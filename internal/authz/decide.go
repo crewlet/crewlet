@@ -201,14 +201,21 @@ const (
 	// beside the role ([withApp]): an editor without the app writes the
 	// artifact's data and does not publish it.
 	ClassShared Class = "shared"
+
+	// ClassNamed — a gesture the company document reserves for administrators
+	// and the people it names for it ([Object.Named]): approving an agent's
+	// production command over SSH. Admin, or a principal whose seat or login
+	// the object names. Nobody else, not a lead: who may approve is a list the
+	// company wrote, not a line of the chart.
+	ClassNamed Class = "named"
 )
 
-// Classes are the sixteen, in declaration order.
+// Classes are the seventeen, in declaration order.
 var Classes = []Class{
 	ClassEverybody, ClassApp, ClassAnyApp, ClassAppOrAsked, ClassSelf,
 	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
 	ClassTidy, ClassSubtree, ClassDestructive, ClassAuthored, ClassAdmin,
-	ClassDirectory, ClassShared,
+	ClassDirectory, ClassShared, ClassNamed,
 }
 
 // relationClasses are the classes that decide on the principal's RELATION to
@@ -755,6 +762,19 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 
 	case ClassShared:
 		return decideShared(ctx, p, r, o, chart)
+
+	case ClassNamed:
+		if p.Can(adminGrant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
+		}
+		for _, name := range o.Named {
+			if name != "" && (p.Seat == name || p.Login == name) {
+				return consulting(Decision{Allowed: true, Reason: ReasonAsked}, adminGrant)
+			}
+		}
+		// NO GRANT: admin is what a caller the document does not name is
+		// missing, and the list is a person's to change, not this caller's.
+		return consulting(Decision{Reason: ReasonNoGrant}, adminGrant)
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather

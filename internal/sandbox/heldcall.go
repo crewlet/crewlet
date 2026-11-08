@@ -109,6 +109,23 @@ const (
 // HeldChoices is every answer, in the order a person is offered them.
 var HeldChoices = []string{HeldOnce, HeldAlways, HeldDeny}
 
+// HeldFixedChoices are the answers a call whose tool always asks offers
+// ([HeldCall.Fixed]): no Always allow, since no level of it can be set.
+var HeldFixedChoices = []string{HeldOnce, HeldDeny}
+
+// ChoicesOf is the answers h offers.
+func ChoicesOf(h HeldCall) []string {
+	if h.Fixed {
+		return HeldFixedChoices
+	}
+	return HeldChoices
+}
+
+// HeldApproversSSH is [HeldCall.Approvers] for an SSH operate command: an
+// administrator or a person integrations.ssh.approvers names, at a fresh
+// step-up (authz's ssh.operate.approve).
+const HeldApproversSSH = "ssh"
+
 // heldMismatch reports whether given is an answer by turn that the run's held
 // call, or its lack of one, refuses: an answer to a held call that does not
 // name it by its id, or one naming a held call the run's question is not.
@@ -193,17 +210,27 @@ func HeldMakes(choice string) bool { return choice == HeldOnce || choice == Held
 // on one). Role approver, since the answer decides the call. No
 // recommendation: the engine asks on the model's behalf and has no view.
 func HeldDecision(question string, evidence []decision.Evidence) *decision.Decision {
-	return &decision.Decision{
-		Question: question,
-		Options: []decision.Option{
-			{ID: HeldOnce, Label: "Allow once", Detail: "Make this call, and ask again next time."},
-			{ID: HeldAlways, Label: "Always allow",
-				Detail: "Make this call, and set the tool to run without asking from now on."},
-			{ID: HeldDeny, Label: "Deny", Detail: "Do not make this call; the run is told it was refused."},
-		},
-		Evidence: evidence,
-		Role:     decision.RoleApprover,
+	return heldDecision(question, evidence, HeldChoices)
+}
+
+// HeldFixedDecision is the decision a call whose tool always asks is asked as
+// ([HeldCall.Fixed]): Allow once and Deny alone.
+func HeldFixedDecision(question string, evidence []decision.Evidence) *decision.Decision {
+	return heldDecision(question, evidence, HeldFixedChoices)
+}
+
+func heldDecision(question string, evidence []decision.Evidence, choices []string) *decision.Decision {
+	options := map[string]decision.Option{
+		HeldOnce: {ID: HeldOnce, Label: "Allow once", Detail: "Make this call, and ask again next time."},
+		HeldAlways: {ID: HeldAlways, Label: "Always allow",
+			Detail: "Make this call, and set the tool to run without asking from now on."},
+		HeldDeny: {ID: HeldDeny, Label: "Deny", Detail: "Do not make this call; the run is told it was refused."},
 	}
+	d := &decision.Decision{Question: question, Evidence: evidence, Role: decision.RoleApprover}
+	for _, id := range choices {
+		d.Options = append(d.Options, options[id])
+	}
+	return d
 }
 
 // HeldCall is a call to a tool at Needs approval that a run's job made and the
@@ -236,6 +263,16 @@ type HeldCall struct {
 	// Arguments are the call's arguments in their canonical form, sealed
 	// ([CallSeal.SealArguments]): never on the row in the clear.
 	Arguments string `json:"arguments"`
+
+	// Fixed is a call to a tool that asks before every call and has no
+	// level to set, an engine tool such as ssh_operate: answered once or
+	// deny alone ([HeldFixedChoices]).
+	Fixed bool `json:"fixed,omitempty"`
+
+	// Approvers names who may answer where it is not the run's seat's lead
+	// or an administrator: [HeldApproversSSH] for an SSH operate command.
+	// Empty is the seat's lead or an administrator (tools.approve).
+	Approvers string `json:"approvers,omitempty"`
 
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`
@@ -321,9 +358,13 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 		found = append(found, fieldRefusal("held_call", "is already being made, and a call is "+
 			"held before anything makes it"))
 	}
-	if decided == nil || !slices.Equal(decided.OptionIDs(), HeldChoices) {
+	if want := ChoicesOf(h); decided == nil || !slices.Equal(decided.OptionIDs(), want) {
 		found = append(found, fieldRefusal("decision", "is not the one a held call is asked "+
-			"as: a held call offers "+words.And(HeldChoices)))
+			"as: this held call offers "+words.And(want)))
+	}
+	if h.Approvers != "" && (h.Approvers != HeldApproversSSH || !h.Fixed) {
+		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+
+			"not know, or names them on a call that may be allowed always"))
 	}
 	return found
 }

@@ -143,12 +143,15 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 	}
 	held := *run.HeldCall
 	rec.Server, rec.Tool, rec.Seat = held.Server, held.Tool, run.AgentHandle
-	// THE SEAT'S LEAD OR AN ADMINISTRATOR, decided now that the seat is
-	// known: on the seat's own record, as answering its run's question is.
-	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionToolsApprove,
-		Object: func(*http.Request) authz.Object {
-			return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle}
-		}}) {
+	if !slices.Contains(sandbox.ChoicesOf(held), req.Answer) {
+		// A TOOL THAT ASKS BEFORE EVERY CALL has no level Always allow
+		// could set, so it is answered once or deny alone.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": "the call to " + held.Tool + " asks before every call, so it is " +
+				"answered " + strings.Join(sandbox.ChoicesOf(held), " or ") + ", never " + quoted(req.Answer)})
+		return
+	}
+	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
 		return
 	}
 	if !slices.Contains(sandbox.Awaiting, run.Status) || run.LaunchID != held.LaunchID {
@@ -191,6 +194,28 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		answer.AnswerID = delivered.String()
 	}
 	httpjson.Write(w, http.StatusAccepted, answer)
+}
+
+// approverPolicy is who may answer run's held call, decided now that the call
+// is read. An SSH operate command is an administrator's or a person's the
+// company names in integrations.ssh.approvers, at the step-up window; every
+// other call is the seat's lead's or an administrator's, on the seat's own
+// record, as answering its run's question is.
+func (s *Service) approverPolicy(run sandbox.PendingRun) authz.Policy {
+	if run.HeldCall.Approvers == sandbox.HeldApproversSSH {
+		var named []string
+		if company := s.company(); company != nil && company.Integrations.SSH != nil {
+			named = company.Integrations.SSH.Approvers
+		}
+		return authz.Policy{Action: authz.ActionSSHOperateApprove,
+			Object: func(*http.Request) authz.Object {
+				return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Named: named}
+			}}
+	}
+	return authz.Policy{Action: authz.ActionToolsApprove,
+		Object: func(*http.Request) authz.Object {
+			return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle}
+		}}
 }
 
 // allowAlways writes the held call's tool to allow on its server's entry, by

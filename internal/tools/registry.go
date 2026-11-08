@@ -173,9 +173,14 @@ type Entry struct {
 	// by its own level, the entry's default, or the level its hints start it
 	// at ([mcp.Definition.Level]). Decided by the surface a call reaches
 	// ([Surface]), on the entry for the reason ServerDescription is: it goes
-	// wherever the tool goes, through every cut of a phase's universe. Never
-	// set on a builtin, which no level governs.
+	// wherever the tool goes, through every cut of a phase's universe. On a
+	// builtin, which no level governs, only beside ApprovalFixed.
 	NeedsApproval bool
+
+	// ApprovalFixed is an engine tool that asks a person before every call
+	// and has no level anybody can set (ssh_operate): held as a tool at Needs
+	// approval is, and answered once or deny alone ([AsksBeforeEveryCall]).
+	ApprovalFixed bool
 
 	// Unreviewed reports, at each call, whether the tool's definition is not
 	// the one its level was decided on, so that a call to it asks a person
@@ -362,6 +367,10 @@ func (r *Registry) RegisterMCP(reg mcp.Registration) error {
 		e.NeedsApproval, e.Unreviewed = approval, unreviewed
 	})
 }
+
+// AsksBeforeEveryCall files a builtin as one whose every call waits for a
+// person's answer, which no configuration can lower ([Entry.ApprovalFixed]).
+func AsksBeforeEveryCall(e *Entry) { e.NeedsApproval, e.ApprovalFixed = true, true }
 
 // RequireApproval makes every call to the MCP tool filed as name wait for a
 // person's answer ([Entry.NeedsApproval]), reporting whether such a tool is
