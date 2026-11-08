@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -221,8 +222,8 @@ func (r *domainRecords) read(frame []byte, at changefeed.Record) (*changefeed.Me
 		// every node before anything is sealed under it, and this node has
 		// not restarted onto yet — which a peer that holds the key reads.
 		return deferredAt(frame, at, changefeed.DeferUnknownKey,
-			fmt.Errorf("the frame is sealed under a key this node does not hold (it holds %v)",
-				r.verify.KeyIDs())), nil
+			fmt.Errorf("the frame is sealed under a key this node does not hold (it holds %s)",
+				words.And(r.verify.KeyIDs()))), nil
 	case verdict != recordseal.Verified:
 		return nil, fmt.Errorf("%w: the frame is %s under this node's keyring",
 			changefeed.ErrForeignFrame, verdict)
