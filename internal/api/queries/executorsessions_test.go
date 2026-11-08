@@ -615,19 +615,19 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	}
 }
 
-// AN ENDING SENDS AN UNKEPT CAPTURE ONLY WHERE THE ROW KEEPS AN OLDER ONE. The
-// end names the turn's newest capture as not kept where the run's record says
-// so, and the log decides on the row's own place: a capture of that very
+// AN ENDING SENDS AN UNKEPT CAPTURE ONLY WHERE IT IS NEWER THAN THE ROW'S PLACE.
+// The end names the turn's newest capture as not kept where the run's record
+// says so, and the log decides on the row's own place: a capture of that very
 // attempt whose record the log took before the end — one its taker handed on
 // before its lease's window closed, settled refused by the node that waited on
 // it — is the row's own, and kept. So a row keeping the capture its end named
 // unkept is sent with none, in both questions; sent it, the screen would say
-// the session it shows kept was not. A row whose end took an older capture off
-// is sent the unkept one, and why.
+// the session it shows kept was not. A row whose end took an older capture off,
+// and so names none, is sent the unkept one, and why.
 //
 // Mutation: send the ending's unkept capture as the row holds it, and the row
 // that kept it says its session was not kept.
-func TestAnEndingSendsAnUnkeptCaptureOnlyWhereTheRowKeepsAnOlderOne(t *testing.T) {
+func TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
 	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
