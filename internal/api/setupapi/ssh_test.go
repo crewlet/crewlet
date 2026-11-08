@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,9 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
-	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -252,6 +253,7 @@ func newSurfaceWithSSH(t *testing.T, access setupapi.SSHAccess, tests setupapi.S
 	t.Helper()
 	fixture := newConfigSurface(t)
 	v := &vault{}
+	var ticks atomic.Int64
 	s := &surface{
 		mux: http.NewServeMux(), config: fixture.svc, vault: v, configs: fixture.db.Configs(),
 		cipher: fixture.cipher, plane: fixture.plane, gate: fixture.gate,
@@ -261,7 +263,8 @@ func newSurfaceWithSSH(t *testing.T, access setupapi.SSHAccess, tests setupapi.S
 	s.setup = newService(t, setupapi.Options{
 		Config: fixture.svc, Secrets: v, Access: s.access, Resolve: v.get, Status: s.status,
 		WebhookBase: fixtureWebhookBase, WebhookBaseKey: oneListener, SSH: access, SSHTests: tests,
-		Now: func() time.Time { return pinned },
+		// A SECOND A READING, so each press is later than the one before.
+		Now: func() time.Time { return pinned.Add(time.Duration(ticks.Add(1)) * time.Second) },
 	})
 	mount(t, s.mux, s.setup, fixture.svc)
 	return s
@@ -273,44 +276,70 @@ func seatedAdmin(seat string) iam.Principal {
 		Stage: iam.StageActive, Grants: iam.AllGrants, ReauthAt: time.Now().Add(time.Hour)}
 }
 
-// A ROTATION STAGES, PROMOTES ONLY ONCE EVERY SERVER PASSED, AND CANCELS: stage
-// seals a second authority the setup trusts beside the current one and is
-// refused while one is staged; promote is refused until every server's latest
-// test with the staged authority passed, then seals it under the current name
-// and clears the staged reference, answering the retired line; cancel drops a
-// staged one, and is refused with none staged.
+// A ROTATION STAGES, PROMOTES ONLY ONCE EVERY SERVER PASSED AS IT IS NOW, AND
+// LEAVES NO STRAY KEY. Stage seals a second authority the setup trusts beside
+// the current one, answers the key the store holds once its revision landed
+// (whichever stage sealed it), and is refused while one is staged. Promote is
+// refused until every server's latest test with the staged authority passed
+// on the server as it is now (a test from before the server changed counts
+// for nothing), then seals the staged key under the current name, removes the
+// staged copy, keeps the retired line for the answer to list, and clears the
+// reference; a promote run again over a key already moved names no retired
+// line. Cancel removes the staged key too.
 func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *testing.T) {
 	t.Parallel()
-	tests := coordmemory.NewFleet()
-	s := newSurfaceWithSSH(t, &fakeSSHAccess{}, tests)
+	access := &fakeSSHAccess{steps: []sshint.TestStep{{ID: sshint.StepReach, OK: false, Detail: "Not reached."}}}
+	s := newSurfaceWithSSH(t, access, coordmemory.NewFleet())
 	s.seed(t)
 	s.connect(t, "ssh", `{"values": {"enabled": "true"}, "generate": ["certificate_authority"]}`)
 	line, _ := sshHostKeyLine(t)
-	host := `{"address": "api-1.example.com", "host_keys": ["` + line + `"], "users": {"read": "crewlet-read"}}`
-	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", host, nil); res.Code != http.StatusOK {
-		t.Fatalf("add the server = %d: %s", res.Code, res.Body)
+	putHost := func(address string) {
+		t.Helper()
+		host := `{"address": "` + address + `", "host_keys": ["` + line + `"], "users": {"read": "crewlet-read"}}`
+		if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", host, nil); res.Code != http.StatusOK {
+			t.Fatalf("put the server = %d: %s", res.Code, res.Body)
+		}
 	}
+	putHost("api-1.example.com")
 	rotate := func(action string) *httptest.ResponseRecorder {
 		return s.do(t, http.MethodPost, "/setup/integrations/ssh/rotation", `{"action": "`+action+`"}`, nil)
 	}
-	oldValue, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY")
-	old, err := setup.ParseSSHCertificateAuthority(oldValue)
-	if err != nil {
-		t.Fatal(err)
+	press := func(passes bool) {
+		t.Helper()
+		access.mu.Lock()
+		access.steps[0].OK = passes
+		access.mu.Unlock()
+		if res := s.doAs(t, seatedAdmin("ops-lead"), http.MethodPost, "/setup/integrations/ssh/hosts/api-1/test",
+			`{"ca": "next"}`, nil); res.Code != http.StatusOK {
+			t.Fatalf("test with the staged authority = %d: %s", res.Code, res.Body)
+		}
 	}
+	parse := func(name string) (string, *setup.SSHCertificateAuthority) {
+		t.Helper()
+		value, ok := s.vault.get(name)
+		ca, err := setup.ParseSSHCertificateAuthority(value)
+		if !ok || err != nil {
+			t.Fatalf("%s holds no authority: %v", name, err)
+		}
+		return value, ca
+	}
+	_, old := parse("SSH_CERTIFICATE_AUTHORITY")
 	for _, action := range []string{"promote", "cancel"} {
 		if res := rotate(action); res.Code != http.StatusConflict {
 			t.Errorf("%s with nothing staged = %d: %s", action, res.Code, res.Body)
 		}
 	}
-	if res := rotate("stage"); res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "next_ca_public_key") ||
-		strings.Contains(res.Body.String(), "PRIVATE KEY") {
-		t.Fatalf("stage = %d: %s", res.Code, res.Body)
+	// ANOTHER STAGE'S KEY WINS THE STORE: the answer names the sealed one.
+	winner, err := setup.GenerateSSHCertificateAuthority()
+	if err != nil {
+		t.Fatal(err)
 	}
-	nextValue, ok := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT")
-	next, err := setup.ParseSSHCertificateAuthority(nextValue)
-	if !ok || err != nil {
-		t.Fatalf("nothing usable was staged: %v", err)
+	s.vault.override("SSH_CERTIFICATE_AUTHORITY_NEXT", winner)
+	res := rotate("stage")
+	nextValue, next := parse("SSH_CERTIFICATE_AUTHORITY_NEXT")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), strings.Fields(next.PublicLine())[1]) ||
+		strings.Contains(res.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("stage = %d: %s, want the sealed key's line %s", res.Code, res.Body, next.PublicLine())
 	}
 	if res := rotate("stage"); res.Code != http.StatusConflict {
 		t.Errorf("a second stage = %d: %s", res.Code, res.Body)
@@ -324,34 +353,60 @@ func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *tes
 	if res := rotate("promote"); res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "api-1") {
 		t.Fatalf("promote before any test = %d: %s", res.Code, res.Body)
 	}
-	for _, passed := range []bool{false, true} {
-		if _, err := tests.PutSSHTest(t.Context(), coord.SSHTest{Host: "api-1", Authority: next.Fingerprint(),
-			At: time.Now(), By: "ops-lead", ByKind: iam.ActorHuman, OK: passed,
-			Steps: []coord.SSHTestStep{{ID: sshint.StepReach, OK: passed, Detail: "Reached."}}}); err != nil {
-			t.Fatal(err)
-		}
-		res := rotate("promote")
-		if !passed {
-			if res.Code != http.StatusConflict {
-				t.Fatalf("promote after a failed test = %d: %s", res.Code, res.Body)
-			}
-			continue
-		}
-		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), old.PublicLine()) {
-			t.Fatalf("promote = %d: %s", res.Code, res.Body)
-		}
+	press(false)
+	if res := rotate("promote"); res.Code != http.StatusConflict {
+		t.Fatalf("promote after a failed test = %d: %s", res.Code, res.Body)
+	}
+	press(true)
+	putHost("api-1b.example.com")
+	if res := rotate("promote"); res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "api-1") {
+		t.Fatalf("promote on a test from before the server changed = %d: %s", res.Code, res.Body)
+	}
+	press(true)
+	res = rotate("promote")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), strings.Fields(old.PublicLine())[1]) {
+		t.Fatalf("promote = %d: %s", res.Code, res.Body)
 	}
 	if current, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY"); current != nextValue {
 		t.Fatal("promote did not seal the staged authority as the current one")
 	}
+	if _, left := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT"); left {
+		t.Fatal("promote left the staged key sealed beside the current one")
+	}
 	if doc := s.do(t, http.MethodGet, "/config", "", nil).Body.String(); strings.Contains(doc, "SSH_CERTIFICATE_AUTHORITY_NEXT") {
 		t.Fatal("the document still points at a staged authority after promote")
 	}
+	var state setupapi.ToolState
+	if err := json.Unmarshal(s.do(t, http.MethodGet, "/setup/integrations/ssh", "", nil).Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.SSH == nil || len(state.SSH.RetiredCAPublicKeys) != 1 ||
+		strings.Fields(state.SSH.RetiredCAPublicKeys[0])[1] != strings.Fields(old.PublicLine())[1] {
+		t.Fatalf("the answer lists the retired lines %+v, want the old authority's", state.SSH)
+	}
+
+	// A PROMOTE THAT MOVED THE KEY AND STOPPED, run again, retires nothing.
 	if res := rotate("stage"); res.Code != http.StatusOK {
 		t.Fatalf("stage after promote = %d: %s", res.Code, res.Body)
 	}
+	press(true)
+	staged, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT")
+	if err := s.vault.Set(t.Context(), "SSH_CERTIFICATE_AUTHORITY", staged, secrets.Author{Name: "jane-doe"},
+		secrets.SourceSetup, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if res := rotate("promote"); res.Code != http.StatusOK || strings.Contains(res.Body.String(), "retired_ca_public_key") {
+		t.Fatalf("a promote run again = %d: %s, want no retired line", res.Code, res.Body)
+	}
+
+	if res := rotate("stage"); res.Code != http.StatusOK {
+		t.Fatalf("stage = %d: %s", res.Code, res.Body)
+	}
 	if res := rotate("cancel"); res.Code != http.StatusOK {
 		t.Fatalf("cancel = %d: %s", res.Code, res.Body)
+	}
+	if _, left := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT"); left {
+		t.Fatal("cancel left the cancelled authority's key sealed")
 	}
 	if res := rotate("rotate"); res.Code != http.StatusBadRequest {
 		t.Errorf("an unknown action = %d: %s", res.Code, res.Body)

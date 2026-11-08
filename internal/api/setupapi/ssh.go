@@ -39,6 +39,9 @@ type SSHServers struct {
 	// rotation's. Never a private key.
 	CAPublicKey     string `json:"ca_public_key,omitempty"`
 	NextCAPublicKey string `json:"next_ca_public_key,omitempty"`
+	// RetiredCAPublicKeys are the lines a rotation retired, newest last:
+	// each server drops them when its setup runs again.
+	RetiredCAPublicKeys []string `json:"retired_ca_public_keys"`
 	// SetupVersion is the server setup this engine renders.
 	SetupVersion int `json:"setup_version"`
 	// Hosts are the registered servers, in document order.
@@ -56,8 +59,8 @@ type SSHServer struct {
 	Containers   bool                `json:"containers,omitempty"`
 	// GrantedTo is every agent naming it, on or off.
 	GrantedTo []string `json:"granted_to"`
-	// LastTest is its latest Test connection with the current authority,
-	// absent where none was pressed.
+	// LastTest is its latest Test connection with the current authority as
+	// the server is now, absent where none was pressed since it changed.
 	LastTest *coord.SSHTest `json:"last_test,omitempty"`
 }
 
@@ -79,7 +82,11 @@ func (s *Service) sshServers(ctx context.Context, company *config.Company) (*SSH
 	if block == nil {
 		return nil, nil
 	}
-	out := &SSHServers{SetupVersion: sshint.SetupVersion, Hosts: []SSHServer{}}
+	out := &SSHServers{SetupVersion: sshint.SetupVersion, Hosts: []SSHServer{},
+		RetiredCAPublicKeys: s.retiredAuthorities()}
+	if out.RetiredCAPublicKeys == nil {
+		out.RetiredCAPublicKeys = []string{}
+	}
 	var current string
 	if block.Provisioning != nil {
 		if ca := s.heldAuthority(block.Provisioning.CertificateAuthority); ca != nil {
@@ -105,11 +112,7 @@ func (s *Service) sshServers(ctx context.Context, company *config.Company) (*SSH
 				server.Fingerprints = append(server.Fingerprints, ssh.FingerprintSHA256(pk))
 			}
 		}
-		for i := range tests {
-			if tests[i].Host == h.ID && tests[i].Authority == current {
-				server.LastTest = &tests[i]
-			}
-		}
+		server.LastTest = latestTest(tests, h, current)
 		out.Hosts = append(out.Hosts, server)
 	}
 	return out, nil

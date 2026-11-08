@@ -34,6 +34,9 @@ type SSHTest struct {
 	// authority the test's certificates were signed with.
 	Host      string `json:"host"`
 	Authority string `json:"authority"`
+	// HostDigest is the tested host's fields, digested: a test says nothing
+	// about the host once they change.
+	HostDigest string `json:"host_digest,omitempty"`
 
 	// At is when the test was pressed; By, ByKind and OperatorID who
 	// pressed it, as [ModelRetry] records them.

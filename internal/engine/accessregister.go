@@ -108,7 +108,7 @@ func (c *core) openAccess(e *Engine, sl *stateLog) error {
 	if err != nil {
 		return fmt.Errorf("engine: access writer: %w", err)
 	}
-	c.accessReader, c.accessWriter = reader, writer
+	c.accessReader, c.accessWriter, c.accessSealer = reader, writer, sealer
 	return nil
 }
 

@@ -154,6 +154,8 @@ type core struct {
 	// every data node for the same reason ([core.openAccess]).
 	accessReader *accessdomain.Reader
 	accessWriter *accessdomain.Writer
+	// accessSealer opens a command's text for the SSH audit: one per node.
+	accessSealer *accessdomain.Sealer
 
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.

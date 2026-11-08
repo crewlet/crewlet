@@ -13,7 +13,13 @@ import (
 const (
 	CertificateAuthoritySecret     = "SSH_CERTIFICATE_AUTHORITY"
 	NextCertificateAuthoritySecret = "SSH_CERTIFICATE_AUTHORITY_NEXT"
+	// RetiredCertificateAuthoritiesSecret holds the public lines of the
+	// authorities a rotation retired, one a line, newest last: no key.
+	RetiredCertificateAuthoritiesSecret = "SSH_CERTIFICATE_AUTHORITY_RETIRED"
 )
+
+// MaxRetiredAuthorities is how many retired public lines are kept.
+const MaxRetiredAuthorities = 4
 
 // trustNote is the sentence beside the authority's public line.
 const trustNote = "Servers trust this line. Its private key never leaves the engine."
