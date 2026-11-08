@@ -2738,9 +2738,9 @@ only on a small volume:
    17 MB per agent seat per year of history, 8.46 GB (7.88 GiB) for the
    reference company in its fifth year. That bottoms the vector log's
    headroom at about 51 % at the 16 GiB a 64 GiB volume asks for, and at
-   about 88 % at the 64 GiB a volume of about 652 GiB or more gets. The alarm
+   about 88 % at the 64 GiB a volume of about 653 GiB or more gets. The alarm
    threshold is 10 %, clear of each. But the one budget scales every log to
-   fit the broker: the eleven logs' asks are scaled down to the share they
+   fit the broker: the twelve logs' asks are scaled down to the share they
    divide, five eighths of what the broker can grant once the object store's
    `nats` bucket has its quarter. So a first boot with every field unset
    leaves about 59 % of the 19.1 GiB a 200 GiB volume creates it with, about
