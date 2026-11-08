@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -44,6 +45,8 @@ type WithdrawDeps struct {
 	Resolver func(actor Actor) AskResolver
 	// Desk reads a run and delivers the withdrawal as its answer.
 	Desk RunDesk
+	// Chart decides whether whoever a turn works for may answer a run.
+	Chart authz.Chart
 }
 
 // tracker reports whether the work-item half is wired.
@@ -139,7 +142,7 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return failed(WithdrawAskTool + " withdraws one thing: a question on a work item " +
 			"(`item` and `ask`) or what your executor waits on (`run`), never both."), nil
 	case run != "":
-		return t.withdrawRun(ctx, seat, run, reason)
+		return t.withdrawRun(ctx, ceiling, seat, run, reason)
 	case item != "" && ask != "":
 		return t.withdrawQuestion(ctx, turn, workingForSeat(ceiling), item, ask, reason, args)
 	}
@@ -148,8 +151,9 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 }
 
 // withdrawRun withdraws the question or held call seat's own run waits on, as
-// that run's answer.
-func (t *withdrawAsk) withdrawRun(ctx context.Context, seat, turnID, reason string) (tools.Result, error) {
+// that run's answer, in a turn worked for ceiling.
+func (t *withdrawAsk) withdrawRun(ctx context.Context, ceiling authz.Ceiling, seat, turnID,
+	reason string) (tools.Result, error) {
 	if t.deps.Desk == nil {
 		return unconfigured(WithdrawAskTool), nil
 	}
@@ -161,6 +165,9 @@ func (t *withdrawAsk) withdrawRun(ctx context.Context, seat, turnID, reason stri
 		// ANOTHER SEAT'S RUN READS AS NONE.
 		return refused(tools.RefusalNotFound, fmt.Sprintf("No run %s of yours waits on a "+
 			"person. Name one of your own runs by its turn id.", clip(turnID))), nil
+	}
+	if refusal := t.mayWithdrawRun(ctx, ceiling, run); refusal != nil {
+		return *refusal, nil
 	}
 	if run.Ending != nil || !slices.Contains(sandbox.Awaiting, run.Status) ||
 		(run.HeldCall == nil && run.Question == "") {
@@ -310,4 +317,40 @@ func workingForSeat(c authz.Ceiling) string {
 		return ""
 	}
 	return c.Principal.Seat
+}
+
+// mayWithdrawRun is nil where a turn worked for ceiling may withdraw run: one
+// nobody woke, or one worked for somebody who may answer the run themselves,
+// by answer_executor's rule (ADR-0111). Otherwise it is the refusal.
+func (t *withdrawAsk) mayWithdrawRun(ctx context.Context, ceiling authz.Ceiling,
+	run sandbox.PendingRun) *tools.Result {
+
+	if ceiling.Kind == authz.CeilingNone {
+		return nil
+	}
+	parties, err := partiesOf(run)
+	if err != nil {
+		return refusalOf(faulted(ctx, WithdrawAskTool, err, fmt.Sprintf(WithdrawAskTool+" cannot "+
+			"withdraw run %s: its record names no seat id this build can read, so whoever may answer "+
+			"it cannot be named: %s.", clip(run.TurnID), faultSaid)))
+	}
+	if t.deps.Chart == nil {
+		return refusalOf(unconfigured(WithdrawAskTool))
+	}
+	who := ceiling.Principal
+	dec := authz.Decide(ctx, who, authz.ActionExecutorAnswer, parties.answeredBy(who.Seat), t.deps.Chart,
+		time.Now().UTC())
+	switch {
+	case dec.Unknown():
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
+			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may "+
+				"answer run %s. Nothing is withdrawn. Try again shortly.", WithdrawAskTool, run.TurnID))
+		return &r
+	case !dec.Allowed:
+		r := refused(tools.RefusalForbidden, fmt.Sprintf("Run %s is withdrawn only in a turn nobody "+
+			"woke, or for somebody who may answer it: the person it asks, or whoever leads you. "+
+			"Nothing is withdrawn.", run.TurnID))
+		return &r
+	}
+	return nil
 }
