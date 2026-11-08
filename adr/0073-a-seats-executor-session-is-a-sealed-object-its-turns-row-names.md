@@ -1109,32 +1109,46 @@ now said as follows (internal/executordomain's `read.go`, internal/executorread'
 **A row naming the session of a turn that has not ended is in progress**
 (`executordomain.Session.InProgress`: not ended, and naming an object), read
 off the row alone, since nothing on the log says what kind of capture landed a
-row and no reader of it reads the turn's run record. It is the turn's session,
-read and continued as one, and its sentence says only what the row says
-(`Session.InProgressNote`): "This turn has not ended: this is the newest
-session its runs have kept, captured at `<captured_at>`; its run may have gone
-on past it, and its last call may have no result yet." Never that the session
-is saved as its run works, which would be false of a harness or a seat whose
-runs keep nothing while they work.
+row and no reader of it reads the turn's run record. It is read as the turn's
+session and never as an ended turn's; whether a relaunch continues it is the
+relaunch's own decision (`sandbox.ContinuityOf`, which a person's read of the
+row asks as `continuable`), since a relaunch continues only the newest kept
+capture of the job it follows and a live turn's row often names an earlier
+job's. Its sentence says only what the row says (`Session.InProgressNote`):
+"This turn has not ended: this is the newest session its runs have kept,
+captured at `<captured_at>`; its run may have gone on past it, and its last
+call may have no result yet." Never that the session is saved as its run
+works, which would be false of a harness or a seat whose runs keep nothing
+while they work.
 
-**One note, in one field, on every surface.** What a reader is told of the
-session a row keeps is the domain's one sentence of it (`Session.KeptNote`):
-the in-progress sentence of a live row and the went-on note of an ended one,
-which never meet, asked of the shown form (`Session.Redacted`), so the unkept
-capture's reason it quotes is redacted. A person's read surface (`in_progress`
+**Two notes, each in its own field, on every surface.** What a reader is told
+of the session a row keeps is the domain's one sentence of it, asked of the
+shown form (`Session.Redacted`): the in-progress sentence of a live row, and
+the went-on note of an ended one (`Session.WentOnNote`), whose unkept capture's
+reason is redacted. A person's read surface (`in_progress`, `in_progress_note`
 and `kept_note` on the row `executor_sessions` and `executor_session` send) and
-the seat's own `list_sessions` and `read_session` (the same two, the note fenced
-and cut in a listing as the row's other words are) carry it, and the dashboard
-places the engine's sentence by `in_progress` — beside "not ended", or under
-when the session was captured — and words none of its own. A copy of the
-sentence in the dashboard was rejected, and so was a field of its own for each
-note: two copies of one sentence are two surfaces that tell a person and a
-model different things about one session, and two fields of which at most one
-is ever set ask every reader to choose between them.
+the seat's own `list_sessions` and `read_session` (the same three) carry them,
+and the dashboard draws each where it reads — the first beside "not ended",
+the second under when the session was captured — and words neither itself. A
+copy of either sentence in the dashboard was rejected: two copies of one
+sentence are two surfaces that tell a person and a model different things about
+one session. And so was one field for both, though they never meet: the
+went-on note quotes what refused a capture, an error a box or a store wrote, so
+its field is declared somebody's words and a seat reads it fenced naming
+nobody — and the in-progress sentence, carried in that field, reached the model
+fenced as words of unknown authorship, the one sentence meant to keep a seat
+from taking its earlier launch's session for an ended turn's labelled as
+nobody's. Each in its own field, the engine's sentence is never fenced and the
+note that quotes a refusal always is.
 
 **A later page of a session in progress is refused in its runs' words**
 (internal/executorread's `recaptured`): its turn has not ended, and its runs
 have kept its session again since the cursor was handed out — true whichever
 capture moved the row, a later launch's or one taken as its run works — and of
 an ended row, as before, that its session was captured again. The dashboard's
-banners take the same words.
+banners take the same words, spelled once (`executorread.LiveKept`, which the
+dashboard's contract declares as `LIVE_KEPT` and
+`internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend` holds to
+it), so a rewording reaches both or fails there; and of a transcript that read
+no capture, the screen says its runs have kept its session since, never
+"again".
