@@ -323,6 +323,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.SSHTests == nil {
 		opts.SSHTests = coordmemory.NewFleet()
 	}
+	if opts.SSH == nil {
+		opts.SSH = &fakeSSHAccess{}
+	}
 	if opts.StateClaims == nil {
 		opts.StateClaims = coordmemory.NewFleet()
 	}
@@ -368,6 +371,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			WebhookBaseKey: oneListener,
 			Access:         &fakeAccess{},
 			SSHTests:       coordmemory.NewFleet(),
+			SSH:            &fakeSSHAccess{},
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
@@ -387,6 +391,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
 		"Access":         func(o *setupapi.Options) { o.Access = nil },
 		"SSHTests":       func(o *setupapi.Options) { o.SSHTests = nil },
+		"SSH":            func(o *setupapi.Options) { o.SSH = nil },
 	} {
 		opts := complete()
 		strip(&opts)

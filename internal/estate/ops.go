@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
@@ -417,6 +418,10 @@ type Backend struct {
 	// ([ExecutorHalf]).
 	Executor ExecutorHalf
 
+	// Access is the access log, which every data node runs from boot, on the
+	// executor log's terms ([AccessHalf]).
+	Access AccessHalf
+
 	// Reached waits until this node's applier of the floor's log has reached
 	// a position — the floor every request carries, the node's own included:
 	// every record through it that writes a row committed, and every barrier
@@ -565,16 +570,17 @@ const SeatCopy = ""
 // declaration. An operation's floor is on its OWN domain's log and no other:
 // see [ready].
 //
-// THE NINE DOMAINS AN OPERATION READS OR WRITES, and not the other two the
+// THE TEN DOMAINS AN OPERATION READS OR WRITES, and not the other two the
 // estate carries: the vectors are written by a fleet duty, never through an
 // operation, and no operation reads their rows at a position — the searches
 // that rank by them read them as an index, which carries no floor at all — and
 // the Dashboard Assistant's conversations are read and written only where the
 // API runs, on a data node, from that node's own copy, so no request carries
-// them across the router. The executor log is among the nine though no
-// surface writes it: the engine records a seat's executor session wherever
-// the seat's box ran, a node without `data` included, and only a data node
-// publishes ([originEngine], executor.go).
+// them across the router. The executor and access logs are among the ten
+// though no surface writes either: the engine records a seat's executor
+// session and what it told the seat wherever the seat runs, a node without
+// `data` included, and only a data node publishes ([originEngine],
+// executor.go, access.go).
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
@@ -585,6 +591,7 @@ var (
 	artifactDataDomain = artifactdata.Domain{}.Name()
 	chatDomain         = chatlet.Domain{}.Name()
 	executorDomain     = executordomain.Domain{}.Name()
+	accessDomain       = accessdomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -596,6 +603,7 @@ var (
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 		chatDomain:         chatlet.Domain{}.Stream().Name,
 		executorDomain:     executordomain.Domain{}.Stream().Name,
+		accessDomain:       accessdomain.Domain{}.Stream().Name,
 	}
 )
 

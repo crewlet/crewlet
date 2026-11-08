@@ -30,6 +30,7 @@ import (
 // SSHTests is the fleet's record of each server's latest Test connection.
 type SSHTests interface {
 	ListSSHTests(ctx context.Context) ([]coord.SSHTest, error)
+	PutSSHTest(ctx context.Context, s coord.SSHTest) (coord.SSHTest, error)
 }
 
 // SSHServers is the SSH integration's extension of its answer.

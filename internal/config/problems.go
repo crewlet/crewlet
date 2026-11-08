@@ -948,8 +948,10 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`stream.chat_log_max_bytes`, where it refuses a message "+
 				"somebody typed, `stream.executor_log_max_bytes`, where it "+
 				"refuses to record an executor's session, so the seat's next "+
-				"turn starts fresh, and `stream.code_log_max_bytes`, where it "+
-				"refuses every push to the company's repositories. The two "+
+				"turn starts fresh, `stream.code_log_max_bytes`, where it "+
+				"refuses every push to the company's repositories, and "+
+				"`stream.access_log_max_bytes`, where it refuses every SSH "+
+				"command and tells no seat a change of its access. The two "+
 				"compacted logs "+
 				"(`stream.tracker_vectors_max_bytes`, "+
 				"`stream.usage_log_max_bytes`) age their records out on the "+
