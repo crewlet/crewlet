@@ -287,12 +287,13 @@ Two policies decide which copies count:
   acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
   `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-  `CREWLET_EXECUTOR_LOG` and `CREWLET_CODE_LOG`, each grow until their own
-  ceiling refuses writes — a full identity log refuses every sign-in, a full
-  Ask Crewlet log every question Ask Crewlet is asked, a full chat log every
-  message, a full executor log every session a turn would keep for its
-  conversation's next, and a full code log every push and every record of a
-  change — while the two compacted logs,
+  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG` and `CREWLET_ACCESS_LOG`, each
+  grow until their own ceiling refuses writes — a full identity log refuses
+  every sign-in, a full Ask Crewlet log every question Ask Crewlet is asked, a
+  full chat log every message, a full executor log every session a turn would
+  keep for its conversation's next, a full code log every push and every
+  record of a change, and a full access log every SSH command and every change
+  of access a seat would be told — while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -1329,6 +1330,7 @@ So the reserve is the larger of two terms:
 | Ask Crewlet | 2 MiB | 64 MiB | 15 MiB plus 28 KiB (the fleet term) | 49 MiB less 28 KiB |
 | chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | executor | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| access | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1345,7 +1347,7 @@ A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`, `stream.code_log_max_bytes`,
 `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
 `stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`,
-`stream.executor_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
+`stream.executor_log_max_bytes`, `stream.access_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -2309,6 +2311,19 @@ the same retention. A person's removal does not reach the sessions: what they
 said to a seat stays in the sessions of the turns that read it until each row
 goes by one of the ways above, the retention at the latest.
 
+The **access history** (what each seat was told about its own access, and
+every SSH certificate the engine signed and command it ran or a person denied,
+on `CREWLET_ACCESS_LOG`) is kept for the company's
+`access_history.retention_days`, **400 days** by default and settable from 90
+to 3650. The trash reaper expires it an hour at a time, by one record each
+hour that every node applies by the broker instants its rows hold, so every
+copy deletes the same rows. Each seat's newest told record stays whatever its
+age: it is what the seat's next turn is diffed against. A seat the company
+removes has its told records forgotten at the reaper's next pass, by a record
+that also keeps a turn racing the removal from being told into it; its
+certificates and commands stay to their retention, since they are the audit
+trail.
+
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
@@ -2729,7 +2744,7 @@ only on a small volume:
    divide, five eighths of what the broker can grant once the object store's
    `nats` bucket has its quarter. So a first boot with every field unset
    leaves about 59 % of the 19.1 GiB a 200 GiB volume creates it with, about
-   33 % of the 11.8 GiB a 128 GiB volume does and about 13 % of the 9.1 GiB a
+   33 % of the 11.7 GiB a 128 GiB volume does and about 13 % of the 9.1 GiB a
    100 GiB volume does; and a 64 GiB volume creates the log at 5.6 GiB, too
    small to hold that re-embedding at all: below about 97 GiB free, set
    `stream.tracker_vectors_max_bytes` to at least 9 GiB. The alarm fires
