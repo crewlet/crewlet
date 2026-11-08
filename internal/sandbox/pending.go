@@ -667,14 +667,16 @@ type BridgeCall struct {
 	// ([BridgeAppend.Owed]) and the call a person approved, which the opening
 	// of the next job appends first ([BridgeLog.opened]).
 	//
-	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count its read
-	// of the log saw ([SessionCapture.Through]), and a call is after it exactly
-	// where Appended is past it: whatever its place (Seq) — a call in flight at
-	// the read is appended once its tool answers, after the read — and however
-	// many places the bound dropped below it, which a reading by place could
-	// not tell from a call still in flight. And the calls after a save point
-	// that the log dropped from its middle are counted exactly: every ordinal
-	// past the point the log does not list is one of them.
+	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count one read
+	// of the log saw ([SessionCapture.Through]) — its own read, or, where its
+	// harness may not have written every call it made, an earlier capture's
+	// (savepoint.go) — and a call is after it exactly where Appended is past
+	// it: whatever its place (Seq) — a call in flight at the read is appended
+	// once its tool answers, after the read — and however many places the
+	// bound dropped below it, which a reading by place could not tell from a
+	// call still in flight. And the calls after a save point that the log
+	// dropped from its middle are counted exactly: every ordinal past the
+	// point the log does not list is one of them.
 	//
 	// ZERO ON A CALL AN OLDER BUILD APPENDED, which numbered none, in a fleet
 	// mid-upgrade: read as after every save point, so a continuation is told it

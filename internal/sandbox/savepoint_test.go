@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -311,6 +312,308 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 			}
 			if !tc.continues && !strings.Contains(got.Why, "states no save point") {
 				t.Errorf("the relaunch says %q, want why: its stamp states no save point", got.Why)
+			}
+		})
+	}
+}
+
+// A CUT-OFF CAPTURE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO
+// HOLD, AND AT NONE IT IS NOT. The take of a job still working, and every
+// capture of a job cut off, is packed where its harness may not have written
+// every call it made, and Claude Code makes a call before it writes it, so
+// nothing read off the log as such a capture is taken says what the session
+// holds: the capture takes its launch's own newest landed capture's point, the
+// row's kept capture only where it is that launch's — its job and its ordinal
+// both, a capture that differs in either being another launch's — or the
+// round's start. The places an older build reads come from the same capture as
+// the point, copied rather than shared.
+//
+// Mutation: take the turn's kept capture of an earlier launch for this
+// launch's, read the launch off its job alone or its ordinal alone, or take a
+// kept capture that states no save point for one that states zero, and a case
+// goes red; share the kept capture's open places rather than copy them, and
+// the copied case does; leave the places a stamp already carried where no
+// capture places it, and every case placed at zero does.
+func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
+	t.Parallel()
+	// landed is a capture of the job launch (its ordinal seq) at save point
+	// through, placed for an older build at seq of the highest call and open
+	// at the places below it.
+	landed := func(launch string, seq int64, through *int, highest int, open ...int) *SessionCapture {
+		return &SessionCapture{LaunchSeq: seq, CaptureSeq: 1, Launch: launch, State: CaptureLanded,
+			Through: through, BridgeSeq: highest, BridgeOpen: open}
+	}
+	const job1, job2 = "job-1", "job-2"
+	for name, tc := range map[string]struct {
+		kept    *SessionCapture
+		through int
+		highest int
+		open    []int
+	}{
+		"a launch that has landed no capture": {},
+		"a launch whose own capture landed": {kept: landed(job2, 2, new(9), 11, 10), through: 9, highest: 11,
+			open: []int{10}},
+		"the turn's kept capture an earlier launch took":                 {kept: landed(job1, 1, new(9), 11, 10)},
+		"another job's capture at this launch's ordinal":                 {kept: landed(job1, 2, new(9), 11, 10)},
+		"this job's capture at another ordinal":                          {kept: landed(job2, 1, new(9), 11, 10)},
+		"its own landed capture stating no save point, an older build's": {kept: landed(job2, 2, nil, 11, 10)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := PendingRun{TurnID: "t1", LaunchID: job2, LaunchSeq: 2, Kept: tc.kept, Capture: tc.kept}
+			// A STAMP THAT ALREADY CARRIES PLACES, as one built from a copy of
+			// another capture would: placed at zero, it carries none of them.
+			capture := SessionCapture{BridgeSeq: 99, BridgeOpen: []int{98}}
+			capture.placeAtNewest(run)
+			through, placed := capture.SavePoint()
+			if !placed || through != tc.through {
+				t.Fatalf("the capture is placed at %d (stated %v), want %d, stated", through, placed, tc.through)
+			}
+			if capture.BridgeSeq != tc.highest || !slices.Equal(capture.BridgeOpen, tc.open) {
+				t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
+					"capture its point is", capture.BridgeSeq, capture.BridgeOpen, tc.highest, tc.open)
+			}
+			if len(capture.BridgeOpen) > 0 {
+				capture.BridgeOpen[0] = -1
+				if tc.kept != nil && slices.Contains(tc.kept.BridgeOpen, -1) {
+					t.Error("the capture shares its open places with the capture it was placed by")
+				}
+			}
+		})
+	}
+}
+
+// A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN.
+// A harness can make a call, and have it answered, before it writes the call to
+// its transcript (Claude Code 2.1.310, measured: it writes a message only once
+// the whole of it has streamed), so the calls its round's log had taken before
+// the pack say what the archive holds only of a job whose harness went cleanly
+// by itself, its script packing it. Every other capture is placed
+// at the newest save point its launch is known to hold: a job still working,
+// taken as it stands; and every job CUT OFF — its harness killed, past its
+// end's grace or by a signal its script packed after; told to stop by its end;
+// ended before its script packed, packed by the read; or lost, its box read by
+// the loss, which cannot say how its job went. Each is placed at the round's
+// start, its launch holding no landed capture and the capture it continued
+// unknown — or at its own launch's landed capture where it holds one, with that
+// capture's places for an older build — so a relaunch continuing it is told
+// every call its archive may lack.
+//
+// Mutation: place a capture of a job cut off at its log read, as a job that is
+// over was, and its cases count calls its archive may lack; place every
+// capture at its launch's newest save point, and the job that ended its own
+// run tells again every call its session holds; place one at zero whatever its
+// launch holds, and the case whose launch kept a capture goes red.
+func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// capped launches the turn with its wall-clock cap passed, so its
+		// collection ends the job first.
+		capped bool
+		// finished is what a job reports that ended by itself, and ended what
+		// one reports once its end ended it, each holding the archive its
+		// script packed; nil for neither.
+		finished, ended func(archive *SessionArchive) Result
+		// unstoppable is a job its end cannot stop, taken as it stands.
+		unstoppable bool
+		// lost reads the job's box as a loss's read does, not as a collection.
+		lost bool
+		// own lands a capture of the job's own launch before the take.
+		own bool
+		// final and cutOff are how the take saw the job.
+		final, cutOff    bool
+		through, highest int
+		open             []int
+	}{
+		{name: "a job whose harness ended its own run, its script packing it",
+			finished: func(a *SessionArchive) Result {
+				return Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310", Captured: a}
+			},
+			final: true, through: 3, highest: 3},
+		{name: "a job whose harness was killed, its script packing after it",
+			finished: func(a *SessionArchive) Result {
+				return Result{Text: "killed", SessionID: "s-1", HarnessVersion: "2.1.310", Captured: a,
+					HarnessCutOff: true}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended, its harness killed past its grace", capped: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndKilled}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended, its harness told to stop", capped: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndAsked}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended before its script packed, packed by the read", capped: true,
+			final: true, cutOff: true},
+		{name: "a job its end could not stop, taken as it stands", capped: true, unstoppable: true, cutOff: true},
+		{name: "a lost job, its box read by the loss", lost: true, final: true, cutOff: true},
+		{name: "a job cut off whose own launch had kept a capture", capped: true, own: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndKilled}
+			},
+			final: true, cutOff: true, through: 2, highest: 2, open: []int{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			deadline := time.Time{}
+			if tc.capped {
+				deadline = rig.now.Add(-time.Minute)
+			}
+			launched := rig.launchUntil("t1", deadline)
+			rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+			rig.coordinator.countRun("swe", StatusRunning)
+			// THREE CALLS ANSWERED before the take reads the log, any of which
+			// the harness may not have written.
+			for seq := 1; seq <= 3; seq++ {
+				if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
+					Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
+					t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+				}
+			}
+			if tc.own {
+				own := SessionCapture{LaunchSeq: launched.LaunchSeq, CaptureSeq: 1, Launch: launched.LaunchID,
+					State: CaptureLanded, At: rig.now, Through: new(2), BridgeSeq: 2, BridgeOpen: []int{1},
+					Object: objstore.KeyAt(rig.now).String(), Harness: "claude-code", SessionID: "s-1",
+					ArchiveFormat: FakeArchiveFormat}
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", own); err != nil || !took {
+					t.Fatalf("landing the launch's own capture = %v, %v", took, err)
+				}
+			}
+			archive := rig.runner.Session.Archive
+			switch {
+			case tc.finished != nil:
+				rig.runner.Finish(tc.finished(&archive))
+			case tc.ended != nil:
+				rig.runner.EndsAs(tc.ended(&archive))
+			}
+			if tc.unstoppable {
+				// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill past
+				// the wait that reaches nothing of the job.
+				rig.coordinator.endWait = 50 * time.Millisecond
+				rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+					return EndAsked, nil
+				}
+				rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
+					return ErrNoJobGroup
+				}
+			}
+			if tc.lost {
+				spooled, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
+				rig.coordinator.keepLater(spooled)
+			} else {
+				// COLLECTED, the resume after it refused, so the row stays for
+				// the case.
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
+			}
+			rig.awaitKeeps()
+			kept := rig.get("t1").Kept
+			if kept == nil || kept.State != CaptureLanded || kept.CaptureSeq != nextSeq(tc.own) ||
+				kept.Final != tc.final || kept.Interrupted != tc.cutOff {
+				t.Fatalf("the row keeps %+v, want the take's capture landed, final: %v, cut off: %v", kept,
+					tc.final, tc.cutOff)
+			}
+			through, placed := kept.SavePoint()
+			if !placed || through != tc.through {
+				t.Errorf("the capture is placed at %d (stated %v), want %d", through, placed, tc.through)
+			}
+			if kept.BridgeSeq != tc.highest || !slices.Equal(kept.BridgeOpen, tc.open) {
+				t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
+					"point it states", kept.BridgeSeq, kept.BridgeOpen, tc.highest, tc.open)
+			}
+		})
+	}
+}
+
+// nextSeq is the place among its launch's captures the take's capture takes:
+// the first, or the one after the capture the launch already kept.
+func nextSeq(kept bool) int64 {
+	if kept {
+		return 2
+	}
+	return 1
+}
+
+// ONLY A CAPTURE ITS LOG READ PLACES READS THE LOG. A job whose harness ended
+// its own run is placed by its read of the round's log, so a log the store
+// cannot read refuses its capture, and a refusal after the read states the
+// count the read saw. A job cut off is placed off its row, at the newest save
+// point its launch is known to hold, and reads no log: one the store cannot
+// read refuses nothing of it, and a refusal of it states no save point, "not
+// known".
+//
+// Mutation: read the log for a job cut off and refuse its capture where the
+// read fails, and its unread case is refused; state a save point on the
+// refusal of a capture no read places, and its refused case states one; state
+// none on the refusal of one its read placed, and that case states none.
+func TestOnlyACaptureItsLogReadPlacesReadsTheLog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// cutOff is a job whose harness was killed, its script packing after
+		// it; else one whose harness ended its own run.
+		cutOff bool
+		// unread fails every read of the round's log, and untaken the take.
+		unread, untaken bool
+		// state is how the capture comes out, and through the save point it
+		// states, nil for none.
+		state   CaptureState
+		through *int
+	}{
+		{name: "a job whose harness ended its own run, its log unread", unread: true, state: CaptureRefused},
+		{name: "a job whose harness was killed, its log unread", cutOff: true, unread: true,
+			state: CaptureLanded, through: new(0)},
+		{name: "a job whose harness ended its own run, its take refused", untaken: true, state: CaptureRefused,
+			through: new(3)},
+		{name: "a job whose harness was killed, its take refused", cutOff: true, untaken: true,
+			state: CaptureRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			launched := rig.launchKept(t, "t1")
+			// THREE CALLS ANSWERED before the take, which a read would count.
+			for seq := 1; seq <= 3; seq++ {
+				if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
+					Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
+					t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+				}
+			}
+			if tc.unread {
+				rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"TurnLog"}}
+			}
+			if tc.untaken {
+				rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
+			}
+			archive := rig.runner.Session.Archive
+			rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+				Captured: &archive, HarnessCutOff: tc.cutOff})
+			// COLLECTED, the resume after it refused, so the row stays for the
+			// case.
+			rig.resumer.failWith(errors.New("held for the case to read the row"))
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Logf("OnCompleted: %v", err)
+			}
+			rig.awaitKeeps()
+			capture := rig.get("t1").Capture
+			if capture == nil || capture.State != tc.state || capture.Interrupted != tc.cutOff {
+				t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, tc.state, tc.cutOff)
+			}
+			through, placed := capture.SavePoint()
+			switch {
+			case tc.through == nil && placed:
+				t.Errorf("the capture states save point %d, want none: not known", through)
+			case tc.through != nil && (!placed || through != *tc.through):
+				t.Errorf("the capture states save point %d (stated %v), want %d", through, placed, *tc.through)
 			}
 		})
 	}
