@@ -77,11 +77,11 @@ import (
 // Its place — the launch's ordinal ([PendingRun.LaunchSeq]) and its own among
 // that launch's captures — is reserved on the row before a byte is spooled
 // ([PendingStore.StampCapture]), with its SAVE POINT — how many of its round's
-// calls the run's log had taken when it was read before the pack
-// ([SessionCapture.Through]; every call the log takes is numbered as it is
-// appended, [BridgeCall.Appended]), or, for the take of a job still working,
-// the newest its launch is known to hold (savepoint.go) — and the note the
-// job had read through: what
+// calls the run's log had taken when it was read before the pack, for a job
+// whose harness ended its own run ([SessionCapture.Through]; every call the
+// log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
+// the take of a job still working or one cut off, the newest its launch is
+// known to hold (savepoint.go) — and the note the job had read through: what
 // a launch that continues the session would need to know of what came after
 // it. How it came out is stamped beside: LANDED, REFUSED with why (no box to
 // read it out of, a pack that failed, a session past its bounds, the seat's
@@ -523,13 +523,19 @@ type SessionCapture struct {
 
 	// Through is the session's SAVE POINT: how many calls the round's log had
 	// taken ([BridgeLog.Appends]) at the one read of it the capture was placed
-	// by, made before the archive was packed ([Coordinator.takeCapture]).
-	// Every call the log takes after that read is numbered past it
-	// ([BridgeCall.Appended]), and is one the session had not been answered
-	// when it was read: a launch that continues the session is told each, with
-	// its outcome — whatever its place in the order the calls were made, so a
-	// call in flight at the read is told however many places the log's bound
-	// dropped below it — and how many of them the bound dropped from the
+	// by. For a job whose harness ended its own run — over, its harness gone
+	// cleanly by itself, its script packing it — that read is the capture's
+	// own, made before the archive was packed ([Coordinator.takeCapture]);
+	// every other capture — a save, the take of a job still working, and one
+	// cut off ([SessionCapture.Interrupted]) — is placed by an EARLIER read,
+	// the save point of the newest capture its launch is known to hold, or
+	// zero (savepoint.go), since its harness may have made, and had answered,
+	// calls it never wrote. Every call the log takes after that read is
+	// numbered past it ([BridgeCall.Appended]), and is one the session may not
+	// have been answered: a launch that continues the session is told each,
+	// with its outcome — whatever its place in the order the calls were made,
+	// so a call in flight at the read is told however many places the log's
+	// bound dropped below it — and how many of them the bound dropped from the
 	// middle, exactly (internal/agent/runner's calledAfter). A call answered
 	// between the read and the pack is in the session and told all the same:
 	// told twice, never not at all.
@@ -544,18 +550,19 @@ type SessionCapture struct {
 	Through *int `json:"bridge_through,omitempty"`
 
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
-	// READS IT, written for a fleet mid-upgrade and read by nothing of this
-	// build: the last bridged call ([BridgeCall.Seq]) the log held
-	// ([BridgeLog.LastSeq]), and the places at or below it the log held no
-	// call at ([openPlaces]) — a call the bridge numbers as it arrives is
-	// recorded only once its tool answers, so a place below the highest can
-	// be a call in flight. That build tells a continuation every call past
-	// BridgeSeq or at a place BridgeOpen names; but BridgeOpen keeps only the
-	// highest [maxOpenPlaces] of them, which a long round's dropped middle
-	// fills, so a call in flight below them reads to it as answered, which no
-	// count of places can mend and Through does. FROM THE SAME READ AS
-	// THROUGH, so the two state one save point. On a REFUSED stamp a BridgeSeq
-	// of zero is "not known", as a nil Through is.
+	// READS IT — copied off the capture whose save point Through takes, where
+	// the capture is placed by an earlier read — written for a fleet
+	// mid-upgrade and read by nothing of this build: the last bridged call
+	// ([BridgeCall.Seq]) the log held ([BridgeLog.LastSeq]), and the places at
+	// or below it the log held no call at ([openPlaces]) — a call the bridge
+	// numbers as it arrives is recorded only once its tool answers, so a place
+	// below the highest can be a call in flight. That build tells a
+	// continuation every call past BridgeSeq or at a place BridgeOpen names;
+	// but BridgeOpen keeps only the highest [maxOpenPlaces] of them, which a
+	// long round's dropped middle fills, so a call in flight below them reads
+	// to it as answered, which no count of places can mend and Through does.
+	// FROM THE SAME READ AS THROUGH, so the two state one save point. On a
+	// REFUSED stamp a BridgeSeq of zero is "not known", as a nil Through is.
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
 
@@ -1142,9 +1149,10 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, c.refuseUnplaced(ctx, by, run, current, at, nil, takerUnheld)
 	}
 	// THE SESSION'S PLACE IN THE RUN'S LOG, read BEFORE THE TAKE: how many
-	// calls the log had taken is how far the session had been answered
-	// ([SessionCapture.Through]). A call is appended once its tool has
-	// answered it, so every call this read counts was answered before the
+	// calls the log had taken is how far the session of a harness that ended
+	// its own run had been answered ([SessionCapture.Through]; every other
+	// capture is placed below, as a save is). A call is appended once its tool
+	// has answered it, so every call this read counts was answered before the
 	// pack that follows, and a call answered after it is numbered past it,
 	// and told — a call in flight now among them, whatever its place. Kept
 	// beside the row rather than on it ([BridgeLog]), so a log the store
@@ -1193,16 +1201,21 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	// A JOB STILL WORKING IS PLACED AS A SAVE IS, at the newest save point its
-	// launch is known to hold ([SessionCapture.placeAtNewest]), never at the
-	// read above: its harness may have made a call, and had it answered,
-	// before it wrote the call to its record — Claude Code 2.1.310 writes a
-	// message only once the whole of it has streamed (measured) — so the
-	// calls the log had taken before the pack are no measure of what the
-	// archive holds, and a continuation told only the calls after them was
-	// never told those. A job that is over is placed by the read
-	// (savepoint.go says why).
-	if at.final {
+	// PLACED BY THE READ ABOVE ONLY WHERE ITS HARNESS ENDED ITS OWN RUN — the
+	// job over, its harness gone cleanly by itself and its script packing it,
+	// nothing cut off — which wrote every call it made before it exited.
+	// EVERY OTHER CAPTURE IS PLACED AS A SAVE IS, at the newest save point its
+	// launch is known to hold ([SessionCapture.placeAtNewest]): a job still
+	// working, and one CUT OFF ([readCapture]) — its harness killed, crashed
+	// or told to stop, or gone with a loss whose read cannot say how. A harness
+	// may make a call, and have it answered, before it writes the call to its
+	// record — Claude Code 2.1.310 writes a message only once the whole of it
+	// has streamed (measured) — and one killed in that window never writes it;
+	// its end's SIGTERM was measured only with the call's message already
+	// written. So the calls the log had taken before the pack are no measure of
+	// what such an archive holds, and a continuation told only the calls after
+	// them was never told those (savepoint.go).
+	if !at.cutOff {
 		stamp.placeAt(calls)
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})

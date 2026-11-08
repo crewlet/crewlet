@@ -44,10 +44,12 @@ import (
 // that job's NEWEST capture: a later one that was not kept is a session that
 // went further than the kept one, and a run continued from the older would
 // believe it knew everything it did. And only one whose stamp states its SAVE
-// POINT ([SessionCapture.Through]), the count of the round's calls the run's
-// log had taken when the capture read it, which is what the continuation is
-// told the calls after by: one an older build stamped states only the places
-// it read the log at, which cannot say which calls came after it.
+// POINT ([SessionCapture.Through]), a count of the round's calls the session is
+// known to hold — the run's log as the capture read it before its pack, where
+// its harness ended its own run, and else the newest point its launch was
+// known to hold (savepoint.go) — which is what the continuation is told the
+// calls after by: one an older build stamped states only the places it read
+// the log at, which cannot say which calls came after it.
 //
 // EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
 // box before any capture of it landed, its captures refused or unanswered. Then

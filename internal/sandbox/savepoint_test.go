@@ -391,46 +391,113 @@ func TestASaveIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
 	}
 }
 
-// A TAKE OF A JOB STILL WORKING IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH
-// HOLDS, NEVER AT ITS LOG READ. A job its end could not stop is packed as it
-// stands, beside a harness that can make a call, and have it answered, before
-// it writes the call to its transcript (Claude Code 2.1.310, measured): so the
-// calls its round's log had taken before the pack say nothing of what its
-// archive holds, and the capture is placed as a save is — here at the round's
+// A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN.
+// A harness can make a call, and have it answered, before it writes the call to
+// its transcript (Claude Code 2.1.310, measured: it writes a message only once
+// the whole of it has streamed), so the calls its round's log had taken before
+// the pack say what the archive holds only of a job whose harness went cleanly
+// by itself, its script packing it. Every other capture is placed as a save is,
+// at the newest save point its launch is known to hold: a job still working,
+// taken as it stands; and every job CUT OFF — its harness killed, past its
+// end's grace or by a signal its script packed after; told to stop by its end;
+// ended before its script packed, packed by the read; or lost, its box read by
+// the loss, which cannot say how its job went. Each is placed at the round's
 // start, its launch holding no landed capture and the capture it continued
-// unknown — so a relaunch continuing it is told every call of the round, those
-// its archive lacks among them. A job its end stopped, taken final, is placed
-// at its log read, its harness having recorded every call before it went.
+// unknown — or at its own launch's landed capture where it holds one, with that
+// capture's places for an older build — so a relaunch continuing it is told
+// every call its archive may lack.
 //
-// Mutation: place the take of a job still working at its log read, as every
-// capture once was, and its save point counts calls its archive may lack;
-// place a final take as a save is, and it tells again every call its session
-// already holds.
-func TestATakeOfAJobStillWorkingIsPlacedAtTheNewestSavePointItsLaunchHolds(t *testing.T) {
+// Mutation: place a capture of a job cut off at its log read, as a job that is
+// over was, and its cases count calls its archive may lack; place every
+// capture as a save is, and the job that ended its own run tells again every
+// call its session holds; place one at zero whatever its launch holds, and the
+// case whose launch kept a capture goes red.
+func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name        string
+		name string
+		// capped launches the turn with its wall-clock cap passed, so its
+		// collection ends the job first.
+		capped bool
+		// finished is what a job reports that ended by itself, and ended what
+		// one reports once its end ended it, each holding the archive its
+		// script packed; nil for neither.
+		finished, ended func(archive *SessionArchive) Result
+		// unstoppable is a job its end cannot stop, taken as it stands.
 		unstoppable bool
-		final       bool
-		through     int
-		highest     int
+		// lost reads the job's box as a loss's read does, not as a collection.
+		lost bool
+		// own lands a capture of the job's own launch before the take.
+		own bool
+		// final and cutOff are how the take saw the job.
+		final, cutOff    bool
+		through, highest int
+		open             []int
 	}{
-		{name: "a job its end stopped, taken final", final: true, through: 3, highest: 3},
-		{name: "a job its end could not stop, taken as it stands", unstoppable: true},
+		{name: "a job whose harness ended its own run, its script packing it",
+			finished: func(a *SessionArchive) Result {
+				return Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310", Captured: a}
+			},
+			final: true, through: 3, highest: 3},
+		{name: "a job whose harness was killed, its script packing after it",
+			finished: func(a *SessionArchive) Result {
+				return Result{Text: "killed", SessionID: "s-1", HarnessVersion: "2.1.310", Captured: a,
+					HarnessCutOff: true}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended, its harness killed past its grace", capped: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndKilled}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended, its harness told to stop", capped: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndAsked}
+			},
+			final: true, cutOff: true},
+		{name: "a job its turn's cap ended before its script packed, packed by the read", capped: true,
+			final: true, cutOff: true},
+		{name: "a job its end could not stop, taken as it stands", capped: true, unstoppable: true, cutOff: true},
+		{name: "a lost job, its box read by the loss", lost: true, final: true, cutOff: true},
+		{name: "a job cut off whose own launch had kept a capture", capped: true, own: true,
+			ended: func(a *SessionArchive) Result {
+				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndKilled}
+			},
+			final: true, cutOff: true, through: 2, highest: 2, open: []int{1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig, _, _ := keepingRig(t)
-			launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+			deadline := time.Time{}
+			if tc.capped {
+				deadline = rig.now.Add(-time.Minute)
+			}
+			launched := rig.launchUntil("t1", deadline)
 			rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
 			rig.coordinator.countRun("swe", StatusRunning)
-			// THREE CALLS ANSWERED before the collection reads the log, any of
-			// which the harness may not have written yet.
+			// THREE CALLS ANSWERED before the take reads the log, any of which
+			// the harness may not have written.
 			for seq := 1; seq <= 3; seq++ {
 				if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
 					Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
 					t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
 				}
+			}
+			if tc.own {
+				own := SessionCapture{LaunchSeq: launched.LaunchSeq, CaptureSeq: 1, Launch: launched.LaunchID,
+					State: CaptureLanded, At: rig.now, Through: new(2), BridgeSeq: 2, BridgeOpen: []int{1},
+					Object: objstore.KeyAt(rig.now).String(), Harness: "claude-code", SessionID: "s-1",
+					ArchiveFormat: FakeArchiveFormat}
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", own); err != nil || !took {
+					t.Fatalf("landing the launch's own capture = %v, %v", took, err)
+				}
+			}
+			archive := rig.runner.Session.Archive
+			switch {
+			case tc.finished != nil:
+				rig.runner.Finish(tc.finished(&archive))
+			case tc.ended != nil:
+				rig.runner.EndsAs(tc.ended(&archive))
 			}
 			if tc.unstoppable {
 				// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill past
@@ -443,26 +510,42 @@ func TestATakeOfAJobStillWorkingIsPlacedAtTheNewestSavePointItsLaunchHolds(t *te
 					return ErrNoJobGroup
 				}
 			}
-			// PAST ITS TURN'S CAP, the collection ends the job first; the
-			// resume after it is refused, so the row stays for the case.
-			rig.resumer.failWith(errors.New("held for the case to read the row"))
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Logf("OnCompleted: %v", err)
+			if tc.lost {
+				spooled, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
+				rig.coordinator.keepLater(spooled)
+			} else {
+				// COLLECTED, the resume after it refused, so the row stays for
+				// the case.
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
 			}
 			rig.awaitKeeps()
 			kept := rig.get("t1").Kept
-			if kept == nil || kept.State != CaptureLanded || kept.Final != tc.final {
-				t.Fatalf("the row keeps %+v, want a landed capture, final: %v", kept, tc.final)
+			if kept == nil || kept.State != CaptureLanded || kept.CaptureSeq != nextSeq(tc.own) ||
+				kept.Final != tc.final || kept.Interrupted != tc.cutOff {
+				t.Fatalf("the row keeps %+v, want the take's capture landed, final: %v, cut off: %v", kept,
+					tc.final, tc.cutOff)
 			}
 			through, placed := kept.SavePoint()
 			if !placed || through != tc.through {
 				t.Errorf("the capture is placed at %d (stated %v), want %d", through, placed, tc.through)
 			}
-			if kept.BridgeSeq != tc.highest || (tc.unstoppable && kept.BridgeOpen != nil) {
-				t.Errorf("the capture carries %d and %v for an older build, want %d: the places of the point "+
-					"it states", kept.BridgeSeq, kept.BridgeOpen, tc.highest)
+			if kept.BridgeSeq != tc.highest || !slices.Equal(kept.BridgeOpen, tc.open) {
+				t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
+					"point it states", kept.BridgeSeq, kept.BridgeOpen, tc.highest, tc.open)
 			}
 		})
 	}
+}
+
+// nextSeq is the place among its launch's captures the take's capture takes:
+// the first, or the one after the capture the launch already kept.
+func nextSeq(kept bool) int64 {
+	if kept {
+		return 2
+	}
+	return 1
 }
