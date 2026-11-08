@@ -11834,6 +11834,18 @@ nothing was written; `revision` the configuration's answer to the block, `null`
 where nothing was blocked. Every call is one `mcp_server_acted` with the action
 `review_changes`, naming the tools accepted and kept blocked.
 
+### `GET /mcp-approvals/{id}`
+
+The held call `{id}` whole, for whoever may answer it: `{"id", "server",
+"tool", "seat", "turn_id", "launch_id", "question", "context", "arguments",
+"arguments_sha256"}`, `arguments` opened from their seal and
+`arguments_sha256` the SHA-256, in hex, of them as JSON with sorted keys.
+Decided as the answer is (`tools.approve`, or `ssh.operate.approve` for an SSH
+operate command), so a person
+`integrations.ssh.approvers` names reads every byte of an operate command's
+standard input here, whether or not they read the seat's runs. Never Ask
+Crewlet's.
+
 ### `POST /mcp-approvals/{id}`
 
 Answers a call an agent's run made to an MCP tool at Needs approval
@@ -11849,7 +11861,11 @@ the run's [executors board](#get-executors) row name it.
 
 `answer` is `once` (make the call), `always` (make it, and set the tool to
 `allow` on its server's entry from now on) or `deny` (do not make it; the run
-is told the call was refused as `forbidden`). `always` takes an optional
+is told the call was refused as `forbidden`). `once` on an SSH operate command
+also names the `arguments_sha256` that [`GET /mcp-approvals/{id}`](#get-mcp-approvalsid)
+answered beside the arguments it showed, so it is given only from a surface
+that read all of it; without it, or naming another, it is `409 conflict` and
+nothing is answered. `always` takes an optional
 `_summary` for the revision it writes; without one the revision is summarised
 as the tool allowed in answer to the held call.
 
