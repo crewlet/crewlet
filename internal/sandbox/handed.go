@@ -136,7 +136,7 @@ import (
 // `auth_provider_x509_cert_url` and `universe_domain` are fixed by Google's
 // format, not by the account, and are kept, so the seat's transcripts keep
 // every googleapis.com URL its tools print ([serviceAccountConstant]). One
-// closed list for one format; every other document keeps every string.
+// closed list for one format; every other document gives up every string.
 //
 // AT THE FLOOR EVERY VALUE IS HELD TO, and of its strings alone. The scrub
 // takes nothing out by value under eight bytes (internal/sandbox/executor's

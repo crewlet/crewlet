@@ -941,7 +941,7 @@ exactly `service_account`), the values of `type`, `auth_uri`, `token_uri`,
 format, the same in every key, and are kept, so a seat handed one keeps every
 googleapis.com URL its tools print. One closed list, for one format the engine
 has a first-class integration for, decided on the key's declared `type`; every
-other document keeps every string, and every other member of the key goes.
+other document gives up every string, and every other member of the key goes.
 
 **A set the renewals take past `MaxHandedBytes`** once its lapsed values are
 dropped, or one the node cannot open or seal again, is MARKED: an empty seal,
