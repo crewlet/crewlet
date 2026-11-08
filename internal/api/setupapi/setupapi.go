@@ -465,7 +465,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// A TEST SIGNS CERTIFICATES and dials the server, so it is the connect
 	// verb; the audit is an administrator's read.
 	post("POST /setup/integrations/ssh/hosts/{id}/test", authz.EffectReads, s.sshTest)
-	mount("GET /setup/integrations/ssh/audit", authz.ActionSetupRead, s.sshAudit)
+	mount("GET /setup/integrations/ssh/audit", authz.ActionSSHAuditRead, s.sshAudit)
 	// A ROTATION SEALS A NEW AUTHORITY, or replaces the current one with it,
 	// so it rewrites.
 	post("POST /setup/integrations/ssh/rotation", authz.EffectRewrites, s.sshRotation)
