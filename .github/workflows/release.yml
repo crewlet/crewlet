@@ -230,7 +230,7 @@ jobs:
       # an input, so the default is the cosign that moves with the pin. The
       # signing arguments in .goreleaser.yaml are cosign 3's bundle form, and
       # a major of cosign that changes them changes them with this pin.
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       # GHCR, with the run's own token. No second account and no stored
       # credential — which is the property Trusted Publishing gave the
