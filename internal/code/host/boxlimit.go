@@ -63,7 +63,7 @@ import (
 // its REPOSITORY's checks (code.CheckKey.Resyncs), the same sixteen and the
 // same refill, and past them are answered at its session saying so; and at
 // most MaxRunRequests of the attempt's git requests are in flight on a node.
-// Its reads at /box/gitlet/ pay the same attempt's bucket at the git node that
+// Its reads at /box/gitlet/ pay the same attempt's bucket at the Gitlet node that
 // answers them (internal/code/query): the query server draws on the node's
 // one Resyncs too, so on a node where Gitlet serves the check's git and
 // answers its reads, the attempt has ONE burst, not one a server. Keyed by

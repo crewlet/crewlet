@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/query"
 )
 
-// BenchmarkRevisionFacts is a revision's facts, timed whole through a git
+// BenchmarkRevisionFacts is a revision's facts, timed whole through a Gitlet
 // node's query server — the check of its two commits, its unit of the share,
 // the merge base, the walk of the paths it touches, its patch written into a
 // spool and `git patch-id` reading it back — over a change whose cumulative
@@ -83,7 +83,7 @@ const (
 	factsLines     = factsFileBytes / 51
 )
 
-// factsRig is BenchmarkRevisionFacts's fixture: a fleet of one git node
+// factsRig is BenchmarkRevisionFacts's fixture: a fleet of one Gitlet node
 // holding a change's base and head, its query server, and the patch's bytes.
 type factsRig struct {
 	s                *query.Server

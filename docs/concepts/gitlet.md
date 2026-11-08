@@ -1,7 +1,7 @@
 # Gitlet
 
 Gitlet is the engine's own git host. A company that sets
-[`code.native`](../getting-started/configuration.md#code) hosts its git
+[`code.backend: gitlet`](../getting-started/configuration.md#code) hosts its git
 repositories in Gitlet, beside Worklet, Doclet and Chatlet, and on the same
 footing: what a repository *is* — its settings, its protection rules, its refs
 and the packs it holds — is replicated state every data node keeps whole, and
@@ -33,7 +33,7 @@ reference, kept while a live row names it (see
 [One object per upload](object-store.md#one-object-per-upload)).
 
 A git repository on a node's disk is never the record. It is a
-[cache](#the-cache-on-a-git-node) derived from the rows, disposable and rebuilt
+[cache](#the-cache-on-a-gitlet-node) derived from the rows, disposable and rebuilt
 from them.
 
 A repository's **changes** are rows on the same log. A change — `web!42`, the
@@ -47,8 +47,8 @@ its branches, so a change is never both merged and closed
 review it, the reviews and the findings they raise, the comments and the
 threads they form — is its conversation, on a subject of the change's own,
 decided by the [change writer](#reviews-and-findings) beside the committer
-and never waiting behind a push. And the repository's [home git
-node](#the-home-git-node) reads each revision against its target — its
+and never waiting behind a push. And the repository's [home Gitlet
+node](#the-home-gitlet-node) reads each revision against its target — its
 base, what it touches, whether it merges cleanly — so that whether a change
 is ready to merge is one judgement over rows, never a clone
 ([A revision's facts](#a-revisions-facts), [Merge
@@ -64,8 +64,8 @@ its page in the dashboard's [Gitlet
 workspace](../reference/dashboard-design.md#the-gitlet-workspace). The steps are
 the guide's [Review a change](../guides/gitlet.md#review-a-change).
 
-How it scales — git nodes adding reads, data nodes committing pushes, and what
-sizes each — is [Scaling Out: Git nodes](scaling.md#git-nodes); turning it on,
+How it scales — Gitlet nodes adding reads, data nodes committing pushes, and what
+sizes each — is [Scaling Out: Gitlet nodes](scaling.md#gitlet-nodes); turning it on,
 declaring a repository and pushing to it are the steps of the
 [Hosting Code on Gitlet](../guides/gitlet.md) guide.
 
@@ -82,7 +82,7 @@ This is the product's current shape, not a configuration choice:
   ([The company's code](../guides/tools-and-mcp.md#the-companys-code)): its
   reads are answered on the server ([Server-side reads](#server-side-reads)),
   and each change it asks — files committed, a commit reverted or picked, a
-  branch created or deleted — is built on the repository's home git node and
+  branch created or deleted — is built on the repository's home Gitlet node and
   landed as a push ([Engine-built commits](#engine-built-commits)), under the
   rule a person's push is judged by too ([Who may read and
   push](#who-may-read-and-push)). A seat and a person's assistant create,
@@ -99,7 +99,7 @@ and every activation makes the fleet match the declaration:
 
 ```yaml
 code:
-  native: true
+  backend: gitlet
   deleted_retention_days: 7        # 1..365; unset is 7
   repos:
     - name: nimbus-web             # the address it is cloned by
@@ -140,15 +140,15 @@ code:
 - **`search`** — how code search reads it: `indexed` (unset), from an index of
   its default branch, which a search across the company's repositories reads
   as well as one naming the repository; or `grep`, with git grep over a copy,
-  and only by a search that names it. The index is kept by the first two git
-  nodes of the repository's order over the live git nodes — each fills a copy
+  and only by a search that names it. The index is kept by the first two Gitlet
+  nodes of the repository's order over the live Gitlet nodes — each fills a copy
   of its own for it, and builds it again within a minute of a push, reading
   only the files the push brought. A node that becomes one of the two because
   another left the order builds nothing until that one has been gone ten
   minutes, and a node the order moves past keeps its index ten minutes, so a
-  git node's restart moves no index. An index costs each git node keeping one
+  Gitlet node's restart moves no index. An index costs each Gitlet node keeping one
   its disk and a build at every new tip, and a `grep` repository costs nothing
-  until somebody asks it. A git node's indexes hold at most a third of its
+  until somebody asks it. A Gitlet node's indexes hold at most a third of its
   cache's budget: past it, the index of the repository searched there least
   recently is dropped, and is built again only once the node has room for it
   or that repository is searched there more recently than an index the node
@@ -212,7 +212,7 @@ references](configuration.md#var-references)); unset fetches anonymously.
 **And the variable is one an administrator declared for the URL's host**, in
 [`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials):
 the node sends the value to the remote's host, so a reference nothing bounded
-would let whoever may create a repository have a git node send any value it
+would let whoever may create a repository have a Gitlet node send any value it
 can resolve — its keyring, a Tier A token, the object store's key — to a host
 of their choosing. A declaration naming any other is refused when the revision
 is written, a person's create or settings change naming one is refused
@@ -231,7 +231,7 @@ mirrors from `code.repos`, which every activation settles.
 A scratch repository takes none of the three.
 
 **An import and a pull mirror run on the repository's home** — the first live
-git node of its rendezvous order, the node that runs its change work. The home
+Gitlet node of its rendezvous order, the node that runs its change work. The home
 fetches the source's branches and tags (`refs/heads/*` and `refs/tags/*`) over
 smart HTTP, every object checked as a push's objects are, cuts what arrived
 into packs of at most 1 GiB and lands them as records of the repository's
@@ -246,7 +246,7 @@ lands a record — a small one, with no pack and no push — that moves the
 mirror's last sync, so the home asks a quiet source again 15 minutes later
 rather than at its next minute's pass, whichever node is home by then: one
 such record per quiet mirror every 15 minutes is the cost. An import stopped in the middle resumes from what
-landed, on whichever git node is home by then, fetching only what the landed
+landed, on whichever Gitlet node is home by then, fetching only what the landed
 refs do not reach. One that cannot finish — a blob past
 `code.limits.max_blob_bytes`, the repository past one of its limits, a source
 that answers only over the dumb HTTP protocol — ends: the repository is active
@@ -292,7 +292,7 @@ does depends on either.
 | Change nothing | **Nothing** but one fleet-wide record, the activation's fence (below) — never a record a repository. |
 | Remove a repository | **Deleted**: it takes no push, and its rows and packs are kept. Declaring it again under its name within `code.deleted_retention_days` **restores** it: its refs and packs as they were, with the settings it is declared with now. |
 | Leave it removed past `code.deleted_retention_days` | **Purged** by the `code-retention` duty, in bounded steps, and its name is free again (see [Deletion and purge](#deletion-and-purge)). |
-| Turn `code.native` off | **Nothing is deleted.** A node whose native runtime is already running keeps serving Gitlet until its restart (see [A native backend changes at a restart](control-plane.md#a-native-backend-changes-at-a-restart)), and a revision without Gitlet reconciles no repository at all. |
+| Turn Gitlet off | **Nothing is deleted.** A node whose native runtime is already running keeps serving Gitlet until its restart (see [A native backend changes at a restart](control-plane.md#a-native-backend-changes-at-a-restart)), and a revision without Gitlet reconciles no repository at all. |
 
 Only repositories the **configuration** manages are reconciled. A repository
 somebody else created is never deleted for being absent from `code.repos`.
@@ -420,9 +420,9 @@ to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
 rules](#protection-rules)): a gate judges a change's merge, never a push. No
 other read carries
 a gate: a listing of repositories answers each rule as a push is held to it,
-and so does the row every git request, every git node's sync and every push's
+and so does the row every git request, every Gitlet node's sync and every push's
 decision reads — at its bounds a repository's gates are half a mebibyte,
-which none of them needs, and a git node rewrites the row it keeps at every
+which none of them needs, and a Gitlet node rewrites the row it keeps at every
 push.
 `crewlet validate` warns — never fails — about a gate field that would do
 nothing: `owners_approve` on a repository that names no path owners, `landing`
@@ -632,7 +632,7 @@ sets its [search mode](#declaring-repositories) — a person's on any repository
 a tool made, a seat's on what it maintains. A **scratch** repository is `grep`
 for good: asked for an index, by its seat or by a person, it is refused
 `not_permitted`, since an index of a seat's experiment would be built and kept
-on the git nodes for a repository deleted once it sits idle — and a search
+on the Gitlet nodes for a repository deleted once it sits idle — and a search
 that names it still reads it.
 
 **Archive, delete and restore** work as they do for a declared repository: an
@@ -757,7 +757,7 @@ A pass's line counts `released` old names, `expired` scratch repositories and
 
 A repository can be filled from another forge, kept in step with one, or
 published to one. All three are run by the repository's
-[home git node](#the-home-git-node), from the repository's rows, and dial the
+[home Gitlet node](#the-home-gitlet-node), from the repository's rows, and dial the
 other host the same one way.
 
 | | What it moves | Which way | How often |
@@ -804,12 +804,12 @@ and the push row on the code log stays the provenance
 **One outbound dial.** Every one of the three reaches the other host over
 HTTPS alone. The node resolves the host itself and refuses it when any address
 it resolves to is not on the public internet — unless Tier A's
-[`git.import_allow_private`](configuration.md#git) lets it
+[`gitlet.import_allow_private`](configuration.md#gitlet) lets it
 reach the node's own network — and hands git exactly the addresses it judged, so
 git never asks DNS again; redirects are not followed. Through a proxy — the
 process's own, the one `HTTPS_PROXY` names for the URL less what `NO_PROXY`
 exempts — the node resolves nothing: the proxy resolves and dials the host, so
-the address rule is the proxy's to hold and `git.import_allow_private` changes
+the address rule is the proxy's to hold and `gitlet.import_allow_private` changes
 nothing. The certificate authorities are the process's own too
 (`SSL_CERT_FILE`, `SSL_CERT_DIR`), as
 [Deployment](../guides/deployment.md#reaching-other-forges) says.
@@ -1007,7 +1007,7 @@ the limit `git push origin :old new` — or a `--prune` push — goes through.
 
 A repository also holds at most **2 048 live packs**: every push that carries
 objects stores one, and they stay until a compaction merges them. The bound is
-a cold read's: a git node that has never served the repository downloads one
+a cold read's: a Gitlet node that has never served the repository downloads one
 object for every live pack before it answers, sixteen at a time, and from an
 S3 fake answering each request 200 ms late a cold read downloaded 2 048 of
 them in 26.4 s, 77 a second — within 27 s, half of 55 s, the minute of quiet a
@@ -1046,8 +1046,8 @@ in steps stores more than one pack of it: every step keeps whole the files it
 touches whose earlier versions an earlier step stored. Measured on this
 project's own history, 34 MB as one pack stored 68.5 MB in eleven steps and
 78.6 MB in forty-two. Those bytes are what the object store holds, what every
-git node serving the repository caches and what a cold sync downloads, so
-size `repo_max_bytes`, the object store and the git nodes' caches for the
+Gitlet node serving the repository caches and what a cold sync downloads, so
+size `repo_max_bytes`, the object store and the Gitlet nodes' caches for the
 repository as it was pushed, not for the source it came from. A merge writes
 each object of the packs it takes once, and git searches for deltas among the
 objects it merges, so a file a step kept whole may be stored as a delta again
@@ -1082,17 +1082,17 @@ would sit beside each other, the first stands and the second is refused.
 ## Compaction
 
 Every push stores one pack, so a busy repository's pack count grows with its
-pushes — and a git node that reads it whole pays a GET for every pack, and
+pushes — and a Gitlet node that reads it whole pays a GET for every pack, and
 every request a lookup in every pack its index does not cover. The
-repository's **maintainer** merges them — the git node that also publishes its
+repository's **maintainer** merges them — the Gitlet node that also publishes its
 layers ([Who maintains a repository](#who-maintains-a-repository)), on a fleet
-of alike git nodes its [home git node](#the-home-git-node) — and its committer
+of alike Gitlet nodes its [home Gitlet node](#the-home-gitlet-node) — and its committer
 decides the merge as it decides a push
 ([ADR-0090](https://github.com/crewlet/crewlet/blob/main/adr/0090-a-compaction-merges-packs-without-judging-reachability.md)).
 
-**The roll.** Once a minute every git node lists the repositories holding
+**The roll.** Once a minute every Gitlet node lists the repositories holding
 sixteen live packs or more, most packs first, judges which of them it
-maintains against one listing of the live git nodes, and for each it maintains
+maintains against one listing of the live Gitlet nodes, and for each it maintains
 it
 plans git's own geometric split — the one `git repack --geometric=2` makes —
 over the packs that are not FULL and that no [published
@@ -1110,7 +1110,7 @@ at a time even when they already stand in that progression, so it shrinks at
 every poll. One merge takes at most 1 024 packs and 8 GiB of pack bytes, the
 lightest first. A repository whose plan finds nothing worth merging is not
 planned again until its rows move, so an idle repository costs its
-maintainer's minute a lookup, and every other git node's the one judgment of
+maintainer's minute a lookup, and every other Gitlet node's the one judgment of
 who maintains it.
 
 **The build.** One `git pack-objects --stdin-packs` over the packs merged,
@@ -1147,7 +1147,7 @@ decides the same compaction, never a second. The committer decides it ALONE,
 in one snapshot: every pack it merges still live, not full and named by no
 published layer, or it is refused `stale` and the next poll plans again from
 the rows; and ONE record adds the outputs' rows and moves the merged packs'
-rows into a table of retired packs. Two git nodes that both take themselves
+rows into a table of retired packs. Two Gitlet nodes that both take themselves
 for the maintainer for a moment both build, and the second is refused `stale`;
 what it stored is named by no row, and the object collector deletes it.
 
@@ -1158,7 +1158,7 @@ sequenceDiagram
     participant R as Estate router
     participant C as Committer
     participant L as Code log
-    participant G as Every other git node
+    participant G as Every other Gitlet node
     H->>H: plan the roll, build in a scratch
     H->>S: store every output, at once
     H->>R: propose one compaction
@@ -1171,10 +1171,10 @@ sequenceDiagram
 ```
 
 **Every copy follows.** The maintainer links the outputs it built into its
-copy, so it downloads none of them; every other git node downloads them at its next
+copy, so it downloads none of them; every other Gitlet node downloads them at its next
 sync of the repository, and drops the merged packs by moving its copy into a
 next directory of hard links, keeping the commit-graph, since a merge drops no
-commit ([When packs leave a copy](#the-cache-on-a-git-node)). A request
+commit ([When packs leave a copy](#the-cache-on-a-gitlet-node)). A request
 already reading the old directory finishes on it.
 
 **A day's grace.** A retired pack keeps its object for a day — longer than the
@@ -1210,14 +1210,14 @@ a host, and 147.5 MiB for the same history's 64 pushes as a publication
 repacks them, measured on git 2.56.0 —
 and more where its delta search meets large files (eight revisions of a
 50 MiB file held 270 MiB), and takes 28 to 48 seconds for every gibibyte of
-packs it merges, in the node's maintenance lane. Every other git node holding
-the repository downloads each output once, so over a repository's life a git
+packs it merges, in the node's maintenance lane. Every other Gitlet node holding
+the repository downloads each output once, so over a repository's life a Gitlet
 node downloads, and writes, at most about 16 times what is pushed to it at
 20 KB pushes, fewer the more pushes a merge takes at once
-([Scaling Out](scaling.md#git-nodes) has what that bills); a merge's record
+([Scaling Out](scaling.md#gitlet-nodes) has what that bills); a merge's record
 takes 43 to 108 bytes a push on the code log, and the record that sweeps its
 retired rows a day later up to 44 more; a merged pack's row is kept a
-day, about 608 bytes; and a git node drops the merged packs by a move into a
+day, about 608 bytes; and a Gitlet node drops the merged packs by a move into a
 next directory that links three files a pack it keeps, whatever the packs'
 bytes (over the in-memory store, whose download waits on no first byte, a
 sync that downloaded a merge's output and moved a copy of 50 packs took
@@ -1226,7 +1226,7 @@ top). What it buys is the cold read: from an S3 fake answering each request
 200 ms late — S3's slow first byte — the fifty or so packs a compacted
 repository holds came up in under a second, where the 2 048 a repository may
 hold took 27 seconds and the 10 000 of a history nothing merged over two
-minutes ([The cache on a git node](#the-cache-on-a-git-node)).
+minutes ([The cache on a Gitlet node](#the-cache-on-a-gitlet-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
 the repository's packs until an [expunge](#expunge) drops it. And it never
@@ -1241,26 +1241,26 @@ pace, so a clone between the two counts its objects by walking.
 ### Who maintains a repository
 
 A repository's background work — merging its packs and
-[publishing its layers](#when-a-repository-is-published) — runs on ONE git
-node, its **maintainer**: the first git node of the repository's rendezvous
-order (the order its reads walk, [The home git node](#the-home-git-node))
+[publishing its layers](#when-a-repository-is-published) — runs on ONE Gitlet
+node, its **maintainer**: the first Gitlet node of the repository's rendezvous
+order (the order its reads walk, [The home Gitlet node](#the-home-gitlet-node))
 whose **advertised background budget** holds every step of its maintenance —
 the largest charge any of them is admitted at: its publication's bitmap over
 its whole history, 600 bytes an object of the repository with room beside it
 for a clone, or a merge of every object with its delta window, the larger
-under some six million objects — and its home where no git node's does. A node
+under some six million objects — and its home where no Gitlet node's does. A node
 whose budget holds the publication but not a whole merge would refuse the
 merge for memory, and a merge refused costs the repository its pushes once its
-packs reach the bound, so the placement weighs the merge as well. Every git
+packs reach the bound, so the placement weighs the merge as well. Every Gitlet
 node advertises its budget on its presence heartbeat, so every node reads the
-placement from memory. On a fleet of alike git nodes every repository's
-maintainer is its home; on a fleet with one large git node, every repository
-only that node can hold is maintained there, and every other git node
-installs what it publishes ([Sizing git
-nodes](../guides/deployment.md#sizing-git-nodes)).
+placement from memory. On a fleet of alike Gitlet nodes every repository's
+maintainer is its home; on a fleet with one large Gitlet node, every repository
+only that node can hold is maintained there, and every other Gitlet node
+installs what it publishes ([Sizing Gitlet
+nodes](../guides/deployment.md#sizing-gitlet-nodes)).
 
-The git nodes weighed are the ones the fleet's presence listing carries, so a
-node is a maintainer only once its peers can see it: a git node that is
+The Gitlet nodes weighed are the ones the fleet's presence listing carries, so a
+node is a maintainer only once its peers can see it: a Gitlet node that is
 starting maintains nothing until its first heartbeat is listed, about a second
 after it starts, and its loops wait for that rather than run a pass before it;
 a node that is draining has left the listing, and every repository it
@@ -1291,7 +1291,7 @@ Nothing
 leases a repository to its maintainer: two nodes whose presence views disagree
 for a moment may both build, and the committer refuses the second `stale`.
 Each pass judges every repository it lists against one reading of the
-listing, so a repository a git node does not maintain costs that node's pass
+listing, so a repository a Gitlet node does not maintain costs that node's pass
 the one judgment of who does, never a read of the presence view of its own. A
 node that cannot read who serves git does none of a maintainer's work that
 pass rather than guess (`code_compaction_maintainer_unknown`,
@@ -1306,7 +1306,7 @@ its publications begins with a whole download of its repository.
 
 Nothing else removes an object a push stored. A force-push or a deletion
 moves a ref and leaves the history behind it in the repository's packs,
-fetchable by its id from every git node and counted against
+fetchable by its id from every Gitlet node and counted against
 `code.limits.repo_max_bytes`, which a push is refused `repo_size` on. An
 **expunge** is the one rewrite that drops objects — what no ref reaches,
 past a grace — run by the repository's
@@ -1316,7 +1316,7 @@ publication, one rewrite of a repository at a time
 
 **When it runs.** Two ways, and nothing to configure:
 
-- **Weekly, on the maintainer's own schedule.** Every minute a git node lists
+- **Weekly, on the maintainer's own schedule.** Every minute a Gitlet node lists
   the repositories it may owe an expunge — first those with one open or a
   purge requested, then every active or archived repository last expunged or
   found clean a week ago or never, least recently first, a seat's
@@ -1328,12 +1328,12 @@ publication, one rewrite of a repository at a time
   is **due** once that is more than a quarter of the repository's live pack
   bytes and at least 64 MiB, and it then rewrites only packs that hold some
   of it, those freeing the most for their size first: below a quarter,
-  rewriting the kept packs, which every git node holding the repository then
+  rewriting the kept packs, which every Gitlet node holding the repository then
   downloads again, costs more than the bytes it frees. A repository whose
   live bytes are under 64 MiB is judged from its size alone, never
   downloaded or walked. One found clean either way is recorded so on the
-  repository, which takes it off every git node's list for a week — after a
-  restart, an upgrade or a new git node as much as before — so a clean
+  repository, which takes it off every Gitlet node's list for a week — after a
+  restart, an upgrade or a new Gitlet node as much as before — so a clean
   repository's history is walked at most once a week. The 64 MiB is
   provisional: the expunge's benchmark has priced a 100 MB repository's
   cycle against what it frees, and not yet a gigabyte's.
@@ -1375,7 +1375,7 @@ sequenceDiagram
     participant M as Maintainer
     participant S as Object store
     participant C as Committer
-    participant G as Every git node's cache
+    participant G as Every Gitlet node's cache
     alt a person's purge
         P->>C: request the purge
         C-->>P: answered once the request is recorded
@@ -1403,10 +1403,10 @@ sequenceDiagram
    packs holding what the scan kept, which stay live, and packs holding the
    rest, which are **dropping**: still rows naming their objects, still
    served to a clone, a fetch and a seat's read, and never a pack a push may
-   build on ([Packs an expunge is dropping](#the-cache-on-a-git-node)). To
+   build on ([Packs an expunge is dropping](#the-cache-on-a-gitlet-node)). To
    every reader it is a merge. It removes the
    [published layers](#published-layers) over the packs it rewrote, so each
-   git node serves from the layers below them, or from its own index, until
+   Gitlet node serves from the layers below them, or from its own index, until
    the maintainer publishes again after the commit. And it moves the
    repository's **drop epoch**: a push, an engine write, a coding box's push,
    a pull mirror's sync, a merge, a queue's candidate or its landing that was
@@ -1430,15 +1430,15 @@ sequenceDiagram
    packs, and keeps live, as a **rescue**, whatever of them a push that
    landed between the scan and the begin reaches again. Its one precondition
    is its own expunge, still open with exactly those dropping packs — never a
-   ref — so a repository pushed to all day still commits. Each git node then
+   ref — so a repository pushed to all day still commits. Each Gitlet node then
    drops the dropping packs at its next sync, by its copy's next directory, and
    with them the commit-graph, the answers it keeps for seats' reads, its tip
    over a published chain and its code index, since each may name or quote
    what left ([What the cache writes beside the
-   packs](#the-cache-on-a-git-node)).
+   packs](#the-cache-on-a-gitlet-node)).
 
 A cycle stopped at any point — a crash, a restart, the maintainer moving to
-another git node — leaves nothing, an expunge open, which the next pass on
+another Gitlet node — leaves nothing, an expunge open, which the next pass on
 whichever node then maintains the repository finishes from the rows, or an
 expunge committed; what it stored that no row names is the
 [object collector's](object-store.md#collection-and-audit). A begin takes at
@@ -1447,13 +1447,13 @@ takes several cycles, each a week apart on the schedule and back to back for
 a purge.
 
 **What still holds a purged object.** The commit takes it out of the
-repository: no row names it live, no git node serves it once it has synced,
+repository: no row names it live, no Gitlet node serves it once it has synced,
 and no clone or fetch receives it again. It is still held:
 
-- by **every git node's cache that has not synced the repository since** — a
+- by **every Gitlet node's cache that has not synced the repository since** — a
   node syncs it at the next request it serves for it, or drops it with the
   repository when its budget evicts it — and a request already reading the
-  old copy finishes on it. The purge's answer names the git nodes that may
+  old copy finishes on it. The purge's answer names the Gitlet nodes that may
   hold a copy;
 - by **the object store, for a day** after the commit — the retired packs'
   grace, so a clone already reading one finishes — then until the
@@ -1481,7 +1481,7 @@ and when the last commit landed and what it dropped. On the maintainer,
 `crewlet.code.expunge.runs` counts its cycles by outcome,
 `crewlet.code.expunge.duration` times their stages,
 `crewlet.code.expunge.dropped_bytes` sums what they took out, and on every
-git node `crewlet.code.cache.dropping.bytes` is what its cache holds of
+Gitlet node `crewlet.code.cache.dropping.bytes` is what its cache holds of
 dropping packs ([metrics reference](../reference/metrics.md)); its log says
 `code_expunge_due` when a scan finds one due, `code_expunge_begun` and
 `code_expunge_committed` for its two records, and `code_expunge_refused` or
@@ -1518,9 +1518,9 @@ of the packs it sorts, as a merge does. A node whose
 budget cannot hold that refuses the expunge and asks again at every pass.
 Nothing is refused at once, but what no ref reaches keeps counting against
 `code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,
-until a git node with the room maintains the repository. The begin's record writes at most 2 625 rows
+until a Gitlet node with the room maintains the repository. The begin's record writes at most 2 625 rows
 and applied in 75 ms at its widest, measured on two cores, the commit's at
-most 97 rows in 13.5 ms. Every other git node holding the repository downloads
+most 97 rows in 13.5 ms. Every other Gitlet node holding the repository downloads
 the kept, the dropping and the rescue packs once — the maintainer links its
 own, the dropping ones into its copy's dropping view, so it downloads none of
 what it built — which is why the schedule waits for a quarter of the
@@ -1906,7 +1906,7 @@ behind their batches and contend with every push to the repository.
 - **One node writes a change's conversation.** A write is asked of the
   repository's committing data node — the node its pushes are asked of — and
   decided there by the **change writer** beside the committer, in one
-  snapshot, as a record of its own; a git node never publishes one. The writer
+  snapshot, as a record of its own; a Gitlet node never publishes one. The writer
   takes ONE CHANGE'S WRITES ONE AT A TIME — two published at once would read
   one expectation, and one of them would lose a round to the other — and
   different changes' side by side. A write waits for its change's turn while
@@ -2189,7 +2189,7 @@ requires checks — say `main`, gated on `unit` and `lint` and an approval:
 ```mermaid
 flowchart TD
     PUSH["A push moves seats/dev/retry<br/>and opens or revises web!42"] --> FACTS["Its home records the revision's facts:<br/>base, patch-id, touched paths, classes"]
-    FACTS --> HEAD["Head checks: each check main's<br/>.crewlet/checks.yaml defines, queued by the home<br/>and run in a box on a git node"]
+    FACTS --> HEAD["Head checks: each check main's<br/>.crewlet/checks.yaml defines, queued by the home<br/>and run in a box on a Gitlet node"]
     HEAD --> GATE{"The merge gate, judged on one snapshot:<br/>approvals, human paths, owners,<br/>blockers, required checks, mergeable,<br/>the merger's authority"}
     GATE -->|"unmet: readiness names each condition<br/>and whom it waits on"| WAIT["ready_to_merge wakes its authors who may merge it<br/>once the last is met"]
     WAIT --> GATE
@@ -2204,13 +2204,13 @@ flowchart TD
 1. **A push** moves a branch, and the push's own record opens a change of it
    or adds a revision to the change already open on it
    ([A change a push opens](#a-change-a-push-opens), [Revisions](#revisions)).
-2. **The repository's home git node** measures the revision — its base, its
+2. **The repository's home Gitlet node** measures the revision — its base, its
    patch-id, the paths it touches and their [change classes](#change-classes)
    — and whether it merges cleanly ([A revision's
    facts](#a-revisions-facts), [Mergeability](#mergeability)).
 3. **The head's checks** are the ones `.crewlet/checks.yaml` defines **as the
    target holds it**, never as the change edits it: the home queues them, a
-   git node claims each and runs it in a box, and each attempt's result is a
+   Gitlet node claims each and runs it in a box, and each attempt's result is a
    row ([How a head's checks are
    dispatched](#how-a-heads-checks-are-dispatched), [Who runs a
    check](#who-runs-a-check)). A failed head check wakes its authors
@@ -2290,7 +2290,7 @@ defines none — and each check is a mapping of these keys and no other:
 | `timeout_seconds` | yes | How long it may run: a whole number, 1 to 21 600 — six hours, GitHub Actions' per-job ceiling, so no job moved from a pipeline has to be cut. A company holds its checks to its own ceiling at or under that (`code.checks.max_timeout_seconds`) |
 | `paths` | no | At most 32 path globs, in the grammar [path owners](#path-owners) use — `*` within a component, `**` for whole components, relative to the repository's root — of which a change must touch one for the check to run on it. None runs it on every change |
 | `report` | no | `junit` and `sarif`: the files the check writes its results to, each a path inside its checkout, read once the command ends. With neither, a check is judged by its exit code alone |
-| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box, among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` is refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads |
+| `run_in` | no | `container` — a container on a Gitlet node — or `e2b`, a remote box, among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` is refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads |
 | `checkout` | no | What of the tree the check's box checks out: all of it (unset), a **cone** — at most 64 directories, git's sparse checkout, each a clean directory inside the repository — or `none`, for a check that reads what it needs by object id through the API instead of a clone |
 | `env` | no | At most 32 variable names, each the key of an entry in the company's check secrets (`code.checks.env`): the secrets this check is given. A check is given none it does not name |
 
@@ -2386,8 +2386,8 @@ every backup, since nothing builds it again.
 A check's records are written by the repository's **committing data node** —
 the node its pushes are [decided by](#the-committer), the first of the
 repository's rendezvous order over the live data nodes — whichever node asks:
-the repository's home queuing a change head's checks, or the git node that
-runs one claiming it and ending it. **No git node publishes a check's record
+the repository's home queuing a change head's checks, or the Gitlet node that
+runs one claiming it and ending it. **No Gitlet node publishes a check's record
 itself**: it asks the committing data node, through the estate's
 `code.checks`, as a push's receiver asks for a push to be decided. That node's
 **checks writer** — beside its committer, sharing none of its queue — takes
@@ -2485,7 +2485,7 @@ A queued attempt that waits for a runner longer than its **own**
 — each attempt judged at the time its author gave its check to run, never at
 one threshold for every check, so a long check's ordinary queue raises
 nothing and a one-minute lint stuck for an hour does. Every data node measures
-it from the rows, so it stands even where no git node runs checks at all,
+it from the rows, so it stands even where no Gitlet node runs checks at all,
 reading the queued attempts in the order they fell **overdue** — each
 attempt's queued instant plus its own timeout, which its row carries — so a
 lint stuck behind a thousand attempts of a long check is found as soon as it
@@ -2499,7 +2499,7 @@ The writer counts what it decided on three instruments: the attempts it
 queued (`crewlet.code.checks.queued`, by purpose), the endings the rows kept
 (`crewlet.code.checks.finished`, by state, placement and the ending each
 replaced — `none` for an attempt's first) and every claim's
-outcome (`crewlet.code.checks.claims`) — `claimed` is git nodes racing for one
+outcome (`crewlet.code.checks.claims`) — `claimed` is Gitlet nodes racing for one
 attempt, each losing a box it never made, and `lost` above zero is two nodes
 writing one repository's checks at once ([metrics](../reference/metrics.md)).
 
@@ -2508,7 +2508,7 @@ writing one repository's checks at once ([metrics](../reference/metrics.md)).
 A change's head is checked by its **target's** checks file, read at the
 target's tip — never the head's own, so no change narrows the checks that
 judge it. Its checks are queued by its repository's
-[home git node](#the-home-git-node) — the same loop that reads its facts and
+[home Gitlet node](#the-home-gitlet-node) — the same loop that reads its facts and
 merges it ([The home's change work](#the-homes-change-work)), working a second
 worker, `checks`, from the rows. The home reads `.crewlet/checks.yaml` at the
 tip through the git reads (`checks_file`, the engine's own read of the file
@@ -2627,7 +2627,7 @@ grant on the repository as every other read of it is:
   on every request ([Check boxes](#check-boxes)). A person's or a seat's read
   naming an attempt's key is refused, so no read that forgot whom it asks for
   is answered held to no grant;
-- **`checks_queued`**: the engine's own — a git node's [claim
+- **`checks_queued`**: the engine's own — a Gitlet node's [claim
   walk](#who-runs-a-check): every repository's queued attempts whose checks
   name one cell (or none), oldest queued first, each with the definition it
   was queued under and its repository's name, a page at a time;
@@ -2644,11 +2644,11 @@ wrote ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 
 ### Check boxes
 
-A check runs in a **box** of its own — a container on a git node, or a remote
+A check runs in a **box** of its own — a container on a Gitlet node, or a remote
 box, with no harness in it ([Code Sandbox → Check
 boxes](code-sandbox.md#check-boxes)) — which reaches Gitlet as a
 [coding box](#coding-boxes) does, at
-`/box/git/<name>.git` on a node whose roles name `git` (on the public listener
+`/box/git/<name>.git` on a node whose roles name `gitlet` (on the public listener
 where one is set), with a credential of its own and nobody's else: git's Basic
 user name `check` and, as the password, a token naming **one attempt** of one
 check of one commit and the name of the repository its box was given, signed
@@ -2727,7 +2727,7 @@ it — or `403 check_unknown` with the same clause for an attempt the stale copy
 does not hold. Keyed by the repository, the checks one push fans out share one
 term, as they share one turn of the transfer lane. At most **16** of an
 attempt's git requests are in flight on a node (`503 run_busy`), and its reads
-at `/box/gitlet/` pay the same attempt's bucket at the git node that answers
+at `/box/gitlet/` pay the same attempt's bucket at the Gitlet node that answers
 them: a node keeps one set of buckets for its git and its reads alike, so an
 attempt has one burst on a node, not one for each, and its reads past it are
 counted in `crewlet.code.box.resyncs` with its git's.
@@ -2750,9 +2750,9 @@ curl -fsS -u "check:<its token>" "https://hooks.example.com/box/gitlet/web/blob?
 the attempt's commit, a diff from the attempt's base to it — and a parameter
 no read takes is refused `400 bad_params`, never ignored: a box that asked for
 `rev=` and was answered its own commit would read the wrong code with nothing
-saying so. The read is asked of the repository's home git node as a
+saying so. The read is asked of the repository's home Gitlet node as a
 [server-side read](#server-side-reads) the engine makes for the check, held to
-no grant, recorded as nobody's read, and held by the git node to that commit
+no grant, recorded as nobody's read, and held by the Gitlet node to that commit
 again. Its answer is the read's page — a tree's listing, a file's lines, a
 diff's stat or one file's patch — with the repository's name, the commit, the
 base a diff was read from and the next page's cursor, and none of the push
@@ -2765,14 +2765,14 @@ as a [coding box](#coding-boxes) is.
 
 ### Who runs a check
 
-**Every git node runs checks.** Each walks the queued attempts, oldest queued
-first, and ranks each by its repository's **git order** — every live git node
-in the repository's rendezvous order, its [home](#the-home-git-node) first:
+**Every Gitlet node runs checks.** Each walks the queued attempts, oldest queued
+first, and ranks each by its repository's **git order** — every live Gitlet node
+in the repository's rendezvous order, its [home](#the-home-gitlet-node) first:
 the node at rank *r* claims an attempt only once it has waited *r* × 2 seconds
 since it was queued. So the home claims first, where the repository's warm
 copy is, and the runner-up two seconds later only if the home did not — its
 container cells full, or none — and so on down the order. Every node computes
-the same order from the same set of git nodes; there is no lease and no
+the same order from the same set of Gitlet nodes; there is no lease and no
 coordinator. A node walks the queue when a check record lands on the code log,
 at most once a second, and every fifteen seconds whatever happens.
 
@@ -2795,9 +2795,9 @@ reads that back and makes nothing. A lost race costs a record, never a box.
 With its box made, the holder names the box on the attempt.
 
 **Container cells are bounded by the node's cores.** A `container` check is a
-container on the git node's own machine, so a node runs at most
-`git.max_checks` of them at once — unset, a quarter of its cores and at least
-one; `0`, none ([Deployment](../guides/deployment.md#running-checks-on-git-nodes)).
+container on the Gitlet node's own machine, so a node runs at most
+`gitlet.max_checks` of them at once — unset, a quarter of its cores and at least
+one; `0`, none ([Deployment](../guides/deployment.md#running-checks-on-gitlet-nodes)).
 A node with no free container cell claims no container check, and the next node
 of the attempt's order claims it two seconds later. An `e2b` check runs on
 another machine and takes none of them: the company's own caps bound it
@@ -2848,27 +2848,27 @@ again at once.
 its commit from Gitlet at that address, and reads it without a clone at
 its `/box/gitlet` sibling — so the address is the public listener with
 `/box/git` on the end. Such a node says so once, as `code_checks_not_run`, and
-leaves the fleet's checks to its other git nodes; a fleet where none runs them
+leaves the fleet's checks to its other Gitlet nodes; a fleet where none runs them
 raises `code_checks_backlog`.
 
 ### What a check costs
 
 A check spends no tokens, so what it costs is **its box's time**. A
-`container` box runs on a git node's own machine, bounded by that node's
-`git.max_checks`. An `e2b` box runs on the provider's machines and is billed to
+`container` box runs on a Gitlet node's own machine, bounded by that node's
+`gitlet.max_checks`. An `e2b` box runs on the provider's machines and is billed to
 the company's account there, so it is bounded **company-wide**, by two caps in
 `code.checks.remote`
 ([configuration](../getting-started/configuration.md#code)):
 
 | Cap | Unset | What it bounds |
 |---|---|---|
-| `max_running` | 16 | How many `e2b` check boxes run at once, whichever git node starts them |
+| `max_running` | 16 | How many `e2b` check boxes run at once, whichever Gitlet node starts them |
 | `box_hours_per_day` | 192 | How many hours of `e2b` box time the company spends on checks in a UTC day, midnight to midnight |
 
 **A check past a cap waits queued.** A runner takes room under both caps
 *before* it claims an `e2b` check, so a check the caps hold back is claimed by
 nobody and stays `queued` — never errored, never a claim that runs nothing —
-until a box ends or the day turns over, when the next walk of whichever git
+until a box ends or the day turns over, when the next walk of whichever Gitlet
 node finds room claims it. Queued checks are taken oldest first, as always.
 
 **At once is a lease.** The boxes running are `max_running` slots in the
@@ -2878,10 +2878,10 @@ node finds room claims it. Queued checks are taken oldest first, as always.
 whose node died holding it lapses within 60 seconds, so a dead runner never
 holds the company's cap for longer than a minute. A cap lowered while the boxes
 of the old one run holds every new box back until enough of them have ended.
-A git node lists the slots once a walk of its queue, however many boxes the
+A Gitlet node lists the slots once a walk of its queue, however many boxes the
 walk starts, and a node that found them all held lists them again only once a
 box of its own has given its slot back, the cap is raised, or 15 seconds have
-passed: a full cap costs the coordination store one listing per git node every
+passed: a full cap costs the coordination store one listing per Gitlet node every
 15 seconds, never one every walk.
 
 **A day is counted a minute at a time.** Each `e2b` box is charged one minute
@@ -2905,7 +2905,7 @@ renewal.
 **A box whose slot lapsed is counted again.** A node whose renewals do not
 reach the store for 60 seconds — an outage that long, its host asleep, a
 stall — has its running boxes' slots lapse, and from that moment the company's
-cap stops counting those boxes, so other git nodes may start boxes in their
+cap stops counting those boxes, so other Gitlet nodes may start boxes in their
 room. A lapsed lease cannot be renewed, so each such box takes a slot again,
 at every renewal until it holds one: a slot the store lists as free, or else
 one past `check-remote:<n-1>`, which no new box is offered and every count
@@ -3222,7 +3222,7 @@ serves, and is split.
 
 ---
 
-## The cache on a git node
+## The cache on a Gitlet node
 
 A repository lives as rows on the code log and as pack bundles in the object
 store. A node that serves git keeps a **cache** of each repository it is asked
@@ -3294,7 +3294,7 @@ a data node a page at a time, and every page is one read on that data node:
 one of the 64 answers its lane gives the whole fleet's reads at once — a seat's
 tracker read, a page write, the check every git request is admitted by — and
 one of the connections its database scans every one of those reads on, of
-which the smallest data node has eight (or, on a git node that holds the data
+which the smallest data node has eight (or, on a Gitlet node that holds the data
 itself, its own database's, which serves those reads too). So a node reads
 **at most eight repositories' rows whole at once**, the rest waiting their
 turn, first come, first served: a node coming up with hundreds of repositories
@@ -3303,7 +3303,7 @@ rather than every page while the fleet's reads wait behind them. A sync after
 a push reads only what moved and never waits for one of the eight. The wait is
 part of the request's own: a clone waits for its repository's turn as it waits
 for the sync, and a seat's read that has no answer within two seconds is sent
-to another git node while the sync goes on.
+to another Gitlet node while the sync goes on.
 
 Against a model of a data node of eight cores, every page as long as a full
 page of refs takes to scan — about 60 ms, the dearest a page is — a node
@@ -3324,8 +3324,8 @@ running and waiting, and `crewlet.code.cache.read.page.duration` how long the
 data nodes take to answer each page.
 
 **The budget.** A node holds its caches to a byte budget —
-`git.cache_max_bytes`, or a share of the cache's volume derived at every boot
-([`git`](configuration.md#git)) — counting everything they hold on disk: every repository's packs, indexes and refs, the
+`gitlet.cache_max_bytes`, or a share of the cache's volume derived at every boot
+([`gitlet`](configuration.md#gitlet)) — counting everything they hold on disk: every repository's packs, indexes and refs, the
 answers its [memo](#the-memo) keeps, and the downloads and pushes in flight.
 Past it, the memo is trimmed to its sixteenth of the budget first, and then
 the repositories used least recently are evicted, and nothing else evicts one: a repository nobody fetched over a
@@ -3334,7 +3334,7 @@ rather than downloaded again. Each repository's last use survives a restart,
 so one read all day and rarely pushed to is not the first evicted after one.
 A repository a request is reading is never evicted — one larger than the whole
 budget is still served, logged as `code_cache_over_budget`, and evicted as soon
-as no request holds it. Every git node that serves a repository caches it
+as no request holds it. Every Gitlet node that serves a repository caches it
 **whole**, so size the volume for the repositories it serves, not the company's
 total. A dedicated disk is worth it, because a cold sync writes everything it
 downloads at the speed the object store delivers it. Size the node's memory
@@ -3345,7 +3345,7 @@ repository past what the node can give it is indexed without one.
 **Background indexing.** With one pack a push, git would search pack after
 pack for every object. So once a repository's packs have stood still for ten
 seconds — or the oldest has waited ten minutes, for one pushed to without pause
-— a git node writes it a multi-pack index with a bitmap, and a commit-graph, so
+— a Gitlet node writes it a multi-pack index with a bitmap, and a commit-graph, so
 a clone counts its objects from the bitmap rather than walking the history. The
 bitmap carries git's lookup table, so a request that opens it reads only the
 bitmaps it needs rather than every commit's: over a gigabyte, the pack-objects
@@ -3383,7 +3383,7 @@ it was read for would wait those seconds to spare the rare skewed push the
 same. A copy that serves from a published chain gets its node's **tip**
 over the chain the same way ([Published layers](#published-layers)).
 
-**Changed-path filters.** Every commit-graph a git node writes carries git's
+**Changed-path filters.** Every commit-graph a Gitlet node writes carries git's
 changed-path filters, one a commit: a `git log -- <path>` or a blame skips
 each commit whose filter says the path did not change rather than diffing it
 against its parent — 0.044 seconds with them against 0.399 with no
@@ -3455,7 +3455,7 @@ layers move with it, a placement of one included
 unreachable objects first rewrites the packs it takes into
 packs of what the refs reach, kept, and packs of what nothing reached when it
 read the refs, **dropping**, and only a second record takes the dropping ones
-out. Between the two, a git node keeps the repository's dropping packs in a
+out. Between the two, a Gitlet node keeps the repository's dropping packs in a
 directory of their own beside its packs, `objects-dropping/pack`, which only a
 git process serving the repository reads: a clone, a fetch and a seat's read
 still find an object there by its id, so a client that already holds one
@@ -3481,7 +3481,7 @@ and so does a node's tip over a published chain; the multi-pack index and the
 published layers stay, never having covered the dropping packs.
 
 **What the cache writes beside the packs.** Six kinds of file in a
-repository's cache are derived on the git nodes rather than named by the
+repository's cache are derived on the Gitlet nodes rather than named by the
 rows: the multi-pack index — a full read's, written before it answers once
 the repository holds 256 packs, and the background indexing's, with its
 bitmap or without one — the commit-graph, the index of which push introduced
@@ -3494,7 +3494,7 @@ inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
 before a pack it may name leaves the directory — the copy's next directory
-never holds it ([When packs leave a copy](#the-cache-on-a-git-node)) — so no
+never holds it ([When packs leave a copy](#the-cache-on-a-gitlet-node)) — so no
 git process reads an index that names a pack that is gone; the one exception
 is the commit-graph when a compaction retires the pack, since a merge drops no
 commit and the graph names only commits the repository still holds. An
@@ -3548,7 +3548,7 @@ written again at once.
 | `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first | dropped first |
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | dropped first | kept |
-| `codeindex`, the trigram index of the default branch's tip of a repository searched by index, on the first two git nodes of its git order — its segments, keyed by blob, and its tip map | `crewlet/codeindex/seg.<n>`, `crewlet/codeindex/tip.<n>` | the indexer of code indexes: `codeindex` | kept | dropped first | kept |
+| `codeindex`, the trigram index of the default branch's tip of a repository searched by index, on the first two Gitlet nodes of its git order — its segments, keyed by blob, and its tip map | `crewlet/codeindex/seg.<n>`, `crewlet/codeindex/tip.<n>` | the indexer of code indexes: `codeindex` | kept | dropped first | kept |
 | `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | kept, no layer naming a pack an expunge drops | cut first, below the layer that names it |
 | `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
@@ -3594,7 +3594,7 @@ a root's 384, 560 and 287); 350 an object of the layer for its commit-graph
 layer, and 100 MiB beside it for its changed-path filters' diffs; and a
 compaction's for its repack. A repository is placed on the node
 that maintains it by its root's charge, which its maintainer must be able to
-hold. A git node reads its
+hold. A Gitlet node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for
@@ -3637,7 +3637,7 @@ alone but not beside what is running waits for it, and the first such
 repository in the queue is given the room it needs: nothing smaller starts
 in its place.
 
-So **a git node's ceiling on a repository it keeps a bitmap of is bounded by
+So **a Gitlet node's ceiling on a repository it keeps a bitmap of is bounded by
 memory — about 840 bytes an object, with the clone beside it — before it is
 bounded by disk**: at about three million objects a gigabyte of a source
 repository's packs, about 2.5 GB of memory for each gigabyte of packs, and some
@@ -3649,7 +3649,7 @@ about 3.3 million); 16 GiB on four cores leaves 9 GiB: bitmaps of up to about
 memory: it reads it again every ten seconds, so a container resized in place
 is held to its new limit at once (`code_cache_memory_changed`), while the git
 lanes keep the sizes they took at boot until a restart. An operator's
-`git.max_transfers` is kept as written rather than sized to the memory, so a
+`gitlet.max_transfers` is kept as written rather than sized to the memory, so a
 figure set by hand can leave the background work nothing: once its
 transfers' 224 MiB each reach the memory less the 896 MiB of each core it
 backs — as little as 56% of the transfers the memory holds at 224 MiB each,
@@ -3877,7 +3877,7 @@ holds damaged, fails the sync at once naming the pack, with nothing fetched
 again, and the collector's daily audit raises the
 [`objects_missing`](object-store.md#alarms) alarm for the same object.
 
-**Checking a copy.** An operator asks a git node to check its copy of a
+**Checking a copy.** An operator asks a Gitlet node to check its copy of a
 repository against the rows — every pack hashed as the bundle its push stored,
 every multi-pack-index, bitmap and commit-graph held to its own checksum (the
 one check that names a damaged bitmap: no git command can), an installed
@@ -3924,7 +3924,7 @@ on a disk holds neither its slot nor the operator who asked; the node says
 when it ends the pass running, and a client waits by that. It checks only a
 copy the node holds: one it never served has nothing to check, and building one
 would be a download of the whole repository that evicts a warm one — so a
-check goes to the git nodes that serve the repository.
+check goes to the Gitlet nodes that serve the repository.
 
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
@@ -3959,7 +3959,7 @@ as `code_layer_refused` ([When a layer is missing](#when-a-layer-is-missing)),
 and `failed` climbing an object store failing the installer — beside
 `crewlet.code.cache.layer.install`, how long each layer took to fetch, check
 and place — `crewlet.code.publish.refusals` by `reason` on a maintainer —
-`memory` at all a repository no git node holds the publication of, which
+`memory` at all a repository no Gitlet node holds the publication of, which
 `code_maintenance_refused` raises and `code_cache_maintenance_refused` (step
 `publish`) names, any other reason logged as `code_publication_refused` — and
 `crewlet.code.cache.memo.lookups` by `outcome` beside
@@ -3971,10 +3971,10 @@ and `corrupt` at all a disk damaging what the cache holds
 ### Published layers
 
 A repository's multi-pack index, its bitmap and its commit-graph are the
-dearest files a git node derives — writing the bitmap walks the whole history
-and holds about 600 bytes of memory an object of it ([Memory](#the-cache-on-a-git-node))
-— and every git node that serves the repository wants them. So they can be
-written **once**, by one git node, the repository's
+dearest files a Gitlet node derives — writing the bitmap walks the whole history
+and holds about 600 bytes of memory an object of it ([Memory](#the-cache-on-a-gitlet-node))
+— and every Gitlet node that serves the repository wants them. So they can be
+written **once**, by one Gitlet node, the repository's
 [maintainer](#who-maintains-a-repository), and installed by every other
 ([ADR-0091](https://github.com/crewlet/crewlet/blob/main/adr/0091-a-derived-object-is-published-kept-and-never-audited.md)).
 The maintainer writes git's own incremental
@@ -3984,13 +3984,13 @@ the three files in the object store, in parts of at most 1 GiB; and names the
 layer on the code log on top of the repository's **chain**: at most 32
 layers, root first, each valid only over the exact layers beneath it
 ([Live, retired and derived references](object-store.md#live-retired-and-derived-references)).
-Every git node installs the chain the rows name. Each layer is fetched, held
+Every Gitlet node installs the chain the rows name. Each layer is fetched, held
 to its row and placed byte for byte as the maintainer's git wrote it, which
 any node holding the layer's packs byte for byte can read — every copy does.
 The two chain files that list the layers are the node's own, written from the
 rows' order, since a layer's files never name the layer beneath them. Who
 publishes and when is [When a repository is
-published](#when-a-repository-is-published); this section is how every git
+published](#when-a-repository-is-published); this section is how every Gitlet
 node installs what the rows name.
 
 **Chain mode or own mode, never both.** A copy holding an installed chain
@@ -4035,7 +4035,7 @@ changed-path filters — on git 2.56.0, 0.01 to 0.03 seconds over a tail of 64
 pushes, and 0.70 computing every filter of one of 90 909 objects outside a
 gigabyte's published layer, whose every commit rewrites a directory of a
 thousand entries. A copy holding no tip gets one at once, as a copy
-with no graph does ([The commit-graph first](#the-cache-on-a-git-node)); once
+with no graph does ([The commit-graph first](#the-cache-on-a-gitlet-node)); once
 the tail's packs change, the tip is written again by the background indexing's
 usual pace, **whole** — over the installed layers alone and every commit of the
 tail — rather than a new tip stacked on the old, which would grow without bound
@@ -4057,7 +4057,7 @@ repository — a cold cache, a node's first sync of it after a restart, a
 rebuild — keeps the longest part of the chain, from its root, that the copy
 already holds whole: every file there at its row's size and held to its
 checksum, as every file a previous process left is before it serves
-([Damage and repair](#the-cache-on-a-git-node)). It fetches the rest, every
+([Damage and repair](#the-cache-on-a-gitlet-node)). It fetches the rest, every
 part of every layer queued in the sync's one download queue behind its packs,
 so a cold copy's first answer is served through the bitmap for the layers'
 bytes downloaded beside the packs' rather than after them. A layer's index and
@@ -4108,7 +4108,7 @@ leaves a copy, a replaced one included).
 
 **A placement is a swap, read before it is seen.** A copy a request may be
 reading has its chain placed the way packs leave one ([When packs leave a
-copy](#the-cache-on-a-git-node)): in its next directory, the layers it keeps
+copy](#the-cache-on-a-gitlet-node)): in its next directory, the layers it keeps
 linked from the old one and the fetched ones renamed in, the chain files
 written from the rows, and the copy moved into place whole. A copy nobody
 holds — a node's first sync of it after a restart, a rebuild's — has its chain
@@ -4217,7 +4217,7 @@ and replaces a base the store lost, with every layer above it. It writes the
 multi-pack-index layer with its bitmap, then the commit-graph layer with every
 changed-path filter, in one slot of the node's maintenance lane and against
 its background budget at the largest of its
-steps' charges ([Memory](#the-cache-on-a-git-node)), and gives both back once
+steps' charges ([Memory](#the-cache-on-a-gitlet-node)), and gives both back once
 its last git process has ended, before the uploads. A tail holding no commit
 gives git nothing to bitmap, and a layer without a bitmap would switch off
 every bitmap beneath it, so such a layer is planned once more over one more
@@ -4229,7 +4229,7 @@ built over and to every pack live at its plan that its base does not cover. A
 store with no room refuses the publication `store_full` and holds the
 repository back until it has the room, as it holds a merge back, never retried
 as a blip. The maintainer then links what it built into its own copy, so it
-downloads none of it, and every other git node's installer fetches the layer.
+downloads none of it, and every other Gitlet node's installer fetches the layer.
 `code_publication_applied` logs each one, and `crewlet.code.publish.runs`,
 `.duration`, `.refusals` and `.bytes` count them
 ([metrics reference](../reference/metrics.md)).
@@ -4268,13 +4268,13 @@ Each is logged as `code_layer_install_failed`, or as `code_cache_swap_failed`
 where it was the placement's swap that failed.
 
 **The maintainer repairs.** A part the store lost or damaged is refused on
-every git node, the maintainer's own among them, so the maintainer's next
+every Gitlet node, the maintainer's own among them, so the maintainer's next
 publication pass finds the refusal in its own copy whether or not anything was
 pushed since, and publishes again over the layers it holds sound: the refused
 layer and every one above it are replaced, at most once every 10 minutes, and
 a repair that does not land paces its repository as any publication's build
 does. An idle repository whose layer the store lost is repaired by the first
-git node to be its maintainer, or at its next push.
+Gitlet node to be its maintainer, or at its next push.
 
 **After a restore.** A backup carries no layer: a layer is derived, and the
 backup neither copies nor asks after it ([Live, retired and derived
@@ -4282,7 +4282,7 @@ references](object-store.md#live-retired-and-derived-references)). So a
 restore brings back rows naming layers whose parts the restored object store
 may not hold. On `s3` it holds none; on the broker's bucket it holds what the
 bucket's snapshot did. A part the store holds is held to its row and placed
-like any other. A layer with a part it lacks is refused `missing` on every git
+like any other. A layer with a part it lacks is refused `missing` on every Gitlet
 node, and each copy serves from the layers below it, or in own mode, until
 the repository's maintainer publishes again — over every live pack, once, for
 a chain the store lost whole: one walk of the repository's history
@@ -4329,8 +4329,8 @@ audit ([ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person
   [public listener](../reference/api-endpoints.md#which-listener-serves-what) —
   it serves outside parties, who hold no token of the company's.
 
-git is served by every node whose `node.roles` name `git` (an undeclared node
-has every role), once the company sets `code.native`: the node builds Gitlet
+git is served by every node whose `node.roles` name `gitlet` (an undeclared node
+has every role), once the company sets `code.backend: gitlet`: the node builds Gitlet
 at boot, or at the activation that brings its native runtime up, and
 refuses to start it on a git older than 2.55 (the node floor), naming the git it
 found; a person's git, CI's or a sandbox box's needs 2.40 or newer. A node
@@ -4345,7 +4345,7 @@ it on, declaring a repository, binding a token and the first push.
 ## Coding boxes
 
 A seat's [executor](code-sandbox.md) reaches Gitlet from its box at
-`/box/git/<name>.git`, served by every node whose roles name `git` — on the
+`/box/git/<name>.git`, served by every node whose roles name `gitlet` — on the
 [public listener](../reference/api-endpoints.md#which-listener-serves-what)
 where one is set, beside the box's other two edges, the tool bridge
 (`/mcp/{token}`) and the telemetry receiver (`/otlp/{token}`), and on
@@ -4359,7 +4359,7 @@ keeps them working ([Secret store](secret-store.md#rotating-the-keyring-with-not
 **A run checks its repositories out, and the engine gives the box the rest.**
 Every launch on a node serving Gitlet hands the run, in its environment
 alone, the token and Gitlet's address: the node's `CREWLET_BOX_GIT_URL`,
-a git node's public `/box/git` or a balancer over the git nodes, since any of
+a Gitlet node's public `/box/git` or a balancer over the Gitlet nodes, since any of
 them serves any box. The box's git is configured to present the token for that
 address only, and the token reaches nothing yet: the run's row grants no
 repository. Each `code_checkout` the run's agent calls through its tool bridge
@@ -4502,7 +4502,8 @@ to the record. The sealed set of secrets beside it is about 0.7 KiB for a
 launch handed a model key, two MCP servers' tokens and its own telemetry and
 Gitlet tokens (computed from its encoding: 486 bytes of values, sealed and
 named for the job in a 779-byte part), and at most 64 KiB before sealing; only
-a capture and the next launch's opening read it. With the log on the record,
+a capture, the next launch's opening and the poll's record of a token it
+renews in the box read it. With the log on the record,
 as the record kept it before (measured 2026-11-01 on the same machine), the
 record was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and
 26.0), and every listing of runs and every flip of one moved the same half
@@ -4623,16 +4624,16 @@ is held to the bound its admitted row set, and a repository the floor does
 not hold is refused saying it was not judged again. Persons are never
 charged: their reads of refs go through the barrier by right, and the code
 log's census counts them as its clients. The buckets are each node's own, in
-memory, so a box whose requests spread over several git nodes has a burst on
-each, and the log's barriers from boxes are bounded by the fleet's git nodes.
+memory, so a box whose requests spread over several Gitlet nodes has a burst on
+each, and the log's barriers from boxes are bounded by the fleet's Gitlet nodes.
 `crewlet.code.box.resyncs{outcome}` counts them, `taken` or `spent`, and every
 `spent` answer is logged `code_box_resyncs_spent` with the bucket's scope (the
 seat), its principal (`run <launch id>`) and the object.
 
-A seat's code tools are bounded the same way on the git node that answers
+A seat's code tools are bounded the same way on the Gitlet node that answers
 them: a [server-side read](#server-side-reads)'s one second look at the log's
 head, and an [engine write](#repositories-made-by-tools)'s one re-judgement of
-a refusal there, are paid from its **turn's** bucket and its seat's — the git
+a refusal there, are paid from its **turn's** bucket and its seat's — the Gitlet
 node's ONE set of buckets, which its boxes pay too, 16 and 11.5 minutes as a
 box's. The seat's bucket on a node is one, whether its boxes or its turns
 reach the log's head through it: the census gives a seat one term, and a box
@@ -4961,7 +4962,7 @@ deleting or restoring it are decided for whoever woke the turn like any other
 write. A colleague seat bounds every read the write makes too, so a write tool
 shows nothing of a repository the colleague could not read.
 
-The write's ceiling is judged where the write is decided — the git node that
+The write's ceiling is judged where the write is decided — the Gitlet node that
 builds an [engine-built commit](#engine-built-commits) and the data node that
 decides a repository's create, settings or protection — from the same chart and
 row as the seat's own grant, so an activation that takes a colleague out of a
@@ -4983,14 +4984,14 @@ or a person who may not act in the company now, a seat writes nothing of a
 change except its own work: a change it owns, an open of a branch under its own
 namespace, and any change of a repository it owns. Every read a change tool
 makes is held to a colleague as every code read is. **A change's
-[rebase](#a-change-rebased) is a branch write**, so the git node that builds it
+[rebase](#a-change-rebased) is a branch write**, so the Gitlet node that builds it
 holds it as it holds every one: for a colleague seat, a source branch the
 colleague could push, or the seat's own work. **A change's
 [merge](#a-merge-end-to-end)** — or its enqueue, which a target whose gate
-requires a check takes in its place — is held by the git node that builds it
+requires a check takes in its place — is held by the Gitlet node that builds it
 to the merge authority the colleague holds itself into the target (its
 gate's `merge_by` and the company's floor, by the one rule the change's
-readiness judges that term by, judged for the colleague from the git node's
+readiness judges that term by, judged for the colleague from the Gitlet node's
 own chart and the gate the merge reads anyway, the change read once), and to
 a repository the colleague may read, refused `not_permitted` otherwise; for a
 stranger, or a person who may not act in the company now, a seat merges
@@ -5000,7 +5001,7 @@ nothing but into a branch of its own namespace or of a repository it owns.
 
 ## Server-side reads
 
-A git node also answers questions about a repository's content without a
+A Gitlet node also answers questions about a repository's content without a
 clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
 file's patch — how two commits compare (their merge base, which contains
 which, the commits each has that the other lacks, and what one changed since
@@ -5014,7 +5015,7 @@ one revision are in another, and what the change changed between two
 ([A revision's facts](#a-revisions-facts)), and which lines of a commit a
 code search matches ([A search of one repository](#a-search-of-one-repository)).
 It answers each with real git over its own
-[cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
+[cache](#the-cache-on-a-gitlet-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
 answer names, with what its index of pushes holds.
 
@@ -5070,7 +5071,7 @@ line; a line of a patch longer than a page is refused, naming the file's lines
 to read instead. A binary file is answered by its size, as git calls one
 binary: a NUL in its first 8 000 bytes.
 
-**Who may read** is judged by the git node that answers, from its own chart,
+**Who may read** is judged by the Gitlet node that answers, from its own chart,
 by the rules of [Who may read and push](#who-may-read-and-push): a person reads
 every repository, and a seat what its tier and its relation allow, so a
 `visibility: unit` repository is refused to a seat outside the unit,
@@ -5080,24 +5081,24 @@ chart and row, and refused where the colleague could not read it
 ([Reads made for somebody else](#reads-made-for-somebody-else)). A deleted or
 purging repository is answered not found, with what became of it.
 
-**A git node that cannot answer says so about itself**, and another git node
+**A Gitlet node that cannot answer says so about itself**, and another Gitlet node
 may answer the same read — nothing about the repository's content is concluded
 from such an answer:
 
 | Unready | What it means |
 |---|---|
-| `syncing` | the node is bringing its copy up: it could not be brought to what the read needs within two seconds, or before the read's answer fell due — a copy downloading the repository, whose download goes on after the read stops waiting — or a git process over the copy reported damage, which the cache is repairing, or a sync failed on what every git node's copy is filled from (the code log, the object store, the repository's rows, or a repair the cache will not repeat because reading them whole did not end the damage), which another node's download would only meet again |
+| `syncing` | the node is bringing its copy up: it could not be brought to what the read needs within two seconds, or before the read's answer fell due — a copy downloading the repository, whose download goes on after the read stops waiting — or a git process over the copy reported damage, which the cache is repairing, or a sync failed on what every Gitlet node's copy is filled from (the code log, the object store, the repository's rows, or a repair the cache will not repeat because reading them whole did not end the damage), which another node's download would only meet again |
 | `share` | the node holds its copy and is busy: its seats' git work holds its whole share of the read lane (below) and none came free within two seconds, its read lane stayed busy for ten, or the read's waits for either, or its own git, ran past the instant its answer fell due |
 | `no_chart` | a seat's read on a node holding no chart yet — at boot, before its first apply — which cannot judge a seat, as opposed to judging it has no access |
 | `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
 | `node_failed` | the node failed the read for a reason of its own — its sync of the repository failed with nothing the code log, the object store or the rows said (its disk refusing a write, its cache stopping), or one of the short checks of what the read names ran its whole bound, which no healthy node takes over a few object ids |
-| `not_held` | the node holds no copy of the repository and the read did not name it the one node of its walk that may fill one ([The home git node](#the-home-git-node)), so it started nothing |
-| `index_building` | a search of a `search: indexed` repository's default branch on the first of the two git nodes keeping its index, asked first, whose index does not answer for the branch's tip yet: the second answers — through its own index where it has it, and with git grep where not ([A search of one repository](#a-search-of-one-repository)) |
+| `not_held` | the node holds no copy of the repository and the read did not name it the one node of its walk that may fill one ([The home Gitlet node](#the-home-gitlet-node)), so it started nothing |
+| `index_building` | a search of a `search: indexed` repository's default branch on the first of the two Gitlet nodes keeping its index, asked first, whose index does not answer for the branch's tip yet: the second answers — through its own index where it has it, and with git grep where not ([A search of one repository](#a-search-of-one-repository)) |
 
 A person's read reads no chart, so neither `no_chart` nor `behind_config`
 applies to one. Which of them a node gives decides more than the sentence: it
 tells the read's walk whether a copy is coming on that node, and so whether
-the next node may fill one ([The home git node](#the-home-git-node)).
+the next node may fill one ([The home Gitlet node](#the-home-gitlet-node)).
 
 **Fresh enough by construction.** A read is answered from the copy as it
 stands, or brought to the reader's floor where it holds one; an object the copy
@@ -5110,7 +5111,7 @@ such object.
 walks and its stat — shares one budget of ten seconds of git run time, each
 process given what the ones before it left. A read whose git runs all of it is
 too large to answer, refused naming what to narrow — a directory below, fewer
-lines, a narrower range, commits closer together — since any git node would
+lines, a narrower range, commits closer together — since any Gitlet node would
 take as long. A comparison's walks go by generation number on a copy the node
 has maintained, which holds a commit-graph — 13 ms for the middle of a
 14 080-commit history against its tip — while a copy just filled, before its
@@ -5126,12 +5127,12 @@ every wait it makes ends there: the copy's sync, a unit of the share, a slot of
 the read lane for each process, each process. Those slots and the short checks
 of what a read names are not in the sum, so under load they come out of the
 attempt, and a read they hold up past it is answered `share` while its asker
-still listens: the read goes on to the next git node, and the busy one is not
+still listens: the read goes on to the next Gitlet node, and the busy one is not
 taken for a node that is gone. Never too large: a read cut short had less than
 its ten seconds, and a node with the time would answer it.
 
 **Seats' reads hold at most half the read lane.** The read lane — one core a
-slot, `git.max_processes` of them — is also where a person's push scans its
+slot, `gitlet.max_processes` of them — is also where a person's push scans its
 objects, where a sync reads the refs it installed, and where a fetch checks
 the objects it wants, each waiting in turn for at most ten seconds before it is
 refused busy. So the git a seat's read runs takes a unit of the node's **seat
@@ -5151,7 +5152,7 @@ two or more ([The home's change work](#the-homes-change-work)).
 `crewlet.code.seatwork.waits` how long every unit asked for waited, by the
 `work` it was for (`read`, `write`, or `engine` for the engine's own) and
 whether it came free in time — the
-wait is a term of the attempt a read or a write is given on one git node
+wait is a term of the attempt a read or a write is given on one Gitlet node
 ([Metrics](../reference/metrics.md)).
 
 A read's git process that reports damage to the copy is never answered from,
@@ -5229,7 +5230,7 @@ commit, always fit a page, and no page carries half a field read as the whole.
 
 ### A search of one repository
 
-A code search of one repository asks its git nodes in their order, as every
+A code search of one repository asks its Gitlet nodes in their order, as every
 read does, for the lines of one commit that an expression matches — its
 default branch's tip unless the search names a branch, a ref or a commit —
 judged on the answering node's chart as any read is. It answers RE2's
@@ -5239,7 +5240,7 @@ to its first 256 bytes, with the file's path, the line's number and the id of
 the file's object.
 
 - **Through the index**, where the node keeps the repository's code index
-  (`codeindex`, [The cache on a git node](#the-cache-on-a-git-node)) and it
+  (`codeindex`, [The cache on a Gitlet node](#the-cache-on-a-gitlet-node)) and it
   answers for the commit searched: the files of the commit the index's
   trigrams admit, at a path the search's `path:` filters admit, read through
   one `cat-file` in path order and confirmed line by line with Go's regexp.
@@ -5261,7 +5262,7 @@ repository's index, asked first, whose index does not yet answer for the
 default branch's new tip, answers `index_building`, so the second answers
 rather than the first reading the slow way a moment before its index is
 ready; every node after the first answers, so a search is never left waiting
-on both indexes, and a fleet of one git node greps until its index is
+on both indexes, and a fleet of one Gitlet node greps until its index is
 ready. An answer the search read to its end — every matching line, or as
 many as its limit — is kept in the [memo](#the-memo), keyed by the commit,
 the ref that named it and every part of the search; one the five seconds cut
@@ -5271,7 +5272,7 @@ is kept nowhere.
 
 A code search of **several** repositories — every `search: indexed`
 repository the asker may read, or the ones its `repo:` filters name — is
-one question to every git node at once, never a walk a repository, which an
+one question to every Gitlet node at once, never a walk a repository, which an
 unfiltered search of a company would make thousands of
 (`internal/codesearch`). A search naming one repository is the read above.
 A person or a script asks it as the question `code_search`
@@ -5287,7 +5288,7 @@ pushed.
 ```mermaid
 sequenceDiagram
     participant A as asking node
-    participant G1 as first git node of each order
+    participant G1 as first Gitlet node of each order
     participant G2 as its runner-up
     A->>A: list the asker's repositories, assign each to the first node of its order
     A->>G1: one signed request on crewlet.code.search.ask: the search, the asker, the table
@@ -5299,9 +5300,9 @@ sequenceDiagram
 ```
 
 - **The table.** The asking node lists the repositories the asker may read
-  at the asker's level, and assigns each to the first git node of its order
+  at the asker's level, and assigns each to the first Gitlet node of its order
   — its home, and for an indexed repository the first of the two nodes
-  keeping its index ([The home git node](#the-home-git-node)). Every git
+  keeping its index ([The home Gitlet node](#the-home-gitlet-node)). Every Gitlet
   node hears the request and answers only for the repositories it is
   assigned.
 - **Signed, because each node searches as the asker.** A node reads its
@@ -5317,13 +5318,13 @@ sequenceDiagram
   round. A round waits at most nine seconds — a node's two-second wait for
   its share of git work, the search's own five, and a second each way — and
   ends as soon as every node it asked has answered.
-- **Never the whole share.** Every search a git node answers reads, together,
+- **Never the whole share.** Every search a Gitlet node answers reads, together,
   at most all but one unit of the node's share of git work for seats' reads
   ([Server-side reads](#server-side-reads)), one where the share is one unit,
   so a seat's read of a file, a log or a diff always finds a unit a search
   cannot hold. A repository whose read could not start before its answer fell
   due is unanswered for that node's share, and its runner-up is asked.
-- **One look at the log's head for the whole search.** A git node that would
+- **One look at the log's head for the whole search.** A Gitlet node that would
   answer a repository with no such ref, or refuse it, from a copy that may be
   behind looks once more at the log's head first, as every read does
   ([Server-side reads](#server-side-reads)). For a search, that head is the
@@ -5365,7 +5366,7 @@ under `not_answering`, naming the runner-up, whatever the first node said:
 | Field | The repository |
 |---|---|
 | `searched` | answered its lines (a count) |
-| `building` | was not answered: the node keeping its index was building it, and its order named no other git node to ask |
+| `building` | was not answered: the node keeping its index was building it, and its order named no other Gitlet node to ask |
 | `stale` | was not answered: the node asked was behind the code log or the company's configuration — the runner-up, or the first node where there was none |
 | `not_answering` | was not answered by the node named beside it, with why: silent, busy, failing, or holding no key the request is signed under |
 | `not_permitted` | the answering node's chart did not grant the asker: the configuration moved since the asker's listing |
@@ -5382,7 +5383,7 @@ first names, in order, beside its whole count: the names of every set and
 the reason of every node under `not_answering` share one budget of 4 KiB —
 the reasons at most half of it, each cut at 256 bytes, then the names, the
 repositories left unsearched first — so the coverage stays a small part of an
-answer however many repositories it names, and one entry naming each git
+answer however many repositories it names, and one entry naming each Gitlet
 node that did not answer is all that grows with the fleet; `skipped_files` and
 `truncated` add up those of every repository searched, and `truncated` is set
 too where the merge cut lines past the limit or past a repository that
@@ -5391,7 +5392,7 @@ that line's on: the ones before it were the pages before's.
 
 ### The memo
 
-Every page a git node cuts for a server-side read is kept beside its copy —
+Every page a Gitlet node cuts for a server-side read is kept beside its copy —
 one file an answer, in the copy's `crewlet/memo` — and the next read that asks
 for the same page is answered from that file with no git run, its answer
 saying so (`memo: true`). A page is a function of the object ids it names, the
@@ -5429,7 +5430,7 @@ all 55 pages of a 3 MB file in 32 ms, against 9.5 ms for that one page, and
 every page after it is a hit.
 
 **At most a sixteenth of the budget.** The memo holds at most a sixteenth of
-the cache's [budget](#the-cache-on-a-git-node), each answer counted at the
+the cache's [budget](#the-cache-on-a-gitlet-node), each answer counted at the
 whole disk blocks it takes and the pages a read is still cutting counted with
 those it keeps, and is trimmed to that before any repository is evicted — an
 answer costs one git process to compute again, a repository a download of
@@ -5472,16 +5473,16 @@ history's packs were swept is kept after. `crewlet.code.cache.memo.bytes` is
 what it holds and `crewlet.code.cache.memo.lookups` its lookups by outcome
 ([Metrics](../reference/metrics.md)).
 
-### The home git node
+### The home Gitlet node
 
-Every node asks a read of the same git node first: the repository's **home**,
+Every node asks a read of the same Gitlet node first: the repository's **home**,
 the first of the repository's rendezvous order over every live node with the
-`git` role, keyed by the repository's id — an order each node computes alike
+`gitlet` role, keyed by the repository's id — an order each node computes alike
 from the same set — and then its runner-up
 ([ADR-0089](https://github.com/crewlet/crewlet/blob/main/adr/0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
-So one repository's reads meet on one git node's cache whichever node they are
+So one repository's reads meet on one Gitlet node's cache whichever node they are
 asked from, and a repository its readers keep warm costs the fleet one copy
-for them rather than one on every git node a read went through. A git node
+for them rather than one on every Gitlet node a read went through. A Gitlet node
 asks its own copy in process at its place in that order, never ahead of it.
 The home is a preference, never an owner: nothing is leased, and two nodes
 that each take themselves for the home answer the same read alike, since an
@@ -5490,22 +5491,22 @@ object id names the same object on both.
 A home that cannot answer in time — its copy still syncing, its share full —
 says so, and the read goes on to the runner-up at once; the next read asks the
 home first again, since a node warming a copy is the right node a moment
-later. A git node that has not built Gitlet — a company that does not host
+later. A Gitlet node that has not built Gitlet — a company that does not host
 code, or one whose first apply has not reached it — answers that it runs none
 and is asked last for thirty seconds, and a node that went silent is asked
-last of all. The reads travel on a lane of their own on each git node, so a
+last of all. The reads travel on a lane of their own on each Gitlet node, so a
 read waiting on its copy's sync never holds a slot the node answers its other
 estate requests through, and each is a signed estate request like any other.
-[Engine-built commits](#which-git-node-builds-a-write) are asked of the same
+[Engine-built commits](#which-gitlet-node-builds-a-write) are asked of the same
 home, on a lane of their own beside the reads'.
 
-**One node fills a copy.** A git node that holds no copy of the repository
+**One node fills a copy.** A Gitlet node that holds no copy of the repository
 starts a download of one only for the read that names it the one node of its
 walk that may fill — the home, the first node of the order once those
 demotions are applied — and answers every other `not_held` at once, having
 started nothing, because a download once begun runs on after the read that
-started it stops waiting. So a read of a repository no git node holds costs
-the fleet one download, by its home, never one by every git node the read was
+started it stops waiting. So a read of a repository no Gitlet node holds costs
+the fleet one download, by its home, never one by every Gitlet node the read was
 asked of. When a home dies, its runner-up becomes the first node every walk
 asks and fills the one copy; a read in the seconds that takes is answered
 unavailable, as it would be by a cold home, and the copy serves every read
@@ -5532,11 +5533,11 @@ copy and is only busy, and the share is the node's, spent by every repository
 it serves: handing the fill on for it would answer a fleet busy everywhere with
 a download of every repository read on each busy node, each evicting a warm
 copy to make the room, and add no capacity anywhere. So one repository's seat
-reads are served by the git nodes that hold a copy of it — its home, and any
+reads are served by the Gitlet nodes that hold a copy of it — its home, and any
 node a person's fetch, a push or an earlier fill has warmed — and a repository
 read harder than half of those nodes' read lanes is answered unavailable for
-the rest: give its git nodes more cores and a wider `git.max_processes`, which
-widens the share with the lane, or let a second git node hold a copy, as a
+the rest: give its Gitlet nodes more cores and a wider `gitlet.max_processes`, which
+widens the share with the lane, or let a second Gitlet node hold a copy, as a
 person's fetch through it does.
 
 ## Who read it
@@ -5633,7 +5634,7 @@ for ([Identity and access](identity-and-access.md)).
 
 ## Which push landed a commit
 
-Beside each copy, a git node keeps an index of which push introduced each
+Beside each copy, a Gitlet node keeps an index of which push introduced each
 commit and every update each push landed on a ref, built from
 Gitlet's push rows rather than from the packs. It names, on every server-side
 read, the push that brought in each commit the answer names — who made it,
@@ -5660,7 +5661,7 @@ naming no push.
 first full read. The history before it, back to the start of the push history
 the data nodes keep ([Retention and history](#retention-and-history)), is read
 only by the node that answers a seat's read of the repository as its
-[home](#the-home-git-node), and only once a seat has asked: once per fleet,
+[home](#the-home-gitlet-node), and only once a seat has asked: once per fleet,
 and only for repositories somebody reads. An index read back to that start is
 `complete`; one that is not names its range on every answer. Once a day the
 index also asks the rows for the oldest push they keep, and drops what it
@@ -5668,10 +5669,10 @@ holds below it, so it holds the push history the rows do and never grows past
 it.
 
 **Paced by the fleet, read where it is whole.** After each page the backfill
-waits twice the page's own duration times the fleet's git nodes for each data
-node, rounded up, the counts read again after every page: one git node a data
+waits twice the page's own duration times the fleet's Gitlet nodes for each data
+node, rounded up, the counts read again after every page: one Gitlet node a data
 node holds at most a third of one reader of each data node, and the fleet's
-backfills hold under half of one however many git nodes share them. A page is
+backfills hold under half of one however many Gitlet nodes share them. A page is
 read at a position the index has already seen, so the data node that answers
 holds every push in it — a data node behind the log would hold the range in
 part, and a commit pushed in the missing part would be answered with no push.
@@ -5701,7 +5702,7 @@ it — the count, the ten seconds, the asker's wait, or a read lane busy for ten
 seconds — it names how far it reached and how many forced moves it did not
 search past, rather than refusing the read. Only the check against the tip,
 before the search, is refused as any read is: too large where it runs out the
-ten seconds, and on a busy node answered by another git node.
+ten seconds, and on a busy node answered by another Gitlet node.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
 `crewlet/` in the repository's directory, merged in the background eight
@@ -5743,7 +5744,7 @@ warm tree listing
 pushes — the 4 MB a page answers at most — each about 115 ms of the data
 node's read and 150 ms in all, so a history of 18 million pushes, a large
 company's monorepo over 181 days, is read back in about 18 minutes with one
-git node for each data node ([Scaling Out](scaling.md#git-nodes) for a larger
+Gitlet node for each data node ([Scaling Out](scaling.md#gitlet-nodes) for a larger
 fleet). Choosing the backfill's next step costs microseconds however many
 copies a node holds — under 3 µs at 10 000 — since the node keeps which
 copies have work due as their work changes, rather than looking at every copy
@@ -5765,10 +5766,10 @@ where the asker's wait ends first.
 ## A revision's facts
 
 Every head a [change](#changes) has had is one of its **revisions**, and what
-a revision *is* against the branch it would merge into is three reads a git
+a revision *is* against the branch it would merge into is three reads a Gitlet
 node answers from its cache, as it answers every
 [server-side read](#server-side-reads): asked of the repository's
-[home](#the-home-git-node) first, held to the asker's grant — and, inside a
+[home](#the-home-gitlet-node) first, held to the asker's grant — and, inside a
 turn somebody woke, to theirs too
 ([Reads made for somebody else](#reads-made-for-somebody-else)) — recorded
 where the repository is `visibility: unit` ([Who read it](#who-read-it)), one
@@ -5776,7 +5777,7 @@ page each, and named by the whole commit ids the change's rows record — never
 an abbreviation, never a ref.
 
 The **facts** of a revision are those of its head commit against its target's
-tip, a function of the two commits alone, so every git node answers them
+tip, a function of the two commits alone, so every Gitlet node answers them
 alike:
 
 | Fact | What it is |
@@ -5827,7 +5828,7 @@ answer would hold for good, every approval its id would have carried lost to
 a re-review exactly when the fleet is busiest, so nobody records them: the
 home asks again on its next pass ([Recorded on the change](#recorded-on-the-change)).
 A copy that lacks a blob its own trees name is that node's failure, and the
-read is refused for another git node to answer.
+read is refused for another Gitlet node to answer.
 
 **Measured**, over changes rewriting every fourth line of files of 256 KiB,
 three reads each on two cores: a revision's facts took 18 ms for a 1 MiB
@@ -5838,7 +5839,7 @@ takes its id.
 
 ### Recorded on the change
 
-A revision's facts are read ONCE, by the repository's [home](#the-home-git-node),
+A revision's facts are read ONCE, by the repository's [home](#the-home-gitlet-node),
 and recorded on the change, where every later reader finds them: an approval
 carried from one revision to the next by its code or by an equal `patch_id`,
 an interdiff kept to the files two revisions touch, the classes a merge
@@ -5846,16 +5847,16 @@ gate's exemptions read, the change's readiness. The record is
 a **revise**, a write of the change's [conversation](#reviews-and-findings):
 the home asks it of the repository's committing data node, whose change writer
 decides it in one snapshot and publishes it on the change's own subject, as it
-does a review — a git node never publishes one — and it names no asker, being
+does a review — a Gitlet node never publishes one — and it names no asker, being
 the engine's own. Only **final** facts are recorded: an answer saying
 `out_of_time` is the home's turn failing for that change, which stays due its
-facts and is read again by the next pass, a minute at most, of whichever git
+facts and is read again by the next pass, a minute at most, of whichever Gitlet
 node answers then — so a recorded `patch_id_omitted` always means the diff
 was past its bound.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the git node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
+| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the Gitlet node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
 
 - **Facts are of the change's head revision against its target now.** A
   revise is decided only while they still are: facts of a revision a push has
@@ -5983,9 +5984,9 @@ a second at the most — a tenth of the read's ten seconds of git.
 
 ### The home's change work
 
-A repository's [home](#the-home-git-node) — the first git node of its order,
+A repository's [home](#the-home-gitlet-node) — the first Gitlet node of its order,
 which its git reads are asked of first — owes its live changes their facts
-and their [mergeability](#mergeability): every git node runs a **home loop**
+and their [mergeability](#mergeability): every Gitlet node runs a **home loop**
 for the repositories it is home to, and the rows are its work list. A change
 is **due** while its head revision holds no facts, or no mergeability, against
 the branch it merges into: a push that moves its head, and a retarget, make it
@@ -6042,13 +6043,13 @@ by nobody, as they are reviewed by nobody.
 
 Two things put a repository's work in front of its home:
 
-- **A nudge.** Every git node watches the code log's repository subjects and
+- **A nudge.** Every Gitlet node watches the code log's repository subjects and
   its repositories' checks subjects — each record's subject and position,
   never its body — and a record on a repository it is home to, or on that
   repository's checks, schedules that repository's work at once, read at the
   record's position so the node's copy holds the record before the rows are
   read.
-- **The backstop.** Once a minute, and at once when it starts, every git node
+- **The backstop.** Once a minute, and at once when it starts, every Gitlet node
   lists the repositories holding a due change and works the ones it is home
   to, judged against one reading of who serves git. A nudge only shortens the
   wait: one lost — a member restarting, the watch's consumer gone, who serves
@@ -6075,7 +6076,7 @@ reference](../reference/metrics.md)).
 ### Mergeability
 
 Whether a change's head revision merges cleanly into its target's tip is a
-function of the two commits alone, and its [home](#the-home-git-node) records
+function of the two commits alone, and its [home](#the-home-gitlet-node) records
 it on the change beside the revision's facts: its **mergeability**. The home
 merges the two commits with `git merge-tree --write-tree` — the merge `git
 merge` would make, from every merge base git finds — in a SCRATCH repository
@@ -6145,7 +6146,7 @@ it names no asker.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads, and the chart, it was judged at |
+| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the Gitlet node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads, and the chart, it was judged at |
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an
@@ -6159,7 +6160,7 @@ one narrow row. `crewlet.code.conversation.writes` counts the records under
 #### A merge preview
 
 What merging one commit into another would do — a comparison's preview,
-before any change is opened — is asked of a repository's git nodes as a
+before any change is opened — is asked of a repository's Gitlet nodes as a
 [server-side read](#server-side-reads) is: of its home first, held to the
 asker's grant and, inside a turn somebody woke, to theirs too, recorded where
 the repository is `visibility: unit` ([Who read it](#who-read-it)), and its
@@ -6405,8 +6406,8 @@ the change dequeue it, each naming which, and a push that moves its head
 enqueued — or dequeues it where the push merged or closed the change.
 
 **The queue's own records** are what it does with what was enqueued — each a
-record on the repository's subject, built by the repository's [home git
-node](#the-home-git-node) and decided by its committer from one snapshot,
+record on the repository's subject, built by the repository's [home Gitlet
+node](#the-home-gitlet-node) and decided by its committer from one snapshot,
 naming no asker: the queue's work is the engine's, and a landing lands each
 change as whoever enqueued it.
 
@@ -6500,7 +6501,7 @@ checks — which no person or seat may read.
 
 #### What the home does with a queue
 
-The repository's [home git node](#the-home-git-node) runs its queues: a
+The repository's [home Gitlet node](#the-home-gitlet-node) runs its queues: a
 worker of [the home's loop](#the-homes-change-work), nudged by every record
 of the repository's queue and passing every repository holding a live entry
 on the loop's backstop. Each turn reads one branch's **queue work** in ONE
@@ -6511,7 +6512,7 @@ candidate's commits with the latest attempt of each required check on each —
 and takes the train's next step from it, as a record the committer decides from its
 own snapshot. A step decided from rows the log has moved past is refused
 there and read again on the next turn, so a home that crashes, or hands the
-repository to another git node, leaves nothing behind but rows: **the next
+repository to another Gitlet node, leaves nothing behind but rows: **the next
 home resumes the train from them**, building nothing a standing train already
 holds.
 
@@ -6566,7 +6567,7 @@ holds.
 - **Cancel what a given-up train still runs.** An eject, a dequeue, a person
   moving the branch and a new train each give the branch's train up, and
   its candidates' and probes' checks still queued or running measure commits
-  nothing will land — while holding a git node's `git.max_checks` cells or
+  nothing will land — while holding a Gitlet node's `gitlet.max_checks` cells or
   the company's e2b box time ahead of the live train's, since a runner takes
   the oldest queued first. The home **cancels** each of them, `dequeued`
   where a change its candidate merged left the queue and `abandoned`
@@ -6668,7 +6669,7 @@ other landing — a merge a person's override landed, a person's own push under
 `direct_push: persons` — lies **above the branch's green row** until a check
 of a tip proves it: two changes each green on its own head can land a merged
 result nothing tested, and a person's push was tested by nobody at all. The
-repository's [home git node](#the-home-git-node) owes each such branch its
+repository's [home Gitlet node](#the-home-gitlet-node) owes each such branch its
 **tip work**, read from the rows in one snapshot — the branch's green row, the
 checks its gate requires, and its landings above the green, oldest first, each
 with the latest attempt of each required check on its commit for the branch —
@@ -6745,7 +6746,7 @@ again on the first tip that passes.
 ### How a candidate is built
 
 A queue never builds its changes one merge at a time. The repository's [home
-git node](#the-home-git-node) builds a run of waiting entries as one
+Gitlet node](#the-home-gitlet-node) builds a run of waiting entries as one
 **chain**: in one scratch beside its copy, each entry is merged onto the
 commit the entry before it made, the first onto the branch's tip, by the very
 build a [merge](#how-a-merge-is-built) runs — its method, its one `git
@@ -6760,7 +6761,7 @@ chain is at most **64 entries**, the most one record lands.
   store. So the queue lands nothing a merge would refuse. Its commit's author
   date is **its entry's own instant**, when it was enqueued, never the
   build's — its committer date that or its later parent's. So a chain built
-  again from the same entries, on any git node, after any crash or as a
+  again from the same entries, on any Gitlet node, after any crash or as a
   bisect builds a prefix twice, is the same commits byte for byte.
 - **An entry that cannot be merged is skipped, and leaves nothing.** An entry
   that conflicts with what the chain made so far is skipped, naming its paths
@@ -7123,7 +7124,7 @@ in a node's cache would leave a refused push's objects there — fetchable by id
 from that one node, and a base a later push could build on that no other node
 holds. So a push is received in a throwaway **scratch** repository whose one
 alternate is the cache's packs — never the packs an expunge is dropping
-([the cache on a git node](#the-cache-on-a-git-node)), so no push relies on
+([the cache on a Gitlet node](#the-cache-on-a-gitlet-node)), so no push relies on
 one — and its pack enters the cache only once its row has
 applied ([ADR-0084](https://github.com/crewlet/crewlet/blob/main/adr/0084-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
 The scratch is removed when the request ends, and a node that crashed with one
@@ -7355,7 +7356,7 @@ of its repositories only after all the others, on four cores a quarter of an
 hour or more for 50 GB of them — and for a repository whose bitmap is past the
 node's memory, which it indexes without one (the
 [`code_maintenance_refused`](../reference/alarms.md) alarm says which;
-[background indexing and memory](#the-cache-on-a-git-node) say what each
+[background indexing and memory](#the-cache-on-a-gitlet-node) say what each
 costs). There every clone, filtered or not, walks the history it reaches,
 bounded only by the node's transfer slots and their deadlines — so plan the
 memory of a node serving blobless clones of its largest repositories from the
@@ -7375,7 +7376,7 @@ A change merges into its target by **one merge record**
 the record that marks the change merged is the record that moves its target,
 decided by the repository's [committer](#the-committer) from one snapshot. A
 merge is built elsewhere — its commit and its pack written by the repository's
-[home git node](#the-home-git-node) onto the tip it read of the target — and
+[home Gitlet node](#the-home-gitlet-node) onto the tip it read of the target — and
 proposed with what it was built from: the target's tip (its **base**), the
 change's head, the commit the target moves to and how it merged (`merge`, a
 merge commit; `squash`, one commit; `fast_forward`, the target moved to the
@@ -7387,7 +7388,7 @@ the log's ledger onto the record that landed.
 ```mermaid
 sequenceDiagram
   autonumber
-  participant B as home git node
+  participant B as home Gitlet node
   participant C as committer
   participant L as code log
   participant A as every data node
@@ -7461,7 +7462,7 @@ climbing is a branch moving faster than its merges are built onto it.
 ### How a merge is built
 
 A merge is an [engine write](#engine-built-commits) of kind `merge_change`,
-asked of the repository's [home git node](#the-home-git-node) like any: the
+asked of the repository's [home Gitlet node](#the-home-gitlet-node) like any: the
 change by its number, the head its caller read, the method, and — for a
 person — an override's reason, at most 1 KiB.
 
@@ -7525,7 +7526,7 @@ person — an override's reason, at most 1 KiB.
    room for one is
    answered `target_moving` at once, with its rebuilds so far, as is a
    rebuild that runs out what the builds before it left — rather than a build
-   that ends `unready` and sends the next git node to merge it from scratch,
+   that ends `unready` and sends the next Gitlet node to merge it from scratch,
    or a landing refused `busy`. A merge built from a copy taken before an
    expunge of the repository began is refused `expunging` and built again the
    same way, from a copy synced past it. How many times each merge was built
@@ -7534,7 +7535,7 @@ person — an override's reason, at most 1 KiB.
    a branch moving under its merges shows as that count climbing towards
    four before any merge is refused.
 
-A router gives a merge **102 seconds** on one git node — an engine write's 82
+A router gives a merge **102 seconds** on one Gitlet node — an engine write's 82
 with its ten seconds of build replaced by the merge's thirty, which its
 rebuilds share — and every other write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
 `crewlet.code.host.write.duration`'s `build` stage times its builds, every
@@ -7553,12 +7554,12 @@ it.
 A change a seat or a person makes through a tool — files committed, a commit
 reverted or cherry-picked, a branch created or deleted, a review's suggestions
 applied — is built by Gitlet
-itself, on a git node holding the repository ([its home](#the-home-git-node)
+itself, on a Gitlet node holding the repository ([its home](#the-home-gitlet-node)
 first), and lands as a **push**: the same landing a person's `git push` takes
 from its pack on, held to the same rules, one record on the code log, and
 answered applied only from that record's applied row. Every node asks a write
-of the repository's home git node first ([Which git node builds a
-write](#which-git-node-builds-a-write)); a seat's code tools and a person's
+of the repository's home Gitlet node first ([Which Gitlet node builds a
+write](#which-gitlet-node-builds-a-write)); a seat's code tools and a person's
 assistant's ask for one, each call one write ([The company's
 code](../guides/tools-and-mcp.md#the-companys-code)).
 
@@ -7596,7 +7597,7 @@ history its caller never saw, and one that creates a branch needs it absent.
    removal refuses nothing a current one would let through. A seat's write on
    a node [confirmed behind the company's
    configuration](control-plane.md#where-the-gate-sits) is answered by that
-   node as one it cannot serve, so another git node builds it; a person's
+   node as one it cannot serve, so another Gitlet node builds it; a person's
    write is built there.
 2. **Built beside the copy, over what it touches.** In a scratch repository
    whose one alternate is the copy — never in the copy, which stays a function
@@ -7620,7 +7621,7 @@ history its caller never saw, and one that creates a branch needs it absent.
    with the square of a path's depth — a thousand paths at the depth bound,
    each with every directory above it, took 19 s of git on two E-cores of an
    Intel Core Ultra 7 265U — and a write too wide or too deep for the budget is
-   refused `too_large`, never taken for a git node that failed and asked of
+   refused `too_large`, never taken for a Gitlet node that failed and asked of
    the next.
 3. **Checked as a push is.** The new objects are packed into one
    self-contained pack, indexed by `git index-pack --strict` — the check
@@ -7670,7 +7671,7 @@ record of who made a commit.
 The push a write lands under is derived from the caller's operation, never
 minted, and the commit is a pure function of the operation and its parent:
 the names and dates above, the tree, the message. So a write asked again —
-on the same git node, on another after the first went silent, after a crash
+on the same Gitlet node, on another after the first went silent, after a crash
 at any step — is the same push, which the repository's committer lands
 once, carrying the same commit. A second ask on a node still building the
 first waits for it and is answered what it is; asked again after it landed,
@@ -7678,17 +7679,17 @@ and after the branch moved on, a write is answered from its push's row with
 nothing built; and a write that cannot learn whether it already landed is
 answered `busy` — make the same call again — never `stale`.
 
-### Which git node builds a write
+### Which Gitlet node builds a write
 
-A write is asked of the repository's [home git node](#the-home-git-node) first
+A write is asked of the repository's [home Gitlet node](#the-home-gitlet-node) first
 — the node its reads are asked of, whose copy they keep warm — then of its
 runner-up, in the order every node computes alike, whichever node the write was
 asked through
 ([ADR-0089](https://github.com/crewlet/crewlet/blob/main/adr/0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
 
-- **A git node that runs none of it is passed over.** One that is stopping
+- **A Gitlet node that runs none of it is passed over.** One that is stopping
   Gitlet, or that holds no configuration yet to sign the commit by, answers
-  that it ran nothing: the write is asked of the next git node at once, and the
+  that it ran nothing: the write is asked of the next Gitlet node at once, and the
   node that refused is asked last for thirty seconds. One that cannot build it
   in time for a reason of its own — its copy still syncing, its seats' share of
   the read lane full, already holding every write its writes' lane holds, or
@@ -7696,26 +7697,26 @@ asked through
   same way, and asked first again next time.
 - **One that goes silent is passed over with the same write.** The write's push
   is its caller's operation's ([A retry is the same
-  push](#a-retry-is-the-same-push)), so the next git node builds the same push
+  push](#a-retry-is-the-same-push)), so the next Gitlet node builds the same push
   and the same commit: where the silent node had landed it, the next answers
   from the push's row with nothing built, and where it had not, the
   repository's committer lands the one push once.
-- **A write waits at most 82 seconds on one git node**, whatever its caller
+- **A write waits at most 82 seconds on one Gitlet node**, whatever its caller
   allows: the waits of every stage at their whole budgets — a unit of the node's
   share (2 s), three reads of the rows (6 s), the build's git (10 s), the
   bundle's upload (30 s), the proposal (33 s) and the answer's way back (1 s).
-  A git node fits the write into that, answering `busy` before anything is
+  A Gitlet node fits the write into that, answering `busy` before anything is
   uploaded where the proposal would no longer fit, so a healthy node always
-  answers inside it and only a wedged one costs it — after which the next git
+  answers inside it and only a wedged one costs it — after which the next Gitlet
   node is asked.
-- **Writes travel on a lane of their own** on each git node, beside the reads':
+- **Writes travel on a lane of their own** on each Gitlet node, beside the reads':
   a write holds its slot through its upload, its proposal and the wait for its
   row, so on the reads' lane a burst of writes would hold the slots every read
   of the node's repositories is answered through. What bounds the git a node's
   writes run is its [seat git-work share](#server-side-reads), never the lane.
-- **A git node holds at most 64 writes for other nodes at once, and answers
+- **A Gitlet node holds at most 64 writes for other nodes at once, and answers
   the next at once** that it is busy, without building it, so its walk moves on
-  to the next git node that holds a copy of the repository — or ends, saying
+  to the next Gitlet node that holds a copy of the repository — or ends, saying
   the node is busy — within milliseconds. Left to wait for a slot, a write
   waited in the node's broker client, which drops what it holds past 64 MiB:
   the asker of a dropped write heard nothing for 82 seconds and then took the
@@ -7723,12 +7724,12 @@ asked through
   for thirty seconds. A held write takes about 3 MiB of the node's memory at
   the largest a write may be, so the 64 take about 200 MiB. A node's own
   seats' writes are built in its process and count against none of the 64.
-- **A write no git node would take is refused before any is asked** — a branch
+- **A write no Gitlet node would take is refused before any is asked** — a branch
   git refuses, a path a checkout cannot make, a seat's write that names no
   turn — naming what is wrong.
 - **A write that landed is in the next read made through the same node.** It
   raises that node's floor on its repository, so the node's next read of the
-  repository, on whichever git node answers it, includes the write.
+  repository, on whichever Gitlet node answers it, includes the write.
 
 ### What a write is refused
 
@@ -7748,7 +7749,7 @@ Paths a write does not touch are never judged.
 
 A refusal of the **push** — `stale`, the grant's `not_permitted`, a
 protection's, `blob_too_large`, `repo_deleted`, `busy` — says what a push's
-says. One the git node reaches stores and records nothing; one the
+says. One the Gitlet node reaches stores and records nothing; one the
 repository's committer reaches is recorded as any push's is. A refusal of the
 **change** stores and records nothing:
 
@@ -7838,7 +7839,7 @@ at the head its caller read. The build:
 The commits are read sixteen at a time, so what a rebase holds of their
 messages is bounded whatever its length. A rebase's build is given **forty
 seconds** of git (BenchmarkEngineRebase measures it), and a router gives it
-**112 seconds** on one git node — an engine write's 82 with its build term
+**112 seconds** on one Gitlet node — an engine write's 82 with its build term
 replaced by the rebase's.
 
 ### A change reverted
@@ -7886,7 +7887,7 @@ operation's step, from the commit the revert made.
 | A path's depth | 64 components | An engine write is a document or a configuration fix, whose paths run from a few components to a couple of dozen even in a deep tree; a deeper change belongs in a coding box. It bounds every cost of a write that grows with depth, which 4 096 bytes alone leave at 2 048 components: the directories its build rewrites, its one `mktree` a level, and its read of what each path it names and each directory above one is, which git walks from the root at a cost growing with the square of the depth — a thousand paths at the bound took 19 s of git, which the build's ten seconds refuse `too_large`. Only the paths a write names are held to it: a repository's own deeper paths are never judged. |
 | A conflict's start | 2 KiB | Enough to see what collided; each stage is readable whole by its id. |
 
-Every write a git node builds or answers is counted
+Every write a Gitlet node builds or answers is counted
 (`crewlet.code.host.writes`, by `kind` and `outcome`) and timed
 (`crewlet.code.host.write.duration`, by `kind` and `stage`: `sync`, `build`,
 `land` and `total`) ([Metrics](../reference/metrics.md)), and logged
@@ -7896,7 +7897,7 @@ Every write a git node builds or answers is counted
 
 Measured from the call of a code write tool in a seat's turn to the tool's
 answer — which follows the push's applied row and its pack adopted into the
-copy — on one git node whose broker writes every record to disk, in two runs
+copy — on one Gitlet node whose broker writes every record to disk, in two runs
 of ten writes an arm, the range given. The figures are from **in-process
 object stores** — the in-memory one and an S3 fake answering every request
 100 or 200 ms late — and no real bucket, on two E-cores of an Intel Core
@@ -7938,7 +7939,7 @@ answered unready is a turn that waited that long, then asks again:
   more cores has a wider share.
 - **Far inside the attempt.** The slowest p99 of every answer at a 200 ms
   first byte was 3.2 s, about a twenty-sixth of the
-  [82 seconds](#which-git-node-builds-a-write) a write may take on one git
+  [82 seconds](#which-gitlet-node-builds-a-write) a write may take on one Gitlet
   node. Every stage stayed inside its own budget, and the share's wait —
   two seconds of the 82 — is the one a write reaches whole: at sixty-four
   writes on a one-unit share that is the bound sending writes on rather than
@@ -7968,7 +7969,7 @@ p99, against 34–82 ms alone). Left uncompacted, the some 400 packs such a
 burst leaves kept the push's p99 near 0.8–0.9 s after it, alike over the
 in-memory store and the S3 fake: what that costs follows the packs, which
 a home merges at its next [compaction](#compaction), never the object
-store, whose part in a push is its one upload. A git node expected to take
+store, whose part in a push is its one upload. A Gitlet node expected to take
 bursts of engine writes beside people's pushes wants more than two cores:
 on two, the syncs waited for the processor; the commit queue is the
 repository's whatever the node.
@@ -8003,9 +8004,9 @@ waits behind every person who has asked less lately. A run is charged the
 greater of the CPU its git spent and the time it held its slot, each second
 of a slot counted as the share of a core that slot stands for: the node's
 cores divided among its transfer slots — a quarter of a core at four slots a
-core, a sixteenth where `git.max_transfers` gives sixteen a core — and never
+core, a sixteenth where `gitlet.max_transfers` gives sixteen a core — and never
 more than a whole core, which is what a slot stands for wherever memory or
-`git.max_transfers` leaves the node fewer slots than cores, since one
+`gitlet.max_transfers` leaves the node fewer slots than cores, since one
 transfer's git runs on one core. So a slow clone holding a slot for an hour is
 charged for the hour, a storm of short, CPU-heavy fetches for the CPU, and on
 a node with fewer slots than cores — 32 cores whose 8 GiB back 16 slots —
@@ -8029,7 +8030,7 @@ each, minutes apiece on a large one, and a box reading slowly holds its slot at
 the paced floor of thirty seconds a mebibyte — and every person's push or
 clone would wait out its ten seconds behind them and be refused. A box is
 generated code, so the lane cannot count on its manners: half is the bound the
-engine already holds seat work to on a git node's read lane, and the other
+engine already holds seat work to on a Gitlet node's read lane, and the other
 half is what persons and machines share. Persons and machines keep the whole
 lane when no box waits. Inside that bound the order is not arrival
 order. With both classes waiting, people get about two thirds of what the
@@ -8046,7 +8047,7 @@ decides who waits.
 class: `machine` climbing while `person` stays flat is the share doing its job
 — CI waiting behind CI — `run` climbing alone is boxes waiting behind each
 other at their half, and `person` and `machine` both climbing is a lane too
-narrow for its traffic (more memory and `git.max_transfers`, or more git
+narrow for its traffic (more memory and `gitlet.max_transfers`, or more Gitlet
 nodes).
 `crewlet.code.git.share` is what each class has spent lately, as the next
 grant reads it ([Metrics](../reference/metrics.md)).
@@ -8138,11 +8139,11 @@ words, since git does not read the header.
 | Your token acts as a seat the org chart no longer holds as a human seat | `seat "<handle>" isn't in the org chart anymore`, or `seat "<handle>" is a "agent" seat now, and only a "human" seat can be held` (403) | Ask an admin to move you to a human seat; signing in again changes nothing. |
 | A session that may only enrol a second factor (where `api.auth.totp` is `required`) | `This company requires two-step verification. Set it up (POST /auth/totp) before you do anything else.` (403) | Enrol an authenticator in the dashboard, then push or fetch with your own token. |
 | The node cannot tell who your token is — it cannot read its identity estate or the org chart, or is behind on identity changes | `this node cannot tell who this credential is right now: retry in 2 s, or against another node` (503) | Retry, or against another node. |
-| The company hosts no code | `this company does not host code (code.native is not set)` (404) | Turn Gitlet on ([`code.native`](../guides/gitlet.md#turn-it-on)). |
+| The company hosts no code | `this company does not host code (code.backend is not gitlet)` (404) | Turn Gitlet on ([`code.backend: gitlet`](../guides/gitlet.md#turn-it-on)). |
 | The node is applying the configuration the fleet activated | `this node is applying the configuration the fleet activated and answers once that apply ends: retry in 5 seconds, or against another node (applying)` (503) | Retry. |
 | The node could not apply the configuration the fleet activated | `this node could not apply the configuration the fleet activated, which hosts code (GET /fleet and this node's log say why): ask another node, or activate a corrected configuration (config_apply_failed)` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log, and activates a corrected configuration. |
 | The node could not read the configuration the fleet activated | `this node could not read the configuration the fleet activated, so it cannot say whether this company hosts code (GET /fleet and this node's log say why): ask another node (code_unknown)` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log. |
-| The node's native runtime was running before `code.native` was set | `this node's native runtime was running before code.native was set, and it serves Gitlet once restarted: ask another node, or restart this one (native_backend_needs_restart)` (503) | Ask another node, or restart this one. |
+| The node's native runtime was running before Gitlet was turned on | `this node's native runtime was running before Gitlet was turned on, and it serves Gitlet once restarted: ask another node, or restart this one (native_backend_needs_restart)` (503) | Ask another node, or restart this one. |
 | The node is draining for a shutdown | `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` (503) | Retry; a balancer sends you to another node. A fetch the node had already begun is served to its end. |
 | The repository is not declared | `repository "<name>" not found` (404) | Check the name in `code.repos`. |
 | The repository was renamed ([Repositories made by tools](#repositories-made-by-tools)) | a clone or a fetch of the old name runs against the repository — git prints `warning: redirecting to <base>/git/<new>.git/` where it presents its credential up front, and nothing where a credential helper answers its challenge; a push of the old name is told `remote: "<old>" was renamed to "<new>" on <instant>; set your remote to /git/<new>.git at the same address (the old name serves clones and fetches until <instant>)` (404), and pushes nothing | Set your remote to the new name before the old one is released, a month after the rename. |
@@ -8177,7 +8178,7 @@ words, since git does not read the header.
 | The outcome is unknown | `(unknown: outcome unknown (op …); fetch, then re-run git push)` | Fetch, then push again. |
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). A full queue, a node at its whole bound, or a push that waited in the queue until its asker could wait no longer raises `code_commit_busy` on that node for fifteen minutes, naming the repository with the most refusals; a push that reached the committer with too little of its asker's attempt left raises nothing. |
-| A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
+| A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home Gitlet node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
 | A push its node checked against the repository just before an [expunge](#expunge) of the repository's unreachable objects began | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
@@ -8195,7 +8196,7 @@ words, since git does not read the header.
 | A pack the rows name is gone, or damaged in the object store | `<repo>'s pack <id> is missing from the object store (the daily audit raises objects_missing for it); retry in 10 s`, or `<repo>'s pack <id> is damaged in the object store (…)` (503) | An operator's problem: see [`objects_missing`](object-store.md#alarms). |
 | A pack's bytes are not the bundle its row describes | `<repo>'s pack <id> in the object store is not the bundle its row describes (code_pack_checksum_mismatch): retrying does not end it — an operator must act on this node's code_pack_checksum_mismatch line, and until then only the node that received the push, which holds its own copy, can serve it` (500, no `Retry-After`) | Do not retry: every retry downloads the whole bundle again and fails the same way. The store handed back exactly the bytes the push stored, and they are not what the push's row says, so the row or what was uploaded is wrong. It is an operator's problem: the node logs `code_pack_checksum_mismatch` at `ERROR`. |
 | The rows cannot be read into a cache | `<repo>'s rows cannot be read into a cache on this node (code_bad_snapshot): <why>; retrying does not end it — an operator must act on this node's code_bad_snapshot line, and a node running a newer build may serve it` (500, no `Retry-After`) | Do not retry this node: it reads the same rows again. The rows hold something this build cannot install (a ref, an id or a pack's sizes) or a push cannot be judged against (a protection rule's pattern), and the sentence names the row; a node of a newer build may install it. It is an operator's problem: the node logs `code_bad_snapshot` at `ERROR`. |
-| A damaged copy is still damaged after its last repair — a pack or an index git could not read, an object no pack holds, or a copy the node will not run git in because it is not the shape the engine writes | `<repo>'s cache on this node is still damaged after its last repair (<why>): retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /gitlet/repos/{name}/verify`](../reference/api-endpoints.md#post-gitletreposnameverify)), which says what the repair could not end. A copy damaged once is repaired under the request that finds it and never shows this. It shows when git meets the same damage on the copy just repaired, and while the node holds back another rebuild ([damage and repair](#the-cache-on-a-git-node)): for a damaged pack or a missing object, one that did not end the damage is not repeated for up to a day unless something writes into the copy, and for a shape that reading the copy whole in place did not end, the wait starts at ten minutes and doubles with every rebuild in a row, up to a day. |
+| A damaged copy is still damaged after its last repair — a pack or an index git could not read, an object no pack holds, or a copy the node will not run git in because it is not the shape the engine writes | `<repo>'s cache on this node is still damaged after its last repair (<why>): retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /gitlet/repos/{name}/verify`](../reference/api-endpoints.md#post-gitletreposnameverify)), which says what the repair could not end. A copy damaged once is repaired under the request that finds it and never shows this. It shows when git meets the same damage on the copy just repaired, and while the node holds back another rebuild ([damage and repair](#the-cache-on-a-gitlet-node)): for a damaged pack or a missing object, one that did not end the damage is not repeated for up to a day unless something writes into the copy, and for a shape that reading the copy whole in place did not end, the wait starts at ten minutes and doubles with every rebuild in a row, up to a day. |
 | The node refused its own call serving the request — the engine's own call is wrong | `this node refused its own call serving this request (<the refusal>): the engine's call is wrong, and retrying does not end it — an operator must act on this node's code_git_refused line` (500, no `Retry-After`) | Do not retry: the request changes nothing about it. It is a bug in the build the node runs — a git configuration key or variable the engine never allows, a call without a deadline, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or a node whose git should never have started (git's HOME not empty, a git below the floor). The node logs `code_git_refused` at `ERROR`; report it. |
 | git failed on the node, for a reason the engine does not classify | `git <command> failed on this node (<kind>): <git's last line>` (500) | git's last line says why. A hand-built push of a line git's protocol does not have reads `protocol error` there. The node logs `code_push_failed` or `code_fetch_failed`. |
 | git's answer could not be read | `git's answer on this node could not be read (…); retrying does not end it` (500, no `Retry-After`) | git exited as if it had answered and its output stopped mid-line, or it wrote a line longer than the engine reads. Report it with the node's `code_push_failed` or `code_fetch_failed` line. |
@@ -8269,9 +8270,9 @@ revised is one click from the terminal that pushed it.
 | `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat, or `check:<repository id>` for a check's box) and `principal` (`run <launch id>`, or the check's attempt: its commit, target, name and number), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
 | `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. Or a box's fetch took a barrier for a want its floor lacked, and its floor could not be raised to it: the fetch was served all the same, and the box's next fetch of those objects on another node may take a barrier again. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: an executor's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |
-| `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another git node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |
+| `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another Gitlet node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |
 | `code_write_outcome_unread` | `WARN` | An engine write found its branch at another head and could not learn, from the code log, whether that head is its own push landed by an earlier ask; it was answered `busy` — make the same call again — rather than `stale`. |
-| `code_commit_failed` | `WARN` | A repository's [committer](#the-committer) could not answer a record it published: the code log failed the write for a reason that is no refusal of it, or the record applied and the rows it wrote could not be read back. By `kind`: `push`, a batch of pushes, each answered with the `error`; or `compaction`, a git node's merge of the repository's packs, which the node that built it plans again. With the `repo` and the record's `op_id`. |
+| `code_commit_failed` | `WARN` | A repository's [committer](#the-committer) could not answer a record it published: the code log failed the write for a reason that is no refusal of it, or the record applied and the rows it wrote could not be read back. By `kind`: `push`, a batch of pushes, each answered with the `error`; or `compaction`, a Gitlet node's merge of the repository's packs, which the node that built it plans again. With the `repo` and the record's `op_id`. |
 | `code_commit_busy` | `WARN` | Proposals to a `repo` (its id) that this node's [committer](#the-committer) refused `busy` in one `minute`, written once the minute has closed — at the committer's next refusal or the node's next alarm evaluation, ten seconds at most: how many were `refused`, and how many of them at the repository's own `queue`, at the `node`'s whole bound, after they `waited` in the queue until their asker could wait no longer, too `late` for their asker when they arrived, and after every compare-and-set round (`contended`). One line a repository a minute, never one a refusal. The first three raise the [`code_commit_busy`](../reference/alarms.md) alarm; the last two raise nothing. |
 | `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, `spool` the credential it waited as — `runs` for every coding box, which share one — and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token, or, for `runs`, that boxes held their share. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
 | `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request — a fetch's in an advertisement, in the node's check of which of the fetch's wants the copy lacks, or in the fetch's own git, before its pack began — read from the formats of git's own reports, never their words, which repeat the request's (`error` quotes git's words) — or the node would not run git in it for its shape (`reason`: `corrupt`, `derived`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape or a damaged derived file (`derived`: a multi-pack-index, a commit-graph) in place, damage to its packs or objects in place first, one download a damaged pack, and by a rebuild only when that found nothing — or, for a request whose git began before the node last wrote a repair into the copy, left as it stands; and git run again over the same request. |
@@ -8279,7 +8280,7 @@ revised is one click from the terminal that pushed it.
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a single member's stalled write, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
 | `code_object_store_unavailable` | `WARN` | A fetch's sync could not read a pack from the object store for a reason that is no answer about the pack — a timeout, a throttle past its retries, the store unreachable — answered 503. A pack the store does not hold, or holds damaged, is `code_pack_missing` instead. |
-| `code_cache_sized` | `INFO` | The node built Gitlet and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit the request `spools`' allowance (64 MiB for each of the pool's `transfers`) and the revision facts' `patches` (two patches spooled at once of up to 256 MiB each, 512 MiB), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build Gitlet, and the error names the same figures and what to change. |
+| `code_cache_sized` | `INFO` | The node built Gitlet and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `gitlet.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit the request `spools`' allowance (64 MiB for each of the pool's `transfers`) and the revision facts' `patches` (two patches spooled at once of up to 256 MiB each, 512 MiB), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build Gitlet, and the error names the same figures and what to change. |
 | `code_git_ready` | `INFO` | The node's git is 2.55 or newer (the node floor, `gitproc.NodeMinVersion`) and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the empty `home` every git process runs with, the node's `memory` the lanes were sized by and where it was read (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), and the format of the trace2 event stream its git writes (`trace_evt`), from which a failure's damage is read. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
 | `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after five seconds. |
@@ -8287,12 +8288,12 @@ revised is one click from the terminal that pushed it.
 | `code_git_cpu_unread` | `WARN` | Ending a git process, the node could not read every process record under `/proc` for what its group had spent (a `/proc` mounted `hidepid=1` hides other users' records), so the run's `crewlet.code.git.cpu` is short by whatever a record it could not read held. |
 | `code_git_protocol_dropped` | `DEBUG` | A client's `Git-Protocol` header was not one the node passes to git, and git ran without it. |
 | `code_git_abandoned` | `DEBUG` | A git request ended because its client hung up (`by`: `client`), answered nothing, or because the node is stopping (`by`: `stop`), answered 503 — never the code log failing. A push abandoned after its proposal is recorded as its session concluded it (`unknown`, `applied`). |
-| `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-git-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
+| `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-gitlet-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 500 with no `Retry-After`, since no retry ends it. |
 | `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal its own check or its committer refused: a bug, and the push fails. A proposal is checked as soon as the commits it introduces are listed, and its bundle's upload is ended there; a bundle already stored is named by no row, and the object collector removes it after its grace. A push past what one push may carry is never this: it is refused before its work, in git's words. |
-| `code_compaction_pass` | `INFO` | A git node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many of them it `maintained`, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
+| `code_compaction_pass` | `INFO` | A Gitlet node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many of them it `maintained`, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
 | `code_compaction_pass_failed` | `WARN` | A poll's listing of the repositories a compaction may be due in failed: nothing was compacted, and the alarm reading stays as the last pass left it until the next poll, a minute on. |
-| `code_compaction_maintainer_unknown` | `WARN` | Who serves git, and what each git node advertises, could not be read — or the listing carries no git node at all, this one included, its own presence lapsed — so the poll compacted nothing rather than guess which repositories this node maintains ([Who maintains a repository](#who-maintains-a-repository)); `listed` is how many repositories its listing named. |
+| `code_compaction_maintainer_unknown` | `WARN` | Who serves git, and what each Gitlet node advertises, could not be read — or the listing carries no Gitlet node at all, this one included, its own presence lapsed — so the poll compacted nothing rather than guess which repositories this node maintains ([Who maintains a repository](#who-maintains-a-repository)); `listed` is how many repositories its listing named. |
 | `code_compaction_applied` | `INFO` | This node's compaction of a `repo` landed: its `compaction` id, how many `inputs` it merged into how many `outputs`, the `objects`, `bytes_in` and `bytes_out`, the record's `position` and how long it `took`, from its plan to its answer. |
 | `code_compaction_refused` | `WARN` | A compaction this node built was refused — by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`) or by an object store with no room for its outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make). `pack_too_large` and `upload_expired` are a build past its own bounds or longer than twelve hours, and say so in `detail`. |
 | `code_compaction_failed` | `WARN` | A compaction this node began did not land: the `step` that failed — `sync`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `outputs`: the build wrote more packs than one compaction records; `bundle_too_large`: an output stayed past the bundle rule at a smaller cut too. Either uploaded nothing and halves what the repository's next plan merges. Tried again at the next poll. |
@@ -8300,17 +8301,17 @@ revised is one click from the terminal that pushed it.
 | `code_compaction_adopt_failed` | `WARN` | A compaction this node built landed and the node could not link its outputs into its own copy: its next sync downloads them instead. |
 | `code_compaction_store_unread` | `WARN` | The object store's room could not be read, so every repository held back for a full store waits for the next poll. |
 | `code_compaction_stop_unfinished` | `WARN` | The node stopped while a compaction or a publication was still running past the stop's wait: its build was killed and its uploads abandoned, and what it stored, named by no row, is the collector's. |
-| `code_publication_pass` | `INFO` | A git node's minute's pass of the repositories a publication may be due in that published, refused or failed something ([When a repository is published](#when-a-repository-is-published)): how many it `listed`, how many hold a layer this node refused (`damaged`, each a repair), how many of them it `maintained`, how many were `due`, `published`, `refused` and `failed`; `DEBUG` when it did none of those. |
+| `code_publication_pass` | `INFO` | A Gitlet node's minute's pass of the repositories a publication may be due in that published, refused or failed something ([When a repository is published](#when-a-repository-is-published)): how many it `listed`, how many hold a layer this node refused (`damaged`, each a repair), how many of them it `maintained`, how many were `due`, `published`, `refused` and `failed`; `DEBUG` when it did none of those. |
 | `code_publication_pass_failed` | `WARN` | A pass's listing of the repositories a publication may be due in failed: nothing was published, until the next pass a minute on. |
-| `code_publication_maintainer_unknown` | `WARN` | Who serves git, and what each git node advertises, could not be read — or the listing carries no git node at all, this one included — so the pass published nothing rather than guess which repositories this node maintains; `listed` is how many repositories it named. |
+| `code_publication_maintainer_unknown` | `WARN` | Who serves git, and what each Gitlet node advertises, could not be read — or the listing carries no Gitlet node at all, this one included — so the pass published nothing rather than guess which repositories this node maintains; `listed` is how many repositories it named. |
 | `code_publication_applied` | `INFO` | This node's publication of a `repo` landed: its `publication` id, the `layer` it put on top of the chain over its `base`, how many layers it `replaces`, how many packs it `repacked` into how many `outputs`, the layer's `objects` and `bytes`, the record's `position` and how long it `took`, from its plan to its answer. |
 | `code_publication_refused` | `WARN` | A publication this node planned or built was refused: by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`, with its `detail`); by an object store with no room for its parts or outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make); or before its build, a layer whose files would pass 16 parts of 1 GiB (`layer_too_large`, with its `objects`, its `estimate` and the `most` its parts hold), not planned again until the repository moves. |
 | `code_publication_failed` | `WARN` | A publication this node began did not land: the `step` that failed — `sync`, `store`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `no_bitmap`: git wrote the layer without a bitmap even over one more layer, since no pack it covers holds a commit; `outputs` and `bundle_too_large`: its repack wrote more packs than one record names, or an output past the bundle rule, as a compaction's would. Tried again at the next pass. |
-| `code_publication_base_lost` | `WARN` | The object store no longer holds every part of a `layer` this node holds installed — a restore, which carries no layer, or a bucket's own deletion — so the publication replaces it, and every layer above it, rather than build over a base no other git node can install. |
+| `code_publication_base_lost` | `WARN` | The object store no longer holds every part of a `layer` this node holds installed — a restore, which carries no layer, or a bucket's own deletion — so the publication replaces it, and every layer above it, rather than build over a base no other Gitlet node can install. |
 | `code_publication_rejected` | `ERROR` | A part of a publication's layer or one of its repack's outputs failed its own seal on its way to the object store: a bug, or a disk returning other bytes than were written. Nothing is proposed, and what was stored, named by no row, is the collector's. |
 | `code_publication_adopt_failed` | `WARN` | A publication this node built landed and the node could not link its outputs or its `layer` into its own copy: its next sync downloads the outputs, and its installer the layer. |
 | `code_publication_store_unread` | `WARN` | The object store's room could not be read, so every repository the publication loop holds back for a full store waits for the next pass. |
-| `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | Under the component `code.compact`: the node that built a compaction or a publication found it breaking a rule its committer holds it to before storing any of it — a bug in that node's build, so nothing was stored or proposed. Otherwise a repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the git node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
+| `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | Under the component `code.compact`: the node that built a compaction or a publication found it breaking a rule its committer holds it to before storing any of it — a bug in that node's build, so nothing was stored or proposed. Otherwise a repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the Gitlet node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
 | `code_layer_not_applied` | `WARN` | Under the component `code.apply`: a publication's record applied as nothing on this node, because the layers it replaces are not the top of the repository's published chain or its base is not the layer below them (`chain`, `base`, `replaces`) — a record no correct committer forms, which every node applies alike, so the chain stays as it was. With the `repo`, the `layer` and the record's `position`. Report it. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
 | `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |
@@ -8324,12 +8325,12 @@ revised is one click from the terminal that pushed it.
 | `code_fetched_dropped` | `WARN` | Under `code.readaudit`: the stream refused this node's records of reads for longer than the node keeps them (4 096 records): the oldest `records`, and the `reads` they counted, are dropped, and who read those repositories answers without them. |
 | `code_fetched_lost_at_stop` | `WARN` | Under `code.readaudit`: the node stopped while the stream was refusing its last records of reads; those `records` and their `reads` are in no answer. |
 | `code_git_unparsed` | `ERROR` | Under the component `code.query`: a [history](#a-paths-history) or a [blame](#who-changed-a-line) read answered output that does not read as git writes it — a record past its fields, an id that is no id, a porcelain line out of its place (`kind`, `error`). The read fails and nothing of that page is answered: a bug in the reader, or a git writing what this build does not read — never a message's doing, since every field ends in a byte no message holds. |
-| `code_git_reads_stop_unfinished` | `WARN` | Under the component `code.query`: stopping Gitlet, the node cut its [server-side reads](#server-side-reads) in flight — each answered unready, so its asker took it to the next git node — and some had still not returned when the stop's wait ended. A read of a `visibility: unit` repository that answers after this line is recorded after Gitlet's stop, and so after the node's stop has flushed what [who read it](#who-read-it) is kept from. |
+| `code_git_reads_stop_unfinished` | `WARN` | Under the component `code.query`: stopping Gitlet, the node cut its [server-side reads](#server-side-reads) in flight — each answered unready, so its asker took it to the next Gitlet node — and some had still not returned when the stop's wait ended. A read of a `visibility: unit` repository that answers after this line is recorded after Gitlet's stop, and so after the node's stop has flushed what [who read it](#who-read-it) is kept from. |
 | `code_status_answerer_not_withdrawn` | `WARN` | Stopping Gitlet, the node could not finish withdrawing its answers to the fleet's code-status question (`crewlet.code.status`), which it stops answering first so that no peer is told of a cache that is going: the broker refused to drop its subscription, or answers already in flight outlasted the stop's wait — the `error` says which. Either way the node starts no answer after this line, and Gitlet's stop goes ahead. |
 | `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /gitlet/repos/{name}/verify/{id}` for an hour after. |
 | `code_verify_failed` | `WARN` | A check of this node's copy of a repository could not end — a stop cut it short, a pack the object store lacks stopped its repair — with what the sync before it had `repaired_by_sync` and the `problems` it had found by then. |
 
-A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.
+A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.
 
 | Line | Level | Means |
 |---|---|---|
@@ -8362,7 +8363,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
 | `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet gitlet verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. A copy serving from a published chain logs a second line: the `layers` of the `installed` chain it linked in, root first, each over packs it linked and held to the row it was installed from ([Published layers](#published-layers)); it fetches the layers above them. |
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead — or could not link a published `layer` of the copy's chain, or found its files not its row's, so it fetches that layer and every one above it. The disk refusing a hard link, or a layer damaged in the copy. |
-| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — or a published chain was placed in a copy a request may be reading ([Published layers](#published-layers)), and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name and the chain holds, hard-linked, `packs_dropped` those that left, `layers` the installed chain the next directory holds, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired or a chain cut whole (`dropped`, written again at once), was never there to keep (`none`), or moves with the chain (`chain`), and `took`. Requests reading the old directory finish there. |
+| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — or a published chain was placed in a copy a request may be reading ([Published layers](#published-layers)), and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-gitlet-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name and the chain holds, hard-linked, `packs_dropped` those that left, `layers` the installed chain the next directory holds, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired or a chain cut whole (`dropped`, written again at once), was never there to keep (`none`), or moves with the chain (`chain`), and `took`. Requests reading the old directory finish there. |
 | `code_cache_swap_failed` | `WARN` | Packs left a repository's copy, or a published chain was being placed in it, and the node could not build its next directory (`step`, `error`; `incarnation` the copy's number): the copy keeps serving, every pack the rows name still in it, and the repository's next sync tries again, or the installer a chain's layers. Recurring, the cache volume is refusing links or is full; at `step` `canary`, the read through the placed chain's bitmap could not run, the node's read lane full for ten seconds or the read past its deadline. |
 | `code_layer_installed` | `INFO` | A published layer of a repository's chain was placed in this node's copy ([Published layers](#published-layers)): the `layer` (its multi-pack-index's checksum) and the `seq` of its row, its `bytes`, how long its fetch, check and placement `took`, and whether it was `adopted` — linked from the files the repository's maintainer wrote on this node rather than fetched. |
 | `code_layer_refused` | `WARN` | This node will not install a published layer while the rows name it ([When a layer is missing](#when-a-layer-is-missing)): `outcome` `missing`, a part the object store holds nothing for while the log's head still names the layer; `corrupt`, bytes or files its row does not describe, or a placement whose read through its bitmap failed — a layer over the wrong base; or `newer_git`, written by a git newer than this node's — with the `detail`. The copy serves from the layers below it, or in its own mode. Once a copy a layer; a restart tries it again. |
@@ -8371,9 +8372,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph` — the copy's own graph, or its tip over a published chain — or `state` when its record could not be written). The repository is served without what the step writes — slower, never wrong — and the next run waits out the interval. |
 | `code_cache_compaction_refused` | `WARN` | A compaction of a `repo` needs more memory than this node can give its background work — its `estimate`, against the `budget`, with the `memory` it was taken from and what was `reserved` — so this node does not build it; logged once for the copy however many polls ask again, and counted `crewlet.code.cache.maintenance.refusals{step=compact}`. The next poll asks again, so a node given more memory builds it; at the pack bound the repository's pushes are refused meanwhile, which `code_compaction_behind` raises. |
-| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit; `tip-graph`: a copy serving from a published chain walks the commits pushed since its last publication by date, and the rest by generation. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused — never for a tip. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
+| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit; `tip-graph`: a copy serving from a published chain walks the commits pushed since its last publication by date, and the rest by generation. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused — never for a tip. Give the node more memory, or — where `gitlet.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
 | `code_cache_provenance_gap` | `WARN` | A sync applied pushes it could not fold into the repository's index of which push introduced each commit (`from`, `through`, `error`: a delta that served no pushes, or one beginning above where the index ends), so it left that range to the backfill, as a full sync does; until it is read, an answer naming a commit in it says the index does not hold it. One now and then is a page the sync could not read; a run of them, `error` says why. |
-| `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted — or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)) found one missing, so the next directory starts with no index until its next full sync makes one. Something outside the engine removing files in the cache, or a disk losing them. |
+| `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted — or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-gitlet-node)) found one missing, so the next directory starts with no index until its next full sync makes one. Something outside the engine removing files in the cache, or a disk losing them. |
 | `code_cache_provenance_unlisted` | `WARN` | A full sync could not list the repository's `crewlet/` directory (`error`), so it kept the index as its record names it; the next full sync lists it again. A disk refusing reads. |
 | `code_cache_provenance_seeded` | `INFO` | A rebuild linked the `runs` of the repository's index into the new copy, so the index outlives it. |
 | `code_cache_provenance_dropped` | `INFO` | The backfill found the repository gone from the rows at a position that had held it (`why`) — purged — and dropped its index; the repository's next sync takes its copy out of the cache. |
@@ -8388,7 +8389,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_memo_cohorts_unread` | `WARN` | At its boot the node found no readable record of the memo's cohorts its previous process opened (`path`, `error`) — the file removed or damaged — so it opened past what the copies' states record alone: a cohort a crash left may be counted short until a trim takes it. It writes the record again at once. |
 | `code_cache_memo_foreign` | `WARN` | A copy's memo held something no cohort is — `found` names the first, as a build that kept the memo in one directory left it — so the node moved the whole memo aside unread; its answers are computed again as they are asked. |
 | `code_cache_memo_unstated` | `WARN` | The node could not write a copy's state after its memo moved (`error`): it tries again at its next tick, and a restart before then counts the memo as the last state written does. |
-| `code_cache_memo_carried` | `INFO` | A rebuild, or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)), moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
+| `code_cache_memo_carried` | `INFO` | A rebuild, or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-gitlet-node)), moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
 | `code_cache_memo_uncarried` | `WARN` | A rebuild, or a move into the copy's next directory, could not move the memo into the new copy (`error`): the new copy starts with none and computes its answers again; the old copy's goes with it. The disk refusing a rename within the cache's own directory. |
 | `code_cache_backfill_failed` | `WARN` | A step of the backfill failed for the `repo` (`error`): a page the data nodes could not serve, a run it could not write, or two runs it could not merge — kept as they are, a lookup reading one more run meanwhile. That repository's steps wait `retry_in`, five seconds doubling to five minutes with each of its failures in a row, while every other repository's steps go on; only failures of more than one repository in a row make the backfill as a whole wait, doubling the same way. One now and then is a data node restarting; one repository's, again and again, is rows of it the data nodes cannot serve this node (a rolling upgrade's record deferred everywhere) or a disk refusing its writes; every repository's, while `crewlet.code.cache.provenance.behind` stays up, is the data nodes unreachable from this node, or its disk full. |
 | `code_cache_backfill_unpaced` | `WARN` | The backfill could not count the fleet's live git and data nodes to pace its next page (`error`), so it waits five seconds, doubling to five minutes, and counts again rather than reading on a guess. |
@@ -8406,7 +8407,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 
 - [Configuration: Code](../getting-started/configuration.md#code) — every field of the `code` block
 - [Hosting Code on Gitlet](../guides/gitlet.md) — the steps: turning it on, a token for each person, clone, fetch and push
-- [Scaling Out: Git nodes](scaling.md#git-nodes) — what git nodes and data nodes each scale, and what sizes them
+- [Scaling Out: Gitlet nodes](scaling.md#gitlet-nodes) — what Gitlet nodes and data nodes each scale, and what sizes them
 - [Object Store](object-store.md) — where a push's bytes live, and the collector and audit that keep them
 - [Replication](../guides/replication.md) — the state-log framework the code log rides
 - [Retention](../guides/retention.md) — the log's trim, and what a purge does and does not reach

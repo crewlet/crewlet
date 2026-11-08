@@ -48,7 +48,7 @@ const ORG = withDerived({
     { name: "Engineer", handle: "dev" },
   ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** The reader: bound to `jane`, offered every change write. */
@@ -441,7 +441,7 @@ test("a refused standing read holds the review until it is read again", async ()
 });
 
 // A DIFF IS READ ONCE FOR WHAT IT IS A FUNCTION OF: a revision's files and a
-// file's patch are git reads on the home git node whose answer moves only
+// file's patch are git reads on the home Gitlet node whose answer moves only
 // with the revision's head and the base its facts record, so minutes on the
 // Files tab ask neither again while the detail says neither has moved — and a
 // version the detail moves asks both again, as a base its facts record anew
@@ -882,6 +882,29 @@ test.each([
   const reply = await screen.findByRole("button", { name: "Reply" });
   await waitFor(() => expect(reply.getAttribute("title")).toBe(reason));
   expect(acted).toHaveLength(0);
+});
+
+// A COMMENT ON THE CHANGE SENDS AS EVERY MESSAGE BOX DOES: Enter sends,
+// Shift+Enter is a new line, an empty box sends nothing, and the field's
+// description names the keys.
+test("a comment on the change sends on Enter, and Shift+Enter is a new line", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  const field = (await screen.findByRole("textbox", { name: "Comment" })) as HTMLTextAreaElement;
+  const described = (field.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain("Enter to send, Shift plus Enter for a new line");
+  expect(fireEvent.keyDown(field, { key: "Enter" })).toBe(false);
+  fireEvent.change(field, { target: { value: "Looks right" } });
+  expect(fireEvent.keyDown(field, { key: "Enter", shiftKey: true })).toBe(true);
+  expect(acted).toHaveLength(0);
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_comment_on_change",
+    args: { change: "web!42", body: "Looks right" },
+  });
 });
 
 // A DRAFT'S NEXT STEP IS BEING MARKED READY, and the page offers it: Ready

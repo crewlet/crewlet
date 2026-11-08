@@ -119,21 +119,21 @@ func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 	}
 }
 
-// THE GIT PLACEMENT IS THE LIVE GIT NODES: every node the router's WATCHED view
-// names whose profile has the git role, sorted — the set a repository's git
+// THE GIT PLACEMENT IS THE LIVE GITLET NODES: every node the router's WATCHED view
+// names whose profile has the gitlet role, sorted — the set a repository's git
 // order is computed over (ADR-0089) — a node that declares no roles among
 // them, since such a node has every role, and never a data node that lists its
-// roles without git or a node with seats alone; off the same view as the data
+// roles without gitlet or a node with seats alone; off the same view as the data
 // placement, so the two cannot disagree about who is live, and UNKNOWN before
-// the view has listed, never a fleet of no git node.
+// the view has listed, never a fleet of no Gitlet node.
 //
-// Mutation: read the data role for the git one — the data node listing no git
-// role is named a git node, red.
-func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
+// Mutation: read the data role for the gitlet one — the data node listing no gitlet
+// role is named a Gitlet node, red.
+func TestTheGitPlacementIsTheLiveGitletNodes(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
 	claimPresences(t, backend, map[string][]string{
-		"git-b": {"data", "git", "ingress"}, "every-a": nil, "data-c": {"data", "ingress"},
+		"git-b": {"data", "gitlet", "ingress"}, "every-a": nil, "data-c": {"data", "ingress"},
 		"agent-1": {"seats"},
 	})
 	view, err := coord.NewLeaseView(backend, coord.ClassNode,
@@ -143,7 +143,7 @@ func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
 	}
 	e := &Engine{dataView: view}
 	if nodes, err := e.gitPlacement().Holders(); !errors.Is(err, coord.ErrUnavailable) {
-		t.Errorf("a view that has never listed names the git nodes %v (%v), want unknown", nodes, err)
+		t.Errorf("a view that has never listed names the Gitlet nodes %v (%v), want unknown", nodes, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -155,38 +155,38 @@ func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
 		t.Fatalf("the git placement: %v", err)
 	}
 	if want := []string{"every-a", "git-b"}; !slices.Equal(nodes, want) {
-		t.Errorf("the git placement names %v, want every live node with the git role %v", nodes, want)
+		t.Errorf("the git placement names %v, want every live node with the gitlet role %v", nodes, want)
 	}
 }
 
-// WHAT EACH GIT NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, ONE
-// LISTING FOR THE NODES AND THEIR FIGURES: the listing names exactly the git
+// WHAT EACH GITLET NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, ONE
+// LISTING FOR THE NODES AND THEIR FIGURES: the listing names exactly the Gitlet
 // nodes the git placement names — a node that declares no roles among them,
-// since such a node has every role, and never one whose roles leave git out,
+// since such a node has every role, and never one whose roles leave gitlet out,
 // whatever its row says — and beside each, what its presence row says beside
 // its status: a budget the row names, across the store's JSON round trip, said
 // — a beat that carried no status at all included, since the figure is not in
 // the status; a zero said as zero, a node with nothing to give its background
 // work; and no entry for a row that names no figure, a node NOT SAYING (absent
 // is not zero), whatever its status says. A view that has never listed is
-// UNKNOWN, never a fleet of no git node; a node with no view has no fleet, and
+// UNKNOWN, never a fleet of no Gitlet node; a node with no view has no fleet, and
 // its listing names nobody.
 //
 // Mutations: read a row that names no figure as a node with nothing to give —
 // the quiet node says zero, red; read the figure out of the status — the node
 // whose beat dropped its status says nothing, red; list every node of the view
-// rather than its git nodes — the data node that writes a figure is listed,
+// rather than its Gitlet nodes — the data node that writes a figure is listed,
 // red; read a view that has never listed as nobody — no error, red.
-func TestTheGitListingIsWhatEachGitNodesPresenceSays(t *testing.T) {
+func TestTheGitListingIsWhatEachGitletNodesPresenceSays(t *testing.T) {
 	t.Parallel()
 	const budget = int64(64)<<30 + 12_345
 	backend := coordmem.New()
-	gitRoles := []string{"data", "git", "ingress"}
+	gitletRoles := []string{"data", "gitlet", "ingress"}
 	claimMeta(t, backend, map[string]map[string]any{
-		"git-large": {"roles": gitRoles, coord.GitBackgroundKey: budget},
-		"git-cold": {"roles": gitRoles, coord.GitBackgroundKey: int64(0),
+		"git-large": {"roles": gitletRoles, coord.GitBackgroundKey: budget},
+		"git-cold": {"roles": gitletRoles, coord.GitBackgroundKey: int64(0),
 			coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
-		"git-quiet": {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
+		"git-quiet": {"roles": gitletRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
 		"every-a":   {coord.GitBackgroundKey: int64(8) << 30},
 		"data-c":    {"roles": []string{"data", "ingress"}, coord.GitBackgroundKey: budget},
 	})
@@ -214,22 +214,22 @@ func TestTheGitListingIsWhatEachGitNodesPresenceSays(t *testing.T) {
 	}
 	want := []string{"every-a", "git-cold", "git-large", "git-quiet"}
 	if !slices.Equal(listing.Nodes, want) || !slices.Equal(holders, want) {
-		t.Errorf("the git listing names %v and the git placement %v, want both every live git node %v",
+		t.Errorf("the git listing names %v and the git placement %v, want both every live Gitlet node %v",
 			listing.Nodes, holders, want)
 	}
 	said := map[string]int64{"every-a": 8 << 30, "git-cold": 0, "git-large": budget}
 	if !maps.Equal(listing.Budgets, said) {
-		t.Errorf("the git listing says %v, want %v: a figure where a git node's row names one, zero included, "+
-			"and none for a node not saying or a node that is no git node", listing.Budgets, said)
+		t.Errorf("the git listing says %v, want %v: a figure where a Gitlet node's row names one, zero included, "+
+			"and none for a node not saying or a node that is no Gitlet node", listing.Budgets, said)
 	}
 	if listing, err := (&Engine{}).gitPlacement().Listing(); err != nil || len(listing.Nodes) != 0 ||
 		len(listing.Budgets) != 0 {
-		t.Errorf("a node with no view lists %+v (%v), want no git node and nobody saying anything", listing, err)
+		t.Errorf("a node with no view lists %+v (%v), want no Gitlet node and nobody saying anything", listing, err)
 	}
 }
 
-// THE ROUTER A NODE BUILDS PLACES A REPOSITORY'S MAINTENANCE BY WHAT EACH GIT
-// NODE ADVERTISES: over three git nodes whose presence rows say 8, 64 and 8
+// THE ROUTER A NODE BUILDS PLACES A REPOSITORY'S MAINTENANCE BY WHAT EACH GITLET
+// NODE ADVERTISES: over three Gitlet nodes whose presence rows say 8, 64 and 8
 // GiB — the large one's beat carrying no status, as a beat whose status read
 // overran carries none — the router [Engine.newRouter] builds — on a node
 // holding nothing, as a seats node's is — places work only the large node
@@ -238,16 +238,16 @@ func TestTheGitListingIsWhatEachGitNodesPresenceSays(t *testing.T) {
 //
 // Mutation: answer newRouter's git placement's listing with no figure in it —
 // nobody saying anything, the 40 GiB work stays with each home, red.
-func TestTheRoutersMaintainerWeighsWhatEachGitNodeAdvertises(t *testing.T) {
+func TestTheRoutersMaintainerWeighsWhatEachGitletNodeAdvertises(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
 	backend := coordmem.New()
-	gitRoles := []string{"data", "git", "ingress"}
+	gitletRoles := []string{"data", "gitlet", "ingress"}
 	claimMeta(t, backend, map[string]map[string]any{
-		"git-a": {"roles": gitRoles, coord.GitBackgroundKey: 8 * gib,
+		"git-a": {"roles": gitletRoles, coord.GitBackgroundKey: 8 * gib,
 			coord.StatusKey: coord.NodeStatus{}.Meta()},
-		"git-b": {"roles": gitRoles, coord.GitBackgroundKey: 64 * gib},
-		"git-c": {"roles": gitRoles, coord.GitBackgroundKey: 8 * gib,
+		"git-b": {"roles": gitletRoles, coord.GitBackgroundKey: 64 * gib},
+		"git-c": {"roles": gitletRoles, coord.GitBackgroundKey: 8 * gib,
 			coord.StatusKey: coord.NodeStatus{}.Meta()},
 		"agent-1": {"roles": []string{"seats"}, coord.StatusKey: coord.NodeStatus{}.Meta()},
 	})

@@ -305,6 +305,14 @@ function Conversation({ channelID }: { channelID: string }) {
   // THE SEATS ANSWERING IN THE ROOM ITSELF; one answering under a message is
   // drawn under it.
   const answering = working.filter((seat) => !seat.thread);
+  // WHO IS TYPING AND WHICH AGENTS ANSWER, on the one line under the box.
+  // Always mounted, so its region hears the first start.
+  const activity = (
+    <ActivityLine
+      typing={typingLine(typingNow.map(people.nameOf))}
+      agents={workingAgents(answering, people.person)}
+    />
+  );
   const placeholder = `Message ${where}`;
 
   return (
@@ -389,13 +397,12 @@ function Conversation({ channelID }: { channelID: string }) {
               onTyping={typing}
               onSent={() => transcript.current?.scrollToLatest()}
               {...(lastMine ? { onEditLast: () => scope.setEditing(lastMine.message.id) } : {})}
+              status={activity}
+              statusBusy={typingNow.length > 0 || answering.length > 0}
             />
           </>
         )}
-        <ActivityLine
-          typing={typingLine(typingNow.map(people.nameOf))}
-          agents={workingAgents(answering, people.person)}
-        />
+        {scope.rules.post && activity}
         {/* WHAT OFFLINE MEANS FOR READING. What it means for saying something
             is the composer's own sentence, beside the Send it holds. */}
         {!connected && (

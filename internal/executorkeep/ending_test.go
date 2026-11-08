@@ -120,3 +120,41 @@ func TestAnEndingsExhaustedSessionsAreBounded(t *testing.T) {
 		})
 	}
 }
+
+// AN ENDING'S LAST WORD IS PLACED FROM THE FIRST CAPTURE, as every capture of
+// a turn is: a reader holds the row's place to it, so a last word placed at
+// nothing — a zero launch or a zero capture — is no capture's place, and is
+// refused by the log's writer and by its applier alike rather than read as one
+// older than every row. One at the first capture or any later is kept as it
+// is.
+//
+// Mutation: drop the last word's place check from Validate, or from Within,
+// and a case goes red.
+func TestAnEndingsLastWordIsPlacedFromTheFirstCapture(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		place *CapturePlace
+		ok    bool
+	}{
+		"none":                 {ok: true},
+		"the first capture":    {place: &CapturePlace{LaunchSeq: 1, CaptureSeq: 1}, ok: true},
+		"a later one":          {place: &CapturePlace{LaunchSeq: 3, CaptureSeq: 7}, ok: true},
+		"no launch":            {place: &CapturePlace{LaunchSeq: 0, CaptureSeq: 1}},
+		"no capture":           {place: &CapturePlace{LaunchSeq: 1, CaptureSeq: 0}},
+		"before the first one": {place: &CapturePlace{LaunchSeq: -1, CaptureSeq: -1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := Ending{Outcome: OutcomeFailed, WentOn: true, LastWord: tc.place}
+			if err := e.Validate(); (err == nil) != tc.ok {
+				t.Errorf("Validate = %v, want ok %v", err, tc.ok)
+			}
+			if e.Within() != tc.ok {
+				t.Errorf("Within = %v, want %v", e.Within(), tc.ok)
+			}
+			if got := e.Fit().LastWord; (got == nil) != (tc.place == nil) || (got != nil && *got != *tc.place) {
+				t.Errorf("Fit moved the last word to %+v, want %+v", got, tc.place)
+			}
+		})
+	}
+}

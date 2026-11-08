@@ -15,14 +15,14 @@ import (
 // WHICH CREDENTIAL A REMOTE MAY BE DIALED WITH (code.remote_credentials): the
 // variables a repository's mirror or import may name for its credential, each
 // with the hosts its value may be sent to. A credential a mirror or an import
-// names is a ${VAR} reference, resolved where its repository's home git node
+// names is a ${VAR} reference, resolved where its repository's home Gitlet node
 // dials — from the secret store and then that node's own environment — and
 // sent to the host of the URL beside it. So a reference nothing bounds is a
-// way to have the git node send ANY value it can resolve — the keyring's
+// way to have the Gitlet node send ANY value it can resolve — the keyring's
 // CREWLET_SECRET_KEY_*, a Tier A token, the object store's key, a model
 // vendor's — to a host its writer chose, and a person who may create a
 // repository (every member of the company, code_import_repo) is not thereby
-// trusted with every secret of every git node. An administrator writes this
+// trusted with every secret of every Gitlet node. An administrator writes this
 // table, and a remote's credential is one it declares for the remote's host:
 // refused where a mirror or an import is declared (this document's
 // validation), where a person asks for one (the code domain's lifecycle

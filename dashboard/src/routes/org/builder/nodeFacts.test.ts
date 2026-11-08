@@ -167,9 +167,9 @@ describe("integrations", () => {
     const github: CompanyDocument = { integrations: { github: { enabled: true } } };
     expect(isConnected(github, "github")).toBe(true);
     expect(readsCodeAccess(github)).toBe(false);
-    expect(readsCodeAccess({ ...github, code: { native: true } })).toBe(true);
-    expect(readsCodeAccess({ code: { native: true } })).toBe(true);
-    expect(readsCodeAccess({ code: { native: false } })).toBe(false);
+    expect(readsCodeAccess({ ...github, code: { backend: "gitlet" } })).toBe(true);
+    expect(readsCodeAccess({ code: { backend: "gitlet" } })).toBe(true);
+    expect(readsCodeAccess({ code: { backend: "none" } })).toBe(false);
   });
 
   // A provisioner acts only where the document names a secret store entry, and

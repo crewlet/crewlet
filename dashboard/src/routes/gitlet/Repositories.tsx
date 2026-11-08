@@ -60,6 +60,7 @@ import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
 import { ImportRepoButton } from "./ImportRepo.tsx";
 import { repoHref } from "./paths.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -107,8 +108,9 @@ export function Repositories() {
 
   return (
     <>
-      <div className="toolbar">
+      <PageToolbar>
         <Select
+          size="sm"
           width="auto"
           value={status}
           onChange={(value) => setStatus(String(value))}
@@ -117,7 +119,7 @@ export function Repositories() {
           active={status !== ""}
         />
         <ImportRepoButton />
-      </div>
+      </PageToolbar>
       {paged.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading repositories" />
       )}

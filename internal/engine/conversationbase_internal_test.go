@@ -48,8 +48,11 @@ func TestAFrozenReadFitsItsBound(t *testing.T) {
 		SessionID:      strings.Repeat(worst, executorkeep.SessionIDMaxBytes),
 		Home:           strings.Repeat(worst, executorkeep.PathMaxBytes),
 		Workspace:      strings.Repeat(worst, executorkeep.PathMaxBytes),
-		ContextTokens:  1 << 40, Interrupted: true, ArchiveFormat: 1 << 20,
-		EndedAt: time.Now().UTC(), Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}
+		ContextTokens:  1 << 40, Interrupted: true, ArchiveFormat: 1 << 20, CapturedAt: time.Now().UTC(),
+		EndedAt: time.Now().UTC(),
+		// LOST, ITS END SAYING IT WENT ON PAST THE SESSION: the base carries
+		// both, and when the session was kept.
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeLost, WentOn: true}}
 	var endings []executordomain.Session
 	told := []string{head.Turn}
 	for i := 1; i <= executordomain.MaxEndings; i++ {
@@ -79,6 +82,9 @@ func TestAFrozenReadFitsItsBound(t *testing.T) {
 	case len(largest.Absorbs) != executordomain.MaxAbsorbs || len(largest.Siblings) != executordomain.MaxSiblings:
 		t.Fatalf("the largest read absorbs %d and offers %d, want %d and %d", len(largest.Absorbs),
 			len(largest.Siblings), executordomain.MaxAbsorbs, executordomain.MaxSiblings)
+	case largest.Session == nil || !largest.Session.WentOn || !largest.Session.Lost ||
+		largest.Session.CapturedAt.IsZero():
+		t.Fatalf("the largest read froze the base %+v, want it carrying every field a base can", largest.Session)
 	case len(raw) > sandbox.ConversationBaseMaxBytes:
 		t.Fatalf("the largest read encodes in %d bytes, past its bound of %d", len(raw),
 			sandbox.ConversationBaseMaxBytes)

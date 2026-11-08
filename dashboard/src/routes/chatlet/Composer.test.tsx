@@ -7,9 +7,9 @@
  * sends what was typed and nothing about it. The `@` list only helps somebody
  * type a handle correctly.
  *
- * AND ITS KEYS ARE THE KEYMAP'S: a chat message sends on Enter with Shift for
- * a new line (`chatbox.send`), while a reply in the Inbox keeps the
- * command key (`compose.send`).
+ * AND ITS KEYS ARE EVERY MESSAGE BOX'S: Enter sends, Shift+Enter is a new
+ * line (`compose.send`), never mid composition and never an Enter the open
+ * `@` list takes.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -169,9 +169,7 @@ describe("what a message links to that the room previews", () => {
 
 describe("saying it", () => {
   test("Enter sends a chat message and Shift and Enter is a new line", async () => {
-    expect(keyRow("chatbox.send").presses).toEqual([{ key: "enter" }]);
-    // A LETTER IN THE INBOX KEEPS THE COMMAND KEY.
-    expect(keyRow("compose.send").presses).toEqual([{ key: "enter", mod: true }]);
+    expect(keyRow("compose.send").presses).toEqual([{ key: "enter" }]);
     mount();
     const field = await box();
     fireEvent.change(field, { target: { value: "first line" } });
@@ -179,6 +177,31 @@ describe("saying it", () => {
     expect(posts()).toHaveLength(0);
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() => expect(posts()).toHaveLength(1));
+  });
+
+  test("an input method's Enter never sends, and the command key with Enter still does", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "안녕하세요" } });
+    fireEvent.compositionStart(field);
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(field, { key: "Enter", keyCode: 229 });
+    fireEvent.compositionEnd(field);
+    expect(posts()).toHaveLength(0);
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(posts()).toHaveLength(1));
+  });
+
+  test("the hint under the box and the field's description name the same keys", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "draft" } });
+    const hint = await waitFor(() => document.querySelector(".chat-composer-hint")!);
+    expect(hint.textContent).toMatch(/to send, .*for a new line$/);
+    const described = (field.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent);
+    expect(described).toContain("Enter to send, Shift plus Enter for a new line");
   });
 
   test("what was typed is what is sent, mentions and all, for the engine to read", async () => {
@@ -336,7 +359,7 @@ describe("whom it will reach", () => {
   // What the line under the box says, which announces itself politely as it
   // changes; the line itself stands while the box is open.
   const said = () =>
-    document.querySelector<HTMLElement>(".chat-composer-reach > :not(.chat-composer-hint)");
+    document.querySelector<HTMLElement>(".chat-composer-reach .chat-composer-draft > *");
   const reachLine = () =>
     waitFor(() => {
       const line = said();

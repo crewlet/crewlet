@@ -24,7 +24,7 @@ import (
 
 // THE CODE SEARCH TOOL, `code_search`: the lines matching a search across every
 // repository the caller may read, answered by the one search over the fleet's
-// git nodes (internal/codesearch, which the engine asks: [CodeSearcher]) — the
+// Gitlet nodes (internal/codesearch, which the engine asks: [CodeSearcher]) — the
 // same search the `code_search` question answers a person's screen or script
 // with, through the same grammar.
 //
@@ -43,7 +43,7 @@ import (
 // credential on the operator surface — and inside a turn somebody woke, that
 // somebody is decided again by this tool's own authority row, a colleague
 // seat riding on the search as its ceiling (codesearch.Query.CeilingSeat).
-// Every git node that answers a repository judges both grants from its own
+// Every Gitlet node that answers a repository judges both grants from its own
 // chart, so a repository either may not read is never searched, and one a
 // repo: filter names is refused in Gitlet's own sentence.
 //
@@ -77,7 +77,7 @@ import (
 // hit sent — its codesearch.Key, the commit its repository was searched at
 // with it. The next page's SEARCH starts there (codesearch.Query.After): no
 // repository before the key's is asked, the key's own is read at the key's
-// commit from the line after it, and the git nodes count their limit among
+// commit from the line after it, and the Gitlet nodes count their limit among
 // those lines alone. So a page costs the lines from its place on, never the
 // whole search again; it continues the file the page before was cut in at the
 // commit it was read at, so no line is answered twice or skipped for a push
@@ -89,7 +89,7 @@ import (
 // CodeSearchTool is the code search's name: its authority row's action.
 const CodeSearchTool = string(authz.ActionCodeSearch)
 
-// CodeSearcher is the code search over the fleet's git nodes, as the engine
+// CodeSearcher is the code search over the fleet's Gitlet nodes, as the engine
 // asks it (engine.Engine.CodeSearch, over codesearch.Searcher). Declared here
 // by its consumer.
 type CodeSearcher interface {
@@ -169,12 +169,12 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// ONE PAGE'S LINES, AFTER THE LAST ONE SENT: the search itself starts
 	// at the cursor's key and stops at what a page holds, so a page costs
-	// the git nodes the lines it answers, never the whole search again.
+	// the Gitlet nodes the lines it answers, never the whole search again.
 	q := codesearch.Query{Search: search, Limit: searchPageHits, After: after, Asker: c.asker,
 		CeilingSeat: c.ceiling, Rows: seatRead}
 	if turn != nil && c.asker.Kind == code.PrincipalAgent {
 		// A SEAT'S SEARCH NAMES ITS TURN, whose bucket on each answering
-		// git node pays the search's second look at the log's head, as a
+		// Gitlet node pays the search's second look at the log's head, as a
 		// read by object id's does ([CodeDeps.gitRead]).
 		q.Turn = turn.RunID
 		if q.Git, refusal = t.deps.searchHolds(ctx, turn, t.Name(), c, search, after); refusal != nil {
@@ -193,7 +193,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A HIT is a path, a line of at most code.MaxSearchLineBytes and a
 		// blob's id, fenced; and the coverage's names and reasons share
 		// codesearch.MaxCoverageText, a sixteenth of an answer, beside an
-		// entry per git node that did not answer — together far under one
+		// entry per Gitlet node that did not answer — together far under one
 		// answer, so this is a bound broken, never a search.
 		return faulted(ctx, t.Name(), errors.New("builtin: one search hit beside its coverage is past one "+
 			"tool answer"), fmt.Sprintf("%s could not fit one line in one answer: %s.", t.Name(), faultSaid)), nil
@@ -205,7 +205,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // (codesearch.Query.Limit): what one tool answer holds of the SMALLEST lines
 // a search answers that carry text — a one-byte repository, path and line,
 // fenced — measured as sent by TestCodeSearchAsksForWhatOnePageHolds. Asked
-// for more, a page would have the git nodes find, confirm and send lines no
+// for more, a page would have the Gitlet nodes find, confirm and send lines no
 // page of them can carry, which the next page reads again; asked for fewer, a
 // page of short lines would be shorter than one answer holds, and the search
 // cut into more pages. Lines that are longer, as nearly all are, fill a page

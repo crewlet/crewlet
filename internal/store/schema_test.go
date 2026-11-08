@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -49,6 +50,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		chatlet.Domain{},
 		executordomain.Domain{},
 		code.Domain{},
+		accessdomain.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -107,6 +109,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"chat_", chatlet.Domain{}},
 		{"executor_", executordomain.Domain{}},
 		{"code_", code.Domain{}},
+		{"access_", accessdomain.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
 			t.Parallel()

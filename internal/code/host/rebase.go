@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A CHANGE REBASED ONTO ITS TARGET, ON THE GIT NODE (code.WriteRebaseChange):
+// A CHANGE REBASED ONTO ITS TARGET, ON THE GITLET NODE (code.WriteRebaseChange):
 // the change's commits its target does not hold, replayed onto the target's
 // tip in order, and its source branch moved to the last of them as ONE PUSH —
 // forced, since the branch no longer holds its old head — through the one

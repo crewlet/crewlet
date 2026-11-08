@@ -399,7 +399,7 @@ func TestABoxRouteIsAdmittedByItsRunNotTheGuard(t *testing.T) {
 }
 
 // GIT IS SERVED WHERE A NODE'S ROLES NAME IT, AND READ EVERYWHERE. A node whose
-// Tier A lists its roles without `git` keeps no cache and runs no git, so its
+// Tier A lists its roles without `gitlet` keeps no cache and runs no git, so its
 // git routes — a person's and a coding box's alike — and the verify of a cache
 // it does not have are not mounted at all: the mux's own `no_route`, as a route
 // this node's configuration does not enable has always answered. The code
@@ -408,7 +408,7 @@ func TestABoxRouteIsAdmittedByItsRunNotTheGuard(t *testing.T) {
 //
 // Mutations: mount the git routes on every API node, and the first half goes
 // red; mount the box routes on every node, and their rows go red.
-func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
+func TestGitRoutesAreMountedOnlyOnAGitletNode(t *testing.T) {
 	t.Parallel()
 	surface := fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}}
 	for _, tc := range []struct {
@@ -416,9 +416,9 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 		roles []string
 		git   bool
 	}{
-		{"roles without git", []string{"data", "ingress", "seats", "workers"}, false},
+		{"roles without gitlet", []string{"data", "ingress", "seats", "workers"}, false},
 		{"undeclared roles", nil, true},
-		{"roles naming git", []string{"data", "git", "ingress"}, true},
+		{"roles naming gitlet", []string{"data", "gitlet", "ingress"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -454,7 +454,7 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 // had through the named routes, so a person, a script, the CLI and a screen
 // reading its own write back are answered by one implementation: each code
 // question is named by exactly one route, at its path; every route an app
-// mounts under /gitlet/ — on a node of every role and on one without git — is
+// mounts under /gitlet/ — on a node of every role and on one without gitlet — is
 // one of those or, where git is served, the verify and its read, operations on
 // this node's copy rather than reads of the rows; and a request on each path
 // is the question's own answer, asking the reader what the generic form of the
@@ -493,7 +493,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 		git   bool
 	}{
 		{"a node of every role", nil, true},
-		{"a node without the git role", []string{"data", "ingress", "seats", "workers"}, false},
+		{"a node without the gitlet role", []string{"data", "ingress", "seats", "workers"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -734,7 +734,7 @@ func (fakeLogs) ReadAt(_ context.Context, _ objstore.Object, off, n int64) ([]by
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. Gitlet is built with the
-// native runtime — at the first apply whose company sets code.native, which on
+// native runtime — at the first apply whose company sets code.backend: gitlet, which on
 // a node that booted with no company is after the API was assembled — so one
 // app answers "not hosted" before it and serves the moment it exists, with no
 // restart between.
@@ -746,7 +746,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 	reads := &fakeCodeReads{}
 	surface := &switchedCode{fixedCode: fixedCode{git: fakeGitRoutes{}, reads: reads}}
 	a := codeApp(t, nil, surface)
-	const notHosted = "this company does not host code (code.native is not set)\n"
+	const notHosted = "this company does not host code (code.backend is not gitlet)\n"
 
 	rec := ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true)
 	if rec.Code != http.StatusNotFound || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") ||
@@ -757,7 +757,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 	rec = ask(t, a, http.MethodGet, "/gitlet/repos", true)
 	if code, detail := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" ||
 		detail != httpjson.Sentence(strings.TrimSuffix(notHosted, "\n")) {
-		t.Errorf("a code read before the host answered %d %s %q, want 404 not_found naming code.native",
+		t.Errorf("a code read before the host answered %d %s %q, want 404 not_found naming code.backend: gitlet",
 			rec.Code, code, detail)
 	}
 
@@ -775,7 +775,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 
 // A NODE THAT SERVES NONE OF GITLET SAYS WHY, and a company that hosts
 // code is never told it does not. Where the company hosts no code, a code
-// route is a 404 naming code.native. Where the fleet activated a configuration
+// route is a 404 naming code.backend: gitlet. Where the fleet activated a configuration
 // that hosts code and this node serves none of it now — or this node has not
 // read whether it does — it is a 503 naming which of four it is, in git's
 // form on a git route, its code in brackets, and in the refusal envelope under
@@ -789,14 +789,14 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 // WHAT THE NODE NEVER READ THE ANSWER NEVER CLAIMS: an apply in flight may not
 // have decoded the revision yet, and an apply that failed before it could
 // (ErrCodeUnknown) did not — so neither answer says the company hosts code or
-// that Gitlet is coming, which a company that never set code.native
+// that Gitlet is coming, which a company that never set code.backend: gitlet
 // would read as a fact about its own document.
 //
 // Mutation: answer every reason with the health tick's Retry-After, and the
 // failed apply's and the restart's go red; answer the unread failure with the
 // failed apply's code or sentence, or an apply in flight with Gitlet's
 // promise, and the unread case and the applying one go red.
-func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
+func TestANodeServingNoGitletSaysWhy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -815,7 +815,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		claims []string
 	}{
 		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "not_found", "not_hosted",
-			"code.native is not set", "", nil},
+			"code.backend is not gitlet", "", nil},
 		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying), http.StatusServiceUnavailable,
 			"applying", "", "retry in 5 seconds", "5", []string{"hosts code", "serves Gitlet"}},
 		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed), http.StatusServiceUnavailable,
@@ -1153,7 +1153,7 @@ func (f *fakeGitReads) queries() []code.GitQuery {
 // session. A revision the request names (`rev`, `base`, `head`, a blob's own
 // id) is refused before anything is read, as is a parameter no read takes
 // and one named twice, and the answer carries the commit's content alone —
-// none of the push provenance a seat's read carries. And the git node holds
+// none of the push provenance a seat's read carries. And the Gitlet node holds
 // a read made for a check to its commit itself (code.GitQuery.Validate), so a
 // node that built one at another commit is refused there too.
 //
@@ -1238,7 +1238,7 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 		}
 	}
 
-	// THE GIT NODE'S OWN HOLD: a read made for the check at any other commit
+	// THE GITLET NODE'S OWN HOLD: a read made for the check at any other commit
 	// is refused as it is validated, whoever built it.
 	at := func(rev string) []code.GitQuery {
 		check := ref.Attempt

@@ -434,7 +434,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       {(!thread || thread.replies === 0) && answeringLine}
       {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
           the post's own routing as the engine kept it. */}
-      {showsReceipt(message, isAgent) && (
+      {showsReceipt(message, isAgent, view.answered) && (
         <DeliveryReceipt
           recipients={reachRecipients(message.reach, view.answered, names.nameOf)}
           truncated={message.reach?.truncated}

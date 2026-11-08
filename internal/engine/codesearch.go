@@ -11,13 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
-// THE CODE SEARCH SCATTER, wired (internal/codesearch): every git node answers
+// THE CODE SEARCH SCATTER, wired (internal/codesearch): every Gitlet node answers
 // topics.CodeSearch for the repositories a request assigns it, searching them
 // through its own git reads (internal/code/query) as the request's asker, and
 // any node asks it ([Engine.CodeSearch]).
 //
-// REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildCodeHost],
-// [native.stopCodeHost]), as the status answerer is: a node that builds no
+// REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildGitletHost],
+// [native.stopGitletHost]), as the status answerer is: a node that builds no
 // host answers nothing, which an asker reads as a node that did not
 // answer and names in its coverage. SIGNED, unlike the status answerer: a
 // node carries the request out as the asker it names, so the envelopes are
@@ -48,7 +48,7 @@ func (e *Engine) serveCodeSearch(ctx context.Context, nodeID string, reads codes
 // runtime hosts no code, or it holds no envelopes to sign one with.
 var errNoCodeSearch = errors.New("engine: this node does not serve Gitlet, so it searches no code")
 
-// CodeSearch answers a code search over every git node of the fleet
+// CodeSearch answers a code search over every Gitlet node of the fleet
 // ([codesearch.Searcher.Search]): one repository through the keyed walk, more
 // in one signed scatter on topics.CodeSearch. The code_search tool and route
 // ask it.

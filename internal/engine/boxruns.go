@@ -21,7 +21,7 @@ import (
 // BUILT ON EVERY NODE THAT SERVES GIT, whether or not it runs a sandbox
 // runtime of its own: a box's run may have been launched by any node, and its
 // row is readable from every one (sandbox.NewCoordStore over the fleet's
-// backend, the store the sandbox runtime builds over), so the git node a box
+// backend, the store the sandbox runtime builds over), so the Gitlet node a box
 // dials judges it by the same row the launching node wrote.
 type boxRuns struct {
 	pending sandbox.PendingStore
@@ -184,7 +184,7 @@ var errForeignFloor = errors.New("engine: an executor's code floor names a posit
 // "" for a seat not paused, paused without stop_running, or a handle the
 // running company resolves to no agent seat (as pauseOfHandle answers it),
 // and errPausesUnread before the watch's first complete answer, UNKNOWN and
-// never "not stopped". Every node runs the watch from boot, so a git node
+// never "not stopped". Every node runs the watch from boot, so a Gitlet node
 // that serves no seat answers too.
 //
 // Gitlet refuses a coding box's push on it (host.Runs.Stopped). A
@@ -195,7 +195,7 @@ var errForeignFloor = errors.New("engine: an executor's code floor names a posit
 // person stopped the seat "because it was doing damage". The same record and
 // the same StopRunning, so the two edges are stopped, and let through again,
 // together. Where the two differ is a node that has not read the pauses:
-// here that is unknown, because a git node serves boxes from boot, while no
+// here that is unknown, because a Gitlet node serves boxes from boot, while no
 // turn runs there to ask the fence (the screening defers its delivery).
 func (e *Engine) stoppedBy(_ context.Context, handle string) (string, error) {
 	seat, err := e.seatID(handle)

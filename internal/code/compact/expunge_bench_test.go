@@ -32,8 +32,8 @@ import (
 //     repository's quota (code.limits.repo_max_bytes) gets back, and what
 //     the store deletes after code.RetireGrace.
 //   - redownload-MiB: the live pack bytes the cycle ADDED — its kept packs
-//     and its rescue — which every other git node holding the repository
-//     downloads once; on a fleet of eight git nodes, seven times this.
+//     and its rescue — which every other Gitlet node holding the repository
+//     downloads once; on a fleet of eight Gitlet nodes, seven times this.
 //   - fleet/freed: seven times redownload over freed, the bytes the fleet
 //     moves for each byte freed.
 //

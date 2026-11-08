@@ -432,7 +432,7 @@ func (wr *writing) failed(ctx context.Context, what string, res gitproc.Result, 
 	s := wr.s
 	if res.Damage != nil {
 		return wr.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
-			"repairing (%v); another git node builds the write meanwhile", s.o.NodeID, what, wr.repoName(),
+			"repairing (%v); another Gitlet node builds the write meanwhile", s.o.NodeID, what, wr.repoName(),
 			res.Damage))
 	}
 	switch {
@@ -440,22 +440,22 @@ func (wr *writing) failed(ctx context.Context, what string, res gitproc.Result, 
 		return nil
 	case code.AnswerDue(ctx):
 		return wr.unready(code.UnreadyShare, fmt.Sprintf("%s could not finish the %s over repository %s before "+
-			"the write's answer fell due — its asker's attempt spent on the waits before it; another git node "+
+			"the write's answer fell due — its asker's attempt spent on the waits before it; another Gitlet node "+
 			"builds it", s.o.NodeID, what, wr.repoName()))
 	case ctx.Err() != nil:
 		return context.Cause(ctx)
 	case errors.Is(err, gitproc.ErrBusy):
-		return wr.unready(code.UnreadyShare, fmt.Sprintf("%s's read lane was busy past %s; another git node "+
+		return wr.unready(code.UnreadyShare, fmt.Sprintf("%s's read lane was busy past %s; another Gitlet node "+
 			"builds the write meanwhile", s.o.NodeID, gitproc.SlotWait))
 	case errors.Is(err, gitproc.ErrDeadline) && wr.metered:
 		return errBuildSpent
 	case errors.Is(err, gitproc.ErrDeadline):
 		return wr.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s's %s over repository %s ran its whole bound, "+
-			"which no healthy git node takes over it: %v; another git node builds the write", s.o.NodeID, what,
+			"which no healthy Gitlet node takes over it: %v; another Gitlet node builds the write", s.o.NodeID, what,
 			wr.repoName(), err))
 	case errors.Is(err, gitproc.ErrRepoShape):
 		return wr.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s did not complete: %v; "+
-			"another git node builds the write meanwhile", s.o.NodeID, what, wr.repoName(), err))
+			"another Gitlet node builds the write meanwhile", s.o.NodeID, what, wr.repoName(), err))
 	}
 	return fmt.Errorf("host: %s over repository %s: %w", what, wr.repoName(), err)
 }
@@ -642,7 +642,7 @@ func (b *building) commitPlan(ctx context.Context, j judgement, files []code.Fil
 // 5.6 s 32 deep and 19 s 64 deep (git 2.56.0 on two E-cores of an Intel Core
 // Ultra 7 265U), where the same 1 000 paths alone took 0.18, 0.29 and 0.53 s.
 // A short read's bound run out is a node failing, which sends the same write
-// to the next git node to run out the same; a build's run out is the
+// to the next Gitlet node to run out the same; a build's run out is the
 // change's, too_large, and while it runs it holds its unit of the node's seat
 // git-work share like the rest of the build.
 func (b *building) paths(ctx context.Context, parent string, files []code.FileOp) (map[string]object, error) {

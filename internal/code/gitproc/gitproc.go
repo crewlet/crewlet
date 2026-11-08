@@ -10,7 +10,7 @@
 // Gitlet, the engine's own git host, runs real upstream git rather than a
 // reimplementation, because pack negotiation, delta resolution and fsck are
 // what a reimplementation gets subtly wrong and a client notices first. So a git
-// process is the unit of work on every git node, and each one is a program
+// process is the unit of work on every Gitlet node, and each one is a program
 // with its own idea of where its configuration comes from, how long it may
 // run and what it leaves running. Six decisions have to be made the same way
 // for every one — the environment, the configuration, the repository it may
@@ -143,7 +143,7 @@
 //     second answer. [ResolveRemote] resolves the host and holds every
 //     address to the engine's public-address rule (internal/httpx, its
 //     NAT64 prefixes discovered through the same resolver) — unless Tier A's
-//     git.import_allow_private lifts the rule — and the run hands libcurl
+//     gitlet.import_allow_private lifts the rule — and the run hands libcurl
 //     those addresses as the name's only answer (http.curloptResolve), so
 //     the address judged is the address connected to.
 //   - THE URL GIT READS IS THE ONE THE RULE JUDGED. ResolveRemote writes the
@@ -469,10 +469,10 @@
 //
 // # Two floors, one pin (ADR-0087)
 //
-// A git node runs git 2.55 or newer ([NodeMinVersion], the node floor),
+// A Gitlet node runs git 2.55 or newer ([NodeMinVersion], the node floor),
 // checked where a pool is built — [New], and nowhere else, since every git a
-// git node runs is a pool's — and refused there as an [*ErrTooOld] naming the
-// floor. A git that only TALKS to a git node — a person's, a CI runner's, the
+// Gitlet node runs is a pool's — and refused there as an [*ErrTooOld] naming the
+// floor. A git that only TALKS to a Gitlet node — a person's, a CI runner's, the
 // operator CLI's, the suite's client — needs 2.40 ([ClientMinVersion], the
 // client floor), checked where the engine meets such a git (gittest.Require,
 // and the CLI before it runs one). Two numbers because the two gits are
@@ -481,7 +481,7 @@
 // Debian's git (trixie ships 2.47, below the node floor): it BUILDS the
 // newest git release from the tarball scripts/git-pin.env pins
 // (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE
-// is an engine CVE on a git node, and what reaches the image is a bump of that
+// is an engine CVE on a Gitlet node, and what reaches the image is a bump of that
 // pin — Debian's security updates to its own git never do — which a weekly
 // check (.github/workflows/git-pin.yml) asks for within a week of upstream
 // releasing one, or at once when it is run by hand (the workflow's Run
@@ -714,7 +714,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if git == "" {
 		found, err := exec.LookPath("git")
 		if err != nil {
-			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): a git node runs the node's own git, %s or newer (gitproc.NodeMinVersion, the node floor); the engine image builds the newest git release", err, NodeMinVersion)
+			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): a Gitlet node runs the node's own git, %s or newer (gitproc.NodeMinVersion, the node floor); the engine image builds the newest git release", err, NodeMinVersion)
 		}
 		git = found
 	}
@@ -723,10 +723,10 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	}
 
 	if o.MaxProcesses < 0 {
-		return nil, fmt.Errorf("gitproc: git.max_processes %d is negative: 0 is one a core", o.MaxProcesses)
+		return nil, fmt.Errorf("gitproc: gitlet.max_processes %d is negative: 0 is one a core", o.MaxProcesses)
 	}
 	if o.MaxTransfers < 0 {
-		return nil, fmt.Errorf("gitproc: git.max_transfers %d is negative: 0 is %d for each process slot", o.MaxTransfers, TransfersPerProcess)
+		return nil, fmt.Errorf("gitproc: gitlet.max_transfers %d is negative: 0 is %d for each process slot", o.MaxTransfers, TransfersPerProcess)
 	}
 	memory, err := resolveMemory(o, readNodeMemory)
 	if err != nil {

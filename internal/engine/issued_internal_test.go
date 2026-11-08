@@ -231,7 +231,7 @@ func TestEveryIssuerMeetsTheContract(t *testing.T) {
 				defaults := []sandbox.SetupStep{{Name: "auth", Files: map[string]string{path: "${" + name + "}"}}}
 				box := sandbox.NewFakeSandbox("box-1")
 				box.Put(path, "expired")
-				r.e.refreshTokenFiles(t.Context(), defaults, sandbox.PendingRun{TurnID: "t", AgentHandle: r.ready}, box)
+				r.e.refreshTokenFiles(t.Context(), defaults, sandbox.PendingRun{TurnID: "t", AgentHandle: r.ready}, box, takesEveryToken)
 				_, tokens := r.e.seatResolver(t.Context(), r.c, r.c.Org.AgentSeatByHandle(r.ready), refreshTokenLife)
 				want, _ := tokens.Lookup(name)
 				if held, _ := box.ReadFile(t.Context(), path); want == "" || string(held) != want {
@@ -378,7 +378,7 @@ func TestTokenFilesAreRefreshedPerVariable(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
 	job := run.TurnID + "/" + run.LaunchID
 
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	if held, _ := box.ReadFile(t.Context(), ghPath); !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Errorf("GitHub's file holds %q while the other variable waits, want its issued token", held)
 	}
@@ -392,7 +392,7 @@ func TestTokenFilesAreRefreshedPerVariable(t *testing.T) {
 	fake.mu.Lock()
 	fake.ready["builder"] = true
 	fake.mu.Unlock()
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	if held, _ := box.ReadFile(t.Context(), fakePath); !strings.HasPrefix(string(held), "fake_issued_") {
 		t.Errorf("the second variable's file holds %q once it is issued", held)
 	}
@@ -517,14 +517,14 @@ func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 		fake.held["builder"] = held
 	}
 	renew()
-	e.refreshTokenFiles(t.Context(), nil, run2, box)
+	e.refreshTokenFiles(t.Context(), nil, run2, box, takesEveryToken)
 	renewed, _ := box.ReadFile(t.Context(), path)
 	if !strings.HasPrefix(string(renewed), "fake_issued_") || string(renewed) == token {
 		t.Fatalf("the poll left %q in the vendor's file once its token renewed, want the new token", renewed)
 	}
 	file.Rewritten = false
 	renew()
-	e.refreshTokenFiles(t.Context(), nil, run2, box)
+	e.refreshTokenFiles(t.Context(), nil, run2, box, takesEveryToken)
 	if again, _ := box.ReadFile(t.Context(), path); string(again) != string(renewed) {
 		t.Error("the poll rewrote a vendor's file the vendor left to the launch")
 	}
@@ -568,7 +568,7 @@ func TestABoxFilesVariableNamesAFileTheBoxHolds(t *testing.T) {
 
 	box := sandbox.NewFakeSandbox("box-1")
 	box.Put(literal, text)
-	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}, box)
+	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}, box, takesEveryToken)
 	if got, _ := box.ReadFile(t.Context(), literal); string(got) != text {
 		t.Errorf("the poll wrote %q over the literal file", got)
 	}
@@ -640,5 +640,133 @@ func TestASettlingIssuersToolGoesLiveOnTheNextRetry(t *testing.T) {
 	if awaiting := logs.records("mcp_server_awaiting_credential", "ceo"); len(awaiting) == 0 ||
 		awaiting[0]["level"] != "INFO" {
 		t.Errorf("mcp_server_awaiting_credential = %v, want the wait said at info", awaiting)
+	}
+}
+
+// takesEveryToken is a recorder that takes every token, as the set beside a
+// running job's row does: the refresh writes whatever it is handed.
+func takesEveryToken(context.Context, string, time.Time) error { return nil }
+
+// A TOKEN THE POLL RENEWS IS RECORDED BEFORE IT IS WRITTEN, once for every file
+// of its variable, with the expiry its issuer gave it: the job's sealed set,
+// which every capture of its session is scrubbed by, holds the token before any
+// file of the box does. A poll that finds the files current records nothing.
+//
+// Mutation: write a file before its token is recorded, record the token once
+// per file, record it with no expiry, or record it on a poll that writes
+// nothing, and a check below goes red.
+func TestATokenThePollRenewsIsRecordedBeforeItIsWritten(t *testing.T) {
+	t.Parallel()
+	e, _, fake := twoIssuers(t)
+	e.issuers = []seatIssuer{fake}
+	const first, second = ".config/crewlet/fake-token", ".config/other/fake-token"
+	paths := []string{first, second}
+	defaults := []sandbox.SetupStep{{Name: "auth", Files: map[string]string{
+		first: "${" + builderFake + "}", second: "${" + builderFake + "}",
+	}}}
+	box := sandbox.NewFakeSandbox("box-1")
+	for _, path := range paths {
+		box.Put(path, "fake_expired")
+	}
+	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
+	type recorded struct {
+		value   string
+		expires time.Time
+		held    []string
+	}
+	var records []recorded
+	record := func(ctx context.Context, value string, expires time.Time) error {
+		var held []string
+		for _, path := range paths {
+			got, _ := box.ReadFile(ctx, path)
+			held = append(held, string(got))
+		}
+		records = append(records, recorded{value: value, expires: expires, held: held})
+		return nil
+	}
+
+	e.refreshTokenFiles(t.Context(), defaults, run, box, record)
+	if len(records) != 1 {
+		t.Fatalf("the renewed token was recorded %d times, want once for both its files", len(records))
+	}
+	got := records[0]
+	for i, path := range paths {
+		if written, _ := box.ReadFile(t.Context(), path); string(written) != got.value {
+			t.Errorf("%s holds %q, want the token recorded, %q", path, written, got.value)
+		}
+		if got.held[i] == got.value {
+			t.Errorf("%s held the token when it was recorded: written before its record", path)
+		}
+	}
+	fake.mu.Lock()
+	issued := fake.held["builder"]
+	fake.mu.Unlock()
+	if got.value != issued.Token || !got.expires.Equal(issued.ExpiresAt) {
+		t.Errorf("recorded %q lapsing at %v, want the issued %q at its expiry, %v",
+			got.value, got.expires, issued.Token, issued.ExpiresAt)
+	}
+
+	e.refreshTokenFiles(t.Context(), defaults, run, box, record)
+	if len(records) != 1 {
+		t.Errorf("a poll that found the files current recorded the token again (%d records)", len(records))
+	}
+}
+
+// A RENEWAL THE STORE DID NOT TAKE IS NOT WRITTEN: none of its variable's
+// files, on this poll or any poll after, until a record lands. A token in the
+// box that its job's set does not hold is one no capture of the job's session is
+// scrubbed of. The refusal is told once while it lasts and settled by the record
+// that lands; and a job the run's record no longer holds running is written
+// nothing and told nothing, since the poll that reached it is a moment old.
+// Not parallel: it adds a destination to the process-wide logger.
+//
+// Mutation: write the files whatever the record answered, tell the refusal on
+// every poll, or tell a job that moved on, and a check below goes red.
+func TestARenewalTheStoreDidNotTakeIsNotWritten(t *testing.T) {
+	logs := captureEngineLogs(t)
+	e, _, fake := twoIssuers(t)
+	e.issuers = []seatIssuer{fake}
+	const path = ".config/crewlet/fake-token"
+	defaults := []sandbox.SetupStep{{Name: "auth", Files: map[string]string{path: "${" + builderFake + "}"}}}
+	box := sandbox.NewFakeSandbox("box-1")
+	box.Put(path, "fake_expired")
+	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
+	unanswered := func(context.Context, string, time.Time) error {
+		return errors.New("sandbox: record what run turn-1's box is handed: coord: the store did not answer")
+	}
+
+	for range 3 {
+		e.refreshTokenFiles(t.Context(), defaults, run, box, unanswered)
+	}
+	if held, _ := box.ReadFile(t.Context(), path); string(held) != "fake_expired" {
+		t.Fatalf("a token its record did not take was written: the file holds %q", held)
+	}
+	told := logs.records("sandbox_token_refresh_failed", "builder")
+	if len(told) != 1 {
+		t.Fatalf("three polls whose record the store did not take logged %d lines, want one", len(told))
+	}
+	detail, _ := told[0]["detail"].(string)
+	for _, want := range []string{"could not be recorded", "did not answer", "keep the token they hold"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the line does not say %q: %s", want, detail)
+		}
+	}
+
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
+	if held, _ := box.ReadFile(t.Context(), path); !strings.HasPrefix(string(held), "fake_issued_") {
+		t.Fatalf("the poll whose record landed left %q in the file", held)
+	}
+	if _, said := e.tokenWaits.said[tokenRecordJob(run.TurnID+"/"+run.LaunchID, builderFake)]; said {
+		t.Error("the record that landed did not settle the refusal")
+	}
+
+	box.Put(path, "fake_expired")
+	moved := func(context.Context, string, time.Time) error { return sandbox.ErrJobNotRunning }
+	e.refreshTokenFiles(t.Context(), defaults, run, box, moved)
+	if held, _ := box.ReadFile(t.Context(), path); string(held) != "fake_expired" {
+		t.Errorf("a token was written into the box of a job its row no longer holds running: %q", held)
+	}
+	if got := len(logs.records("sandbox_token_refresh_failed", "builder")); got != 1 {
+		t.Errorf("a job that moved on was told as a failure: %d lines in all, want the one", got)
 	}
 }

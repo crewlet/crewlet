@@ -117,7 +117,7 @@ func TestAGateRidesItsSettingsRecord(t *testing.T) {
 
 // THE GATES ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM, and never on a
 // repository's row. Every read answering the row — the resolution of its name
-// every git request is admitted by, a page of the snapshot every git node
+// every git request is admitted by, a page of the snapshot every Gitlet node
 // syncs from and keeps in its state file, a resolution of its refs, a listing,
 // its detail — answers each rule as a push is judged by it, with no gate
 // (code.PushRule, which has none to leave out): a repository's gates are up to
@@ -339,7 +339,7 @@ func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
 
 // NO ROW OF A REPOSITORY CARRIES A MERGE GATE, by its type: the row every git
 // request's admission and every resolution of a ref reads (code.RepoRef), each
-// page of the snapshot a git node syncs by and its cache's state file keeps
+// page of the snapshot a Gitlet node syncs by and its cache's state file keeps
 // (code.RepoSnapshot), and each rule a push is judged by (code.PushRule) reach
 // no code.MergeGate anywhere — so no read of them decodes, ships or keeps one,
 // and no consumer of them can take a gate nobody read for a rule with none.

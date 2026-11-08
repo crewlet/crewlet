@@ -11,7 +11,7 @@ import (
 )
 
 // A SEAT'S RE-SYNCS AT THE LOG'S HEAD ARE BOUNDED: every linearizable re-sync
-// a seat's work takes on a git node — a coding box's (internal/code/host's box
+// a seat's work takes on a Gitlet node — a coding box's (internal/code/host's box
 // routes) and a turn's code tools' (the git reads of internal/code/query and
 // an engine write's re-judgement in internal/code/host) — appends a barrier
 // to the code log, and the code log's census gives a seat
@@ -23,7 +23,7 @@ import (
 // fired, and past it the log filled and refused every push of the company.
 //
 // THE BUCKETS ARE internal/costlimit's, the engine's ONE limiter (ADR-0008),
-// and a git node keeps ONE set of them ([Resyncs]) for every re-sync it
+// and a Gitlet node keeps ONE set of them ([Resyncs]) for every re-sync it
 // bounds — its coding boxes', its checks' boxes' and its seats' tools' alike —
 // each charged 1 a re-sync, the principal the run (a box's launch), the
 // attempt (a check's) or the turn (a tool's), the scope its seat (a check's,
@@ -31,13 +31,13 @@ import (
 // census's seat term. ONE SET, because the census gives a seat ONE term on a
 // log however its work reaches the log's head: a box's barriers and its
 // turns' tools' each drawing on buckets of their own put twice the seat's
-// term on the log from every git node, and a check's git and its /box/gitlet/
+// term on the log from every Gitlet node, and a check's git and its /box/gitlet/
 // reads were two bursts of one attempt. ONE live run or turn a seat is
 // bounded exactly to that term; a seat with several live on one node — runs
 // and turns together — shares its seat's bucket there, which is the term the
 // census gave the seat. Per node, in memory, as every costlimit bucket is: a
-// seat whose requests spread over N git nodes gets N bursts, which bounds the
-// log's barriers by the fleet's git nodes — the census's own reading of a
+// seat whose requests spread over N Gitlet nodes gets N bursts, which bounds the
+// log's barriers by the fleet's Gitlet nodes — the census's own reading of a
 // seat, multiplied by a count the operator chose.
 //
 // PAST THE BUCKET THE REQUEST IS ANSWERED AT ITS FLOOR — what its run or its
@@ -57,7 +57,7 @@ import (
 // repositories may meet each one's floor short twice — a fetch whose wants a
 // lagging cache lacks, and a request past the bound its admitted row set —
 // before any of it waits on the refill; and a turn's tools meet at most one
-// re-sync a call (the git node's one second look, the write's one
+// re-sync a call (the Gitlet node's one second look, the write's one
 // re-judgement), so the burst is as many calls each naming what its copy
 // lacks, which no turn that reads what it was shown comes near. DERIVED rather
 // than written as a figure, because the run bound is what sizes it: a burst
@@ -77,7 +77,7 @@ const ResyncBurst = 2 * MaxRunRepos
 // resyncsPerSecond is the census's seat term as a bucket's rate.
 var resyncsPerSecond = float64(statelog.LinearizableReadsPerSeatDay) / (24 * time.Hour).Seconds()
 
-// Resyncs is ONE git node's re-sync buckets ([NewResyncs]): every draw on it,
+// Resyncs is ONE Gitlet node's re-sync buckets ([NewResyncs]): every draw on it,
 // whichever server takes it — Gitlet's box routes and engine writes,
 // the query server's reads — pays the one bucket of its principal on its
 // scope and the one of its scope, so a seat's term on this node is one term
@@ -87,10 +87,10 @@ type Resyncs struct {
 	metrics *metrics.Recorder
 }
 
-// NewResyncs is one git node's re-sync buckets, on a clock (nil is the wall
+// NewResyncs is one Gitlet node's re-sync buckets, on a clock (nil is the wall
 // clock), every bucket [ResyncBurst] refilled at the census's seat term — a
 // box's draws counted to m (crewlet.code.box.resyncs; nil records nothing).
-// The engine builds ONE a git node and hands it to Gitlet's host and the
+// The engine builds ONE a Gitlet node and hands it to Gitlet's host and the
 // query server both.
 func NewResyncs(now func() time.Time, m *metrics.Recorder) *Resyncs {
 	return &Resyncs{limiter: costlimit.New(costlimit.Rates{PrincipalRate: resyncsPerSecond,

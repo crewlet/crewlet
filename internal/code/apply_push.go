@@ -49,7 +49,7 @@ import (
 // counters stay exact, and the count after it is at most the count before.
 // Its mark rises to its own position, since a cache synced below it would
 // otherwise be handed a delta missing those deletions; such a cache — every
-// one on every git node, since none has synced the record yet — reads the
+// one on every Gitlet node, since none has synced the record yet — reads the
 // repository whole, which is why the committer leaves no record of its own
 // needing it. Decided BEFORE a ref is written, from the counter and the
 // record — never from a count a write already moved.
@@ -824,7 +824,7 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 // instead ([Applier.applyPush]), so excess here never passes limit. The ref
 // drops past their grace come after it, and take only what it leaves
 // ([Applier.expireRefDrops]): a drop forgotten late costs a row, and a
-// tombstone's sweep room taken costs every git node a full read.
+// tombstone's sweep room taken costs every Gitlet node a full read.
 func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	limit, excess int) (int, error) {
 

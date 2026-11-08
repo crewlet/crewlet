@@ -35,7 +35,7 @@ var (
 	// which is the resolver's own error, because the three ask different
 	// people for different things: a malformed remote is corrected where it
 	// was written, a refused address is the operator's
-	// (git.import_allow_private), and a failed lookup is worth asking again.
+	// (gitlet.import_allow_private), and a failed lookup is worth asking again.
 	ErrRemote = errors.New("gitproc: not a remote a git process may dial")
 
 	// ErrRepoShape: a Cmd.Dir (or the alternate the call names, at its real

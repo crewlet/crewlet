@@ -89,7 +89,7 @@ type Config struct {
 
 	// GitBackground is what this node's git cache gives its background
 	// work now, written on every beat beside the status and never in it:
-	// see [seat.Config].GitBackground. Nil on a node without the git role.
+	// see [seat.Config].GitBackground. Nil on a node without the gitlet role.
 	GitBackground func() int64
 
 	// RoleNeeded is whether the company needs a role at all right now,

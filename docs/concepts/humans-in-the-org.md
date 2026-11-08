@@ -301,7 +301,7 @@ What the binding buys:
   each speaker by seat and its members are seats. Your messages carry the
   seat's handle with author kind `human`, like every other write.
 - **Your git pushes are yours.** A company that hosts its repositories in the
-  engine ([`code.native`](gitlet.md)) is cloned, fetched and pushed to over
+  engine ([`code.backend: gitlet`](gitlet.md)) is cloned, fetched and pushed to over
   HTTPS with a token as git's password — your own machine token (`crewlet iam
   token -login` mints one for you), or a Tier A token the directory binds to a
   seat. git is one more way a person acts, beside the dashboard's act route,
@@ -643,8 +643,9 @@ credential's own login when the directory binds it to none. First comes
 **Needs you** — the questions agents put to them, the executors parked on a
 question to them, a seat stopped on its budget, the conditions a person
 decides — then **Updates**, what reached them and is not read yet, and the
-item they open is read in full beside the list with the answer to it right
-there.
+item they open is read in full beside the list, from its head, with the
+answer to it right there. Updates is a closed, counted group, which they open
+when they choose.
 Nothing on the screen names whose queue to read: there is no way to ask for
 somebody else's from it, and a lead reading a report's queue does so by name,
 decided by the [authority table](identity-and-access.md#the-authority-table-one-function-decides).

@@ -94,7 +94,7 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 
 // A READ MADE FOR A CHECK IS THE ENGINE'S OWN: a check's box's read of its
 // commit through the API names no asker — the box is no principal, and the
-// attempt's row that admitted it is its authority — so the git node judges no
+// attempt's row that admitted it is its authority — so the Gitlet node judges no
 // grant on the `visibility: unit` repository it reads, which a seat outside
 // the owning unit is refused, and records it as nobody's read; and it reads
 // the attempt's commit alone, a read at another commit refused as it is

@@ -409,6 +409,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       return where.id ? [root(row, true), named(labels, where.id)] : [root(row, false)];
     // A VIEW IS A SECTION OF THE ROW, named as the row names it (`nav.ts`).
     case "chatlet-activity":
+    case "chatlet-dms":
     case "chatlet-threads":
     case "chatlet-drafts":
     case "chatlet-saved":

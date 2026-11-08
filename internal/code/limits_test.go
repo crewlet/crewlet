@@ -658,14 +658,14 @@ func TestLimitsOfIsConfigsReading(t *testing.T) {
 				PushesPerSeatDay: 40, MergeByFloor: code.MergeByWriters},
 		},
 	} {
-		if got := code.LimitsOf(config.Code{Native: true, Limits: tc.set}); got != tc.want {
+		if got := code.LimitsOf(config.Code{Backend: config.CodeGitlet, Limits: tc.set}); got != tc.want {
 			t.Errorf("%s: code.limits %+v is held to %+v, want %+v", name, tc.set, got, tc.want)
 		}
 	}
 	// THE MERGE FLOOR, unset and each value set, beside limits nobody set:
 	// config's own resolution, as a value the domain records.
 	for _, floor := range append([]config.CodeMergeBy{""}, config.CodeMergeBys...) {
-		got := code.LimitsOf(config.Code{Native: true, MergeByFloor: floor}).MergeByFloor
+		got := code.LimitsOf(config.Code{Backend: config.CodeGitlet, MergeByFloor: floor}).MergeByFloor
 		if want := code.MergeBy(floor.Resolved()); got != want || !got.Valid() {
 			t.Errorf("code.merge_by_floor %q is held as %q, want %q, a value the domain records", floor, got,
 				want)

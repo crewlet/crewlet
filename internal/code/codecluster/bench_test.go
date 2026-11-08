@@ -504,7 +504,7 @@ func quantile(sorted []time.Duration, q float64) float64 {
 // seat's turn on any other node does), each timed from the call a code write
 // tool makes of Gitlet on its member (estate.CodeSeam.GitWrite) to its
 // answer — the push's row applied and its pack adopted — and reported as its
-// p50 and p99. On a cluster every member is a data node and a git node, so
+// p50 and p99. On a cluster every member is a data node and a Gitlet node, so
 // the home is the repository's committer too (codetest's F40).
 //
 // FROM GITLET'S CALL, NOT THE TOOL'S: what the tool adds around its

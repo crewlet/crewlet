@@ -25,7 +25,7 @@ import (
 // on either side of a rename — so no path ever reaches git's command line,
 // and then ONLY THE FILES THE FILTER ADMITS ARE COUNTED: their raw records,
 // exactly as diff-tree wrote them, go to `git diff-pairs -z --numstat` on its
-// standard input (git 2.50's, which every git node's 2.55 floor carries),
+// standard input (git 2.50's, which every Gitlet node's 2.55 floor carries),
 // which diffs those pairs and no other. So naming one directory of a diff of
 // thousands of files costs git that directory's diffs: measured over this
 // repository's 5 866 files changed between two commits (git 2.53, one core),

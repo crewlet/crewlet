@@ -64,7 +64,7 @@ const (
 	// branches and history, the changes proposed to them, their reviews
 	// and their checks.
 	GroupCode Group = "code"
-	// GroupHealth is the deployment's health: every live node and the git
+	// GroupHealth is the deployment's health: every live node and the Gitlet
 	// nodes' caches. A shelf of its own rather than the code's, because it
 	// answers about the fleet, not about one repository.
 	GroupHealth Group = "health"
@@ -102,7 +102,7 @@ var groupWords = map[Group]struct{ label, description string }{
 	GroupCode: {"Code",
 		"The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks."},
 	GroupHealth: {"Health",
-		"The deployment's health: every live node, and the git nodes' caches."},
+		"The deployment's health: every live node, and the Gitlet nodes' caches."},
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},
 	GroupMemory: {"Memory and skills",

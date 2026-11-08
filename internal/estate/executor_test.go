@@ -62,6 +62,8 @@ func fullEnding() executorkeep.Ending {
 		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
 		Failure:   "a guard",
 		Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"},
+		WentOn:    true,
+		LastWord:  &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1},
 		Exhausted: []string{"s-ran-out"}}
 }
 
@@ -1060,7 +1062,7 @@ func TestTheExecutorFacadesAskExactlyTheExecutorOperations(t *testing.T) {
 		want   func(*opSpec) bool
 	}{
 		{r.ExecutorReads(), func(s *opSpec) bool { return s.domain == executorDomain && s.class == opRead }},
-		{r.ExecutorWrites(), func(s *opSpec) bool { return s.origin == originEngine }},
+		{r.ExecutorWrites(), func(s *opSpec) bool { return s.origin == originEngine && s.domain == executorDomain }},
 	} {
 		v := reflect.ValueOf(tc.facade)
 		got := map[string]bool{}

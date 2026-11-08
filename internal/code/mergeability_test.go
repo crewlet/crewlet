@@ -17,7 +17,7 @@ import (
 )
 
 // A CHANGE'S MERGEABILITY THROUGH THE CHANGE WRITER: what the repository's
-// home git node found merging a change's head into its target's tip, handed
+// home Gitlet node found merging a change's head into its target's tip, handed
 // to the change writer as the home's own write (no asker), decided in one
 // snapshot on a real embedded broker as a record on the change's own subject,
 // applied by the shipped applier — and the due listing that asks it of the

@@ -300,7 +300,7 @@ func TestAPublicationIsDecidedOverTheChainItBuildsOn(t *testing.T) {
 }
 
 // A COMPACTION NEVER RETIRES A PUBLISHED PACK: a tail compaction of packs a
-// layer names is refused stale, naming the layer — every git node's chain is
+// layer names is refused stale, naming the layer — every Gitlet node's chain is
 // loadable only over every pack it names — while a publication that replaces
 // that layer may repack them.
 //

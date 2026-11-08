@@ -98,6 +98,7 @@ import type { CodeChangeState, CodeChangeSummary, CodeChangesAnswer } from "~/pr
 import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -215,8 +216,9 @@ export function Changes() {
 
   return (
     <>
-      <div className="toolbar">
+      <PageToolbar>
         <Select
+          size="sm"
           width="auto"
           value={needs}
           onChange={(value) => setNeeds(String(value))}
@@ -225,6 +227,7 @@ export function Changes() {
           active={needs !== ""}
         />
         <Select
+          size="sm"
           width="auto"
           value={state}
           onChange={(value) => setState(String(value))}
@@ -234,8 +237,9 @@ export function Changes() {
           ariaLabel="Which changes"
           active={state !== DEFAULT_STATE}
         />
-        <RepoPicker repo={repo} onChoose={setRepo} every="Every repository" />
+        <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
         <Select
+          size="sm"
           width="auto"
           value={movedIn}
           onChange={(value) => setMovedIn(String(value))}
@@ -246,7 +250,7 @@ export function Changes() {
         <Narrowing label="Owner" value={owner} clear={() => setOwner("")} />
         <Narrowing label="Reviewer" value={reviewer} clear={() => setReviewer("")} />
         <Narrowing label="Work item" value={work} clear={() => setWork("")} />
-      </div>
+      </PageToolbar>
       {needs !== "person" && "params" in asked && (
         <PersonBand repo={repo} showAll={() => setNeeds("person")} />
       )}
