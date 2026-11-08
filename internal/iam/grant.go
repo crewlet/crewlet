@@ -200,3 +200,16 @@ func Expand(set []Grant) []Grant {
 	}
 	return out
 }
+
+// AppsOf is the apps a set of permissions lets its holder use: every app admin
+// includes where the set holds admin ([Expand]), and never admin itself, which
+// no turn's ceiling carries, nor a name this build does not know, which grants
+// nothing. In [Expand]'s order, a fresh slice that never aliases set.
+//
+// ONE RULE FOR EVERY REQUESTER A TURN IS WORKED FOR (ADR-0105): the person who
+// holds a seat, and a credential acting as no seat, both as the node running
+// the turn resolves them and, for the credential, as the node that took its
+// write recorded them ([ActorApps]).
+func AppsOf(set []Grant) []Grant {
+	return slices.DeleteFunc(Expand(set), func(g Grant) bool { return !g.IsApp() })
+}

@@ -2350,6 +2350,10 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
 		Requester: t.Requester,
+		// OR THE CREDENTIAL that did, which a resumed segment's every call
+		// is still bounded by — see [sandbox.PendingRun.RequesterLogin].
+		RequesterLogin: t.RequesterLogin,
+		RequesterApps:  slices.Clone(t.RequesterApps),
 		// AND WHEN THE TURN'S CAP ENDS, for the poll to end a run that
 		// outlasts it — see [sandbox.PendingRun.Deadline].
 		Deadline: t.Deadline,

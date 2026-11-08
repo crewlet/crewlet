@@ -605,6 +605,13 @@ type Decision struct {
 	// act is not told to ask for an app, and one who lacks an app is.
 	RequesterReason Reason
 
+	// RequesterKind is what kind of principal that requester is — a person,
+	// a seat, or a credential acting as no seat (a machine) — set beside
+	// [Decision.RequesterReason] and on nothing else, so a surface tells the
+	// agent about the right somebody: a person is somebody to tell what they
+	// lack, a pipeline's token is not.
+	RequesterKind iam.Kind
+
 	// Ceiling is who a [ReasonCeiling] refusal was decided for — the
 	// requester a principal woke the turn as, or a stranger — set on that
 	// refusal and on nothing else, so what a surface says of it is about the

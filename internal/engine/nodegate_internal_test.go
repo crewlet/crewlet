@@ -354,7 +354,7 @@ func containerRecord(t *testing.T, key, writer string) []byte {
 	}
 	payload, err := doclet.Encode(doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
-			V: doclet.RecordVersion, OpID: statelog.NewOpID(time.Now(), "container-"+key),
+			OpID:    statelog.NewOpID(time.Now(), "container-"+key),
 			Subject: doclet.ContainerSubject(key), Op: doclet.OpPatch,
 			Writer: writer, Scope: doclet.ScopeSet{Subject: true},
 		},

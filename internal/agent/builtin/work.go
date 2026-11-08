@@ -401,6 +401,13 @@ type Actor struct {
 	// answers "what did this credential do".
 	OperatorID string
 
+	// Apps are the apps an OPERATOR — a credential acting as no seat — used
+	// when this node resolved it (iam.ActorApps), and nil for every other
+	// author: carried on the records it writes that wake somebody, so a turn
+	// one of them wakes is worked for the credential no wider than this node
+	// resolved it (ADR-0105). Set by [ActorOf] alone.
+	Apps []iam.Grant
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
@@ -660,7 +667,7 @@ func threadOf(turn *turnctx.Turn) *worklet.Origin {
 func (a Actor) Provenance() worklet.Provenance {
 	provenance := worklet.Provenance{
 		OperatorID: a.OperatorID, TurnID: a.TurnID, Chain: a.Chain,
-		Origin: a.Thread,
+		Origin: a.Thread, Apps: slices.Clone(a.Apps),
 	}
 	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
 	// reports into nothing, and the writer would do the work of naming an

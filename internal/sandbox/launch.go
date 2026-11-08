@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -116,6 +117,12 @@ type TurnRef struct {
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
+
+	// RequesterLogin and RequesterApps are the credential acting as no seat
+	// whose write started the turn, and the apps its writes carried — see
+	// [PendingRun.RequesterLogin].
+	RequesterLogin string
+	RequesterApps  []iam.Grant
 
 	// ColleagueAsk is the colleague's A2A question the turn answers, nil
 	// for a turn no ask woke — written onto the row, because the segment
@@ -568,6 +575,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester,
+		// Or the credential that did, for every segment that resumes the
+		// turn: each call it makes is still bounded by it.
+		RequesterLogin: req.Turn.RequesterLogin,
+		RequesterApps:  slices.Clone(req.Turn.RequesterApps),
 		// THE TURN'S READ OF ITS CONVERSATION, frozen by the write that
 		// creates the record and kept by every reset: a relaunch continues
 		// the base this read named, never one read again — see

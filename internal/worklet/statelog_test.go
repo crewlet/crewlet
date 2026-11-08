@@ -3,10 +3,12 @@ package worklet_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -41,12 +43,10 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
 			Kinds: suiteKinds(),
-			// THE PRODUCTION TABLE. It is empty — every field the
-			// tracker writes is in the base format — so there is no
-			// record to carry; the field this build's successor adds
-			// brings a Carrying case built through the writer's own
-			// encoder, which the suite refuses to run without.
+			// THE PRODUCTION TABLE, each field carried by a record built
+			// through the writer's own encoder ([carryingSuiteRecord]).
 			Fields:     worklet.VersionedFields(),
+			Carrying:   carryingSuiteRecord,
 			Rows:       worklet.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
@@ -160,6 +160,36 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		return record.Encode()
 	}
 	return json.Marshal(record)
+}
+
+// carryingSuiteRecord is a record carrying one versioned field, through the
+// production encoder, which stamps it at the field's version.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	body, err := json.Marshal(worklet.Project{
+		V: worklet.DocumentVersion, Key: "carrying", Name: "Suite carrying",
+		CreatedAt: at, UpdatedAt: at,
+	})
+	if err != nil {
+		return nil, err
+	}
+	record := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			OpID: "suite-carrying", Op: worklet.OpCreate,
+			Subject:   worklet.Subject{Kind: worklet.KindProject, ID: "carrying"},
+			CreatedAt: at, Writer: "suite-node", Scope: worklet.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: worklet.AuthorSystem,
+	}
+	switch field.Name {
+	case "MutationRecord.ActorApps":
+		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
+		record.Actor, record.ActorKind, record.OperatorID = "token:ci", worklet.AuthorOperator, "token:ci"
+		record.ActorApps = []iam.Grant{iam.GrantWorklet}
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	return record.Encode()
 }
 
 // suiteKinds is every kind the domain arbitrates, ordered so the three the

@@ -59,6 +59,14 @@ func (r countedRequesters) Requester(_ context.Context, handle string) (iam.Prin
 	return p, nil
 }
 
+// Credential places a credential by the entry keyed "login:" and its login,
+// counted as a seat's composition is.
+func (r countedRequesters) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	r.asked.Add(1)
+	p, ok := r.of["login:"+login]
+	return p, ok, nil
+}
+
 // opsBotTurn is a turn of the agent seat ops-bot that requester woke ("" for a
 // turn nobody woke).
 func opsBotTurn(requester string) *turnctx.Turn {
@@ -273,5 +281,128 @@ func TestARequesterWhoMayNotActIsToldSoNotSentForAnApp(t *testing.T) {
 	res = run(opsBotTurn("mallory"))
 	if !res.Failed || !strings.Contains(res.Output, "administrator can give them Worklet") {
 		t.Errorf("a turn a person without Worklet woke answered %q, want told the app", res.Output)
+	}
+}
+
+// tokenTurn is a turn of the agent seat ops-bot that a credential acting as no
+// seat woke, by its login, its writes carrying apps.
+func tokenTurn(login string, apps ...iam.Grant) *turnctx.Turn {
+	turn := opsBotTurn("")
+	turn.RequesterLogin, turn.RequesterApps = login, apps
+	return turn
+}
+
+// machine is a credential acting as no seat, as this node resolves it.
+func machine(login string, grants ...iam.Grant) iam.Principal {
+	return iam.Principal{Kind: iam.KindMachine, Login: login, Stage: iam.StageActive, Grants: grants}
+}
+
+// A TOKEN'S WORK USES THE APPS IT HOLDS, AND NONE IT DOES NOT (ADR-0105): a
+// credential acting as no seat that woke a turn is that turn's requester, by
+// its own apps and never admin. A pipeline's `[worklet]` token that filed an
+// item has the agent comment on it and refuses it the pages, naming the
+// credential and the app; an `[admin]` token's work uses every app; a login
+// this node cannot place, and a write that carried no apps, are a stranger's.
+//
+// Mutation: compose a turn's RequesterLogin as nobody (CeilingNone) — the
+// Worklet token's turn reads the pages; or as a stranger — its comment is
+// refused.
+func TestATokensWorkUsesTheAppsItHolds(t *testing.T) {
+	t.Parallel()
+	authorize := Decide(authz.NoChart{})
+	people := countedRequesters{asked: &atomic.Int64{}, of: map[string]iam.Principal{
+		"login:token:ci":  machine("token:ci", iam.GrantWorklet),
+		"login:token:ops": machine("token:ops", iam.GrantAdmin),
+	}}
+	run := func(verb authz.Action, turn *turnctx.Turn) mcp.Result {
+		t.Helper()
+		row := rowTool{name: string(verb), authorize: authorize, ran: &atomic.Int64{}}
+		if subjectOf[string(verb)].inTool {
+			// A ROW ITS TOOL DECIDES, asked from inside a tool whose own row
+			// names no app — as the comment tool asks it.
+			row = rowTool{name: string(authz.ActionColleagueAsk), authorize: authorize,
+				asks: []authz.Action{verb}, ran: &atomic.Int64{}}
+		}
+		tool := gate(row, authorize, people)
+		res, refused, err := tools.Invoke(t.Context(), tools.Invocation{Name: tool.Name(), Tool: tool,
+			Args: tools.ArgsOf(tool, false, map[string]any{}), AsSeat: true, Turn: turn})
+		if err != nil || refused {
+			t.Fatalf("%s: the invocation itself failed (%v, refused %v)", verb, err, refused)
+		}
+		return res
+	}
+
+	ci := tokenTurn("token:ci", iam.GrantWorklet)
+	if res := run(authz.ActionWorkComment, ci); res.Failed {
+		t.Errorf("a comment in a turn the Worklet token woke answered %q, want it run", res.Output)
+	}
+	res := run(authz.ActionPageList, ci)
+	var refused *DecisionRefused
+	if !res.Failed || !errors.As(res.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling ||
+		refused.Decision.Ceiling != authz.CeilingRequester ||
+		!slices.Equal(refused.Decision.RequesterGrants, []iam.Grant{iam.GrantDoclet}) ||
+		!strings.Contains(res.Output, "the credential this turn is working for does not use Doclet") {
+		t.Errorf("the pages in a turn the Worklet token woke answered %+v, want the ceiling naming "+
+			"the credential and Doclet", res)
+	}
+
+	ops := tokenTurn("token:ops", iam.AppsOf([]iam.Grant{iam.GrantAdmin})...)
+	walked := 0
+	for _, a := range gateDecided() {
+		if res := run(a, opsBotTurn("")); res.Failed {
+			continue
+		}
+		walked++
+		if res := run(a, ops); res.Failed {
+			t.Errorf("%s in a turn the admin token woke answered %q, want it run: admin "+
+				"includes every app", a, res.Output)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row the gate decides was walked: the admin token's case holds nothing")
+	}
+
+	for name, turn := range map[string]*turnctx.Turn{
+		"a login this node cannot place": tokenTurn("token:gone", iam.GrantWorklet),
+		"a write that carried no apps":   tokenTurn("token:ci"),
+	} {
+		res := run(authz.ActionWorkComment, turn)
+		if !res.Failed || !errors.As(res.Cause, &refused) || refused.Decision.Ceiling != authz.CeilingStranger {
+			t.Errorf("a comment in a turn %s woke answered %+v, want a stranger's", name, res)
+		}
+	}
+}
+
+// A CREDENTIAL IS BOUND BY THE NARROWER OF ITS WRITE AND THIS NODE (ADR-0105).
+// Tier A is per node: the apps a token's write carried are what the node that
+// took it resolved, and this node's resolution is what the token is here, now.
+// Each alone widens it somewhere — a token one node narrowed acting on
+// another's wider grants, or a write recorded before the token was narrowed
+// acting on the old ones — so a call uses only an app both name.
+//
+// Mutation: bound the credential by its carried apps alone — the token this
+// node narrowed to Worklet reads the pages; by this node's alone — the write
+// that carried Worklet reads them.
+func TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode(t *testing.T) {
+	t.Parallel()
+	authorize := Decide(authz.NoChart{})
+	people := countedRequesters{asked: &atomic.Int64{}, of: map[string]iam.Principal{
+		"login:token:narrowed-here":  machine("token:narrowed-here", iam.GrantWorklet),
+		"login:token:narrowed-there": machine("token:narrowed-there", iam.GrantAdmin),
+	}}
+	tool := gate(rowTool{name: string(authz.ActionPageList), authorize: authorize, ran: &atomic.Int64{}},
+		authorize, people)
+	for name, turn := range map[string]*turnctx.Turn{
+		"narrowed on this node":   tokenTurn("token:narrowed-here", iam.GrantWorklet, iam.GrantDoclet),
+		"narrowed where it wrote": tokenTurn("token:narrowed-there", iam.GrantWorklet),
+	} {
+		res, _, err := tools.Invoke(t.Context(), tools.Invocation{Name: tool.Name(), Tool: tool,
+			Args: tools.ArgsOf(tool, false, map[string]any{}), AsSeat: true, Turn: turn})
+		var refused *DecisionRefused
+		if err != nil || !res.Failed || !errors.As(res.Cause, &refused) ||
+			refused.Decision.Reason != authz.ReasonCeiling || refused.Decision.RequesterKind != iam.KindMachine {
+			t.Errorf("the pages in a turn a token %s woke answered %+v (%v), want the ceiling",
+				name, res, err)
+		}
 	}
 }

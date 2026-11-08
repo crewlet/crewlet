@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -350,6 +351,35 @@ func TestTheHarnessIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	}
 	if got := rig.get("t1").Requester; got != "ada" {
 		t.Errorf("the row records requester %q, want the seat whose wake started the turn", got)
+	}
+}
+
+// THE ROW CARRIES THE CREDENTIAL A TOKEN'S TURN IS WORKED FOR (ADR-0105): every
+// segment that resumes the turn, and every call its box makes after a
+// takeover, is still bounded by that credential and the apps its write
+// carried, and the row is the one place they reach those frames from. A turn
+// no credential woke carries neither.
+//
+// Mutation: leave the launch's credential off the row — the row names none.
+func TestTheRowCarriesTheCredentialATokensTurnIsWorkedFor(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Turn.RequesterLogin, req.Turn.RequesterApps = "token:ci", []iam.Grant{iam.GrantWorklet}
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	row := rig.get("t1")
+	if row.RequesterLogin != "token:ci" || !slices.Equal(row.RequesterApps, []iam.Grant{iam.GrantWorklet}) ||
+		row.Requester != "" {
+		t.Errorf("the row records %q using %v (requester %q), want token:ci using Worklet and no seat",
+			row.RequesterLogin, row.RequesterApps, row.Requester)
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t2")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if row := rig.get("t2"); row.RequesterLogin != "" || len(row.RequesterApps) != 0 {
+		t.Errorf("a turn no credential woke records %q using %v", row.RequesterLogin, row.RequesterApps)
 	}
 }
 

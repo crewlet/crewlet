@@ -274,15 +274,33 @@ type Inbound struct {
 }
 
 // FirstPartyWriter is the writer a first-party notice states
-// ([Inbound.Writer]), from the actor and the actor kind its record names: the
-// actor as the seat's handle for a seat's write and for a person's, which
-// iam.ActorFor records under the seat they hold, and no seat for a
-// credential's or the engine's. THE KIND DECIDES, NEVER THE SPELLING: a
-// handle is one segment, and so can be a node's name.
-func FirstPartyWriter(kind iam.ActorKind, actor string) *types.NotificationWriter {
+// ([Inbound.Writer]), from the actor, the actor kind and the actor's apps its
+// record names: the actor as the seat's handle for a seat's write and for a
+// person's, which iam.ActorFor records under the seat they hold; as the
+// credential's login for a credential acting as no seat, with the apps the
+// node that took the write recorded for it (iam.ActorApps); and nothing for
+// the engine's. THE KIND DECIDES, NEVER THE SPELLING: a handle is one segment,
+// and so can be a node's name.
+//
+// THE ONE PLACE A WRITER IS BUILT, and the apps a parameter rather than an
+// option, so no producer names a credential's write without what a turn it
+// wakes may use for it: a credential's writer carrying no apps is worked for
+// as a stranger (ADR-0105). Kept for a credential's write alone, and only as
+// apps this build knows, once each, in iam.Apps order: what a seat's or a
+// person's record carries is not its requester's to use — the running node
+// reads who holds the seat.
+func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant) *types.NotificationWriter {
 	w := &types.NotificationWriter{Kind: kind}
-	if kind == iam.ActorAgent || kind == iam.ActorHuman {
+	switch kind {
+	case iam.ActorAgent, iam.ActorHuman:
 		w.Seat = strings.TrimSpace(actor)
+	case iam.ActorOperator:
+		w.Login = strings.TrimSpace(actor)
+		for _, app := range iam.Apps {
+			if slices.Contains(apps, app) {
+				w.Apps = append(w.Apps, app)
+			}
+		}
 	}
 	return w
 }

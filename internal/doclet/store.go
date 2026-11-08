@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -408,6 +409,7 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 		Mutation:   body,
 		Actor:      actor.Name(),
 		ActorKind:  actor.Kind,
+		ActorApps:  actor.operatorApps(notify),
 		OperatorID: actor.OperatorID,
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
@@ -489,6 +491,14 @@ type Actor struct {
 	TurnID     string
 	Chain      []string
 
+	// Apps are the apps the credential behind an [AuthorOperator] actor used
+	// when this node resolved it (iam.ActorApps), carried on every record it
+	// writes that wakes somebody ([MutationRecord.ActorApps]) so a turn the
+	// record wakes uses no app the credential did not use here (ADR-0105). Ignored for every other
+	// kind: a seat's or a person's record names the seat, whose holder the
+	// turn's node reads.
+	Apps []iam.Grant
+
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every write here derives its operation
 	// id from when it is set.
@@ -508,6 +518,19 @@ type Actor struct {
 	// an actor carrying any other: the ids derived from it carry its instant
 	// — see [statelog.KeyedOpID].
 	OpKey string
+}
+
+// operatorApps are the apps a record carries beside its actor: a credential's
+// own ([Actor.Apps]) on an [AuthorOperator] write that wakes somebody, and
+// nothing otherwise. Only a wake is read for them, and apps on a seat's or a
+// person's record, or on one that wakes nobody — a gate among them, which
+// every build there will ever be must read — would stamp it at a version
+// older builds retain for a field nothing reads.
+func (a Actor) operatorApps(notify *Notify) []iam.Grant {
+	if a.Kind != AuthorOperator || notify == nil {
+		return nil
+	}
+	return slices.Clone(a.Apps)
 }
 
 // operation is the id one write is published under: derived from the actor's

@@ -51,6 +51,11 @@ func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, 
 	return iam.Principal{}, fmt.Errorf("the operator surface composes no requester, and was asked for %q", handle)
 }
 
+// Credential composes nobody either.
+func (noRequesters) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, fmt.Errorf("the operator surface composes no requester, and was asked for %q", login)
+}
+
 func (h *listingHost) askers() []code.Principal {
 	h.mu.Lock()
 	defer h.mu.Unlock()

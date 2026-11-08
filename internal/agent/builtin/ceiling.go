@@ -49,6 +49,15 @@ type Requesters interface {
 	// decides it: the person bound to a human seat, or the agent seat
 	// itself. An error is UNKNOWN, never "nobody".
 	Requester(ctx context.Context, handle string) (iam.Principal, error)
+
+	// Credential is a credential acting as no seat, by its login, as THIS
+	// node resolves it now — a Tier A token of this node's own (a `token:`
+	// login), or a service account of the identity directory (any other) —
+	// and whether this node can place it at all: false for a login neither
+	// names, one bound to a seat, and one whose stage may not act, which are
+	// nobody the company knows as a requester. An error is UNKNOWN, never
+	// "nobody".
+	Credential(ctx context.Context, login string) (iam.Principal, bool, error)
 }
 
 // errNoRequesters is a ceiling asked of a surface that composes nobody a turn
@@ -59,8 +68,9 @@ var errNoRequesters = errors.New("builtin: this surface composes nobody a turn i
 // ceilingOf is who a seat's turn is acting for: nobody beyond the seat for a
 // turn nobody woke, for one the outcome of its own act woke and for a call
 // outside any turn; the requester a known principal woke it as — never the
-// seat itself; or a stranger, a sender the turn names with no requester the
-// company knows behind it. A KNOWN REQUESTER IS READ BEFORE THE SENDERS: a
+// seat itself — whether a seat's or a credential's acting as no seat
+// ([credentialCeiling]); or a stranger, a sender the turn names with no
+// requester the company knows behind it. A KNOWN REQUESTER IS READ BEFORE THE SENDERS: a
 // person's message carries both their seat and their own identity as its
 // sender. An error is a requester this node could not compose, which is
 // UNKNOWN: never read as a turn nobody woke, which is the one kind that bounds
@@ -132,6 +142,46 @@ func OutsideAnyTurn(ctx context.Context) context.Context {
 	}))
 }
 
+// credentialCeiling is the ceiling of a turn a credential acting as no seat
+// woke ([turnctx.Turn.RequesterLogin]): that credential, using the apps its
+// writes carried AND the apps this node resolves it to now, whichever is
+// narrower — never admin, and no app either side lacks (ADR-0105).
+//
+// BOTH, because each alone is wrong. The carried apps are what the node that
+// took the write resolved, and Tier A is per node: read alone, a token this
+// node's operator narrowed would act here on another node's wider grants. The
+// running node's resolution is what the credential is now: read alone, a
+// write recorded before the credential was narrowed would carry the old
+// grants, and a token another node gave wider grants would be widened here.
+//
+// A STRANGER, never nobody, where either answer is empty: a write that
+// carries no apps (an older build's), and a login this node cannot place — a
+// Tier A token its own configuration does not name, a service account the
+// directory does not hold or holds removed or suspended, or a credential bound
+// to a seat, whose writes are the person's and never reach here.
+func credentialCeiling(ctx context.Context, login string, carried []iam.Grant,
+	r Requesters) (authz.Ceiling, error) {
+
+	if len(carried) == 0 {
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
+	if r == nil {
+		return authz.Ceiling{}, errNoRequesters
+	}
+	credential, known, err := r.Credential(ctx, login)
+	switch {
+	case err != nil:
+		return authz.Ceiling{}, fmt.Errorf("builtin: compose requester %s: %w", login, err)
+	case !known:
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
+	now := iam.AppsOf(credential.Grants)
+	credential.Grants = slices.DeleteFunc(iam.AppsOf(carried), func(app iam.Grant) bool {
+		return !slices.Contains(now, app)
+	})
+	return authz.Ceiling{Kind: authz.CeilingRequester, Principal: credential}, nil
+}
+
 // composeCeiling is [ceilingOf] composed from the turn itself.
 func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (authz.Ceiling,
 	error) {
@@ -148,6 +198,9 @@ func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requ
 			return authz.Ceiling{}, fmt.Errorf("builtin: compose requester %s: %w", handle, err)
 		}
 		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
+	}
+	if login := strings.TrimSpace(turn.RequesterLogin); login != "" {
+		return credentialCeiling(ctx, login, turn.RequesterApps, r)
 	}
 	if slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
 		// AN EMPTY HANDLE IS NOBODY'S, never the seat's: a seat the

@@ -112,3 +112,61 @@ func TestEveryGrantIsOneLowercaseWord(t *testing.T) {
 		}
 	}
 }
+
+// WHAT A REQUESTER USES IS APPS, AND NEVER ADMIN: admin includes every app, and
+// running the company is nothing a turn may do for somebody (ADR-0105). A name
+// this build does not know grants nothing, and the answer never aliases the
+// row it was read from.
+func TestAppsOfIsEveryAppAdminIncludesAndNeverAdmin(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		held []Grant
+		want []Grant
+	}{
+		{nil, []Grant{}},
+		{[]Grant{GrantAdmin}, Apps},
+		{[]Grant{GrantDoclet, "teleport", GrantWorklet}, []Grant{GrantDoclet, GrantWorklet}},
+		{[]Grant{GrantChatlet, GrantAdmin}, []Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts}},
+	} {
+		held := slices.Clone(c.held)
+		got := AppsOf(held)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("AppsOf(%v) = %v, want %v", c.held, got, c.want)
+		}
+		if slices.Contains(got, GrantAdmin) {
+			t.Errorf("AppsOf(%v) carries admin", c.held)
+		}
+		if len(got) > 0 {
+			got[0] = "edited"
+			if !slices.Equal(held, c.held) {
+				t.Errorf("AppsOf(%v) aliases the row it read: an edit to the answer "+
+					"changed it to %v", c.held, held)
+			}
+		}
+	}
+}
+
+// A WRITE RECORDS APPS FOR A CREDENTIAL ACTING AS NO SEAT, AND FOR NOBODY ELSE:
+// a seat's or a person's record names the seat, whose holder the node running
+// a turn reads, and apps on it would be a second, stale answer to that.
+func TestActorAppsAreACredentialsAlone(t *testing.T) {
+	t.Parallel()
+	every := []Grant{GrantAdmin}
+	for _, c := range []struct {
+		name string
+		p    Principal
+		want []Grant
+	}{
+		{"a Tier A token", Principal{Kind: KindMachine, Login: TokenLogin("ci"),
+			Grants: []Grant{GrantWorklet}}, []Grant{GrantWorklet}},
+		{"an admin token", Principal{Kind: KindMachine, Login: TokenLogin("ops"), Grants: every}, Apps},
+		{"a person on their seat", Principal{Kind: KindPerson, Login: "ana", Seat: "ana",
+			Grants: every}, nil},
+		{"an agent seat", Principal{Kind: KindSeat, Seat: "swe", Grants: every}, nil},
+		{"the engine", Principal{Kind: KindEngine, Login: "node-a", Grants: every}, nil},
+	} {
+		if got := ActorApps(c.p); !slices.Equal(got, c.want) {
+			t.Errorf("%s records apps %v, want %v", c.name, got, c.want)
+		}
+	}
+}

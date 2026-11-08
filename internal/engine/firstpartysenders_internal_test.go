@@ -198,7 +198,7 @@ func trackerCommentWake(t *testing.T, author string) *events.Event {
 	}
 	record := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: "op-" + author,
+			OpID:    "op-" + author,
 			Subject: worklet.TaskSubject("t-1"), Op: worklet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 			Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
@@ -217,7 +217,7 @@ func pageCommentWake(t *testing.T, author string) *events.Event {
 	t.Helper()
 	record := doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
-			V: doclet.RecordVersion, OpID: "op-" + author,
+			OpID:    "op-" + author,
 			Subject: doclet.PageSubject("p-1"), Op: doclet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 		},
@@ -484,4 +484,10 @@ func (p personSeats) Requester(_ context.Context, handle string) (iam.Principal,
 	}
 	return iam.Principal{Kind: iam.KindSeat, Seat: handle, Stage: iam.StageActive,
 		Grants: iam.Apps}, nil
+}
+
+// Credential places a credential by the entry keyed "login:" and its login.
+func (p personSeats) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	principal, ok := p["login:"+login]
+	return principal, ok, nil
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -29,12 +30,25 @@ import (
 // from an identity the caller cannot choose per call.
 func operator(t *testing.T, n *node) *worklet.Writer {
 	t.Helper()
-	w := n.engine.TrackerWriter().As("e2e", worklet.AuthorOperator,
-		worklet.Provenance{OperatorID: "e2e"})
+	// AS EVERY SURFACE WRITES THE TOKEN'S WORK ([builtin.ActorOf]): under its
+	// login, with the apps it holds riding every record that wakes somebody,
+	// which a turn the work wakes is held to (ADR-0105). A name of the
+	// harness's own carrying no apps is a write no surface makes, and the turn
+	// it woke was worked for a stranger.
+	actor := builtin.ActorOf(e2eOperator())
+	w := n.engine.TrackerWriter().As(actor.Handle, actor.Kind, actor.Provenance())
 	if w == nil {
 		t.Fatal("the operator identity was refused")
 	}
 	return w
+}
+
+// e2eOperator is the fixture's Tier A token ([withCredential], id
+// [e2eTokenID], `admin`) as the request path resolves it: a machine acting as
+// no seat under its own login.
+func e2eOperator() iam.Principal {
+	return iam.Principal{Login: iam.TokenLogin(e2eTokenID), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin}}
 }
 
 // newTask is one task as a caller files it: the fields a create names, and
@@ -55,8 +69,9 @@ func newTask(project, title string) worklet.Task {
 // and what it wrote through, since a token acting for nobody has nobody else
 // to name — and a write naming nobody is refused.
 func pageOperator() doclet.Actor {
-	login := iam.TokenLogin("e2e")
-	return doclet.Actor{Kind: doclet.AuthorOperator, Handle: login, OperatorID: login}
+	login := iam.TokenLogin(e2eTokenID)
+	return doclet.Actor{Kind: doclet.AuthorOperator, Handle: login, OperatorID: login,
+		Apps: iam.ActorApps(e2eOperator())}
 }
 
 // A COMPANY THAT CONFIGURES NOTHING GETS A TRACKER AND A WIKI. That is the

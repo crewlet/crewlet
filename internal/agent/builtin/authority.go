@@ -239,10 +239,11 @@ func (e *DecisionRefused) Error() string {
 // decided for (ADR-0105): somebody the company does not know, a requester who
 // may not act in the company at all — told as such, since no app would admit
 // them — one who does not use the app the verb belongs to — the app named,
-// since an administrator giving it to them is what changes the answer — or one
-// who could not take the verb themselves. Never the requester's name: the
-// agent knows who woke its turn, and one sentence for every requester is the
-// rule [Refusal] keeps.
+// since an administrator giving it to them is what changes the answer, and
+// a person told so where a credential acting as no seat, which nobody can tell
+// anything, is not — or one who could not take the verb themselves. Never the
+// requester's name: the agent knows who woke its turn, and one sentence for
+// every requester of a kind is the rule [Refusal] keeps.
 func ceilingWords(d authz.Decision) string {
 	switch {
 	case d.Ceiling == authz.CeilingStranger:
@@ -262,6 +263,11 @@ func ceilingWords(d authz.Decision) string {
 			said = append(said, words.Said(name))
 		}
 		apps := words.Or(said)
+		if d.RequesterKind == iam.KindMachine {
+			return ": the credential this turn is working for does not use " + apps + ", so you " +
+				"may not use it for it. Answer without it; an administrator can give the " +
+				"credential " + apps
+		}
 		return ": the person this turn is working for does not use " + apps + ", so you may " +
 			"not use it for them. Answer without it, or tell them an administrator can give " +
 			"them " + apps

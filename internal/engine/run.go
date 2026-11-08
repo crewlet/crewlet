@@ -176,10 +176,13 @@ type Engine struct {
 	adminPosture iam.AdminPosture
 
 	// tierATokens are the ids this node's `api.auth.tokens` declares — the
-	// holders of every `token:<id>` login this node can authenticate — for
-	// [Engine.HolderRecord], which answers a login no entry declares as
-	// nobody's. Tier A, so read once at boot like the posture beside it.
-	tierATokens map[string]struct{}
+	// holders of every `token:<id>` login this node can authenticate — with
+	// the grants each declares: for [Engine.HolderRecord], which answers a
+	// login no entry declares as nobody's, and for a turn such a token woke,
+	// whose every call is bounded by the apps it holds HERE
+	// (turnRequesters.Credential, ADR-0105). Tier A, so read once at boot like
+	// the posture beside it.
+	tierATokens map[string][]iam.Grant
 
 	// companyManaged is whether only named systems write this deployment's
 	// company document (`api.auth.company_writers`), which decides who holds
@@ -1882,9 +1885,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		e.adminPosture = opts.Bootstrap.API.Auth.Admin
 	}
 	e.companyManaged = opts.Bootstrap.API.Auth.CompanyManaged()
-	e.tierATokens = make(map[string]struct{}, len(opts.Bootstrap.API.Auth.Tokens))
+	e.tierATokens = make(map[string][]iam.Grant, len(opts.Bootstrap.API.Auth.Tokens))
 	for _, token := range opts.Bootstrap.API.Auth.Tokens {
-		e.tierATokens[token.ID] = struct{}{}
+		e.tierATokens[token.ID] = slices.Clone(token.Grants)
 	}
 	// THE EVENT LOG FILES AN EVENT UNDER EVERY AGENT IT INVOLVES, by the
 	// agent id the org chart derives for each seat a participant tag names

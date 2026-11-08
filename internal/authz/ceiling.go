@@ -115,7 +115,8 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 	case req.Unknown():
 		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, Err: req.Err}
 	case !req.Allowed:
-		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, RequesterReason: req.Reason}
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, RequesterReason: req.Reason,
+			RequesterKind: c.Principal.Kind}
 	}
 	return d
 }
@@ -184,10 +185,11 @@ func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action,
 		// THEIR STAGE REFUSES THEM, and no app would change that: a
 		// requester who may not act is told as one, never sent to ask for
 		// an app.
-		return Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterReason: ReasonStage}
+		return Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterReason: ReasonStage,
+			RequesterKind: q.Kind}
 	}
 	refused := Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterGrants: slices.Clone(apps),
-		RequesterReason: ReasonNoGrant}
+		RequesterReason: ReasonNoGrant, RequesterKind: q.Kind}
 	for _, app := range apps {
 		if q.Can(app) {
 			return d

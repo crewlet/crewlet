@@ -309,7 +309,7 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// seat's handle, a credential's login or a node's name, and only the
 		// kind tells a turn this wakes whether a colleague is asking or
 		// nobody is (notify.FirstPartyWriter).
-		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor),
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps),
 	}
 }
 

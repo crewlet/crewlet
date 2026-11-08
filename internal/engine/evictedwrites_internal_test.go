@@ -522,7 +522,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: "op-evict-" + node,
+			V: worklet.GateRecordVersion, OpID: "op-evict-" + node,
 			Subject: worklet.EvictionSubject(node), Op: worklet.OpEviction,
 			Writer: "node-peer", Scope: worklet.ScopeSet{Subject: true},
 		},
@@ -546,7 +546,7 @@ func pagesEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := doclet.Encode(doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
-			V: doclet.RecordVersion, OpID: "op-evict-" + node,
+			V: doclet.GateRecordVersion, OpID: "op-evict-" + node,
 			Subject: doclet.EvictionSubject(node), Op: doclet.OpEviction,
 			Writer: "node-peer", Scope: doclet.ScopeSet{Subject: true},
 		},

@@ -2,12 +2,14 @@ package engine
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -41,12 +43,19 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 	type writer struct {
 		actor string
 		kind  string
+		// apps are the apps the record carries beside a credential's
+		// actor, as the node that took the write resolved them.
+		apps []iam.Grant
 	}
 	cases := []struct {
 		name   string
 		writer writer
 		// requester is the seat the turn is acting for, "" for none.
 		requester string
+		// login is the credential acting as no seat the turn is acting
+		// for, "" for none, and apps what its record carried for it.
+		login string
+		apps  []iam.Grant
 		// stranger is a turn whose senders nobody the company holds stands
 		// behind: one the requester ceiling lets read nothing.
 		stranger bool
@@ -54,17 +63,23 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 		// the knowledge base that wakes anybody names the engine.
 		trackerOnly bool
 	}{
-		{name: "a colleague seat's", writer: writer{"cto", "agent"}, requester: "cto"},
-		{name: "a person's, as the seat they hold", writer: writer{"ada", "human"}, requester: "ada"},
+		{name: "a colleague seat's", writer: writer{"cto", "agent", nil}, requester: "cto"},
+		{name: "a person's, as the seat they hold", writer: writer{"ada", "human", nil}, requester: "ada"},
 		// THE ENGINE'S OWN WRITE — a duty's repair, an unblocking it
 		// reports — is nobody's errand: no counterparty, no requester.
-		{name: "the engine's own", writer: writer{"node-a", "system"}, trackerOnly: true},
-		// A CREDENTIAL ACTING AS NO SEAT has no seat the ceiling can
-		// compose, so it stays the closed end it always was.
-		{name: "a credential's acting as no seat", writer: writer{"token:ci", "operator"}, stranger: true},
+		{name: "the engine's own", writer: writer{"node-a", "system", nil}, trackerOnly: true},
+		// A CREDENTIAL ACTING AS NO SEAT is the requester by its own login,
+		// with the apps its record carried (ADR-0105) — never its token.
+		{name: "a credential's acting as no seat",
+			writer: writer{"token:ci", "operator", []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}},
+			login:  "token:ci", apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}},
+		// ONE AN OLDER BUILD WROTE carries no apps, and a turn it woke is
+		// worked for as a stranger's still.
+		{name: "a credential's an older build wrote", writer: writer{"token:ci", "operator", nil},
+			login: "token:ci", stranger: true},
 		// A SEAT THE CHART NO LONGER HOLDS is nobody the company holds now,
 		// as a chat message from a removed person is.
-		{name: "a removed seat's", writer: writer{"gone", "agent"}, stranger: true},
+		{name: "a removed seat's", writer: writer{"gone", "agent", nil}, stranger: true},
 	}
 	for _, source := range []string{worklet.Source, doclet.Source} {
 		for _, c := range cases {
@@ -78,10 +93,12 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 				var prompt notify.Prompt
 				switch source {
 				case worklet.Source:
-					payload = workItemNotice(t, c.writer.actor, worklet.AuthorKind(c.writer.kind), "swe")
+					payload = workItemNotice(t, c.writer.actor, worklet.AuthorKind(c.writer.kind),
+						c.writer.apps, "swe")
 					parser, prompt = worklet.NewParser(worklet.ParserOptions{}), worklet.Prompt{}
 				default:
-					payload = pageNotice(t, c.writer.actor, doclet.AuthorKind(c.writer.kind), "swe")
+					payload = pageNotice(t, c.writer.actor, doclet.AuthorKind(c.writer.kind),
+						c.writer.apps, "swe")
 					parser, prompt = doclet.NewParser(doclet.ParserOptions{}), doclet.Prompt{}
 				}
 				evs := []*events.Event{noticeOf(t, reg, parser, prompt, payload, "swe")}
@@ -90,8 +107,13 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 				if got := requesterOf(evs, interactions, "swe"); got != c.requester {
 					t.Errorf("the turn is acting for %q, want %q", got, c.requester)
 				}
+				login, apps := credentialRequesterOf(evs, evs, interactions, "swe")
+				if login != c.login || !slices.Equal(apps, c.apps) {
+					t.Errorf("the turn is acting for the credential %q using %v, want %q using %v",
+						login, apps, c.login, c.apps)
+				}
 				senders := sendersSpoken(interactions)
-				stranger := c.requester == "" && len(senders) > 0
+				stranger := c.requester == "" && len(apps) == 0 && len(senders) > 0
 				if stranger != c.stranger {
 					t.Errorf("the turn reads as a stranger's: %v, want %v (senders %+v)",
 						stranger, c.stranger, senders)
@@ -107,7 +129,7 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 							"what a seat learned of them on chat and on its own tracker is one profile",
 							profiled, c.requester)
 					}
-				case !c.stranger:
+				case !c.stranger && c.login == "":
 					if len(senders) != 0 || len(profiled) != 0 {
 						t.Errorf("nobody sent the engine's own notice, yet it names senders %+v "+
 							"and profiles %+v", senders, profiled)
@@ -127,16 +149,17 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 // the engine's comment reaches the assignee's inbox and starts no turn
 // (worklet's ownerAsked), and a notice that wakes nobody has no writer for a
 // turn to read.
-func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, recipient string) []byte {
+func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, apps []iam.Grant,
+	recipient string) []byte {
 	t.Helper()
 	record := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: "op-work",
+			OpID:    "op-work",
 			Subject: worklet.TaskSubject("t-1"), Op: worklet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 			Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
 		},
-		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind,
+		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind, ActorApps: apps,
 		Notify: &worklet.Notify{
 			Kind: worklet.ChangeComment, Excerpt: "can you read the repository for me",
 			Mentions: []string{recipient},
@@ -156,7 +179,8 @@ func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, recipie
 
 // pageNotice is a comment on a page that mentions recipient, written by actor
 // as kind, encoded as the knowledge base's feed relays it.
-func pageNotice(t *testing.T, actor string, kind doclet.AuthorKind, recipient string) []byte {
+func pageNotice(t *testing.T, actor string, kind doclet.AuthorKind, apps []iam.Grant,
+	recipient string) []byte {
 	t.Helper()
 	record := doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
@@ -164,7 +188,7 @@ func pageNotice(t *testing.T, actor string, kind doclet.AuthorKind, recipient st
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 			Scope: doclet.ScopeSet{Subject: true, Container: "ENG"},
 		},
-		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind,
+		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind, ActorApps: apps,
 		Notify: &doclet.Notify{
 			Kind: doclet.ChangeComment, PageID: "p-1", Version: 2,
 			Mentions: []string{recipient}, Excerpt: "can you read the repository for me",

@@ -44,6 +44,22 @@ type NotificationWriter struct {
 	// Seat is the writer's seat handle, for a seat's write and a person's,
 	// and empty for the other two kinds.
 	Seat string `json:"seat"`
+
+	// Login is a credential's login, for a write by a credential acting as no
+	// seat (`operator`) — `token:<id>` for a Tier A token, the directory
+	// machine's login otherwise — and empty for the other three kinds. A
+	// LOGIN, NEVER A TOKEN'S VALUE: it names the credential a turn the write
+	// woke is worked for (ADR-0105), which the node running it resolves again.
+	Login string `json:"login,omitempty"`
+
+	// Apps are the apps that credential used when the node that took its
+	// write resolved it (iam.ActorApps), and empty for the other kinds. The
+	// turn the write wakes uses no app outside them, nor outside what the
+	// running node resolves the login to now (ADR-0105): Tier A is per node,
+	// so the running node's answer alone would let a token one node narrowed
+	// act on another node's wider grants. An operator writer carrying none —
+	// an older build's — is worked for as a stranger.
+	Apps []iam.Grant `json:"apps,omitempty"`
 }
 
 // CoalescedMessage is one constituent inbound message inside a coalesced

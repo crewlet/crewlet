@@ -544,7 +544,7 @@ func (d ArtifactDeps) decide(ctx context.Context, c artifactCaller, tool string,
 	r := authorityRefusal(tool, DecisionError(action, dec))
 	switch dec.Reason {
 	case authz.ReasonCeiling:
-		r.Output = fmt.Sprintf("%s didn't run: the person this turn is working for "+
+		r.Output = fmt.Sprintf("%s didn't run: whoever this turn is working for "+
 			"could not do that to this artifact themselves, so you may not do it for "+
 			"them. Tell them what they would need, or ask the artifact's owner.", tool)
 	case authz.ReasonSeatRefused:

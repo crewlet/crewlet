@@ -420,8 +420,9 @@ work an agent owns. Reading its own artifact back, and sharing it, are never
 exempt, and neither is what such an edit hands back: the live files a stale
 publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
-edits, and so does one a credential acting as no seat woke with a change on a
-work item or a page, since no seat stands behind it; a turn nobody woke (a
+edits. One a credential acting as no seat woke with a change on a work item or
+a page is decided for that credential: it opens what is shared with it or that
+it owns, and nothing else; a turn nobody woke (a
 schedule, a watch, the engine's own notice, the outcome of the agent's own act
 such as a workflow its own push failed) is bounded by the agent alone. The
 bound is the turn's and no later one's: a colleague the agent asks reads for
@@ -541,8 +542,8 @@ shares](#an-artifact-is-opened-by-its-shares)).
 ### An agent uses only the apps of the person it works for
 
 Inside a turn somebody woke — a person's message, their assignment of a work
-item, their comment, a colleague seat's ask — an agent uses **only the apps
-that somebody uses**. Every verb whose row names an app is decided twice: once
+item, their comment, a colleague seat's ask, a pipeline's token filing work —
+an agent uses **only the apps that somebody uses**. Every verb whose row names an app is decided twice: once
 for the agent, which holds every app, and once for the app of whoever woke the
 turn ([ADR-0105](../../adr/0105-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 A person kept off Worklet cannot have an agent create, read or close work
@@ -558,7 +559,21 @@ that an administrator can give it to them.
 | a person of the company | the apps their permissions name (`admin` includes every app) |
 | a person who may not act now: invited and not yet enrolled, suspended or removed | none |
 | a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
+| a credential acting as no seat, with a change on a work item or a page: a Tier A token, or a service account bound to no seat | the apps its permissions name (`admin` includes every app), on the node that took the write and on the node running the turn alike: only an app both give it |
+| a credential the node running the turn cannot place: a Tier A token that node's configuration does not declare, a service account removed, suspended or bound to a seat | none |
 | somebody the company does not know: a chat sender no seat or person maps to | none |
+
+**A token's work is held to the token.** A pipeline's token that files or
+comments on a work item, or writes a page, wakes the agents it names in turns
+worked for that token, by its login and never by its value. The apps it used
+when the node it wrote through resolved it travel with the write, and each call
+uses only an app that those name and that the node running the turn gives the
+login now, so a token narrowed after it wrote, or declared narrower on one node
+than another, never acts wider than the narrower answer. A `token:` login is
+placed by that node's own `api.auth.tokens` and nothing else, and any other
+login by the identity directory alone. Nobody is asked anything for a
+credential: a question its turn's executor addresses to the requester goes to
+the seat's lead chain instead, as one in a turn nobody woke does.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

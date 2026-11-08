@@ -3,10 +3,12 @@ package doclet_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -37,15 +39,13 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE. It is empty — every field the
-			// knowledge base writes is in the base format — so there is
-			// no record to carry; the field this build's successor adds
-			// brings a Carrying case, which the suite refuses to run
-			// without.
-			Fields: doclet.VersionedFields(),
-			Kinds:  suiteKinds(),
-			Rows:   doclet.NewRows,
-			Write:  suiteWrite,
+			// THE VERSIONED-FIELD TABLE, each field carried by a record
+			// built through the production encoder ([carryingSuiteRecord]).
+			Fields:   doclet.VersionedFields(),
+			Carrying: carryingSuiteRecord,
+			Kinds:    suiteKinds(),
+			Rows:     doclet.NewRows,
+			Write:    suiteWrite,
 			// THE PRODUCTION ENCODER the engine hands the trim.
 			EncodeTrimmed: doclet.EncodeTrimmed,
 			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
@@ -140,6 +140,33 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 			return nil, err
 		}
 		rec.Mutation = body
+	}
+	return doclet.Encode(rec)
+}
+
+// carryingSuiteRecord is a record carrying one versioned field, through the
+// production encoder, which stamps it at the field's version.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	op, payload, scope := suitePayload(doclet.KindContainer, "carrying")
+	body, err := marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	rec := doclet.MutationRecord{
+		RecordEnvelope: doclet.RecordEnvelope{
+			OpID: "suite-carrying", Op: op, Scope: scope,
+			Subject:   doclet.Subject{Kind: doclet.KindContainer, ID: "carrying"},
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "suite-node",
+		},
+		Mutation: body, Actor: "suite", ActorKind: doclet.AuthorOperator,
+	}
+	switch field.Name {
+	case "MutationRecord.ActorApps":
+		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
+		rec.Actor, rec.ActorKind, rec.OperatorID = "token:ci", doclet.AuthorOperator, "token:ci"
+		rec.ActorApps = []iam.Grant{iam.GrantDoclet}
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
 	return doclet.Encode(rec)
 }

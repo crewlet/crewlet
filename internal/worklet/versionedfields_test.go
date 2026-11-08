@@ -21,10 +21,9 @@ import (
 // line to this map.
 func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
-	// EMPTY: every field the tracker writes is in the base format, so no
-	// version above it has been closed yet. The first field this build's
-	// successor adds lists its version here.
-	closed := map[int][]string{}
+	closed := map[int][]string{
+		2: {"MutationRecord.ActorApps"},
+	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {
 		got[field.Since] = append(got[field.Since], field.Name)

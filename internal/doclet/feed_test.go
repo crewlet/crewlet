@@ -1,6 +1,7 @@
 package doclet_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -150,8 +151,12 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 	}{
 		{author("jane"), types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
 		{agent("swe"), types.NotificationWriter{Kind: iam.ActorAgent, Seat: "swe"}},
-		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator},
-			types.NotificationWriter{Kind: iam.ActorOperator}},
+		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
+		// node that took its write recorded for it (ADR-0105).
+		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator,
+			Apps: []iam.Grant{iam.GrantDoclet}},
+			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantDoclet}}},
 	} {
 		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
 			doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}); err != nil {
@@ -166,7 +171,7 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 		if wake == nil {
 			t.Fatalf("%s's mention of bob woke nobody", c.actor.Handle)
 		}
-		if got := wake.Writer; got == nil || *got != c.want {
+		if got := wake.Writer; got == nil || !reflect.DeepEqual(*got, c.want) {
 			t.Errorf("%s's comment names its writer %+v, want %+v", c.actor.Handle, got, c.want)
 		}
 	}

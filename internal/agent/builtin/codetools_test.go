@@ -377,6 +377,9 @@ func codeRequesters() requesters {
 		"agent-ceo": {Kind: iam.KindSeat, Seat: "agent-ceo", Stage: iam.StageActive, Grants: iam.Apps},
 		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
 			Stage: iam.StageRetired, Grants: iam.Apps},
+		// A PIPELINE'S TOKEN acting as no seat, as this node resolves it.
+		"login:token:ci": {Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+			Grants: iam.Apps},
 	}
 }
 
