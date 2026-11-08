@@ -1202,33 +1202,33 @@ busybox's compares whole seconds, so up to a second there, and the wait reads
 whatever grain the box's filesystem keeps rather than assume one; a box whose
 `find` never does is refused after fifty sleeps of a tenth of a second, five
 seconds, rather than packed blind. A box's `sleep` is required to take a tenth
-of a second — every wait the engine's own scripts make counts in tenths (a
-run's end, the kill of a job's group, OpenCode's waits for its server), and
-the page's image requirements say so — and a box whose `sleep` refuses one
-fails the pack, saying so, rather than run its wait out at once. It then lists every
-file of the session, its inode and its size, and refuses a session whose files
-add up past what one reading of an archive yields a kept session's scrub
-(eight times `SessionMaxBytes`) before any tar, since the take would refuse it
-once packed. After the tar, whatever its exit 0 or 1 said, it refuses the pack
-where the archive does not list back through gunzip — busybox's archive cut
-inside a member that shrank fails there as GNU's reading of it does — or lists
-no file, a file is gone, its inode changed or it shrank, a file it listed is
-not in the archive (one tar could not read, which busybox's leaves out with
-exit 1), a member that is no `.jsonl` transcript was written since the marker
-(find's `-newer`, held to files and to members), a `.jsonl` member written
-since then is not a byte prefix of the live file — the member read back out
-of the archive as a stream, its `cksum` against the live file's first as many
-bytes, which is what catches the in-place rewrite grown back and a shrink
-grown back within the read — or, looked at last, a member of the archive is
-gone, so a file removed while the checks ran, which no check of a live file
-can read, is refused too. No check reads an empty file of patterns, which
-busybox's grep and GNU's read in opposite ways. The refusal names its check and
-its file, and the pack's error carries enough of that line to read both. A
-transcript or a thread that only grew is taken as tar first saw it, a whole
-prefix with at most its last line torn, which the resume cuts back (above).
-Reading tar's words was rejected, since busybox says nothing; so was keeping a
-torn task file by leaving out a `.json` that is not one value, which needs a
-parser no box is known to have.
+of a second — every wait the engine's own scripts make sleeps a fraction of a
+second at a time (a run's end, the kill of a job's group, OpenCode's waits for
+its server), and the page's image requirements say so — and a box whose `sleep`
+refuses one fails the pack, saying so, rather than run its wait out at once. It
+then lists every file of the session, its inode and its size, and refuses a
+session whose files add up past what one reading of an archive yields a kept
+session's scrub (eight times `SessionMaxBytes`) before any tar, since the take
+would refuse it once packed. After the tar, whatever its exit 0 or 1 said, it
+refuses the pack where the archive does not list back through gunzip —
+busybox's archive cut inside a member that shrank fails there as GNU's reading
+of it does — or lists no file, a file is gone, its inode changed or it shrank,
+a file it listed is not in the archive (one tar could not read, which busybox's
+leaves out with exit 1), a member that is no `.jsonl` transcript was written
+since the marker (find's `-newer`, held to files and to members), a `.jsonl`
+member written since then is not a byte prefix of the live file — the member
+read back out of the archive as a stream, its `cksum` against the live file's
+first as many bytes, which is what catches the in-place rewrite grown back and
+a shrink grown back within the read — or, looked at last, a member of the
+archive is gone, so a file removed while the checks ran, which no check of a
+live file can read, is refused too. No check reads an empty file of patterns,
+which busybox's grep and GNU's read in opposite ways. The refusal names its
+check and its file, and the pack's error carries enough of that line to read
+both. A transcript or a thread that only grew is taken as tar first saw it, a
+whole prefix with at most its last line torn, which the resume cuts back
+(above). Reading tar's words was rejected, since busybox says nothing; so was
+keeping a torn task file by leaving out a `.json` that is not one value, which
+needs a parser no box is known to have.
 
 **Only a transcript written since the marker is read back.** The decision that
 asked for the byte-prefix proof named every `.jsonl` member; the pack proves
@@ -1270,11 +1270,10 @@ by its log read: its harness, gone by itself or on its end's SIGTERM, recorded
 every call it made (2.1.310, told to stop, records the call it was cut off in).
 
 **What it costs, and no wire changes.** Each pack beside a working harness
-waits up to a second for the box's clock, walks the session's files with
-`find` a few times, and decompresses its archive once to list it and once more
-for each transcript written since its marker, reading those back as a stream
-rather than onto the disk of a box whose harness is still writing — within the
-minute `SessionPackWait` keeps for an OpenCode server's start, which such a
-pack never makes. Nothing on
-the log, the row or the archive's format changes: a pack refused is a capture
-refused, as a pack that failed always was.
+waits up to a second for the box's clock, walks the session's files with `find`
+a few times, and decompresses its archive once to list it and once more for
+each transcript written since its marker, reading those back as a stream rather
+than onto the disk of a box whose harness is still writing — within the minute
+`SessionPackWait` keeps for an OpenCode server's start, which such a pack never
+makes. Nothing on the log, the row or the archive's format changes: a pack
+refused is a capture refused, as a pack that failed always was.

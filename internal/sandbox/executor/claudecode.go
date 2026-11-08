@@ -753,23 +753,23 @@ func claudePack(paths Paths, at packAt) string {
 // ONLY A `.jsonl` WRITTEN SINCE THE MARKER IS READ BACK, rather than every one
 // the archive holds: one find reads as older than the marker is the file tar
 // read, unwritten since, and a long session holds a hundred subagents' threads,
-// each read back by a decompression of the whole archive, which past a few
-// would run the pack out of its bound ([sandbox.SessionPackWait]). Like WRITTEN,
-// this rests on the box's clock: it does not step back while a pack runs, and
-// it stamps the marker, in the work directory, and the session's files, in the
-// configuration directory, at one grain — both directories the engine keeps
-// under the box's home.
+// each read back by a decompression of the whole archive — every one would run
+// the pack far past its bound ([sandbox.SessionPackWait]), whose spare minute
+// covers some ten. Like WRITTEN, this rests on the box's clock: it does not
+// step back while a pack runs, and it stamps the marker, in the work directory,
+// and the session's files, in the configuration directory, at one grain — both
+// directories the engine keeps under the box's home.
 //
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
 // BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
 // sleep is required to take a tenth of a second — every wait the engine's own
-// scripts make is counted in tenths (end.go, the kill of a job's group,
-// OpenCode's waits for its server) — and a box whose sleep refuses one fails
-// the pack, saying so, rather than run its wait out at once. No awk, and no
-// stat, whose options differ between GNU and BSD. A transcript member is read
-// back out of the archive as a stream, never onto the box's disk: a pack
-// beside a harness that is still writing must not fill the disk under it, and
-// the archive already holds the session once.
+// scripts make sleeps a fraction of a second at a time (end.go's grace, the
+// kill of a job's group, OpenCode's waits for its server) — and a box whose
+// sleep refuses one fails the pack, saying so, rather than run its wait out at
+// once. No awk, and no stat, whose options differ between GNU and BSD. A
+// transcript member is read back out of the archive as a stream, never onto
+// the box's disk: a pack beside a harness that is still writing must not fill
+// the disk under it, and the archive already holds the session once.
 func claudeHeldTar(cfg, staged string) string {
 	q := sandbox.ShellQuote
 	plain := strconv.FormatInt(heldPlainMax, 10)
