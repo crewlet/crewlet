@@ -109,7 +109,7 @@ func (s *Service) sshRotation(w http.ResponseWriter, r *http.Request) {
 		// before the staged reference is cleared: a promote that stops
 		// between the two signs with the new authority, which every server
 		// trusts, and runs again to the same end.
-		if err := s.secrets.Set(r.Context(), name, nextValue, authorOf(attributionOf(r)), secrets.SourceSetup,
+		if err = s.secrets.Set(r.Context(), name, nextValue, authorOf(attributionOf(r)), secrets.SourceSetup,
 			s.now()); err != nil {
 			s.refuse(w, r, err, setup.Result{})
 			return
