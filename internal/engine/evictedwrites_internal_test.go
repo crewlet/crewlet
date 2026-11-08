@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -397,7 +398,39 @@ var evictedWriters = map[string]evictedWriter{
 			return executordomain.NewGates(db)
 		},
 	},
+	accessdomain.Domain{}.Name(): {
+		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
+			statelog.Position, statelog.Outcome, error) {
+			t.Helper()
+			// A BASELINE TOLD TO A TURN, through the writer every told record
+			// is written with: the one write of this log a turn makes.
+			res, err := e.core.Load().accessWriter.Tell(ctx, accessdomain.Call{
+				By:   iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+				OpID: statelog.NewOpID(time.Now(), "told-"+tag),
+			}, accessdomain.NewTold{
+				Handle: "ceo", Turn: uuid.NewSHA1(uuid.NameSpaceOID, []byte("turn-"+tag)).String(),
+				Digest: evictedDigest, Snapshot: json.RawMessage(`{"v":1}`), Baseline: true,
+				RevisionTo: "evicted-" + tag,
+			})
+			return res.Position, res.Outcome, err
+		},
+		applied: func(t *testing.T, back *Backends, tag string) bool {
+			return rowExists(t, back, "access_told", "revision_to", "evicted-"+tag)
+		},
+		evictionSubject: func(node string) string {
+			return accessdomain.EvictionSubject(node).String()
+		},
+		eviction:  accessEviction,
+		evictions: "access_evictions",
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return accessdomain.NewGates(db)
+		},
+	},
 }
+
+// evictedDigest is a snapshot digest's spelling, for a told record whose
+// snapshot is nobody's.
+var evictedDigest = "sha256:" + strings.Repeat("0", 64)
 
 // envelopeAt is the envelope of the record at seq on a domain's log.
 func envelopeAt(t *testing.T, running *runningLog, seq uint64) statelog.Envelope {
@@ -669,6 +702,32 @@ func assistantEviction(t *testing.T, node string) []byte {
 			Subject: assistantdomain.EvictionSubject(node), Op: assistantdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: assistantdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
+		OperatorID: "operator",
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// accessEviction is the same for the access log.
+func accessEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	body, err := json.Marshal(accessdomain.Eviction{
+		V: accessdomain.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := accessdomain.Encode(accessdomain.MutationRecord{
+		RecordEnvelope: accessdomain.RecordEnvelope{
+			V: accessdomain.GateRecordVersion, OpID: "op-evict-" + node,
+			Subject: accessdomain.EvictionSubject(node), Op: accessdomain.OpEviction,
+			Writer: "node-peer", CreatedAt: time.Now().UTC(),
+			Scope: accessdomain.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
 		OperatorID: "operator",

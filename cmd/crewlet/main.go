@@ -2324,13 +2324,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, errors.New("api: the engine opened no executor estate: " +
 			"engine.New opens it beside the identity estate on every node holding the estate")
 	}
+	accessValues := e.AccessReader()
+	if accessValues == nil {
+		return nil, errors.New("api: the engine opened no access estate: " +
+			"engine.New opens it beside the identity estate on every node holding the estate")
+	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
-		// record can move, and the assistant's and the executor sessions',
-		// which a rotation waits out.
+		// record can move, and the assistant's, the executor sessions' and
+		// the access log's commands, which a rotation waits out.
 		Identity: keyring, Assistant: assistantValues, Executor: executorValues,
+		Access: accessValues,
 		// AND THE CONFIG SURFACE, so a write of a value the company reads
 		// re-activates the revision that reads it (ADR-0070), through the
 		// same Reload `POST /config/reload` performs.

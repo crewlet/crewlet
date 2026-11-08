@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -347,6 +348,10 @@ type engineHeld struct {
 	// Executor is the seats' sealed executor sessions, waited out the same
 	// way; nil where the backend holds none.
 	Executor *executordomain.SealedCount
+
+	// Access is the access log's sealed SSH commands, waited out the same
+	// way; nil where the backend holds none.
+	Access *accessdomain.SealedCount
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -1092,8 +1097,9 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 // and so keeps the old key on the ring until it is gone: live invitations,
 // because only a re-issue could carry the address again and its own claim
 // refuses one while the invitation is open, the Dashboard Assistant's
-// conversations, which leave only with their retention, and the seats'
-// executor sessions, which leave with their rows.
+// conversations, which leave only with their retention, the seats' executor
+// sessions, which leave with their rows, and the access log's SSH commands,
+// which leave with their retention.
 func waitOut(stdout io.Writer, held engineHeld, active string) {
 	if held.Assistant != nil {
 		if n := held.Assistant.Outside(active); n > 0 {
@@ -1111,6 +1117,15 @@ func waitOut(stdout io.Writer, held engineHeld, active string) {
 				"its seat's budget releases it, or once it is untouched for "+
 				"turn_engine.conversation_session.retention_days); dropped sooner, "+
 				"each reads as no session and its next turn starts fresh\n", n)
+		}
+	}
+	if held.Access != nil {
+		if n := held.Access.Outside(active); n > 0 {
+			fmt.Fprintf(stdout, "%d recorded SSH commands are sealed under another key "+
+				"and are not re-sealed: keep that key on the ring until none is left (a "+
+				"command's record leaves once it is older than "+
+				"access_history.retention_days); dropped sooner, an audit read shows the "+
+				"command as unreadable\n", n)
 		}
 	}
 	if held.Identity == nil {
