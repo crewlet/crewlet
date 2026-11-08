@@ -215,7 +215,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// the tool every other addressing decision goes through.
 	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
-		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
+		{&a2aAsk{svc: deps.A2A, env: deps.Env, requesters: deps.Requesters}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
 			skills:   deps.Refinable,

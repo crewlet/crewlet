@@ -2352,7 +2352,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		WorkItem: t.WorkItem,
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
-		Requester: t.Requester, Stranger: t.Stranger,
+		Requester: t.Requester, WorkingFor: t.WorkingFor,
 		// OR THE CREDENTIAL that did, which a resumed segment's every call
 		// is still bounded by — see [sandbox.PendingRun.RequesterLogin].
 		RequesterLogin: t.RequesterLogin,

@@ -408,6 +408,10 @@ type ColleagueAsk struct {
 	TraceID      string   `json:"trace_id,omitempty"`
 	SpanID       string   `json:"span_id,omitempty"`
 	ParentSpanID string   `json:"parent_span_id,omitempty"`
+	// WorkingFor is who the answering turn works for, and so who the
+	// answer back is worked for ([types.A2AMessage.WorkingFor]): the ask's
+	// own carrier, or the asking seat where the ask was its own work.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
 // RunStop is who ENDED a run by pausing its seat with a stop
@@ -1365,9 +1369,10 @@ type PendingRun struct {
 	RequesterLogin string      `json:"requester_login,omitempty"`
 	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
 
-	// Stranger is a run whose turn acts for somebody the company does not
-	// know through a colleague's ask, which its resumed turn acts for too.
-	Stranger bool `json:"stranger,omitempty"`
+	// WorkingFor is who the run's turn works for when a colleague's ask or
+	// an answer handed it on ([types.WorkingFor]), which its resumed turn
+	// works for too.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,
 	// nil for a turn no ask woke — see [ColleagueAsk].

@@ -188,7 +188,9 @@ func TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer(t *testing.T) {
 			servers := &fakeServers{cfg: cfg, res: sshint.Result{Stdout: []byte("up 3 days\n"), Started: true}}
 			byName := sshTools(t, servers, chart)
 			turn := sshTurn(o, "sre", c.requester, c.senders)
-			turn.Stranger = c.carried
+			if c.carried {
+				turn.WorkingFor = &types.WorkingFor{Kind: types.WorkingForStranger}
+			}
 
 			got, err := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, read)
 			if err != nil {
@@ -582,7 +584,7 @@ func TestWhatAServerPrintedReachesTheTurnAndNoRecord(t *testing.T) {
 }
 
 // A COLLEAGUE'S ASK FROM A STRANGER'S TURN CARRIES THE STRANGER: the ask says
-// so, and an ask from a turn nobody outside woke does not.
+// so, and an ask from a turn nobody outside woke carries nobody.
 func TestAnAskFromAStrangersTurnCarriesTheStranger(t *testing.T) {
 	t.Parallel()
 	svc := &asker{}
@@ -596,8 +598,9 @@ func TestAnAskFromAStrangersTurnCarriesTheStranger(t *testing.T) {
 		"brief": "Tail the api log."}); res.Failed {
 		t.Fatalf("the ask failed: %s", res.Output)
 	}
-	if len(svc.asks) != 2 || !svc.asks[0].Stranger || svc.asks[1].Stranger {
-		t.Fatalf("the asks carried %+v, want the first a stranger's and the second not", svc.asks)
+	if len(svc.asks) != 2 || svc.asks[0].WorkingFor == nil ||
+		svc.asks[0].WorkingFor.Kind != types.WorkingForStranger || svc.asks[1].WorkingFor != nil {
+		t.Fatalf("the asks carried %+v, want the first a stranger's and the second nobody", svc.asks)
 	}
 }
 
