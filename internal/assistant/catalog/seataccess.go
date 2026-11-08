@@ -52,11 +52,6 @@ func laneTitle(lane seataccess.Lane) string {
 	return seataccess.LaneName(lane)
 }
 
-// githubGrantWords are GitHub's own words for a permission's grant.
-var githubGrantWords = map[seataccess.Access]string{
-	"": "No access", seataccess.AccessRead: "Read-only", seataccess.AccessWrite: "Read and write",
-}
-
 // seatAccessWrite is set_seat_access.
 func seatAccessWrite() Tool {
 	act := authz.ActionSetupAccessWrite
@@ -202,8 +197,8 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 	c.move("enabled", title, onWords(before.Enabled), onWords(after.Enabled))
 	c.move("level", title+" role", levelWords(offer, before.Level), levelWords(offer, after.Level))
 	for _, p := range offer.Permissions {
-		c.move("permissions."+p.Key, p.Name, githubGrantWords[before.Permissions[p.Key]],
-			githubGrantWords[after.Permissions[p.Key]])
+		c.move("permissions."+p.Key, p.Name, before.Permissions[p.Key].Label(),
+			after.Permissions[p.Key].Label())
 	}
 	c.move("scope", "Scope", scopeWords(before.Scope), scopeWords(after.Scope))
 	step := 0

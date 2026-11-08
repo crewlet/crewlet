@@ -194,12 +194,17 @@ func (s *accessSession) remember(records map[string]seataccess.Record) {
 // Options is Expo's four levels under the roles' own names. Fixed: a level is
 // one of Expo's robot roles, not something Expo lists.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Rotatable: true,
+		ActionURL: AccessTokensURL(s.account), VendorAccount: s.account}, nil
+}
+
+// FixedLevels is Expo's roles, least access first ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	out := make([]seataccess.Level, 0, len(Levels()))
 	for _, id := range Levels() {
 		out = append(out, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id)})
 	}
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: AccessTokensURL(s.account),
-		VendorAccount: s.account}, nil
+	return out
 }
 
 // Observe reads each seat's robot with the seat's own sealed token. A seat
