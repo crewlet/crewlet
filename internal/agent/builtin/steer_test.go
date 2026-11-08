@@ -177,7 +177,7 @@ func newSteerRigOn(t *testing.T, asker builtin.FleetAsker, runs builtin.RunSteer
 		Authorize: builtin.Decide(chart),
 	}) {
 		if tool.Name() == builtin.SteerTurnTool {
-			return steerRig{tool: tool, caller: iam.WithPrincipal(t.Context(), caller), cto: cto}
+			return steerRig{tool: tool, caller: builtin.OutsideAnyTurn(iam.WithPrincipal(t.Context(), caller)), cto: cto}
 		}
 	}
 	t.Fatal("the operator catalogue serves no steer_turn with an asker wired")

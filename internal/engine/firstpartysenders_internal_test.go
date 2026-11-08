@@ -408,7 +408,8 @@ func readSharedArtifact(t *testing.T, o *org.Organization, turn *turnctx.Turn,
 			Limits: func() artifacts.Limits { return artifacts.Limits{} },
 			Now:    func() time.Time { return at },
 		},
-		Authorize: builtin.Decide(orgchart.Of(o)),
+		Requesters: personSeats(people),
+		Authorize:  builtin.Decide(orgchart.Of(o)),
 	}); err != nil {
 		t.Fatalf("register the artifact tools: %v", err)
 	}

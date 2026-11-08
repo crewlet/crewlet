@@ -196,6 +196,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
+	// AND THE ONE COMPOSER, for [Deps.Authorize]'s reason: the gate binds a
+	// turn's ceiling from it, and the families that decide a relation for
+	// the requester read that binding — handed a second composer, a family
+	// could compose somebody else than the gate did.
+	if deps.Requesters != nil {
+		deps.Artifacts.Requesters, deps.Code.Requesters = deps.Requesters, deps.Requesters
+		deps.Health.Requesters = deps.Requesters
+	}
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is

@@ -237,6 +237,10 @@ func healthAnnotations(name string) (tools.Annotations, bool) {
 // ([ErrUndecidable]) offers the tool and the call decides it again, as every
 // call is; withholding on silence would hide a tool from a seat that holds it.
 // An MCP or agent-to-agent tool is no builtin and has no row to ask.
+//
+// OUTSIDE ANY TURN, as [Admits] says: what a seat is offered is its own
+// authority, asked before any turn exists, and whoever wakes a turn later
+// bounds each of its calls, never the offer.
 func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot) []string {
 	var out []string
 	for _, e := range snapshot.Entries() {

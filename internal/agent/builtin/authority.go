@@ -113,9 +113,10 @@ var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 // call decides — the gate's of the tool's own row and every row the tool asks
 // inside itself — reads the ceiling its gate bound to the call
 // ([bindCeiling]), composed only when an action's row first names an app. A
-// decision with nothing bound is one no gate made: outside any turn, bounded
-// by nothing beyond the seat, as [ceilingOf] answers a turn nobody can name —
-// and every call a turn makes passes a gate, which binds it.
+// seat's decision with nothing bound is REFUSED as undecidable, the closed end
+// as [authz.CeilingKind]'s zero is: every call a turn makes passes a gate,
+// which binds it, and a caller deciding a seat's call outside any turn on
+// purpose says so ([OutsideAnyTurn]).
 func Decide(chart authz.Chart) Authorizer {
 	return func(ctx context.Context, action authz.Action,
 		object authz.Object) error {
@@ -139,8 +140,18 @@ func Decide(chart authz.Chart) Authorizer {
 		// MCP surface, the act route), carry no such instant and are judged
 		// now.
 		now := authz.DecidedAt(ctx)
-		bound, inTurn := ctx.Value(ceilingKey{}).(boundCeiling)
-		if !inTurn || principal.Kind != iam.KindSeat || !authz.NamesApp(action) {
+		if principal.Kind != iam.KindSeat {
+			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
+		}
+		bound, ok := ctx.Value(ceilingKey{}).(boundCeiling)
+		if !ok {
+			// THE CLOSED END: a seat's decision no gate bound a ceiling
+			// to is a path that skipped the gate, refused where somebody
+			// sees it rather than decided for nobody in silence — which
+			// would grant every app to whatever the path decided.
+			return fmt.Errorf("%w: %w", ErrUndecidable, errNoCeiling)
+		}
+		if !authz.NamesApp(action) {
 			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
 		}
 		ceiling, err := bound()
@@ -151,6 +162,12 @@ func Decide(chart authz.Chart) Authorizer {
 			authz.DecideWithinApps(ctx, principal, ceiling, action, object, chart, now))
 	}
 }
+
+// errNoCeiling is a seat's decision that reached the authority with no
+// requester ceiling bound to it: no gate decided the call, and no caller said
+// it was made outside any turn ([OutsideAnyTurn]).
+var errNoCeiling = errors.New("builtin: a seat's call reached the authority with nobody bound as whom it " +
+	"works for — no gate decided it, and nothing said it was made outside any turn")
 
 // ErrUnauthenticated reports a call nobody presented a credential for.
 //
@@ -811,10 +828,15 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 // nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
 // [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
 // from "this node cannot say" exactly as a call does.
+//
+// OUTSIDE ANY TURN, said so ([OutsideAnyTurn]): what a party is offered is
+// asked before any call, so for a seat it is the seat's own authority, and
+// whoever later wakes a turn bounds each of its calls, never the offer.
 func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 	if authorize == nil {
 		return ErrNoAuthorizer
 	}
+	ctx = OutsideAnyTurn(ctx)
 	about := subjectOf[tool]
 	object := authz.Object{Kind: about.kind, Owner: unresolvedName, Unresolved: true}
 	if !about.inTool {

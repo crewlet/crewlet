@@ -93,7 +93,7 @@ type executorAnswerRig struct {
 }
 
 func (r executorAnswerRig) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
-	return r.tool.Call(iam.WithPrincipal(ctx, r.caller), args)
+	return r.tool.Call(builtin.OutsideAnyTurn(iam.WithPrincipal(ctx, r.caller)), args)
 }
 
 func newAnswerExecutorRig(t *testing.T, desk *deskFake, caller iam.Principal,

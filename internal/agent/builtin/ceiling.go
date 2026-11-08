@@ -98,18 +98,38 @@ type ceilingKey struct{}
 // captured: the next call composes afresh, so an administrator's revocation
 // applies at the turn's next call (ADR-0103).
 //
-// A call that is not a seat's, or a seat's with no composer to ask, binds
-// nothing: a principal acting through their own credential is no deputy, and
-// a decision with nothing bound is one made outside any turn.
+// A call that is not a seat's binds nothing: a principal acting through their
+// own credential is no deputy. A seat's call binds even with no composer to
+// ask: a turn nobody woke is still nobody's, and one somebody woke is then a
+// ceiling this node cannot compose — undecidable for every decision that
+// needs it, never read as a turn nobody woke.
 func bindCeiling(ctx context.Context, turn *turnctx.Turn, r Requesters) context.Context {
 	p, how := iam.From(ctx)
-	if how != iam.Resolved || p.Kind != iam.KindSeat || r == nil {
+	if how != iam.Resolved || p.Kind != iam.KindSeat {
 		return ctx
 	}
+	// THE TURN'S OWN SEAT, whose voice is never its requester, as every
+	// family names it when it asks [ceilingOf] itself.
 	seat := p.Seat
+	if handle := turn.Handle(); handle != "" {
+		seat = handle
+	}
 	return context.WithValue(ctx, ceilingKey{}, boundCeiling(sync.OnceValues(func() (authz.Ceiling, error) {
 		return composeCeiling(ctx, turn, seat, r)
 	})))
+}
+
+// OutsideAnyTurn binds to ctx the ceiling of a call a seat makes outside any
+// turn: nobody beyond the seat itself. A seat's decision with nothing bound is
+// refused ([Decide]) — the closed end, so a path that skipped the gate is a
+// refusal somebody sees rather than every app granted in silence — and this is
+// how a caller that decides a seat's call with no turn on purpose says so:
+// what a seat is offered before any call ([Withheld]), and a case that calls a
+// tool directly.
+func OutsideAnyTurn(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ceilingKey{}, boundCeiling(func() (authz.Ceiling, error) {
+		return authz.Ceiling{Kind: authz.CeilingNone}, nil
+	}))
 }
 
 // composeCeiling is [ceilingOf] composed from the turn itself.
