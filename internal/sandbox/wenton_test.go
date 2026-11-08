@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -55,13 +56,18 @@ func lostWithItsBox(t *testing.T, rig *coordRig, run PendingRun) {
 // nothing newer was attempted and the end names no capture unkept. Said
 // nowhere, the conversation's next turn would be told the session runs through
 // the turn's end; the end says the turn went on past it, which the log keeps
-// the session for and says.
+// the session for and says. And it names no last word: the turn's was never
+// taken, and the save it went on past is none, so no row is read as holding
+// it.
 //
 // Mutation: decide went_on by whether an unkept capture rides the end, or by
 // the kept capture's launch alone, and the end of a turn that kept its last
 // launch's capture taken as it worked says nothing of the turn going on; have
 // a loss's ending read a box its loss took with its host (capturesLoss blind
-// to the loss's cause), and the premise of the loss the engine ended goes red.
+// to the loss's cause), and the premise of the loss the engine ended goes red;
+// name the newest capture the turn's last word whether or not it is one
+// (lastWordOf blind to lastWord), and the save is named it, its row read as
+// all the turn did.
 func TestAnEndOfATurnThatEndedOnASaveSaysItWentOn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -138,9 +144,10 @@ func TestAnEndOfATurnThatEndedOnASaveSaysItWentOn(t *testing.T) {
 			if len(ends) != 1 || ends[0].Ending.Outcome != c.outcome {
 				t.Fatalf("recorded %+v, want the turn's one end, %s", ends, c.outcome)
 			}
-			if end := ends[0].Ending; !end.WentOn || end.Unkept != nil {
-				t.Errorf("the end says went on %v and names %+v unkept, want it saying the turn went on past "+
-					"the capture its job took as it worked, and naming nothing unkept", end.WentOn, end.Unkept)
+			if end := ends[0].Ending; !end.WentOn || end.Unkept != nil || end.LastWord != nil {
+				t.Errorf("the end says went on %v and names %+v unkept and %+v its last word, want it saying "+
+					"the turn went on past the capture its job took as it worked, and naming nothing unkept and "+
+					"no last word", end.WentOn, end.Unkept, end.LastWord)
 			}
 			if takes := rig.runner.Takes(); len(takes) != 0 {
 				t.Errorf("took %d sessions out of a box that was gone", len(takes))
@@ -154,14 +161,19 @@ func TestAnEndOfATurnThatEndedOnASaveSaysItWentOn(t *testing.T) {
 // ran a job that kept nothing newer — its box gone when the turn ended, or its
 // own final capture refused — so the session the row names is an earlier
 // launch's, and the turn went on past it: the end says so, naming the refused
-// capture where there was one. A relaunch whose job never started worked no
+// capture where there was one, and naming it the turn's last word, which the
+// row's place is held to. A relaunch whose job never started worked no
 // session past the first launch's, which is the turn's last word still, and
-// its end says nothing of the kind.
+// its end says nothing of the kind, naming no last word: that one was kept.
 //
 // Mutation: decide the turn's last word on the kept capture's finality alone,
 // and both relaunches that ran say nothing of the turn going on; decide it on
 // the row's launch alone, and the relaunch that never started says the turn
-// went on past the session it ended on.
+// went on past the session it ended on; name no last word, or the kept
+// capture's place for it, and the refused capture is not the last word the
+// row is held to; name it wherever the newest capture is the last word
+// (lastWordOf blind to wentOnPast), and the end of the relaunch that never
+// started names a last word beside no went_on.
 func TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -235,6 +247,13 @@ func TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn(t *testing.T) {
 			case !c.refused && u != nil:
 				t.Errorf("the end names %+v unkept, want nothing: no capture was attempted after the kept one", *u)
 			}
+			switch w := end.LastWord; {
+			case c.refused && (w == nil || *w != executorkeep.CapturePlace{LaunchSeq: relaunched.LaunchSeq,
+				CaptureSeq: 1}):
+				t.Errorf("the end names %+v its turn's last word, want the relaunch's refused final capture", w)
+			case !c.refused && w != nil:
+				t.Errorf("the end names %+v its turn's last word, want none: it was never taken, or it was kept", *w)
+			}
 		})
 	}
 }
@@ -246,15 +265,20 @@ func TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn(t *testing.T) {
 // once it had ended — so its end says nothing of the turn going on and names
 // nothing unkept. A turn whose final capture was refused names it unkept, and
 // says the turn went on past whatever its row names: none, on its run's record,
-// though the log may have taken a capture the record holds refused. So no end
-// this build writes asks the log to take a session off for an unkept capture,
-// which only an end stamped below version 4 does.
+// though the log may have taken a capture the record holds refused — so it
+// names that capture the turn's last word, which a row at its place holds. So
+// no end this build writes asks the log to take a session off for an unkept
+// capture, which only an end stamped below version 4 does, and none names a
+// last word beside no went_on.
 //
 // Mutation: say the turn went on wherever it kept a capture, and the turn whose
 // final capture landed says so; name the newest capture unkept where it
 // landed, and the end names it beside the capture it kept; decide went_on on
 // what the record kept alone, and the refused capture rides an end that says
-// nothing of the turn going on.
+// nothing of the turn going on; name the last word wherever the newest capture
+// is one (lastWordOf blind to wentOnPast), and the end of the turn whose final
+// capture landed names it; name none, and the refused final is no last word a
+// row could be held to.
 func TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow(t *testing.T) {
 	t.Parallel()
 	for name, putErr := range map[string]error{"its final capture landed": nil,
@@ -289,6 +313,9 @@ func TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow(t *testing
 				t.Errorf("the end names %+v unkept and says nothing of the turn going on: the rule of an end "+
 					"stamped below version 4 would take an older session off the row", *end.Unkept)
 			}
+			if !end.WentOn && end.LastWord != nil {
+				t.Errorf("the end names %+v its turn's last word and says nothing of the turn going on", *end.LastWord)
+			}
 			switch {
 			case putErr == nil && (run.Kept == nil || !run.Kept.Final || end.Unkept != nil || end.WentOn):
 				t.Errorf("the row keeps %+v and the end names %+v unkept, went on %v; want the final capture "+
@@ -297,6 +324,10 @@ func TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow(t *testing
 				t.Errorf("the row keeps %+v and the end names %+v unkept, went on %v; want nothing kept, the "+
 					"refused capture named, and the end saying the turn went on", run.Kept, end.Unkept,
 					end.WentOn)
+			case putErr != nil && (end.LastWord == nil || end.LastWord.LaunchSeq != end.Unkept.LaunchSeq ||
+				end.LastWord.CaptureSeq != end.Unkept.CaptureSeq):
+				t.Errorf("the end names %+v its turn's last word, want the refused final capture at %+v",
+					end.LastWord, *end.Unkept)
 			}
 			if takes := rig.runner.Takes(); len(takes) != 1 {
 				t.Errorf("took the job's session %d times, want once", len(takes))
@@ -431,5 +462,200 @@ func TestACaptureTheLogTookAfterARelaunchSettledItStaysTheTurnsSession(t *testin
 		head.Session.Object.Key.String() != object.Key.String() {
 		t.Errorf("the conversation's next turn is handed %+v (%v), want the capture the log took late",
 			head.Session, err)
+	}
+}
+
+// lateRecord is node-a's record of the capture it took, handed on before its
+// taker lease's window closed: the log takes it once, when the hook a case
+// gives it asks, and says what it answered.
+type lateRecord struct {
+	take func(context.Context) (LogAnswer, error)
+
+	mu     sync.Mutex
+	asked  bool
+	answer LogAnswer
+	err    error
+}
+
+// land has the log take the record, the first time it is asked; on a context of
+// its own, since the record lands whatever its asker's budget has left.
+func (r *lateRecord) land(ctx context.Context) (LogAnswer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.asked {
+		r.asked = true
+		r.answer, r.err = r.take(context.WithoutCancel(ctx))
+	}
+	return r.answer, r.err
+}
+
+// landed is whether the log was asked to take the record, and what it answered.
+func (r *lateRecord) landed() (bool, LogAnswer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.asked, r.answer, r.err
+}
+
+// takenBeforeTheEnd is the executor log that takes a late record when the
+// turn's end reaches it, just before the end itself: the record the log orders
+// after the end was decided off the run's record, and before the end.
+type takenBeforeTheEnd struct {
+	*appliedLog
+	late *lateRecord
+}
+
+func (l *takenBeforeTheEnd) End(ctx context.Context, e EndRecord) (LogAnswer, error) {
+	if _, err := l.late.land(ctx); err != nil {
+		return LogUnsettled, err
+	}
+	return l.appliedLog.End(ctx, e)
+}
+
+// A LAST WORD THE LOG TOOK AFTER ITS SETTLE IS READ AS THE TURN'S LAST WORD.
+// The turn's one launch's final capture — its last word — was taken by node-a's
+// process, which handed its record on and stopped before the log took it; the
+// end's own wait settled it refused, its taker gone, so the run's record holds
+// nothing kept, and the end, decided off that record, says the turn went on.
+// The log then took the record before the end, whether before the end was
+// decided or after: so the turn's row names that last word, holding all the
+// turn did. The end names its last word, at the row's own place, and the reader
+// holds the row's place to it: the row reads as no row its turn went on past,
+// says no note of it, is shown to every reader without went_on, and is handed
+// the conversation's next turn as its head, to be led through that turn rather
+// than told what the turn did after it is not there. DRIVEN THROUGH THE
+// SHIPPED APPLIER AND READER (executordomaintest).
+//
+// Mutation: name no last word beside went_on (lastWordOf nil), or read went_on
+// off the ending alone (executordomain's endWentPast ignoring the last word),
+// or hold the row's place to it at or after it rather than past it, and the row
+// that holds the turn's last word reads, is shown and is handed on as one its
+// turn went on past.
+func TestALastWordTheLogTookAfterItsSettleIsReadAsTheTurnsLastWord(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// decided says the log takes the late record once the end was
+		// decided, just before the end; otherwise at once after the settle,
+		// before the end is decided.
+		decided bool
+	}{
+		{name: "its record taken before the end was decided"},
+		{name: "its record taken after the end was decided, before the end", decided: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			store := newTakerStore()
+			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+			applied := &appliedLog{log: executordomaintest.Open(t)}
+			rig.coordinator.sessions, rig.coordinator.restore = applied, applied
+			// THE SHIPPED RECORD BUDGET: every record here is applied to a
+			// real store, which a loaded runner can hold past the rig's fifth
+			// of a second.
+			rig.coordinator.recordBudget = sessionRecordBudget
+			turn := uuid.NewString()
+			run := rig.launchKept(t, turn)
+
+			// node-a's PROCESS TOOK THE JOB'S FINAL CAPTURE, its turn's last
+			// word, under its taker lease, uploaded it and sent its record,
+			// and stopped before the log took it.
+			lease := claimTaker(t, store, takingProcess)
+			begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+				TakerEpoch: lease.Epoch, Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
+				ArchiveFormat: FakeArchiveFormat, Through: new(0), SeatBudget: 64 << 20}
+			if took, err := rig.pending.StampCapture(ctx, turn, begun); err != nil || !took {
+				t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
+			}
+			body := []byte("node-a's session of the job")
+			object := objstore.Object{Key: objstore.KeyAt(begun.At), Hash: objstore.HashOf(body),
+				Size: int64(len(body))}
+			handedOn := begun
+			handedOn.Object, handedOn.ObjectHash = object.Key.String(), string(object.Hash)
+			handedOn.ObjectSize, handedOn.ContentKey = object.Size, "k1"
+			late := &lateRecord{take: func(ctx context.Context) (LogAnswer, error) {
+				return applied.Capture(ctx, CaptureRecord{Handle: run.AgentHandle, Turn: turn,
+					ConversationKey: run.ConversationKey, WorkKey: run.WorkKey, Object: object, Stamp: handedOn})
+			}}
+			if c.decided {
+				rig.coordinator.sessions = &takenBeforeTheEnd{appliedLog: applied, late: late}
+			} else {
+				rig.coordinator.pending = &recordedLate{PendingStore: rig.coordinator.pending, land: late.land}
+			}
+			lapse(store)
+
+			// THE TURN'S END, as its ending's own retry records it: owed, its
+			// wait for the turn's captures settling node-a's, and published.
+			if _, err := rig.coordinator.OweEnd(ctx, turn, executorkeep.Ending{
+				Outcome: executorkeep.OutcomeCompleted, Decision: "done"}); err != nil {
+				t.Fatalf("OweEnd: %v", err)
+			}
+			waited, found, err := rig.coordinator.awaitCapture(ctx, rig.get(turn), SessionCaptureBudget)
+			if err != nil || !found {
+				t.Fatalf("the end's wait = found %v, %v", found, err)
+			}
+			if settled := waited.Capture; settled == nil || settled.State != CaptureRefused ||
+				!settled.sameTake(begun) || waited.Kept != nil {
+				t.Fatalf("the premise: the end's wait left %+v, kept %+v; want node-a's take refused and "+
+					"nothing kept", settled, waited.Kept)
+			}
+			if asked, _, _ := late.landed(); asked == c.decided {
+				t.Fatalf("the premise: the late record was taken before the end was decided: %v, want %v",
+					asked, !c.decided)
+			}
+			if _, err := rig.coordinator.publishEnd(ctx, waited); err != nil {
+				t.Fatalf("publishEnd: %v", err)
+			}
+			if asked, answer, err := late.landed(); !asked || err != nil || answer != LogLanded {
+				t.Fatalf("the premise: the late record = %v, %s, %v; want the log to take it before the end",
+					asked, answer, err)
+			}
+
+			ends := applied.ended()
+			if len(ends) != 1 {
+				t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+			}
+			end := ends[0].Ending
+			lastWord := executorkeep.CapturePlace{LaunchSeq: begun.LaunchSeq, CaptureSeq: begun.CaptureSeq}
+			if !end.WentOn || end.LastWord == nil || *end.LastWord != lastWord {
+				t.Fatalf("the end says went on %v and names %+v its last word, want it saying the turn went on "+
+					"off the run's record, naming node-a's capture its last word at %+v", end.WentOn,
+					end.LastWord, lastWord)
+			}
+			read, err := applied.log.Session(ctx, run.AgentHandle, turn)
+			if err != nil {
+				t.Fatalf("the next read of the turn's row: %v", err)
+			}
+			row := read.Session
+			if !row.Ended() || !row.HasObject() || row.Object.Key.String() != object.Key.String() ||
+				row.LaunchSeq != lastWord.LaunchSeq || row.CaptureSeq != lastWord.CaptureSeq {
+				t.Fatalf("the turn's row is %+v, want it ended and naming the last word the log took late", row)
+			}
+			shown := row.Redacted()
+			switch kept := row.Kept(); {
+			case row.WentOn() || shown.WentOn():
+				t.Errorf("the row that holds its turn's last word reads as one its turn went on past: %+v",
+					row.Ending)
+			case shown.WentOnNote() != "":
+				t.Errorf("the row that holds its turn's last word is told %q", shown.WentOnNote())
+			case shown.Ending.WentOn:
+				t.Error("every reader is shown went_on of the row that holds its turn's last word")
+			case kept.WentOn || kept.Lost:
+				t.Errorf("the next turn is handed the row as one its turn went on past (%v) or lost (%v)",
+					kept.WentOn, kept.Lost)
+			case row.Unkept() != nil || row.NotKept() != "":
+				t.Errorf("the row tells its own kept session %+v unkept and says %q", row.Unkept(), row.NotKept())
+			}
+			head, err := applied.log.Head(ctx, run.AgentHandle, run.ConversationKey)
+			switch {
+			case err != nil || head.Session == nil || head.Session.Turn != turn ||
+				head.Session.Object.Key.String() != object.Key.String():
+				t.Errorf("the conversation's next turn is handed %+v (%v), want the last word the log took late",
+					head.Session, err)
+			case baseSessionOf(head.Session.Kept()).WentOn:
+				t.Error("the conversation's next turn is led up to a session its last turn went on past, " +
+					"which holds all that turn did")
+			}
+		})
 	}
 }
