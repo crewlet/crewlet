@@ -142,22 +142,33 @@ import (
 // beside a stamp that says refused. On the turn's end the log orders the two
 // itself — a record it took before the end is the row's place and is kept,
 // one after it is refused by the end's tombstone — and never contradicts
-// itself; on a relaunch the record can stand, and the relaunch, having read
-// the capture refused, does not continue it — what it did before any settle,
-// when it started a session of its own beside a begun stamp it would not wait
-// out. THAT IS DECIDED, AND NO REFUSAL GOES TO THE LOG: ordered there as the
+// itself. THAT IS DECIDED, AND NO REFUSAL GOES TO THE LOG: ordered there as the
 // end's tombstone is, the settle's refusal would have the applier refuse the
 // late capture and lose a session, and no session history is given up for a
 // stamp's sake. So a late capture the log takes before the turn's end is kept
 // and read as any other — the turn's row names it, a session read and the
-// conversation's next turn take it — and past the one relaunch that settled
-// it, nothing treats the stamp as authoritative once the log names the
+// conversation's next turn take it — and one decision alone goes by the stamp
+// once the log names the capture: the relaunch that follows the job whose
+// capture was settled, which continues only what the run's record keeps, and
+// the record never keeps a place it holds refused — so every attempt at that
+// relaunch starts without the capture, the one whose wait settled it and one
+// asked again after the record landed alike; and where the decision is told
+// with the turn's row in hand — to a reader of the seat's sessions, and in the
+// relaunch's own reason once it has read the row for the base — it says the
+// log keeps the capture, never that it was not kept ([namedThoughRefused]).
+// Nothing else treats the stamp as authoritative once the log names the
 // capture: the end names it unkept at the row's own place, which releases
 // nothing ([executorkeep.Ending.Unkept]), and an account of how the turn ended
-// tells a capture as not kept only where the row names an older one
-// (internal/executordomain's Session.Unkept). That relaunch started without
-// it, the outcome of one that does not wait out a slow keep
-// ([relaunchCaptureWait]): a session of its own, beside the capture.
+// tells a capture as not kept only where it is newer than the row's own place
+// (internal/executordomain's Session.Unkept).
+//
+// THAT RELAUNCH STARTS WITHOUT IT AS ONE DOES THAT WILL NOT WAIT OUT A SLOW
+// KEEP ([relaunchCaptureWait]) — in a session of its own, or the one its job's
+// box holds where it carries the run on in that box — except in a turn that
+// has kept nothing and froze its conversation's base: there it continues that
+// base where the late record lands only after it read the turn's row, as any
+// relaunch of a turn that has kept nothing does (restore.go), where a
+// relaunch whose capture is still being kept continues no base.
 //
 // NOT PRESENCE, which answers another question. A draining node gives its
 // presence up at once while its keeps still upload, so a taker read as gone
