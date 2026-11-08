@@ -695,9 +695,10 @@ func claudePack(paths Paths, at packAt) string {
 // every check of size. So the run's own end's rule — GNU's exit 1 taken
 // wherever "changed as we read it" stands anywhere in its error file — would
 // keep beside a working harness a task file read torn, or padded with NULs,
-// whenever another file's growth said those words, and busybox's cut archive
-// whenever tar said nothing; and the scrub keeps a `.json` that is not one
-// value as the text it is.
+// whenever another file's growth said those words, and a file busybox read
+// torn as it was rewritten in place whenever tar said nothing (its cut
+// archive, exit 1 with "short read", that rule refuses); and the scrub keeps
+// a `.json` that is not one value as the text it is.
 //
 // SO THE PACK LISTS WHAT IT READS, BEFORE THE TAR, AND HOLDS IT TO THAT AFTER:
 //
