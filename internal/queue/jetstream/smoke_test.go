@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -321,12 +322,24 @@ func TestMalformedSubjectsAreRefused(t *testing.T) {
 // after a stream nobody was making, and then reported the overlap wrapped in
 // "(and it is not there: stream not found)" — on every publish, because only
 // a stream that exists is remembered.
+//
+// NOT READ BACK is read off the broker, never the clock: every request the
+// queue sends about the derived stream is listened for where the broker
+// receives it, in the order it read them, and none may follow the refused
+// create. It used to be the publish held under the read-back window by the
+// test's clock, which a runner that lost five seconds in the publish failed.
+//
+// Mutation: read a refused create back as a peer's win is, and info requests
+// follow the create.
 func TestAStreamTheBrokerRefusesIsNotReadBack(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
-	start := time.Now()
-	err := q.Publish(t.Context(), "crewlet.events", ev(1))
-	took := time.Since(start)
+	spec, err := specForSubject("crewlet.events", q.cfg.EventRetention)
+	if err != nil {
+		t.Fatalf("derive the stream of crewlet.events: %v", err)
+	}
+	asked := apiRequests(t, q, "$JS.API.STREAM.*."+spec.name)
+	err = q.Publish(t.Context(), "crewlet.events", ev(1))
 
 	var apiErr *jetstream.APIError
 	if !errors.As(err, &apiErr) || !jsprovision.Refused(err) {
@@ -337,11 +350,17 @@ func TestAStreamTheBrokerRefusesIsNotReadBack(t *testing.T) {
 		t.Errorf("the refusal was read back, so the broker's reason arrives wrapped "+
 			"in a not-found an operator reads as the cause:\n%v", err)
 	}
-	// MEASURED AGAINST THE WINDOW the read-back would have spent: the
-	// refused create polls not-found until that window closes, so a
-	// refusal that reached it cannot have returned inside it.
-	if took >= jsprovision.ReadBack {
-		t.Errorf("the refusal took %v, the whole %v read-back window", took, jsprovision.ReadBack)
+	// NOTHING AFTER THE CREATE: the lookup before it is a request about the
+	// stream too, and a read-back would be the ones behind it.
+	requests := asked()
+	created := slices.Index(requests, "$JS.API.STREAM.CREATE."+spec.name)
+	if created < 0 {
+		t.Fatalf("no create of %s reached the broker, only %v", spec.name, requests)
+	}
+	if after := requests[created+1:]; len(after) > 0 {
+		t.Errorf("the refused create of %s was followed by %v — read back, polling for "+
+			"the %v read-back window after a stream nobody was making",
+			spec.name, after, jsprovision.ReadBack)
 	}
 }
 

@@ -137,8 +137,19 @@ func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 // window expires. The first is a node that never hydrates. The second is one
 // that sits unhydrated for thirty seconds on every such restart.
 //
-// Both are asserted inside a bound far below that window, from a checkpoint
-// of nothing (the rows are gone) and from one partway (an older copy).
+// Both are asserted from a checkpoint of nothing (the rows are gone) and from
+// one partway (an older copy), and both are read off the broker rather than
+// the clock: the consumer the reopen leaves is one the reopen CREATED, and the
+// replay is that consumer's own first delivery of each record — never the
+// earlier one handing a record over again once its ack window ran out, which
+// a consumer kept ahead of the rows does for the delivered ones and never for
+// the acknowledged. The replay used to be held to a third of the window by
+// the test's clock, which a runner that lost ten seconds in the reopen failed.
+//
+// Mutation: keep a consumer that has delivered or acknowledged past the rows,
+// and what the node is missing is not handed over; keep the delivered one
+// under an ack window of a second, and it hands them over again a second late
+// — which the clock passed, as a replay well inside a third of the window.
 func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -193,7 +204,7 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 
 			// THE ROWS WENT BACKWARDS: this run's checkpoint is below
 			// what the consumer delivered.
-			started := time.Now()
+			before := createdAt(t, first)
 			again, err := q.DomainConsumer(t.Context(), stream, "node-a", tc.after)
 			if err != nil {
 				t.Fatalf("reopen at %d: %v", tc.after, err)
@@ -207,9 +218,24 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 					"(acknowledged) or not before the %s ack window (delivered)",
 					tc.after, seqsOf(got), domainConsumerAckWait)
 			}
-			if took := time.Since(started); took >= domainConsumerAckWait/3 {
-				t.Fatalf("the replay took %s, which is the ack window rather "+
-					"than a rebuild", took)
+			// REBUILT, AND REPLAYED BY WHAT WAS REBUILT: a consumer the
+			// reopen made, whose own deliveries are exactly the records
+			// the node is missing, each once. Its delivery count holds
+			// every delivery, a redelivery included.
+			info, err := consumerInfo(t, again)
+			if err != nil {
+				t.Fatalf("info: %v", err)
+			}
+			if info.Created.Equal(before) {
+				t.Fatalf("a consumer that had delivered through 5 was kept for a node "+
+					"whose rows are at %d (created %s, as before the reopen)",
+					tc.after, info.Created)
+			}
+			if info.Delivered.Consumer != uint64(want) {
+				t.Fatalf("the replay of %d record(s) took %d deliveries of the consumer "+
+					"the reopen left — a record handed over again once the %s ack "+
+					"window ran out, rather than by a rebuild",
+					want, info.Delivered.Consumer, domainConsumerAckWait)
 			}
 		})
 	}
@@ -787,6 +813,20 @@ func TestAClosedHandleTakesNothingTheNextReaderNeeds(t *testing.T) {
 // for twenty seconds, which the client counts as already over — what a
 // server running later than [pullGrace] looks like from the client. A record
 // appended then is delivered to it; the next fetch must hand it over at once.
+//
+// AT ONCE IS A FETCH THAT WAITS FOR NOTHING AND ASKS FOR NOTHING. The record is
+// waited for where the delivery puts it, the handle's buffer, and then a fetch
+// that waits for nothing must hand it over without sending the broker a
+// request: one sent first is answered that the consumer has nothing, the
+// record being in flight to this client already, and a fetch that read that
+// answer before the record would return empty-handed. It used to be a fetch
+// of five seconds held to one by the test's clock, which a runner that lost a
+// second around the fetch failed.
+//
+// Mutation: drop a delivery that answers a request the client no longer
+// counts, and it never reaches the buffer; let a fetch hand over the buffer
+// only while a request of its own stands, and it asks the broker for a record
+// it already holds.
 func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_LATE_LOG", "crewlet.late.log")
@@ -812,19 +852,35 @@ func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.
 	waitStanding(t, cons)
 	appendN(t, log, "crewlet.late.log.task", 1)
 
-	took := time.Now()
-	got, err := cons.Fetch(t.Context(), 1, 0, 5*time.Second)
+	// DELIVERED BEFORE THE FETCH BEGINS: the record is in the buffer the
+	// next fetch takes from, however late the runner delivered it. A
+	// delivery dropped on its way there is in flight until the ack window,
+	// past the request's twenty seconds, so it never arrives.
+	waitUntil(t, "the record delivered to the request the client gave up on to be "+
+		"held for the next fetch", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.buffered) == 1
+	})
+	p.mu.Lock()
+	sentBefore := p.sent
+	p.mu.Unlock()
+	got, err := cons.Fetch(t.Context(), 1, 0, 0)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if len(got) != 1 || got[0].Seq != 1 {
-		t.Fatalf("the next fetch took %d record(s) from %d, want sequence 1 — the "+
-			"record the server delivered to a request the client had given up on "+
-			"was not held for it", len(got), seqOf(got))
+		t.Fatalf("a fetch that waits for nothing took %d record(s) from %d, want "+
+			"sequence 1 — the record the server delivered to a request the client "+
+			"had given up on was held, and not handed over at once",
+			len(got), seqOf(got))
 	}
-	if waited := time.Since(took); waited > time.Second {
-		t.Fatalf("the record reached the next fetch after %v; it was delivered "+
-			"before the fetch began", waited)
+	p.mu.Lock()
+	asked := p.sent - sentBefore
+	p.mu.Unlock()
+	if asked != 0 {
+		t.Errorf("a fetch holding the record sent the broker %d request(s) before "+
+			"handing it over — what it already held was asked for again", asked)
 	}
 }
 
@@ -1170,6 +1226,16 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 // apply latency across a hundred and twenty-nine streams. What
 // [statelog.Fetcher] asks is to wait for the FIRST record; the runner decides
 // whether a partial run is worth another fetch.
+//
+// THE FETCH WAITS AN HOUR, so one that held its records for its wait is still
+// holding them when the case gives up on it, and one that handed them over
+// with their burst has returned long before. It used to wait five seconds and
+// be held to one past the append by the test's clock, which a runner that lost
+// a second around the fetch failed.
+//
+// Mutation: hand the buffer over only once the request has ended or the wait
+// has run out, never when the newest delivery says nothing follows it, and the
+// fetch holds its records for the hour.
 func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_BURST_LOG", "crewlet.burst.log")
@@ -1180,29 +1246,26 @@ func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
 	type fetched struct {
 		got []statelog.Message
 		err error
-		at  time.Time
 	}
 	done := make(chan fetched, 1)
 	go func() {
 		got, err := cons.Fetch(t.Context(), statelog.FetchMessages, statelog.FetchBytes,
-			5*time.Second)
-		done <- fetched{got, err, time.Now()}
+			time.Hour)
+		done <- fetched{got, err}
 	}()
 	waitStanding(t, cons)
-	appended := time.Now()
 	appendN(t, log, "crewlet.burst.log.task", 3)
 	select {
 	case f := <-done:
 		if f.err != nil || len(f.got) == 0 || seqOf(f.got) != 1 {
 			t.Fatalf("the fetch returned %d record(s) from %d, %v", len(f.got), seqOf(f.got), f.err)
 		}
-		if waited := f.at.Sub(appended); waited > time.Second {
-			t.Fatalf("records appended into a standing fetch were handed over "+
-				"%v later — the fetch held them for its wait", waited)
-		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("a fetch holding appended records did not return them before " +
-			"its wait ran out")
+	// LIVENESS: a fetch that hands its records over with their burst returns
+	// once they arrive, and one that holds them for its wait returns an hour
+	// from now; this only ends that wait, as the failure it is.
+	case <-time.After(20 * time.Second): //fixedwait:liveness
+		t.Fatal("a fetch holding appended records was still holding them twenty " +
+			"seconds in — it holds them for its wait of an hour")
 	}
 }
 

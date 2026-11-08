@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -74,6 +75,14 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 // is what the pull holds — the newest delivery's count of what follows it, and
 // what it delivered that no fetch has taken — and a broker that never answers
 // a consumer info changes nothing.
+//
+// NOTHING ASKED IS READ OFF THE BROKER, never the clock: every consumer info
+// is held where it would be answered, and each count is followed by a look at
+// how many were. It used to be each count held to a tenth of a second by the
+// test's clock, which a runner that lost that much in a count failed.
+//
+// Mutation: answer the count with a consumer info, as it was, and the broker
+// holds the request the count sent.
 func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 	t.Parallel()
 	ns, q := accountQueue(t, probeDomain())
@@ -108,17 +117,18 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the consumer counts %d of the five appended records pending", info.NumPending)
 		}
-		time.Sleep(5 * time.Millisecond)
+		// LIVENESS: paces a poll of the broker's own count, which decides;
+		// a broker that never counts the five fails at the deadline above.
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()), nats.Token(leaderReadsToken))
 
 	pending := func(want uint64) {
 		t.Helper()
-		start := time.Now()
 		got, err := cons.Pending(context.Background())
-		if took := time.Since(start); took > 100*time.Millisecond {
-			t.Errorf("Pending took %v: a count the pull already holds was asked "+
-				"of the broker", took)
+		if n := held.Count(); n != 0 {
+			t.Errorf("Pending sent the broker %d consumer info(s): a count the pull "+
+				"already holds was asked of the broker", n)
 		}
 		if err != nil || got != want {
 			t.Fatalf("Pending = (%d, %v), want (%d, nil)", got, err, want)
@@ -151,7 +161,9 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 			t.Fatalf("Pending = %d with two records delivered into the pull and "+
 				"not taken, want 2", got)
 		}
-		time.Sleep(10 * time.Millisecond)
+		// LIVENESS: paces a poll of the count, which decides; a pull that
+		// never counts what it holds fails at the deadline above.
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 
 	// AN APPLIER'S RUNS: a fetch and a count each, as nextRun asks them.
@@ -212,6 +224,18 @@ func TestAPendingCountBeforeAnyDeliveryIsUnknown(t *testing.T) {
 // a trim blocked for the tick over a group that was there all along. And a
 // group never opened is still answered at once as never opened: the hedge
 // asks again only while nobody answers.
+//
+// # At once is asked once
+//
+// So the read of a group never opened is held to ONE request, counted where
+// the broker receives them, with the read term an HOUR: the hedge's own re-ask
+// is then out of reach whatever the load, and a second request is one asked
+// after the answer came. It used to be held to one read term by the test's
+// clock, which a runner that lost a second around the read failed.
+//
+// Mutation: settle a not-found as the provisioning read-backs do, and the read
+// asks again after its answer; read a not-found as silence, and it asks until
+// its bound and fails.
 func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ns, q := accountQueue(t, probeDomain())
@@ -241,13 +265,61 @@ func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 		t.Errorf("the broker dropped %d reads, want the 1 it was told to", got)
 	}
 
-	start := time.Now()
+	// THE READ TERM AN HOUR, set while nothing else uses the queue: the
+	// first half is done, and its reads have returned.
+	timing.ReadTerm = time.Hour
+	q.timing = timing
+	asked := apiRequests(t, q, jsapitest.ConsumerInfo(probeDomain().Name,
+		domainGroupName(probeDomain().Name, "never")))
 	if floor, exists, err := log.GroupAckFloor(t.Context(), "never"); err != nil || exists || floor != 0 {
 		t.Errorf("a group never opened = (%d, %v, %v), want (0, false, nil)", floor, exists, err)
 	}
-	if took := time.Since(start); took > timing.ReadTerm {
-		t.Errorf("a group never opened took %v to answer, past one read term: "+
-			"an answer was asked again as if nobody had given it", took)
+	if n := len(asked()); n != 1 {
+		t.Errorf("a group never opened was asked about %d times, want once: an answer "+
+			"was asked again as if nobody had given it", n)
+	}
+}
+
+// apiRequests listens for the requests q sends on the broker's API subjects
+// matching subject from here on, and returns the subjects of those sent so
+// far, in the order the broker read them — every request q sent before the
+// call, and none after.
+//
+// ON THE SUBJECT THE BROKER'S JETSTREAM SERVES and ON THE QUEUE'S OWN
+// CONNECTION, whose protocol the broker reads in order: the subscription is in
+// place before any request after it arrives, and a flush of the connection is
+// answered only once the broker has handed this connection a copy of every
+// request sent before it — so what it returns is final for those, however
+// late the runner delivers them.
+func apiRequests(t *testing.T, q *Queue, subject string) func() []string {
+	t.Helper()
+	copies := make(chan *nats.Msg, 64)
+	sub, err := q.nc.ChanSubscribe(subject, copies)
+	if err != nil {
+		t.Fatalf("subscribe to %s: %v", subject, err)
+	}
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	if err := q.nc.Flush(); err != nil {
+		t.Fatalf("flush the subscription to %s: %v", subject, err)
+	}
+	var seen []string
+	return func() []string {
+		t.Helper()
+		if err := q.nc.Flush(); err != nil {
+			t.Fatalf("flush the requests on %s: %v", subject, err)
+		}
+		for {
+			select {
+			case msg := <-copies:
+				seen = append(seen, msg.Subject)
+			default:
+				if dropped, err := sub.Dropped(); err != nil || dropped > 0 {
+					t.Fatalf("the requests on %s overflowed their listener (%d dropped, %v)",
+						subject, dropped, err)
+				}
+				return slices.Clone(seen)
+			}
+		}
 	}
 }
 
@@ -382,26 +454,37 @@ func TestAnAccountLimitAMemberDropsIsAskedAgain(t *testing.T) {
 // counts that read at five seconds. Hedged, each asks again inside the bound,
 // at none, two and four seconds, and a broker that never answers costs its
 // caller no more than it did.
+//
+// # The read in a bubble, the broker outside it
+//
+// The read runs IN A SYNCTEST BUBBLE ([inBubble]) against the real broker:
+// nobody answers it, so nothing the connection's own reader hands over ever
+// reaches a request of the bubble, and the read's every timer is the bubble's.
+// So it ends at the client's default exactly, and asks at none, two and four
+// seconds exactly — three requests, counted where the broker holds them,
+// behind a sentinel the queue sends after the read. On the machine's clock the
+// end was held only from below and the asking to two or three, a timer the
+// load delayed past the bound missing the third, and a read still asking at
+// fifteen seconds was what told one held to the ceiling apart.
+//
+// Mutation: bound the read by the lookup ceiling, as the reads asked again
+// from the start are, and it asks until the ceiling; bound it by a read term,
+// and it gives up after one request.
 func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		subject string
-		read    func(context.Context, *Queue) error
+		read    func(context.Context, *Queue, *DomainLog) error
 	}{
 		{"a group's acknowledgement floor",
 			jsapitest.ConsumerInfo(probeDomain().Name, domainGroupName(probeDomain().Name, "feed")),
-			func(ctx context.Context, q *Queue) error {
-				//nolint:contextcheck // Opening the log is the case's setup, under the test's context: ctx is the deadline-less read under test.
-				log, err := q.DomainLog(t.Context(), probeDomain().Name)
-				if err != nil {
-					return err
-				}
-				_, _, err = log.GroupAckFloor(ctx, "feed")
+			func(ctx context.Context, _ *Queue, log *DomainLog) error {
+				_, _, err := log.GroupAckFloor(ctx, "feed")
 				return err
 			}},
 		{"an account limit", jsapitest.AccountInfo(),
-			func(ctx context.Context, q *Queue) error {
+			func(ctx context.Context, q *Queue, _ *DomainLog) error {
 				_, err := q.budget(ctx, false)
 				return err
 			}},
@@ -409,32 +492,55 @@ func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			ns, q := accountQueue(t, probeDomain())
+			// OPENED BEFORE THE BUBBLE: the broker answers the open, and
+			// an answer the connection's reader hands to a request made in
+			// a bubble is a use of the bubble from outside it.
+			log, err := q.DomainLog(t.Context(), probeDomain().Name)
+			if err != nil {
+				t.Fatalf("open the log: %v", err)
+			}
 			bound := q.js.Options().DefaultTimeout
 			held := jsapitest.Hold(t, ns, c.subject, nats.Token(leaderReadsToken))
-			done := make(chan error, 1)
-			start := time.Now()
-			go func() { done <- c.read(context.Background(), q) }()
-			select {
-			case err := <-done:
-				if err == nil {
+			inBubble(t, func(t *testing.T) {
+				start := time.Now()
+				if err := c.read(context.Background(), q, log); err == nil {
 					t.Fatal("a read nobody answered succeeded")
 				}
-				if took := time.Since(start); took < bound {
-					t.Errorf("the read gave up after %v, inside its client's %v", took, bound)
+				if took := time.Since(start); took != bound {
+					t.Errorf("the read gave up after %v, want its client's %v default",
+						took, bound)
 				}
-			case <-time.After(jsprovision.LookupBudget / 2):
-				t.Fatalf("a read nobody answers was still being asked %v later, past its "+
-					"client's %v default (%d requests)", jsprovision.LookupBudget/2, bound,
-					held.Count())
-			}
-			// AT NONE, TWO AND FOUR SECONDS: the third a second inside the
-			// bound, which a timer the load delays may miss, so it is the
-			// two the bound must hold that are asked for.
-			if n := held.Count(); n < 2 || n > 3 {
+			})
+			if n := heldBefore(t, q, held, c.subject); n != 3 {
 				t.Errorf("the read was asked %d times inside its client's %v, want it "+
 					"asked again inside it — at none, two and four seconds", n, bound)
 			}
 		})
+	}
+}
+
+// heldBefore is how many reads held was handed before a sentinel q sends on
+// subject now: every request q sent on it before, since the broker reads a
+// connection in order and hands what it maps to the interception in that
+// order, however late the runner delivers them.
+func heldBefore(t *testing.T, q *Queue, held *jsapitest.Held, subject string) int {
+	t.Helper()
+	sentinel := q.nc.NewInbox()
+	if err := q.nc.PublishRequest(subject, sentinel, nil); err != nil {
+		t.Fatalf("send the sentinel on %s: %v", subject, err)
+	}
+	// LIVENESS: the sentinel reaches the interception once the reads before
+	// it have; this only ends a wait for one that never does.
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	for {
+		r, err := held.Next(ctx)
+		if err != nil {
+			t.Fatalf("the sentinel sent on %s never reached the interception: %v", subject, err)
+		}
+		if r.Reply() == sentinel {
+			return r.N - 1
+		}
 	}
 }
 

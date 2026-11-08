@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -37,6 +38,20 @@ import (
 // ([StoreDirLock]) lets the start through to nats-server, which is the refusal
 // this case is about; a store directory that is itself a file is refused by the
 // lock instead, and has a case of its own.
+//
+// # At once, and how a boot that is not is told apart
+//
+// A boot that missed the refusal waits out the whole listener budget for a
+// server that never opens a listener, and only then says anything. So the
+// budget here is AN HOUR ([startTiming]): such a boot is still waiting long
+// after the case's patience ends it, and fails it on that, while one that
+// heard the refusal answers at once. It used to be measured: the boot timed
+// from the case's own clock and held under the thirty-second budget, which a
+// runner that lost thirty seconds anywhere in the boot failed.
+//
+// Mutation: hand the boot a death nobody declares, or read the death only once
+// the listeners have answered, and the boot is still waiting when the case's
+// patience ends.
 func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
@@ -50,18 +65,27 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 				[]byte("not a directory"), 0o600); err != nil {
 				t.Fatalf("plant a file where the store's jetstream directory goes: %v", err)
 			}
-			cfg := Config{StoreDir: store, StoreMaxBytes: brokertest.StoreMaxBytes}
+			cfg := Config{StoreDir: store, StoreMaxBytes: brokertest.StoreMaxBytes,
+				start: startTiming{listen: time.Hour}}
 			if clustered {
 				cfg.ServerName, cfg.ClusterName = "member-1", "unusable-store"
 				cfg.ClusterHost = "127.0.0.1"
 				cfg.FleetAuth = testFleetAuth()
 			}
 
-			begun := time.Now()
-			err := startOnAFreeRoutePort(t, cfg)
-			took := time.Since(begun)
+			// LIVENESS: a boot that heard the refusal answers at once,
+			// and one that missed it waits out the hour above; this only
+			// ends that wait, as the failure it is.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			defer cancel()
+			err := startOnAFreeRoutePort(ctx, t, cfg)
 			if err == nil {
 				t.Fatal("a broker whose store is a file started")
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("the boot was still waiting a minute in, for the listeners of a "+
+					"server that had refused its store — it missed the refusal and waits "+
+					"out the whole listener budget: %v", err)
 			}
 			if !errors.Is(err, ErrBrokerDied) {
 				t.Fatalf("the boot did not report the broker's own refusal: %v", err)
@@ -75,32 +99,24 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 				t.Errorf("a refused store is reported as a taken port, which a "+
 					"harness retries and an operator goes hunting for: %v", err)
 			}
-			// AT ONCE: the store is refused within milliseconds of Start,
-			// and a boot that missed the refusal waits out the whole
-			// listener budget for a server that never opens one. Under the
-			// budget is the line between the two.
-			if took >= listenTimeout {
-				t.Errorf("the refusal took %s, the whole %s budget — the boot "+
-					"waited for a server that had already given up", took, listenTimeout)
-			}
 		})
 	}
 }
 
-// startOnAFreeRoutePort starts cfg, on a route port nothing held a moment ago
-// when cfg is clustered, and answers what the start answered.
+// startOnAFreeRoutePort starts cfg on ctx, on a route port nothing held a
+// moment ago when cfg is clustered, and answers what the start answered.
 //
 // A PORT LOST BEFORE THE START is the one answer that says nothing about the
 // case — the start's own probe refuses it as [ErrRoutePortTaken] with no
 // [ErrBrokerDied] beside it — so it is tried again on another; anything else
 // is the answer.
-func startOnAFreeRoutePort(t *testing.T, cfg Config) error {
+func startOnAFreeRoutePort(ctx context.Context, t *testing.T, cfg Config) error {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		if cfg.ClusterName != "" {
 			cfg.ClusterPort = freePort(t)
 		}
-		srv, err := StartServer(t.Context(), cfg)
+		srv, err := StartServer(ctx, cfg)
 		if err == nil {
 			srv.Shutdown()
 			return nil
