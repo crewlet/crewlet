@@ -86,7 +86,11 @@ export function MessageBody({ message, viewer, nameOf, onPerson, after }: Messag
     return out;
   };
   return (
-    <Prose as="div" measure="none" className="prose md chat-body">
+    <Prose
+      as="div"
+      measure="none"
+      className={after ? "prose md chat-body has-after" : "prose md chat-body"}
+    >
       {renderMarkdown(message.body ?? "", { ...CHAT_WORDS, prose })}
       {after ? <span className="chat-body-after">{after}</span> : null}
     </Prose>
