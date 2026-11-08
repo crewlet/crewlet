@@ -403,6 +403,7 @@ var contract = []Entry{
 	{"SessionContinuedBy", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SCHEDULE_CONVERSATION_PREFIX", ReadScalar,
 		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"LIVE_KEPT", ReadScalar, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},

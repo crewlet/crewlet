@@ -181,6 +181,19 @@ const (
 // Valid reports whether a is a grant GitHub knows.
 func (a GitHubAccess) Valid() bool { return a == GitHubRead || a == GitHubWrite }
 
+// Label is a grant as GitHub's settings page names it: "Read-only", "Read and
+// write", or "No access" for an absent grant.
+func (a GitHubAccess) Label() string {
+	switch a {
+	case GitHubRead:
+		return "Read-only"
+	case GitHubWrite:
+		return "Read and write"
+	default:
+		return "No access"
+	}
+}
+
 // Rank is a grant's place in GitHub's order: no access, read, write.
 func (a GitHubAccess) Rank() int {
 	switch a {

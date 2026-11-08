@@ -529,6 +529,11 @@ func (f *fakeLedger) Records(_ context.Context, kind integration.Kind) (map[stri
 	return maps.Clone(f.records[kind]), nil
 }
 
+func (f *fakeLedger) SeatRecord(_ context.Context, kind integration.Kind, handle string) (seataccess.Record, bool, error) {
+	rec, found := f.records[kind][handle]
+	return rec, found, nil
+}
+
 func (f *fakeLedger) Put(_ context.Context, rec seataccess.Record) error {
 	if f.records[rec.Kind] == nil {
 		f.records[rec.Kind] = map[string]seataccess.Record{}

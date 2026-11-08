@@ -228,15 +228,21 @@ func (s *accessSession) retiredLabel(handle string) string {
 // Options is the three levels, each with the scopes it grants, and the scopes
 // no level grants. Fixed: a level is Crewlet's own set of DigitalOcean scopes.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	// THE TOKEN LIST, where every row's Regenerate Token is and Generate New
+	// Token is one click away; a wait for a new token links its form itself.
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Rotatable: true,
+		ActionURL: TokensURL, Refused: Refused(), Unneeded: Unneeded(), VendorAccount: s.team}, nil
+}
+
+// FixedLevels is the three levels, least access first, each with the scopes it
+// grants ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	out := make([]seataccess.Level, 0, len(levels))
 	for _, id := range Levels() {
 		out = append(out, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id),
 			Administers: Administers(id), Grants: Grants(id)})
 	}
-	// THE TOKEN LIST, where every row's Regenerate Token is and Generate New
-	// Token is one click away; a wait for a new token links its form itself.
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: TokensURL,
-		Refused: Refused(), Unneeded: Unneeded(), VendorAccount: s.team}, nil
+	return out
 }
 
 // Observe proves each seat's token with the token itself. A 401 is reported

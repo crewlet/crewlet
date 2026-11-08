@@ -98,9 +98,10 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 
 // A CLAUDE CODE RUN'S SKILLS ARE ADDED BY THE BOX'S RELEASE: at or after
 // 2.1.118, the first whose hooks call an MCP tool, the run starts with its
-// plugin. On an older release a run with a required skill is refused before
-// its harness starts — every call to a tool the skill covers would be refused
-// for good — and a run whose skills are advisory starts without them.
+// plugin, and on the settings that keep the plugin's hook on. On an older
+// release a run with a required skill is refused before its harness starts —
+// every call to a tool the skill covers would be refused for good — and a run
+// whose skills are advisory starts without them.
 //
 // Mutation: add the plugin on any release, and an older one lists skills whose
 // loads it never reports; refuse an advisory run, and a box short of one release
@@ -108,7 +109,8 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 func TestAClaudeCodeRunsSkillsAreAddedByItsRelease(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/home/box"}
-	gate := `if at 2 1 118; then set -- "$@" --plugin-dir '` + p.ClaudeSkillsPlugin() + `'; else `
+	gate := `if at 2 1 118; then set -- "$@" --plugin-dir '` + p.ClaudeSkillsPlugin() + `'; cs='` +
+		p.ClaudeSkillsSettings() + `'; else `
 	tail := func(script string) string {
 		_, after, ok := strings.Cut(script, gate)
 		if !ok {

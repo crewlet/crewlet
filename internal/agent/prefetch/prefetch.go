@@ -273,6 +273,11 @@ type Request struct {
 	// it knows which one the trigger is.
 	Message string
 
+	// Told is the changes to the seat's access it was told of recently, for
+	// marking the selected notes each may contradict ([ToldChange]). Nil marks
+	// nothing.
+	Told []ToldChange
+
 	// Boundary is the turn's fence token ([turnctx.Turn.Boundary]): the
 	// thread block is other people's words handed over in the prompt, so it
 	// is fenced with the token the turn's tools fence their reads with. An

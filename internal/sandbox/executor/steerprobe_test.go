@@ -114,10 +114,11 @@ func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledg
 // than each to a copy of the other's names.
 //
 // What it holds: the brief reaches the harness on stdin and nowhere on its argv;
-// --settings names the file; the two variables that switch hooks off are gone
-// from the harness's environment though the seat's environment set them; each of
-// the main agent's two boundaries is answered with the note, as the hook's
-// additional context for that event; and a subagent's boundary takes nothing.
+// --settings names the file holding the hooks; the two variables that switch
+// hooks off are gone from the harness's environment though the seat's
+// environment set them; each of the main agent's two boundaries is answered
+// with the note, as the hook's additional context for that event; and a
+// subagent's boundary takes nothing.
 //
 // Mutation: rename the hook input's `event` key and no boundary takes the note;
 // drop Output.Unset and the variables reach the harness.
@@ -157,8 +158,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 	if argv[0] != "-p" || slices.Contains(argv, brief) {
 		t.Errorf("the brief is on the harness's argv: %q", argv)
 	}
-	if got := after(argv, "--settings"); got != p.ClaudeSettings() {
-		t.Errorf("--settings names %q, want %q", got, p.ClaudeSettings())
+	if got := after(argv, "--settings"); got != p.ClaudeNotesSettings() {
+		t.Errorf("--settings names %q, want %q", got, p.ClaudeNotesSettings())
 	}
 	if stdin := strings.Join(lines(t, filepath.Join(record, "stdin")), "\n"); stdin != brief {
 		t.Errorf("the harness read %q on stdin, want the brief", stdin)

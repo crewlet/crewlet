@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -271,13 +270,7 @@ func (k executorKeep) OpenHanded(turnID, sealed string) ([]byte, error) {
 // the operation ledger's horizon — [rebaseFor], the one rule every operation id
 // a turn derives follows, judged at this attempt's clock.
 func (k executorKeep) MintedAt(ctx context.Context, turnID, workKey string, workSince time.Time) (time.Time, error) {
-	identity := builtin.Actor{TurnID: turnID, WorkKey: workKey, WorkSince: workSince}
-	rebased, err := rebaseFor(ctx, k.engine.rebases(), identity, time.Now().UTC())
-	if err != nil {
-		return time.Time{}, err
-	}
-	identity.RebasedTo = rebased
-	return identity.OperationSince(), nil
+	return k.engine.turnMintedAt(ctx, turnID, workKey, workSince)
 }
 
 // Seal streams archive sealed under the fleet keyring into dst, under an

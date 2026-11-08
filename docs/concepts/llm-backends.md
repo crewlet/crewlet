@@ -1333,12 +1333,15 @@ started with `-p` and no prompt, reading its brief on standard input from a
 file in the box — a brief carries every note the turn has read, and one
 argument is capped at 128 KiB — and with `--settings` naming a file of two
 `mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
-batch of the main agent's tool calls and as the run is about to finish. The
-wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since
-either switches those hooks off. Measured on Claude Code 2.1.263 and 2.1.310;
-it needs 2.1.163 or later, and the run's script starts an older release without
-`--settings` and without telling it of notes. See [Claude Code's
-hooks](code-sandbox.md#claude-codes-hooks).
+batch of the main agent's tool calls and as the run is about to finish, beside
+the setting every run's settings hold, which keeps the box's own retention
+sweep off the session the engine carries. The wrapper unsets
+`CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since either switches
+those hooks off. Measured on Claude Code 2.1.263 and 2.1.310; it needs 2.1.163
+or later, and the run's script starts an older release on the settings every
+run has, without the hooks and without telling it of notes. See [Claude Code's
+hooks](code-sandbox.md#claude-codes-hooks) and [A Claude Code run's
+session](code-sandbox.md#a-claude-code-runs-session).
 
 **A person's notes reach an OpenCode run at its next step.** The run's
 configuration names a plugin the engine writes into the box beside it, which

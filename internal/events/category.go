@@ -206,6 +206,7 @@ var categories = map[string]placement{
 	// integration loop's own cadence: a person at the vendor can cause one,
 	// and cannot make more of them than there are syncs.
 	"seat_access_drift_restored": {"lifecycle", RateEngine},
+	"agent_capability_told":      {"lifecycle", RateEngine},
 
 	// Task: work reaching a seat — including a detached executor, which
 	// is the execution of one, and a schedule firing, which creates one.
