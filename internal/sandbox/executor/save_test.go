@@ -666,10 +666,9 @@ func boxNow(t *testing.T, b sandbox.Sandbox, name string) time.Time {
 // noneAhead checks session s in box b, stamped against now as [stampedSession]
 // has it, once a pack was made of it that began at began and was done by ended,
 // each as the box's clock stamps a file ([boxNow]): every file and directory of
-// it stamped an hour ahead now stamped within the pack — no earlier than began,
-// taken to the second for a touch that copies its reference's time to the
-// second, and no later than ended — and every one stamped an hour behind still
-// stamped so, to the second.
+// it stamped an hour ahead now stamped within the pack — no earlier than began
+// and no later than ended — and every one stamped an hour behind still stamped
+// so, to the second.
 func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, began, ended time.Time) {
 	t.Helper()
 	cfg := executor.PathsFor(b).ClaudeConfigDir()
@@ -683,7 +682,7 @@ func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, began, ended time
 		case at.After(ended):
 			t.Errorf("%s is stamped %s after the pack, which was done by %s: in the box's future", e.name, at,
 				ended)
-		case e.ahead && at.Before(began.Truncate(time.Second)):
+		case e.ahead && at.Before(began):
 			t.Errorf("%s, stamped in the box's future, is stamped %s after the pack, before the pack began at "+
 				"%s: not the pack's own time", e.name, at, began)
 		case !e.ahead && !at.Equal(e.stamp(now)):
@@ -722,8 +721,8 @@ func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
 // carried here with its time, or that this box stamped before its clock stepped
 // back, would fail every such pack for that long. So every pack, before its
 // marker, sets every file and directory of the session that the box's find
-// reads as newer than a reference it writes to the reference's time, and
-// leaves every earlier time as it is, which the harness's own retention sweep,
+// reads as newer than a reference it writes to the box's present, and leaves
+// every earlier time as it is, which the harness's own retention sweep,
 // held off, deletes nothing by; and it sets no time through a link, which touch
 // would follow out of the session. Here the box's own copy of the session
 // holds its transcript, a task file, a subagent's metadata and their
@@ -742,7 +741,7 @@ func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
 // later time reads as written since the marker, so the pack is refused for one
 // too; set every time rather than those in the box's future, and a file an
 // hour behind loses its own; set those in the future to a time long past
-// rather than the pack's own, and they end stamped before the pack began; set
+// rather than the present, and they end stamped before the pack began; set
 // files alone, and a directory stamped an hour ahead stays in the box's
 // future; drop `! -type l`, and the file outside the session takes the pack's
 // time through the link to it.
@@ -767,19 +766,19 @@ func TestAPackSetsEveryFileOfItsSessionFromItsBoxsFutureToItsStartAndHolds(t *te
 }
 
 // A FILE FROM ITS BOX'S FUTURE THAT ITS HARNESS REWRITES AS IT IS PACKED IS
-// STILL REFUSED. The pack sets a file stamped in its box's future back to the
-// pack's own start before its marker, never after it, so a write the harness
-// makes as tar reads that file is newer than the marker to every check, set
-// back or not before it. Here a task file stamped an hour ahead is rewritten in
-// place once tar has read the session: every way the pack is made — a save,
-// and the take of a job still working — is refused, saying a file was written
-// while the session was packed and naming the task file, with nothing moved to
-// its destination, recorded as a digest the box holds, or left in its staging
-// directory.
+// STILL REFUSED. The pack sets a file stamped in its box's future to the box's
+// present, before its marker, and sets no time back after it, so a write the
+// harness makes as tar reads that file is newer than the marker to every check,
+// whether the file was set before it or not. Here a task file stamped an hour
+// ahead is rewritten in place once tar has read the session: every way the
+// pack is made — a save, and the take of a job still working — is refused,
+// saying a file was written while the session was packed and naming the task
+// file, with nothing moved to its destination, recorded as a digest the box
+// holds, or left in its staging directory.
 //
-// Mutation: set the times again once tar has read the session, and the task
-// file rewritten under the tar is set back before the marker, and the pack
-// holds.
+// Mutation: once tar has read the session, set every file newer than the
+// reference back to the reference's time, and the task file rewritten under
+// the tar is set behind the marker, and the pack holds.
 func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T) {
 	t.Parallel()
 	for _, pack := range heldPacks {
@@ -811,6 +810,100 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 				t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
 			}
 		})
+	}
+}
+
+// TWO PACKS BESIDE ONE WORKING HARNESS HIDE NO WRITE FROM EACH OTHER. Two packs
+// of one box's session can run at once — two takers' saves, as when a box's
+// waiter duty changes hands mid-save, or a save and the take of a job still
+// working — each in a staging directory of its own; and each, before its
+// marker, sets every file of the session that the box's find reads as newer
+// than a reference it writes, as a file stamped in the box's future is, to the
+// box's present: never to an earlier time, at which a walk that ran late would
+// set a file behind the other pack's marker. Here pack B's walk picks a task
+// file stamped an hour ahead and is held between picking it and setting it, as
+// a find held up on a busy box is, until pack A — its reference and marker
+// written after B's reference — has had the harness rewrite that task file in
+// place once A's tar read the session; only then does B set it, and only then
+// do A's checks run. A is refused, saying a file was written while the session
+// was packed and naming the task file, and B, whose marker is written after
+// that write, holds.
+//
+// Mutation: set the files the walk picks to the reference's time rather than
+// the present (`touch -c -r`), and B sets the task file rewritten under A's tar
+// back behind A's marker, and A holds.
+func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	p := paths(b)
+	forgetCapture(t, b)
+	f := filesOf(ran.SessionID)
+	task := filepath.Join(p.ClaudeConfigDir(), f.task)
+	ahead := time.Now().Add(time.Hour)
+	if err := os.Chtimes(task, ahead, ahead); err != nil {
+		t.Fatal(err)
+	}
+	flags := filepath.Join(b.Home(), "two-packs")
+	if err := os.MkdirAll(flags, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	claimed, picked := shQuote(flags+"/b-claimed"), flags+"/b-picked"
+	rewritten, set := flags+"/rewritten", flags+"/b-set"
+	sleep, touch := shQuote(hostTool(t, "sleep")), shQuote(hostTool(t, "touch"))
+	// await is shell that waits for flag, thirty seconds at most, and then
+	// exits with status where the flag never came, so an interleaving that
+	// did not happen fails the case rather than pass it.
+	await := func(flag, status string) string {
+		return `i=0; while [ ! -e ` + shQuote(flag) + ` ] && [ "$i" -lt 300 ]; do ` + sleep + ` 0.1; ` +
+			`i=$((i + 1)); done; [ -e ` + shQuote(flag) + ` ] || exit ` + status
+	}
+	// THE FIRST TOUCH OF A WALK IS B'S — the walk's alone passes -c, the
+	// clock's does not — and it says B has picked the task file, then holds
+	// until A's tar has rewritten it; every other touch is this machine's.
+	writeBoxStandIn(t, b, p.BinDir()+"/touch", "#!/bin/sh\n"+
+		`case " $* " in *" -c "*) if mkdir `+claimed+` 2> /dev/null; then : > `+shQuote(picked)+"; "+
+		await(rewritten, "3")+"; "+touch+` "$@"; st=$?; : > `+shQuote(set)+`; exit "$st"; fi;; esac`+"\n"+
+		"exec "+touch+` "$@"`+"\n")
+	// A'S TAR rewrites the task file in place once it has read the session,
+	// and hands A's checks the session only once B has set it.
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `case "$1" in `+
+		shQuote(p.SessionSaveStaging(takerA))+`/*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
+		`'{"id":"1","status":"completed"}' > `+shQuote(task)+`; : > `+shQuote(rewritten)+"; "+
+		await(set, "2")+`; exit "$st";; esac`+"\n"+`exec "$tar" -czf "$@"`+"\n"))
+	packedB := make(chan error, 1)
+	go func() {
+		_, err := runner.PackSave(t.Context(), b, takerB)
+		packedB <- err
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(picked); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pack B's walk never picked the task file stamped in the box's future")
+		}
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
+	}
+	_, errA := runner.PackSave(t.Context(), b, takerA)
+	errB := <-packedB
+	for _, flag := range []string{rewritten, set} {
+		if _, err := os.Stat(flag); err != nil {
+			t.Fatalf("the packs never ran as the case has them: no %s (pack A: %v; pack B: %v)", flag, errA,
+				errB)
+		}
+	}
+	if want := "a file was written while the session was packed: " + f.task; errA == nil ||
+		!strings.Contains(errA.Error(), want) {
+		t.Errorf("pack A, under whose tar the task file was rewritten, answered %v once pack B's walk had set "+
+			"it; want it refused saying %q", errA, want)
+	}
+	if boxHas(t, b, p.SessionSave(takerA)) {
+		t.Errorf("the refused pack A left a save at %s", p.SessionSave(takerA))
+	}
+	if errB != nil {
+		t.Errorf("pack B, whose marker came after the task file was rewritten, was refused: %v", errB)
 	}
 }
 

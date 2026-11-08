@@ -720,21 +720,29 @@ func claudePack(paths Paths, at packAt) string {
 //   - NO FILE FROM THE BOX'S FUTURE, before the marker: a reference written
 //     in the pack's own staging directory, and every file and directory of
 //     the session that the box's find reads as newer than it — never a link,
-//     which touch would follow out of the session — set to its time
-//     (`touch -c -r`). A box cannot hold a file from its own future, and
-//     every check below would read one as written since the marker until the
-//     box's clock passed it — a task file failing every pack for that long, a
+//     which touch would follow out of the session — set to the box's present
+//     (`touch -c`). A box cannot hold a file from its own future, and every
+//     check below would read one as written since the marker until the box's
+//     clock passed it — a task file failing every pack for that long, a
 //     thread read back on each — whatever stamped it: a box whose clock ran
 //     ahead, the session carried here with the times tar restores, or this
 //     box before its clock stepped back. So the pack sets it, the one step
 //     that reads a session file's time, rather than the resume, after which a
 //     clock that steps back would leave every file stamped before the step
-//     ahead of the clock. Set to the reference's time, such a file reads as
-//     written only where the harness writes it during the pack, which every
-//     check still sees; and a write the harness makes between the reference
-//     and the marker, which this may set back to the reference's time, is
-//     still before the marker and before tar reads the file, so nothing
-//     written during the pack is hidden. Every earlier time is left as it is,
+//     ahead of the clock. Once set, such a file is read as every other is: as
+//     written where the harness writes it after the marker, and whole where
+//     its last write came before the marker, tar reading it after. THE
+//     PRESENT, NEVER AN EARLIER TIME: a file the walk sets reads as no older
+//     than any write made before the walk set it, so the walk hides no write
+//     from a marker — not from this pack's, written after the walk, nor from
+//     that of another pack of the session running beside this one, as two
+//     takers' saves, or a save and the take of a job still working, may, each
+//     in a staging directory of its own. Set to the reference's time instead,
+//     a walk that ran late, its find held up on a busy box, would set a file
+//     the harness rewrote under the other pack's tar back behind that pack's
+//     marker, and that pack would keep the file torn. What another pack's
+//     walk sets after this pack's marker reads as written here, which costs
+//     this pack, never a torn file. Every earlier time is left as it is,
 //     which costs the session nothing, the harness's own retention sweep
 //     being held off ([claudeRetentionDays]). A find that compares whole
 //     seconds, as busybox's does, leaves a file stamped later than the
@@ -841,11 +849,12 @@ func claudeHeldTar(cfg, staged string) string {
 		`for c in ` + heldTools + `; do command -v "$c" > /dev/null 2>&1 || why "this box has no $c, which a ` +
 			`pack beside a working harness checks what it packed with"; done`,
 		`cd ` + q(cfg) + ` || why 'the directory the session is filed under could not be entered'`,
-		// NO FILE FROM THE BOX'S FUTURE, set back before the marker; what
-		// the walk could not set stays ahead, and the checks read it as
-		// written.
-		`: > "$st/now" || why "the pack could not write the reference it sets the box's future back to"`,
-		`find "$@" ! -type l -newer "$st/now" -exec touch -c -r "$st/now" {} + 2> /dev/null`,
+		// NO FILE FROM THE BOX'S FUTURE, set to the box's present before the
+		// marker — never to an earlier time, which could put a write behind
+		// another pack's marker; what the walk could not set stays ahead, and
+		// the checks read it as written.
+		`: > "$st/now" || why "the pack could not write the reference it tells the box's future by"`,
+		`find "$@" ! -type l -newer "$st/now" -exec touch -c {} + 2> /dev/null`,
 		// THE MARKER, and the wait for the box's own find.
 		`: > "$st/marker" && touch "$st/clock" || why 'the pack could not write its marker'`,
 		`i=0; until [ -n "$(find "$st/clock" -newer "$st/marker" 2> /dev/null)" ]; do ` +
