@@ -151,6 +151,8 @@ type HeldResume struct {
 	Call HeldCall
 	// Choice is the answer: [HeldOnce], [HeldAlways] or [HeldDeny].
 	Choice string
+	// By is who answered, as the answer's own record names them.
+	By string
 	// Mark records that the call is being made, and answers the held call
 	// as the row then holds it and whether this mark is the first: false
 	// means some attempt marked it before, and it is not made again.
@@ -187,7 +189,7 @@ func (c *Coordinator) askedWith(claimed PendingRun, words AnswerWords) *AskedRun
 	fence := fenceOf(claimed)
 	turnID, launch := claimed.TurnID, claimed.LaunchID
 	asked.Held = &HeldResume{
-		TurnID: turnID, Call: *claimed.HeldCall, Choice: words.Choice,
+		TurnID: turnID, Call: *claimed.HeldCall, Choice: words.Choice, By: words.By,
 		Mark: func(ctx context.Context) (HeldCall, bool, error) {
 			return c.pending.MarkHeldCall(ctx, turnID, launch, fence)
 		},

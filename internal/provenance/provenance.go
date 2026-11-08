@@ -166,6 +166,12 @@ const (
 	// text is.
 	SourceCheckLog Source = "check_log"
 
+	// SourceServerOutput is what a command printed on one of the company's
+	// servers (ssh_read, ssh_operate): logs and status a service or a person
+	// anywhere may have put words into, so it is read at [TrustExternal]
+	// naming no writer, as a check's log is.
+	SourceServerOutput Source = "server_output"
+
 	// SourceTurnEnding is how an earlier turn of a conversation ended, as the
 	// engine recorded it on the executor log and tells the conversation's
 	// next turn: what that turn was asked, what its reviewer said landed,
@@ -185,7 +191,7 @@ var Sources = []Source{
 	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
-	SourceTurnEnding,
+	SourceTurnEnding, SourceServerOutput,
 }
 
 // Valid reports whether s is one of [Sources].
@@ -873,6 +879,12 @@ type Label struct {
 // colleague's.
 func Repository(src Source) Label {
 	return Label{Source: src, Trust: TrustExternal}
+}
+
+// ServerOutput is the label of what a command printed on one of the company's
+// servers: EXTERNAL, naming nobody, for the reason a check's log is.
+func ServerOutput() Label {
+	return Label{Source: SourceServerOutput, Trust: TrustExternal}
 }
 
 // Executor is the label of what a seat's executor puts to a person (its

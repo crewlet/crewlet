@@ -841,3 +841,16 @@ func (s Snapshot) With(e Entry) (Snapshot, error) {
 	out.byName[e.Name()] = e
 	return out, nil
 }
+
+// Innermost is c with every wrapper a registration put around it removed (a
+// wrapper names what it wraps by Unwrap), so a caller can ask the tool itself
+// what it declares beside Callable.
+func Innermost(c Callable) Callable {
+	for {
+		w, ok := c.(interface{ Unwrap() Callable })
+		if !ok {
+			return c
+		}
+		c = w.Unwrap()
+	}
+}
