@@ -215,7 +215,8 @@ func noSession(ask Ask, reading bool) error {
 // row went while the session was read; a row naming no object is
 // [TranscriptNone] in the domain's reason and that nothing more can be read;
 // a row naming a newer capture is read from it on a first page, and refuses a
-// later page's cursor as a session captured again. Only where the row still
+// later page's cursor as a session captured again — or, its turn not ended, as
+// one its runs have kept again ([recaptured]). Only where the row still
 // names the object is the failure the store's or the archive's own — missing,
 // unreadable, or a store that did not answer — since the store reports a
 // collected object and bytes that are not the sealed ones alike as unreadable,
@@ -394,6 +395,8 @@ func Cursor(key objstore.Key, next int) string {
 // answered — no session kept, and why ([readPage]) — where a refusal saying
 // the session was captured since, and to read it from its start, said what was
 // false and sent the reader to a first page saying something else.
+//
+// A ROW IN PROGRESS IS REFUSED IN ITS RUNS' WORDS ([recaptured]).
 func ordinalOf(cursor string, row executordomain.Session) (int, error) {
 	if cursor == "" {
 		return 0, nil
@@ -412,11 +415,28 @@ func ordinalOf(cursor string, row executordomain.Session) (int, error) {
 			"counts a transcript's entries otherwise: read the transcript again from its start",
 			ErrCursor, cursor)
 	case row.HasObject() && parts[0] != row.Object.Key.String():
-		return 0, fmt.Errorf("%w: the turn %s's session was captured again since the cursor "+
-			"%q was handed out: read its transcript again from the start", ErrCursor,
-			row.Turn, cursor)
+		return 0, recaptured(cursor, row)
 	}
 	return at, nil
+}
+
+// recaptured refuses a cursor of an object row has since replaced with a newer
+// capture, saying to read the transcript again from its start: of a row in
+// progress ([executordomain.Session.InProgress]), that its turn has not ended
+// and its runs have kept its session again since — what the row says, and true
+// whichever capture moved it, a later launch's or one taken as a run works —
+// and of an ended row, that its session was captured again, its final capture
+// landing between the cursor and the turn's end. NEVER THAT A RUN SAVED IT: a
+// reader of the row reads no run record, so whether its runs keep their session
+// as they work is nothing it can say.
+func recaptured(cursor string, row executordomain.Session) error {
+	if row.InProgress() {
+		return fmt.Errorf("%w: the turn %s has not ended, and its runs have kept its session again "+
+			"since the cursor %q was handed out: read its transcript again from the start", ErrCursor,
+			row.Turn, cursor)
+	}
+	return fmt.Errorf("%w: the turn %s's session was captured again since the cursor %q was handed "+
+		"out: read its transcript again from the start", ErrCursor, row.Turn, cursor)
 }
 
 // notACursor refuses a cursor no page of a transcript hands out.

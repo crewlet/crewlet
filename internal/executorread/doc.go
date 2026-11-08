@@ -11,9 +11,13 @@
 // a row the log no longer holds is said one way, a row naming no session says
 // why in the domain's own sentence (executordomain.Session.NotKept), and an
 // object that does not read is one of five states, each in the engine's own
-// words ([TranscriptStates]). Two copies of those words are two surfaces that
-// tell a person and a model different things about one session, so the read is
-// here and every surface calls [Read].
+// words ([TranscriptStates]). A row naming the session of a turn that has not
+// ended is read as the session it is, in progress, and a page the row's newer
+// capture no longer continues is refused saying the turn has not ended and its
+// runs have kept its session again — what the row says, and never that a run
+// saved it. Two copies of those words are two surfaces that tell a person and
+// a model different things about one session, so the read is here and every
+// surface calls [Read].
 //
 // # The cursor names the object, and the count of entries
 //

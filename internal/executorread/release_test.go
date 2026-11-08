@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -221,15 +222,22 @@ func (o openedNothing) Open(context.Context, executordomain.Session) (io.ReadClo
 	return nil, errors.New("opened")
 }
 
-// A LIVE ROW WITH NO SESSION YET IS SAID AS SUCH. A turn's first launch
-// begins its row before anything of it is captured — its `begin`, naming the
-// session it was handed — so a read of that row is a row naming no object
-// while the turn runs: none, in the domain's sentence for a live turn that has
-// captured nothing yet, never the one for a turn whose run ended before its
-// harness packed one; the row read once, and no object opened.
+// A LIVE ROW WITH NO SESSION YET IS SAID AS SUCH, and one naming a session is
+// read as the session in progress it is. A turn's first launch begins its row
+// before anything of it is captured — its `begin`, naming the session it was
+// handed — so a read of that row is a row naming no object while the turn
+// runs: none, in the domain's sentence for a live turn that has captured
+// nothing yet, never the one for a turn whose run ended before its harness
+// packed one; the row read once, and no object opened. Once its runs have kept
+// a session, the read opens it and hands its entries out beside the row as the
+// log holds it — in progress, in the domain's sentence for one
+// (executordomain.Session.KeptNote), which every surface carries — never said
+// as an ended turn's session, nor as nothing captured.
 //
 // Mutation: tell a live turn's nothing as an ended one's
-// (executordomain.Session.NotKept), and this goes red.
+// (executordomain.Session.NotKept), answer a live row as none where it names a
+// session, or hand the surfaces a row other than the one read, and this goes
+// red.
 func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 	t.Parallel()
 	begun := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), ConversationKey: "chat:room",
@@ -245,6 +253,90 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 		page.Why != "nothing of this turn's session has been captured yet" || len(rows.asked) != 1 {
 		t.Errorf("a live row with no session yet reads %s %q after %d reads of the row, want none, "+
 			"saying nothing of it has been captured yet, after one", page.State, page.Why, len(rows.asked))
+	}
+	if page.Read.Session.InProgress() || page.Read.Session.KeptNote() != "" {
+		t.Errorf("a live row with no session yet reads in progress %v, told %q", page.Read.Session.InProgress(),
+			page.Read.Session.KeptNote())
+	}
+
+	// ITS RUNS HAVE KEPT A SESSION since, and the turn has not ended.
+	store, _ := sessionStore(t)
+	running := sealedSession(t, store, "ana", gzipText(t, openCodeExport("the work so far")))
+	running.Ending, running.EndedAt = nil, time.Time{}
+	rows = &scriptedRows{answers: []*executordomain.Session{&running}}
+	page, err = executorread.Read(t.Context(),
+		executorread.Ask{Handle: "ana", Turn: running.Turn, Fresh: stale, By: executor.ReadByPerson},
+		executorread.Source{Rows: rows, Objects: store})
+	if err != nil {
+		t.Fatalf("a live row naming a session answered %v, want its transcript", err)
+	}
+	row := page.Read.Session
+	if page.State != executorread.TranscriptRead || page.Why != "" || len(page.Transcript.Entries) != 1 ||
+		page.Transcript.Entries[0].Text != "the work so far" || len(rows.asked) != 1 {
+		t.Errorf("a live row naming a session reads %s %q with %d entries after %d reads of the row, want "+
+			"its one entry read, after one", page.State, page.Why, len(page.Transcript.Entries), len(rows.asked))
+	}
+	note := "This turn has not ended: this is the newest session its runs have kept, captured at " +
+		running.CapturedAt.UTC().Format(time.RFC3339)
+	if row.Turn != running.Turn || row.Object != running.Object || !row.InProgress() ||
+		!strings.HasPrefix(row.KeptNote(), note) || row.NotKept() != "" {
+		t.Errorf("a live row naming a session is handed out as %+v, in progress %v, told %q (%q), want the "+
+			"row read, in progress, told %q…", row.Object, row.InProgress(), row.KeptNote(), row.NotKept(), note)
+	}
+}
+
+// A SESSION KEPT AGAIN SINCE ITS CURSOR IS READ AGAIN IN ITS ROW'S WORDS. A
+// later page's cursor names the object its page was read from, and a row that
+// names a newer one since refuses it, saying to read the transcript again from
+// its start: of a turn that has not ended, that its runs have kept its session
+// again — true whichever capture moved it, a later launch's or one taken as its
+// run works — and never that a run saved it, which no reader of the row can
+// know; of an ended turn, that its session was captured again, its final
+// capture landing before its end. Neither opens an object.
+//
+// Mutation: word the refusal of a row in progress as an ended row's, or an
+// ended row's as one in progress, or say a run saved it, and a case goes red.
+func TestASessionKeptAgainSinceItsCursorIsReadAgainInItsRowsWords(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionStore(t)
+	ended := sealedSession(t, store, "ana", gzipText(t, openCodeExport("the turn's last word")))
+	running := sealedSession(t, store, "ana", gzipText(t, openCodeExport("the work so far")))
+	running.Ending, running.EndedAt = nil, time.Time{}
+	// THE OBJECT THE PAGE WAS READ FROM, older than the one each row names.
+	cursor := executorread.Cursor(objstore.KeyAt(ended.CapturedAt.Add(-time.Hour)), 3)
+	for _, c := range []struct {
+		name        string
+		row         executordomain.Session
+		says, never []string
+	}{
+		{"a turn that has not ended", running,
+			[]string{"the turn " + running.Turn + " has not ended", "its runs have kept its session again",
+				"read its transcript again from the start"},
+			[]string{"captured again", "save"}},
+		{"an ended turn", ended,
+			[]string{"the turn " + ended.Turn + "'s session was captured again",
+				"read its transcript again from the start"},
+			[]string{"has not ended", "save"}},
+	} {
+		rows := &scriptedRows{answers: []*executordomain.Session{&c.row}}
+		_, err := executorread.Read(t.Context(),
+			executorread.Ask{Handle: "ana", Turn: c.row.Turn, Cursor: cursor, Fresh: stale,
+				By: executor.ReadByPerson},
+			executorread.Source{Rows: rows, Objects: openedNothing{t}})
+		if !errors.Is(err, executorread.ErrCursor) {
+			t.Errorf("%s: a cursor of an older object answered %v, want it refused", c.name, err)
+			continue
+		}
+		for _, want := range c.says {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal %q does not say %q", c.name, err, want)
+			}
+		}
+		for _, not := range c.never {
+			if strings.Contains(err.Error(), not) {
+				t.Errorf("%s: the refusal %q says %q", c.name, err, not)
+			}
+		}
 	}
 }
 
