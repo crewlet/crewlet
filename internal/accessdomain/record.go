@@ -53,6 +53,10 @@ const (
 	// create-only.
 	OpRan OpKind = "ran"
 
+	// OpResealed moves one command's text onto the keyring's active key, on
+	// the command's own subject: the same text, sealed afresh.
+	OpResealed OpKind = "resealed"
+
 	// OpForget removes what a seat the company removed was told, on the
 	// seat's subject. Its certificates and commands stay to their retention.
 	OpForget OpKind = "forget"
@@ -76,7 +80,7 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpTold, OpIssued, OpRan, OpForget, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpTold, OpIssued, OpRan, OpResealed, OpForget, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

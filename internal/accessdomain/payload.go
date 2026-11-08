@@ -248,6 +248,17 @@ type Generation struct {
 	StreamAt    time.Time `json:"stream_created_at"`
 }
 
+// Resealed is one command's text sealed afresh under the keyring's active key,
+// for a rotation that drops the key it was sealed under.
+type Resealed struct {
+	V      int    `json:"v"`
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+
+	CommandSealed string `json:"command_sealed"`
+	ContentKey    string `json:"content_key"`
+}
+
 // DecodeMutation reads the typed payload for one record. The dispatch is on
 // (kind, op) alone, so an unknown pair is an error naming both.
 func DecodeMutation(rec MutationRecord) (any, error) {
@@ -259,6 +270,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Certificate](rec)
 	case k == KindCommand && op == OpRan:
 		return decodePayload[Command](rec)
+	case k == KindCommand && op == OpResealed:
+		return decodePayload[Resealed](rec)
 	case k == KindSeat && op == OpForget:
 		return decodePayload[Forget](rec)
 	case k == KindExpiry && op == OpExpire:
