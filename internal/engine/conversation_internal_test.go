@@ -1147,19 +1147,20 @@ func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 	}
 }
 
-// AN ENDING TELLS THE NEXT TURN AN UNKEPT CAPTURE ONLY WHERE THE ROW KEEPS AN
-// OLDER ONE. The end names the turn's newest capture as not kept where the
-// run's record says so, and the log decides on the row's own place: a capture
-// of that very attempt whose record the log took before the end — one its
-// taker handed on before its lease's window closed, settled refused by the node
-// that waited on it — is the row's own, the very session the conversation's
-// next turn continues, so the head's account says nothing of a session not
-// kept, which would tell that turn its own session was lost. A turn whose end
-// took an older capture off tells the unkept one, and why.
+// AN ENDING TELLS THE NEXT TURN AN UNKEPT CAPTURE ONLY WHERE IT IS NEWER THAN
+// THE ROW'S PLACE. The end names the turn's newest capture as not kept where
+// the run's record says so, and the log decides on the row's own place: a
+// capture of that very attempt whose record the log took before the end — one
+// its taker handed on before its lease's window closed, settled refused by the
+// node that waited on it — is the row's own, the very session the
+// conversation's next turn continues, so the head's account says nothing of a
+// session not kept, which would tell that turn its own session was lost. A
+// turn whose end took an older capture off, and so names none, tells the
+// unkept one, and why.
 //
 // Mutation: tell the ending's unkept capture as the row holds it, and the head
 // is told its session was not kept.
-func TestAnEndingTellsTheNextTurnAnUnkeptCaptureOnlyWhereTheRowKeepsAnOlderOne(t *testing.T) {
+func TestAnEndingTellsTheNextTurnAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
