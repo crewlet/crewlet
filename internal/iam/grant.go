@@ -9,7 +9,7 @@ import (
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A CLOSED SET OF FIVE (ADR-0033), and the set is the whole point. Eleven
+// A CLOSED SET OF SIX (ADR-0033), and the set is the whole point. Eleven
 // grants carved the engine by surface (a read of the board, a read of the
 // trail, a read of the document, a write of work, a write of pages, the
 // credential store twice, the deployment, the directory, `sandbox:run`) and a
@@ -25,7 +25,9 @@ import (
 //   - [GrantDoclet] uses Doclet, read and write;
 //   - [GrantArtifacts] authors artifacts: creates them, publishes their
 //     versions and shapes their data;
-//   - [GrantChatlet] uses Chatlet, read and write.
+//   - [GrantChatlet] uses Chatlet, read and write;
+//   - [GrantGitlet] uses Gitlet: reaches the company's repositories, through
+//     every door (ADR-0110).
 //
 // Everything else a person sees (the org chart, the agents' status, spend,
 // schedules) is EVERYBODY's, and asks no permission at all; what a team lead
@@ -118,6 +120,26 @@ const (
 	// (`chat.backend: vendor`) is given nothing by it, as the tracker app
 	// gives a company on Jira nothing.
 	GrantChatlet Grant = "chatlet"
+
+	// GrantGitlet uses Gitlet, the engine's own git host: reading the
+	// company's repositories and their changes, searching them, cloning,
+	// fetching and pushing over git, and every write a repository takes —
+	// through every door, the routes, the git transport, the code tools a
+	// person's assistant calls, the dashboard and the code half of the inbox
+	// (ADR-0110).
+	//
+	// WHICH REPOSITORY, AND WHAT ON IT, IS NEVER THIS PERMISSION'S. Behind
+	// it, ADR-0088's derivation decides as it always has: a person holding it
+	// maintains every repository, a credential bound to no seat that holds it
+	// reads every repository and never pushes (ADR-0085), and a seat holds
+	// the lower of its `code.access` tier and its relation on the chart. A
+	// holder without it is refused at the authority table, before any
+	// repository is read, so no answer, count or line of git says what one
+	// holds. Who read a repository and the Gitlet nodes' caches are
+	// [GrantAdmin]'s, which includes this. A company that runs no Gitlet is
+	// given nothing by it, as [GrantChatlet] gives a company on a vendor's
+	// chat nothing.
+	GrantGitlet Grant = "gitlet"
 )
 
 // AllGrants are every permission this build knows, in declaration order.
@@ -125,7 +147,7 @@ const (
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}
+var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
 
 // Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
 // DECLARED.
@@ -143,7 +165,7 @@ var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, G
 // APPENDED, NEVER INSERTED: the order is what [Expand] stores in a row and
 // what every list of an administrator's permissions reads in, so a new app
 // goes last and no stored row moves.
-var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}
+var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
 
 // Valid reports whether a permission off the wire is one this build knows.
 //

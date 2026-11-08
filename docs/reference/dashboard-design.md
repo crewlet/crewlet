@@ -802,7 +802,7 @@ them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
-| **Gitlet** | `#/gitlet` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.backend: gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
+| **Gitlet** | `#/gitlet` | none; locked, naming Gitlet, for a reader without the Gitlet access, as Worklet's row is without Worklet's, since every section reads a code question the engine refuses them (ADR-0110), and for a holder the engine holds each answer to their own grant. Still hidden where the company hosts no code in the engine (`code.backend` is not `gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
 | **Chatlet** | `#/chatlet/activity` (and `#/chatlet`) | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
@@ -954,9 +954,12 @@ Executors, and Settings › Token spend: what every seat is doing, what it has s
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work's Worklet sections,
 Worklet and Settings › Expensive tasks need Worklet, and Doclet needs Doclet,
-and every section of Chatlet is chat's; Gitlet's (Gitlet, My work ›
-Reviews, a seat's Code section) need none, since every person reads every
-repository (ADR-0088). And the
+and every section of Chatlet is chat's; and Gitlet's (Gitlet, My work ›
+Reviews, a seat's Code section) need Gitlet, since the engine refuses every
+code question to a reader without it (ADR-0110), as do the places outside
+those that read code — Home's Code waiting on a person, a task's Changes tab
+and ⌘K's Code scope — each drawing what would open it, or nothing, rather
+than asking. And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Doclet › Agent diaries, and a seat's Turns and Memory sections to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
@@ -1049,7 +1052,7 @@ is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
 signed in that nobody was. It names ACCESS by the word People gives
-it (Admin, Worklet, Doclet, Chatlet) rather than a credential,
+it (Admin, Worklet, Doclet, Artifacts, Chatlet, Gitlet) rather than a credential,
 because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
@@ -1354,11 +1357,11 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Worklet access)* | `row=` (which item the pane is on) |
+| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(no access needed for the page: each half lists under its own app, Worklet's notices with Worklet access and Gitlet's with Gitlet access)* | `row=` (which item the pane is on) |
 | `#/me` | **My work › Queue**: what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(needs Worklet access, as every section of My work but Reviews does)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
-| `#/me/reviews` | **My work › Reviews**: Gitlet's claims on this person: the changes asking their review, then their own changes waiting on their fix, each Gitlet › Changes' grid over the engine's own listing, with no count on the tab *(no access needed; not offered where the company hosts no code)* | `handle=` |
+| `#/me/reviews` | **My work › Reviews**: Gitlet's claims on this person: the changes asking their review, then their own changes waiting on their fix, each Gitlet › Changes' grid over the engine's own listing, with no count on the tab *(needs Gitlet access; not offered where the company hosts no code)* | `handle=` |
 | `#/worklet` | **Worklet › Projects**: Worklet's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Worklet needs Worklet access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/worklet/tasks` | **Worklet › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/worklet/views` · `#/worklet/views/{id}` | **Saved views**: the inventory, and one view run | |
@@ -1366,7 +1369,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/worklet/search` | **Search**: the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/gitlet` | **Gitlet › Changes**, Gitlet's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Gitlet workspace](#the-gitlet-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
+| `#/gitlet` | **Gitlet › Changes**, Gitlet's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(the whole of Gitlet needs Gitlet access; hidden where the company hosts no code; see [The Gitlet workspace](#the-gitlet-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
 | `#/gitlet/repos` | **Gitlet › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
 | `#/gitlet/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|checks\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
 | `#/gitlet/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
@@ -3085,7 +3088,11 @@ company did.** That is Home until its reader arranges it (see
   as turns finish, so nothing under it moves. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Code waiting on a person**, where the company hosts code: the changes an
-  agent cannot move. Two halves, the first three changes each of two of the
+  agent cannot move, for a reader holding Gitlet. For anybody else the card,
+  its header and **Open Gitlet** stay, "Seeing Gitlet's changes needs Gitlet
+  access. An admin can give it to you." stands in place of both halves, and
+  neither listing is asked, as Tasks completed does for Worklet; until the
+  viewer has answered, both halves draw as loading and never say "none". Two halves, the first three changes each of two of the
   engine's own listings keeps: *Asking your review* (`code_changes?needs=review`, which names no
   reviewer and so asks the reader's own seat; a reader bound to no seat is
   told a review is asked of a seat, and asked nothing) and *Waiting on a
@@ -3282,7 +3289,13 @@ comment whole under it, and says why it reached the reader where the heading
 does not ("· you follow this task", from the reason of an update that only
 informs, or "· snoozed until …").
 
-**A code notice is an intent-first card.** A notice Gitlet routed is
+**A code notice is an intent-first card.** It is listed only to a reader
+holding Gitlet: the engine lists, counts and pushes no code notice to anybody
+else (ADR-0110), so their Inbox holds Worklet's half alone, with nothing
+locked in its place, and **Mark all read** sends Worklet's `mark_inbox` alone.
+A code notice still on screen when a reader no longer holds Gitlet holds its
+Mark as read and Snooze, saying "This change needs Gitlet access. An admin can
+give it to you.", and `code_mark_inbox` is never sent. A notice Gitlet routed is
 a row named by its change (`web!42`), with the code mark as its badge, the
 change's title as its line, what the record said after it, and — as every
 row's task — the work item the change implements. Opened, the card says what
@@ -3473,12 +3486,18 @@ explains it, and each empty section says in its own words what would fill it.
 **Each section names its own service and permission; the page names none.**
 Every section but Reviews is a question about work items: it needs Worklet
 and is hidden where the company does not run Worklet. Reviews is
-Gitlet's, which no app gates: hidden where the company hosts no code, and open
-to everybody signed in. So My work is hidden, never locked, only where the
-company runs neither (see [the sidebar](#the-sidebar)); a reader without
-Worklet lands on Reviews, with Worklet's sections locked beside it; and
-where the engine hosts no code, Reviews opens nothing, so for that reader the
-row is locked naming Worklet rather than opening onto the Queue's refusal.
+Gitlet's: it takes Gitlet (`grants: ["gitlet"]`, ADR-0110) and is hidden
+where the company hosts no code; for a reader without Gitlet it is locked
+beside Worklet's tabs, and `#/me/reviews` draws the frame's one refusal ("You
+need Gitlet access") and asks nothing. So My work is hidden, never locked,
+only where the company runs neither (see [the sidebar](#the-sidebar)); a
+Gitlet holder lands on Reviews where Worklet is not theirs, with Worklet's
+sections locked beside it, and where the company runs no Worklet; a reader
+holding Worklet without Gitlet finds Reviews locked beside the Queue; and a
+reader who can open none of it finds the row locked rather than opening onto a
+refusal, naming what would open it: "needs Worklet or Gitlet access" where the
+company runs both, Worklet alone where it hosts no code, and Gitlet alone
+where it runs no Worklet.
 
 **Reviews is Gitlet's claims on the person**: the changes asking their
 review (`code_changes?needs=review&reviewer=`), then their own changes waiting
@@ -3569,7 +3588,9 @@ aside while a grid on the page holds them), **Watch live** while a turn is runni
 in the trash, and a menu with **Open on the board**.
 
 **A task a change carries out has a Changes tab.** Where the company hosts
-code, the page asks the engine for one change naming the task as its work
+code and the reader holds Gitlet — a reader without it is asked nothing and
+keeps the task's one tab, since a lock would say a change stands behind it —
+the page asks the engine for one change naming the task as its work
 item (`code_changes?work=native:<id>&limit=1`, every state, since a listing by
 work item needs none), and only once it finds one does the column open with a
 **Task | Changes** strip (`tab=changes`). A page is the rows the engine read,
@@ -4023,7 +4044,9 @@ agent has **Overview**, **Work** (its tasks, then a **Code** section),
 Settings. Eight tabs were a strip a phone folded half away, and three of them
 were a single card. Work is drawn where the company runs Worklet or hosts
 code, its tasks only with Worklet and its Code section only where the company
-hosts code (`seat/profile.ts`). Turns, Memory, Schedules and Access are
+hosts code (`seat/profile.ts`) — drawn only for a Gitlet holder, and a compact
+"You need Gitlet access" lock in its place for anybody else, as its tasks are
+locked for a reader without Worklet. Turns, Memory, Schedules and Access are
 properties of a RUNTIME, and the engine never spawns a person, so a person's
 profile asks nothing a runtime answers: no activity, no memory, no turn list,
 no phase history. A `tab=` that names a section (`tab=memory`, `code`,
@@ -4198,8 +4221,10 @@ colleague's seat draws no such card.
 
 **Code**, the section under the tasks on Work, is what the seat does on
 Gitlet, agent or person, each the engine's own question held to the reader's grant on every
-repository it names, so it is every reader's section (no app gates code) and a
-repository the reader may not read is simply absent from its rows. Its open
+repository it names. It is drawn only for a Gitlet holder (ADR-0110): anybody
+else gets a compact lock in its place, "You need Gitlet access", and nothing
+is asked. For a holder, a repository they
+may not read is simply absent from its rows. Its open
 changes (`code_changes?owner=&state=open`, the owner's listing, which the
 engine keeps one state at a time), with **Open in Gitlet** for Gitlet › Changes
 narrowed to the owner, where the other states are; the reviews it gave
@@ -4702,7 +4727,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
-| **Code** | `code_search` (where the company hosts code), asked once the term has rested and is three characters or more — the shortest Gitlet's plan looks up — eight lines, each `repo:path:line` opening its file at the commit it was searched at with the line picked, and a row to Gitlet › Search with the term | |
+| **Code** | `code_search` (where the company hosts code), asked once the term has rested and is three characters or more — the shortest Gitlet's plan looks up — eight lines, each `repo:path:line` opening its file at the commit it was searched at with the line picked, and a row to Gitlet › Search with the term. Asked only for a reader holding Gitlet: for anybody else the scope stays, as Tasks and Pages stay for a reader without their apps, asks nothing, and says "Search needs Gitlet access. An admin can give it to you." rather than that no line matched | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -5169,7 +5194,7 @@ same, under its own login:
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
-| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, Chatlet for one in a room, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Chatlet, in a room; Worklet or Doclet, for a question.) |
+| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, Chatlet for one in a room, Gitlet for one to the code, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Chatlet, in a room; Gitlet, for the code; Worklet or Doclet, for a question.) |
 | Somebody the engine does not make this change for | This can’t be changed from here. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
@@ -8047,11 +8072,18 @@ them ([Gitlet](../concepts/gitlet.md)), and the changes proposed to them: a
 Workspace row after Worklet, `g g`, landing on **Changes** at `#/gitlet`, its
 sections drawn as tabs in the page header. It is drawn only where the company hosts code in the engine —
 `services.code` on the org projection — and is hidden, never locked, where it
-is `none`, an address under it answered by the service notice. It names no
-app: every person reads every repository (ADR-0088), and the engine holds each
-answer to the reader's own grant on the repository, leaving out of a listing
-what a seat may not read, so nothing waits on the reader's access before a
-section mounts.
+is `none`, an address under it answered by the service notice. It names the
+**Gitlet** access (ADR-0110): every section reads the code questions — the
+changes, the repositories, a search, the pushes, the queues, the checks — which
+the engine refuses a reader without it before reading anything, so the
+sidebar's row is locked for that reader, as Worklet's is, and the frame draws
+its one refusal in place of every Gitlet page. For a holder, the engine holds
+each answer to their own grant on the repository, leaving out of a listing
+what they may not read, and a write here carries its own reason where it is
+held: every code write is held for a reader without the access, saying "This
+change needs Gitlet access. An admin can give it to you.". A change's peek
+(`peek=change:web!42`, over any page) is not locked by the frame: it asks, as
+every peek does, and draws the engine's `403` to a reader without Gitlet.
 
 A change and its conversation are the engine's ([Changes](../concepts/gitlet.md#changes),
 [Reviews and findings](../concepts/gitlet.md#reviews-and-findings)), and

@@ -124,12 +124,12 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 		brokertest.GitletCacheIn(&b.Gitlet)
 		for _, id := range slices.Sorted(maps.Keys(tokens)) {
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
-			// lists nothing — and no app is a code permission: what a
-			// credential may do to a repository is the standing of the
-			// person it is bound to (ADR-0088), so the grant decides
-			// nothing a code case reads.
+			// lists nothing — and Gitlet is the code permission: a
+			// credential without it reaches no repository (ADR-0106), and
+			// what one holding it may do to a repository is the standing
+			// of the person it is bound to (ADR-0088).
 			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
-				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantWorklet}})
+				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantGitlet}})
 		}
 		if amend != nil {
 			amend(b)

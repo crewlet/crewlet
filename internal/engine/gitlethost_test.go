@@ -108,9 +108,9 @@ func bindOps(t *testing.T, e *engine.Engine) {
 // gitletNodeBootstrap is a data node's Tier A with a persisted stream, its roles
 // mutated by roles (nil leaves them undeclared: every role), and the founder's
 // token. The token states its grants, as every Tier A token must, and lists
-// the tracker, which decides nothing a case here reads: what a credential may
-// do to a repository is the standing of the seat the directory binds it to
-// (ADR-0088).
+// Gitlet, without which it reaches no repository at all (ADR-0110): what a
+// credential holding it may do to a repository is the standing of the seat
+// the directory binds it to (ADR-0088).
 func gitletNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
@@ -118,7 +118,7 @@ func gitletNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 		brokertest.GitletCacheIn(&b.Gitlet)
 		b.Node.Roles = roles
 		b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,
-			Grants: []iam.Grant{iam.GrantWorklet}}}
+			Grants: []iam.Grant{iam.GrantGitlet}}}
 	})
 }
 

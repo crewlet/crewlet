@@ -22,6 +22,12 @@
  * it of — so the card lists what waits on a person and says why the first
  * half is not there.
  *
+ * GITLET'S QUESTIONS, ASKED ONLY OF A READER HOLDING GITLET (ADR-0110): the
+ * engine refuses both listings to anybody else, so for them the card asks
+ * neither and says what would open it, in the words every lock uses, as Tasks
+ * completed does for Worklet. Until the viewer has answered, neither half is
+ * asked and neither says "none": a listing nobody asked found nothing.
+ *
  * NO GAP TO SAY: Gitlet's listings carry no flag of what they could
  * not account for, since each is one estate copy's answer at the level it
  * names rather than a gather over nodes, so both halves pass an empty `gaps`
@@ -31,6 +37,7 @@
 import { Card, Tag } from "@crewlethq/ui";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
+import { GITLET, needsWords } from "~/lib/access.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -51,16 +58,19 @@ export const HOME_CODE_ROWS = 3;
 export function CodeWaiting() {
   const viewer = useViewer();
   const seated = viewer.handle !== "";
-  const ask = useServicesAsk().code;
+  // ASKED ONLY WHERE THE COMPANY HOSTS CODE AND THE READER HOLDS GITLET; the
+  // lock is drawn once the viewer has said they do not.
+  const reads = useServicesAsk().code && viewer.gitlet;
+  const locked = !viewer.loading && !viewer.gitlet;
   const mine = useCodeQuery(
     "code_changes",
     { needs: "review", limit: HOME_CODE_ROWS },
-    { enabled: ask && seated, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
+    { enabled: reads && seated, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
   );
   const person = useCodeQuery(
     "code_changes",
     { needs: "person", limit: HOME_CODE_ROWS },
-    { enabled: ask, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
+    { enabled: reads, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
   );
   const asked = (mine.data?.changes ?? []).slice(0, HOME_CODE_ROWS);
   const waiting = (person.data?.changes ?? []).slice(0, HOME_CODE_ROWS);
@@ -81,54 +91,60 @@ export function CodeWaiting() {
         <Card.Title as="h3">Code waiting on a person</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-3">
-        <section aria-label="Asking your review" className="col gap-1">
-          <span className="t-label">Asking your review</span>
-          {seated ? (
-            <WidgetQuery
-              error={mine.error}
-              refusal={mine.refusal}
-              loading={mine.loading && !mine.data}
-              gaps={[]}
-            >
-              <WaitingRows
-                rows={asked}
-                ended={mineEnded}
-                none="No change is asking your review."
-                rest={changesHref({ needs: "review" })}
-              />
-            </WidgetQuery>
-          ) : (
-            <span className="t-caption">
-              A review is asked of a seat, and you are signed in as {viewer.login || "nobody"},
-              bound to none.
-            </span>
-          )}
-        </section>
-        <section aria-label="Waiting on a person" className="col gap-1">
-          <span className="t-label">Waiting on a person</span>
-          <WidgetQuery
-            error={person.error}
-            refusal={person.refusal}
-            loading={person.loading && !person.data}
-            gaps={[]}
-            empty={
-              waiting.length === 0 && asked.length === 0 && personEnded && mineEnded
-                ? {
-                    headingLevel: "none",
-                    title: "Nothing waits on a person",
-                    hint: "A change whose approval or blocker only a person can settle appears here.",
-                  }
-                : undefined
-            }
-          >
-            <WaitingRows
-              rows={waiting}
-              ended={personEnded}
-              none="No change waits on a person."
-              rest={changesHref({ needs: "person" })}
-            />
-          </WidgetQuery>
-        </section>
+        {locked ? (
+          <p className="home-card-note">{needsWords("Seeing Gitlet's changes", [GITLET])}</p>
+        ) : (
+          <>
+            <section aria-label="Asking your review" className="col gap-1">
+              <span className="t-label">Asking your review</span>
+              {seated ? (
+                <WidgetQuery
+                  error={mine.error}
+                  refusal={mine.refusal}
+                  loading={(mine.loading || !reads) && !mine.data}
+                  gaps={[]}
+                >
+                  <WaitingRows
+                    rows={asked}
+                    ended={mineEnded}
+                    none="No change is asking your review."
+                    rest={changesHref({ needs: "review" })}
+                  />
+                </WidgetQuery>
+              ) : (
+                <span className="t-caption">
+                  A review is asked of a seat, and you are signed in as {viewer.login || "nobody"},
+                  bound to none.
+                </span>
+              )}
+            </section>
+            <section aria-label="Waiting on a person" className="col gap-1">
+              <span className="t-label">Waiting on a person</span>
+              <WidgetQuery
+                error={person.error}
+                refusal={person.refusal}
+                loading={(person.loading || !reads) && !person.data}
+                gaps={[]}
+                empty={
+                  waiting.length === 0 && asked.length === 0 && personEnded && mineEnded
+                    ? {
+                        headingLevel: "none",
+                        title: "Nothing waits on a person",
+                        hint: "A change whose approval or blocker only a person can settle appears here.",
+                      }
+                    : undefined
+                }
+              >
+                <WaitingRows
+                  rows={waiting}
+                  ended={personEnded}
+                  none="No change waits on a person."
+                  rest={changesHref({ needs: "person" })}
+                />
+              </WidgetQuery>
+            </section>
+          </>
+        )}
       </Card.Body>
     </Card>
   );

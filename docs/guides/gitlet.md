@@ -107,8 +107,10 @@ field, the pattern grammar and what each change does at its activation are in
 `visibility` decides which of the company's **seats** read a repository:
 `company`, the default, is every seat, and `unit` only the seats the chart
 relates to its owner — the owning unit's members and the leads above them.
-It never narrows a person: you, and everyone with a token, read every
-repository whatever it says ([Visibility](../concepts/gitlet.md#visibility)).
+It never narrows a person: you, and everyone holding the Gitlet permission,
+read every repository whatever it says, and a token that carries the permission
+does too ([Visibility](../concepts/gitlet.md#visibility)). What keeps a person
+off the company's code is the permission itself (below).
 
 `path_owners` names who owns which part of the tree: a unit, whose lead is
 asked, or a seat, and the globs of the paths it owns. A glob starts at the
@@ -120,6 +122,18 @@ could, so owning `deploy/**` lets no seat push there that could not before
 ([Path owners](../concepts/gitlet.md#path-owners)).
 
 ## Give each person a token
+
+**First, the Gitlet permission.** Reaching any repository takes it — the
+Gitlet workspace, git and the code tools a person's assistant calls alike
+([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)). An
+administrator holds it through Admin. Give it to everybody else who works on
+the code: tick **Gitlet** in their access (Settings › People), or restate what
+they hold with `gitlet` added (`crewlet iam grant ID -grants worklet,gitlet`;
+the flag is the whole set). The dashboard's **Invite** and **Add person** open
+with every app ticked, Gitlet among them, and `crewlet iam invite` or `create`
+without `-grants` gives every app too. A person without it is refused every
+repository, and git prints `remote: You don't have the access this needs
+(Gitlet). Ask an admin for it (unauthorized)`.
 
 A person pushes with a token that acts as them — as the human seat they hold,
 which every person does from the moment they join
@@ -137,6 +151,13 @@ second factor, and prints the token once
 ([`crewlet iam`](../reference/cli.md#crewlet-iam)). Revoking it ends it, and
 removing its owner ends every token they minted.
 
+**The token needs Gitlet too.** It carries the permissions it was minted with,
+cut to what its owner still holds: `crewlet iam token -login` carries
+everything you hold unless `-grants` says less, and the dashboard's **New
+token** opens with nothing ticked, so tick **Gitlet** there. A token minted
+without it stays without it — one minted before you were given Gitlet among
+them, unless it carries Admin — so mint a new one.
+
 A **Tier A token** pushes too when the identity directory binds it to a human
 seat: it acts under the login `token:<id>`, and
 
@@ -147,6 +168,8 @@ crewlet iam create -kind machine -login token:<id> -seat <handle> -grants none
 binds it in one record — on a human seat nobody holds, since a person's seat
 is theirs alone, so its pushes are that seat's rather than any person's
 ([Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)).
+What it may do is its own entry's `grants` in `api.auth.tokens`, which must
+name `gitlet`.
 
 Either way it is the same principal the dashboard's writes and an assistant's
 operator tools act as, so a person's pushes are theirs: each is recorded as one
@@ -159,7 +182,20 @@ and the repository's push history (below) shows the seat as `actor_seat`.
 account the directory binds to none. It acts as no person, so a push with it
 is refused at its first request, before anything is sent:
 `fatal: remote error: this token is not bound to a person: …`. A pipeline that
-only clones needs no seat.
+only clones needs no seat, and needs the Gitlet permission all the same: a
+Tier A entry for it reads
+
+```yaml
+api:
+  auth:
+    tokens:
+      - id: ci-clone
+        token: "${CREWLET_API_TOKEN_CI}"
+        grants: [gitlet]
+```
+
+and a service account is created with it (`crewlet iam create -kind machine
+-login ci:clone -grants gitlet`) before its token is minted.
 
 ## Clone, fetch and push
 
@@ -194,7 +230,9 @@ platform's keychain works too (`git config --global credential.helper
 osxkeychain`, `libsecret` or `manager`); `credential.helper store` keeps the
 token in plain text in `~/.git-credentials`.
 
-**In CI**, give each runner a token of its own. A token shared by many
+**In CI**, give each runner a token of its own, each carrying the Gitlet
+permission — a Tier A entry with `grants: [gitlet]`, or a service account's
+token minted with it (above). A token shared by many
 runners works while their blobless checkouts' lazy fetches fit together in a
 quarter of a node's room for large requests — 256 MiB on a four-core node —
 and the checkouts past that wait their turn, up to 55 s, behind the ones
@@ -267,6 +305,7 @@ status and the node's log keeps the reason. The ones a person meets most:
 | git prints | What to do |
 |---|---|
 | `repository "<name>" not found` | Check the name in `code.repos`. |
+| `You don't have the access this needs (Gitlet). Ask an admin for it (unauthorized)` | You, or the token you gave, lack the Gitlet permission. Ask an administrator to give you **Gitlet** (Settings › People); a token minted without it stays without it, so mint a new one. A CI runner's Tier A entry needs `gitlet` in its `grants`. |
 | `this token is not bound to a person` | Push with a token that acts as your seat — your own machine token (`crewlet iam token -login`, or the dashboard's Account page). |
 | `(stale: refs/heads/main is at <id>; fetch first)` | Fetch, integrate, push again. |
 | `(protected_force: …)`, `(protected_delete: …)`, `(protected_direct: …)` | The rule named says what it allows; a change to it is a change to `code.repos` for a declared repository, and a person's `code_protect_branch` for one a tool made ([Who may change a protection](../concepts/gitlet.md#who-may-change-a-protection)). |
@@ -366,10 +405,12 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
 reviewers by handle, with a note; a seat or your assistant asks with
 `code_request_review`, which also withdraws an ask. An author of the change,
 anybody who reviews the repository and any person may ask, at most 32
-reviewers at once. A person may always be asked; a seat only where its grant
-lets it review the repository, and never an author of the change, whose
-review would count for nothing ([Asking for
-review](../concepts/gitlet.md#asking-for-review)). A change whose
+reviewers at once. A person may be asked only where they hold the Gitlet
+permission, since reviewing a change is reading its code: an ask naming
+somebody without it is refused `not_permitted`, saying an administrator gives
+them Gitlet first. A seat may be asked only where its grant lets it review the
+repository, and never an author of the change, whose review would count for
+nothing ([Asking for review](../concepts/gitlet.md#asking-for-review)). A change whose
 revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
@@ -439,8 +480,11 @@ questions](../reference/api-endpoints.md#a-changes-questions)).
 
 ### The Inbox card
 
-A notice about a change opens in your Inbox as a card that leads with what
-the change is FOR: its title, the work item it implements and the opening of
+Your code notices are listed only while you hold the Gitlet permission, as
+your work notices are while you hold Worklet's: without it, no code notice is
+listed, counted or pushed to you, and the ones written meanwhile appear once
+an administrator gives you Gitlet. A notice about a change opens in your Inbox
+as a card that leads with what the change is FOR: its title, the work item it implements and the opening of
 its description, then what the record said, then **Where it stands** — the
 engine's sentence of where its merge stands and the agent findings that stand
 open, by weight — and **Open the diff**, one press to its files.
@@ -899,7 +943,8 @@ dashboard read it beside the engine's own. A report is a **person's**: your CI
 calls `code_report_check` over [your own
 assistant's](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 surface with a token of your own (`crewlet iam token -login`), and the report
-names you. A token bound to no seat only reads, and no seat may report: a
+names you. You and the token both need the Gitlet permission. A token bound to
+no seat only reads, and no seat may report: a
 check result is a measurement, and a seat runs no CI whose result it could
 send.
 
@@ -1010,6 +1055,17 @@ repositories with all twenty-three others; and a seat's executor checks a reposi
 box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)).
 
+**For whom.** Every agent seat holds the Gitlet permission, as it holds every
+app, and in a turn nobody woke it works on the code by its grant alone. In a
+turn a person woke — their message, their comment, a work item they assigned
+— it reads and changes the code only where that person holds the Gitlet
+permission too: for a person without it, every code tool is refused, its
+executor is given no repository, and the seat tells them an administrator can
+give them Gitlet. Not even the seat's own branches are changed for them. A
+colleague seat's turn is held to that colleague's grant as well ([Reads made
+for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else),
+[Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
+
 ### What your seats read
 
 Every seat reads the repositories with thirteen of the code tools — a file's
@@ -1030,8 +1086,9 @@ leads above them ([Who may read and push](../concepts/gitlet.md#who-may-read-and
 so a seat outside the unit finds the repository absent from its listing and
 every read of it refused. Your own assistant reads through the same tools on
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-as you, which reads every repository; asked by you, `code_get_repo` also hands
-out the URL to clone from, on `api.external_url`.
+as you, so it reads every repository while you hold the Gitlet permission, and
+none without it; asked by you, `code_get_repo` also hands out the URL to clone
+from, on `api.external_url`.
 
 ### What your seats change
 
@@ -1502,8 +1559,10 @@ as they are, a coding box's `Crewlet-Seat`, `Crewlet-Run` and
 
 **It pushes as the seat `as` names, never as a bot**, with that seat's own token
 at the other forge: what appears there is that person's or that agent's push.
-The seat must read the repository, and is asked again before every push, so a
-chart change that takes its read away stops the mirror. The token is never
+The seat must read the repository — a person's seat, such as `jane` here,
+reads it only while the person holding it has the Gitlet permission — and is
+asked again before every push, so a chart change that takes its read away, or
+Gitlet taken away from that person, stops the mirror. The token is never
 written in the company file — `credential` names the variable that holds it,
 resolved from the secret store and then the node's environment when it
 dials, and only where `code.remote_credentials` declares that variable for

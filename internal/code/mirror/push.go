@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -157,7 +158,12 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 		// publish yet, or any more.
 		return nil
 	}
-	if why := code.MirrorSeatRefusal(to.As, s.Repo, m.o.Roster()); why != "" {
+	roster := m.o.Roster()
+	noGitlet, err := m.personWithoutGitlet(ctx, to.As, roster)
+	if err != nil {
+		return fmt.Errorf("mirror: %s's push mirror: %w", s.Repo.Name, err)
+	}
+	if why := code.MirrorSeatRefusal(to.As, s.Repo, roster, noGitlet); why != "" {
 		return fmt.Errorf("mirror: %s's push mirror pushes as nobody it may: %s", s.Repo.Name, why)
 	}
 	patterns := to.Refs
@@ -384,4 +390,26 @@ func (m *Mirrors) pushBatch(ctx context.Context, s cache.Synced, sc *cache.Scrat
 func (m *Mirrors) announcePushed(ctx context.Context, ev types.CodeMirrorPushed) {
 	m.announce(ctx, ev.RepoID, events.New(ev, events.TraceContext{}), "code_mirror_pushed_unpublished",
 		"the event log does not hold this push; the other host holds what it moved")
+}
+
+// personWithoutGitlet is whether the seat a push mirror pushes as is a
+// person's whom the identity directory says uses no Gitlet — held by nobody,
+// by a person who may not act, or by one not given the app — read before
+// every push (code.MirrorSeatRefusal, ADR-0110); false for an agent's seat and
+// a handle the chart lacks, which the chart alone judges. A directory that
+// cannot answer fails the attempt, which the next one asks again: never a
+// push published as somebody nobody could say may read it.
+func (m *Mirrors) personWithoutGitlet(ctx context.Context, as string, roster code.Roster) (bool, error) {
+	if roster == nil {
+		return false, nil
+	}
+	if seat, ok := roster.Seat(as); !ok || !seat.Human {
+		return false, nil
+	}
+	p, err := m.o.People.Requester(ctx, as)
+	if err != nil {
+		return false, fmt.Errorf("the identity directory could not say whether the person holding %q uses "+
+			"Gitlet, which a push mirror pushing as their seat is judged by: %w", as, err)
+	}
+	return !p.Can(iam.GrantGitlet), nil
 }

@@ -513,6 +513,57 @@ func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
+// withoutGitlet composes whoever woke a rig's turn as colleagues does, but for
+// the contractor, a person holding every app except Gitlet.
+type withoutGitlet struct{ colleagues }
+
+func (w withoutGitlet) Requester(ctx context.Context, handle string) (iam.Principal, error) {
+	if handle != "contractor" {
+		return w.colleagues.Requester(ctx, handle)
+	}
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	return iam.Principal{Kind: iam.KindPerson, Login: "contractor@example.com", Seat: handle,
+		Stage: iam.StageActive, Grants: others}, nil
+}
+
+// A RUN A PERSON WITHOUT GITLET WOKE IS GIVEN NO REPOSITORY (ADR-0110): a
+// run's repositories are resolved through the code read for whoever its turn
+// works for, and a person not given Gitlet reaches no repository, so the
+// launch is refused for them — forbidden, naming Gitlet — before anything is
+// read, and the box is given nothing to clone. The CONTROL is the founder,
+// who holds Gitlet: the same request is resolved.
+//
+// Mutation: put code.read back on ClassEverybody, and the contractor's run is
+// given web.
+func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
+	t.Parallel()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	rig.requesters = withoutGitlet{}
+	rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+		map[string]string{"refs/heads/main": mainHead})
+
+	turn := rig.turn(t, "swe", nil)
+	turn.Requester = "contractor"
+	row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"})
+	var refused *builtin.RefusedCheckout
+	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
+		!strings.Contains(refused.Result.Output, "does not use Gitlet") || len(row.repos) != 0 {
+		t.Fatalf("a run the contractor woke answered %+v, %v; want a forbidden refusal naming Gitlet, and "+
+			"no repository", row.repos, err)
+	}
+
+	person := rig.turn(t, "swe", nil)
+	person.Requester = "founder"
+	if row, err = rig.launch(t, person, builtin.RepoRequest{Repo: "web"}); err != nil || len(row.repos) != 1 {
+		t.Fatalf("a run the founder woke answered %+v, %v; want web", row.repos, err)
+	}
+}
+
 // A CHECKOUT NEEDS THE BOX URL: a node with no CREWLET_BOX_GIT_URL refuses a
 // checkout, naming the variable, before anything
 // is read or written — a box would be given a repository and no address to

@@ -1270,9 +1270,9 @@ What that means in practice:
   present: reveal a secret, change who may do anything, or end everybody's
   sessions ([two locks](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are)).
 - Everything a company does *with* its apps — filing work, writing pages,
-  making artifacts, talking in its own chat — needs no admin: that is
-  `worklet`, `doclet`, `artifacts` and `chatlet`, which is what most people
-  hold.
+  making artifacts, talking in its own chat, reading and pushing its code —
+  needs no admin: that is `worklet`, `doclet`, `artifacts`, `chatlet` and
+  `gitlet`, which is what most people hold.
 
 The org chart inside this document is also written by its **leads**, who need
 no permission for it: a person who leads a unit may change the seats and units

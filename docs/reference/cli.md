@@ -903,7 +903,7 @@ optional. `seats` lists which seats are free.
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
 | `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every data node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every data node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
@@ -925,7 +925,7 @@ optional. `seats` lists which seats are free.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the node's answer as JSON rather than a table: every field and number as the node sent them, its text as written (`<`, `>` and `&` as themselves) and its keys sorted |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts` and `chatlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts`, `chatlet` and `gitlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -948,8 +948,8 @@ states.** On `grant` they are opposite intentions and an empty flag value
 cannot carry both, so the word is explicit — and it is the one spelling that
 could never be a permission. `-grants none` on a person is the
 [overview](../concepts/identity-and-access.md#everybodys-overview) alone: they
-see the org chart, what the agents are doing and the spend, and use neither
-app.
+see the org chart, what the agents are doing and the spend, and use no app —
+the company's code included, which takes `gitlet`.
 
 **A value shown once is shown once.** `invite`, a person's `create`,
 `reset-password` and `token` each print something nothing can read back: what
@@ -1626,6 +1626,12 @@ alone and find the node from the Tier A file's `api` block — `-api` overrides
 it, and with `-api` given no Tier A file is read. `export`, `import -local` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
+`status`, `import` and `purge-unreachable` need the token to carry the Gitlet
+permission (`gitlet`), as the git that `export`, `import -local` and
+`credential` serve does
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)):
+without it the node refuses before any repository is read. `verify` is the
+deployment's own control, and takes `admin`.
 
 `crewlet gitlet hook` is the engine's own: git starts it inside every push. Run
 by hand it says so and exits 2.
@@ -3432,7 +3438,7 @@ One case per file:
 ```yaml
 name: spend-by-agent              # default: the file's name
 person:
-  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet
+  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet, gitlet
   acts: [create_work_item]        # the act tools they may propose; default none
 page:                             # optional: the page chip, as the dashboard sends it
   screen: spend

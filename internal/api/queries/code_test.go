@@ -609,3 +609,51 @@ func TestWhoReadARepositoryIsDecidedBeforeAnythingIsRead(t *testing.T) {
 		t.Errorf("an admin was answered %+v (%v), want the company repository's answer, not recorded", answer, err)
 	}
 }
+
+// A CODE QUESTION ASKS THE GITLET APP BEFORE ANYTHING IS READ (ADR-0110).
+//
+// Every code question but who read a repository (admin's) is registered
+// behind the app, so a caller holding every other app is refused on authority,
+// naming exactly gitlet, by the registry — on REST and the socket alike, which
+// answer through it — and the node's source, the repository's rows, its
+// content and its search are never asked: no answer, count or "not declared"
+// tells somebody the company withheld code from what a repository holds. The
+// questions are found by their names, so one added later is held here too, and
+// the walk fails if it finds none. The CONTROL is the same caller holding
+// gitlet alone, answered. Mutation: register code_repos DecidedBy code.read
+// again, as it was, and it is answered to the caller without the app.
+func TestACodeQuestionAsksTheGitletAppBeforeAnythingIsRead(t *testing.T) {
+	t.Parallel()
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	stub := &stubCode{}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Code: stub})
+	walked := 0
+	for _, what := range r.Names() {
+		if !strings.HasPrefix(what, "code_") || what == "code_repo_readers" {
+			continue
+		}
+		walked++
+		_, err := r.Answer(asGrants(t, "", others...), what, map[string]any{"name": "web"})
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantGitlet}) {
+			t.Errorf("%s: a caller holding every app but gitlet was answered %v, want refused naming gitlet",
+				what, err)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no code question is registered, so this walk certifies nothing")
+	}
+	if stub.sourced != 0 || len(stub.asked) != 0 || len(stub.read) != 0 || len(stub.searched) != 0 {
+		t.Errorf("a refused caller reached the source %d time(s), its rows %d, its content %d and its search %d",
+			stub.sourced, len(stub.asked), len(stub.read), len(stub.searched))
+	}
+	if _, err := r.Answer(asGrants(t, "", iam.GrantGitlet), "code_repos", map[string]any{}); err != nil {
+		t.Errorf("a caller holding gitlet alone was refused the repositories: %v", err)
+	}
+}
