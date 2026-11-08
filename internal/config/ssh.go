@@ -79,6 +79,13 @@ type SSHHost struct {
 	Users SSHHostUsers `yaml:"users" json:"users" desc:"The login users the server setup creates."`
 
 	Description string `yaml:"description,omitempty" json:"description,omitempty" desc:"What the server is, in one line of up to 200 characters, shown to agents and approvers."`
+
+	// Containers adds the container reads to the server's allowlist and the
+	// sudo line they need.
+	Containers bool `yaml:"containers,omitempty" json:"containers,omitempty" desc:"Let the read user list containers and read their logs through sudo -n docker ps and docker logs --tail. Off by default."`
+
+	// ReadAllowlist replaces the rendered default allowlist when set.
+	ReadAllowlist []string `yaml:"read_allowlist,omitempty" json:"read_allowlist,omitempty" desc:"The commands the read user may run, one rule each, replacing the default list: an absolute path, then words, where * is any one word not starting with -, a word ending in =* is that option with any value, and a final ... is any further words. At most 100 rules. Empty renders the default list."`
 }
 
 // SSHHostUsers are a server's two login users, one per level.
@@ -134,6 +141,8 @@ const (
 	SSHDefaultPort = 22
 
 	sshMaxHosts           = 200
+	sshMaxAllowlistRules  = 100
+	sshMaxRuleBytes       = 512
 	sshMaxHostKeys        = 8
 	sshMaxSourceAddresses = 16
 	sshMaxDescription     = 200
@@ -227,8 +236,7 @@ func SSHUser(name string) bool { return sshUser().MatchString(name) }
 // a person reads, "" for an address it takes.
 func SSHAddress(address string) string {
 	if a, err := netip.ParseAddr(address); err == nil {
-		if a = a.Unmap(); a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() ||
-			a.IsLinkLocalMulticast() || a.IsMulticast() || a.Zone() != "" {
+		if !SSHReachable(a) {
 			return fmt.Sprintf("%q is the engine host or a link-local address, which no server should be reached at", address)
 		}
 		return ""
@@ -242,6 +250,49 @@ func SSHAddress(address string) string {
 		return fmt.Sprintf("%q is the engine host or a link-local address, which no server should be reached at", address)
 	}
 	return ""
+}
+
+// sshRuleWord is one word of a read allowlist rule: only characters the
+// server's gate lets through, and * where a rule allows any word.
+var sshRuleWord = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z0-9_./:=,@%+*-]+$`)
+})
+
+// SSHAllowlistRule checks one read allowlist rule and answers the sentence a
+// person reads, "" for a rule the gate can hold a command to: an absolute path
+// first, then words of the gate's own characters, * only as a whole word or
+// after =, and ... only last.
+func SSHAllowlistRule(rule string) string {
+	words := strings.Fields(rule)
+	switch {
+	case len(words) == 0:
+		return "a rule is empty; remove it or name the command"
+	case len(rule) > sshMaxRuleBytes || strings.Join(words, " ") != rule:
+		return fmt.Sprintf("a rule is one line of at most %d characters, its words one space apart", sshMaxRuleBytes)
+	case !strings.HasPrefix(words[0], "/") || strings.ContainsAny(words[0], "*="):
+		return fmt.Sprintf("%q does not start with a command's absolute path, such as /usr/bin/uptime", rule)
+	}
+	for i, w := range words {
+		switch {
+		case !sshRuleWord().MatchString(w):
+			return fmt.Sprintf("%q holds a character the server's gate refuses: write it without quotes or shell characters", rule)
+		case w == "..." && i != len(words)-1:
+			return fmt.Sprintf("%q has ... before its last word; ... stands for any further words, so it goes last", rule)
+		case strings.Contains(w, "*") && w != "*" && !(strings.HasSuffix(w, "=*") && strings.Count(w, "*") == 1):
+			return fmt.Sprintf("%q uses * inside a word; * is a whole word, or the value after an option's =", rule)
+		}
+	}
+	return ""
+}
+
+// SSHReachable reports whether a server may be reached at a: never the engine
+// host itself, an unspecified or multicast address, or a link-local one (where
+// a cloud's metadata service answers). The engine's dialer holds the address it
+// connects to the same rule, so a name that resolves to one is refused too.
+func SSHReachable(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsValid() && a.Zone() == "" && !a.IsLoopback() && !a.IsUnspecified() && !a.IsLinkLocalUnicast() &&
+		!a.IsLinkLocalMulticast() && !a.IsMulticast()
 }
 
 // SSHHostKeyAlgorithms are the host key types the engine pins, strongest first.
@@ -400,6 +451,15 @@ func (h SSHHost) validate(p *problems, path Path) {
 	case op == h.Users.Read:
 		p.add(at(path, "users.operate"), ErrConflict,
 			"the operate user must differ from the read user, whose every command is forced through the read allowlist")
+	}
+	if len(h.ReadAllowlist) > sshMaxAllowlistRules {
+		p.add(at(path, "read_allowlist"), ErrOutOfRange, "%d rules is more than %d", len(h.ReadAllowlist),
+			sshMaxAllowlistRules)
+	}
+	for i, rule := range h.ReadAllowlist {
+		if sentence := SSHAllowlistRule(rule); sentence != "" {
+			p.add(idx(at(path, "read_allowlist"), i), ErrUnknownValue, "%s", sentence)
+		}
 	}
 	if utf8.RuneCountInString(h.Description) > sshMaxDescription || strings.ContainsAny(h.Description, "\r\n") {
 		p.add(at(path, "description"), ErrOutOfRange, "a description is one line of at most %d characters",

@@ -4847,6 +4847,15 @@
             "null"
           ]
         },
+        "containers": {
+          "description": "Let the read user list containers and read their logs through sudo -n docker ps and docker logs --tail. Off by default.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "description": "What the server is, in one line of up to 200 characters, shown to agents and approvers.",
           "type": [
@@ -4884,6 +4893,21 @@
           "description": "The server's SSH port. Empty is 22.",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "read_allowlist": {
+          "description": "The commands the read user may run, one rule each, replacing the default list: an absolute path, then words, where * is any one word not starting with -, a word ending in =* is that option with any value, and a final ... is any further words. At most 100 rules. Empty renders the default list.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         },

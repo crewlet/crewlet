@@ -90,7 +90,8 @@ func TestACompleteSSHBlockValidates(t *testing.T) {
 		"    commands: {timeout_seconds: 900, max_output_bytes: 4096}\n" +
 		"    hosts:\n" +
 		fmt.Sprintf("      - {id: api-1, address: api-1.example.com, port: 2222, host_keys: [%q, %q, %q], "+
-			"users: {read: crewlet-read, operate: crewlet-ops}, description: Production API server}\n",
+			"users: {read: crewlet-read, operate: crewlet-ops}, description: Production API server, containers: true, "+
+			"read_allowlist: [/usr/bin/uptime, \"/usr/bin/journalctl --no-pager -u * --since=*\", \"/usr/bin/tail -n * ...\"]}\n",
 			ed25519Line(t, 1), sshKeyLine(t, &rsaKey.PublicKey), sshKeyLine(t, &ecKey.PublicKey)) +
 		fmt.Sprintf("      - {id: db-2, address: 198.51.100.4, host_keys: [%q], users: {read: crewlet-read}}\n",
 			ed25519Line(t, 2))
@@ -246,6 +247,18 @@ func TestEverySSHProblemIsReportedAtItsPath(t *testing.T) {
 		{"a description of two lines", hostsBlock(fmt.Sprintf("      - {id: api-1, address: api-1.example.com, "+
 			"host_keys: [%q], users: %s, description: \"one\\ntwo\"}\n", key, users)), on,
 			"integrations.ssh.hosts[0].description", "out_of_range"},
+		{"a relative allowlist rule", hostsBlock(fmt.Sprintf("      - {id: api-1, address: api-1.example.com, "+
+			"host_keys: [%q], users: %s, read_allowlist: [uptime]}\n", key, users)), on,
+			"integrations.ssh.hosts[0].read_allowlist[0]", "unknown_value"},
+		{"an allowlist rule with a shell character", hostsBlock(fmt.Sprintf("      - {id: api-1, address: api-1.example.com, "+
+			"host_keys: [%q], users: %s, read_allowlist: [\"/bin/sh -c id;id\"]}\n", key, users)), on,
+			"integrations.ssh.hosts[0].read_allowlist[0]", "unknown_value"},
+		{"an allowlist rule with ... first", hostsBlock(fmt.Sprintf("      - {id: api-1, address: api-1.example.com, "+
+			"host_keys: [%q], users: %s, read_allowlist: [\"/usr/bin/tail ... -n\"]}\n", key, users)), on,
+			"integrations.ssh.hosts[0].read_allowlist[0]", "unknown_value"},
+		{"an allowlist rule with * inside a word", hostsBlock(fmt.Sprintf("      - {id: api-1, address: api-1.example.com, "+
+			"host_keys: [%q], users: %s, read_allowlist: [\"/usr/bin/cat /var/log/*.log\"]}\n", key, users)), on,
+			"integrations.ssh.hosts[0].read_allowlist[0]", "unknown_value"},
 		{"an unknown level", sshBlock(t, ""), "enabled: true, level: administer, hosts: [api-1]",
 			"roles[0].integrations.ssh.level", "unknown_value"},
 		{"a host the company has not registered", sshBlock(t, ""), "enabled: true, hosts: [api-2]",
