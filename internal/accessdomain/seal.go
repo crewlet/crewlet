@@ -21,6 +21,8 @@ func AAD(handle, commandID string) string {
 // Sealer seals and opens command text under the fleet keyring.
 type Sealer struct {
 	cipher secrets.Cipher
+	// active is the keyring key the cipher seals under.
+	active string
 }
 
 // NewSealer builds one over the fleet keyring. A nil cipher is refused: it
@@ -30,10 +32,15 @@ func NewSealer(cipher secrets.Cipher) (*Sealer, error) {
 		return nil, errors.New("accessdomain: a sealer with no keyring would write every " +
 			"command in the clear into the log, every node's database and every backup")
 	}
-	if _, err := cipher.Encrypt("", "access/sealer/probe"); err != nil {
+	probe, err := cipher.Encrypt("", "access/sealer/probe")
+	if err != nil {
 		return nil, fmt.Errorf("accessdomain: the keyring cannot seal: %w", err)
 	}
-	return &Sealer{cipher: cipher}, nil
+	active, ok := secrets.EnvelopeKeyID(probe)
+	if !ok {
+		return nil, errors.New("accessdomain: the keyring sealed a value that names no key")
+	}
+	return &Sealer{cipher: cipher, active: active}, nil
 }
 
 // SealedCommand is a command's text sealed to its record, and the keyring key

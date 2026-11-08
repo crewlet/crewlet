@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -961,6 +962,57 @@ func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
 		if body["message"] != tc.code.Message() || tc.code.Message() == "" {
 			t.Errorf("%s carries message %q, want the vocabulary's sentence "+
 				"for %s", tc.name, body["message"], tc.code)
+		}
+	}
+}
+
+// fakeAccess is the access log's half of a rotation.
+type fakeAccess struct {
+	report   accessdomain.ResealReport
+	err      error
+	resealed int
+}
+
+func (f *fakeAccess) SealedKeys(context.Context) (accessdomain.SealedCount, error) {
+	return accessdomain.SealedCount{Values: secrets.KeyCounts{"k0": 2}}, nil
+}
+
+func (f *fakeAccess) Reseal(context.Context) (accessdomain.ResealReport, error) {
+	f.resealed++
+	return f.report, f.err
+}
+
+// A REKEY MOVES THE ACCESS LOG'S SSH COMMANDS TOO: each command's text sealed
+// under an old key is moved by a record, counted in the answer; a node that
+// runs no access log says so (`null`); and a command nobody could confirm, or
+// one that would not open, is `rekey_incomplete` carrying what did move.
+//
+// Mutation: drop the call to Reseal and the first case fails.
+func TestARekeyMovesTheAccessLogsCommandsToo(t *testing.T) {
+	t.Parallel()
+	opts := func(access secretsapi.Access) secretsapi.Options {
+		return secretsapi.Options{Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+			ActiveKeyID: "k1", Access: access, Now: func() time.Time { return clock }}
+	}
+	moved := &fakeAccess{report: accessdomain.ResealReport{Commands: 2}}
+	code, body := call(t, mounted(t, opts(moved), iam.AllGrants...), http.MethodPost, "/secrets/rekey", "")
+	if code != http.StatusOK || moved.resealed != 1 || !strings.Contains(body, `"access":{"commands":2}`) {
+		t.Errorf("rekey = %d %s (re-sealed %d times), want the commands moved once and counted",
+			code, body, moved.resealed)
+	}
+	if code, body := call(t, mounted(t, opts(nil), iam.AllGrants...), http.MethodPost, "/secrets/rekey", ""); code !=
+		http.StatusOK || !strings.Contains(body, `"access":null`) {
+		t.Errorf("a node with no access log rekeyed %d %s, want it said", code, body)
+	}
+	for name, access := range map[string]*fakeAccess{
+		"an outcome nobody could confirm": {report: accessdomain.ResealReport{Commands: 1, Unknown: 1}},
+		"a command that would not open": {report: accessdomain.ResealReport{Commands: 1},
+			err: errors.New("open a command: secret could not be decrypted")},
+	} {
+		code, body := call(t, mounted(t, opts(access), iam.AllGrants...), http.MethodPost, "/secrets/rekey", "")
+		if code != http.StatusInternalServerError || !strings.Contains(body, `"rekey_incomplete"`) ||
+			!strings.Contains(body, `"access":{"commands":1}`) {
+			t.Errorf("%s: rekey = %d %s, want rekey_incomplete carrying what did move", name, code, body)
 		}
 	}
 }

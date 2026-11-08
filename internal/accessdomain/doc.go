@@ -19,8 +19,9 @@
 // serial, a command by its seat and its own id, each on a subject of its own
 // and published first-writer-wins, so a retried write lands once and a second
 // write for the same turn is [ErrRecorded], not an error of the caller's. No
-// record is updated after it lands, but for one flag: a seat's newest told
-// record is its BASELINE (`latest`), which the applier moves in log order.
+// record is updated after it lands, but for two: a seat's newest told record
+// is its BASELINE (`latest`), which the applier moves in log order, and a
+// command's sealed text, which a rekey moves onto the active key (`resealed`).
 //
 //   - `told` records one turn's snapshot of the seat's access and the changes
 //     since its baseline, or none on a seat's first (`baseline`). The snapshot
@@ -33,6 +34,8 @@
 //     closed failure word where it did not run or finish (never an error's
 //     text), and who approved or denied it. Only an administrator's audit read
 //     opens it.
+//   - `resealed` writes one command's text sealed afresh under the keyring's
+//     active key, on the command's own subject ([Writer.Reseal]).
 //   - `forget` removes what a seat the company removed was told, and records the
 //     removal: a told record decided before a removal it did not see lands as
 //     nothing, so a turn racing its seat's removal is not told into a seat that

@@ -24,17 +24,15 @@ that ran it**, bound to its record, written through by the applier and opened
 only by an administrator's audit read. Its stdin and output are kept as their
 sizes and SHA-256 digests alone.
 
-**A command's text stays sealed under the keyring key that wrote it for as
-long as its record is kept**, and no rekey moves it in this release: a key may
-leave the ring only once no command is sealed under it (`access_values` on
-`GET /secrets` counts them), or the commands sealed under it read as
-unreadable in the audit. That is up to `access_history.retention_days` (400 by
-default, 3650 at most), far past the 30 to 365 days the assistant's and the
-executor's sealed values live. Nothing writes a command yet: the SSH
-integration is the first writer, and a reseal of a command's text under the
-active key through `crewlet secrets rekey` is a requirement of that series
-before it reaches `main`. A command's failure is a closed word, never text, so
-no error can carry the command or its output into a row in the clear.
+**A rekey moves a command's text onto the active key with a record**, a
+`resealed` op on the command's own subject carrying the same text sealed
+afresh, which every data node applies; no node rewrites its own rows.
+`crewlet secrets rekey` publishes one for every command still under another
+key (`access_values` on `GET /secrets` counts them), so an old key can leave
+the ring without a command's audit reading as unreadable for the
+`access_history.retention_days` (400 by default, 3650 at most) it is kept. A
+command's failure is a closed word, never text, so no error can carry the
+command or its output into a row in the clear.
 
 **Records are kept for the company's `access_history.retention_days`** (400 by
 default, 90 to 3650) and expired an hour at a time by the trash reaper, every

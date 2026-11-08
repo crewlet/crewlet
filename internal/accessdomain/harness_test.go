@@ -95,6 +95,12 @@ type writeNode struct {
 // newWriteNode is a data node named nodeID over log.
 func newWriteNode(t *testing.T, log *js.DomainLog, nodeID string) *writeNode {
 	t.Helper()
+	return newWriteNodeWith(t, log, nodeID, testCipher(t))
+}
+
+// newWriteNodeWith is a data node named nodeID over log, sealing with cipher.
+func newWriteNodeWith(t *testing.T, log *js.DomainLog, nodeID string, cipher secrets.Cipher) *writeNode {
+	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), nodeID+".db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := dbNode.Close(); err != nil {
@@ -141,7 +147,7 @@ func newWriteNode(t *testing.T, log *js.DomainLog, nodeID string) *writeNode {
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	sealer, err := accessdomain.NewSealer(testCipher(t))
+	sealer, err := accessdomain.NewSealer(cipher)
 	if err != nil {
 		t.Fatalf("NewSealer: %v", err)
 	}

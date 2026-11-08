@@ -284,6 +284,7 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 		Moved      []string                     `json:"moved"`
 		EngineKeys int                          `json:"engine_keys_moved"`
 		Identity   *secretsapi.IdentityResealed `json:"identity"`
+		Access     *secretsapi.AccessResealed   `json:"access"`
 	}
 	err := c.callWithin(ctx, http.MethodPost,
 		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), "", nil, &body, maxListingBytes,
@@ -293,7 +294,7 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 	}
 	return rotation{
 		Rekeyed:  fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys},
-		Identity: body.Identity,
+		Identity: body.Identity, Access: body.Access,
 	}, nil
 }
 

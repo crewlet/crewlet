@@ -211,12 +211,20 @@ type Executor interface {
 }
 
 // Access is the access log's half of a keyring rotation: the SSH commands it
-// recorded, each one's text sealed under the same keyring, which a rotation
-// waits out until they age out with `access_history.retention_days`.
+// recorded, each one's text sealed under the same keyring, which a rekey moves
+// onto the active key by a record per command.
 type Access interface {
 	// SealedKeys counts the commands by the keyring key each is sealed
 	// under, opening none of them.
 	SealedKeys(ctx context.Context) (accessdomain.SealedCount, error)
+
+	// Reseal moves every command's text onto the active key.
+	Reseal(ctx context.Context) (accessdomain.ResealReport, error)
+}
+
+// AccessResealed is what a rekey moved in the access log, counted.
+type AccessResealed struct {
+	Commands int `json:"commands"`
 }
 
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
@@ -1156,8 +1164,27 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var access *AccessResealed
+	if s.access != nil {
+		report, err := s.access.Reseal(r.Context())
+		access = &AccessResealed{Commands: report.Commands}
+		if err != nil || report.Unknown > 0 {
+			log.ErrorContext(r.Context(), "secret_rekey_access_incomplete",
+				"error", errText(err), "moved", rekeyed.Moved, "access_commands", access.Commands,
+				"access_unknown", report.Unknown, "by", by.Name, "operator", by.OperatorID)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
+				"moved":             nonNil(rekeyed.Moved),
+				"engine_keys_moved": rekeyed.EngineKeys,
+				"identity":          identity,
+				"access":            access,
+				"access_unknown":    report.Unknown,
+				"hint":              "Some SSH commands weren't moved to the new key. Run the rekey again.",
+			})
+			return
+		}
+	}
 	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", rekeyed.Moved,
-		"engine_keys_moved", rekeyed.EngineKeys, "identity", identity,
+		"engine_keys_moved", rekeyed.EngineKeys, "identity", identity, "access", access,
 		"key_id", s.keyID, "by", by.Name, "operator", by.OperatorID)
 	// THE ENGINE'S KEYS AND THE IDENTITY ESTATE'S VALUES AS COUNTS beside the
 	// operator's names: the operator retiring the old key needs to know they
@@ -1165,7 +1192,7 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	// estate, which is a different answer from "nothing to move".
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key_id": s.keyID, "moved": nonNil(rekeyed.Moved),
-		"engine_keys_moved": rekeyed.EngineKeys, "identity": identity,
+		"engine_keys_moved": rekeyed.EngineKeys, "identity": identity, "access": access,
 	})
 }
 

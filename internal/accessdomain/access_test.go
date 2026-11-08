@@ -3,6 +3,7 @@ package accessdomain_test
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -405,4 +407,70 @@ func TestACommandsFailureIsAClosedWord(t *testing.T) {
 		page.Rows[0].Ran {
 		t.Fatalf("the audit answers %+v, %v", page.Rows, err)
 	}
+}
+
+// A REKEY RESEALS EVERY COMMAND UNDER THE ACTIVE KEY: a node whose keyring made
+// a new key active moves each command still sealed under the old one by a
+// record on the command's own subject, which every node applies, so the rows
+// stay identical across nodes and open under the new key; a second pass finds
+// nothing to move.
+//
+// Mutation: rewrite the row in place instead of publishing a record, and the
+// node that did not reseal still holds the old key.
+func TestACommandIsResealedUnderTheActiveKey(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	old := newWriteNode(t, log, "data-1")
+	const text = "sudo systemctl restart api"
+	ran := command("sre", uuid.NewString(), text)
+	if _, err := old.writer.Ran(t.Context(), engineCall(), ran); err != nil {
+		t.Fatal(err)
+	}
+	rotated := newWriteNodeWith(t, log, "data-2", rotatedCipher(t))
+	rotated.drain()
+	report, err := rotated.writer.Reseal(t.Context(), engineCall().By, rotated.reader())
+	if err != nil || report.Commands != 1 || report.Unknown != 0 {
+		t.Fatalf("the reseal moved %+v, %v; want one command", report, err)
+	}
+	rotated.drain()
+	old.drain()
+	for _, n := range []*writeNode{old, rotated} {
+		if got := n.count(`SELECT COUNT(*) FROM access_commands WHERE content_key = 'k2'`); got != 1 {
+			t.Fatalf("a node holds %d commands under the new key, want 1", got)
+		}
+	}
+	if !maps.EqualFunc(old.dump(), rotated.dump(), slices.Equal) {
+		t.Fatal("the two nodes' rows differ after the reseal")
+	}
+	page, err := rotated.reader().Commands(t.Context(), accessdomain.AuditQuery{Handle: "sre"},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(page.Rows) != 1 {
+		t.Fatalf("the audit answers %+v, %v", page, err)
+	}
+	if opened, err := page.Rows[0].Open(rotated.sealer); err != nil || opened != text {
+		t.Fatalf("the resealed row opens to %q, %v", opened, err)
+	}
+	again, err := rotated.writer.Reseal(t.Context(), engineCall().By, rotated.reader())
+	if err != nil || again.Commands != 0 {
+		t.Fatalf("a second pass moved %+v, %v; want nothing", again, err)
+	}
+}
+
+// rotatedCipher is the fleet keyring after a rotation: the old key kept, the
+// new one active.
+func rotatedCipher(t *testing.T) secrets.Cipher {
+	t.Helper()
+	old := make([]byte, 32)
+	for i := range old {
+		old[i] = byte(i + 1)
+	}
+	next := make([]byte, 32)
+	for i := range next {
+		next[i] = byte(64 + i)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k2", Keys: map[string][]byte{"k1": old, "k2": next}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cipher
 }

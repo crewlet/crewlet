@@ -333,6 +333,9 @@ type removedSecret struct {
 type rotation struct {
 	fleetsecrets.Rekeyed
 	Identity *secretsapi.IdentityResealed
+	// Access is the access log's SSH commands, counted; nil where nothing
+	// moved them, as Identity is.
+	Access *secretsapi.AccessResealed
 }
 
 // engineHeld is what the keyring seals that no command names: the engine's own
@@ -349,8 +352,8 @@ type engineHeld struct {
 	// way; nil where the backend holds none.
 	Executor *executordomain.SealedCount
 
-	// Access is the access log's sealed SSH commands, waited out the same
-	// way; nil where the backend holds none.
+	// Access is the access log's sealed SSH commands, which a rekey moves;
+	// nil where the backend holds none.
 	Access *accessdomain.SealedCount
 }
 
@@ -1043,14 +1046,21 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 					"(sealed under another key)\n", identityStale)
 			}
 		}
+		accessStale := 0
+		if held.Access != nil {
+			accessStale = held.Access.Outside(active)
+			if accessStale > 0 {
+				fmt.Fprintf(stdout, "  %d recorded SSH commands (sealed under another key)\n", accessStale)
+			}
+		}
 		waitOut(stdout, held, active)
-		if stale == 0 && engineStale == 0 && identityStale == 0 {
+		if stale == 0 && engineStale == 0 && identityStale == 0 && accessStale == 0 {
 			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 			noIdentityHere(stdout, sv, held.Identity == nil)
 			return nil
 		}
-		fmt.Fprintf(stdout, "%d secrets, %d engine keys and %d personal values "+
-			"would be re-sealed under %s\n", stale, engineStale, identityStale, active)
+		fmt.Fprintf(stdout, "%d secrets, %d engine keys, %d personal values and %d SSH commands "+
+			"would be re-sealed under %s\n", stale, engineStale, identityStale, accessStale, active)
 		noIdentityHere(stdout, sv, held.Identity == nil)
 		return nil
 	}
@@ -1058,11 +1068,14 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	if err != nil {
 		return err
 	}
-	identityMoved := 0
+	identityMoved, accessMoved := 0, 0
 	if rekeyed.Identity != nil {
 		identityMoved = rekeyed.Identity.Values
 	}
-	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 && identityMoved == 0 {
+	if rekeyed.Access != nil {
+		accessMoved = rekeyed.Access.Commands
+	}
+	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 && identityMoved == 0 && accessMoved == 0 {
 		fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 	} else {
 		// THE NAMES, not a count: a pass that moved 12 of 13 rows raises
@@ -1081,6 +1094,9 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 			fmt.Fprintf(stdout, "and %d personal values of %d people in the "+
 				"identity estate\n", identityMoved, rekeyed.Identity.People)
 		}
+		if accessMoved > 0 {
+			fmt.Fprintf(stdout, "and %d recorded SSH commands\n", accessMoved)
+		}
 	}
 	noIdentityHere(stdout, sv, rekeyed.Identity == nil)
 	// AND WHAT A REKEY CANNOT MOVE, read after it: the answer the operator
@@ -1097,9 +1113,8 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 // and so keeps the old key on the ring until it is gone: live invitations,
 // because only a re-issue could carry the address again and its own claim
 // refuses one while the invitation is open, the Dashboard Assistant's
-// conversations, which leave only with their retention, the seats' executor
-// sessions, which leave with their rows, and the access log's SSH commands,
-// which leave with their retention.
+// conversations, which leave only with their retention, and the seats'
+// executor sessions, which leave with their rows.
 func waitOut(stdout io.Writer, held engineHeld, active string) {
 	if held.Assistant != nil {
 		if n := held.Assistant.Outside(active); n > 0 {
@@ -1117,15 +1132,6 @@ func waitOut(stdout io.Writer, held engineHeld, active string) {
 				"its seat's budget releases it, or once it is untouched for "+
 				"turn_engine.conversation_session.retention_days); dropped sooner, "+
 				"each reads as no session and its next turn starts fresh\n", n)
-		}
-	}
-	if held.Access != nil {
-		if n := held.Access.Outside(active); n > 0 {
-			fmt.Fprintf(stdout, "%d recorded SSH commands are sealed under another key "+
-				"and are not re-sealed: keep that key on the ring until none is left (a "+
-				"command's record leaves once it is older than "+
-				"access_history.retention_days); dropped sooner, an audit read shows the "+
-				"command as unreadable\n", n)
 		}
 	}
 	if held.Identity == nil {
