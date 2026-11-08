@@ -243,11 +243,13 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 // OF IS NOTHING. A box whose tar breaks — its record naming a session its
 // harness wrote — answers why, so the capture is stamped refused and a later
 // launch knows the job's session is missing rather than continuing an older one
-// as its last; a box whose harness wrote no transcript answers no session at
-// all, which is no refusal.
+// as its last, and the error carries the pack's whole word, though it names a
+// file nested deep in the session; a box whose harness wrote no transcript
+// answers no session at all, which is no refusal.
 //
 // Mutation: read a failed pack's exit as nothing to pack, or a missing
-// transcript as a failure, and a case here goes red.
+// transcript as a failure, or cut the pack's word at a transcript line's
+// bound, and a case here goes red.
 func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 	t.Parallel()
 	t.Run("a tar that breaks", func(t *testing.T) {
@@ -262,6 +264,22 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true,
 			MaxBytes: takeBound}); err == nil {
 			t.Fatal("a take whose pack failed answered no error")
+		}
+	})
+	t.Run("a tar that breaks on a file nested deep in the session", func(t *testing.T) {
+		t.Parallel()
+		runner, b := sessionBox(t, "2.1.310")
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+		said := "tar: projects/" + executor.ClaudeProjectDir + "/" + ran.SessionID +
+			"/subagents/workflow/agent-a1b2c3d4e5f6a7b8c.jsonl: Cannot open: Permission denied"
+		writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\necho "+shQuote(said)+" >&2\nexit 2\n")
+		_, body, err := runner.PackCapture(t.Context(), b)
+		if body != nil {
+			_ = body.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), said) {
+			t.Fatalf("PackCapture with a tar that breaks on a nested file = %v; want an error carrying its "+
+				"whole word, %q", err, said)
 		}
 	})
 	t.Run("no transcript", func(t *testing.T) {
