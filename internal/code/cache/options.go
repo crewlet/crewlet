@@ -315,6 +315,12 @@ type knobs struct {
 	// is about to sync (Cache.durableDir): a case counts what a swap's
 	// durability costs.
 	syncing func(dir string)
+	// dropping and dropped, when set, are told each derived file a drop
+	// moves into trash/ (dropFor), by its path relative to the incarnation:
+	// dropping once it is moved and before the incarnation's record of it
+	// changes, dropped once that change is made, its entry's lock let go
+	// between them. A case holds a drop on either side of the change.
+	dropping, dropped func(rel string)
 }
 
 // validate refuses an Options value naming the field and what to set,
