@@ -397,6 +397,13 @@ jobs:
         working-directory: dashboard
       - run: npm test
         working-directory: dashboard
+      # The layout suites measure panes in a headless browser, at the revision
+      # the locked test runner names, with the system libraries it needs.
+      - name: install the layout suites' headless browser
+        run: npx --no playwright install --with-deps --only-shell chromium
+        working-directory: dashboard
+      - run: npm run test:layout
+        working-directory: dashboard
       # THE SAME PREDICATE AS `make dashboard-check`, whose comment carries the
       # reasoning; change the two together. `git diff` sees only the paths
       # the commit already has, and every emitted name is content-hashed, so

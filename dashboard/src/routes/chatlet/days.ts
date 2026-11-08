@@ -82,6 +82,7 @@ export function daysBefore(key: string, days: number): string {
 // Formatted at UTC because the key is already the reader's civil day.
 const WEEKDAY: DateShape = Object.freeze({ weekday: "long" });
 const MONTH: DateShape = Object.freeze({ month: "long" });
+const MONTH_SHORT: DateShape = Object.freeze({ month: "short" });
 
 /** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st. */
 function ordinal(n: number): string {
@@ -173,4 +174,27 @@ export function layoutDays(
     previous = view;
   });
   return days;
+}
+
+/**
+ * When a list row's last word was said, in two lengths for one place: the
+ * time today, "Yesterday", then the date ("November 16" wide, "Nov 16"
+ * narrow), with its year once it is not this year's. The row draws the one
+ * its column has room for.
+ */
+export function listDate(ts: string, today: string): { long: string; short: string } {
+  const key = dayOf(ts);
+  if (key === "") return { long: "", short: "" };
+  const days = daysBetween(key, today);
+  if (days === 0) return { long: timeOf(ts), short: timeOf(ts) };
+  if (days === 1) return { long: "Yesterday", short: "Yesterday" };
+  const at = civilAt(key);
+  if (at === null) return { long: key, short: key };
+  const date = new Date(at);
+  const day = date.getUTCDate();
+  const year = key.slice(0, 4) === today.slice(0, 4) ? "" : `, ${key.slice(0, 4)}`;
+  return {
+    long: `${dateTimeFormat("en-US", "UTC", MONTH).format(date)} ${day}${year}`,
+    short: `${dateTimeFormat("en-US", "UTC", MONTH_SHORT).format(date)} ${day}${year}`,
+  };
 }

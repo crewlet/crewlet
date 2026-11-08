@@ -162,3 +162,6 @@ slack-apps.json
 # covers both, and the cost is a file literally named `node_modules` that
 # nothing creates.
 node_modules
+
+# What a browser run of the layout suites writes beside them (failure screenshots).
+.vitest

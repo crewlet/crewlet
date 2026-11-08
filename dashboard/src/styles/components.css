@@ -426,9 +426,10 @@ a.live-row:focus-visible {
    the baseline's `:focus-visible` ring, so the ring never drew for anyone.
    The baseline already draws nothing on a pointer focus. */
 .tabpanel {
+  --toolbar-host-gap: var(--spacing-5);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
+  gap: var(--toolbar-host-gap);
   min-width: 0;
 }
 

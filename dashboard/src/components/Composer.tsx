@@ -37,6 +37,7 @@ import {
   Select,
   Text,
   Textarea,
+  useSendOnEnter,
   type SelectOption,
 } from "@crewlethq/ui";
 import {
@@ -56,7 +57,6 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useTaskKeyHint } from "~/lib/projectKeys.ts";
 import { DOCLET, needsWords } from "~/lib/access.ts";
-import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
 import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
@@ -132,8 +132,8 @@ export const Composer = forwardRef<
 
   const blocked = text.trim() ? undefined : "Write something first.";
   const send = async () => {
-    // THE BUTTON'S OWN GATE, because ⌘Enter sends from inside the field
-    // without touching the button: a second ⌘Enter while the first answer
+    // THE BUTTON'S OWN GATE, because Enter sends from inside the field
+    // without touching the button: a second Enter while the first answer
     // was out posted the same comment twice.
     if (!pressable(write, blocked)) return;
     const body = text.trim();
@@ -156,6 +156,9 @@ export const Composer = forwardRef<
       ? `Reply to ${to}… @mention to bring someone in`
       : `Leave a comment… @mention to bring someone in`);
   const fieldLabel = mode.kind === "reply" ? `Reply to ${to}` : `Comment on ${named}`;
+  // THE KIT'S SEND KEYS, as in every message box: Enter sends, Shift+Enter
+  // is a new line. An open `@` list takes its Enter first.
+  const keys = useSendOnEnter({ onSend: () => void send(), canSend: blocked === undefined });
 
   return (
     <div className="composer" data-mode={mode.kind}>
@@ -171,6 +174,7 @@ export const Composer = forwardRef<
           aria-expanded={choices.length > 0}
           aria-controls={choices.length > 0 ? listId : undefined}
           aria-activedescendant={choices.length > 0 ? `${listId}-${active}` : undefined}
+          aria-describedby={keys.describedBy}
           onChange={(event) => {
             setText(event.target.value);
             setCaret(event.target.selectionStart ?? event.target.value.length);
@@ -198,12 +202,10 @@ export const Composer = forwardRef<
                 return;
               }
             }
-            if (matchesRow("compose.send", event.nativeEvent)) {
-              event.preventDefault();
-              void send();
-            }
+            keys.onKeyDown(event);
           }}
         />
+        {keys.description}
         {choices.length > 0 && (
           <ul
             className="composer-mentions"

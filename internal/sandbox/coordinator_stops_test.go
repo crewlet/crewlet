@@ -284,6 +284,21 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"RecordHanded": {{
+		// IT ENDS NOTHING: it records a token the poll's refresh is about to
+		// write into the run's box in the sealed set beside the job's row,
+		// and writes nothing of the row itself — a job the row no longer
+		// holds running is answered as one, its token written nowhere, and
+		// whatever becomes of the run is the poll's to say as it always does.
+		name: "a token the poll renews in the run's box, recorded before it is written",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			if err := rig.coordinator.RecordHanded(t.Context(), run, "a-token-the-poll-renewed",
+				rig.now.Add(15*time.Minute)); err != nil {
+				t.Logf("RecordHanded: %v", err)
+			}
+		},
+	}},
 	"OweEnd": {{
 		// IT ENDS NOTHING: it writes onto the run's record the end its turn
 		// owes the executor log, which the run's own ending records before
@@ -951,6 +966,14 @@ func (s *refusingStore) Handed(ctx context.Context, run PendingRun) (string, err
 	return s.inner.Handed(ctx, run)
 }
 
+func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
+	add func(sealed string) (string, string)) (bool, error) {
+	if s.called("AddHanded") {
+		return false, errRefusedCall
+	}
+	return s.inner.AddHanded(ctx, run, add)
+}
+
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall
@@ -1137,6 +1160,13 @@ func (s *refusingStore) StampCapture(ctx context.Context, turnID string, capture
 		return false, errRefusedCall
 	}
 	return s.inner.StampCapture(ctx, turnID, capture)
+}
+
+func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if s.called("SettleBegun") {
+		return false, errRefusedCall
+	}
+	return s.inner.SettleBegun(ctx, turnID, capture)
 }
 
 func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {

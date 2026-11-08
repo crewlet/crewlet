@@ -117,6 +117,16 @@ type BaseSession struct {
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	Interrupted   bool  `json:"interrupted,omitempty"`
 
+	// CapturedAt is when it was kept; WentOn that its turn's end said the turn
+	// went on past it, so the run that continues it is told it was kept while
+	// that turn still worked, not that it runs through the turn's end; and
+	// Lost that the turn ended lost, which no frame of it saw end, so the run
+	// is told the session may not hold the last of what that turn did
+	// ([executorkeep.TurnRow.WentOn]).
+	CapturedAt time.Time `json:"captured_at,omitzero"`
+	WentOn     bool      `json:"went_on,omitempty"`
+	Lost       bool      `json:"lost,omitempty"`
+
 	// EndedAt is when its turn ended: where the turn that continues it
 	// begins.
 	EndedAt time.Time `json:"ended_at,omitzero"`
@@ -180,7 +190,8 @@ func baseSessionOf(row executorkeep.TurnRow) BaseSession {
 		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
 		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
 		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Home: row.Home, Workspace: row.Workspace,
-		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, EndedAt: row.EndedAt}
+		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, CapturedAt: row.CapturedAt,
+		WentOn: row.WentOn, Lost: row.Lost, EndedAt: row.EndedAt}
 }
 
 // archive is the base as a runner's restore takes it ([ArchiveOf]).
@@ -218,11 +229,15 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 // ended row by design; a base is always an ended row of another turn.
 //
 // A BASE IS CONTINUED ONLY WHILE THE TURN HAS KEPT NOTHING: once any capture of
-// its own landed, that session holds the base and everything after, and its
-// relaunches continue that one by [ContinuityOf] alone — so the base's hold
-// lifts there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a
-// row that names another base, or that landed a capture, holds nothing the log
-// keeps from a sibling's end or the seat's budget.
+// its own landed, that session holds the base and everything after, and which
+// session of the turn's own a relaunch continues — the newest of the job it
+// follows, kept, or none — is [ContinuityOf]'s alone — so the base's hold lifts
+// there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a row that
+// names another base, or that landed a capture, holds nothing the log keeps
+// from a sibling's end or the seat's budget. Either refusal says only why the
+// base is not continued, never which session the launch continues instead,
+// which is not this decision's to know: a relaunch whose job left no kept
+// capture continues none of the turn's own either.
 //
 // What the box a launch gets says of its harness's own release, whether the
 // launch's box is one of its own, and whether the seat's budget can carry the
@@ -268,12 +283,12 @@ func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) 
 			"its conversation's session"
 	case run != nil && run.Kept != nil:
 		return "the turn has kept a session of its own, which holds everything the session its " +
-			"conversation's last turn left does, and its relaunches continue that one instead"
+			"conversation's last turn left does, so no launch of the turn continues that one any more"
 	case own != nil && own.Ended:
 		return "the turn has ended, so no launch of it continues its conversation's session"
 	case own != nil && own.LaunchSeq > 0:
-		return "the turn's row on the executor log has landed a capture of its own, which its relaunches " +
-			"continue instead of the session its conversation's last turn left"
+		return "the turn's row on the executor log has landed a capture of its own, which lifted its hold on " +
+			"the session its conversation's last turn left, so no launch of the turn continues that one any more"
 	case own != nil && own.BaseTurn != base.Turn:
 		return fmt.Sprintf("the turn's row on the executor log does not hold turn %s's session against its "+
 			"release: the turn's begin did not land in time, or found that session gone", base.Turn)

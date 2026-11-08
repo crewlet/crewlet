@@ -334,15 +334,21 @@ func TestAnEndWithNothingCapturedKeepsTheEndingAlone(t *testing.T) {
 }
 
 // AN END WHOSE TURN'S NEWEST CAPTURE WAS NOT KEPT TAKES THE OLDER ONE OFF THE
-// ROW. The turn's row names launch 1's session; launch 2's capture was refused,
-// so that session does not hold what launch 2 did, and the conversation's next
-// turn must not continue it as the turn's last: the end releases it and keeps
-// the ending, which says why. Where the capture the end names as unkept landed
-// after all — its record was out when the end was decided, and the row's place
-// is that capture's — the session stays.
+// ROW — BY THE RULE OF AN END STAMPED BELOW VERSION 4, one that says nothing of
+// the turn going on past the session its row names, as every end a build
+// before version 4 wrote: the rule such an end is applied by on every copy, so
+// this build applies it so too ([wentOnVersion];
+// TestAnEndStampedBelowFourIsAppliedByTheRuleItWasWrittenUnder holds the
+// branch, and TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt the rule version 4
+// brought). The turn's row names launch 1's session; launch 2's capture was
+// refused, so that session does not hold what launch 2 did: the end releases
+// it and keeps the ending, which says why. Where the capture the end names as
+// unkept landed after all — its record was out when the end was decided, and
+// the row's place is that capture's — the session stays.
 //
-// Mutation: drop the release from applyEnd, or decide it on anything but the
-// row's own place, and the stale session stays named, or the landed one goes.
+// Mutation: drop the release from applyEnd's rule for an end stamped below
+// version 4, or decide it on anything but the row's own place, and the stale
+// session stays named, or the landed one goes.
 func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -355,7 +361,14 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 	e.begin(beginning(e.head("ana", "chat:room"), "ana", "chat:room", holder, ""))
 
 	e.capture(capturing("ana", "chat:room", stale, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", stale, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Unkept: unkept}))
+	staleEnd := ending("ana", "chat:room", stale, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+		Unkept: unkept})
+	if env, err := DecodeEnvelope(e.encode(ConversationSubject("ana", "chat:room", stale), OpEnd,
+		ScopeSet{Subject: true}, staleEnd)); err != nil || env.V >= wentOnVersion {
+		t.Fatalf("the premise: an end that says nothing of its turn going on is stamped %d (%v), want "+
+			"below %d", env.V, err, wentOnVersion)
+	}
+	e.end(staleEnd)
 	s, found := e.session("ana", stale)
 	if !found || !s.Ended() || s.HasObject() {
 		t.Fatalf("the turn whose newest capture was refused is (%+v, %v), want it ended "+

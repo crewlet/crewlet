@@ -79,6 +79,7 @@ import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
 import { projectPath, targetLabel } from "~/lib/work.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** Which projects the grid lists, as the one switch this page has. */
 const SHOWN = ["active", "archived", "all"] as const;
@@ -492,7 +493,7 @@ export function Projects() {
           sentence above them spent a line on every visit saying it again.
           Where a project COMES FROM is the sentence somebody needs when there
           are none, so it lives in the empty state below. */}
-      <div className="toolbar">
+      <PageToolbar>
         {/* THE TOTALS AS ONE SENTENCE, not four tiles. They are context for the
             rows under them rather than the point of the page — and the counts
             are over WHAT IS SHOWN, which is why the switch beside them changes
@@ -517,6 +518,7 @@ export function Projects() {
             third figure that is the other two added up is arithmetic on
             screen rather than a fact. */}
         <SegmentedControl
+          size="sm"
           semantics="radio"
           activate="manual"
           value={shown}
@@ -567,7 +569,7 @@ export function Projects() {
             <ColumnChooser choices={choices} value={cols} onChange={setCols} />
           </div>
         </Popover>
-      </div>
+      </PageToolbar>
 
       <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {/* A COMPANY WITH NO PROJECTS, SAID ON WHATEVER SEGMENT THE READER IS

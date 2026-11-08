@@ -105,9 +105,17 @@ func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 		e.incarnation, e.id, ttl)
 }
 
-// holdLeases is the lease store this node's holds are taken through: its own,
+// holdLeases is the lease store this node's holds are taken through, and the
+// sandbox coordinator's taker lease ([Engine.coordinatorOptions]): its own,
 // with every give-back drawn from the stop's one allowance for as long as it
 // runs once the TEARDOWN has begun ([Engine.stepOnceTornDown]).
+//
+// THE TAKER LEASE FOR THE SAME REASON, a step of its own: the coordinator
+// claims it as it is built and gives it back as its stop ends, once its last
+// keep has, on the lifetime it claimed it on — and the teardown is what stops
+// it ([Engine.stopSandbox]), so its give-back is charged from its start, and a
+// node whose store has gone spends the one allowance rather than the
+// release's own renewal interval beside it.
 //
 // A HOLD IS GIVEN BACK BY WHOEVER ENDS THE WORK IT GUARDS — the setup runner,
 // at the end of a pass the integration loop or an operator ran — on the context

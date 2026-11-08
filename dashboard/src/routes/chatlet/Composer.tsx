@@ -6,10 +6,8 @@
  * The kit's `Composer`, laid out top to bottom: the formatting row, one line
  * of words that grows as they do, and the tools along the foot (attach, the
  * formatting toggle, emoji, mention, Draft with Ask Crewlet) with Send at its
- * end. Enter sends and Shift+Enter breaks the line, as every chat box does
- * (`chatbox.send` in the keymap's legend); a reply in the Inbox and a comment on
- * a task keep the command key (`compose.send`), because those are letters
- * more often than lines.
+ * end. Enter sends and Shift+Enter breaks the line, as in every message box
+ * (the kit's send rule, `compose.send` in the keymap's legend).
  *
  * # What a message names is the engine's reading of it
  *
@@ -70,11 +68,11 @@ import {
   EmojiPicker,
   FormField,
   IconButton,
-  Kbd,
   MentionMenu,
   mentionQuery,
   Menu,
   SendButton,
+  SendKeysHint,
   Toolbar,
   Tooltip,
   formatMarkdown,
@@ -83,6 +81,7 @@ import {
   type MarkdownFormat,
   type MarkdownTextFormat,
   type MentionOption,
+  type SendKeysLabels,
 } from "@crewlethq/ui";
 import {
   AtSignGlyph,
@@ -247,6 +246,14 @@ export interface ComposerProps {
   onEditLast?: () => void;
   /** Somebody is composing. Throttled by the caller (`useChatFocus`). */
   onTyping?: (typing: boolean) => void;
+  /**
+   * The host's own line under the box (who is typing, which agents work, whom
+   * replies reach), laid in the cell the draft's reach takes, so the box keeps
+   * one status line under it rather than two.
+   */
+  status?: ReactNode;
+  /** The status line says something live (somebody typing), over the draft's reach. */
+  statusBusy?: boolean;
 }
 
 export function Composer({
@@ -258,6 +265,8 @@ export function Composer({
   onSent,
   onEditLast,
   onTyping,
+  status,
+  statusBusy = false,
 }: ComposerProps) {
   const scope = useRoomScope();
   const nav = useChatNav();
@@ -383,22 +392,34 @@ export function Composer({
           as the activity line keeps its own: arriving once the typing
           settles, it moved the conversation above the box. */}
       <div className="chat-composer-reach">
-        {draftReach && (
-          <DeliveryReceipt
-            tense="draft"
-            announce
-            recipients={reachRecipients(draftReach, undefined, names.nameOf)}
-            truncated={draftReach.truncated}
-            hint={quietHint(reach.data?.quiet)}
-          />
-        )}
-        {/* HOW TO BREAK A LINE, while there are words to break and a
-            keyboard to break them with. */}
-        {value !== "" && !nav.narrow && (
-          <span className="chat-composer-hint">
-            <Kbd keys={["Shift", "Enter"]} subtle /> for a new line
-          </span>
-        )}
+        {/* ONE CELL FOR THE LINE UNDER THE BOX: whom the draft reaches, and
+            the host's line, which takes its place while somebody types and
+            gives it way while a draft has words to send. */}
+        <div
+          className={[
+            "chat-composer-status",
+            statusBusy ? "is-busy" : "",
+            draftReach ? "has-draft" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          {draftReach && (
+            <span className="chat-composer-draft">
+              <DeliveryReceipt
+                tense="draft"
+                announce
+                recipients={reachRecipients(draftReach, undefined, names.nameOf)}
+                truncated={draftReach.truncated}
+                hint={quietHint(reach.data?.quiet)}
+              />
+            </span>
+          )}
+          {status}
+        </div>
+        {/* THE SEND KEYS, while there are words to send and room to say
+            it; the kit's hint says nothing on a touch keyboard. */}
+        {value !== "" && !nav.narrow && <SendKeysHint className="chat-composer-hint" />}
       </div>
       {/* THE BROWSER'S REASON, beside the Send it holds: the button's own
           description reaches neither a touch screen nor a reader who has not
@@ -419,6 +440,8 @@ export interface MessageBoxProps {
   fieldRef?: RefObject<HTMLTextAreaElement | null>;
   /** Enter, unless a list is open. */
   onSubmit: () => void;
+  /** The words the field's description says around its keys: "to save" for a rewrite. */
+  sendLabels?: SendKeysLabels;
   /** A key the box does not answer itself: Up for the last message, Escape for an editor. */
   onKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   /** Tools after the box's own, at the footer's start. */
@@ -441,6 +464,7 @@ export function MessageBox({
   autoFocus,
   fieldRef,
   onSubmit,
+  sendLabels,
   onKey,
   extraTools,
   actions,
@@ -768,7 +792,8 @@ export function MessageBox({
             onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
             onKeyDown={onKeyDown}
             onSubmit={onSubmit}
-            submitOn="enter"
+            sendHint={false}
+            sendLabels={sendLabels}
             appearance="chat"
             label={label}
             placeholder={placeholder}

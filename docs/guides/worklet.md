@@ -1622,10 +1622,11 @@ drawn for everybody and held with that reason for anybody without it.
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/worklet/history`) is the change log over a window you choose,
-  narrowed from one bar: the window, then **Kind** and **By** pickers whose
-  options are what the pages loaded hold, with how many of each
-  (said once: the counts are over the changes loaded) — and it says "Showing
-  the latest N" beside **Load older**. Every row is a change: re-applying an
+  narrowed from one bar, the work list's row: the window, then **Kind** and
+  **By**, quiet pickers with their captions inside ("Kind Any kind"), whose
+  options are what the pages loaded hold, with how many of each, and at the
+  far end what is loaded: "Counts are over the changes loaded · Showing the
+  latest N", then **Load older**. Every row is a change: re-applying an
   activation that already landed writes nothing, and a new activation that
   leaves a project's name, purpose and unit as they were is one quiet "org
   chart re-applied" row per project, naming the activation it moved to.
