@@ -466,8 +466,9 @@ var tornThreads = map[string]struct{ left, resumed string }{
 		resumed: tornWhole},
 	"subagents/workflow/agent-2.jsonl": {left: tornWhole + `{"type":"user","n":`, resumed: tornWhole},
 	"subagents/agent-3.jsonl":          {left: tornWhole, resumed: tornWhole},
-	"subagents/agent-4.jsonl":          {left: `{"type":"us`, resumed: `{"type":"us`},
-	"tool-results/out.txt":             {left: "spilled, with no newline", resumed: "spilled, with no newline"},
+	"subagents/agent-4.jsonl":          {left: `{"type":"us`, resumed: ""},
+	"tool-results/out.txt": {left: "spilled\nand a last line with no newline",
+		resumed: "spilled\nand a last line with no newline"},
 }
 
 // tornWhole is the whole lines a torn thread holds before its torn one.
@@ -499,34 +500,66 @@ func threadsSeenHarness(release string) string {
 // threads — or a session packed while they did — ends those threads mid-line,
 // and resumed as they are, the record the harness next writes to such a thread
 // runs into its torn line and is lost with it (measured on Claude Code 2.1.310,
-// whose resume takes a thread cut back to its last whole line). So a session
-// carried into a fresh box has every `.jsonl` under its sidecar directory, at
-// any depth, cut back to its last whole line before its harness resumes it; a
-// thread that ends whole, one with no whole line at all, and a file that is no
-// thread are left as they are.
+// whose resume takes a thread cut back to its last whole line). So every
+// resume — of a session carried into a fresh box, and of the copy the box's own
+// last run left — has every `.jsonl` under the session's sidecar directory, at
+// any depth, cut back to its last whole line before its harness resumes it,
+// and a thread with no whole line at all emptied, a file still; a thread that
+// ends whole, and a file that is no thread, are left as they are, the last
+// line of a spilled result with no newline among them.
 //
-// Mutation: cut the session's own transcript alone, as the restore did, or
-// only the threads one level down, and a torn thread is resumed as it was.
+// Mutation: cut the session's own transcript alone, as the restore did, only
+// the threads one level down, or only a session restored from an archive, and
+// a torn thread is resumed as it was; leave a thread with no whole line as it
+// is, or remove it, and its row goes red; cut every file rather than every
+// thread, and the spilled result loses its last line.
 func TestARestoreCutsATornLastLineOfEverySubagentThread(t *testing.T) {
 	t.Parallel()
-	first, a := realBox(t)
-	writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", tornThreadsHarness("2.1.310"))
-	_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
-	described, body, err := first.OpenCapture(t.Context(), a)
-	if err != nil || body == nil {
-		t.Fatalf("OpenCapture = %v, %v", body, err)
-	}
-	defer func() { _ = body.Close() }()
+	t.Run("carried into a fresh box", func(t *testing.T) {
+		t.Parallel()
+		first, a := realBox(t)
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", tornThreadsHarness("2.1.310"))
+		_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
+		described, body, err := first.OpenCapture(t.Context(), a)
+		if err != nil || body == nil {
+			t.Fatalf("OpenCapture = %v, %v", body, err)
+		}
+		defer func() { _ = body.Close() }()
 
-	second, b := realBox(t)
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", threadsSeenHarness("2.1.310"))
-	_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
-		Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
-	if !res.Continued {
-		t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
-	}
+		second, b := realBox(t)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", threadsSeenHarness("2.1.310"))
+		_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+			Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
+		if !res.Continued {
+			t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		threadsResumed(t, b)
+	})
+	t.Run("resumed in the box that holds it", func(t *testing.T) {
+		t.Parallel()
+		runner, a := realBox(t)
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", tornThreadsHarness("2.1.310"))
+		_, ran := runToEnd(t, runner, a, sandbox.RunRequest{Brief: "begin"})
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", threadsSeenHarness("2.1.310"))
+		_, res := runToEnd(t, runner, a, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
+		if !res.Continued {
+			t.Fatalf("the box's own copy of the session was not continued:\n%s", boxFile(t, a, paths(a).Err()))
+		}
+		threadsResumed(t, a)
+	})
+}
+
+// threadsResumed checks what the harness resumed in b read of the session's
+// sidecar directory against [tornThreads]: each file there, as it must read it.
+func threadsResumed(t *testing.T, b sandbox.Sandbox) {
+	t.Helper()
 	for name, thread := range tornThreads {
-		if got := boxFile(t, b, b.Home()+"/seen/"+name); got != thread.resumed {
+		seen := b.Home() + "/seen/" + name
+		if !boxHas(t, b, seen) {
+			t.Errorf("%s did not reach the resumed harness at all", name)
+			continue
+		}
+		if got := boxFile(t, b, seen); got != thread.resumed {
 			t.Errorf("%s reached the resumed harness as %q, want %q", name, got, thread.resumed)
 		}
 	}
