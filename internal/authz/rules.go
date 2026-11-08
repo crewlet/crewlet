@@ -302,6 +302,9 @@ const (
 	ActionPageCommentEdit   Action = "pages.comment.edit"
 	ActionPageCommentRemove Action = "pages.comment.remove"
 	ActionWorkCommentEdit   Action = "work.comment.edit"
+	// ActionWithdrawAsk is a seat withdrawing its own question, or a call its
+	// executor holds for approval (ADR-0111): an agent's alone, on its own.
+	ActionWithdrawAsk Action = toolname.WithdrawAsk
 
 	// --- the org chart ---------------------------------------------- //
 	//
@@ -1504,6 +1507,11 @@ var rules = map[Action]rule{
 	// [rule.seatOnly].
 	ActionSessionsList: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	ActionSessionRead:  {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
+	// A SEAT'S OWN QUESTION WITHDRAWN, its own as its sessions are: the
+	// tracker's writer holds a question to its author, and a run to the seat
+	// it belongs to, so the row asks for nothing beyond being that seat. A
+	// person resolves their own question from the item ([rule.seatOnly]).
+	ActionWithdrawAsk: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
 	// seat's turn, and the ROLE decides which seats are offered it. No
 	// person takes it — see [rule.seatOnly].

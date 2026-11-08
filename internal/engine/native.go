@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -1288,7 +1289,8 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 }
 
 // nativeParsers is what the engine's own sources contribute to the inbound
-// edge: the native backends' parsers, and the alarms' (internal/alarmwake).
+// edge: the native backends' parsers, the alarms' (internal/alarmwake) and the
+// access reviews' (internal/accessreview).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
 // company-derived input is the org chart — the native backends' LEAD MAP, the
@@ -1307,6 +1309,11 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		Granted: orgchart.GrantedSeats(c.Org, authz.SeatGrantHealth),
 	})}
 	prompts := []notify.Prompt{alarmwake.Prompt{}}
+	// THE ACCESS REVIEWS, on every node too: a review names its seat, and
+	// the roster the delivery is routed against is all it reads
+	// (internal/accessreview).
+	parsers = append(parsers, accessreview.Parser{})
+	prompts = append(prompts, accessreview.Prompt{})
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
@@ -1953,6 +1960,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 // as one party.
 type trackerWriter interface {
 	builtin.WorkWriter
+	builtin.AskResolver
 	builtin.ProjectWriter
 	builtin.WorkDepender
 	builtin.WorkMerger

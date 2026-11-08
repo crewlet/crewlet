@@ -103,6 +103,12 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	}
 	out := decideTold(snap, recent, handle, turn, now, accessdomain.SnapshotMaxBytes)
 	out.memory = append(e.toldMemory(ctx, recent.Since), out.memory...)
+	if out.changes != "" {
+		// THE TURN THAT TELLS A CHANGE ASKS FOR THE REVIEW, whatever woke
+		// it (ADR-0111): its told record keeps every later turn from being
+		// told the change again, the review's included.
+		out.changes = e.withOpenWork(ctx, company, handle, out.changes)
+	}
 	if out.pending != nil {
 		out.pending.RevisionTo = e.fleetRevisionID(ctx)
 		if !out.pending.Baseline {
@@ -442,4 +448,21 @@ func (e *Engine) turnMintedAt(ctx context.Context, turnID, workKey string, workS
 	}
 	identity.RebasedTo = rebased
 	return identity.OperationSince(), nil
+}
+
+// withOpenWork is the changes block a turn is told, followed by the seat's open
+// work and what to do about it (accessreview.Work.Section). A seat whose work
+// could not be read is told the change alone, and says so in the log: the
+// change is still news, and a list it could not vouch for is no list.
+func (e *Engine) withOpenWork(ctx context.Context, company *Company, handle, changes string) string {
+	work, err := e.openWork(ctx, company, handle)
+	if err != nil {
+		log.WarnContext(ctx, "capability_open_work_unread", "agent", handle, "error", err.Error(),
+			"detail", "the turn is told its access changed without the list of its open work")
+		return changes
+	}
+	if section := work.Section(); section != "" {
+		return changes + "\n\n" + section
+	}
+	return changes
 }

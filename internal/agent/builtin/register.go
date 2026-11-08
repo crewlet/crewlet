@@ -148,6 +148,12 @@ type Deps struct {
 	// enabled: false`), and a node with no object store. See sessions.go.
 	Sessions SessionDeps
 
+	// Withdraw is withdraw_ask's tracker resolver and run desk: the seat
+	// withdrawing a question it asked, or a call its executor holds for
+	// approval (ADR-0111). Its tracker reads and writes are [Deps.Work]'s,
+	// set by [Register], so the engine hands it only the two it adds.
+	Withdraw WithdrawDeps
+
 	// Chat is Chatlet. Every half nil omits all nine tools, which
 	// is what a company on Slack or Mattermost has — there the colleague
 	// surface is that vendor's own MCP server, and a seat offered
@@ -210,6 +216,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		deps.Health.Requesters = deps.Requesters
 	}
 
+	withdraw := deps.Withdraw
+	withdraw.Work = deps.Work
+
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
 	// the tool every other addressing decision goes through.
@@ -251,6 +260,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
+		// AND WITHDRAWING ONE'S OWN QUESTION, on a work item or one the
+		// seat's executor waits on. See withdrawask.go.
+		{&withdrawAsk{deps: withdraw}, withdraw.serves()},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can
