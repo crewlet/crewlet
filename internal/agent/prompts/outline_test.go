@@ -35,7 +35,7 @@ func outlineCorpus() []outlined {
 			prompt: BuildExecutor(richSeat(), richExecutorInput()),
 			keys: []string{
 				"identity", "company_context", "background", "responsibilities",
-				"behavioral_guidelines", "unit", "policies", "team", "human_colleagues",
+				"behavioral_guidelines", "unit", "policies", KeyAccess, "team", "human_colleagues",
 				"your_turn", "escalation", KeyUntrustedText,
 				KeyThreadContext, KeyPersonalMemory, KeySynthesizedSkills,
 				KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
@@ -95,7 +95,7 @@ func outlineCorpus() []outlined {
 		{
 			name:   "user message, both ledgers",
 			prompt: BuildPhaseUserMessage(richUserMessage()),
-			keys:   []string{"conversation_endings", "task", "prior_work"},
+			keys:   []string{"conversation_endings", KeyCapabilityChanges, "task", "prior_work"},
 			nested: map[string][]string{
 				"task": {"## Triage — decide BEFORE replying", "## Thread context",
 					"naïve cache warmed ✅"},
@@ -116,7 +116,7 @@ func outlineCorpus() []outlined {
 			name: "user message, then a kept session it does not continue",
 			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyKeptSession,
 				KeptSession("t-0 🧰", false, false)),
-			keys: []string{"conversation_endings", "task", "prior_work", KeyKeptSession},
+			keys: []string{"conversation_endings", KeyCapabilityChanges, "task", "prior_work", KeyKeptSession},
 		},
 		{
 			name: "user message, nothing, then a kept session",

@@ -249,6 +249,12 @@ type ExecutorInput struct {
 	// turn start and handed over rather than left for the agent to fetch.
 	// Empty for every trigger that is not a chat thread reply.
 	ThreadContext string
+
+	// Access is the rendered "## Your access" section (internal/capability's
+	// YourAccess): what the seat reaches with its own credentials now, on
+	// every turn, so it outranks anything an earlier turn of a continued
+	// session said. Empty for a company that connects no integration.
+	Access string
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
@@ -289,6 +295,9 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		{"behavioral_guidelines", buildGuidelinesSection(seat)},
 		{"unit", BuildUnitContextSection(seat)},
 		{"policies", BuildPoliciesSection(seat)},
+		// RIGHT AFTER THE POLICIES, which say what the seat may do; this says
+		// what it can reach. Both are current on every turn.
+		{KeyAccess, accessSection(in.Access)},
 		{"team", BuildRosterSection(seat, reports)},
 		{"human_colleagues", BuildHumanColleaguesNote(seat)},
 	}
@@ -391,6 +400,18 @@ func holdsAll(surface, names []string) bool {
 		}
 	}
 	return true
+}
+
+// KeyAccess is the outline key of the "## Your access" section.
+const KeyAccess = "access"
+
+// accessSection is the rendered section as the builder's lines, or nil when
+// there is none.
+func accessSection(access string) []string {
+	if strings.TrimSpace(access) == "" {
+		return nil
+	}
+	return []string{"\n" + access}
 }
 
 // KeyDiscoverableTools is the outline key of the tools a phase can reach but
