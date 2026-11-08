@@ -121,6 +121,35 @@ func (e *Engine) AccessReader() *accessdomain.Reader {
 	return nil
 }
 
+// AccessKeyring is the access log's half of a keyring rotation, or nil on an
+// engine with no core runtime: the SSH commands it recorded, each one's text
+// sealed under the keyring, moved by a record per command ([accessdomain.Writer.Reseal]).
+func (e *Engine) AccessKeyring() *AccessKeyring {
+	reader, writer := e.AccessReader(), e.AccessWriter()
+	if reader == nil || writer == nil {
+		return nil
+	}
+	return &AccessKeyring{reader: reader, writer: writer}
+}
+
+// AccessKeyring counts and moves the access log's sealed commands: see
+// [Engine.AccessKeyring].
+type AccessKeyring struct {
+	reader *accessdomain.Reader
+	writer *accessdomain.Writer
+}
+
+// SealedKeys counts the commands by the keyring key each is sealed under.
+func (k *AccessKeyring) SealedKeys(ctx context.Context) (accessdomain.SealedCount, error) {
+	return k.reader.SealedKeys(ctx)
+}
+
+// Reseal moves every command's text onto this node's active keyring key, as
+// the engine.
+func (k *AccessKeyring) Reseal(ctx context.Context) (accessdomain.ResealReport, error) {
+	return k.writer.Reseal(ctx, sshAuditor, k.reader)
+}
+
 // AccessWriter is this node's access write side, or nil on an engine with no
 // core runtime.
 func (e *Engine) AccessWriter() *accessdomain.Writer {

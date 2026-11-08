@@ -110,6 +110,9 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindCertificate:
 		return applyCertificate(ctx, tx, c, payload)
 	case KindCommand:
+		if record.Op == OpResealed {
+			return applyResealed(ctx, tx, c, payload)
+		}
 		return applyCommand(ctx, tx, c, payload)
 	case KindSeat:
 		return applyForget(ctx, tx, c, payload)
@@ -268,6 +271,26 @@ func applyCommand(ctx context.Context, tx *sql.Tx, c applyContext, payload any) 
 		c.at(), c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("accessdomain: record command %s at %s: %w", cmd.ID, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// applyResealed writes a command's text sealed afresh over its row. A command
+// its retention already took writes nothing, and a redelivery nothing new.
+func applyResealed(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
+	r, ok := payload.(Resealed)
+	if !ok {
+		return 0, fmt.Errorf("accessdomain: the reseal record at %s carries a %T", c.position, payload)
+	}
+	if err := ownedKey(c, r.Handle, r.ID); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE access_commands SET command_sealed = ?, content_key = ?
+		WHERE agent_handle = ? AND command_id = ? AND (command_sealed != ? OR content_key != ?)`,
+		r.CommandSealed, r.ContentKey, r.Handle, r.ID, r.CommandSealed, r.ContentKey)
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: reseal command %s at %s: %w", r.ID, c.position, err)
 	}
 	return affected(res), nil
 }
