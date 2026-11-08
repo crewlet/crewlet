@@ -878,7 +878,7 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	// is the row's place, and is kept. An end stamped at it or above never takes
 	// the row's session off for an attempt that was not kept: the session holds
 	// what the turn did up to it, and the end says the turn went on past it
-	// ([executorkeep.Ending.WentOn]), which every reader is told.
+	// ([executorkeep.Ending.WentOn]), which the row keeps for its readers.
 	stale := false
 	if u := p.Ending.Unkept; found && row.hasObject && u != nil && c.record.V < wentOnVersion {
 		stale = unkeptSupersedes(*u, row.launchSeq, row.captureSeq)

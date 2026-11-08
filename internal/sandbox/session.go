@@ -196,11 +196,12 @@ import (
 // ([ErrEndOwed]): after every capture of the turn has settled, so the end's
 // tombstone never refuses the turn's own last session, with the turn's NEWEST
 // capture where it was not kept ([executorkeep.Unkept]), and saying whether the
-// turn WENT ON PAST the session its row names ([wentOnPast]) — kept from a
-// capture taken while its job still worked, or from an earlier launch's — so
-// the log's row never names an older session as the turn's last without
-// saying so: the log keeps that session, and every reader of it is told the
-// turn went on past it. On every frame
+// turn WENT ON PAST the session its row names ([wentOnPast]) — wherever its
+// run's record does not hold the turn's last word kept: a capture taken while
+// its job still worked, an earlier launch's, or none beside a newer one that
+// was not kept — so the log's row never names an older session as the turn's
+// last without saying so: the log keeps that session, and says the turn went
+// on past it. On every frame
 // somebody waits on — a completion's resume, a stop, a seat's recovery — the
 // ending is decided there and the end recorded by the ending's own retry,
 // armed at once ([errAskAway]): a capture still being kept, and the log's
@@ -2318,19 +2319,50 @@ func unkeptOf(run PendingRun) *executorkeep.Unkept {
 }
 
 // wentOnPast reports whether the turn went on past the session its row on the
-// executor log names ([executorkeep.Ending.WentOn]): run kept a capture, and it
-// is not the final capture of the turn's last launch — one taken while its job
-// still worked, or an earlier launch's, the jobs after it keeping nothing newer.
-// False where the turn kept none: its row then names no session to say it of.
+// executor log names ([executorkeep.Ending.WentOn]): the turn took a capture,
+// and run's record does not hold its LAST WORD kept ([lastWord]) — what it kept
+// was taken while its job still worked, or is an earlier launch's, or a newer
+// capture beside it was not kept, or it kept none. False where the turn took
+// no capture at all, whose row names no session of it, and where its newest
+// capture is its last word, kept.
 //
-// ITS LAST LAUNCH'S FINAL CAPTURE IS THE TURN'S LAST WORD, and the one: nothing
-// of a job is taken once a take found it ended ([Coordinator.takeCapture]), so
-// an end that says nothing of the kind names no unkept capture newer than the
-// one it kept ([unkeptOf]). Every unkept capture an end names beside a kept one
-// rides an end that says the turn went on past it.
+// ON WHAT THE RECORD DID NOT KEEP, NOT ONLY ON WHAT IT KEPT: a capture the
+// record holds refused can be the log's all the same — a record its taker had
+// handed on before a wait's settle read the turn's row and found it not there
+// ([Coordinator.settleGoneTaker]) — so a turn that kept nothing on its record
+// may still have its row naming a session, older than the newest capture the
+// end names unkept. So EVERY UNKEPT CAPTURE AN END NAMES RIDES AN END THAT SAYS
+// THE TURN WENT ON — [unkeptOf] names the newest only where it did not land and
+// is newer than anything kept, which is going on here — and the log's apply, by
+// the rule of the version that field is stamped at, never takes the row's
+// session off for it. The cost is the direction a record that parts from the
+// log errs in: where the capture the log took late is the turn's last word
+// itself, the end says the turn went past a session it may not have.
 func wentOnPast(run PendingRun) bool {
-	kept := run.Kept
-	return kept != nil && (!kept.Final || kept.Launch != run.LaunchID)
+	newest, kept := run.Capture, run.Kept
+	return newest != nil && (kept == nil || newest.newerThan(*kept) || !lastWord(run, *kept))
+}
+
+// lastWord reports whether capture is its turn's LAST WORD: the final capture
+// of the last launch of the turn whose job ran — the row's own launch, or,
+// where that launch's job never started (a relaunch whose harness would not
+// start, one a stop ended while it launched), the launch before it. Nothing of
+// a job is taken once a take found it ended ([Coordinator.takeCapture]), and a
+// job that never started worked no session past it.
+//
+// THE LAUNCH BEFORE, AND NO EARLIER: a launch whose job never started is its
+// turn's last — [Coordinator.Launch] abandons a run whose job would not start,
+// and the seat's recovery reaps a launching row its last holder left — so one
+// is never followed by another. Were it ever, the turn would say it went on
+// past a session it may not have: the direction that costs least.
+func lastWord(run PendingRun, capture SessionCapture) bool {
+	switch {
+	case !capture.Final:
+		return false
+	case capture.Launch == run.LaunchID:
+		return true
+	}
+	return !run.Launch.Started && capture.LaunchSeq == run.LaunchSeq-1
 }
 
 // TurnEnd is how one turn that launched an executor ended, for the executor

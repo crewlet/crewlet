@@ -36,8 +36,12 @@ const (
 	// OutcomeStopped is a turn a person or a duty stopped.
 	OutcomeStopped Outcome = "stopped"
 
-	// OutcomeLost is a turn whose executor was lost with its box or its
-	// host and not carried on.
+	// OutcomeLost is a turn NO FRAME OF IT SAW END: the engine ended its run
+	// rather than the turn's own loop — its job lost with its box or host and
+	// not carried on, a resume that broke or kept failing, a claim stranded, its
+	// seat removed — or its end was never recorded, and the retention duty
+	// ended it a day after its last record. Nothing says the last of what it
+	// did reached its session.
 	OutcomeLost Outcome = "lost"
 )
 
@@ -100,14 +104,15 @@ type Ending struct {
 	// deleted with the turn, and the turn's row would otherwise go on naming
 	// an older capture of the turn — one that does not hold what came after
 	// it — as the turn's last word, for whatever continues the conversation's
-	// session to take for it, with nothing to say so. Wherever the turn kept a
-	// capture older than this one, the end says too that the turn went on past
-	// the session its row names ([Ending.WentOn]), and the row keeps that
-	// session, told as what the turn did up to it rather than all it did. Only
-	// an end that does not say so — one an older build wrote — has the
-	// executor log's apply take that older object off the row, so the row
-	// names no session of the turn; the record's version decides which
-	// (internal/executordomain's applyEnd).
+	// session to take for it, with nothing to say so. So an end that names one
+	// says too that the turn went on past the session its row names
+	// ([Ending.WentOn]) — whatever that row names: an older capture the run's
+	// record kept, one the log took that the record holds refused, or none —
+	// and the row keeps that session, told as what the turn did up to it rather
+	// than all it did. Only an end that does not say so — one an older build
+	// wrote — has the executor log's apply take that older object off the row,
+	// so the row names no session of the turn; the record's version decides
+	// which (internal/executordomain's applyEnd).
 	//
 	// DECIDED ON THE ROW'S OWN PLACE, in log order, and read the same way: an
 	// end is decided off the run's record, which can name a capture as not
@@ -117,12 +122,15 @@ type Ending struct {
 	// is newer (internal/executordomain's Session.Unkept).
 	Unkept *Unkept `json:"unkept,omitempty"`
 
-	// WentOn says the turn WENT ON PAST the session its row names: the run's
-	// kept capture is not the final capture of the turn's last launch — one
-	// taken while its job still worked, or an earlier launch's — so that
-	// session holds what the turn did up to it and nothing after. Written only
-	// where true, and so a field a build that predates it has no reader for
-	// (internal/executordomain's record version 4).
+	// WentOn says the turn WENT ON PAST the session its row names: the turn
+	// took a capture, and the run's record does not hold its LAST WORD — the
+	// final capture of its last launch that ran a job — kept. What it kept was
+	// taken while its job still worked, or is an earlier launch's, or a newer
+	// capture beside it was not kept ([Ending.Unkept], which never rides an
+	// end without it), or it kept none: so the session the row names, where it
+	// names one, holds what the turn did up to it and nothing after. Written
+	// only where true, and so a field a build that predates it has no reader
+	// for (internal/executordomain's record version 4).
 	//
 	// THE END IS WHERE IT IS SAID, for Unkept's reason: only the run's record
 	// knows which capture its last launch left, and that record is deleted
@@ -136,9 +144,10 @@ type Ending struct {
 	// did, told as one, holds more than the conversation's previous head or a
 	// fresh session would. So no unkept attempt beside it takes the row's
 	// object off, the end absorbs what the turn's read handed out as any turn
-	// that landed a capture does, and every reader of the row, the
-	// conversation's next turn among them, is told the session is not the
-	// turn's last word (internal/executordomain's Session.WentOn).
+	// whose row keeps a session does, and the row says the session is not the
+	// turn's last word: the conversation's next turn is told so in words, and
+	// every reader of the row is shown it here (internal/executordomain's
+	// Session.WentOn).
 	WentOn bool `json:"went_on,omitempty"`
 
 	// Exhausted names the sessions a launch of the turn ran out of its model's
