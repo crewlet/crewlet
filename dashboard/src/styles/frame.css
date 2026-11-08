@@ -127,13 +127,12 @@
    starts below it. Asked with `:has` on the whole scroller rather than on a
    direct child, because a toolbar rendered inside a tab panel or a panel is
    still sticky against this same scroller and still covers the same band.
-   The offset is ONE band of controls: a toolbar narrow enough to wrap is
-   taller than that and a column head then parks under its second row — the
-   only alternative is measuring the band in JS and writing the property from
-   a ResizeObserver, which puts a layout read in the scroll path to buy a
-   pixel at the one width where the grid is already dropping columns. */
+   The offset is the toolbar's DRAWN height where it publishes one
+   (`--toolbar-band`, `lib/useStickyBand.ts`, measured when the bar resizes and
+   never on scroll), since a bar that wraps is taller than one band; and one
+   band of controls where it does not. */
 .crewlet-app-shell__main:has(.toolbar) {
-  --sticky-top: var(--toolbar-h);
+  --sticky-top: var(--toolbar-band, var(--toolbar-h));
 }
 
 /* NO MAX WIDTH. The kit's content column caps at `--size-content-max`, which

@@ -57,8 +57,9 @@ test("on a phone only the chips scroll, with a focus ring's room inside their cl
   expect(run).toMatch(/overflow-x:\s*auto/);
   expect(run).toMatch(/padding:\s*var\(--ring-room\)/);
   expect(run).toMatch(/margin:\s*calc\(-1 \* var\(--ring-room\)\)/);
-  // The chip row dissolves, so "+ Filter" and Clear stand on the band itself.
-  expect(rule(".work-bar .work-chips")).toMatch(/display:\s*contents/);
+  // The chips share one line with "+ Filter" and Clear, which never scroll.
+  expect(rule(".work-bar .work-chips")).toMatch(/flex-wrap:\s*nowrap/);
+  expect(rule(".work-bar .work-chips > :not(.work-bar-run)")).toMatch(/flex:\s*none/);
   // And nothing else in the bar is a scroller.
   const scrollers = rules.filter(
     (r) => /\.work-bar/.test(r.selector) && /overflow-x:\s*auto/.test(r.body),

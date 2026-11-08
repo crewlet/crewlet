@@ -945,8 +945,9 @@ describe("the frame's layout", () => {
     // header on it parks below a strip of scrolling page.
     const shell = sheet("frame.css");
     expect(block(shell, ".toolbar")).toMatch(/min-height:\s*var\(--toolbar-h\)/);
+    // The drawn height where the toolbar publishes one, one band where not.
     expect(block(shell, ".crewlet-app-shell__main:has(.toolbar)")).toMatch(
-      /--sticky-top:\s*var\(--toolbar-h\)/,
+      /--sticky-top:\s*var\(--toolbar-band,\s*var\(--toolbar-h\)\)/,
     );
     expect(sheet("tokens.css")).toMatch(/--sticky-top:\s*0px/);
   });

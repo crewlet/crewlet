@@ -1,50 +1,42 @@
 /**
- * The work list's two rows of controls, as the approved board draws them.
+ * The work list's one row of controls, read in the order a reader asks.
  *
- * # The first row is WHAT is drawn: the shape, then the saved views
+ * # What is drawn, what narrows it, how it is arranged, then the tools
  *
- * The five shapes are a segmented row of the DRAWING, never mixed with the
- * views: they are two rows, each in its own well, because a saved view is a
- * query somebody arranged and a shape is how any query is drawn. Both are the
- * kit's `SegmentedControl`, the switch the Artifacts gallery draws too. They were in
- * the Display menu for a while, which made the board — the shape a team lives
- * in — two presses away and said nothing about which was on until the menu was
- * opened. The views after the divider are the ones this reader PINNED, plus
- * whichever one is running; the rest are one link away in the inventory, and
- * "+ View" saves the query on screen as a new one.
+ * The row opens with the DRAWING: the five shapes, a segmented row of their
+ * glyphs, then (on a screen that is this list, never on a host whose own tabs
+ * name the page) the saved views this reader pinned, a pin for the one
+ * running, "+ View" to save the query on screen and the inventory. Shapes and
+ * views are two wells, because a saved view is a query somebody arranged and a
+ * shape is how any query is drawn.
  *
- * The row ends in the substring box — always drawn, with the `/` that focuses
- * it — and the Display menu, which holds what is left of the arrangement (the
- * second axis, the columns, the hidden lanes). The Filter menu is not here: it
- * is the "+ Filter" that ends the chip row below.
+ * Then what NARROWS it: a chip per filter in force, ending in "+ Filter"
+ * (`FilterChips.tsx`). Then how it is ARRANGED, at the row's far end: which
+ * work is shown and the grouping, drawn as the kit's quiet pickers with their
+ * captions inside ("Show Open", "Group by Due") so the arrangement says what
+ * is on without anything being opened and still fits the one row, the lanes
+ * out of a board's view (`shapes/Board.tsx`), and the count. The substring box
+ * and the Display menu close the row.
  *
- * # The second row is HOW the answer is cut — and it is the only other row
+ * Each group is one cluster, so a row too narrow for everything wraps whole
+ * clusters, the far end's right-aligned, and never strands the count or the
+ * Display button alone on a line. The row is the screen's `toolbar`: see
+ * `lib/useStickyBand.ts` for how what sticks under it learns its height.
  *
- * The chips (what narrows it) ending in "+ Filter", and at the far end the
- * choices a reader makes constantly: which work is shown, the grouping and,
- * on a board or a timeline, the order. Group by and Sort were inside Display;
- * lifted into the bar they say what is on without anything being opened,
- * which is the one thing a menu button cannot.
+ * # The order is in Display, on every shape
  *
- * A LIST AND A TABLE ARE ORDERED AT THEIR COLUMN HEADS, so the bar draws no
- * Sort for them: the head that orders the rows shows the order where the
- * values are, and a press on it writes the same `sort=` the picker did. The
- * orders no column carries (the manual order, the newest, the most tokens)
- * stay one press away in Display's Sort.
+ * A list and a table are ordered at their column heads, where a press writes
+ * the same `sort=` the picker does. Every shape's full list of orders (the
+ * manual order a drag changes, the newest, the most tokens) is Display's
+ * Sort, so the row keeps to what a reader changes constantly.
  *
- * The lanes out of a board's view are named at the same end (see
- * `shapes/Board.tsx`), so the board's lanes start directly under this row, as
- * the approved board draws them.
- *
- * NOTHING ELSE SITS BETWEEN THE BAR AND THE WORK. There was an introduction
- * above the tabs and a hint line above the lanes; each cost the board a row on
- * every visit to say something a reader needs once. What the screen is, is in
+ * NOTHING ELSE SITS BETWEEN THE ROW AND THE WORK. What the screen is, is in
  * the docs and in its empty state; why a card will not move is said when
  * somebody tries to move it, and in the Sort control's own title.
  */
 
-import { useRef, type RefObject } from "react";
-import { Input, Kbd, SegmentedControl, Select, cx } from "@crewlethq/ui";
+import { useRef, type ComponentProps, type RefObject } from "react";
+import { Input, Kbd, SegmentedControl, Select } from "@crewlethq/ui";
 import {
   CalendarGlyph,
   ChartNoAxesGanttGlyph,
@@ -68,7 +60,6 @@ import {
   type Scope,
   type Shape,
 } from "~/lib/work.ts";
-import { isGridShape } from "../shapes/Grid.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 
 /** The five shapes, in the order the approved board draws them. */
@@ -227,9 +218,8 @@ export function SubstringBox({
 
 /**
  * The order picker: the shape's default, named, then every order the engine
- * takes. ONE CONTROL in two places, the bar's end on a board or a timeline and
- * Display's Sort on a list or a table, so the two can never offer different
- * orders or name the default differently.
+ * takes. Display's Sort on every shape but the calendar, whose order is its
+ * dates.
  */
 export function OrderSelect({
   shape,
@@ -264,102 +254,115 @@ export function OrderSelect({
 }
 
 /**
- * Group by and, where no column head orders the rows, Sort, in the bar.
+ * One arrangement picker, drawn two ways. In the bar it is the kit's quiet
+ * picker with its caption inside the trigger ("Group by Status"), so the
+ * arrangement shares the one toolbar row; in the Display panel (a phone) it is
+ * a caption beside a bordered picker, the panel's form.
+ */
+function ArrangePicker({
+  caption,
+  inline,
+  ...select
+}: {
+  caption: string;
+  /** Drawn in the bar rather than in a panel. */
+  inline: boolean;
+} & Pick<
+  ComponentProps<typeof Select>,
+  "value" | "onChange" | "ariaLabel" | "active" | "options"
+>) {
+  if (inline) {
+    return (
+      <Select
+        size="sm"
+        width="auto"
+        appearance="quiet"
+        renderTrigger={(option) => (
+          <span className="work-arrange-value">
+            <span className="t-caption">{caption}</span>
+            <span className="truncate">{option?.label}</span>
+          </span>
+        )}
+        {...select}
+      />
+    );
+  }
+  return (
+    <label className="work-arrange-row">
+      <span className="t-caption">{caption}</span>
+      <Select size="sm" width="auto" {...select} />
+    </label>
+  );
+}
+
+/**
+ * Group by, at the bar's far end (or in Display on a phone).
  *
- * THE EFFECTIVE ARRANGEMENT, never the URL key — a saved view carries its own
- * `group_by` and `sort` and the address overrides them — so the pickers show
- * what the engine was asked, and `""` out of a callback means OFF, which the
- * screen writes as a value where a view supplies one ([EXPLICIT_NONE]).
+ * THE EFFECTIVE ARRANGEMENT, never the URL key (a saved view carries its own
+ * `group_by` and the address overrides it), so the picker shows what the
+ * engine was asked, and `""` out of the callback means OFF, which the screen
+ * writes as a value where a view supplies one ([EXPLICIT_NONE]). The order is
+ * Display's Sort on every shape: see the module doc.
  */
 export function ArrangeControls({
   shape,
   workspace,
-  trash = false,
   groupBy,
-  sort,
   onGroupBy,
-  onSort,
-  manual = true,
+  inline = false,
 }: {
   shape: Shape;
   workspace: boolean;
-  /** A trash listing, whose default order is the removal order. */
-  trash?: boolean;
   groupBy: string;
-  sort: string;
-  /** Whether the order on screen is the manual one a drag changes. */
-  manual?: boolean;
   onGroupBy: (axis: string) => void;
-  onSort: (sort: string) => void;
+  /** Drawn in the bar rather than in the Display panel. */
+  inline?: boolean;
 }) {
-  // A CALENDAR'S AXIS IS THE DATE and its order is the date: neither control
-  // has anything to change there, so neither is drawn.
+  // A CALENDAR'S AXIS IS THE DATE: there is nothing to group it by.
   if (shape === "calendar") return null;
   return (
-    <span className="work-arrange">
-      <label className="work-arrange-row">
-        <span className="t-caption">Group by</span>
-        <Select
-          size="sm"
-          width="auto"
-          // THE BOARD IS ALWAYS GROUPED — it is what a board IS — so its
-          // picker offers no "none" and shows status where nothing chose one.
-          value={shape === "board" ? groupBy || "status" : groupBy}
-          onChange={(value) => onGroupBy(String(value))}
-          ariaLabel="Group by"
-          active={groupBy !== ""}
-          options={groupAxisOptions(shape, workspace)}
-        />
-      </label>
-      {/* A LIST AND A TABLE SORT AT THEIR HEADS: see the module doc. */}
-      {!isGridShape(shape) && (
-        <label
-          className={cx("work-arrange-row")}
-          title={shape === "board" && !manual ? MANUAL_ORDER_HINT : undefined}
-        >
-          <span className="t-caption">Sort</span>
-          <OrderSelect
-            shape={shape}
-            workspace={workspace}
-            trash={trash}
-            sort={sort}
-            onSort={onSort}
-          />
-        </label>
-      )}
-    </span>
+    <ArrangePicker
+      caption="Group by"
+      inline={inline}
+      // THE BOARD IS ALWAYS GROUPED, which is what a board IS, so its
+      // picker offers no "none" and shows status where nothing chose one.
+      value={shape === "board" ? groupBy || "status" : groupBy}
+      onChange={(value) => onGroupBy(String(value))}
+      ariaLabel="Group by"
+      active={groupBy !== ""}
+      options={groupAxisOptions(shape, workspace)}
+    />
   );
 }
 
 /**
  * Which work is shown: open, open and this week's finished, finished, or all.
  *
- * A PICKER BESIDE GROUP BY AND SORT rather than four segments opening the
- * row: it is the same kind of choice as those two — how this answer is cut,
- * made often and read at a glance — and as four segments it took the start of
- * the row the chips belong in, pushing the narrowings a reader reads first
- * behind a control they set once. A listbox also chooses on Enter rather than
- * on every arrow, so walking the options asks the engine nothing.
+ * A PICKER BESIDE GROUP BY rather than four segments opening the row: it is
+ * the same kind of choice (how this answer is cut, made often and read at a
+ * glance), and as four segments it took the start of the row the chips belong
+ * in. A listbox also chooses on Enter rather than on every arrow, so walking
+ * the options asks the engine nothing.
  */
 export function ScopeControl({
   scope,
   onScope,
+  inline = false,
 }: {
   scope: Scope;
   onScope: (scope: string) => void;
+  /** Drawn in the bar rather than in the Display panel. */
+  inline?: boolean;
 }) {
   return (
-    <label className="work-arrange-row">
-      <span className="t-caption">Show</span>
-      <Select
-        size="sm"
-        width="auto"
-        value={scope}
-        onChange={(value) => onScope(String(value))}
-        ariaLabel="Which work"
-        options={SCOPE_OPTIONS}
-      />
-    </label>
+    <ArrangePicker
+      caption="Show"
+      inline={inline}
+      value={scope}
+      onChange={(value) => onScope(String(value))}
+      ariaLabel="Which work"
+      options={SCOPE_OPTIONS}
+    />
   );
 }
 

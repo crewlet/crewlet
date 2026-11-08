@@ -21,7 +21,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";
-import { ArrangeControls, ShapeSwitch, defaultOrderLabel } from "./WorkBar.tsx";
+import { ArrangeControls, MANUAL_ORDER_HINT, ShapeSwitch, defaultOrderLabel } from "./WorkBar.tsx";
 import { ItemsView } from "../ItemsView.tsx";
 import { columnChoices } from "../shapes/Grid.tsx";
 import { CARD_FACTS } from "~/components/work.tsx";
@@ -88,17 +88,15 @@ function openDisplay(over: Partial<DisplayMenuProps> = {}) {
   return { ...calls, trigger };
 }
 
-/** Group by and Sort, as the bar draws them. */
-function arrange(
-  over: Partial<{ shape: Shape; workspace: boolean; groupBy: string; sort: string }> = {},
-) {
-  const calls = { onGroupBy: vi.fn(), onSort: vi.fn() };
+/** Group by, as the row draws it. */
+function arrange(over: Partial<{ shape: Shape; workspace: boolean; groupBy: string }> = {}) {
+  const calls = { onGroupBy: vi.fn() };
   render(
     <ArrangeControls
       shape={over.shape ?? "list"}
       workspace={over.workspace ?? true}
       groupBy={over.groupBy ?? ""}
-      sort={over.sort ?? ""}
+      inline
       {...calls}
     />,
   );
@@ -190,10 +188,10 @@ test("the arrows walk the shapes without choosing one, and a press chooses", () 
 // THE MENU IS "DISPLAY" AND HOLDS WHAT A READER SETS ONCE. What it used to say
 // on its button — the shape and the axis — is on screen without it now, in the
 // shape row and the Group by picker, so the button stopped restating it.
-test("the menu holds the second axis, the columns and the lanes, and nothing the bar holds", () => {
+test("the menu holds the order, the second axis, the columns and the lanes, and nothing the row holds", () => {
   openDisplay({ shape: "board", groupBy: "status" });
   expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "Sort" })).toBeTruthy();
   cleanup();
   openDisplay({ shape: "list", groupBy: "status" });
   expect(screen.getByRole("combobox", { name: "Then by" })).toBeTruthy();
@@ -202,11 +200,12 @@ test("the menu holds the second axis, the columns and the lanes, and nothing the
   expect(document.querySelector(".work-display-shape")).toBeNull();
 });
 
-// A LIST AND A TABLE SORT AT THEIR COLUMN HEADS, so the bar draws no Sort for
-// them, and Display holds the same picker: the orders no column carries (the
-// manual order, the newest, the most tokens) must stay reachable.
-test("a grid shape sorts at its heads, and its Sort is in Display with every order", () => {
-  for (const shape of ["list", "table"] as const) {
+// EVERY ORDER IS DISPLAY'S SORT, on every shape but the calendar, and the row
+// draws none: a list and a table are also ordered at their column heads, and
+// the orders no column carries (the manual order, the newest, the most
+// tokens) must stay reachable on every shape.
+test("every shape but the calendar has its Sort in Display with every order, and the row has none", () => {
+  for (const shape of ["list", "table", "board", "timeline"] as const) {
     arrange({ shape });
     expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
     expect(screen.getByRole("combobox", { name: "Group by" })).toBeTruthy();
@@ -220,12 +219,19 @@ test("a grid shape sorts at its heads, and its Sort is in Display with every ord
     expect(onSort).toHaveBeenCalledWith("rank");
     cleanup();
   }
-  // A BOARD AND A TIMELINE HAVE NO HEADS, so their Sort stays in the bar.
-  for (const shape of ["board", "timeline"] as const) {
-    arrange({ shape });
-    expect(screen.getByRole("combobox", { name: "Sort" })).toBeTruthy();
-    cleanup();
-  }
+});
+
+// A BOARD'S DRAG IS A PLACE IN THE MANUAL ORDER, so under any other order its
+// Sort says how to drag, where the order is chosen.
+test("a board's Sort says how to drag where the order on screen is not the manual one", () => {
+  openDisplay({ shape: "board", sort: "-updated", manual: false });
+  const row = screen.getByRole("combobox", { name: "Sort" }).closest("label")!;
+  expect(row.getAttribute("title")).toBe(MANUAL_ORDER_HINT);
+  cleanup();
+  openDisplay({ shape: "board", sort: "", manual: true });
+  expect(
+    screen.getByRole("combobox", { name: "Sort" }).closest("label")!.hasAttribute("title"),
+  ).toBe(false);
 });
 
 // WHAT A SAVED VIEW WAS SAVED AS, and the way back to it. A reader who has
@@ -324,7 +330,8 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
   // opening on an empty panel.
   openDisplay({ shape: "calendar" });
   expect(screen.queryByText("Columns")).toBeNull();
-  expect(screen.getByText("Grouping and order are in the bar.")).toBeTruthy();
+  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+  expect(screen.getByText("A calendar is laid out by its dates.")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -335,7 +342,7 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
 // engine takes, and a picker that wrote "updated desc" or "recent" would be
 // refused at the read rather than sorted differently.
 test("Sort offers the grammar's own keys and writes them as written", () => {
-  const { onSort } = arrange({ shape: "board" });
+  const { onSort } = openDisplay({ shape: "board" });
   expect(optionsOf("Sort")).toEqual([
     defaultOrderLabel("board", true),
     ...SORTS.map((s) => s.label),
@@ -360,7 +367,7 @@ test("the default order is named for what it is", () => {
 // performs: `""` out of the callback means off, and turning a view's own order
 // off is the screen's to write because only it knows what the view carries.
 test("choosing the default order hands back the empty string", () => {
-  const { onSort } = arrange({ shape: "board", sort: "-updated" });
+  const { onSort } = openDisplay({ shape: "board", sort: "-updated" });
   pick(screen.getByRole("combobox", { name: "Sort" }), defaultOrderLabel("board", true));
   expect(onSort).toHaveBeenCalledWith("");
 });

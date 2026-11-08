@@ -643,7 +643,7 @@ walked past it, and a key with two is two controls for one fact that disagree
 the first time either writes.
 
 The one control outside both is the **scope** picker (**Show**: Open / Recent /
-Closed / All, at the bar's far end beside Group by and Sort), which is always
+Closed / All, at the row's far end beside Group by), which is always
 set to something: as a chip it would either be
 permanently present, which is not a chip, or absent on its default, which hides
 the one control that decides whether finished work is on screen at all. Its
@@ -6292,9 +6292,12 @@ What replaced it:
   screen's answer at the bottom of another is how the two come to disagree.
 - **A toolbar carries the `toolbar` class, and its controls travel in
   groups.** The class is not decoration: `.screen:has(.toolbar)` publishes
-  `--sticky-top`, and every other band that sticks to the same scroller — a
-  grid's column heads, a grouped list's group heads, an item's side rail —
-  starts at that offset. Worklet's filter bar restated every one of
+  `--sticky-top`, and every other band that sticks to the same scroller (a
+  grid's column heads, a grouped list's group heads, an item's side rail)
+  starts at that offset. It is the toolbar's drawn height where the toolbar
+  publishes one (`useStickyBand`, measured when the bar resizes, never on
+  scroll), as the work list's row does because it wraps at narrow widths, and
+  one band of controls where it does not. Worklet's filter bar restated every one of
   `.toolbar`'s declarations under a name of its own, so the property stayed at
   its `0px` default and the table's own header parked underneath an opaque
   band. Inside the bar, what narrows the rows is one group and what switches
@@ -7225,8 +7228,8 @@ is one of the rules on this page applied to a tracker.
   somebody saved: mixed in beside an arranged query, the two read as the same
   kind of thing, which is why `view=` and `shape=` are two keys. The SIDEBAR
   drops them because a builtin carries no id, so there is no row to address.
-  The five shapes are the first row's own segmented switch, and the strip is a
-  second one in its own well. Both are radio groups with manual activation,
+  The five shapes open the work list's one row as its own segmented switch,
+  and the strip is a second one in its own well. Both are radio groups with manual activation,
   because each choice is a URL change that re-runs the list: the arrows move
   focus and Enter or Space chooses, so walking a row leaves no history entry
   per keypress. A strip with more views than the row holds wraps inside its
@@ -7239,27 +7242,31 @@ is one of the rules on this page applied to a tracker.
   the item that pushed the search box and the menus onto a second line at
   1280px. That the strip is drawn even when nothing was saved is [the sparse
   state](#the-sparse-state)'s rule, not this one.
-- **The second row is how the answer is cut, and it is the last row above the
-  work.** The chips open it, ending in **+ Filter** — what narrows the answer
-  is what a reader reads first, and the control that adds a narrowing sits
-  after the ones it adds to, as the approved Board draws it. At the far end,
-  one cluster: **Show** (the scope), Group by, Sort, a board's lanes out of
-  view and the count, so a row made narrow by an open peek or a 1280 window
-  moves them down together rather than leaving the count alone on a line. The
-  scope was four segments opening the row; it is a picker because it is the
-  same kind of choice as Group by and Sort, and as segments it took the start
-  of the row from the chips. NOTHING ELSE sits between this bar and the work:
+- **The work list's controls are ONE row, read in the order a reader asks,
+  and it is the only row above the work.** What is drawn (the shapes and the
+  strip), then what narrows it (the chips, ending in **+ Filter**: the control
+  that adds a narrowing sits after the ones it adds to), then at the far end
+  how it is arranged (**Show**, the scope, and **Group by**, each the kit's
+  quiet picker with its caption inside, "Show Open", so the pair reads as one
+  phrase and spends no width on a label beside a box), a board's lanes out of
+  view and the count, and last the search box and **Display**. Two rows cost
+  every Work screen a row of height: as one, the list starts 41px higher at
+  1440px and 45px higher at 1280px beside the peek and on a phone. Each group
+  is one cluster, so a row too narrow for everything wraps whole clusters, the
+  far end right-aligned, the search box giving way to 140px first, and never
+  leaves the count or Display alone on a line. The order is **Display's Sort**
+  on every shape but the calendar: a list and a table are also ordered at
+  their column heads, and a board and a timeline have none, so one picker
+  offers every order the engine takes (on a board, titled with how to drag
+  outside the manual order). NOTHING ELSE sits between this row and the work:
   the Tasks screen's introduction and the board's "cards move in the manual
   order" line each cost a row on every visit to say something needed once, so
   the first lives in these docs and the empty state and the second is said
-  when somebody tries to drag outside the manual order (and in the Sort
-  control's title on a board). On a phone the
-  row is the sticky band, so it stays ONE line that scrolls sideways: wrapped, it stood three rows tall and covered the
-  board's lane heads as the page scrolled under it. It fades the edge with
-  more past it, as the page bar's controls do — cut at the edge with nothing
-  said, "Ta" and "No g" read as broken labels — and what scrolls in the bar is
-  the run of controls inside it, never the opaque band, which a fade would let
-  the rows beneath show through.
+  when somebody tries to drag outside the manual order. On a phone the
+  arrangement opens from Display, which is its glyph there, so the row is two
+  lines (the drawing; "+ Filter" beside the count and the tools) and a third
+  while a filter is on: the chips, the one run that scrolls sideways, fading
+  the edge with more past it, so no control in the row stands past the edge.
 - **The landing shape is the CLIENT's fallback, not a builtin the engine marks
   `default`.** Why it is the list is under [the sparse state](#the-sparse-state);
   why it lives here is that exactly one view row may carry `default` and the
