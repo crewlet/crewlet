@@ -86,7 +86,7 @@ func integrationLine(in Integration) string {
 	if len(parts) == 0 {
 		parts = append(parts, "your own account.")
 	}
-	if tool := toolSentence(seataccess.ToolState(in.Tool), false); tool != "" {
+	if tool := toolSentence(seataccess.ToolState(in.Tool), false, voiceOf(ForSeat)); tool != "" {
 		parts = append(parts, capitalized(tool))
 	}
 	for _, hc := range in.Commands {

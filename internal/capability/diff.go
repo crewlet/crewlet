@@ -119,32 +119,37 @@ func (c Change) Terms() []string {
 //
 // AGAINST WHAT THE SEAT WAS LAST TOLD, never the previous revision: a revert
 // is a change back, and an unchanged revision applied again is nothing.
-func Diff(old, now Snapshot) []Change {
+func Diff(old, now Snapshot) []Change { return DiffFor(old, now, ForSeat) }
+
+// DiffFor is [Diff] with each line worded for audience: the seat, told its own
+// access, or a person reading about the seat's.
+func DiffFor(old, now Snapshot, audience Audience) []Change {
+	v := voiceOf(audience)
 	// AT ONE LEVEL: a snapshot shortened to fit is compared with the other
 	// shortened alike, so what one level leaves out is never told as gone.
 	level := max(old.Compact, now.Compact)
 	old, now = old.at(level), now.at(level)
 	var out []Change
-	out = append(out, integrationChanges(old, now)...)
-	out = append(out, serverChanges(old.MCP, now.MCP)...)
+	out = append(out, integrationChanges(old, now, v)...)
+	out = append(out, serverChanges(old.MCP, now.MCP, v)...)
 	out = append(out, foldedChange(ChangeServerAdded, ChangeServerRemoved, "Tool servers",
 		old.MCP, now.MCP, old.MCPMore, now.MCPMore, old.MCPDigest, now.MCPDigest,
-		"tool servers changed past the ones you are told by name.")...)
+		"tool servers changed past the ones "+v.told+" by name.")...)
 	out = append(out, policyChanges(old.Policies, now.Policies)...)
 	out = append(out, foldedChange(ChangePolicyAdded, ChangePolicyRemoved, "Policy",
 		old.Policies, now.Policies, old.PoliciesMore, now.PoliciesMore, old.PoliciesDigest, now.PoliciesDigest,
-		"the company's policies changed past the ones you are told here; your system prompt holds them all.")...)
+		"the company's policies changed past the ones "+v.told+" here; "+v.your+" system prompt holds them all.")...)
 	out = append(out, setupChanges(old.Setup, now.Setup)...)
 	out = append(out, foldedChange(ChangeSetupStepModified, ChangeSetupStepModified, "Box setup",
 		old.Setup, now.Setup, old.SetupMore, now.SetupMore, old.SetupDigest, now.SetupDigest,
-		"steps changed past the ones you are told by name.")...)
+		"steps changed past the ones "+v.told+" by name.")...)
 	for i := range out {
 		out[i].Line = textcut.Within(out[i].Line, MaxLineBytes)
 	}
 	return out
 }
 
-func integrationChanges(old, now Snapshot) []Change {
+func integrationChanges(old, now Snapshot, v voice) []Change {
 	before := map[string]Integration{}
 	for _, in := range old.Integrations {
 		before[in.Lane] = in
@@ -170,15 +175,15 @@ func integrationChanges(old, now Snapshot) []Change {
 		case has && is.On && (!had || !was.On):
 			c := base
 			c.Kind, c.To = ChangeIntegrationOn, is.LevelName
-			c.Line = vendor + ": you now have your own account" + grantedAt(is) + "."
+			c.Line = vendor + ": " + v.have + " " + v.your + " own account" + grantedAt(is) + "."
 			out = append(out, c)
 			continue
 		case had && was.On && (!has || !is.On):
 			c := base
 			c.Kind, c.From = ChangeIntegrationOff, was.LevelName
-			c.Line = vendor + ": no longer granted to you."
+			c.Line = vendor + ": no longer granted to " + v.you + "."
 			if has {
-				c.Line = vendor + ": your account is not active now, so its tools are unavailable."
+				c.Line = vendor + ": " + v.your + " account is not active now, so its tools are unavailable."
 			}
 			out = append(out, c)
 			continue
@@ -188,7 +193,7 @@ func integrationChanges(old, now Snapshot) []Change {
 			// use until it is on.
 			continue
 		}
-		out = append(out, laneChanges(base, was, is)...)
+		out = append(out, laneChanges(base, was, is, v)...)
 	}
 	return out
 }
@@ -210,13 +215,13 @@ func grantedAt(in Integration) string {
 
 // laneChanges is what moved on a lane the seat could act on before and can
 // now.
-func laneChanges(base Change, was, is Integration) []Change {
+func laneChanges(base Change, was, is Integration, v voice) []Change {
 	var out []Change
 	vendor := base.Vendor
 	if was.Level != is.Level {
 		c := base
 		c.Kind, c.From, c.To = ChangeLevel, nameOr(was.LevelName, was.Level), nameOr(is.LevelName, is.Level)
-		c.Line = fmt.Sprintf("%s: your level is now %s (was %s).", vendor, c.To, c.From)
+		c.Line = fmt.Sprintf("%s: %s level is now %s (was %s).", vendor, v.your, c.To, c.From)
 		if is.LevelNote != "" {
 			c.Line += " " + is.LevelNote
 		}
@@ -254,13 +259,13 @@ func laneChanges(base Change, was, is Integration) []Change {
 	if added := minus(is.Scope, was.Scope); len(added) > 0 {
 		c := base
 		c.Kind, c.Items = ChangeScopeAdded, added
-		c.Line = vendor + ": you can now work in " + scopeList(added, is.ScopeLabels) + "."
+		c.Line = vendor + ": " + v.can + " now work in " + scopeList(added, is.ScopeLabels) + "."
 		out = append(out, c)
 	}
 	if removed := minus(was.Scope, is.Scope); len(removed) > 0 {
 		c := base
 		c.Kind, c.Items = ChangeScopeRemoved, removed
-		c.Line = vendor + ": you can no longer work in " + scopeList(removed, was.ScopeLabels) + "."
+		c.Line = vendor + ": " + v.can + " no longer work in " + scopeList(removed, was.ScopeLabels) + "."
 		out = append(out, c)
 	}
 	for _, entry := range minus(isPending, wasPending) {
@@ -290,20 +295,20 @@ func laneChanges(base Change, was, is Integration) []Change {
 		if is.ScopeMore < was.ScopeMore {
 			c.Kind = ChangeScopeRemoved
 		}
-		c.Line = fmt.Sprintf("%s: your scope changed past the %d entries you are told by name; "+
-			"you now hold %d.", vendor, len(is.Scope), len(is.Scope)+is.ScopeMore)
+		c.Line = fmt.Sprintf("%s: %s scope changed past the %d entries %s by name; %s %d.",
+			vendor, v.your, len(is.Scope), v.told, v.hold, len(is.Scope)+is.ScopeMore)
 		out = append(out, c)
 	}
 	if was.Tool != is.Tool {
 		c := base
 		c.Kind, c.From, c.To = ChangeToolState, was.Tool, is.Tool
-		c.Line = vendor + ": " + toolSentence(seataccess.ToolState(is.Tool), true)
+		c.Line = vendor + ": " + toolSentence(seataccess.ToolState(is.Tool), true, v)
 		out = append(out, c)
 	}
 	return out
 }
 
-func serverChanges(old, now []ToolServer) []Change {
+func serverChanges(old, now []ToolServer, v voice) []Change {
 	before := map[string]ToolServer{}
 	for _, s := range old {
 		before[s.Server] = s
@@ -317,7 +322,7 @@ func serverChanges(old, now []ToolServer) []Change {
 				Line: "New tool server: " + s.Server + "."})
 			continue
 		}
-		if c, ok := toolLevelChange(was, s); ok {
+		if c, ok := toolLevelChange(was, s, v); ok {
 			out = append(out, c)
 		}
 	}
@@ -332,7 +337,7 @@ func serverChanges(old, now []ToolServer) []Change {
 // toolLevelChange is what moved among one server's tools: the tools that now
 // need an approval, those now offered no more, and those that now run without
 // one.
-func toolLevelChange(was, is ToolServer) (Change, bool) {
+func toolLevelChange(was, is ToolServer, v voice) (Change, bool) {
 	var parts, items []string
 	add := func(tools []string, one, many string) {
 		if len(tools) == 0 {
@@ -348,13 +353,13 @@ func toolLevelChange(was, is ToolServer) (Change, bool) {
 	add(minus(is.Approve, was.Approve), "now needs a person's approval before each call",
 		"now need a person's approval before each call")
 	gone := minus(union(was.Allow, was.Approve), union(is.Allow, is.Approve))
-	add(gone, "is no longer offered to you", "are no longer offered to you")
+	add(gone, "is no longer offered to "+v.you, "are no longer offered to "+v.you)
 	add(minus(is.Allow, was.Allow), "now runs without an approval", "now run without an approval")
 	if was.Default != is.Default {
-		parts = append(parts, "every other tool "+defaultWords(is.Default))
+		parts = append(parts, "every other tool "+defaultWords(is.Default, v))
 	}
 	if len(parts) == 0 && (was.More != is.More || was.ToolsDigest != is.ToolsDigest) {
-		parts = append(parts, "tools past the ones you are told by name changed level")
+		parts = append(parts, "tools past the ones "+v.told+" by name changed level")
 	}
 	if len(parts) == 0 {
 		return Change{}, false
@@ -380,14 +385,14 @@ func foldedChange[T any](grown, shrunk ChangeKind, vendor string, was, is []T,
 }
 
 // defaultWords is what a server's default level means for its unnamed tools.
-func defaultWords(level string) string {
+func defaultWords(level string, v voice) string {
 	switch config.MCPToolLevel(level) {
 	case config.MCPToolAllow:
 		return "now runs without an approval"
 	case config.MCPToolApprove:
 		return "now needs a person's approval before each call"
 	case config.MCPToolBlocked:
-		return "is no longer offered to you"
+		return "is no longer offered to " + v.you
 	}
 	return "now runs at the level its server marks it with"
 }
@@ -452,19 +457,19 @@ func setupChanges(old, now []SetupStep) []Change {
 
 // toolSentence says what a tool state means for the seat, as a clause; first
 // is whether it opens a change line, which a state the seat can use says too.
-func toolSentence(state seataccess.ToolState, first bool) string {
+func toolSentence(state seataccess.ToolState, first bool, v voice) string {
 	switch state {
 	case seataccess.ToolServerOff:
-		return "your tool server is off, so its tools are unavailable."
+		return v.your + " tool server is off, so its tools are unavailable."
 	case seataccess.ToolNoServer:
 		return "no tool server is set up for it, so it has no tools yet."
 	case seataccess.ToolWaiting:
-		return "your credential is not set up yet, so its tools are unavailable."
+		return v.your + " credential is not set up yet, so its tools are unavailable."
 	case seataccess.ToolOff:
 		return "its tools are unavailable."
 	}
 	if first {
-		return "your tools for it are available."
+		return v.your + " tools for it are available."
 	}
 	return ""
 }
@@ -541,4 +546,28 @@ func unionKeys(a, b map[string]string) map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// Audience is who a change line is written for.
+type Audience int
+
+// The two audiences.
+const (
+	// ForSeat is the seat, told its own access ("your level is now Read").
+	ForSeat Audience = iota
+	// ForPerson is a person reading about the seat ("its level is now Read").
+	ForPerson
+)
+
+// voice is one audience's words for the seat a line is about.
+type voice struct{ you, your, have, can, hold, told string }
+
+// voiceOf is audience's voice.
+func voiceOf(audience Audience) voice {
+	if audience == ForPerson {
+		return voice{you: "it", your: "its", have: "it now has", can: "it can",
+			hold: "it now holds", told: "it is told"}
+	}
+	return voice{you: "you", your: "your", have: "you now have", can: "you can",
+		hold: "you now hold", told: "you are told"}
 }

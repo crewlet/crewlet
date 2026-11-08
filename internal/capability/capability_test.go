@@ -453,3 +453,28 @@ func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
 		t.Error("one access takes two digests")
 	}
 }
+
+// A PERSON READS A CHANGE ABOUT THE SEAT, NOT ABOUT THEMSELVES: the same
+// change worded for a person names the seat in the third person, from one
+// formatter, and says the same facts.
+//
+// Mutation: hand a person the seat's own line and they read "your level".
+func TestAPersonReadsAChangeAboutTheSeat(t *testing.T) {
+	t.Parallel()
+	seat := capability.DiffFor(told("secure"), told("operate"), capability.ForSeat)
+	person := capability.DiffFor(told("secure"), told("operate"), capability.ForPerson)
+	if len(seat) != 1 || len(person) != 1 || seat[0].Kind != person[0].Kind {
+		t.Fatalf("the two audiences were told %+v and %+v, want one change each", seat, person)
+	}
+	if !strings.Contains(seat[0].Line, "your level is now Operate (was Secure)") ||
+		!strings.Contains(person[0].Line, "its level is now Operate (was Secure)") {
+		t.Errorf("the seat reads %q and a person %q", seat[0].Line, person[0].Line)
+	}
+	for _, c := range capability.DiffFor(capability.Take(input(company())), told("read"), capability.ForPerson) {
+		for _, word := range []string{" you ", " your ", "you are", "you now", "to you"} {
+			if strings.Contains(" "+c.Line+" ", word) {
+				t.Errorf("a person's line %q says %q", c.Line, strings.TrimSpace(word))
+			}
+		}
+	}
+}
