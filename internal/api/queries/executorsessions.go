@@ -299,10 +299,13 @@ type SessionRow struct {
 	// relaunch would only in the box the run parked in, why no other box
 	// continues it. NULL where it cannot be decided now, which NotContinuable
 	// then says: an unknown is never sent as a no. See the file comment.
+	// NotContinuable can quote what refused a capture — an error a box or a
+	// store wrote — and so is declared as somebody else's words, as the
+	// unkept capture's reason it quotes is.
 	ContinuedBy    sandbox.ContinuedBy `json:"continued_by,omitempty"`
 	Continuable    *bool               `json:"continuable"`
 	ContinuesIn    sandbox.ContinuesIn `json:"continues_in,omitempty"`
-	NotContinuable string              `json:"not_continuable,omitempty"`
+	NotContinuable string              `json:"not_continuable,omitempty" untrusted:"fence"`
 }
 
 // SessionsAnswer is one page of a seat's executor sessions, the latest begun
@@ -330,9 +333,10 @@ type SessionAnswer struct {
 
 	// State is what reading the session's object came to, and Why says it in
 	// the engine's own words wherever it is not `read` — the words every
-	// reader of a session is told (internal/executorread).
+	// reader of a session is told (internal/executorread), which can quote
+	// why a capture was not kept, and so are declared as somebody else's.
 	State executorread.TranscriptState `json:"state"`
-	Why   string                       `json:"why,omitempty"`
+	Why   string                       `json:"why,omitempty" untrusted:"fence"`
 
 	// Entries are the transcript's entries from From on, in the order the
 	// harness recorded them; empty wherever State is not `read`.
