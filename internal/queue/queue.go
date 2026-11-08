@@ -423,7 +423,17 @@ func LiteralSubject(subject string) error {
 	return nil
 }
 
-// Unsubscribe cancels a stream subscription and releases backend resources.
+// Unsubscribe withdraws a registration, a stream subscription, an answerer
+// ([EventQueue.Serve]) or a listener ([EventQueue.Listen]), and releases its
+// backend resources.
+//
+// ONE A QUEUE RETURNS MAY BE CALLED AGAIN. Only the first call withdraws; a
+// later one finds the registration withdrawn, which is all it asks, and
+// answers nil once nothing the verb's withdrawal waits for is still running.
+// A broker that reports the registration already gone is reporting what the
+// first call made true, not a failure. So a deferred withdrawal beside an
+// explicit one, or a teardown that runs twice, hears the same from every
+// backend, and the conformance suite holds each to it (#777).
 type Unsubscribe func(ctx context.Context) error
 
 // BatchKeyFunc derives the PARTITION KEY an event is handled under: which
