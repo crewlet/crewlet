@@ -49,6 +49,7 @@ import {
   markdownHeadingOf,
   markdownInline,
   parseMarkdown,
+  peelPunctuation,
   safeHref,
   type MarkdownBlock,
   type MarkdownFence,
@@ -433,11 +434,21 @@ export function renderInline(
   const live = mode === "text" ? null : mode;
 
   for (const { index, end, groups: g } of markdownInline(text)) {
-    if (index > at) {
-      out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard, options));
+    // A CODE SPAN, A LINK OR AN ADDRESS takes the punctuation around it
+    // (`peelPunctuation`), so a line never ends on the "(" before one.
+    const takes =
+      g.tick !== undefined ||
+      g.href !== undefined ||
+      (g.auto !== undefined && mode !== "text" && safeHref(g.auto) !== null);
+    const peeled = takes ? peelPunctuation(text.slice(at, index), text.slice(end)) : null;
+    const lead = peeled ? peeled.before : text.slice(at, index);
+    if (lead) {
+      out.push(breakLines(lead, `${keyPrefix}-t${n++}`, hard, options));
     }
     const key = `${keyPrefix}-${n++}`;
-    at = end;
+    const open = peeled?.open ?? "";
+    const close = peeled?.close ?? "";
+    at = end + close.length;
 
     if (g.esc !== undefined) {
       // AN ESCAPED CHARACTER IS ITSELF: `\*` is an asterisk somebody meant.
@@ -458,8 +469,12 @@ export function renderInline(
       const colour = codeColour(code);
       out.push(
         colour
-          ? createElement(ColourCode, { key, code, colour })
-          : createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code),
+          ? createElement(ColourCode, { key, code, colour, open, close })
+          : createElement(
+              InlineCode,
+              { key, whole: code.length <= UnbrokenCode, open, close },
+              code,
+            ),
       );
     } else if (g.src !== undefined) {
       const alt = g.alt ?? "";
@@ -489,6 +504,8 @@ export function renderInline(
           key,
           token: { kind: "address", at: 0, end: g.auto.length, text: g.auto, href: auto },
           links: mode,
+          open,
+          close,
         }),
       );
     } else if (g.href !== undefined) {
@@ -502,8 +519,18 @@ export function renderInline(
       // token ([asLabel]). Whether it is live is the link mode's.
       out.push(
         href && live
-          ? createElement(LabelledLink, { key, href, mode: live }, renderInline(label, key, inner))
-          : createElement("span", { key }, renderInline(label, key, inner)),
+          ? createElement(
+              LabelledLink,
+              { key, href, mode: live, open, close },
+              renderInline(label, key, inner),
+            )
+          : createElement(
+              Fragment,
+              { key },
+              open,
+              createElement("span", null, renderInline(label, key, inner)),
+              close,
+            ),
       );
     } else if (g.auto !== undefined) {
       // AN AUTOLINK NO LINK MAY BE, or one with an unsafe address: its words.

@@ -187,7 +187,7 @@ fix what the linter reports.
 The layout suites (a `.layout.test.tsx` beside the stylesheet it holds) lay
 panes out in a headless browser, which `npx playwright install chromium
 --only-shell` installs once, and `npm run test:layout` runs them. They place
-the stylesheets where a built page does (`src/test/layout.ts`): the app's
+the stylesheets where a built page does (`src/test/layout.tsx`): the app's
 sheet, the design system's rules among it, after every screen's own sheet,
 so a screen's rule that sizes or restyles a design-system box loses there as
 it does for a reader. Ask the design system for the state instead (a prop),

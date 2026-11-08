@@ -6,7 +6,7 @@
  * title, a wide table and a wide code block. Only a table or a code block may
  * scroll, inside its own box.
  */
-import "~/test/layout.ts";
+import "~/test/layout.tsx";
 // Chatlet's own sheets, lazy in the app, after the app's sheet is placed.
 import "~/styles/chatlet-room.css";
 import "~/styles/chatlet-panes.css";
@@ -15,17 +15,17 @@ import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import type { ReactNode } from "react";
-import { ChatThread, LayerHost, ListDetail, PeekRail, ToastProvider } from "@crewlethq/ui";
+import { ChatThread, ListDetail, PeekRail } from "@crewlethq/ui";
 import { ItemPeek } from "~/routes/worklet/WorkItem.tsx";
 import { MessageBody } from "~/routes/chatlet/Body.tsx";
-import { Router } from "~/app/router.tsx";
-import { FrameReadings } from "~/app/Shell.tsx";
-import { ClientContext } from "~/lib/store-hooks.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
-import { healthFrame } from "~/test/health.ts";
-import { withDerived } from "~/test/org.ts";
-import { overflowing, sidewaysScrollers } from "~/test/layout.ts";
+import {
+  InertWebSocket,
+  LayoutClient,
+  overflowing,
+  sidewaysScrollers,
+  strandedPunctuation,
+} from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
 
 const PATH = `/srv/releases/${"route-cache-worker-".repeat(6)}bundle.tar.zst`;
@@ -56,15 +56,6 @@ const HOSTILE = [
   `${COMMAND} && ${COMMAND}`,
   "```",
 ].join("\n");
-
-class InertWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSED = 3;
-  readyState = InertWebSocket.CONNECTING;
-  send(): void {}
-  close(): void {}
-}
 
 const VIEWER = {
   login: "U0FOUNDER",
@@ -162,27 +153,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Everything a pane reads, answered from the fixtures above, around `children`. */
-function Client({ children }: { children: ReactNode }) {
-  const store = new Store();
-  store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(withDerived(ORG) as never);
-  store.applySeats([] as never);
-  const socket = new LiveSocket(store);
-  socket.query = ((what: string) => Promise.resolve(ANSWERS[what] ?? {})) as typeof socket.query;
-  return (
-    <ToastProvider>
-      <LayerHost>
-        <ClientContext.Provider value={{ store, socket }}>
-          <FrameReadings>
-            <Router>{children}</Router>
-          </FrameReadings>
-        </ClientContext.Provider>
-      </LayerHost>
-    </ToastProvider>
-  );
-}
-
 /** Renders `node` into a slot exactly `width` wide, and waits until it has settled and laid out. */
 async function mount(node: ReactNode, width: number, settle: () => boolean): Promise<HTMLElement> {
   host = document.createElement("div");
@@ -191,7 +161,13 @@ async function mount(node: ReactNode, width: number, settle: () => boolean): Pro
   host.style.cssText = `display: grid; grid-template-columns: minmax(0, 1fr); width: ${width}px; height: 720px; overflow: auto;`;
   document.body.append(host);
   root = createRoot(host);
-  flushSync(() => root!.render(<Client>{node}</Client>));
+  flushSync(() =>
+    root!.render(
+      <LayoutClient answers={ANSWERS} org={ORG}>
+        {node}
+      </LayoutClient>,
+    ),
+  );
   await eventually(() => expect(settle()).toBe(true));
   await document.fonts.ready;
   await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
@@ -266,3 +242,26 @@ for (const viewport of [
     }
   });
 }
+
+const SENTENCE =
+  "Approve merging backend#51 (`make deploy`) into main, and see the timeline (https://status.example.com/incidents/2031-04-16) first.";
+
+// A TOKEN KEEPS THE PUNCTUATION AROUND IT: the dashboard's words hand what
+// opens and closes around a code span or an address to the token
+// (`peelPunctuation`), so no line ends on "(". Before, at many widths a
+// line did, while the token moved whole to the next.
+test("a token in rendered words keeps its punctuation on its line, at every width a line holds it", async () => {
+  await page.viewport(1440, 900);
+  const stranded: string[] = [];
+  // From the width that holds "(https://status.example.com", the address's unit.
+  for (let width = 260; width <= 600; width += 4) {
+    const at = await mount(<div className="prose md">{renderMarkdown(SENTENCE)}</div>, width, () =>
+      Boolean(document.querySelector(".prose.md code")),
+    );
+    const found = strandedPunctuation(at.querySelector(".prose.md")!);
+    if (found.length) stranded.push(`${width}px: ${found.join(", ")}`);
+    flushSync(() => root?.unmount());
+    host?.remove();
+  }
+  expect(stranded).toEqual([]);
+});

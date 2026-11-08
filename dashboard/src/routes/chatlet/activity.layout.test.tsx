@@ -4,11 +4,11 @@
  * whole box, never the pane's resting width, and its own body scrolls, so the
  * last reply and the reply box are in reach however long the thread.
  *
- * Measured with the stylesheets where a built page puts them (`~/test/layout.ts`):
+ * Measured with the stylesheets where a built page puts them (`~/test/layout.tsx`):
  * Chatlet's sheets are a lazy chunk's, linked before the app's, so a Chatlet
  * rule sizing the kit's panel loses there, and only the kit's own rule holds.
  */
-import "~/test/layout.ts";
+import "~/test/layout.tsx";
 // Chatlet's own sheets, lazy in the app, after the app's sheet is placed.
 import "~/styles/chatlet-frame.css";
 import "~/styles/chatlet-room.css";
@@ -19,7 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { ReactNode } from "react";
 import { ChatThread, LayerHost, ListDetail, ToastProvider } from "@crewlethq/ui";
 
-import { sidewaysScrollers } from "~/test/layout.ts";
+import { sidewaysScrollers } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
 
 import { ChatDetailPlacement, ChatSidePanel, DETAIL_PANE_CLASS } from "./PanePanel.tsx";
