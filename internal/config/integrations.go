@@ -41,6 +41,7 @@ type Integrations struct {
 	GoogleCloud  *GoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
 	Atlassian    *Atlassian    `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
 	AWS          *AWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
+	SSH          *SSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -168,6 +169,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.GoogleCloud != nil {
 		p.wrap(i.GoogleCloud.validate(at(path, "google_cloud")))
+	}
+	if i.SSH != nil {
+		p.wrap(i.SSH.validate(at(path, "ssh")))
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))
