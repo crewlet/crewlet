@@ -345,9 +345,13 @@ type AnswerTooLargeError struct {
 	May    int
 }
 
+// Error states what the answer weighs ROUNDED UP ([kept.SizeUp]) beside the
+// bound in [kept.Size]'s units, which round down: rounded down too, a reply a
+// byte past the bound read "weighs 512 KiB ..., and an answer may weigh
+// 512 KiB" in the log line that refuses it.
 func (e *AnswerTooLargeError) Error() string {
 	return fmt.Sprintf("sandbox: the answer to run %s weighs %s on its row, and an answer may weigh %s",
-		e.TurnID, kept.Size(e.Weighs), kept.Size(e.May))
+		e.TurnID, kept.SizeUp(e.Weighs), kept.Size(e.May))
 }
 
 // Unwrap is [ErrAnswerTooLarge], which every caller tests for.
@@ -745,11 +749,12 @@ func answerFits(turnID string, answer RecordedAnswer) error {
 // HeldArgsFit reports why held call arguments sealed as sealed are past their
 // share of the row ([MaxHeldArgsBytes]), nil where they are within it: what the
 // holder asks before it records the question, and the store again as it writes
-// it.
+// it. The figure past the bound is stated rounded up ([kept.SizeUp]), so
+// arguments a byte past it never read as the bound itself.
 func HeldArgsFit(sealed string) error {
 	if n := kept.Quoted(sealed); n > MaxHeldArgsBytes {
 		return fmt.Errorf("sandbox: the call's arguments weigh %s once sealed, and a held call's may "+
-			"weigh %s: %w", kept.Size(n), kept.Size(MaxHeldArgsBytes), ErrHeldCallTooLarge)
+			"weigh %s: %w", kept.SizeUp(n), kept.Size(MaxHeldArgsBytes), ErrHeldCallTooLarge)
 	}
 	return nil
 }
