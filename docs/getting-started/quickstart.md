@@ -546,6 +546,16 @@ first sign-in you act as that seat. The secret after the `.` never leaves the
 page in a URL: the link carries it in the fragment, which no browser sends to a
 server, and the screen sends it in a header and a body instead.
 
+**Until a person holds a human seat, an agent uses no app for what that seat
+says.** The seat's `contact` lets the agents recognise who is writing to them,
+but a permission is a person's: until you redeem the invitation (or an
+administrator creates the person on the seat), a message from the founder's
+chat account wakes an agent that files no task, reads and writes no page,
+posts in no room and authors no artifact for it, and tells you why ([An agent
+uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+The same holds for every human seat you add later.
+
 This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
 signs you in here. **Leave that line out on a deployment reached off
 loopback** — unset, a second factor is required, and the session a redemption
