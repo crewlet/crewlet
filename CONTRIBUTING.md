@@ -88,6 +88,22 @@ test-gitproc` — gitproc's own suite on the three pins — on macOS for every p
 request, so the recipe's macOS branch is built where a Mac contributor builds
 it; on Linux `make test` runs the same packages.
 
+**What fetching Chromium takes** — `curl`, `unzip` and the same SHA-256 tool,
+`zip` for `make chromium-test` (the recipe's own suite, in `make check`), and on
+Linux the shared libraries Chrome links, which a desktop and GitHub's runner
+image already carry and which a build's `deb.deps` (Debian, Ubuntu) or
+`rpm.deps` (Fedora, RHEL) lists — because `make chromium` fetches the Chrome for
+Testing builds [`scripts/chromium-pin.env`](scripts/chromium-pin.env) pins, the
+newest and the floor, each checked against its SHA-256 for your platform, with
+[`scripts/chromium.sh`](scripts/chromium.sh), once, into
+`~/.cache/crewlet/chromium` (`CREWLET_CHROMIUM_CACHE` moves it; about 0.8 GB for
+both, and a pin bump, or a change to how the recipe lays a build out, fetches
+beside what is there, which `rm -rf ~/.cache/crewlet/chromium` clears; any
+other change to the recipe reuses every build). The recipe runs on the four
+platforms the engine is released for, `linux64`, `linux-arm64`, `mac-x64` and
+`mac-arm64`, and refuses any other naming it. A build that cannot start says so
+when the recipe asks it its version, naming that `deb.deps`.
+
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
@@ -152,6 +168,7 @@ go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
 scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
+scripts/chromium-pin_test.sh   # the Chromium recipe's own suite (chromium-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...

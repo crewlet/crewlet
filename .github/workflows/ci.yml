@@ -235,6 +235,13 @@ jobs:
       # and a job of its own would spend longer starting.
       - name: the git recipe's and the pin check's own suite
         run: scripts/git-pin_test.sh
+      # The own suite of the Chromium recipe (scripts/chromium.sh) — `make
+      # chromium-test` — for the git suite's reasons, against a stand-in Chrome
+      # for Testing tree under file://, so it fetches no Chromium and reads no
+      # network. It needs curl, zip, unzip and sha256sum, all on the runner
+      # image, and takes seconds.
+      - name: the Chromium recipe's own suite
+        run: scripts/chromium-pin_test.sh
       # Only what this job created or used, by the epoch above. Without the
       # prune, every save would carry forward everything the restored cache
       # held, and the go command only trims entries five days unused — so each

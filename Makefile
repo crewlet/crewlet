@@ -248,8 +248,8 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc \
+        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc chromium \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -454,6 +454,27 @@ GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
 	$(REQUIRED) $(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
 
+##@ The pinned Chromiums
+
+# THE CHROMIUMS THE SUITE DRIVES, fetched from the Chrome for Testing builds
+# scripts/chromium-pin.env pins by version and per-platform SHA-256, by
+# scripts/chromium.sh, once a machine, into a per-user cache
+# (CREWLET_CHROMIUM_CACHE, by default ~/.cache/crewlet/chromium; a pin bump,
+# or a change to how the recipe lays a build out, is a new build beside the
+# old). Two of them: the newest, Chrome for Testing's Stable, and the floor,
+# the newest patch of the oldest major the engine drives, so what a protocol
+# case asserts is held at both ends of what the engine promises to drive,
+# never on whichever Chrome the machine has.
+#
+# BOTH ARE FETCHED, so a pin whose version or digest is wrong fails here — at
+# the download its SHA-256 refuses — rather than in whichever later run first
+# needs it. About 200 MB a zip and 430 MB unpacked each, once; after that
+# chromium.sh finds each build and answers at once.
+CHROMIUM_PINS := newest floor
+
+chromium: ## fetch the pinned Chromiums the suite drives (scripts/chromium-pin.env; needs curl and unzip)
+	@for pin in $(CHROMIUM_PINS); do scripts/chromium.sh $$pin >/dev/null || exit 1; done
+
 ##@ Gates — `make check` is all of them
 
 # REQUIRED makes every prerequisite of the suite a requirement: a case whose
@@ -519,7 +540,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV)
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -594,6 +615,18 @@ signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 # curl, sha256sum (or shasum) and GnuPG.
 git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/git-pin_test.sh
+
+# The OWN SUITE of the Chromium recipe (scripts/chromium.sh), for git-test's
+# reasons: shell no Go test reaches, failing silently where it matters — a
+# recipe that unpacks over a Chromium another checkout's suite is running, or
+# prints something on stdout beside the path it is asked for. It runs the real
+# script against a stand-in Chrome for Testing tree under file://, each zip
+# holding a stand-in `chrome`, so it fetches no Chromium and reads no network,
+# then runs itself once more, by a relative path, under a developer's most
+# hostile environment: about four seconds. It needs curl, zip, unzip and
+# sha256sum (or shasum).
+chromium-test: ## run the Chromium recipe's own suite (ci: build + vet)
+	@scripts/chromium-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
