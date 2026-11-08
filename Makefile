@@ -430,19 +430,20 @@ git: ## build the pinned gits the suite and the image run (scripts/git-pin.env; 
 # them (gittest.NodeFloor and gittest.ClientFloor read CREWLET_TEST_GIT_NODE_FLOOR
 # and CREWLET_TEST_GIT_CLIENT_FLOOR: every pool of host's
 # TestTheGitFloorsPassTheSuite on the node floor, gitproc.NodeMinVersion, and
-# every person's git on the client floor, gitproc.ClientMinVersion) —
-# REQUIRED there (CREWLET_REQUIRE_GIT_FLOOR=1), so a run whose floors are
-# missing fails naming them rather than skipping the arm, which only a bare
-# `go test` outside make does. STATEMENTS rather than a prefix of assignments:
-# a prefix `PATH="$(scripts/git.sh node):$PATH" go test …` whose command
-# failed runs the suite on the machine's own git with nothing said, which is
-# the one outcome this group exists to rule out. A recipe line starts with it,
-# and what follows it runs with the pin on PATH and the floors named.
+# every person's git on the client floor, gitproc.ClientMinVersion). Every
+# target that runs it also runs REQUIRED (below, beside the test targets), so a
+# run whose floors are missing fails naming them rather than skipping the arm,
+# which only a bare `go test` outside make does. STATEMENTS rather than a
+# prefix of assignments: a prefix `PATH="$(scripts/git.sh node):$PATH" go test
+# …` whose command failed runs the suite on the machine's own git with nothing
+# said, which is the one outcome this group exists to rule out. A recipe line
+# starts with it, and what follows it runs with the pin on PATH and the floors
+# named.
 GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 	node_floor="$$(scripts/git.sh node-floor)" || exit 1; \
 	client_floor="$$(scripts/git.sh client-floor)" || exit 1; \
 	export PATH="$$node_git:$$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$$node_floor/git" \
-	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git" CREWLET_REQUIRE_GIT_FLOOR=1;
+	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git";
 
 # gitproc's own suite on the pinned gits, alone: what ci.yml's `git recipe
 # (macOS)` job runs, so the recipe's macOS branch (shasum, sysctl's core count,

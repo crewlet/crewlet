@@ -68,15 +68,19 @@ disagreed.
 **The floors' arm.** Every make target that runs Go tests also names the two
 floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
 `CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
-`node-floor` and `client-floor` — and sets `CREWLET_REQUIRE_GIT_FLOOR=1` (the
-Makefile's `GIT_ENV`), so `internal/gitlet/host`'s
+`node-floor` and `client-floor` (the Makefile's `GIT_ENV`) — and requires
+them, as it requires every program the suite needs
+(`CREWLET_REQUIRE_PREREQUISITES=1`, the Makefile's `REQUIRED`, which
+`internal/prereqtest` reads), so `internal/gitlet/host`'s
 `TestTheGitFloorsPassTheSuite` runs Gitlet's whole suite with every
 pool on the node floor's 2.55 and every person's git on the client floor's
 2.40 — the worst pairing the floors admit — and FAILS, naming the variable and
 `make git`, where either build is missing — as do gitproc's node-floor arms
 above. A bare `go test ./internal/gitlet/host/` or `./internal/gitlet/gitproc/`
 without them skips those arms, saying so, and runs everything else; export the
-three variables to run them by hand. A git named
+two floors' variables to run them by hand, and
+`CREWLET_REQUIRE_PREREQUISITES=1` beside them to have a missing one fail as
+it does under make. A git named
 there must be an absolute path to a build of its floor's own series (2.55.x,
 2.40.x): a newer git in its place is a floor nobody is testing, and is refused
 naming the variable. ci.yml's `git recipe (macOS)` job runs `make

@@ -83,7 +83,8 @@ func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
 // run, and measured on the pin alone it was a claim about one of them: the
 // floor's own expectations were wrong in three arms of the format table, and
 // nothing ran them (ADR-0087, "each floor is a measured claim"). Under every
-// make target the floor's build is required (CREWLET_REQUIRE_GIT_FLOOR=1);
+// make target the floor's build is required, as every prerequisite of the
+// suite is (CREWLET_REQUIRE_PREREQUISITES=1, internal/prereqtest's one rule);
 // a bare `go test` without it skips the floor's arm alone.
 func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {
 	t.Helper()

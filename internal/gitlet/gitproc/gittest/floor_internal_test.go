@@ -1,13 +1,12 @@
 package gittest
 
 import (
-	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 )
 
 // THE FLOOR JUDGEMENT IS THE FLOORS': a git below a floor cannot stand for
@@ -51,81 +50,53 @@ func TestTheFloorJudgementIsTheFloors(t *testing.T) {
 }
 
 // A FLOOR'S GIT IS NAMED, OR REQUIRED, OR SKIPPED — and never guessed. Unset,
-// the floor's arm fails where CREWLET_REQUIRE_GIT_FLOOR is 1, which every make
-// target sets, naming the variable and the recipe that builds the git, and is
-// skipped otherwise naming `make git`; a value of CREWLET_REQUIRE_GIT_FLOOR
+// the floor's arm is a missing prerequisite by internal/prereqtest's one rule:
+// it fails where CREWLET_REQUIRE_PREREQUISITES is 1, which the make targets
+// that run the suite set, naming the variable and the recipe that builds the
+// git, and is skipped otherwise naming `make git`; a value of the requirement
 // that is neither is refused rather than read as either. Named, it must be an
 // absolute path to an executable of the floor's series, or the variable is
 // named; the floor's own build is handed back.
 //
 // Not parallel: it sets the variables every floor's arm reads.
 //
-// Mutation: read CREWLET_REQUIRE_GIT_FLOOR as set whenever it is non-empty,
-// and "true" requires the floors — red.
+// Mutation: read CREWLET_REQUIRE_PREREQUISITES as set whenever it is
+// non-empty (prereqtest.Required), and "true" requires the floors — red.
 func TestAFloorsGitIsNamedRequiredOrSkipped(t *testing.T) {
 	floorBuild := Fake(t, "git version 2.55.2", "exit 0")
 	nextSeries := Fake(t, "git version 2.56.0", "exit 0")
+	unset := nodeFloorEnv + " is unset, and it names the node floor's own git"
 	for _, tc := range []struct {
 		name, require, git string
 		fatal, skip        string // a fragment of the failure or the skip; neither: the git back
 	}{
-		{name: "unset and required", require: "1", fatal: nodeFloorEnv + " is unset, and " + requireFloorEnv + "=1"},
-		{name: "unset", skip: "`make git` builds it"},
-		{name: "a requirement that is no setting", require: "true", fatal: requireFloorEnv + `="true"`},
+		{name: "unset and required", require: "1", fatal: unset},
+		{name: "unset", skip: unset + ", which this arm runs: `make git` builds it"},
+		{name: "a requirement that is no setting", require: "true", fatal: prereqtest.RequireEnv + `="true"`},
 		{name: "relative", require: "1", git: "git", fatal: "not an absolute path"},
 		{name: "missing", require: "1", git: filepath.Join(t.TempDir(), "git"), fatal: nodeFloorEnv},
 		{name: "another series", require: "1", git: nextSeries, fatal: "not of the node floor's series"},
 		{name: "the floor's build", require: "1", git: floorBuild},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(requireFloorEnv, tc.require)
+			t.Setenv(prereqtest.RequireEnv, tc.require)
 			t.Setenv(nodeFloorEnv, tc.git)
-			r := &outcome{TB: t}
 			var got string
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				got = NodeFloor(r)
-			}()
-			<-done
+			r := prereqtest.Run(t, func(tb testing.TB) { got = NodeFloor(tb) })
 			switch {
 			case tc.fatal != "":
-				if !strings.Contains(r.fatal, tc.fatal) || r.skip != "" {
-					t.Errorf("failed %q, skipped %q; want a failure saying %q", r.fatal, r.skip, tc.fatal)
+				if !strings.Contains(r.Fatal, tc.fatal) || r.Skip != "" {
+					t.Errorf("failed %q, skipped %q; want a failure saying %q", r.Fatal, r.Skip, tc.fatal)
 				}
 			case tc.skip != "":
-				if !strings.Contains(r.skip, tc.skip) || r.fatal != "" {
-					t.Errorf("failed %q, skipped %q; want a skip saying %q", r.fatal, r.skip, tc.skip)
+				if !strings.Contains(r.Skip, tc.skip) || r.Fatal != "" {
+					t.Errorf("failed %q, skipped %q; want a skip saying %q", r.Fatal, r.Skip, tc.skip)
 				}
 			default:
-				if r.fatal != "" || r.skip != "" || got != tc.git {
-					t.Errorf("NodeFloor = %q (failed %q, skipped %q), want %s", got, r.fatal, r.skip, tc.git)
+				if r.Fatal != "" || r.Skip != "" || got != tc.git {
+					t.Errorf("NodeFloor = %q (failed %q, skipped %q), want %s", got, r.Fatal, r.Skip, tc.git)
 				}
 			}
 		})
 	}
-}
-
-// outcome is a testing.TB that records the first failure or skip it is
-// handed and ends the goroutine calling it, as the real ones do.
-type outcome struct {
-	testing.TB
-	fatal, skip string
-}
-
-func (o *outcome) Helper() {}
-
-func (o *outcome) Fatal(args ...any) {
-	o.fatal = fmt.Sprint(args...)
-	runtime.Goexit()
-}
-
-func (o *outcome) Fatalf(format string, args ...any) {
-	o.fatal = fmt.Sprintf(format, args...)
-	runtime.Goexit()
-}
-
-func (o *outcome) Skipf(format string, args ...any) {
-	o.skip = fmt.Sprintf(format, args...)
-	runtime.Goexit()
 }
