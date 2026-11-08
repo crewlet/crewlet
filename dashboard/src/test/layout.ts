@@ -1,7 +1,16 @@
 /**
  * What the layout suites (`*.layout.test.tsx`, `vitest.layout.config.ts`)
- * share: the app's stylesheets, in `main.tsx`'s order, and the measurement of
- * what a reader would have to scroll sideways to see.
+ * share: the app's stylesheets, in `main.tsx`'s order and placed where a built
+ * page places them, and the measurement of what a reader would have to scroll
+ * sideways to see.
+ *
+ * THE APP'S SHEET COMES LAST, as in a built page: the build moves `main.tsx`'s
+ * sheets (the kit's among them) to the end of the body (`vite.config.ts`'s
+ * `appSheetsToBodyEnd`), after every lazy screen's sheet in the head, so a
+ * screen's rule loses to an app rule of equal specificity. The dev server
+ * injects in import order, the other way round, so a suite would pass on what
+ * a reader never sees. A screen's own sheet is imported by the suite (or the
+ * module it mounts) after this one, and lands in the head, before the app's.
  */
 import "@crewlethq/tokens/css";
 import "@crewlethq/tokens/css/themes";
@@ -16,8 +25,20 @@ import "~/styles/base.css";
 import "~/styles/components.css";
 import "~/styles/frame.css";
 import "~/styles/screens.css";
-import "~/styles/chatlet-room.css";
-import "~/styles/chatlet-panes.css";
+
+const appSheets = new Set(document.querySelectorAll("style[data-vite-dev-id]"));
+for (const sheet of appSheets) document.body.append(sheet);
+// A SCREEN'S SHEET, loaded later, goes to the head, before the app's: the dev
+// server inserts it after the last sheet it inserted, which is now the app's.
+new MutationObserver((records) => {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node instanceof HTMLStyleElement && node.dataset.viteDevId && !appSheets.has(node)) {
+        document.head.append(node);
+      }
+    }
+  }
+}).observe(document.body, { childList: true });
 
 const REPLACED = new Set([
   "IMG",
