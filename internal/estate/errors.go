@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
@@ -295,6 +296,15 @@ var sentinels = []sentinel{
 	{"executordomain.ErrTurnEnded", executordomain.ErrTurnEnded},
 	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
 	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
+
+	// THE ACCESS LOG'S, answered by a data node for the engine on a node
+	// holding no data ([AccessReads], [AccessWrites]): a record already made,
+	// an expiry no longer due, a command that does not open as its record's.
+	{"accessdomain.ErrConflict", accessdomain.ErrConflict},
+	{"accessdomain.ErrInvalid", accessdomain.ErrInvalid},
+	{"accessdomain.ErrNotDue", accessdomain.ErrNotDue},
+	{"accessdomain.ErrRecorded", accessdomain.ErrRecorded},
+	{"accessdomain.ErrUnreadable", accessdomain.ErrUnreadable},
 	// And the session's bound the log refuses a capture past, which is
 	// internal/executorkeep's: the sandbox that takes a session stops at it too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
@@ -388,6 +398,7 @@ var typedKinds = []typedKind{
 	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
+	{"accessdomain.ErrFutureVersion", reflect.TypeFor[*accessdomain.ErrFutureVersion]()},
 	{"executordomain.ErrFutureVersion", reflect.TypeFor[*executordomain.ErrFutureVersion]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},

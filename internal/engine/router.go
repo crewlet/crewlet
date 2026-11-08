@@ -612,6 +612,14 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 			b.Executor.Writer = c.executorWriter
 		}
 	}
+	// AND THE ACCESS LOG, on the executor log's terms: a turn is dispatched
+	// and told wherever its seat is held (ADR-0103).
+	if c.accessReader != nil && c.accessWriter != nil {
+		b.Access = estate.AccessHalf{Reader: c.accessReader}
+		if publishes {
+			b.Access.Writer = c.accessWriter
+		}
+	}
 	if n == nil {
 		return b
 	}

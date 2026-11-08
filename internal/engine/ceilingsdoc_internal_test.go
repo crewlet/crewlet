@@ -235,6 +235,11 @@ func gibWords(t *testing.T, bytes int64) string {
 		// that third, so a sum ends in a sixth, which the pages write as the
 		// vulgar fraction [gibText] spells (229⅙).
 		return gibText(bytes) + " GiB"
+	case (24*bytes+24)%gib < 48:
+		// A WHOLE NUMBER OF TWENTY-FOURTHS: the access log's 128 MiB, an
+		// eighth, beside a sum in sixths. No vulgar fraction spells it, so
+		// the pages write it to one decimal, as [gibText] does (229.3).
+		return gibText(bytes) + " GiB"
 	}
 	t.Fatalf("%d bytes is no whole or half GiB; teach gibWords and the pages "+
 		"the figure the arithmetic now leaves", bytes)

@@ -127,12 +127,11 @@ export function DirectMessagesView() {
             renderTrigger={(props) => (
               <Button
                 {...props}
-                className="chat-dms-title"
                 variant="ghost"
                 size="medium"
                 trailingIcon={<ChevronDownGlyph size="sm" />}
               >
-                Direct messages
+                <span className="chat-dms-title">Direct messages</span>
               </Button>
             )}
             items={[
