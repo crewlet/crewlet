@@ -52,11 +52,11 @@ func (w *Writer) Reseal(ctx context.Context, by iam.Actor, reader *Reader) (Rese
 		if ctx.Err() != nil {
 			return report, errors.Join(append(errs, ctx.Err())...)
 		}
-		res, err := w.reseal(ctx, by, cmd.handle, cmd.id)
+		res, perr := w.reseal(ctx, by, cmd.handle, cmd.id)
 		switch {
-		case errors.Is(err, errResealed):
-		case err != nil:
-			errs = append(errs, fmt.Errorf("accessdomain: reseal command %s: %w", cmd.id, err))
+		case errors.Is(perr, errResealed):
+		case perr != nil:
+			errs = append(errs, fmt.Errorf("accessdomain: reseal command %s: %w", cmd.id, perr))
 		case res.Outcome == statelog.OutcomeUnknown:
 			report.Unknown++
 		default:
