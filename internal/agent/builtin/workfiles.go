@@ -100,6 +100,20 @@ func (d WorkDeps) fileArgs(actor *Actor, args map[string]any) (string, string, s
 	return worklet.ProjectKey(project), argString(args, "path"), ""
 }
 
+// normalizePath is a file's path as the tracker keeps it
+// ([worklet.NormalizeFilePath]), or the refusal naming what is wrong with it
+// in the tracker's sentence ([worklet.Sentence]) — never its error, which
+// opens with the package's name. Every tool that names a file holds its path
+// to this one rule, so a path is refused in the same words through each.
+func normalizePath(tool, raw string) (string, *tools.Result) {
+	p, err := worklet.NormalizeFilePath(raw)
+	if err != nil {
+		r := failed(fmt.Sprintf("%s: %s.", tool, worklet.Sentence(err)))
+		return "", &r
+	}
+	return p, nil
+}
+
 func projectParameter() map[string]any {
 	return map[string]any{
 		"type": "string",
@@ -256,9 +270,9 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err = worklet.NormalizeFilePath(filePath)
-	if err != nil {
-		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
+	filePath, badPath := normalizePath(t.Name(), filePath)
+	if badPath != nil {
+		return *badPath, nil
 	}
 	encoding := strings.TrimSpace(argString(args, "encoding"))
 	if encoding != "" && encoding != "text" && encoding != "base64" {
@@ -286,34 +300,13 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"size": f.Size, "version": f.Version, "hash": f.Hash,
 		"updated_by": f.UpdatedBy, "updated_at": f.UpdatedAt, "offset": offset,
 	}
-	object, named := f.Content()
-	if !named {
-		// A LIVE FILE NAMING NO OBJECT is one the applier refuses to
-		// write, so reaching it is the engine's own fault — never a file
-		// that is gone, and never a read a retry will fix.
-		return faulted(ctx, t.Name(), fmt.Errorf("builtin: %s in %s names no object",
-			f.Path, f.Project), fmt.Sprintf("%s: %s in %s exists, and its row names "+
-			"no content the object store could return. Trying again will not help — "+
-			"tell a person the file needs writing again; this node's log has the details.",
-			t.Name(), f.Path, f.Project)), nil
+	object, unnamed := fileContent(ctx, t.Name(), f)
+	if unnamed != nil {
+		return *unnamed, nil
 	}
 	page, err := t.deps.Objects.ReadAt(ctx, object, offset, int64(limit))
-	switch {
-	case errors.Is(err, objstore.ErrCorrupt):
-		// NOT A FAILED READ: the store answered, with bytes that are not
-		// the ones the file records, and a retry reads the same bytes.
-		return objectFailure(ctx, t.Name(), tools.RefusalInternalError, err,
-			fmt.Sprintf("%s: %s in %s exists, and the object store holds content "+
-				"for it that is not what was written. Trying again will not help — do "+
-				"not use what it holds, and tell a person the file needs restoring or "+
-				"writing again; this node's log has the details.",
-				t.Name(), f.Path, f.Project)), nil
-	case err != nil:
-		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
-			fmt.Sprintf("%s: %s in %s exists, and its content could not be read "+
-				"from the object store right now. The file is NOT empty or missing — "+
-				"try again, or say you could not read it.",
-				t.Name(), f.Path, f.Project)), nil
+	if err != nil {
+		return fileContentFailure(ctx, t.Name(), f, err), nil
 	}
 	if encoding == "base64" {
 		// NOT FENCED, because base64 is bytes rather than prose a model
@@ -405,6 +398,48 @@ func fileReadFailure(ctx context.Context, tool, project, filePath string, err er
 	return readFailure(ctx, tool, err)
 }
 
+// fileContent is the object holding a file's bytes ([worklet.File.Content]),
+// or the refusal of a file whose row names none.
+//
+// A LIVE FILE NAMING NO OBJECT is one the applier refuses to write, so
+// reaching it is the engine's own fault — never a file that is gone, and never
+// a read a retry will fix.
+func fileContent(ctx context.Context, tool string, f worklet.File) (objstore.Object, *tools.Result) {
+	object, named := f.Content()
+	if !named {
+		r := faulted(ctx, tool, fmt.Errorf("builtin: %s in %s names no object",
+			f.Path, f.Project), fmt.Sprintf("%s: %s in %s exists, and its row names "+
+			"no content the object store could return. Trying again will not help — "+
+			"tell a person the file needs writing again; this node's log has the details.",
+			tool, f.Path, f.Project))
+		return objstore.Object{}, &r
+	}
+	return object, nil
+}
+
+// fileContentFailure is a read of a file's content the object store could not
+// serve, told as the file's head says: content that is there and is not what
+// the file records is damage no retry reads past, and any other failure is the
+// store not answering, which a retry may reach — each in fixed words, the
+// store's own error in the node's log ([objectFailure]).
+func fileContentFailure(ctx context.Context, tool string, f worklet.File, err error) tools.Result {
+	if errors.Is(err, objstore.ErrCorrupt) {
+		// NOT A FAILED READ: the store answered, with bytes that are not
+		// the ones the file records, and a retry reads the same bytes.
+		return objectFailure(ctx, tool, tools.RefusalInternalError, err,
+			fmt.Sprintf("%s: %s in %s exists, and the object store holds content "+
+				"for it that is not what was written. Trying again will not help — do "+
+				"not use what it holds, and tell a person the file needs restoring or "+
+				"writing again; this node's log has the details.",
+				tool, f.Path, f.Project))
+	}
+	return objectFailure(ctx, tool, tools.RefusalUnavailable, err,
+		fmt.Sprintf("%s: %s in %s exists, and its content could not be read "+
+			"from the object store right now. The file is NOT empty or missing — "+
+			"try again, or say you could not read it.",
+			tool, f.Path, f.Project))
+}
+
 // objectFailure is the failed result of a call the object store could not
 // serve: class and sentence as the caller decided them, the error beneath the
 // class for [errors.Is], and the error itself in the node's log and never in
@@ -481,9 +516,9 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err := worklet.NormalizeFilePath(rawPath)
-	if err != nil {
-		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
+	filePath, badPath := normalizePath(t.Name(), rawPath)
+	if badPath != nil {
+		return *badPath, nil
 	}
 	content := []byte(argString(args, "content"))
 	encoding := strings.TrimSpace(argString(args, "encoding"))
@@ -678,9 +713,9 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err := worklet.NormalizeFilePath(rawPath)
-	if err != nil {
-		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
+	filePath, badPath := normalizePath(t.Name(), rawPath)
+	if badPath != nil {
+		return *badPath, nil
 	}
 	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
 	// that is — see the `inTool` entries in authority.go. A colleague may

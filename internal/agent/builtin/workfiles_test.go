@@ -360,8 +360,8 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 // path refusal whole, so a model read the package's name in front of what to
 // change.
 //
-// Mutation: print NormalizeFilePath's error with %v again in any of the three
-// tools and its row goes red.
+// Mutation: print NormalizeFilePath's error with %v again in normalizePath and
+// every row goes red.
 func TestAPathTheTrackerRefusesIsToldInItsWords(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
