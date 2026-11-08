@@ -885,6 +885,9 @@ func (r *Role) Seat() *org.Role {
 		seat.CodeAccess = r.Code.Access
 	}
 	seat.HealthTools = r.HealthTools
+	if b := r.Integrations.SSH; b != nil && SeatAccessOn(b.Enabled) && len(b.Hosts) > 0 {
+		seat.SSHLevel = b.LevelOrDefault()
+	}
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))
