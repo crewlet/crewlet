@@ -199,12 +199,12 @@ func (r *Reader) Told(ctx context.Context, handle, cursor string, limit int,
 	var out ToldPage
 	answer, err := r.log.Read(ctx, fresh.Query(SeatScope(handle), true), func(tx *sql.Tx) error {
 		out = ToldPage{}
-		rows, err := tx.QueryContext(ctx, `SELECT `+toldColumns+`
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+toldColumns+`
 			FROM access_told INDEXED BY access_told_seat_idx
 			WHERE agent_handle = ? AND position < ? ORDER BY position DESC LIMIT ?`,
 			handle, before, limit+1)
-		if err != nil {
-			return err
+		if queryErr != nil {
+			return queryErr
 		}
 		for rows.Next() {
 			t, scanErr := scanTold(rows)
@@ -351,14 +351,14 @@ func (r *Reader) Certificates(ctx context.Context, q AuditQuery,
 	var out CertificatePage
 	answer, err := r.log.Read(ctx, fresh.Query(scope, true), func(tx *sql.Tx) error {
 		out = CertificatePage{}
-		rows, err := tx.QueryContext(ctx, `SELECT `+certificateColumns+`
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+certificateColumns+`
 			FROM access_certificates INDEXED BY `+index+`
 			WHERE (? = '' OR agent_handle = ?) AND position < ? AND at >= ? AND at < ?
 			  AND (? = '' OR instr(host_ids, '"' || ? || '"') > 0)
 			ORDER BY position DESC LIMIT ?`,
 			q.Handle, q.Handle, before, since, until, q.Host, q.Host, limit+1)
-		if err != nil {
-			return err
+		if queryErr != nil {
+			return queryErr
 		}
 		for rows.Next() {
 			c, scanErr := scanCertificate(rows)
@@ -481,14 +481,14 @@ func (r *Reader) Commands(ctx context.Context, q AuditQuery,
 	var out CommandPage
 	answer, err := r.log.Read(ctx, fresh.Query(scope, true), func(tx *sql.Tx) error {
 		out = CommandPage{}
-		rows, err := tx.QueryContext(ctx, `SELECT `+commandColumns+`
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+commandColumns+`
 			FROM access_commands INDEXED BY `+index+`
 			WHERE (? = '' OR agent_handle = ?) AND (? = '' OR host = ?)
 			  AND position < ? AND at >= ? AND at < ?
 			ORDER BY position DESC LIMIT ?`,
 			q.Handle, q.Handle, q.Host, q.Host, before, since, until, limit+1)
-		if err != nil {
-			return err
+		if queryErr != nil {
+			return queryErr
 		}
 		for rows.Next() {
 			c, scanErr := scanCommand(rows)
