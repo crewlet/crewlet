@@ -731,6 +731,34 @@ type CoordinatorOptions struct {
 	// — a test's coordinator — and then every run it launched is its own.
 	Node string
 
+	// Incarnation is this PROCESS's incarnation, `<node>:<uuid>` — what its
+	// seat leases and its presence are held under — and Takers the
+	// coordination store this coordinator holds its TAKER LEASE in under it
+	// ([coord.ClassTaker], taker.go) and reads another process's: claimed as
+	// the coordinator is built, renewed every TakerTTL / [coord.KeptRenewals],
+	// and released by [Coordinator.Stop] once the last keep has ended. Every
+	// capture this coordinator begins names the lease ([SessionCapture.Taker],
+	// [SessionCapture.TakerEpoch]), every keep stops once its own no longer
+	// covers it, and a wait for a capture another process began settles it
+	// from the executor log once that one's has lapsed (session.go), rather
+	// than waiting it out for its whole budget. The incarnation is held to
+	// [maxIncarnationBytes], which [NewCoordinator] refuses past.
+	//
+	// BOTH OR NEITHER, which [NewCoordinator] holds: a lease needs a holder to
+	// name, and a holder named with no lease behind it would be read as a
+	// taker gone the moment its capture was begun. Neither is a test's
+	// coordinator, whose stamps name no taker, as an older build's do, and are
+	// waited for by their age.
+	Incarnation string
+	Takers      TakerLeases
+
+	// TakerTTL is the taker lease's TTL: the seat lease TTL the deployment
+	// configures, so a stopped taker is read as gone as fast as its seats
+	// move (see [takerLease]). Zero takes [seat.SeatLeaseTTL], and nothing
+	// past [coord.MaxDutyTTL] is asked for, the longest lease the store keeps
+	// outside seats and presence.
+	TakerTTL time.Duration
+
 	// Boxes reads a run's box on the node whose host it is on, for a run
 	// this node holds the seat of and not the box — see [BoxReader]. Nil
 	// reads no peer's box: a collection of one is a failure to read it.
@@ -880,6 +908,9 @@ type Coordinator struct {
 	node  string
 	boxes BoxReader
 	nudge func(ctx context.Context, n Nudge)
+	// taker is this process's taker lease ([CoordinatorOptions.Takers]), nil
+	// where none is wired.
+	taker *takerLease
 	// refresh is [CoordinatorOptions.Refresh].
 	refresh RefreshFunc
 	// sessions and keep are [CoordinatorOptions.Sessions] and Keep;
@@ -1063,6 +1094,18 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			"sealed and opened",
 			strings.Join(missing, ", "))
 	}
+	switch {
+	case (opts.Incarnation == "") != (opts.Takers == nil):
+		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation and CoordinatorOptions.Takers come " +
+			"together: a taker lease is held under the process's incarnation, and an incarnation named on a " +
+			"capture with no lease behind it reads as a taker gone")
+	case len(opts.Incarnation) > maxIncarnationBytes:
+		// REFUSED HERE rather than at every stamp, where each capture this
+		// coordinator took would be refused past its bound and never kept.
+		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation is %d bytes, past the %d a run's "+
+			"row carries of one: an incarnation is `<node>:<uuid>`, its node id at most 64 bytes",
+			len(opts.Incarnation), maxIncarnationBytes)
+	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
@@ -1121,6 +1164,11 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	c.life, c.end = context.WithCancel(context.Background())
 	c.keepLife, c.endKeeps = context.WithCancel(context.Background())
+	// THE TAKER LEASE LAST, once nothing can refuse the coordinator: it is
+	// held from here until [Coordinator.Stop] has seen the last keep end.
+	if opts.Takers != nil {
+		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
+	}
 	return c, nil
 }
 
@@ -1132,6 +1180,16 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 // ordinary session takes seconds — and ended after it, stamped refused saying
 // so: a stopping node does not hold its drain for the slowest upload a session
 // at its bound could take.
+//
+// THE TAKER LEASE IS RELEASED ONLY ONCE THE LAST KEEP HAS ENDED — its stamp
+// written — and not before: a peer reads a capture whose taker's lease is gone
+// as one whose keep will never record, and settles it refused, so a lease
+// given back under a keep still uploading would have the turn's end tombstone
+// the turn before that keep's record landed. Released rather than left to
+// lapse, so a wait on a capture this node never stamped settles at once
+// rather than a TTL later — through the lease store it was claimed in, which
+// in an engine makes the give-back a step of its stop's one allowance
+// ([takerLease.release]).
 func (c *Coordinator) Stop() {
 	c.mu.Lock()
 	c.closed = true
@@ -1157,6 +1215,9 @@ func (c *Coordinator) Stop() {
 	}
 	c.endKeeps()
 	<-kept
+	if c.taker != nil {
+		c.taker.stop()
+	}
 }
 
 // leaseOf is the lease this node writes on a seat's behalf under —

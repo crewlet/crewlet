@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -323,6 +324,15 @@ func (r *coordRig) stoppedTurns() []string {
 
 func newCoordRig(t *testing.T) *coordRig {
 	t.Helper()
+	return newCoordRigWith(t, nil)
+}
+
+// newCoordRigWith is [newCoordRig] whose coordinator is built with what with
+// sets on its options beside the rig's own — through [NewCoordinator], so a
+// case about an option holds the copy the constructor makes of it too. Nil
+// sets nothing.
+func newCoordRigWith(t *testing.T, with func(*CoordinatorOptions)) *coordRig {
+	t.Helper()
 	base := newWaiterRig(t)
 	rig := &coordRig{
 		waiterRig:  base,
@@ -331,7 +341,7 @@ func newCoordRig(t *testing.T) *coordRig {
 		audience:   &audienceSpy{},
 		pushes:     &pushSpy{},
 	}
-	coordinator, err := NewCoordinator(CoordinatorOptions{
+	opts := CoordinatorOptions{
 		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
 		Pushes:      rig.pushes,
 		Audience:    rig.audience, Answers: rigAnswers(),
@@ -358,7 +368,11 @@ func newCoordRig(t *testing.T) *coordRig {
 		// a real node's coordinator holds its seats: a case that hands the
 		// seat to a successor gives that successor its own, newer lease.
 		Lease: leased(rigLease),
-	})
+	}
+	if with != nil {
+		with(&opts)
+	}
+	coordinator, err := NewCoordinator(opts)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -4173,7 +4187,15 @@ func TestReleasingASeatTearsNothingDown(t *testing.T) {
 
 // EVERY COLLABORATOR IS REQUIRED, and a missing one is refused by name. The
 // resumer is among them: every node that builds a coordinator runs the engine a
-// completion resumes into, and "not on this node" is the resumer's answer.
+// completion resumes into, and "not on this node" is the resumer's answer. And
+// a taker lease comes with its holder, held to what a run's row carries of one:
+// a holder named on a capture with no lease behind it reads as a taker gone,
+// and one past its bound has every capture refused at its stamp and never
+// kept.
+//
+// Mutation: drop a name from the refusal, build a coordinator with a holder and
+// no lease store or a lease store and no holder, or one whose incarnation is
+// past its bound, and a check below goes red.
 func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	t.Parallel()
 	_, err := NewCoordinator(CoordinatorOptions{})
@@ -4203,6 +4225,27 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
 		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
+	}
+	// AND A TAKER LEASE WITH NO HOLDER, OR A HOLDER WITH NO LEASE: an
+	// incarnation named on a capture with no lease behind it reads as a taker
+	// gone the moment the capture is begun.
+	for _, c := range []struct {
+		name        string
+		incarnation string
+		takers      TakerLeases
+	}{
+		{name: "a holder with no lease store", incarnation: "node-a:1"},
+		{name: "a lease store with no holder", takers: memory.New()},
+		{name: "a holder past what a row carries of one", takers: memory.New(),
+			incarnation: "node-a:" + strings.Repeat("9", maxIncarnationBytes)},
+	} {
+		if _, err := NewCoordinator(CoordinatorOptions{
+			Pushes: &pushSpy{}, Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+			Incarnation: c.incarnation, Takers: c.takers,
+		}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Incarnation") {
+			t.Errorf("a coordinator built with %s = %v, want it refused naming Incarnation", c.name, err)
+		}
 	}
 }
 

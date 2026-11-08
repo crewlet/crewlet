@@ -97,6 +97,37 @@ var leaseCases = []testCase{
 		}
 	}},
 
+	{"every_taker_lease_mints_from_its_class_counter", func(h *harness) {
+		// A TAKER LEASE NAMES ONE PROCESS (coord.TakerResource) and every
+		// process claims its own, so a counter per resource would leave a
+		// counter record per process start, which nothing may remove. Its
+		// tokens come from its class's one counter (coord.CounterResource),
+		// which fences exactly as a resource's own does: every tenure of
+		// every taker holds a token above every one its class minted before
+		// — the next process's first, and a taker's own once it lapses and
+		// claims again.
+		//
+		// Mutation: count a taker lease on a counter of its own, and the
+		// second process's first token is the first's.
+		taker := func(incarnation string, ttl time.Duration) *coord.Lease {
+			return h.claim(coord.TakerResource(incarnation), coord.AcquireOptions{
+				Owner: incarnation, TTL: ttl, Ungated: true,
+			})
+		}
+		restarted := taker("node-a:2", LongTTL)
+		stopped := taker("node-a:1", ShortTTL)
+		if stopped.Epoch <= restarted.Epoch {
+			h.t.Fatalf("a second process's taker claimed at %d, at or below the %d its class's counter "+
+				"had minted", stopped.Epoch, restarted.Epoch)
+		}
+		h.lapse()
+		again := taker("node-a:1", LongTTL)
+		if again.Epoch <= stopped.Epoch {
+			h.t.Fatalf("a taker claiming again after its lapse holds %d, at or below its lapsed %d — the "+
+				"gap is unfenced", again.Epoch, stopped.Epoch)
+		}
+	}},
+
 	// --- renew ---------------------------------------------------------
 
 	{"renew_extends_a_live_lease", func(h *harness) {

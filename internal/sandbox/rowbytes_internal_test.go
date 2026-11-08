@@ -299,7 +299,7 @@ func worstRow(t *testing.T) PendingRun {
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128), ArchiveFormat: 99,
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
-		SeatBudget: math.MaxInt64, Minted: worstAt}
+		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -418,7 +418,7 @@ func worstRow(t *testing.T) PendingRun {
 		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
 			executorkeep.ExhaustedMaxSessions),
 		OwedEnd: end, EndRecorded: true,
-		Launch: launch, Owner: plain(128), OwnerEpoch: math.MaxInt64,
+		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),
 		Reply: plain(64), PartitionKey: markup(512), ConversationKey: markup(512),
 		Branch: markup(gitref.MaxBranchBytes), SessionID: plain(128),

@@ -558,3 +558,54 @@ func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 		}
 	}
 }
+
+// AN END'S UNKEPT CAPTURE STANDS ONLY WHERE IT IS NEWER THAN THE ROW'S PLACE.
+// The end names the turn's newest capture as not kept where the run's record
+// says so, and the apply decides on the row's own place, in log order: an
+// unkept capture newer than the one the row keeps took that one off, and is
+// why the row names none; one at the row's own place landed after all — its
+// record, sent before the end was decided, taken before the end — and is the
+// session the row keeps. [Session.Unkept] is the one reading every account of
+// an end takes, so the landed row is told as kept everywhere and the released
+// one says which capture was not kept, and why.
+//
+// Mutation: answer Session.Unkept off the ending alone, or hold it at or past
+// the row's place, and the landed row tells its own session as not kept;
+// answer it nil for a newer capture, and the released row no longer says why
+// it names none.
+func TestAnEndsUnkeptCaptureStandsOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	landed, released := newTurn(), newTurn()
+	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
+	e.capture(capturing("ana", "chat:a", landed, 1, 1, 100, budget))
+	e.capture(capturing("ana", "chat:a", landed, 1, 2, 100, budget))
+	landedUnkept := unkept
+	e.end(ending("ana", "chat:a", landed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeLost,
+		Unkept: &landedUnkept}))
+	e.capture(capturing("ana", "chat:b", released, 1, 1, 100, budget))
+	releasedUnkept := unkept
+	e.end(ending("ana", "chat:b", released, "", executorkeep.Ending{Outcome: executorkeep.OutcomeLost,
+		Unkept: &releasedUnkept}))
+
+	kept, found := e.session("ana", landed)
+	if !found || !kept.Ended() || !kept.HasObject() || kept.CaptureSeq != unkept.CaptureSeq {
+		t.Fatalf("the premise: the turn whose unkept capture landed is (%+v, %v), want it ended keeping "+
+			"that capture", kept, found)
+	}
+	if got := kept.Unkept(); got != nil || kept.NotKept() != "" {
+		t.Errorf("the row keeping the capture its end named unkept tells %+v unkept and says %q, want "+
+			"neither", got, kept.NotKept())
+	}
+	gone, found := e.session("ana", released)
+	if !found || !gone.Ended() || gone.HasObject() {
+		t.Fatalf("the premise: the turn whose unkept capture never landed is (%+v, %v), want it ended "+
+			"naming no session", gone, found)
+	}
+	switch got := gone.Unkept(); {
+	case got == nil || *got != unkept:
+		t.Errorf("the released row tells %+v unkept, want %+v", got, unkept)
+	case !strings.Contains(gone.NotKept(), "(launch 1, capture 2) was not kept: "+unkept.Reason):
+		t.Errorf("the released row says %q, want which capture was not kept and why", gone.NotKept())
+	}
+}

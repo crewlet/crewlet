@@ -91,6 +91,58 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 	}
 }
 
+// A ROW IS SHOWN WITH NO UNKEPT CAPTURE IT KEEPS. An end decided off the run's
+// record can name as not kept a capture whose record the log took before the
+// end — one a taker handed on before its lease's window closed, which the node
+// that waited on it settled refused — and the row's place is then that
+// capture's own. The one form every reader is shown a row in names the end's
+// unkept capture only where it is newer than the row's place
+// ([executordomain.Session.Unkept]), its reason redacted, so no surface that
+// shows the row tells the session it keeps as lost; the row it was called on
+// keeps the ending as the log holds it.
+//
+// Mutation: copy the ending's unkept capture as the row holds it, and the row
+// at that capture's own place, or past it, is shown with it.
+func TestARowIsShownWithNoUnkeptCaptureItKeeps(t *testing.T) {
+	t.Parallel()
+	said := "its taker node-a stopped before it was kept, while it read " + plantedToken
+	for _, c := range []struct {
+		name            string
+		launch, capture int64
+		shown           bool
+	}{
+		{name: "at the row's own place", launch: 2, capture: 3},
+		{name: "older than the row's place", launch: 2, capture: 2},
+		{name: "of an earlier launch", launch: 1, capture: 9},
+		{name: "newer than the row's place", launch: 2, capture: 4, shown: true},
+		{name: "of a later launch", launch: 3, capture: 1, shown: true},
+	} {
+		row := executordomain.Session{Handle: "ana", Turn: "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3",
+			LaunchSeq: 2, CaptureSeq: 3,
+			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+				Unkept: &executorkeep.Unkept{LaunchSeq: c.launch, CaptureSeq: c.capture, Reason: said}}}
+		got := row.Redacted().Ending
+		switch {
+		case got == nil:
+			t.Errorf("%s: the shown row carries no ending", c.name)
+		case !c.shown && got.Unkept != nil:
+			t.Errorf("%s: the row is shown with %+v unkept, the capture it keeps or an older one",
+				c.name, *got.Unkept)
+		case c.shown && (got.Unkept == nil || got.Unkept.LaunchSeq != c.launch ||
+			got.Unkept.CaptureSeq != c.capture):
+			t.Errorf("%s: the row is shown with %+v unkept, want (launch %d, capture %d)", c.name,
+				got.Unkept, c.launch, c.capture)
+		case c.shown && (strings.Contains(got.Unkept.Reason, plantedToken) ||
+			!strings.Contains(got.Unkept.Reason, redact.Marker)):
+			t.Errorf("%s: the shown unkept capture's reason reads %q, want the token redacted", c.name,
+				got.Unkept.Reason)
+		}
+		if row.Ending.Unkept == nil || row.Ending.Unkept.Reason != said {
+			t.Errorf("%s: showing the row changed the ending it was called on: %+v", c.name, row.Ending.Unkept)
+		}
+	}
+}
+
 // everyFieldSet fails t for a field of the struct v holds that is its zero
 // value, and for one of a struct a field points to: a fixture that leaves one
 // unset proves nothing about it.

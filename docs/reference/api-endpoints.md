@@ -10356,7 +10356,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   `blocked_on`, who stopped it (`stopped_by`) and why (`stop_reason`), the
   engine's `failure`, and the turn's newest capture where it was not kept
   (`unkept`: its `launch_seq` and `capture_seq`, and the `reason`, which quotes
-  what refused it), and the session ids a launch of the turn ran out of its
+  what refused it — sent only where it is newer than the last capture the row
+  named, if it named any, and the row then names no session of the turn; one
+  at the row's own place, whose record the log took before the turn's end
+  after all, is the row's, and kept), and the session ids a launch of the turn ran out of its
   model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.

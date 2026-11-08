@@ -2,11 +2,23 @@ package executordomain
 
 import "github.com/crewlet/crewlet/internal/redact"
 
-// Redacted is the row as every reader is shown it: what the turn was asked,
-// and the ending's prose — what the reviewer said landed, what blocked a
-// round, the reason a person gave for a stop, the engine's account of a
-// failure, and why the turn's newest capture was not kept — each passed
-// through [redact.Secrets], and every other field exactly as the row holds it.
+// Redacted is THE SHOWN FORM of a row, the one form every reader is shown it
+// in, which does two things and nothing else. Its words somebody else wrote are
+// redacted: what the turn was asked, and the ending's prose — what the reviewer
+// said landed, what blocked a round, the reason a person gave for a stop, the
+// engine's account of a failure, and why the turn's newest capture was not
+// kept — each passed through [redact.Secrets]. And a capture the run's stamp
+// called unkept but the row keeps is shown as kept: the ending names its
+// unkept capture only where that capture is newer than the row's own place
+// ([Session.Unkept]). Every other field is exactly as the row holds it.
+//
+// THE UNKEPT CAPTURE AS IT STANDS ON THE ROW, never as the end named it, for
+// every reader by the same token: an end is decided off the run's record, which
+// can name as not kept a capture whose record the log took before the end, and
+// that capture is then the row's own, kept. A reader shown the end's word for
+// it — a person's read surface, a seat's own read, a search's hit, the account
+// a conversation's next turn is told — would tell the session the row keeps as
+// one that was lost.
 //
 // ONE REDACTION FOR EVERY READER of a row — a person's read surface, a seat's
 // own reads of its sessions, a search of them — so a field somebody's words
@@ -39,10 +51,9 @@ func (s Session) Redacted() Session {
 	ending.BlockedOn = redact.Secrets(ending.BlockedOn)
 	ending.StopReason = redact.Secrets(ending.StopReason)
 	ending.Failure = redact.Secrets(ending.Failure)
-	if u := ending.Unkept; u != nil {
-		unkept := *u
-		unkept.Reason = redact.Secrets(unkept.Reason)
-		ending.Unkept = &unkept
+	ending.Unkept = s.Unkept()
+	if ending.Unkept != nil {
+		ending.Unkept.Reason = redact.Secrets(ending.Unkept.Reason)
 	}
 	s.Ending = &ending
 	return s
