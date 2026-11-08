@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/accessreview`
-- **Enforced-by:** `internal/engine.TestALevelChangeAsksForExactlyOneReview`, `internal/engine.TestAChangeRevertedAndMadeAgainIsReviewedAgain`, `internal/engine.TestThreeQuickRevisionsAskForOneReview`, `internal/engine.TestALedgerWriteMeasuresTheSeatItNames`, `internal/engine.TestAPausedSeatReviewsWhenItResumes`, `internal/engine.TestASettledReviewIsAckedWithoutATurn`, `internal/engine.TestAReviewTurnsToldRecordStopsTheNextTurnRepeatingIt`, `internal/engine.TestAnAskRaisedBeforeAChangeCarriesTheNoteUntilAskedAgain`, `internal/engine.TestTheSaveDryRunCountsOpenItems`, `internal/engine.TestAChangeOutsideTheClosedListAsksForNoReview`, `internal/engine.TestASeatWithNothingOpenIsAskedForNoReview`, `internal/accessreview.TestAWakeIsDerivedFromItsSeatItsToldRecordAndItsDigest`, `internal/accessreview.TestEveryCopyOfAWakeCarriesOneInstant`, `internal/accessreview.TestAQuestionIsStaleUntilTheChangeIsTold`, `internal/accessreview.TestAReviewIsTheCompanysOwnTurn`, `internal/accessreview.TestTheSectionNamesTheWorkAndHowToWithdrawIt`, `internal/capability.TestAPersonReadsAChangeAboutTheSeat`, `internal/agent/builtin.TestASeatWithdrawsItsOwnHeldCallAsDeny`, `internal/agent/builtin.TestASeatWithdrawsItsOwnQuestionSayingWhy`, `internal/agent/builtin.TestASeatWithdrawsItsOwnQuestionWhoeverWokeTheTurn`, `internal/agent/builtin.TestASeatCannotWithdrawAnotherSeatsRun`, `internal/agent/builtin.TestASeatCannotWithdrawAQuestionItDidNotAsk`, `internal/agent/runner.TestARunIsToldItsSeatWithdrewWhatItWaitedOn`, `internal/api/queries.TestAnAgentsAccessChangeIsDetailedOnlyToASetupReader`, `internal/api/queries.TestEachSeatsReviewIsReadOncePerAnswer`
+- **Enforced-by:** `internal/engine.TestALevelChangeAsksForExactlyOneReview`, `internal/engine.TestAChangeRevertedAndMadeAgainIsReviewedAgain`, `internal/engine.TestThreeQuickRevisionsAskForOneReview`, `internal/engine.TestALedgerWriteMeasuresTheSeatItNames`, `internal/engine.TestAPausedSeatReviewsWhenItResumes`, `internal/engine.TestASettledReviewIsAckedWithoutATurn`, `internal/engine.TestAReviewTurnsToldRecordStopsTheNextTurnRepeatingIt`, `internal/engine.TestAnAskRaisedBeforeAChangeCarriesTheNoteUntilAskedAgain`, `internal/engine.TestTheSaveDryRunCountsOpenItems`, `internal/engine.TestOpenWorkCountsEachItemOncePastThePage`, `internal/engine.TestTwoFirstMeasurementsOfAChangeKeepOne`, `internal/engine.TestALateWriterLeavesAToldRecordTold`, `internal/engine.TestATurnsEndLeavesANewerChange`, `internal/engine.TestASettledReviewDropsItsUntoldRecord`, `internal/engine.TestARemovedSeatLeavesNoReviewBehind`, `internal/engine.TestAChangeOutsideTheClosedListAsksForNoReview`, `internal/engine.TestASeatWithNothingOpenIsAskedForNoReview`, `internal/accessreview.TestAWakeIsDerivedFromItsSeatItsToldRecordAndItsDigest`, `internal/accessreview.TestEveryCopyOfAWakeCarriesOneInstant`, `internal/accessreview.TestAQuestionIsStaleUntilTheChangeIsTold`, `internal/accessreview.TestAReviewIsTheCompanysOwnTurn`, `internal/accessreview.TestTheSectionNamesTheWorkAndHowToWithdrawIt`, `internal/capability.TestAPersonReadsAChangeAboutTheSeat`, `internal/capability.TestAnAudienceIsOneThisBuildWordsLinesFor`, `internal/agent/builtin.TestASeatWithdrawsItsOwnHeldCallAsDeny`, `internal/agent/builtin.TestASeatWithdrawsItsOwnQuestionSayingWhy`, `internal/agent/builtin.TestAWithdrawalIsHeldToWhoeverWokeTheTurn`, `internal/agent/builtin.TestASeatCannotWithdrawAnotherSeatsRun`, `internal/agent/builtin.TestASeatCannotWithdrawAQuestionItDidNotAsk`, `internal/agent/runner.TestARunIsToldItsSeatWithdrewWhatItWaitedOn`, `internal/api/queries.TestAnAgentsAccessChangeIsDetailedOnlyToASetupReader`, `internal/api/queries.TestEachSeatsReviewIsReadOncePerAnswer`
 - **Cost-when-tried:** an SRE agent raised approval requests that assumed write access to a production server, and its access was then lowered to read. Told the change only at its next turn (ADR-0104), it had none: every turn it could have had waited on a person answering those requests. The requests stayed in the administrator's Inbox, worded for the old access; the administrator approved one, and only then did the agent find it could not run it. Its other open requests were stale the same way, and nothing on them said so.
 - **Tag-status:** unreleased
 
@@ -13,7 +13,7 @@ told, is recorded as the seat's pending review and asks the seat for one review
 turn when it has open work.** Open work is the questions it asked that are
 still open, what its executor waits on a person for (a question, or a call held
 for approval), and the work items assigned to it that are in progress or
-blocked, each item counted once.
+blocked, each item counted once, past the items a review lists too.
 
 - **Measured against what the seat was last told**, never the previous
   revision: the node holding the seat measures it once its applies have gone
@@ -25,7 +25,11 @@ blocked, each item counted once.
   told record it is measured from, the digest it is measured to, when it was
   first measured, the turn first told it and the change in a person's words. A
   change made, reverted and made again is measured afresh, so it is reviewed
-  again.
+  again. Any node may measure a seat, so every write is conditional on the
+  revision it read (a first record is created, a change updates the revision
+  read, the end of a review deletes it), and a write that loses reads the
+  record again. A seat the company removes takes its record with it, so a seat
+  added later under its handle starts with none.
 - **Derived, not published as a courtesy** (ADR-0012, ADR-0095): the request is
   an inbound delivery of source `access_review`, its wake id the seat, the told
   record, the digest and the instant the change was first measured, its wake
@@ -36,12 +40,15 @@ blocked, each item counted once.
   its dispatch and writes its told record at its launch, like every turn.
   Whichever turn tells a change lists the seat's open work and asks it to update
   or withdraw what the change affects, saying why; a review that finds nothing
-  left to tell is acked without a turn. When the turn first told the change
-  ends, the pending review ends with it.
+  left to tell is acked without a turn and drops a record no turn was told, so
+  a change undone and made again inside one quiet window is reviewed again.
+  When the turn first told the change ends, the pending review ends with it.
 - **The seat can act on it**: `withdraw_ask` withdraws its own question on a
   work item (the reason posted in the thread, the question resolved as its
-  author, by authorship and not by the Worklet app, as answering is the asked
-  person's arm) or what its own executor waits on (answered by the seat itself,
+  author, held to whoever woke the turn as a comment is (ADR-0109): somebody
+  who uses Worklet, or the person the question asks; the review's own turn,
+  which nobody woke, is the seat's, and somebody outside the company never has
+  the seat withdraw anything) or what its own executor waits on (answered by the seat itself,
   a held call as Deny, so the call is never made and the run is told it
   withdrew it).
 
@@ -53,7 +60,8 @@ may read the setup (`setup.read`) is sent its lines, and everybody else is told
 only that it changed. Each asking seat's record is read once per answer.
 
 **The access save says it first**: its plan names each agent whose access the
-draft changes, by the save's own edits, and that has open work, with the count.
+draft changes, by the save's own edits, and that has open work, with the count,
+said as "at least" where the tracker stopped counting at its ceiling.
 
 ## Why the obvious alternative is wrong
 

@@ -4421,10 +4421,11 @@ curl -X POST https://engine.example.com/setup/integrations/datadog/access/plan \
 
 `reviews` names each agent whose access the draft changes, by the closed list a
 turn is told, and that has open work raised under its access now: `{handle,
-open, changes}`, `open` counting its distinct open items (the questions it asked that are still
+open, at_least?, changes}`, `open` counting its distinct open items (the questions it asked that are still
 open, what its executor waits on a person for and its work items in progress
-or blocked, each work item once), and `changes` the change worded about the
-agent. The draft is measured by the same seat edits the save writes. Each reviews that work once
+or blocked, each work item once), `at_least` set where the tracker stopped
+counting at its ceiling so `open` is a floor, and `changes` the change worded
+about the agent. The draft is measured by the same seat edits the save writes. Each reviews that work once
 the draft is saved ([ADR-0111](../../adr/0111-an-agent-whose-access-changed-reviews-its-open-work-once.md)).
 It is absent where the open work could not be counted.
 
