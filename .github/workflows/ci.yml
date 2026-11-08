@@ -1011,14 +1011,13 @@ jobs:
       # first one saved (main saved it in 2 of 16 pushes), and a pull request
       # that misses saves one that only it can read (#753). Here it is
       # restored from main's newest entry and saved only by a push to main,
-      # and saved WHOLE. Unlike a build cache it is not dated and pruned by the
-      # epoch, because the entries a lint reads do not come out newer than it.
-      # On 2026-11-08 a lint that restored the entry ran in 118 s, against
-      # 204 s without it, yet left only 5.6 MB of the 91 MB it restored newer
-      # than its epoch (run 42428775684). So that prune threw away the cache
-      # the lint had just used. The entry is small (6 MB as stored), and
-      # golangci-lint's own trim removes entries stamped more than five days
-      # ago.
+      # WHOLE, without the dating and pruning a build cache gets. Pruning buys
+      # nothing here, because the entry stays small whole. A lint with no
+      # analysis cache took 204 s and wrote 91 MB on disk, 6 MB as stored. One
+      # that restored an entry pruned to 0.6 MB took 73 s (run 42431149880), so
+      # most of what a cold lint writes is never read again, and a whole entry
+      # is at most those 6 MB. golangci-lint's own trim removes entries stamped
+      # more than five days ago.
       - name: locate the linter's analysis cache
         run: echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
       - name: restore the linter's analysis cache
