@@ -453,11 +453,11 @@ func TestAPushWhoseChangesDoNotFitLeadsTheNextRecord(t *testing.T) {
 		moves = append(moves, update(seededSource(i), head, oidOf(fmt.Sprint("next", i))))
 	}
 	first := proposeAsync(t.Context(), c, asPerson(deletions...))
-	eventually(t, "the deletions queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	eventually(t, "the deletions queued", func() bool { return c.Queued(repo) == 1 })
 	second := proposeAsync(t.Context(), c, asPerson(moves...))
-	eventually(t, "the moves queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "the moves queued", func() bool { return c.Queued(repo) == 2 })
 	third := proposeAsync(t.Context(), c, asPerson(update("refs/heads/after", code.ZeroOID, oidOf("after"))))
-	eventually(t, "the push behind queued", func() bool { return code.CommitterQueued(c, repo) == 3 })
+	eventually(t, "the push behind queued", func() bool { return c.Queued(repo) == 3 })
 	gate.open()
 
 	requireOK(t, await(t, lead))

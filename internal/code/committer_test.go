@@ -382,7 +382,7 @@ func TestQueuedProposalsShareOneRecord(t *testing.T) {
 		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo,
 			update(fmt.Sprintf("refs/heads/b%02d", i), code.ZeroOID, oidOf(fmt.Sprint(i))))))
 	}
-	eventually(t, "twenty proposals queued", func() bool { return code.CommitterQueued(c, repo) == 20 })
+	eventually(t, "twenty proposals queued", func() bool { return c.Queued(repo) == 20 })
 	gate.open()
 
 	requireOK(t, await(t, lead))
@@ -425,7 +425,7 @@ func TestABatchIsDecidedInOrder(t *testing.T) {
 	} {
 		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo, u)))
 		want := len(queued)
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		eventually(t, "the proposal queued", func() bool { return c.Queued(repo) == want })
 	}
 	gate.open()
 	requireOK(t, await(t, lead))
@@ -561,9 +561,9 @@ func TestACallerThatHangsUpNeverCancelsTheBatch(t *testing.T) {
 	defer cancel()
 	gone := proposal(repo, update("refs/heads/gone", code.ZeroOID, oidOf("G")))
 	first := proposeAsync(hangUp, c, gone)
-	eventually(t, "the first proposal queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	eventually(t, "the first proposal queued", func() bool { return c.Queued(repo) == 1 })
 	second := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/kept", code.ZeroOID, oidOf("K"))))
-	eventually(t, "the second proposal queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "the second proposal queued", func() bool { return c.Queued(repo) == 2 })
 	gate.pass()
 	requireOK(t, await(t, lead))
 	eventually(t, "the two proposals' batch reaching the gate", func() bool { return gate.calls.Load() == 2 })
@@ -595,7 +595,7 @@ func fill(t *testing.T, c *code.Committer, repo string, mk func(i int) code.Prop
 		start := time.Now()
 		ch := proposeAsync(t.Context(), c, mk(i))
 		for {
-			if code.CommitterQueued(c, repo) == len(queued)+1 {
+			if c.Queued(repo) == len(queued)+1 {
 				queued = append(queued, ch)
 				break
 			}
@@ -827,7 +827,7 @@ func TestANodeFullOfProposalsIsBusy(t *testing.T) {
 	}
 	held = append(held, proposeAsync(t.Context(), c, proposal(web,
 		update("refs/heads/next", code.ZeroOID, oidOf("N")))))
-	eventually(t, "a push queued behind web's batch", func() bool { return code.CommitterQueued(c, web) == 1 })
+	eventually(t, "a push queued behind web's batch", func() bool { return c.Queued(web) == 1 })
 
 	busy := await(t, proposeAsync(t.Context(), c, proposal(api, update("refs/heads/more", code.ZeroOID,
 		oidOf("M")))))
@@ -901,7 +901,7 @@ func TestAQueuedPushIsNeverDecidedPastOneBudget(t *testing.T) {
 			tail, tailIDs = append(tail, ch), append(tailIDs, p.PushID)
 		}
 		want := i + 1
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		eventually(t, "the proposal queued", func() bool { return c.Queued(repo) == want })
 	}
 	// HALF A BUDGET behind the lead: the next batch's pushes are decided.
 	clock.advance(code.CommitBudget / 2)
@@ -957,9 +957,9 @@ func TestAPushWhoseCallerWentBeforeItsBatchIsNeverDecided(t *testing.T) {
 	defer cancel()
 	gone := proposal(repo, update("refs/heads/gone", code.ZeroOID, oidOf("G")))
 	first := proposeAsync(hangUp, c, gone)
-	eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
 	kept := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/kept", code.ZeroOID, oidOf("K"))))
-	eventually(t, "the next push queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "the next push queued", func() bool { return c.Queued(repo) == 2 })
 	cancel()
 	if a := await(t, first); !errors.Is(a.err, context.Canceled) {
 		t.Fatalf("the caller that went got %+v, %v; want context.Canceled", a.res, a.err)
@@ -1017,7 +1017,7 @@ func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
 	p := proposal(repo, update("refs/heads/late", code.ZeroOID, oidOf("T")))
 	res, err := c.Propose(ctx, p)
 	requireBusyUndecided(t, n, answer{res, err}, p.PushID, "stops waiting")
-	if got := code.CommitterQueued(c, repo); got != 0 {
+	if got := c.Queued(repo); got != 0 {
 		t.Fatalf("%d proposals queued, want none: a push nobody can wait for takes no place", got)
 	}
 	gate.open()
@@ -1067,7 +1067,7 @@ func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 
 	gate.open()
 	requireOK(t, await(t, lead))
-	eventually(t, "the queue drained", func() bool { return code.CommitterQueued(c, repo) == 0 })
+	eventually(t, "the queue drained", func() bool { return c.Queued(repo) == 0 })
 	if got := gate.calls.Load(); got != 1 {
 		t.Fatalf("%d publishes, want the lead's alone: the withdrawn push started no batch", got)
 	}
@@ -1114,9 +1114,9 @@ func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
 	defer cancelLong()
 	short := proposal(repo, update("refs/heads/short", code.ZeroOID, oidOf("S")))
 	shortCh := proposeAsync(shortCtx, c, short)
-	eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
 	long := proposeAsync(longCtx, c, proposal(repo, update("refs/heads/long", code.ZeroOID, oidOf("G"))))
-	eventually(t, "the next push queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "the next push queued", func() bool { return c.Queued(repo) == 2 })
 
 	// AN HOUR AND A SECOND behind the lead: the first push's asker stops
 	// waiting inside a batch and its answer; the second's has hours left,
@@ -1241,9 +1241,9 @@ func TestARetriedPushCollapsesOnItsRow(t *testing.T) {
 		eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
 		p := proposal(repo, update("refs/heads/main", oidOf("A"), oidOf("B")))
 		a := proposeAsync(t.Context(), c, p)
-		eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+		eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
 		b := proposeAsync(t.Context(), c, p)
-		eventually(t, "its repeat queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+		eventually(t, "its repeat queued", func() bool { return c.Queued(repo) == 2 })
 		gate.open()
 		requireOK(t, await(t, lead))
 		first, second := await(t, a), await(t, b)
@@ -1648,7 +1648,7 @@ func TestAStoppingCommitterAnswersNotServing(t *testing.T) {
 		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo,
 			update(fmt.Sprintf("refs/heads/q%d", i), code.ZeroOID, oidOf(fmt.Sprint(i))))))
 		want := i + 1
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		eventually(t, "the proposal queued", func() bool { return c.Queued(repo) == want })
 	}
 
 	stopped := make(chan struct{})
@@ -1743,7 +1743,7 @@ func TestARecordStaysUnderTheRowBudget(t *testing.T) {
 		}
 		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo, cmds...)))
 		want := i + 1
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		eventually(t, "the proposal queued", func() bool { return c.Queued(repo) == want })
 	}
 	gate.open()
 	requireOK(t, await(t, lead))
