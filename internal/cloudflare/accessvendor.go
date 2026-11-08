@@ -211,11 +211,18 @@ func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seat
 	if err != nil {
 		return seataccess.Options{}, err
 	}
+	return seataccess.Options{Lane: lane, Levels: seataccess.OfferGaps(accessVendor{}.FixedLevels(lane), gaps),
+		Rotatable: true}, nil
+}
+
+// FixedLevels is Cloudflare's levels, least access first: this engine's own
+// set of permission groups ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	out := make([]seataccess.Level, 0, len(levels))
 	for _, l := range levels {
 		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note, Administers: l.administers})
 	}
-	return seataccess.Options{Lane: lane, Levels: seataccess.OfferGaps(out, gaps), Rotatable: true}, nil
+	return out
 }
 
 // Observe reads back the token the ledger records for each seat, by ID. A

@@ -163,7 +163,7 @@ type SeatCallable interface {
 // TurnBound is a tool that is TOLD the turn a seat's call is made in without
 // being seat-scoped: the builtin gate, which decides every call a seat makes
 // inside a turn somebody woke for whoever woke it too (the requester ceiling,
-// ADR-0104), and answers a call made outside any turn as the plain Callable it
+// ADR-0105), and answers a call made outside any turn as the plain Callable it
 // wraps — so a read-only builtin still answers the operator's surface and the
 // HTTP one, and is never refused there as a seat's tool would be.
 //

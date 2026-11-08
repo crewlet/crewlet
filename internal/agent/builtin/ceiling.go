@@ -17,7 +17,7 @@ import (
 // WHO A SEAT'S TURN IS ACTING FOR — the requester ceiling ([authz.Ceiling]),
 // which every call a seat makes inside a turn somebody woke is decided against
 // at the one gate (authority.go): the app every app verb names, for every
-// family alike ([authz.DecideWithinApps], ADR-0104), and the relation the
+// family alike ([authz.DecideWithinApps], ADR-0105), and the relation the
 // families whose objects carry one decide beside it — the artifacts tools and
 // their datastore's on the stored artifact ([authz.DecideWithin]), and the code
 // tools on a repository's grant as well (codetools.go).
@@ -96,7 +96,7 @@ type ceilingKey struct{}
 // and no relation for anybody reads nothing of the identity directory. It is
 // bound per call, as the principal already is ([Authorizer]), and never
 // captured: the next call composes afresh, so an administrator's revocation
-// applies at the turn's next call (ADR-0104).
+// applies at the turn's next call (ADR-0105).
 //
 // A call that is not a seat's binds nothing: a principal acting through their
 // own credential is no deputy. A seat's call binds even with no composer to

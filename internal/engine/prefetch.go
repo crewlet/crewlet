@@ -95,6 +95,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
+	told []prefetch.ToldChange,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -117,6 +118,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// described, so the judgements and the turn's record of what it was
 		// asked carry one answer about who wrote it.
 		Ask: ask,
+		// THE ACCESS CHANGES THE SEAT WAS TOLD, which mark its notes written
+		// before them (capability.go).
+		Told: told,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's

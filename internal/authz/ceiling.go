@@ -30,7 +30,7 @@ const (
 	// sender on a chat surface no seat or person maps to. A stranger uses no
 	// app and opens no artifact, so an agent acting for one takes no app's
 	// verb for them at all, and reaches only the edits to its own work that
-	// no app gates (ADR-0104).
+	// no app gates (ADR-0105).
 	CeilingStranger CeilingKind = "stranger"
 )
 
@@ -89,7 +89,7 @@ type Ceiling struct {
 //
 // THE APP IS ASKED BEFORE THE SPARE: steering an agent's own work in an app
 // is using the app, so a requester who does not use it steers nothing there
-// (ADR-0104). The spare decides relations among the app's users, never
+// (ADR-0105). The spare decides relations among the app's users, never
 // whether somebody uses the app at all.
 //
 // ONE DECISION OF THE SAME TABLE, ASKED TWICE: the requester is decided by
@@ -122,7 +122,7 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 
 // DecideWithinApps answers whether agent p may do a to o INSIDE A TURN
 // somebody woke, as far as the APPS go: [Decide] for p, and then whether the
-// principal the turn is acting for uses the app a's row names (ADR-0104).
+// principal the turn is acting for uses the app a's row names (ADR-0105).
 //
 // # Every app, for every family
 //

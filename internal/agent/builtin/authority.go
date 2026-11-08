@@ -109,7 +109,7 @@ var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 // decision into an error rather than a refusal.
 //
 // A SEAT'S CALL IN A TURN SOMEBODY WOKE is decided for whoever woke it too, as
-// far as the apps go ([authz.DecideWithinApps], ADR-0104): every action the
+// far as the apps go ([authz.DecideWithinApps], ADR-0105): every action the
 // call decides — the gate's of the tool's own row and every row the tool asks
 // inside itself — reads the ceiling its gate bound to the call
 // ([bindCeiling]), composed only when an action's row first names an app. A
@@ -236,7 +236,7 @@ func (e *DecisionRefused) Error() string {
 }
 
 // ceilingWords is what a refusal of the requester ceiling says, by whom it was
-// decided for (ADR-0104): somebody the company does not know, a requester who
+// decided for (ADR-0105): somebody the company does not know, a requester who
 // may not act in the company at all — told as such, since no app would admit
 // them — one who does not use the app the verb belongs to — the app named,
 // since an administrator giving it to them is what changes the answer — or one

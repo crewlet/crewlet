@@ -206,13 +206,18 @@ type accessSession struct {
 // Options is AWS's three levels, least access first. Administer is the one
 // that administers, so it takes a fresh sign-in to grant.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane), ActionURL: s.rolesURL()}, nil
+}
+
+// FixedLevels is the three levels, least access first ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	var levels []seataccess.Level
 	for _, id := range config.AWSLevels() {
 		name, note := levelInfo(id)
 		levels = append(levels, seataccess.Level{ID: id, Name: name, Note: note,
 			Administers: id == config.AWSLevelAdminister})
 	}
-	return seataccess.Options{Lane: lane, Levels: levels, ActionURL: s.rolesURL()}, nil
+	return levels
 }
 
 // Observe lists the seat roles once, then reads each seat's role where the

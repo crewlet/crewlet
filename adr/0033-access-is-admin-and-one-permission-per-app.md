@@ -106,7 +106,7 @@ are there — which is how `artifacts`
 
 ## Amendment: a seat uses only its requester's apps
 
-Since [ADR-0104](0104-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), an agent seat that holds every app uses,
+Since [ADR-0105](0105-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), an agent seat that holds every app uses,
 inside a turn a principal woke, only the apps that principal holds. A person
 holds the apps their grants name, and never admin. A stranger and a human seat
 nobody holds in the directory hold none. The seat's own grants are unchanged,

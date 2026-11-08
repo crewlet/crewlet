@@ -88,7 +88,7 @@ func gateDecided() []authz.Action {
 }
 
 // EVERY APP VERB A SEAT TAKES IN A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY
-// USE (ADR-0104), through the gate every builtin passes: a call the seat's own
+// USE (ADR-0105), through the gate every builtin passes: a call the seat's own
 // row admits is refused [authz.ReasonCeiling] when the person whose turn it is
 // does not use the row's app, with the app named for them — and the same call
 // in a turn nobody woke, or one a person using the app woke, runs. A
