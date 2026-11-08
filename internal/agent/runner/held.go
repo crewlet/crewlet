@@ -191,8 +191,11 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 	defer origin.Stamp(&err)
 	ctx = tools.WithApproval(ctx, tools.Approval{By: held.Approver, HeldID: held.HeldID})
 	if !sandbox.HeldMakes(held.Choice) {
+		// A DENIAL RAN NOTHING, so a record that did not land is logged and
+		// the run is still told it was refused.
 		if err := held.recordDenied(ctx, surface); err != nil {
-			return fmt.Errorf("runner: recording the denied call to %s: %w", held.Tool, err)
+			log.ErrorContext(ctx, "held_call_denial_unrecorded", "tool", held.Tool, "held_call", held.HeldID,
+				"error", err.Error())
 		}
 		held.outcome = heldOutcome{kind: heldDenied}
 		return nil

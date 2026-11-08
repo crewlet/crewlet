@@ -69,6 +69,19 @@ The default read allowlist:
 
 With `containers`, it adds `/usr/bin/sudo -n /usr/bin/docker ps` and `/usr/bin/sudo -n /usr/bin/docker logs --tail * *`. A server's own `read_allowlist` replaces the list. In a rule, `*` is any one word that does not start with `-`, a word ending in `=*` is that option with any value, and a final `...` allows any further words. Never put `*` where a file path goes.
 
+## The agents' tools
+
+An agent on at SSH has two tools; an agent at `read` has only the first.
+
+- **`ssh_read`** runs one command on one of the agent's servers as its read user, with no approval: `{host, command}`, the command one line of up to 4096 bytes. The server's gate decides what runs.
+- **`ssh_operate`** runs one command as the server's operate user once a person approves it: `{host, command, stdin, reason}`, the command up to 4096 bytes, the stdin up to 128 KiB of text, and a reason of up to 500 characters. Every call is put to a person, who reads the server, the command exactly as written, the stdin's size, SHA-256 and first 2 KiB, and the reason, and answers **Allow once** or **Deny**. Only an administrator, or a person `integrations.ssh.approvers` names, answers, after a fresh sign-in. On Allow once, Crewlet signs a five-minute certificate whose forced command is that command and runs it once itself; no certificate or key for operate ever reaches the agent's box.
+
+Both answer `{host, exit_code, stdout, stderr, truncated, duration_ms}`, each stream cut to `commands.max_output_bytes` and the answer to one tool answer, and marked as text a server printed so the agent reads it as data. The output goes only to the turn that ran the command.
+
+In a turn somebody woke, an agent reaches its servers only for somebody of the company: a person of the company, a colleague agent, a schedule or Crewlet itself. A turn woken by somebody the company does not know, such as a guest in a shared room or an unauthenticated webhook, reaches no server, and the tool says why.
+
+Every certificate Crewlet signs is recorded before it is used, and every command once it ran, failed or was denied: the agent, the turn, the server and user, the command (sealed), the stdin's size and digest, the exit status, the output's size and digest (never its text), the approver and the certificate's serial. `GET /setup/integrations/ssh/audit` pages both.
+
 ## Configuration
 
 ```yaml
@@ -131,5 +144,4 @@ Turning `integrations.ssh` off, turning an agent off, or removing a server from 
 
 ## What is not supported yet
 
-- The agents' `ssh_read` and `ssh_operate` tools, and the audit of every certificate and command.
 - Receiving events from a server.

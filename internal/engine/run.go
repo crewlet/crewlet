@@ -72,6 +72,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -471,6 +472,11 @@ type Engine struct {
 	// exclude a node whose admission the first Stop had already removed —
 	// and announced `engine_stopped` twice for one shutdown.
 	stopOnce sync.Once
+
+	// sshRunner runs the SSH tools' commands, holding each turn's read
+	// certificate in memory until it ends ([Engine.sshRun]).
+	sshRunnerOnce sync.Once
+	sshRunner     *sshint.Runner
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
