@@ -10354,23 +10354,39 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   no delivery — never beside `delivered`), the engine's `answer` to a
   colleague's ask, the reviewer's `completed_work`, the executor's
   `blocked_on`, who stopped it (`stopped_by`) and why (`stop_reason`), the
-  engine's `failure`, and the turn's newest capture where it was not kept
+  engine's `failure`, the turn's newest capture where it was not kept
   (`unkept`: its `launch_seq` and `capture_seq`, and the `reason`, which quotes
   what refused it — sent only where it is newer than the last capture the row
-  named, if it named any, and the row then names no session of the turn; one
-  at the row's own place, whose record the log took before the turn's end
-  after all, is the row's, and kept), and the session ids a launch of the turn ran out of its
+  named, if it named any; one at the row's own place, whose record the log
+  took before the turn's end after all, is the row's, and kept), that the
+  turn went on past the session its row names (`went_on: true`: the turn's
+  record did not hold its last word, the final capture of its last launch
+  that ran a job, kept — what the row names was kept while the turn still
+  worked, a capture its job took as it worked or an earlier launch's, so it
+  holds what the turn did up to there and nothing after; sent beside every
+  `unkept` this version of the engine records, and on a row that names no
+  session too; the row keeps what it names, and the conversation's next turn
+  continues it, told so), the turn's last word where its end said it went on
+  and that capture was its newest (`last_word`: the final capture's
+  `launch_seq` and `capture_seq`, sent as the end named it; a row at that place
+  holds it after all — the log took its record although the run's own record
+  held it refused — and is sent without `went_on`, since its turn went on past
+  no session of it, and the conversation's next turn continues it as all the
+  turn did), and the session ids a launch of the turn ran out of its
   model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.
 - **`kept`** says the row still names a session's object, of `object_bytes`
   sealed. A row that names none is an ending alone, for one of four reasons
   its transcript's `why` and its `not_continuable` say: its turn captured
-  nothing (yet, while it runs); its newest capture was not kept, and its end
-  took the older one off the row; a run [ran out of context](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired)
+  nothing (yet, while it runs); its newest capture was not kept and none
+  before it was, or an end an earlier version of the engine recorded took the
+  older one off the row; a run [ran out of context](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired)
   in its session, which retired it; or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
-  make room for newer ones, keeping how the turn ended.
+  make room for newer ones, keeping how the turn ended — a session its turn
+  went on past included, which only the budget releases, said with the newer
+  capture `unkept` names.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
   handed to continue: its conversation's head as the turn's dispatch read it
   (of the conversation's ended turns whose rows still name a session, the one
