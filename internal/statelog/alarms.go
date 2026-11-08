@@ -2444,7 +2444,11 @@ var table = []rule{
 			"hook there refusing a force-push or a deletion the mirror needs; " +
 			"a seat named by `as` that no longer reads the repository is " +
 			"refused before any push: name another in the repository's " +
-			"mirror_to. A mirror is tried a minute after a failure, longer " +
+			"mirror_to — and a person's seat whose holder does not use " +
+			"Gitlet (not given the gitlet permission, unable to act, or " +
+			"nobody at all) is refused the same way until an administrator " +
+			"gives them Gitlet or mirror_to names another seat. A mirror is " +
+			"tried a minute after a failure, longer " +
 			"after each one in a row, and at least once an interval, and the " +
 			"alarm clears once it is brought level. A mirror with no such " +
 			"line has waited behind the node's other attempts: a node runs " +

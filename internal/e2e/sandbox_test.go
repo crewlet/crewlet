@@ -685,6 +685,10 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS HOLDS THEIR SEAT, with Gitlet among their apps: the
+	// turn is worked for whoever woke it (ADR-0109), and a turn a person
+	// without Gitlet woke checks no repository out (ADR-0110).
+	employFounder(t, n.node)
 	n.wakeInDirectThread(t, "swe", "the web test is failing, please fix it", codingConversation, codingThread)
 
 	// THE ROW, WHILE THE RUN HOLDS IT: the stand-in waits for the release

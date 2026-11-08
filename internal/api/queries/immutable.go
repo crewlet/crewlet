@@ -44,17 +44,18 @@ import "encoding/json"
 // session cookie, so the cookie's re-issue every five minutes moves nothing.
 //
 // SO AN ANSWER IS IMMUTABLE ONLY WHERE IT IS THE SAME FOR EVERY CALLER WHO MAY
-// ASK IT, as a repository's content is: every person reads every repository
-// (ADR-0088). A request that names nobody (a tab that opened the route itself)
-// is kept under one key for everybody who uses that browser, and the only
-// thing that empties it is a sign-out (session.SignOut), which a browser
-// honours only in a secure context (https, or a loopback address) and only
-// from a release that implements the directive. The next person to sign in
-// there is served the kept answer from the cache, which is harmless exactly
-// when it is what they would be answered themselves. An answer that differs by
-// who asks therefore names the asker in what is asked (a parameter the
-// question holds equal to the caller the guard resolved), so the request, and
-// with it the cache key, differs too.
+// ASK IT, as a repository's content is among the persons who use Gitlet
+// (ADR-0088, ADR-0110). AND ONLY TO A REQUEST THAT NAMES ITS READER: a request
+// that names nobody (a tab that opened the route itself) would be kept under
+// one key for everybody who uses that browser, and the next person to sign in
+// there served the kept answer from the cache — harmless only where it is what
+// they would be answered themselves, which a person without the app is not.
+// So REST answers such a request the value itself, kept by no cache (internal/
+// api's writeAnswer), and a sign-out still empties what a named reader kept
+// (session.SignOut). An answer that differs by who asks therefore names the
+// asker in what is asked (a parameter the question holds equal to the caller
+// the guard resolved), so the request, and with it the cache key, differs
+// too.
 //
 // A TRANSPORT THAT CACHES NOTHING SENDS THE ANSWER ITSELF: Immutable encodes
 // as the value it wraps ([Immutable.MarshalJSON]), so the socket's frame and a

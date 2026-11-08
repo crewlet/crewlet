@@ -406,3 +406,34 @@ func TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode(t *testing.T) {
 		}
 	}
 }
+
+// GITLET'S CEILING NAMES WHO THE TURN WORKS FOR AS WHAT THEY ARE: a person as a
+// person, and a credential acting as no seat as a credential, as the authority
+// table's own refusal does. The administrator gives the app to the credential,
+// and a seat told "the person" would go looking for somebody who never asked.
+//
+// Mutation: drop the credential's case from ceilingRefused, and the token's
+// sentence names a person.
+func TestGitletsCeilingNamesACredentialAsACredential(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		who       iam.Principal
+		want, not string
+	}{
+		"a person without Gitlet": {
+			who: iam.Principal{Kind: iam.KindPerson, Login: "jane@example.com", Seat: "jane",
+				Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}},
+			want: "the person this turn is working for does not use Gitlet", not: "credential",
+		},
+		"a [worklet] token": {
+			who: iam.Principal{Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+				Grants: []iam.Grant{iam.GrantWorklet}},
+			want: "the credential this turn is working for does not use Gitlet", not: "the person",
+		},
+	} {
+		got := ceilingRefused("code_status", authz.Ceiling{Kind: authz.CeilingRequester, Principal: tc.who})
+		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.not) {
+			t.Errorf("%s: the refusal says %q, want %q and never %q", name, got, tc.want, tc.not)
+		}
+	}
+}

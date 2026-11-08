@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -203,6 +204,10 @@ type harness struct {
 	dial mirror.Dial
 	// git is the git pool the workers run in: nil for the Gitlet node's own.
 	git mirror.Pool
+	// people is the identity directory the workers ask who holds the person's
+	// seat a push mirror pushes as: nil for every seat held by an active
+	// person using every app (codetest.FixturePeople).
+	people code.People
 
 	mu  sync.Mutex
 	now time.Time
@@ -257,9 +262,13 @@ func (h *harness) mirrors() *mirror.Mirrors {
 	if h.git != nil {
 		git = h.git
 	}
+	var people code.People = codetest.FixturePeople{}
+	if h.people != nil {
+		people = h.people
+	}
 	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: git, Objects: objects,
 		Dial: dial, NodeID: n.ID(), Limits: func() code.Limits { return h.limits },
-		Roster: codetest.FixtureRoster, Events: &h.events, Faults: h.faults, Now: h.clock})
+		Roster: codetest.FixtureRoster, People: people, Events: &h.events, Faults: h.faults, Now: h.clock})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -1387,5 +1396,46 @@ func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
 	if got, want := mirror.FailingPastThePromise(turns), mirror.MaxAttempts+1; got != want {
 		t.Fatalf("%d attempts running and a mirror queued behind them for %v count %d failing; want %d",
 			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want)
+	}
+}
+
+// gitletless is the identity directory with every seat held by an active
+// person who is given every app but Gitlet until given — what a push mirror
+// pushing as a person asks before each push.
+type gitletless struct{ given atomic.Bool }
+
+func (g *gitletless) Requester(_ context.Context, seat string) (iam.Principal, error) {
+	grants := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet, iam.GrantArtifacts, iam.GrantChatlet}
+	if g.given.Load() {
+		grants = append(grants, iam.GrantGitlet)
+	}
+	return iam.Principal{Kind: iam.KindPerson, Seat: seat, Stage: iam.StageActive, Grants: grants}, nil
+}
+
+// A PUSH MIRROR PUSHES AS A PERSON ONLY WHILE THEY USE GITLET (ADR-0110): a
+// push mirror publishes only what the seat it pushes as reads, and a person
+// reads only through Gitlet, so while the directory says pat — the person the
+// fixture's mirror pushes as — is not given it, an attempt publishes nothing
+// at the other host; once pat is given it, the next attempt publishes main.
+// The directory is read before every push, so an administrator taking the
+// app away stops the next one.
+//
+// Mutation: hand code.MirrorSeatRefusal false in the push, and the other host
+// gets main while pat holds no Gitlet.
+func TestAPushMirrorPushesAsAPersonOnlyWhileTheyUseGitlet(t *testing.T) {
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings { return mirroredTo(url) })
+	people := &gitletless{}
+	h.people = people
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main")
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != "" {
+		t.Fatalf("the other host's main is %q while pat holds no Gitlet; want nothing published", got)
+	}
+	people.given.Store(true)
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != a {
+		t.Fatalf("the other host's main is %q once pat holds Gitlet; want %s", got, a)
 	}
 }

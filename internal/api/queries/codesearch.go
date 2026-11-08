@@ -21,7 +21,8 @@ import (
 // Decided per repository by the grant each answering node derives, as every
 // code question is (code.go): a listing of the caller's repositories leaves
 // out what they may not read, and a repo: naming one is refused
-// [NotPermitted] — so it is registered [DecidedBy] `code.read`, as the rest.
+// [NotPermitted] — behind the gitlet app, which it is registered [Requires],
+// as the rest.
 //
 // # One grammar, in the text or beside it
 //

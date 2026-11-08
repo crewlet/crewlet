@@ -30,8 +30,8 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. SEVEN exist, the
-	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
+	// configuration REFUSES it rather than answers it last. NINE exist. Seven
+	// are the chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a Gitlet
 	// node; host.Options.Roster, an engine write a Gitlet node builds;
 	// code.CommitterOptions.SeatRules, a seat's push on the committer that
@@ -42,7 +42,12 @@ const (
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
 	// refused there by its own gate, code.StoreOptions.Current, and by the
-	// estate's declaration on code.lifecycle. The Gitlet node's own gates,
+	// estate's declaration on code.lifecycle. The other two are whether the
+	// PERSON holding a human seat uses Gitlet (ADR-0110), read through the
+	// identity directory and that chart: code.ChangeWriterOptions.People, for
+	// every human reviewer an ask names, and code.StoreOptions.People, for the
+	// seat a push mirror pushes as, each refused by the gates of the seat rules
+	// beside it. The Gitlet node's own gates,
 	// query.Options.Current and host.Options.Current, refuse a seat's read
 	// and a seat's write there themselves (unready, behind_config) rather
 	// than judging them; the committer's, the change writer's and the checks
@@ -224,6 +229,10 @@ var classified = map[string]struct {
 	"code.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a write the chart judges behind it is handed to the repository's next committing node, decided " +
 		"nowhere here"},
+	"code.ChangeWriterOptions.People": {seamGrant, "whether the person holding a human reviewer's seat " +
+		"uses Gitlet now (ADR-0110), read through the identity directory and the serving node's chart: " +
+		"refused on a node behind the configuration by code.ChangeWriterOptions.Current, as the seat " +
+		"rules beside it are"},
 	"code.ChangeWriterOptions.Now":    {seamNone, "the decide's clock"},
 	"code.ChangeWriterOptions.Events": {seamNone, "the node's event stream a review it landed is announced on"},
 	"code.ChangeWriterOptions.AgentIDs": {seamNone, "the agent ids a review's announcement names its reviewer " +
@@ -250,6 +259,10 @@ var classified = map[string]struct {
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
 	"code.StoreOptions.NodeID":    {seamNone, "the deciding node"},
 	"code.StoreOptions.Now":       {seamNone, "the clock"},
+	"code.StoreOptions.People": {seamGrant, "whether the person holding the human seat a push mirror " +
+		"pushes as uses Gitlet now (ADR-0110), read through the identity directory and the serving " +
+		"node's chart: refused there by code.StoreOptions.Current and the estate's declaration on " +
+		"code.lifecycle, as the seat rules beside it are"},
 	"code.StoreOptions.SeatRules": {seamGrant, "the chart a tool's lifecycle request is judged by: who " +
 		"may create, rename, change, archive, delete, restore or protect a repository, a create's owner, " +
 		"and what a seat may hold"},

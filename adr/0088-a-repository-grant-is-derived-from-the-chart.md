@@ -100,3 +100,19 @@ Since [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), the
 turn they woke. The code verbs name no app yet. Once Gitlet is an app (piece
 5 of crewlet#733), a turn woken by a person without it reaches no repository,
 and its executor is given none.
+
+## Amendment: a person reaches a repository through the gitlet app
+
+Since [ADR-0110](0110-reaching-a-repository-takes-the-gitlet-permission.md), the two clauses above
+about principals who are not seats hold behind the `gitlet` app:
+- a person maintains every repository;
+- a credential bound to no seat reads every repository.
+
+A principal without the app is refused at the authority table before any repository is read, and a
+turn a person or a credential without it woke reaches none, its executor given none. A stranger, a
+person who may not act, and a person or a credential without the app use no app, so no write is made
+for them, the seat's own work included. The ceiling of nobody stays for the one requester left that
+uses the app and pushes to no repository itself, a credential bound to no seat
+([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)): its turn steers the seat's
+own work alone. Everything else this record decides is unchanged: the derivation for seats,
+`visibility`, the reserved namespace, protections and a colleague seat's ceiling.

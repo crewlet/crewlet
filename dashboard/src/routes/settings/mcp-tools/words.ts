@@ -349,6 +349,11 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail: "Agents whose role holds Chatlet access, in the rooms they are in.",
   },
   artifacts: { label: "Artifacts access", detail: "Agents whose role holds Artifacts access." },
+  gitlet: {
+    label: "Gitlet access",
+    detail:
+      "Agents whose role holds Gitlet access. What each may do to a repository is its own grant there.",
+  },
   artifact_viewer: {
     label: "Its viewers",
     detail: "Anyone the artifact is shared with, as a viewer or above.",

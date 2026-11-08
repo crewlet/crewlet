@@ -77,6 +77,10 @@ type DataOptions struct {
 	// false is a node confirmed behind it, which decides neither; nil is
 	// current.
 	Current func() bool
+	// People answers who holds each human seat an ask for review names
+	// (code.ChangeWriterOptions.People); nil is every such seat held by an
+	// active person using every app (FixturePeople).
+	People code.People
 	// Clock is the fleet's clock as a case moves it (Shape.Clock): what the
 	// node's lifecycle stores decide by, and the broker's instant on every
 	// record its applier applies past a move; nil is the wall clock, moved
@@ -317,6 +321,10 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if seatRules == nil {
 		seatRules = FixtureSeatRules
 	}
+	people := d.o.People
+	if people == nil {
+		people = FixturePeople{}
+	}
 	// THE READER JUDGES BY THE CHART ITS WRITERS DECIDE BY, as a node reads
 	// and writes by one epoch's: a seat's grant, and every change's readiness
 	// whoever reads it — a reader holding none refuses a read of changes.
@@ -353,7 +361,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		// chart a seat's push is, and by no node confirmed behind the
 		// company's configuration, so a node of the suite decides what a node
 		// of the fleet does.
-		SeatRules: seatRules, Current: d.o.Current,
+		SeatRules: seatRules, Current: d.o.Current, People: people,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
 	}
@@ -383,7 +391,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		now = d.o.Clock.Now
 	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
-		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy}); err != nil {
+		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy,
+		People: people}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
 	}
 	if d.o.Operator != "" {

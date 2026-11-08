@@ -790,8 +790,8 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 
 // forCompany is nil where code_status may read the deployment's view for
 // whoever its turn is acting for, and the refusal for a credential acting as no
-// seat ([worksForACredential]) — the one composition the code read above was
-// decided on, bound to the call, so it reads nothing again.
+// seat ([worksForACredential]) — composed once and bound to the call, so the
+// code read decided after it on the same composition reads nothing again.
 func (t *codeStatus) forCompany(ctx context.Context, turn *turnctx.Turn) *tools.Result {
 	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
 	if p.Kind != iam.KindSeat {
@@ -866,20 +866,23 @@ type repoOnNode struct {
 func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
+	// THE DEPLOYMENT'S VIEW FIRST — every Gitlet node's cache — which is the
+	// health grant's, read for a person or a seat of the company and never
+	// for a credential acting as no seat, whose reach is the apps its grants
+	// name ([companyRequester]). Its repository reads alone would bound
+	// nothing: such a credential reads every repository itself. And FIRST,
+	// because no app given to the credential would let it read the view: a
+	// refusal naming Gitlet would send an administrator to grant something
+	// that changes nothing.
+	if refusal := t.forCompany(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
 	// WHO IT READS AS, AND FOR: the code tools' one composition, with
 	// whoever woke the turn decided on Gitlet's read verb — the
 	// repository reads below are the requester ceiling's, the rest of the
 	// answer the health grant's ([CodeDeps.callerOn]).
 	c, refusal := t.deps.Code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
 	if refusal != nil {
-		return *refusal, nil
-	}
-	// AND THE REST OF THE ANSWER — every Gitlet node's cache, the deployment's
-	// view — is the health grant's, read for a person or a seat of the
-	// company, never for a credential acting as no seat, whose reach is the
-	// apps its grants name ([companyRequester]). Its repository reads alone
-	// would bound nothing: such a credential reads every repository itself.
-	if refusal = t.forCompany(ctx, turn); refusal != nil {
 		return *refusal, nil
 	}
 	q, refusal := t.query(args)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -76,6 +77,28 @@ import (
 // holding no chart yet ([ChangeWriterOptions.SeatRules]), as the committer
 // refuses a seat's push there: the router asks the repository's runner-up under
 // the same operation id. A person's comment or resolution is decided as ever.
+//
+// # A person is asked to review only where they use Gitlet
+//
+// Reading a change is reading its repository's code, so an ask for review
+// names a person only where the identity directory says the seat's holder
+// uses Gitlet (ADR-0110). The decide is pure over its snapshot, so the writer
+// asks the directory first — once for each person the ask names, through
+// [People], on the asker's deadline — and hands the decide who cannot be
+// asked; a directory that cannot say answers the write busy, undecided, to be
+// sent again, and never as a refusal of somebody who may well use the app.
+
+// People answers who holds a human seat, as the authority table decides for
+// them: the person the identity directory binds to it, at their stage, holding
+// the apps their grants name — none for a seat nobody holds, nor for a person
+// who may not act — or the error that kept the directory from answering.
+//
+// THE ENGINE'S IS THE REQUESTER CEILING'S OWN COMPOSITION (internal/engine's
+// turnRequesters, ADR-0109), so a person is one principal whether an agent is
+// working for them or a change is asking them to review it.
+type People interface {
+	Requester(ctx context.Context, seat string) (iam.Principal, error)
+}
 
 // ChangeWriterOptions configure a change writer.
 type ChangeWriterOptions struct {
@@ -115,6 +138,10 @@ type ChangeWriterOptions struct {
 	// REQUIRED with Events: a review announced without its reviewer's and
 	// its change owner's ids is counted on no seat's day.
 	AgentIDs func(handle string) (string, bool)
+	// People answers who holds each human seat an ask for review names, and
+	// whether they use Gitlet ([People]). REQUIRED: a person is never asked
+	// to review a change on a default.
+	People People
 	// Metrics records every write's outcome; nil records nothing.
 	Metrics *metrics.Recorder
 	// Logger is where a failed write is reported; nil is the package's.
@@ -133,6 +160,7 @@ type ChangeWriter struct {
 	now       func() time.Time
 	events    EventPublisher
 	agentIDs  func(string) (string, bool)
+	people    People
 	metrics   *metrics.Recorder
 	log       *slog.Logger
 
@@ -166,6 +194,9 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	case o.SeatRules == nil:
 		return nil, errors.New("code: a change writer needs the epoch's chart (SeatRules) — a seat's write and " +
 			"every reviewer an ask names are judged by the chart, never by a default")
+	case o.People == nil:
+		return nil, errors.New("code: a change writer needs the identity directory's people (People) — a person " +
+			"an ask for review names is asked only where they use Gitlet, never on a default")
 	case o.Events != nil && o.AgentIDs == nil:
 		return nil, errors.New("code: a change writer that announces on an event stream needs AgentIDs — a " +
 			"review is counted on its reviewer's and its change owner's seat days by their agent ids, which only " +
@@ -173,8 +204,8 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	}
 	w := &ChangeWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
-		current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs, metrics: o.Metrics,
-		log: o.Logger, flights: newFlights(changeFlights),
+		current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs, people: o.People,
+		metrics: o.Metrics, log: o.Logger, flights: newFlights(changeFlights),
 	}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
@@ -251,6 +282,13 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 				"the repository's next committing node decides it", ErrNotServing), false
 		}
 	}
+	// AND WHO OF THE PERSONS IT ASKS MAY NOT BE ASKED, from the identity
+	// directory, before the decide, which reads nothing but its snapshot.
+	noGitlet, unsaid := w.withoutGitlet(ctx, cw, seats.Roster)
+	if unsaid != "" {
+		hold.release()
+		return busyConversation(unsaid), nil, false
+	}
 	if !w.flights.begin() {
 		hold.release()
 		return ConversationResult{}, errChangeWriterStopping, false
@@ -263,7 +301,7 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the change's next write deciding beside a record still in flight.
 	go func() {
 		defer w.flights.done()
-		res, err, fresh := w.write(cw, seats)
+		res, err, fresh := w.write(cw, seats, noGitlet)
 		// THE CHANGE'S NEXT WRITE WAITS ON NONE OF THE ANNOUNCEMENT: its
 		// turn is released with the answer, and the announcement — a read
 		// and a publish, bounded by checkEventBudget — runs after both,
@@ -288,6 +326,46 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 		}
 		return ConversationResult{}, ctx.Err(), true
 	}
+}
+
+// withoutGitlet is the persons an ask for review names who may not be asked —
+// each human seat of the chart it asks whose holder the identity directory
+// says cannot use Gitlet: a seat nobody holds, a person who may not act, or
+// one not given the app (ADR-0110) — or, where the directory could not say,
+// the sentence the write is answered busy with. Nil for any other write, and
+// for an ask naming no person.
+//
+// ONE POINT READ A PERSON, never the directory, on the asker's deadline: an
+// ask names at most [MaxReviewersPerChange] reviewers. A handle the chart holds
+// no seat for, and an agent's seat, are left to the decide, which refuses the
+// first and judges the second by its grant on the repository.
+func (w *ChangeWriter) withoutGitlet(ctx context.Context, cw ConversationWrite, roster Roster) (map[string]bool,
+	string) {
+
+	if cw.Reviewers == nil || roster == nil {
+		return nil, ""
+	}
+	var out map[string]bool
+	asked := map[string]bool{}
+	for _, rv := range cw.Reviewers.Request {
+		seat, ok := roster.Seat(rv.Handle)
+		if !ok || !seat.Human || asked[rv.Handle] {
+			continue
+		}
+		asked[rv.Handle] = true
+		p, err := w.people.Requester(ctx, rv.Handle)
+		if err != nil {
+			return nil, fmt.Sprintf("the identity directory could not say now whether the person holding %q uses "+
+				"Gitlet, which an ask for their review is decided by (%v): send it again", rv.Handle, err)
+		}
+		if !p.Can(iam.GrantGitlet) {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[rv.Handle] = true
+		}
+	}
+	return out, ""
 }
 
 // behindFor is why this node may not decide cw now, or "": a write the chart
@@ -325,7 +403,9 @@ func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx) }
 // this call landed, which is announced once its answer is handed back
 // (announce.go): never one answered unchanged, from no record, nor a retry the
 // ledger collapsed onto an earlier landing, whose call announced it.
-func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (ConversationResult, error, bool) {
+func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules, noGitlet map[string]bool) (ConversationResult,
+	error, bool) {
+
 	ctx, cancel := context.WithTimeout(w.flights.life, CommitBudget)
 	defer cancel()
 	op, _ := cw.record()
@@ -352,7 +432,7 @@ func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (Conversatio
 			// RESET AT THE TOP OF EVERY ROUND: only the last round says
 			// what the publish decided.
 			last, decided = conversationDecision{}, false
-			d, err := decideConversation(ctx, tx, cw, seats, retention)
+			d, err := decideConversation(ctx, tx, cw, seats, retention, noGitlet)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

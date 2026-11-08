@@ -1,13 +1,16 @@
 package codetest
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // THE FIXTURE CHART every topology judges a seat by unless a case names its
@@ -143,3 +146,16 @@ func (FixtureSigner) Committer() (string, error) { return FixtureCommitterEmail,
 // FixtureAuthorEmail is the address the fixture signer names a seat's commit
 // by.
 func FixtureAuthorEmail(seat string) string { return seat + "@" + config.DefaultCodeIdentityDomain }
+
+// FixturePeople is the identity directory as the fixture's change writers ask
+// it who holds a human seat (code.People): every seat held by an active person
+// using every app, as the fixture's person `pat` is — so an ask for review
+// naming a person is decided by the chart alone unless a case names its own
+// people, as a case about a person without Gitlet does.
+type FixturePeople struct{}
+
+// Requester is seat's holder: an active person holding every app.
+func (FixturePeople) Requester(_ context.Context, seat string) (iam.Principal, error) {
+	return iam.Principal{Kind: iam.KindPerson, Seat: seat, Stage: iam.StageActive,
+		Grants: slices.Clone(iam.Apps)}, nil
+}
