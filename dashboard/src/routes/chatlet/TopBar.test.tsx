@@ -146,3 +146,13 @@ test("Menu draws what waits as a count apart from its word", async () => {
   expect(label?.textContent).toBe("Menu");
   expect(label?.nextElementSibling?.textContent).toBe("3");
 });
+
+test("the Messages switcher's foot leads to the Direct messages page", async () => {
+  mountInFrame(<ChatTopBar />, { hash: "#/chatlet/activity", answers });
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^Direct messages|Switch conversation/ }),
+  );
+  const page = await screen.findByRole("option", { name: /All direct messages/ });
+  fireEvent.click(page);
+  await waitFor(() => expect(location.hash).toBe("#/chatlet/dms"));
+});

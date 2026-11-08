@@ -1369,33 +1369,29 @@ describe("the Spend overview's rows", () => {
       block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
     ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
     expect(block(sheet("chatlet-panes.css"), ".chat-activity-list")).toMatch(
-      /padding:\s*var\(--tab-panel-gap\) /,
+      /padding-top:\s*var\(--tab-panel-gap\);/,
     );
   });
 
-  // CHATLET'S ACTIVITY LIST KEEPS THE VIEW'S SIDE LINE. Its rows began at the
-  // view's own edge, the selected fill flush against it and each face 4px in,
-  // while the view's title and its first tab stood on the side line, 20px in;
-  // and the list sat flush against the tab bar. A row pads itself by the first
-  // step, so the list stands that step inside the line and the faces start on
-  // it. The inset is the list's own, inside its column, so the column's
-  // hairline still meets the tab bar.
-  test("Chatlet's Activity list starts its faces on the view's side line", () => {
+  // CHATLET'S ACTIVITY LIST IS THE WHOLE VIEW UNTIL AN ITEM OPENS, then half
+  // of it, flush at the hairline. Its rows are the kit's chat density, full
+  // bleed and inset on the conversation's side line by the kit, so the list
+  // draws no side inset of its own: one would stop every row's fill short of
+  // the column's edge, which is how the rows came to end 32px before the
+  // hairline (the kit's list slot kept its gutter for a wrapped inbox).
+  test("Chatlet's Activity list runs the whole view, its rows the kit's chat density", () => {
     const panes = sheet("chatlet-panes.css");
-    expect(block(panes, ".chat-activity-list")).toMatch(
-      /padding:\s*var\(--tab-panel-gap\) 0 var\(--spacing-3\)\s+calc\(var\(--crewlet-chat-pad-x\) - var\(--spacing-2\)\);/,
+    expect(block(panes, ".chat-activity-list")).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+    expect(block(panes, ".chat-activity-list")).not.toMatch(
+      /padding(-left|-right|-inline[a-z-]*)?:/,
     );
-    // WIDE ENOUGH FOR THE ROOM: at the kit's 17rem the clamp took the room's
-    // name off "replied to a thread in #engineering".
-    expect(block(panes, ".chat-activity")).toMatch(/--crewlet-list-detail-list:\s*20rem;/);
-    expect(block(panes, ".chat-activity")).not.toMatch(/padding/);
+    expect(block(panes, ".chat-activity")).not.toMatch(/--crewlet-list-detail-list|padding/);
     const views = readFileSync(
       fileURLToPath(new URL("../routes/chatlet/Views.tsx", import.meta.url)),
       "utf8",
     );
-    expect(views).toMatch(
-      /list=\{\s*<div className="chat-activity-list">\s*<InboxList label="Activity">/,
-    );
+    expect(views).toMatch(/<InboxList label="Activity" density="chat">/);
+    expect(views).toMatch(/listWidth="half"\s+flush/);
   });
 
   // A ROOM IN BROWSE ROOMS AND SEARCH'S ROOMS IS THE KIT'S ROW: the name that

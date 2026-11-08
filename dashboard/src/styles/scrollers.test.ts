@@ -194,7 +194,8 @@ describe("a list on a screen that fills the shell", () => {
   test("is what every chat view draws its list in", () => {
     // A VIEW IS A `.chat-view`, and one whose list is not the scroller above
     // is the clipped list again, so every module that draws one draws its list
-    // in `.chat-view-scroll`.
+    // in `.chat-view-scroll`, or in the kit's ListDetail, whose list pane
+    // scrolls its own column (Activity, Direct messages).
     const views = modules().filter(
       (m) => m.path.startsWith("routes/chatlet/") && /className="chat-view"/.test(m.text),
     );
@@ -210,7 +211,7 @@ describe("a list on a screen that fills the shell", () => {
       expect(
         view.text,
         `${view.path} draws a .chat-view with no .chat-view-scroll to scroll it`,
-      ).toMatch(/className="chat-view-scroll"/);
+      ).toMatch(/className="chat-view-scroll"|<ListDetail\b/);
     }
   });
 });

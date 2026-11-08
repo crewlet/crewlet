@@ -98,6 +98,7 @@ import {
   ChatNavProvider,
   MISSING_ROOM_TITLE,
   OpenRoomProvider,
+  openRoomOf,
   PANE_PARAM,
   paneOf,
   placeOf,
@@ -110,6 +111,7 @@ import {
   type OpenRoom,
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
+import { DirectMessagesView } from "./DirectMessages.tsx";
 import { ChatPaneHost } from "./Pane.tsx";
 import { ChatNamesProvider, useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
@@ -343,7 +345,7 @@ export function ChatFrameRoot({
   // THE OPEN ROOM'S OWN DETAIL, read ONCE for the top bar, the room and every
   // pane about it, and asked again on every live frame in the room. An answer
   // about the room the reader just left is no answer about this one.
-  const room = place.kind === "room" ? place.id : "";
+  const room = openRoomOf(place);
   const detail = useQuery("chat_channel", { channel_id: room }, { enabled: asks && room !== "" });
   useChatFrames(room, () => {
     if (room) detail.refetch();
@@ -497,7 +499,7 @@ function ChatLayout({ children }: { children: ReactNode }) {
   // rules and one set of presses (`scope.tsx`). Provided on every place,
   // the scope of no room off one, so moving between a room and a view never
   // remounts the panel or the bar beneath it.
-  const room = nav.place.kind === "room" ? nav.place.id : "";
+  const room = openRoomOf(nav.place);
   return (
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
@@ -545,6 +547,8 @@ function PlaceView() {
       return <Room key={place.id} channelID={place.id} />;
     case "activity":
       return <ActivityView />;
+    case "dms":
+      return <DirectMessagesView />;
     case "threads":
       return <ThreadsView />;
     case "drafts":

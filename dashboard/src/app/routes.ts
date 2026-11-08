@@ -66,6 +66,7 @@ export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  */
 export const CHAT_VIEWS = [
   "activity",
+  "dms",
   "threads",
   "drafts",
   "saved",

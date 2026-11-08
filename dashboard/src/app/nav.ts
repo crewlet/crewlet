@@ -880,6 +880,14 @@ export const WORKSPACES: WorkspaceRow[] = [
         keywords: ["activity", "mentions"],
       },
       {
+        key: "dms",
+        label: "Direct messages",
+        icon: "message-square",
+        path: ["chatlet", "dms"],
+        hint: "Every conversation you are in, newest first, with the one you open beside them",
+        keywords: ["direct message", "dm", "conversations"],
+      },
+      {
         key: "threads",
         label: "Threads",
         icon: "messages-square",
@@ -1403,6 +1411,7 @@ export const RESERVED_SEGMENTS: string[] = [
   // CHATLET'S VIEWS (`app/routes.ts`'s `CHAT_VIEWS`, "search" and "new"
   // among the others' words).
   "activity",
+  "dms",
   "threads",
   "drafts",
   "saved",

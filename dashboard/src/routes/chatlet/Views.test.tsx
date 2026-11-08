@@ -85,35 +85,106 @@ describe("Activity", () => {
   };
   const FEED = { ...SERVED, items: [item], unread: { mention: 1, reply: 0 }, read_state: true };
 
-  test("lists what reached the reader, and reads the chosen one in place", async () => {
+  const asked = (socket: { query: { mock: { calls: unknown[][] } } }, what: string) =>
+    socket.query.mock.calls.some(([name]) => name === what);
+  const MESSAGE = { ...SERVED, channel_kind: "public", view: view("m-2", "bo") };
+
+  // NOTHING OPEN ON ARRIVAL: the list is the whole view, and each item reads
+  // as the message it is, in full, with why it is here under it.
+  test("arrives with nothing open: the list is the whole view and each item reads in full", async () => {
     const { socket } = mount(<ActivityView />, "#/chatlet/activity", {
       chat_activity: FEED,
-      chat_message: { ...SERVED, channel_kind: "public", view: view("m-2", "bo") },
+      chat_message: MESSAGE,
     });
-    expect(await screen.findByText(/mentioned you in #launch/)).toBeTruthy();
-    expect(screen.getByText("@ada can you look?")).toBeTruthy();
-    await waitFor(() =>
-      expect(socket.query.mock.calls.some(([what]) => what === "chat_message")).toBe(true),
-    );
+    const row = await screen.findByRole("button", { name: /Mention in #launch/ });
+    expect(within(row).getByText(/can you look\?/)).toBeTruthy();
+    expect(document.querySelector(".crewlet-list-detail--alone")).not.toBeNull();
+    expect(document.querySelector(".crewlet-list-detail__detail")).toBeNull();
+    expect(row.querySelector(".crewlet-inbox-row__text--lines-all")).not.toBeNull();
+    expect(row.getAttribute("aria-current")).toBeNull();
+    // A DAY HEADS ITS ITEMS.
+    expect(screen.getByRole("heading", { name: /2026|day|Thursday|Today|Yesterday/ })).toBeTruthy();
+    // Nothing is read in place until something is opened.
+    expect(asked(socket, "chat_message")).toBe(false);
+    // A row is an item of a list, never an item of the navigation itself.
+    expect(row.closest("li")?.parentElement?.tagName).toBe("UL");
   });
 
-  test("choosing an unread row marks it read through its room's cursor", async () => {
-    mount(<ActivityView />, "#/chatlet/activity", {
+  test("opening an item splits the view beside it, clamps the list, marks it read and keeps it in the address", async () => {
+    const { socket } = mount(<ActivityView />, "#/chatlet/activity", {
       chat_activity: FEED,
-      chat_message: { ...SERVED, channel_kind: "public", view: view("m-2", "bo") },
+      chat_message: MESSAGE,
     });
-    fireEvent.click(await screen.findByText(/mentioned you in #launch/));
+    fireEvent.click(await screen.findByRole("button", { name: /Mention in #launch/ }));
+    await waitFor(() => expect(location.hash).toContain("item=mention%3Am-2"));
+    await waitFor(() =>
+      expect(document.querySelector(".crewlet-list-detail__detail")).not.toBeNull(),
+    );
+    expect(document.querySelector(".crewlet-list-detail--half")).not.toBeNull();
+    expect(document.querySelector(".crewlet-list-detail--alone")).toBeNull();
+    const row = screen.getByRole("button", { name: /Mention in #launch/ });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(row.querySelector(".crewlet-inbox-row__text--lines-2")).not.toBeNull();
+    await waitFor(() => expect(asked(socket, "chat_message")).toBe(true));
+    const pane = document.querySelector<HTMLElement>(".chat-detail-pane")!;
+    expect(within(pane).getByRole("button", { name: "Open in room" })).toBeTruthy();
     await waitFor(() => expect(presses).toHaveLength(1));
-    expect(presses[0]).toMatchObject({
-      tool: "mark_chat_read",
-      args: { cursors: { [ROOM]: 41 } },
+    expect(presses[0]).toMatchObject({ tool: "mark_chat_read", args: { cursors: { [ROOM]: 41 } } });
+  });
+
+  test("an address with an item opens it, as a reload does", async () => {
+    mount(<ActivityView />, "#/chatlet/activity?item=mention%3Am-2", {
+      chat_activity: FEED,
+      chat_message: MESSAGE,
     });
+    const row = await screen.findByRole("button", { name: /Mention in #launch/ });
+    await waitFor(() => expect(row.getAttribute("aria-current")).toBe("true"));
+    expect(document.querySelector(".crewlet-list-detail__detail")).not.toBeNull();
+  });
+
+  test("Escape and Close give the list the whole view back, with focus on the row", async () => {
+    mount(<ActivityView />, "#/chatlet/activity?item=mention%3Am-2", {
+      chat_activity: FEED,
+      chat_message: MESSAGE,
+    });
+    const row = await screen.findByRole("button", { name: /Mention in #launch/ });
+    await waitFor(() =>
+      expect(document.querySelector(".crewlet-list-detail__detail")).not.toBeNull(),
+    );
+    row.focus();
+    fireEvent.keyDown(row, { key: "Escape" });
+    await waitFor(() => expect(location.hash).not.toContain("item="));
+    await waitFor(() => expect(document.querySelector(".crewlet-list-detail__detail")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /Mention in #launch/ }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Mention in #launch/ }));
+    const back = await screen.findByRole("button", { name: "Back to Activity" });
+    fireEvent.click(back);
+    await waitFor(() => expect(document.querySelector(".crewlet-list-detail__detail")).toBeNull());
+  });
+
+  test("an item in a thread opens the thread pane a room uses", async () => {
+    const { socket } = mount(<ActivityView />, "#/chatlet/activity", {
+      chat_activity: {
+        ...FEED,
+        items: [{ ...item, key: "t:m-3", kind: "reply", message_id: "m-3", thread_root: "m-1" }],
+      },
+      chat_thread: { ...SERVED, root: view("m-1", "ada"), replies: [view("m-3", "bo")] },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Reply in #launch thread/ }));
+    expect(await screen.findByRole("heading", { name: "Thread" })).toBeTruthy();
+    await waitFor(() => expect(asked(socket, "chat_thread")).toBe(true));
+    expect(asked(socket, "chat_message")).toBe(false);
   });
 
   // A CONVERSATION OF THE READER AND THE ACTOR ALONE IS NOT NAMED: its title
   // is the actor's own name, which the row has just said. A group
   // conversation and a named room still are.
-  test("a line names the room, except a conversation of the reader and the actor alone", async () => {
+  test("the context line names the room, except a conversation of the reader and the actor alone", async () => {
     const summary = (id: string, kind: string, participants: string[]) => ({
       channel: { v: 1, id, kind, created_at: "2026-10-01T00:00:00Z" },
       participants,
@@ -149,17 +220,16 @@ describe("Activity", () => {
           row("reply-room", "reply", ROOM, "public"),
         ],
       },
-      chat_message: { ...SERVED, channel_kind: "dm", view: view("reply-dm", "bo") },
     });
-    const qualifiers = async () =>
-      (await screen.findAllByText(/^(replied|mentioned|reacted)/)).map((el) => el.textContent);
-    await waitFor(async () => expect(await qualifiers()).toHaveLength(5));
-    expect(await qualifiers()).toEqual([
-      "replied to a thread",
-      "mentioned you",
-      "reacted 👍 to your message",
-      "replied to a thread in Bo Chen, Ops Agent",
-      "replied to a thread in #launch",
+    const contexts = async () =>
+      (await screen.findAllByText(/^(Reply|Mention|Reaction) in /)).map((el) => el.textContent);
+    await waitFor(async () => expect(await contexts()).toHaveLength(5));
+    expect(await contexts()).toEqual([
+      "Reply in a direct message",
+      "Mention in a direct message",
+      "Reaction in a direct message",
+      "Reply in Bo Chen, Ops Agent",
+      "Reply in #launch",
     ]);
   });
 
