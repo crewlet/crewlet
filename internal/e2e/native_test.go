@@ -263,11 +263,13 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 	change := detail.History[len(detail.History)-1]
 	// THE KIND IS THE DISCRIMINATOR, and it is what every renderer and
 	// every recipient rule reads. An author string alone cannot say
-	// whether `e2e` is a credential or a colleague.
+	// whether a name is a credential or a colleague.
 	if change.ActorKind != worklet.AuthorOperator {
 		t.Errorf("the filing is attributed as %q, not as an operator", change.ActorKind)
 	}
-	if change.Actor != "e2e" {
-		t.Errorf("the change names its author %q", change.Actor)
+	// AND THE AUTHOR IS THE TOKEN'S OWN LOGIN, as every surface records a
+	// credential acting as no seat ([iam.ActorFor]).
+	if want := iam.TokenLogin(e2eTokenID); change.Actor != want {
+		t.Errorf("the change names its author %q, want the token's login %q", change.Actor, want)
 	}
 }
