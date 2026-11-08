@@ -423,32 +423,8 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 				return "a file was removed while the session was packed: " + f.task
 			}},
 	}
-	packs := []struct {
-		name    string
-		make    func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
-		dest    func(p executor.Paths) string
-		staging func(p executor.Paths) string
-	}{
-		{name: "a save",
-			make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-				_, err := runner.PackSave(t.Context(), b, takerA)
-				return err
-			},
-			dest:    func(p executor.Paths) string { return p.SessionSave(takerA) },
-			staging: func(p executor.Paths) string { return p.SessionSaveStaging(takerA) }},
-		{name: "a take of a job still working",
-			make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-				taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
-				if taken.Body != nil {
-					_ = taken.Body.Close()
-				}
-				return err
-			},
-			dest:    func(p executor.Paths) string { return p.SessionCapture() },
-			staging: func(p executor.Paths) string { return p.SessionPackStaging() }},
-	}
 	for _, tc := range cases {
-		for _, pack := range packs {
+		for _, pack := range heldPacks {
 			t.Run(pack.name+", "+tc.name, func(t *testing.T) {
 				t.Parallel()
 				runner, b := sessionBox(t, "2.1.310")
@@ -492,6 +468,89 @@ func rewrittenInPlace(f sessionFiles) string {
 // listed the session, and removes once tar has read it.
 func madeAndRemoved(f sessionFiles) string {
 	return strings.TrimSuffix(f.spilled, "out.txt") + "made.txt"
+}
+
+// heldPacks are the packs made beside a harness that may still work, each held
+// to the rule of such a pack: a save, and a take of a job its box would not
+// end, which packs it on demand (sandbox.SessionTake.Pack) — each with the
+// path it moves its archive over and the directory it stages it in.
+var heldPacks = []struct {
+	name    string
+	make    func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
+	dest    func(p executor.Paths) string
+	staging func(p executor.Paths) string
+}{
+	{name: "a save",
+		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
+			_, err := runner.PackSave(t.Context(), b, takerA)
+			return err
+		},
+		dest:    func(p executor.Paths) string { return p.SessionSave(takerA) },
+		staging: func(p executor.Paths) string { return p.SessionSaveStaging(takerA) }},
+	{name: "a take of a job still working",
+		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+			if taken.Body != nil {
+				_ = taken.Body.Close()
+			}
+			return err
+		},
+		dest:    func(p executor.Paths) string { return p.SessionCapture() },
+		staging: func(p executor.Paths) string { return p.SessionPackStaging() }},
+}
+
+// A PACK BESIDE A WORKING HARNESS PROVES THE SESSION'S OWN TRANSCRIPT WHATEVER
+// ITS FIND READS OF IT. Claude Code rewrites that transcript in place where it
+// withdraws a message (probe P1: 2.1.310 truncates it and writes it again, in
+// the same inode), and a clock that steps back while a pack runs stamps such a
+// rewrite before the pack's marker, so the box's find reads the file as
+// unwritten since. Here the transcript is rewritten in place and grown back
+// past its old size once tar has read it, under a find that reads it as
+// unwritten since any file: every way the pack is made — a save, and the take
+// of a job still working — reads the transcript back out of its archive all
+// the same, finds it is not the start of the live file, and is refused saying
+// so, with nothing moved to its destination, recorded as a digest the box
+// holds, or left in its staging directory.
+//
+// Mutation: read the session's own transcript back only where find reads it as
+// written since the marker, as a subagent's thread is, and the transcript
+// rewritten under the stepped-back clock is packed torn.
+func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
+	t.Parallel()
+	for _, pack := range heldPacks {
+		t.Run(pack.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, "2.1.310")
+			_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			p := paths(b)
+			forgetCapture(t, b)
+			f := filesOf(ran.SessionID)
+			tr := shQuote(f.transcript)
+			// A FIND THAT READS THE TRANSCRIPT AS UNWRITTEN SINCE ANY FILE, as
+			// under a clock stepped back while the pack ran: every listing of
+			// files newer than another leaves it out, and every other word
+			// goes to this machine's find.
+			find := shQuote(hostTool(t, "find"))
+			writeBoxStandIn(t, b, p.BinDir()+"/find", "#!/bin/sh\ncase \" $* \" in *\" -newer \"*) "+find+
+				` "$@" | grep -vxF `+tr+"; exit 0;; esac\nexec "+find+` "$@"`+"\n")
+			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`cp `+tr+` `+tr+`.was && { printf `+
+				`'%s\n' '{"type":"user","withdrawn":"and written again"}'; cat `+tr+`.was; } > `+tr+` && rm -f `+
+				tr+`.was`)))
+			err := pack.make(t, runner, b)
+			if want := rewrittenInPlace(f); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
+			}
+			if boxHas(t, b, pack.dest(p)) {
+				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+			}
+			if boxHas(t, b, pack.staging(p)) {
+				t.Errorf("the refused pack left its staging directory, %s", pack.staging(p))
+			}
+			if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
+				t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
+			}
+		})
+	}
 }
 
 // A SAVE OF A SESSION THAT ONLY GREW AS IT WAS PACKED HOLDS — the one change a

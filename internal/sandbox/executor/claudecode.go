@@ -651,6 +651,8 @@ func claudePack(paths Paths, at packAt) string {
 	project := "projects/" + claudeProjectDir
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
+	// THE TRANSCRIPT FIRST: [claudeHeldTar] reads back its first operand, the
+	// session's own transcript, on every pack it makes.
 	line(`    set -- %s/"$s".jsonl`, q(project))
 	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" %s/"$s"; fi`,
 		q(cfg+"/"+project), q(cfg+"/"+project), q(project))
@@ -674,9 +676,9 @@ func claudePack(paths Paths, at packAt) string {
 
 // claudeHeldTar is [claudePack]'s tar for a pack made beside a harness that may
 // still be working — a job its box would not end, packed on demand, and a save
-// — packing the operands the pack set ("$@", relative to cfg) into
-// staged/capture, or failing with the one check that refused it, said on one
-// line in staged/error.
+// — packing the operands the pack set ("$@", relative to cfg, the session's
+// own transcript first) into staged/capture, or failing with the one check that
+// refused it, said on one line in staged/error.
 //
 // A SESSION ITS HARNESS IS STILL WRITING IS NOT APPEND-ONLY, and tar's own
 // word cannot be taken for what it read. Claude Code rewrites a task file as
@@ -738,16 +740,16 @@ func claudePack(paths Paths, at packAt) string {
 //     directory as find names it: GNU's and busybox's end one in a slash
 //     (measured), which the filter by members alone keeps out, and -type f
 //     keeps out any tar's — and to the archive's members, since a file made
-//     after tar read its directory is not in it); a
-//     `.jsonl` member written since the marker is not A BYTE PREFIX of the
-//     live file — the member's cksum, read back out of the archive, against
-//     the live file's first as many bytes — which catches the in-place rewrite
-//     grown back, and the shrink grown back that GNU pads with NULs; and, LAST,
-//     a member of the archive is GONE — so a file removed while the checks ran
-//     is refused too: one made after the manifest, archived and removed, which
-//     no check of the manifest reads, and one written as tar read it and
-//     removed before WRITTEN or the prefix's check looked, neither of which
-//     reads a file that is gone.
+//     after tar read its directory is not in it); the session's own
+//     transcript, or another `.jsonl` member written since the marker, is not
+//     A BYTE PREFIX of the live file — the member's cksum, read back out of
+//     the archive, against the live file's first as many bytes — which
+//     catches the in-place rewrite grown back, and the shrink grown back that
+//     GNU pads with NULs; and, LAST, a member of the archive is GONE — so a
+//     file removed while the checks ran is refused too: one made after the
+//     manifest, archived and removed, which no check of the manifest reads,
+//     and one written as tar read it and removed before WRITTEN or the
+//     prefix's check looked, neither of which reads a file that is gone.
 //
 // A `.jsonl` that only grew is the one change taken: a transcript or a
 // subagent's thread appended to while tar read it is archived as tar first
@@ -757,15 +759,29 @@ func claudePack(paths Paths, at packAt) string {
 // already at its destination — the last save its taker made, or the job's
 // capture — is never moved over.
 //
-// ONLY A `.jsonl` WRITTEN SINCE THE MARKER IS READ BACK, rather than every one
-// the archive holds: one find reads as older than the marker is the file tar
-// read, unwritten since, and a long session holds a hundred subagents' threads,
-// each read back by a decompression of the whole archive — every one would run
-// the pack far past its bound ([sandbox.SessionPackWait]), whose spare minute
-// covers some ten. Like WRITTEN, this rests on the box's clock: it does not
-// step back while a pack runs, and it stamps the marker, in the work directory,
-// and the session's files, in the configuration directory, at one grain — both
-// directories the engine keeps under the box's home. And both read a file a box
+// THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, and of the other
+// `.jsonl` members only one written since the marker. The transcript is the one
+// file of the session Claude Code rewrites in place: withdrawing a message
+// rewrites the session's own file and never a subagent's thread, which it only
+// appends to (2.1.310's removeTranscriptMessage, read in its shipped code). So
+// its proof cannot rest on the box's clock: a clock that steps back while a
+// pack runs can stamp that rewrite before the marker, and a proof made only of
+// what find reads as written would keep the transcript torn mid-file. A thread
+// find reads as older than the marker is the file tar read, unwritten since —
+// a rename over one, a removal and a shrink are refused above on no clock —
+// and a long session holds a hundred subagents' threads, each read back by a
+// decompression of the whole archive: every one would run the pack far past
+// its bound ([sandbox.SessionPackWait]), whose spare minute covers some ten.
+// Like WRITTEN, that narrowing rests on the box's clock: it does not step back
+// while a pack runs, and it stamps the marker, in the work directory, and the
+// session's files, in the configuration directory, at one grain — both
+// directories the engine keeps under the box's home. A CLOCK THAT DOES STEP
+// BACK while a pack runs costs at most a subagent's thread appended to as it
+// was packed and missed by the check, kept with a partial last line — as a
+// thread that only grew always is — which the resume's cut of a torn `.jsonl`
+// removes ([claudeSessionGate]); and, since WRITTEN rests on the same clock, a
+// file that is no transcript rewritten in place as it was packed (a task file,
+// a subagent's `.meta.json`), kept torn. And both read a file a box
 // whose clock ran ahead of this one's stamped, which a restore keeps, as
 // written since the marker until this box's clock passes it: such a session's
 // task files fail the pack for that long, and its threads are read back.
@@ -842,13 +858,16 @@ func claudeHeldTar(cfg, staged string) string {
 		`find "$@" -type f ! -name '*.jsonl' -newer "$st/marker" > "$st/written" 2> /dev/null`,
 		`if [ -s "$st/written" ] && grep -xF -f "$st/members" "$st/written" > "$st/rewritten"; then ` +
 			`read -r f < "$st/rewritten"; why "a file was written while the session was packed: $f"; fi`,
-		// NOT A PREFIX: a transcript member written since the marker, read
-		// back out of the archive as a stream. cksum prints the bytes it
-		// read beside its sum, so the member's length is its own word, and
-		// an extraction that failed is told apart from an empty member by
-		// the mark its failure leaves, which a pipeline's status cannot say.
-		`find "$@" -type f -name '*.jsonl' -newer "$st/marker" > "$st/grown" 2> /dev/null`,
-		`if [ -s "$st/grown" ] && grep -xF -f "$st/grown" "$st/members" > "$st/prefixes"; then ` +
+		// NOT A PREFIX: the session's own transcript, the first operand, on
+		// every pack whatever find reads of it, and every other transcript
+		// member written since the marker, each read back out of the archive
+		// as a stream — the list of them never empty, since it names the
+		// transcript. cksum prints the bytes it read beside its sum, so the
+		// member's length is its own word, and an extraction that failed is
+		// told apart from an empty member by the mark its failure leaves,
+		// which a pipeline's status cannot say.
+		`{ printf '%s\n' "$1"; find "$@" -type f -name '*.jsonl' -newer "$st/marker"; } > "$st/transcripts" 2> /dev/null`,
+		`if grep -xF -f "$st/transcripts" "$st/members" > "$st/prefixes"; then ` +
 			`while IFS= read -r f; do ` +
 			`a=$( { tar -xzOf "$st/capture" "$f" < /dev/null 2> /dev/null || : > "$st/unread"; } | cksum ) && ` +
 			`[ ! -e "$st/unread" ] || why "a transcript could not be read back out of the archive the pack ` +
