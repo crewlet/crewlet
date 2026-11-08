@@ -10366,8 +10366,13 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   holds what the turn did up to there and nothing after; sent beside every
   `unkept` this version of the engine records, and on a row that names no
   session too; the row keeps what it names, and the conversation's next turn
-  continues it, told so), and the
-  session ids a launch of the turn ran out of its
+  continues it, told so), the turn's last word where its end said it went on
+  and that capture was its newest (`last_word`: the final capture's
+  `launch_seq` and `capture_seq`, sent as the end named it; a row at that place
+  holds it after all — the log took its record although the run's own record
+  held it refused — and is sent without `went_on`, since its turn went on past
+  no session of it, and the conversation's next turn continues it as all the
+  turn did), and the session ids a launch of the turn ran out of its
   model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.
