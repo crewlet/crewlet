@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -229,5 +230,48 @@ func TestOneCallComposesItsRequesterOnce(t *testing.T) {
 	invoke(appless)
 	if n := asked.Load(); n != 2 {
 		t.Errorf("a call deciding no app verb composed a requester (%d in all, want 2)", n)
+	}
+}
+
+// A REQUESTER WHO MAY NOT ACT IS TOLD SO, AND NEVER SENT FOR AN APP.
+//
+// A person whose stage may not act — suspended, or removed — holds every app
+// they were given and may still use none, so an app verb in a turn they woke
+// is refused for their stage: the agent is told they may not act in the
+// company now, and never that an administrator could give them the app, which
+// they hold and which would change nothing. The CONTROL is a requester who
+// may act and lacks the app, who is told the app.
+//
+// Mutation: refuse a requester who may not act naming the row's app again —
+// the suspended requester is sent for an app they hold.
+func TestARequesterWhoMayNotActIsToldSoNotSentForAnApp(t *testing.T) {
+	t.Parallel()
+	authorize := Decide(authz.NoChart{})
+	suspended := iam.Principal{Kind: iam.KindPerson, Seat: "sam", Stage: iam.StageSuspended,
+		Grants: slices.Clone(iam.Apps)}
+	people := countedRequesters{of: map[string]iam.Principal{"sam": suspended, "mallory": mallory},
+		asked: &atomic.Int64{}}
+	const verb = authz.ActionWorkList
+	tool := gate(rowTool{name: string(verb), authorize: authorize, ran: &atomic.Int64{}}, authorize, people)
+	run := func(turn *turnctx.Turn) mcp.Result {
+		res, refused, err := tools.Invoke(t.Context(), tools.Invocation{Name: string(verb), Tool: tool,
+			Args: tools.ArgsOf(tool, false, map[string]any{}), AsSeat: true, Turn: turn})
+		if err != nil || refused {
+			t.Fatalf("the invocation itself failed (%v, refused %v)", err, refused)
+		}
+		return res
+	}
+	res := run(opsBotTurn("sam"))
+	var refused *DecisionRefused
+	if !res.Failed || !errors.As(res.Cause, &refused) ||
+		refused.Decision.RequesterReason != authz.ReasonStage ||
+		!strings.Contains(res.Output, "may not act in the company now") ||
+		strings.Contains(res.Output, "administrator can give them") {
+		t.Errorf("a turn a suspended person woke answered %+v, want refused for their stage, sending "+
+			"nobody for an app", res)
+	}
+	res = run(opsBotTurn("mallory"))
+	if !res.Failed || !strings.Contains(res.Output, "administrator can give them Worklet") {
+		t.Errorf("a turn a person without Worklet woke answered %q, want told the app", res.Output)
 	}
 }

@@ -591,8 +591,19 @@ type Decision struct {
 	// nothing else — a row's app, or every app of a [ClassAnyApp] row's set.
 	// Never [Decision.Grants], which name what the CALLER lacks: the agent
 	// holds the app, and what changes the answer is an administrator giving
-	// the requester one.
+	// the requester one. Never set where no app would: a stranger's refusal,
+	// and a requester's whose stage is what refuses them
+	// ([Decision.RequesterReason]).
 	RequesterGrants []iam.Grant
+
+	// RequesterReason is why the REQUESTER themselves would be refused, on a
+	// [ReasonCeiling] refusal of somebody the company knows:
+	// [ReasonStage] for one who may not act at all, [ReasonNoGrant] for one
+	// who does not use the row's app ([Decision.RequesterGrants]), and the
+	// relation's own reason where their relation to the object refuses
+	// them. What a surface tells the agent turns on it: a person who may not
+	// act is not told to ask for an app, and one who lacks an app is.
+	RequesterReason Reason
 
 	// Ceiling is who a [ReasonCeiling] refusal was decided for — the
 	// requester a principal woke the turn as, or a stranger — set on that

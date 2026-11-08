@@ -70,6 +70,7 @@ func TestARequesterWithoutTheAppRefusesItsVerbs(t *testing.T) {
 			nimbus(), decidedAt)
 		if without.Unknown() || without.Allowed || without.Reason != authz.ReasonCeiling ||
 			without.Ceiling != authz.CeilingRequester || !slices.Equal(without.RequesterGrants, apps) ||
+			without.RequesterReason != authz.ReasonNoGrant ||
 			len(without.Grants) != 0 {
 			t.Errorf("%s for a requester using no app decided %+v, want the ceiling naming %v as the "+
 				"requester's", a, without, apps)
@@ -156,6 +157,13 @@ func TestARequesterWhoMayNotActHoldsNoApp(t *testing.T) {
 		authz.ActionWorkCreate, objectFor([]iam.Grant{iam.GrantWorklet}), nimbus(), decidedAt)
 	if d.Unknown() || d.Allowed || d.Reason != authz.ReasonCeiling {
 		t.Errorf("a Worklet verb for a suspended requester decided %+v, want the ceiling", d)
+	}
+	// THEIR STAGE IS WHAT REFUSES THEM, and the refusal says so rather than
+	// naming an app they hold already: no administrator's grant would
+	// change it.
+	if d.RequesterReason != authz.ReasonStage || len(d.RequesterGrants) != 0 {
+		t.Errorf("the suspended requester's refusal says %q naming %v, want their stage and no app",
+			d.RequesterReason, d.RequesterGrants)
 	}
 }
 

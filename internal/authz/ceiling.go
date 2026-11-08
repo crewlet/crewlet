@@ -115,7 +115,7 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 	case req.Unknown():
 		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, Err: req.Err}
 	case !req.Allowed:
-		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester}
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, RequesterReason: req.Reason}
 	}
 	return d
 }
@@ -147,7 +147,8 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 // A stranger uses no app. A requester who may not act uses none. A turn
 // nobody woke is bounded by nothing beyond p's own authority, and a ceiling
 // nobody filled in is refused rather than read as one. A refusal is
-// [ReasonCeiling], with the apps that would admit the requester in
+// [ReasonCeiling], with why the requester is refused in
+// [Decision.RequesterReason] and, where an app would admit them, the apps in
 // [Decision.RequesterGrants].
 func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action, o Object,
 	chart Chart, now time.Time) Decision {
@@ -175,14 +176,18 @@ func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action,
 		// it for the requester is the relation [DecideWithin] decides.
 		return d
 	}
-	refused := Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterGrants: slices.Clone(apps)}
 	if c.Kind == CeilingStranger {
-		return refused
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingStranger}
 	}
 	q := c.Principal
 	if !q.Stage.MayAct() {
-		return refused
+		// THEIR STAGE REFUSES THEM, and no app would change that: a
+		// requester who may not act is told as one, never sent to ask for
+		// an app.
+		return Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterReason: ReasonStage}
 	}
+	refused := Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterGrants: slices.Clone(apps),
+		RequesterReason: ReasonNoGrant}
 	for _, app := range apps {
 		if q.Can(app) {
 			return d

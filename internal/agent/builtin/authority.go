@@ -237,17 +237,21 @@ func (e *DecisionRefused) Error() string {
 
 // ceilingWords is what a refusal of the requester ceiling says, by whom it was
 // decided for (ADR-0104): somebody the company does not know, a requester who
-// does not use the app the verb belongs to — the app named, since an
-// administrator giving it to them is what changes the answer — or one who
-// could not take the verb themselves. Never the requester's name: the agent
-// knows who woke its turn, and one sentence for every requester is the rule
-// [Refusal] keeps.
+// may not act in the company at all — told as such, since no app would admit
+// them — one who does not use the app the verb belongs to — the app named,
+// since an administrator giving it to them is what changes the answer — or one
+// who could not take the verb themselves. Never the requester's name: the
+// agent knows who woke its turn, and one sentence for every requester is the
+// rule [Refusal] keeps.
 func ceilingWords(d authz.Decision) string {
 	switch {
 	case d.Ceiling == authz.CeilingStranger:
 		return ": this turn was woken by somebody the company does not know, and you use no app " +
 			"and reach nothing of anybody's for them. Answer from what you already know, or a " +
 			"person of the company has to ask"
+	case d.RequesterReason == authz.ReasonStage:
+		return ": whoever this turn is working for may not act in the company now, so you may " +
+			"not act for them either"
 	case len(d.RequesterGrants) > 0:
 		said := make([]words.Said, 0, len(d.RequesterGrants))
 		for _, app := range d.RequesterGrants {
