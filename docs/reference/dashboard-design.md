@@ -6291,14 +6291,23 @@ What replaced it:
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
-- **A toolbar carries the `toolbar` class, and its controls travel in
-  groups.** The class is not decoration: `.screen:has(.toolbar)` publishes
-  `--sticky-top`, and every other band that sticks to the same scroller (a
-  grid's column heads, a grouped list's group heads, an item's side rail)
-  starts at that offset. It is the toolbar's drawn height where the toolbar
-  publishes one (`useStickyBand`, measured when the bar resizes, never on
-  scroll), as the work list's row does because it wraps at narrow widths, and
-  one band of controls where it does not. Worklet's filter bar restated every one of
+- **A screen's toolbar is a `PageToolbar`, and its controls travel in
+  groups.** It draws the `toolbar` class, which is not decoration:
+  `.crewlet-app-shell__main:has(.toolbar)` publishes `--sticky-top`, and every
+  other band that sticks to the same scroller (a grid's column heads, a
+  grouped list's group heads, an item's side rail) starts at that offset. It
+  is the toolbar's drawn height, which every `PageToolbar` publishes
+  (`useStickyBand`, measured when the bar resizes, never on scroll), so a bar
+  that wraps on a phone still has the heads under it rather than behind its
+  second line; one band of controls before the first measurement.
+- **One rhythm for every toolbar, the work list's.** The band's own padding is
+  the only space between its controls and the work under them, and it adds
+  nothing above them: the controls start where any screen's content starts,
+  and the rows follow 8px below, stuck or not. The bar hands back the gap of
+  the box it stands in (`--toolbar-host-gap`, which each such box names), and
+  every control in it stands at the small step, 26px, in the kit's one edge.
+  Before, the content column's padding and its gap stacked on the band: 28px
+  above the controls and 28px below them on every screen but the work list. Worklet's filter bar restated every one of
   `.toolbar`'s declarations under a name of its own, so the property stayed at
   its `0px` default and the table's own header parked underneath an opaque
   band. Inside the bar, what narrows the rows is one group and what switches

@@ -74,6 +74,7 @@ import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
 import { CATEGORIES } from "~/contract/categories.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 const PAGE = 100;
 
@@ -407,12 +408,13 @@ export function Activity() {
         </QueryState>
       </Card>
 
-      <div className="toolbar">
+      <PageToolbar>
         {/* The wrappers these replace were a `style={{ maxWidth: 300 }}` and a
             `style={{ maxWidth: 180 }}` — two numbers nobody had reconciled.
             `width` is the same idea as a named step, so the search box and the
             filter box beside it are sized by what they hold. */}
         <Input
+          inputSize="sm"
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -423,6 +425,7 @@ export function Activity() {
           width="md"
         />
         <Input
+          inputSize="sm"
           type="search"
           value={actor}
           onChange={(e) => setActor(e.target.value)}
@@ -476,7 +479,7 @@ export function Activity() {
           </FilterChip>
         )}
         <span className="spacer" />
-      </div>
+      </PageToolbar>
 
       {/* A NODE THAT DID NOT ANSWER is named where the rows are drawn: the
           log is every data node's, read at query time (ADR-0021), and a short

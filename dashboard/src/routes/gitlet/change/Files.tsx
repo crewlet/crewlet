@@ -76,6 +76,7 @@ import {
   usePagedComments,
   usePagedFindings,
 } from "./reads.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -194,8 +195,9 @@ export function Files({
   const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
   return (
     <Stack gap={3}>
-      <div className="toolbar">
+      <PageToolbar>
         <Select
+          size="sm"
           width="auto"
           value={String(rev)}
           onChange={(value) =>
@@ -208,6 +210,7 @@ export function Files({
           ariaLabel="Revision"
         />
         <Select
+          size="sm"
           width="auto"
           value={since === null ? "" : String(since)}
           onChange={(value) => setSince(String(value))}
@@ -221,6 +224,7 @@ export function Files({
           active={since !== null}
         />
         <Select
+          size="sm"
           width="auto"
           value={layout}
           onChange={(value) => setLayout(String(value))}
@@ -235,7 +239,7 @@ export function Files({
             {drafts.drafts.length} drafted finding{drafts.drafts.length === 1 ? "" : "s"}
           </Tag>
         )}
-      </div>
+      </PageToolbar>
       {(findings.more || comments.more) && (
         <Button
           variant="secondary"
