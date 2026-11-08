@@ -245,6 +245,7 @@ var contract = []Entry{
 	{"McpHeldCall", ReadInterface, "internal/api/queries.TestTheInboxReadsWhatAHeldCallSends"},
 	{"McpApprovalAnswer", ReadInterface, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
 	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpHeldWhole", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheHeldCallReadSends"},
 	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
 
 	// tools.ts
