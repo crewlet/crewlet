@@ -384,6 +384,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// publishes, which a worker of a granted seat may be handed.
 		builtin.FleetHealthTool: false,
 		builtin.CodeStatusTool:  false,
+		// A server's read changes nothing; an operate command can change
+		// anything on a server, so a worker is never handed it.
+		builtin.SSHReadTool:    false,
+		builtin.SSHOperateTool: true,
 		// CHATLET. Its reads are reads; saying something and
 		// reacting are words on somebody else's screen; joining and
 		// leaving move only where this seat listens, which is its own.
@@ -1131,6 +1135,11 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// tool answers.
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(),
 			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newGitletHost())},
+		// AND THE SSH TOOLS, over a document that reaches no server, with the
+		// requester ceiling's halves beside them: left out, their two rows
+		// read as rules no registered tool answers.
+		SSH: builtin.SSHDeps{Servers: &fakeServers{cfg: &config.Company{}}, Requesters: codeRequesters(),
+			Chart: chartLeads},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),
