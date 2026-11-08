@@ -40,6 +40,7 @@ import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
+import { accessNote } from "~/lib/decisions.ts";
 import { firstLine } from "~/lib/format.ts";
 import { TokenScope } from "~/components/InlineToken.tsx";
 import { renderTokens } from "~/lib/markdown.ts";
@@ -488,6 +489,8 @@ const InboxItem = memo(function InboxItem({
         ) : undefined
       }
       leading={<Badge row={row} who={who} />}
+      // ASKED BEFORE THE AGENT'S ACCESS CHANGED, said on its own quiet line.
+      context={row.kind === "decision" ? accessNote(row.subject) : undefined}
       // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
       // swatches and never a link of its own (`renderTokens`).
       excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}
