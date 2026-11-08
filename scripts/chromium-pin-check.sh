@@ -1,8 +1,9 @@
 #!/bin/sh
 #
-# chromium-pin-check.sh — hold the Chromiums scripts/chromium-pin.env pins to Chrome for Testing's releases, every
-# week, because no Dependabot ecosystem watches a Chrome for Testing build: without it the pin would be watched by
-# nothing, which looks exactly like a pin with nothing to update.
+# chromium-pin-check.sh — hold the Chromiums scripts/chromium-pin.env pins to Chrome for Testing's releases.
+# .github/workflows/pins.yml runs it every week, beside the git pins' check, because no Dependabot ecosystem watches a
+# Chrome for Testing build: without it the pin would be watched by nothing, which looks exactly like a pin with nothing
+# to update.
 #
 #   scripts/chromium-pin-check.sh    is each pin the release its rule names?
 #
@@ -20,15 +21,15 @@
 # every later fetch must match it (scripts/chromium.sh). So every fetch here follows a redirect to an https:// address
 # alone, where curl by default follows one to plain http:// too: a digest computed over bytes no TLS protected would
 # rest on nothing. And a listing's answer is refused unless it is a version of four numbers BEFORE it reaches a URL, a
-# file name or the report, so nothing a listing says, other than a version, reaches the report or a path either
-# script builds; a refusal says how long the answer was and never what it said.
+# file name or the report, so nothing a listing says, other than a version, reaches the issue the workflow writes or a
+# path either script builds; a refusal says how long the answer was and never what it said.
 #
 # Exit status: 0 when every pin is current; 1 when a pin is behind — its new lines on stdout, every SHA-256 that of a
 # zip downloaded and hashed here; 2 when it cannot tell: a listing refused or answering anything but a version, a
 # release missing a platform's zip (the bucket answering 404 or 403 for it), a zip that could not be downloaded for any
 # other reason (named as that, with curl's exit status and the HTTP status, never as a missing build), a pin newer than
 # what the listing names (a listing that is behind is not upstream), or a zip whose SHA-256 this machine cannot
-# compute. 2 is never a pass.
+# compute. 2 is never a pass, and the workflow leaves its issue alone on it.
 #
 # Its downloads go into a directory of its own in TMPDIR, one zip at a time, each removed once hashed: about 200 MB
 # at once, which a machine whose /tmp is a small tmpfs may not have, so point TMPDIR elsewhere there.

@@ -1138,10 +1138,11 @@ that a value in it changes what the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest this repository has, and opens a
-pull request when any of them has a newer release. The git pin is no manifest
-— a source tarball no Dependabot ecosystem reads — so a workflow of this
-repository's own watches it instead (and the tool servers the docs and the
-examples launch are not in a manifest either: a test holds them — see below):
+pull request when any of them has a newer release. The git pin and the Chromium
+pin are no manifests — a source tarball and a Chrome for Testing build, which
+no Dependabot ecosystem reads — so a workflow of this repository's own watches
+them instead (and the tool servers the docs and the examples launch are not in
+a manifest either: a test holds them — see below):
 
 | Surface | Watched by | What it covers |
 |---|---|---|
@@ -1150,7 +1151,8 @@ examples launch are not in a manifest either: a test holds them — see below):
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
-| `scripts/git-pin.env` | [`.github/workflows/git-pin.yml`](.github/workflows/git-pin.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
+| `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
+| `scripts/chromium-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Chromiums the suite drives |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -1246,12 +1248,15 @@ worth knowing:
   with the pin: they hold the registry and the signing identity (and the
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
-- **The git pin is watched by a workflow rather than Dependabot**, and a
-  bump of it arrives as an issue rather than a pull request: every Monday
-  [`git-pin.yml`](.github/workflows/git-pin.yml) asks kernel.org whether each
-  pin is still the newest release of its series and keeps ONE issue, `git pin
+- **The git and Chromium pins are watched by a workflow rather than
+  Dependabot**, and a bump of either arrives as an issue rather than a pull
+  request: every Monday [`pins.yml`](.github/workflows/pins.yml) asks kernel.org
+  whether each git pin is still the newest release of its series, and Chrome
+  for Testing whether each Chromium pin is the release its rule names, and
+  keeps ONE issue per pin file, `git pin behind upstream` or `chromium pin
   behind upstream`, naming what moved — see [The git pin is checked every
-  week](#the-git-pin-is-checked-every-week).
+  week](#the-git-pin-is-checked-every-week) and [The Chromium pin is checked
+  every week](#the-chromium-pin-is-checked-every-week).
 - **goreleaser itself floats within its major.** Every goreleaser step in
   `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
   on each run, because Dependabot bumps the action's ref but never a `with:`
@@ -1538,8 +1543,8 @@ newest patches of the two floors' series, which the floors' arm runs. Every Gitl
 node runs the image's git, so a git security release reaches a deployment only
 through a bump of that pin — Debian's updates to its own git never do — and no
 Dependabot ecosystem reads a source tarball. So
-[`git-pin.yml`](.github/workflows/git-pin.yml) is the watcher. Every Monday at
-06:17 UTC (and on **Actions → git-pin → Run workflow**) it runs
+[`pins.yml`](.github/workflows/pins.yml) is the watcher. Every Monday at
+06:17 UTC (and on **Actions → pins → Run workflow**) its `gits` leg runs
 [`scripts/git-pin-check.sh`](scripts/git-pin-check.sh), which reads kernel.org's
 listing for the newest release of each pin's series — release candidates are no
 release — and, for every pin that is behind, downloads that release and its
@@ -1560,7 +1565,9 @@ waiting for a click (as under [A dashboard bump brings its own
 bundle](#a-dashboard-bump-brings-its-own-bundle)), and one whose checks run by
 themselves needs a token beside the two the Dependabot workflows hold — a new
 credential, which the workflow does not take. It holds `contents: read` and
-`issues: write` and no secret.
+`issues: write` and no secret, and the git pin is one leg of its matrix: the
+Chromium pin is the other, under its own issue (see [The Chromium pin is
+checked every week](#the-chromium-pin-is-checked-every-week)).
 
 **Making the bump** is a pull request of its own:
 
@@ -1645,6 +1652,73 @@ stderr: a case holds the check's report and the recipe's bin directory to
 being all either prints on stdout under such a file. Nothing holds the
 workflow file itself: read its `permissions:`, the issue title it matches and
 the step that runs the key check on any diff that touches it.
+
+### The Chromium pin is checked every week
+
+[`scripts/chromium-pin.env`](scripts/chromium-pin.env) pins two Chrome for
+Testing builds the suite drives, each by version and the SHA-256 of its zip on
+each of the four platforms the engine is released for (`linux64`,
+`linux-arm64`, `mac-x64`, `mac-arm64`): the **newest**, Chrome for Testing's
+Stable channel, and the **floor**, the newest patch of the oldest major the
+engine drives. No release carries either — the engine image has no Chromium —
+so a bump changes what the suite certifies and nothing a deployment runs. The
+`Chromiums` leg of [`pins.yml`](.github/workflows/pins.yml) runs
+[`scripts/chromium-pin-check.sh`](scripts/chromium-pin-check.sh) beside the git
+leg every Monday:
+
+- **The newest pin moves for a new major, never for a patch.** The check
+  reads `LATEST_RELEASE_STABLE` and calls the pin behind only when Stable names
+  a newer major: a patch changes no protocol, and the suite drives only pages
+  it serves on loopback, so following patches would open the issue every week
+  for nothing.
+- **The floor pin moves to the newest patch of its own major**
+  (`LATEST_RELEASE_<major>`), which settles within weeks of that major's
+  release.
+- **Every platform or none.** For a pin that is behind the check downloads the
+  release's zip for each of the four platforms, hashes it, and prints the pin's
+  new lines and the title of the pull request that moves it; a release missing
+  any platform is never proposed, since a pin a supported platform cannot
+  fetch is a gate that platform skips.
+- **The trust anchor is that download.** No signature exists for a Chrome for
+  Testing build, so a digest rests on Google's bucket, served over HTTPS and
+  read by the check, and on the pull request a person reviews when they paste
+  it; every later fetch must match it ([`scripts/chromium.sh`](scripts/chromium.sh)
+  refuses a zip that does not). A listing's answer is refused unless it is a
+  version of four numbers before it reaches a URL, a file name or the report,
+  so nothing a listing says but a version reaches the issue.
+
+Exit 1 opens or updates ONE issue, `chromium pin behind upstream` (labelled
+`dependencies`, found by that exact title), with that report as its body, and
+fails the leg; exit 0 closes it; exit 2 — a listing refused or answering
+something that is no version, a release missing a platform (the bucket
+answering 404 or 403 for its zip), a zip that could not be downloaded for any
+other reason (said as that, with curl's exit status, never as a missing
+build), a pin ahead of the listing — fails the leg and leaves the issue as it
+was.
+
+**Making the bump** is a pull request of its own: replace the pin's lines in
+`scripts/chromium-pin.env` with the ones the issue names
+(`scripts/chromium-pin-check.sh` prints them again by hand; it downloads each
+zip into `TMPDIR`, about 200 MB at a time, so point `TMPDIR` at a disk with
+that room where `/tmp` is a small tmpfs), run `make chromium` — it fetches the
+new build and refuses a zip that is not the digest — then `make check`, and
+title the pull request as the report does:
+`build(deps): bump chromium from <a> to <b>` for the newest pin,
+`build(deps): bump chromium's floor from <a> to <b>` for the floor.
+
+**Raising the floor** is never a bump: it moves the floor pin to the newest
+patch of the new major, in a pull request that argues the new floor.
+
+[`scripts/chromium-pin_test.sh`](scripts/chromium-pin_test.sh) (`make
+chromium-test`, in `make check` and ci.yml's `build + vet`) is the own suite of
+the check and of the recipe: it runs both against a stand-in Chrome for
+Testing tree and listing under `file://`, so it reads no network and fetches no
+Chromium, and every case it holds a mutation to — compare the newest pin by its
+patch, skip a platform whose zip is missing, take a listing's answer unchecked
+— fails it. Like the git suite it runs itself a second time, by a relative
+path under a `CDPATH` naming another `scripts/`, in a hostile environment.
+Nothing holds the workflow file itself: read its `permissions:`, both issue
+titles and the git leg's key step on any diff that touches it.
 
 ## Releasing
 

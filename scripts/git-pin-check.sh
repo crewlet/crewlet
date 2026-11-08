@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # git-pin-check.sh — hold the gits scripts/git-pin.env pins to upstream's releases, and the key that verifies
-# those releases to its expiry. .github/workflows/git-pin.yml runs both every week, because no Dependabot ecosystem
+# those releases to its expiry. .github/workflows/pins.yml runs both every week, because no Dependabot ecosystem
 # watches a source tarball: without it the pin would be watched by nothing, which looks exactly like a pin with
 # nothing to update.
 #

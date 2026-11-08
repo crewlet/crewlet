@@ -6,7 +6,7 @@
 # No Go test reaches either script, and each regresses silently in the direction that matters: a recipe that unpacks
 # into the directory another checkout's suite is running its Chromium from, hands back a build it never checked, or
 # prints something on stdout beside the path it is asked for; a check that calls every pin current because it read
-# nothing, or carries a listing's text into the report it prints. So every case runs the REAL
+# nothing, or carries a listing's text into the issue it reports to. So every case runs the REAL
 # script — copied beside a pin file the case writes, because both read their pin beside themselves — against local
 # stand-ins: a Chrome for Testing tree under file:// (<version>/<platform>/chrome-<platform>.zip), each zip holding a
 # stand-in `chrome` that answers --version, a release listing of LATEST_RELEASE_* files, a stand-in `uname` that names
@@ -981,7 +981,7 @@ expect "a listing that does not load -> 2" 2 "" "cannot read the release listing
 
 # A LISTING'S ANSWER IS A VERSION OR NOTHING. Anything else is refused before it is used: no download is asked for, the
 # report is empty, and the refusal says the answer's length and never its text — so a listing's words (a workflow
-# command, a path, a page) reach neither the report nor a URL. Mutation: take the
+# command, a path, a page) reach neither the issue the workflow writes, nor its log, nor a URL. Mutation: take the
 # listing's answer without checking it -> it reaches a download and the refusal (red).
 for answer in "158.0.8127.18
 ::error::injected" "../../158.0.8127.18" "<html>injected</html>" "158.0.8127" ""; do

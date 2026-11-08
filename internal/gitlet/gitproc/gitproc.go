@@ -483,7 +483,7 @@
 // (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE
 // is an engine CVE on a Gitlet node, and what reaches the image is a bump of that
 // pin — Debian's security updates to its own git never do — which a weekly
-// check (.github/workflows/git-pin.yml) asks for within a week of upstream
+// check (.github/workflows/pins.yml) asks for within a week of upstream
 // releasing one, or at once when it is run by hand (the workflow's Run
 // workflow, or scripts/git-pin-check.sh), which is how a git security release
 // is taken; each release's signature is verified against the git maintainer's

@@ -225,7 +225,7 @@ jobs:
             exit 1
           fi
       # The own suite of the git recipe (scripts/git.sh) and of the weekly pin
-      # check (scripts/git-pin-check.sh, .github/workflows/git-pin.yml) — `make
+      # check (scripts/git-pin-check.sh, .github/workflows/pins.yml) — `make
       # git-test`. Both are shell no Go test reaches, and each fails silently:
       # the check that calls every pin current because it read nothing is the
       # one the weekly workflow would run with nobody the wiser. It runs the
