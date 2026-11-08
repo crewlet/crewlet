@@ -277,6 +277,20 @@ var allowed = []Allowance{
 	},
 	{
 		Package: "internal/ssh",
+		Test:    "TestEveryCertificateAndCommandIsRecorded",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves each certificate and command is recorded as the server answered it.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestACommandThatDidNotRunIsRecordedByWhatStoppedIt",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves each certificate and command is recorded as the server answered it.",
+	},
+	{
+		Package: "internal/ssh",
 		Test:    "TestAnOperateCertificateRunsOnlyItsForcedCommand",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
