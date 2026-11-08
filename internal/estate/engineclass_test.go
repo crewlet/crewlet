@@ -16,13 +16,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE ENGINE CLASS: the executor log's writes are the engine's record of what
-// its own runs did, which no tool, no person and no operator surface makes
-// ([originEngine]). Two gates hold it, one on each side: every write on the log
+// THE ENGINE CLASS: the executor and access logs' writes are the engine's record
+// of what its own runs did and told, which no tool, no person and no operator
+// surface makes ([originEngine]). Two gates hold it, one on each side: every write on the log
 // is declared the engine's and nothing else is (the operation table), and no
 // package that serves a person or a model reaches the log's write side (the
 // source tree).
@@ -48,7 +49,7 @@ func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 	for _, violation := range engineClassViolations(registry) {
 		t.Error(violation)
 	}
-	var engine, executorWrites int
+	var engine, executorWrites, accessWrites int
 	for _, spec := range registry {
 		if spec.origin == originEngine {
 			engine++
@@ -56,10 +57,13 @@ func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 		if spec.domain == executorDomain && spec.class != opRead {
 			executorWrites++
 		}
+		if spec.domain == accessDomain && spec.class != opRead {
+			accessWrites++
+		}
 	}
-	if engine == 0 || executorWrites == 0 {
-		t.Fatalf("%d operations are the engine's and %d write the executor log: the class holds "+
-			"nothing, so this gate certifies nothing", engine, executorWrites)
+	if engine == 0 || executorWrites == 0 || accessWrites == 0 {
+		t.Fatalf("%d operations are the engine's, %d write the executor log and %d the access log: "+
+			"the class holds nothing, so this gate certifies nothing", engine, executorWrites, accessWrites)
 	}
 	if spec, ok := registry["executor.begin"]; !ok || spec.class != opIdempotentWrite ||
 		spec.domain != executorDomain || spec.origin != originEngine {
@@ -75,18 +79,23 @@ func TestEveryExecutorWriteIsTheEngines(t *testing.T) {
 		"executor.end":        {class: opIdempotentWrite, domain: executorDomain, origin: originEngine},
 		"executor.head":       {class: opRead, domain: executorDomain},
 		"tracker.create_task": {class: opIdempotentWrite, domain: trackerDomain},
+		"access.tell":         {class: opIdempotentWrite, domain: accessDomain},
+		"access.ran":          {class: opIdempotentWrite, domain: accessDomain, origin: originEngine},
 	}
 	violations := engineClassViolations(planted)
 	var named []string
 	for _, v := range violations {
 		named = append(named, strings.Fields(v)[0])
 	}
-	want := []string{"executor.begin", "executor.capture", "executor.peek", "tracker.repair"}
+	want := []string{"access.tell", "executor.begin", "executor.capture", "executor.peek", "tracker.repair"}
 	if !slices.Equal(named, want) {
 		t.Errorf("the planted table's violations name %v, want %v:\n%s", named, want,
 			strings.Join(violations, "\n"))
 	}
 }
+
+// engineDomains are the logs whose every write is the engine's.
+var engineDomains = []string{executorDomain, accessDomain}
 
 // engineClassViolations is every operation in table that breaks the engine
 // class, in the order of their names, each opening with the name.
@@ -100,13 +109,14 @@ func engineClassViolations(table map[string]*opSpec) []string {
 			out = append(out, name+" is a read declared the engine's: the engine's reads are "+
 				"ordinary ones, which a surface may hold")
 		case spec.class == opRead:
-		case spec.domain == executorDomain && !engine:
-			out = append(out, name+" writes the executor log and is not declared the engine's: "+
-				"nothing but the engine records what its runs did, so declare it byEngine()")
-		case spec.domain != executorDomain && engine:
+		case slices.Contains(engineDomains, spec.domain) && !engine:
+			out = append(out, fmt.Sprintf("%s writes the %s log and is not declared the engine's: "+
+				"nothing but the engine records what its runs did, so declare it byEngine()",
+				name, spec.domain))
+		case !slices.Contains(engineDomains, spec.domain) && engine:
 			out = append(out, fmt.Sprintf("%s is declared the engine's and writes the %q domain: "+
-				"the class is the executor log's writes, the only ones the surface guard "+
-				"(TestNoSurfaceHoldsTheEnginesExecutorWrites) holds", name, spec.domain))
+				"the class is the executor and access logs' writes, the only ones the surface "+
+				"guard (TestNoSurfaceHoldsTheEnginesExecutorWrites) holds", name, spec.domain))
 		}
 	}
 	return out
@@ -126,9 +136,11 @@ func engineClassViolations(table map[string]*opSpec) []string {
 func TestTheSurfacesWriteDomainsLeaveTheEnginesOut(t *testing.T) {
 	t.Parallel()
 	listed := SurfaceWriteDomains()
-	if slices.Contains(listed, executorDomain) {
-		t.Errorf("SurfaceWriteDomains lists %v, the executor log among them, whose writes are "+
-			"the engine's alone", listed)
+	for _, domain := range engineDomains {
+		if slices.Contains(listed, domain) {
+			t.Errorf("SurfaceWriteDomains lists %v, the %s log among them, whose writes are "+
+				"the engine's alone", listed, domain)
+		}
 	}
 	for _, domain := range []string{trackerDomain, pagesDomain, artifactsDomain, artifactDataDomain, chatDomain, codeDomain} {
 		if !slices.Contains(listed, domain) {
@@ -163,17 +175,22 @@ const engineDir = "internal/engine"
 var (
 	estateImport   = reflect.TypeFor[Backend]().PkgPath()
 	executorImport = reflect.TypeFor[executordomain.Writer]().PkgPath()
+	accessImport   = reflect.TypeFor[accessdomain.Writer]().PkgPath()
 )
+
+// domainImports are the engine-class logs' own packages.
+var domainImports = []string{executorImport, accessImport}
 
 // engineWriteNames are the names the log's write side is reached by, matched
 // on any operand: the router's writer facade and its accessor
 // (ExecutorWrites), and the serving half's writer and the engine's own
 // accessor of this node's writer (ExecutorWriter).
-var engineWriteNames = []string{"ExecutorWrites", "ExecutorWriter"}
+var engineWriteNames = []string{"ExecutorWrites", "ExecutorWriter", "AccessWrites", "AccessWriter"}
 
 // writeSideTypes are this package's types that carry the log's write side, as
 // a hand-out's results name them.
-var writeSideTypes = []string{"ExecutorWrites", "ExecutorWriter", "ExecutorHalf"}
+var writeSideTypes = []string{"ExecutorWrites", "ExecutorWriter", "ExecutorHalf",
+	"AccessWrites", "AccessWriter", "AccessHalf"}
 
 // domainWriteNames are the domain's own write side, matched through whatever
 // name a file imports the domain under: its writer, how one is built, and the
@@ -456,26 +473,29 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names map[string]b
 	}
 	for _, spec := range file.Imports {
 		if imported, err := strconv.Unquote(spec.Path.Value); err == nil &&
-			(imported == estateImport || imported == executorImport) &&
+			(imported == estateImport || slices.Contains(domainImports, imported)) &&
 			spec.Name != nil && spec.Name.Name == "." {
 			at(spec, "dot-imports "+imported+", which reaches every name of it unqualified: "+
 				"import it by name")
 		}
 	}
-	domain := importNamesOf(file, executorImport)
+	domain := map[string]bool{}
+	for _, imported := range domainImports {
+		maps.Copy(domain, importNamesOf(file, imported))
+	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
 		if names[sel.Sel.Name] {
-			at(sel, sel.Sel.Name+" reaches the executor log's writes, which are the engine's "+
-				"alone (internal/estate's engine-originated class); a surface holds its "+
-				"reads, ExecutorReads")
+			at(sel, sel.Sel.Name+" reaches the executor or access log's writes, which are the "+
+				"engine's alone (internal/estate's engine-originated class); a surface holds "+
+				"their reads, ExecutorReads and AccessReads")
 		}
 		if x, isIdent := sel.X.(*ast.Ident); isIdent && domain[x.Name] &&
 			slices.Contains(domainWriteNames, sel.Sel.Name) {
-			at(sel, x.Name+"."+sel.Sel.Name+" is the executor domain's write side, which "+
+			at(sel, x.Name+"."+sel.Sel.Name+" is an engine-class domain's write side, which "+
 				"only the engine holds")
 		}
 		return true
@@ -503,7 +523,10 @@ func engineHandOuts(dir string) ([]string, int, error) {
 			return nil, 0, err
 		}
 		files++
-		estateNames, domainNames := importNamesOf(parsed, estateImport), importNamesOf(parsed, executorImport)
+		estateNames, domainNames := importNamesOf(parsed, estateImport), map[string]bool{}
+		for _, imported := range domainImports {
+			maps.Copy(domainNames, importNamesOf(parsed, imported))
+		}
 		for _, decl := range parsed.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !fn.Name.IsExported() || fn.Type.Results == nil {
