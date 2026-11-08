@@ -17,7 +17,7 @@
 // by the engine's scan and compared by a person against the server console, so
 // the engine's client accepts no other key and never trusts a key on first use.
 //
-// # Two levels, one principal per host and level
+// # Two levels, one principal per host and level (ADR-0106)
 //
 // A seat holds one level across the hosts it names. Read reaches a host's read
 // user, whose every command the server forces through an allowlist. Operate
