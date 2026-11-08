@@ -46,7 +46,12 @@ func (e *Engine) SeatAccessLedger() (seataccess.Ledger, error) {
 		return nil, errors.New("engine: this engine holds no coordination store to " +
 			"keep the seat access ledger in; it was not built by engine.New")
 	}
-	return seataccess.NewCoordLedger(e.backends.Fleet)
+	ledger, err := seataccess.NewCoordLedger(e.backends.Fleet)
+	if err != nil {
+		return nil, err
+	}
+	// A WRITE NAMING A SEAT MEASURES ITS ACCESS REVIEW (ADR-0111).
+	return reviewingLedger{Ledger: ledger, kick: e.kickAccessReviews}, nil
 }
 
 // seatAccessAccounts is each seat's account the ledger records as held for

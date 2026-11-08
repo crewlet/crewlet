@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -14,11 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/capability"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -27,34 +30,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN AGENT WHOSE ACCESS CHANGED REVIEWS ITS OPEN WORK ONCE (ADR-0111).
-//
-// A revision that changes a seat's access is told to the seat at its next turn
-// (ADR-0104, capability.go), and a seat whose open work waits on a person has
-// no next turn until somebody answers it. So the node holding a seat, once an
-// apply has gone quiet, measures the seat's access against what the seat was
-// last told, and where the closed change list counts a difference and the seat
-// has open work, it asks for one review turn: a delivery on the inbound topic
-// the notify spine routes to the seat (internal/accessreview).
-//
-// LEVEL, NOT EDGE. What a check reads is the company document, the seat access
-// ledger and the access log, every one durable, so a check this node did not
-// live to make is the seat's next holder's, made on admission; a check whose
-// publish the broker refused is made again on the retry's spacing; and a check
-// that finds the seat already told (its review, or any turn that told the change
-// first, ran) asks for nothing.
+// AN AGENT WHOSE ACCESS CHANGED REVIEWS ITS OPEN WORK ONCE (ADR-0111): a seat
+// is measured once applies go quiet, on admission and when a ledger write names
+// it, and each change is recorded as its pending review and asked for once.
 
 // accessReviewQuiet is how long a node waits after the last apply before it
-// measures the seats it holds: TWO MINUTES, so a person's run of saves on an
-// agent's access (a level, then a host, then a permission, each a revision of
-// its own, seconds apart) is one review measured from the last of them, and
-// the review still starts while the person is at the screen they saved from.
+// measures its seats: a person's run of saves is one review.
 const accessReviewQuiet = 2 * time.Minute
 
 // accessReviewRetryBase and accessReviewRetryCeiling pace a check that could
-// not be made (a store or the broker unreachable): from the quiet window's own
-// length, doubling to a quarter of an hour, never faster than the quiet window
-// the review waits out anyway.
+// not be made: from the quiet window, doubling to a quarter of an hour.
 const (
 	accessReviewRetryBase    = accessReviewQuiet
 	accessReviewRetryCeiling = 15 * time.Minute
@@ -62,17 +47,14 @@ const (
 
 // accessReviews is one node's debounce of its seats' reviews.
 type accessReviews struct {
-	// check measures the seats named, or every seat this node holds where
-	// all is set, and reports the seats whose check could not be made.
+	// check measures the seats named, or every seat held where all is set,
+	// and answers the seats whose check could not be made.
 	check func(ctx context.Context, handles []string, all bool) []string
 
-	// quiet is the window an apply waits out; after arms a timer that runs
-	// f once d has passed and answers its stop, time.AfterFunc's outside a
-	// case.
+	// after arms a timer and answers its stop: time.AfterFunc's outside a case.
 	quiet time.Duration
 	after func(d time.Duration, f func()) (stop func() bool)
 
-	// ctx is the node's own, which every check runs under.
 	ctx context.Context
 
 	mu      sync.Mutex
@@ -82,8 +64,7 @@ type accessReviews struct {
 	failed  int
 	stopped bool
 
-	// asked is the review each seat was last asked for, keyed by handle:
-	// an apply that changes nothing further asks for nothing again.
+	// asked is the wake each seat was last asked for on this node.
 	asked map[string]string
 }
 
@@ -100,9 +81,8 @@ func afterFunc(d time.Duration, f func()) func() bool {
 	return time.AfterFunc(d, f).Stop
 }
 
-// kick asks for a check after the quiet window, of the seats named, or of
-// every seat this node holds when none is named, and restarts the window: a
-// second apply inside it is measured with the first.
+// kick asks for a check of the seats named, or of every seat held when none
+// is, after the quiet window, restarting it.
 func (r *accessReviews) kick(handles ...string) {
 	if r == nil {
 		return
@@ -129,8 +109,7 @@ func (r *accessReviews) armLocked(d time.Duration) {
 	r.timer = r.after(d, r.fire)
 }
 
-// fire runs the check the window collected, and arms a retry for the seats
-// whose check could not be made.
+// fire runs the check the window collected, and retries what it could not make.
 func (r *accessReviews) fire() {
 	r.mu.Lock()
 	if r.stopped {
@@ -165,7 +144,7 @@ func (r *accessReviews) fire() {
 	}
 }
 
-// seen reports whether seat handle was already asked for review key, and
+// seen reports whether seat handle was already asked for wake key here, and
 // records it when it was not. A nil debounce has seen nothing.
 func (r *accessReviews) seen(handle, key string) bool {
 	if r == nil {
@@ -180,8 +159,8 @@ func (r *accessReviews) seen(handle, key string) bool {
 	return false
 }
 
-// forget drops what seat handle was last asked for, so a publish that failed
-// is asked for again.
+// forget drops what seat handle was last asked for, so a failed publish is
+// asked for again.
 func (r *accessReviews) forget(handle, key string) {
 	if r == nil {
 		return
@@ -207,8 +186,8 @@ func (r *accessReviews) stop() {
 	}
 }
 
-// kickAccessReviews asks this node's debounce for a check of the seats named,
-// or of every seat it holds when none is named.
+// kickAccessReviews asks for a check of the seats named, or of every seat this
+// node holds when none is.
 func (e *Engine) kickAccessReviews(handles ...string) {
 	if r := e.accessReviews.Load(); r != nil {
 		r.kick(handles...)
@@ -216,14 +195,16 @@ func (e *Engine) kickAccessReviews(handles ...string) {
 }
 
 // checkAccessReviews measures the seats named, or every seat this node holds
-// where all is set, and asks for each review a seat owes. It answers the seats
-// whose check could not be made, for the retry.
+// where all is set, and answers the seats whose check could not be made.
 func (e *Engine) checkAccessReviews(ctx context.Context, handles []string, all bool) []string {
 	company := e.Company()
-	if company == nil || company.Config == nil || e.node == nil {
+	if company == nil || company.Config == nil {
 		return nil
 	}
 	if all {
+		if e.node == nil {
+			return nil
+		}
 		handles = e.node.Host().Held()
 	}
 	var unchecked []string
@@ -231,60 +212,78 @@ func (e *Engine) checkAccessReviews(ctx context.Context, handles []string, all b
 		if company.Org.AgentSeatByHandle(handle) == nil {
 			continue
 		}
-		if _, held := e.node.Host().MayStart(handle); !held {
-			// THE SEAT'S HOLDER CHECKS IT, on its admission: this node
-			// would be asking for another node's seat.
-			continue
-		}
 		if err := e.reviewSeat(ctx, company, handle, e.reviewSeams()); err != nil {
 			log.WarnContext(ctx, "access_review_unchecked", "agent", handle, "error", err.Error(),
-				"detail", "the seat's access could not be measured against what it was told, "+
-					"or its review could not be published; it is checked again shortly")
+				"detail", "the seat's access review could not be measured or asked for; it is checked again shortly")
 			unchecked = append(unchecked, handle)
 		}
 	}
 	return unchecked
 }
 
-// reviewSeams are what a review check reads the seat's open work through and
-// publishes its request with: the engine's own, and a case's.
+// pendingStore is where each seat's pending review is kept.
+type pendingStore interface {
+	AccessReview(ctx context.Context, handle string) ([]byte, bool, error)
+	PutAccessReview(ctx context.Context, handle string, value []byte) error
+	DeleteAccessReview(ctx context.Context, handle string) error
+}
+
+// reviewSeams are what a review check reads and writes through: the engine's
+// own, and a case's.
 type reviewSeams struct {
 	work    func(ctx context.Context, company *Company, handle string) (accessreview.Work, error)
 	publish func(ctx context.Context, req accessreview.Request) error
+	pending pendingStore
+	now     func() time.Time
 }
 
 // reviewSeams are the engine's own.
 func (e *Engine) reviewSeams() reviewSeams {
-	return reviewSeams{work: e.openWork, publish: e.publishAccessReview}
+	s := reviewSeams{work: e.openWork, publish: e.publishAccessReview,
+		now: func() time.Time { return time.Now().UTC() }}
+	if e.backends != nil && e.backends.Fleet != nil {
+		s.pending = e.backends.Fleet
+	}
+	return s
 }
 
-// reviewSeat asks for seat handle's review where it owes one: its access
-// differs, by the closed change list, from what it was last told, and it has
-// open work.
+// reviewSeat records seat handle's access change as its pending review and asks
+// for the review where it has open work; a change undone before any turn was
+// told it drops its record.
 func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string, seams reviewSeams) error {
-	req, owed, err := e.reviewOwed(ctx, company, handle)
-	if err != nil || !owed {
+	if seams.pending == nil {
+		return errors.New("engine: this node holds no coordination store to keep access reviews in")
+	}
+	m, owed, err := e.measureAccess(ctx, company, handle)
+	if err != nil {
 		return err
 	}
-	reviews := e.accessReviews.Load()
-	key := accessreview.WakeID(req).String()
+	pending, found, err := readPending(ctx, seams.pending, handle)
+	if err != nil {
+		return err
+	}
+	if !owed {
+		if found && pending.ToldTurn == "" {
+			return seams.pending.DeleteAccessReview(ctx, handle)
+		}
+		return nil
+	}
+	if !found || !pending.Same(m.base.Turn, m.digest) {
+		pending = accessreview.Pending{Baseline: m.base.Turn, BaselineAt: m.base.At,
+			Digest: m.digest, ChangedAt: seams.now(), Lines: m.personLines}
+		if err = writePending(ctx, seams.pending, handle, pending); err != nil {
+			return err
+		}
+	}
+	work, err := seams.work(ctx, company, handle)
+	if err != nil || work.Empty() {
+		return err
+	}
+	req := accessreview.RequestFor(handle, pending, m.seatLines, work.Count())
+	reviews, key := e.accessReviews.Load(), accessreview.WakeID(req).String()
 	if reviews.seen(handle, key) {
 		return nil
 	}
-	work, err := seams.work(ctx, company, handle)
-	if err != nil {
-		reviews.forget(handle, key)
-		return err
-	}
-	if work.Empty() {
-		reviews.forget(handle, key)
-		// NOTHING TO REVIEW: the seat is told the change at its next turn,
-		// as every change is, and a turn now would cost a turn nobody needs.
-		log.DebugContext(ctx, "access_review_not_needed", "agent", handle,
-			"detail", "the seat's access changed and it has no open work to review")
-		return nil
-	}
-	req.Open, req.At = work.Count(), time.Now().UTC()
 	if err := seams.publish(ctx, req); err != nil {
 		reviews.forget(handle, key)
 		return err
@@ -294,53 +293,128 @@ func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string
 	return nil
 }
 
-// reviewOwed is the review seat handle owes, false where it owes none: its
-// snapshot is what it was last told, or the difference is none the closed list
-// counts, or there is no baseline to measure from (a seat's first turn is told
-// its access as a baseline and no change).
-func (e *Engine) reviewOwed(ctx context.Context, company *Company, handle string) (
-	accessreview.Request, bool, error) {
+// accessMeasure is a seat's access now against what it was last told.
+type accessMeasure struct {
+	base                   *accessdomain.ToldRow
+	digest                 string
+	seatLines, personLines []string
+}
+
+// measureAccess measures seat handle; false where it owes no review: told as it
+// stands, with no baseline, or a difference the closed list does not count.
+func (e *Engine) measureAccess(ctx context.Context, company *Company, handle string) (
+	accessMeasure, bool, error) {
 
 	in, err := e.capabilityInput(ctx, company, handle)
 	if err != nil {
-		return accessreview.Request{}, false, err
+		return accessMeasure{}, false, err
 	}
 	reads, ok := e.accessReads()
 	if !ok {
-		return accessreview.Request{}, false, nil
+		return accessMeasure{}, false, nil
 	}
 	recent, err := reads.Recent(ctx, handle, time.Now().UTC(), accessdomain.DispatchRead())
 	if err != nil {
-		return accessreview.Request{}, false, err
+		return accessMeasure{}, false, err
 	}
-	req, owed := reviewOf(capability.Take(in), recent, handle)
-	return req, owed, nil
+	m, owed := measured(capability.Take(in), recent)
+	return m, owed, nil
 }
 
-// reviewOf is the review a seat whose snapshot is snap owes, given what it was
-// last told: the change lines the closed list counts from its baseline, false
-// where there are none or no baseline the difference can be measured from.
-func reviewOf(snap capability.Snapshot, recent accessdomain.Recent, handle string) (accessreview.Request, bool) {
+// measured is snap against recent's baseline, false where nothing is owed.
+func measured(snap capability.Snapshot, recent accessdomain.Recent) (accessMeasure, bool) {
 	base := recent.Baseline
 	switch {
 	case !recent.Complete, base == nil, base.Digest == snap.Digest(),
 		bytes.Equal(base.Snapshot, toldWithheld):
-		return accessreview.Request{}, false
+		return accessMeasure{}, false
 	}
 	old, err := capability.Parse(base.Snapshot)
 	if err != nil {
-		return accessreview.Request{}, false
+		return accessMeasure{}, false
 	}
-	changes := capability.Diff(old, snap)
-	if len(changes) == 0 {
-		return accessreview.Request{}, false
+	seat := linesOf(capability.DiffFor(old, snap, capability.ForSeat))
+	if len(seat) == 0 {
+		return accessMeasure{}, false
 	}
-	lines := make([]string, 0, len(changes))
+	return accessMeasure{base: base, digest: snap.Digest(), seatLines: seat,
+		personLines: linesOf(capability.DiffFor(old, snap, capability.ForPerson))}, true
+}
+
+// linesOf is changes' lines.
+func linesOf(changes []capability.Change) []string {
+	out := make([]string, 0, len(changes))
 	for _, c := range changes {
-		lines = append(lines, c.Line)
+		out = append(out, c.Line)
 	}
-	return accessreview.Request{Handle: handle, Baseline: base.Turn, Digest: snap.Digest(),
-		Lines: lines}, true
+	return out
+}
+
+// readPending is seat handle's pending review, false where it has none.
+func readPending(ctx context.Context, store pendingStore, handle string) (accessreview.Pending, bool, error) {
+	raw, found, err := store.AccessReview(ctx, handle)
+	if err != nil || !found {
+		return accessreview.Pending{}, false, err
+	}
+	p, err := accessreview.DecodePending(raw)
+	return p, err == nil, err
+}
+
+// writePending records seat handle's pending review.
+func writePending(ctx context.Context, store pendingStore, handle string, p accessreview.Pending) error {
+	raw, err := accessreview.EncodePending(p)
+	if err != nil {
+		return err
+	}
+	return store.PutAccessReview(ctx, handle, raw)
+}
+
+// PendingAccessReview is seat handle's access change waiting on its review, the
+// one read an Inbox makes per asking seat.
+func (e *Engine) PendingAccessReview(ctx context.Context, handle string) (accessreview.Pending, bool, error) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return accessreview.Pending{}, false, nil
+	}
+	return readPending(ctx, e.backends.Fleet, handle)
+}
+
+// noteReviewTold marks seat handle's pending review as told to turn, once its
+// told record of digest landed: questions raised from then on are not stale.
+func (e *Engine) noteReviewTold(ctx context.Context, handle, turn, digest string) {
+	store := e.reviewSeams().pending
+	if store == nil {
+		return
+	}
+	p, found, err := readPending(ctx, store, handle)
+	if err != nil || !found || p.Digest != digest || p.ToldTurn != "" {
+		logReviewErr(ctx, handle, err)
+		return
+	}
+	p.ToldTurn, p.ToldAt = turn, time.Now().UTC()
+	logReviewErr(ctx, handle, writePending(ctx, store, handle, p))
+}
+
+// endReviewOnTurnEnd drops seat handle's pending review once the turn told it
+// ends: the seat has reviewed the change, and the Inbox notes it no more.
+func (e *Engine) endReviewOnTurnEnd(ctx context.Context, handle, turn string) {
+	store := e.reviewSeams().pending
+	if store == nil || handle == "" {
+		return
+	}
+	p, found, err := readPending(ctx, store, handle)
+	if err != nil || !found || p.ToldTurn != turn {
+		logReviewErr(ctx, handle, err)
+		return
+	}
+	logReviewErr(ctx, handle, store.DeleteAccessReview(ctx, handle))
+}
+
+// logReviewErr says a pending review record that could not be kept current.
+func logReviewErr(ctx context.Context, handle string, err error) {
+	if err != nil {
+		log.WarnContext(ctx, "access_review_record_unkept", "agent", handle, "error", err.Error(),
+			"detail", "the seat's pending access review was not updated; the next check measures it again")
+	}
 }
 
 // publishAccessReview sends one review as the inbound delivery accessreview
@@ -359,12 +433,7 @@ func (e *Engine) publishAccessReview(ctx context.Context, req accessreview.Reque
 }
 
 // AccessReviewSettled reports whether a review of seat handle has nothing left
-// to tell: its access is what it was last told, because its review, or another
-// turn that told the change first and asked for the review with it, already
-// ran. The dispatcher acks such a wake without a turn.
-//
-// FAIL OPEN, TO THE TURN: a store this node cannot read says nothing settled,
-// and the review runs; a turn told no change is told its access alone.
+// to tell: its access is what it was last told. Fail open, to the turn.
 func (e *Engine) AccessReviewSettled(ctx context.Context, handle string) bool {
 	return e.reviewSettled(ctx, e.Company(), handle)
 }
@@ -389,14 +458,34 @@ func (e *Engine) reviewSettled(ctx context.Context, company *Company, handle str
 	return recent.Baseline != nil && recent.Baseline.Digest == capability.Take(in).Digest()
 }
 
-// openWork is seat handle's open work an access review covers: the work items
-// carrying a question it asked that is still open, its executor runs waiting
-// on a person, and the work items assigned to it that are in progress or
-// blocked.
-//
-// AT `stale`: a list the seat checks item by item with its own tools, and a
-// count a person reads beside a save, neither of which a few records of lag
-// changes the meaning of.
+// reviewingLedger is the seat access ledger kicking a seat's review on every
+// write naming it: access a sync or a vendor step changes is measured too.
+type reviewingLedger struct {
+	seataccess.Ledger
+	kick func(handles ...string)
+}
+
+// Put implements [seataccess.Ledger].
+func (l reviewingLedger) Put(ctx context.Context, rec seataccess.Record) error {
+	err := l.Ledger.Put(ctx, rec)
+	if err == nil {
+		l.kick(rec.Handle)
+	}
+	return err
+}
+
+// Drop implements [seataccess.Ledger].
+func (l reviewingLedger) Drop(ctx context.Context, kind integration.Kind, handle string) error {
+	err := l.Ledger.Drop(ctx, kind, handle)
+	if err == nil {
+		l.kick(handle)
+	}
+	return err
+}
+
+// openWork is seat handle's open work an access review covers, read at `stale`:
+// questions it asked still open, its runs waiting on a person, and its work
+// items in progress or blocked.
 func (e *Engine) openWork(ctx context.Context, company *Company, handle string) (accessreview.Work, error) {
 	var w accessreview.Work
 	if reads := OperatorNative(e); reads.Tracker {
@@ -451,8 +540,7 @@ func workPage(ctx context.Context, work interface {
 	return work.Tasks(ctx, q, now)
 }
 
-// waitingRuns are the runs that wait on a person: a question or a held call,
-// not ended, oldest first.
+// waitingRuns are the runs that wait on a person, not ended, oldest first.
 func waitingRuns(runs []sandbox.PendingRun) []sandbox.PendingRun {
 	var out []sandbox.PendingRun
 	for _, run := range runs {
@@ -479,9 +567,8 @@ func waitingRun(run sandbox.PendingRun) accessreview.Run {
 }
 
 // withdrawDeps is what withdraw_ask adds to a seat's tracker tools: the
-// tracker's writer resolving a question as its author, where the company runs
-// Worklet, and the answer desk a run's withdrawal is delivered by, where the
-// node holds a coordination store and a queue.
+// tracker's writer resolving a question as its author, and the answer desk a
+// run's withdrawal is delivered by.
 func (e *Engine) withdrawDeps() builtin.WithdrawDeps {
 	var out builtin.WithdrawDeps
 	if halves, ok := e.trackerHalves(); ok {
@@ -494,102 +581,23 @@ func (e *Engine) withdrawDeps() builtin.WithdrawDeps {
 	return out
 }
 
-// accessHistoryPages bounds how far back AccessSince reads a seat's told
-// records: two pages of the log's largest, two hundred records, which at a
-// told record per change is more changes to one seat's access than an open
-// question outlives.
-const accessHistoryPages = 2
-
-// AccessSince is seat handle's access history as one read (ADR-0111): the
-// function it answers says, for an instant, the change lines the closed list
-// counts between the access the seat was told at or before that instant and
-// its access now, and whether it changed at all. A seat the company does not
-// hold as an agent, or an instant older than every told record read, answers
-// no change: nothing can be said of it.
-//
-// MEASURED AGAINST NOW, never against the next told record: a question raised
-// before a change that a later change reverted asks under the access the seat
-// holds again, and carries no note.
-func (e *Engine) AccessSince(ctx context.Context, handle string) (func(time.Time) ([]string, bool), error) {
-	none := func(time.Time) ([]string, bool) { return nil, false }
-	company := e.Company()
-	if company == nil || company.Config == nil || company.Org.AgentSeatByHandle(handle) == nil {
-		return none, nil
-	}
-	reads, ok := e.accessReads()
-	if !ok {
-		return none, nil
-	}
-	in, err := e.capabilityInput(ctx, company, handle)
-	if err != nil {
-		return nil, err
-	}
-	now := capability.Take(in)
-	var rows []accessdomain.ToldRow
-	cursor := ""
-	for range accessHistoryPages {
-		page, err := reads.Told(ctx, handle, cursor, accessdomain.MaxPageSize,
-			statelog.Freshness{Level: statelog.ReadStale})
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, page.Rows...)
-		if cursor = page.Next; cursor == "" {
-			break
-		}
-	}
-	return func(at time.Time) ([]string, bool) { return changedSince(rows, now, at) }, nil
-}
-
-// changedSince is what changed between the told record in force at an instant,
-// the newest of rows (newest first) at or before it, and the snapshot now.
-func changedSince(rows []accessdomain.ToldRow, now capability.Snapshot, at time.Time) ([]string, bool) {
-	for _, row := range rows {
-		if row.At.After(at) {
-			continue
-		}
-		if row.Digest == now.Digest() {
-			return nil, false
-		}
-		if bytes.Equal(row.Snapshot, toldWithheld) {
-			// KEPT AS ITS DIGEST: the access moved, and what moved cannot
-			// be said.
-			return nil, true
-		}
-		old, err := capability.Parse(row.Snapshot)
-		if err != nil {
-			return nil, true
-		}
-		changes := capability.Diff(old, now)
-		lines := make([]string, 0, len(changes))
-		for _, c := range changes {
-			lines = append(lines, c.Line)
-		}
-		return lines, len(lines) > 0
-	}
-	return nil, false
-}
-
-// draftReviews is, for each agent seat whose access the draft changes by the
-// closed change list, how many of its open items were raised under its access
-// now: what the access save warns of before it is saved (ADR-0111). The draft's
-// access is measured with the ledger the seat's access now is, so a grant whose
-// account the sync has yet to make is no change until it is made, as it is to
-// the seat.
+// draftReviews is, for each agent seat whose access a draft changes by the
+// closed list, how many of its distinct open items it will review; the draft is
+// written into a copy of cfg by the save's own edits.
 func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *org.Organization,
-	draft seataccess.Draft, openWork func(context.Context, *Company, string) (accessreview.Work, error)) (
-	[]seataccess.SeatReview, error) {
+	current seataccess.Answer, draft seataccess.Draft,
+	openWork func(context.Context, *Company, string) (accessreview.Work, error)) ([]seataccess.SeatReview, error) {
 
 	company := e.Company()
 	if company == nil || cfg == nil || roster == nil || len(draft.Seats) == 0 {
 		return nil, nil
 	}
-	next, nextOrg, err := draftCompany(cfg, draft)
+	next, nextOrg, err := draftCompany(cfg, current, draft)
 	if err != nil {
 		return nil, err
 	}
 	var out []seataccess.SeatReview
-	for _, handle := range slices.Sorted(maps.Keys(draft.Seats)) {
+	for _, handle := range sortedHandles(draft.Seats) {
 		if roster.AgentSeatByHandle(handle) == nil {
 			continue
 		}
@@ -601,7 +609,7 @@ func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *
 		if err != nil {
 			return nil, err
 		}
-		changes := capability.Diff(capability.Take(was), capability.Take(will))
+		changes := capability.DiffFor(capability.Take(was), capability.Take(will), capability.ForPerson)
 		if len(changes) == 0 {
 			continue
 		}
@@ -612,19 +620,17 @@ func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *
 		if work.Empty() {
 			continue
 		}
-		lines := make([]string, 0, len(changes))
-		for _, c := range changes[:min(len(changes), capability.MaxLines)] {
-			lines = append(lines, c.Line)
-		}
-		out = append(out, seataccess.SeatReview{Handle: handle, Open: work.Count(), Changes: lines})
+		out = append(out, seataccess.SeatReview{Handle: handle, Open: work.Count(),
+			Changes: linesOf(changes[:min(len(changes), capability.MaxLines)])})
 	}
 	return out, nil
 }
 
-// draftCompany is cfg with the draft's settings written into a copy of it, and
-// the chart the copy resolves to, which decides the MCP servers a seat's lanes
-// grant it.
-func draftCompany(cfg *config.Company, draft seataccess.Draft) (*config.Company, *org.Organization, error) {
+// draftCompany is a copy of cfg with the save's edits of draft against current,
+// and the chart it resolves to.
+func draftCompany(cfg *config.Company, current seataccess.Answer, draft seataccess.Draft) (
+	*config.Company, *org.Organization, error) {
+
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: copy the document to measure a draft on: %w", err)
@@ -633,12 +639,8 @@ func draftCompany(cfg *config.Company, draft seataccess.Draft) (*config.Company,
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: copy the document to measure a draft on: %w", err)
 	}
-	for _, seat := range seataccess.SeatsOf(next) {
-		for lane, d := range draft.Seats[seat.Handle] {
-			if err = seataccess.SetDesired(seat.Role, lane, d.Normalized()); err != nil {
-				return nil, nil, err
-			}
-		}
+	if err = configapi.EditSeats(next, setupapi.DraftSeatEdits(current, draft.Seats)); err != nil {
+		return nil, nil, err
 	}
 	o, err := next.Organization()
 	if err != nil {
@@ -646,3 +648,5 @@ func draftCompany(cfg *config.Company, draft seataccess.Draft) (*config.Company,
 	}
 	return next, o, nil
 }
+
+var _ pendingStore = (coord.Fleet)(nil)

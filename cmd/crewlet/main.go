@@ -2620,8 +2620,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-			// WHAT CHANGED IN AN ASKING AGENT'S ACCESS SINCE IT ASKED, the
-			// engine's read of the access log and the seat's access now.
+			// EACH ASKING AGENT'S PENDING ACCESS REVIEW (ADR-0111).
 			Access: e,
 			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
 			// seal says: opened under this node's fleet keyring.

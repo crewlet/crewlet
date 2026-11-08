@@ -148,10 +148,8 @@ type Deps struct {
 	// enabled: false`), and a node with no object store. See sessions.go.
 	Sessions SessionDeps
 
-	// Withdraw is withdraw_ask's tracker resolver and run desk: the seat
-	// withdrawing a question it asked, or a call its executor holds for
-	// approval (ADR-0111). Its tracker reads and writes are [Deps.Work]'s,
-	// set by [Register], so the engine hands it only the two it adds.
+	// Withdraw is withdraw_ask's resolver and run desk (ADR-0111); its tracker
+	// reads and writes are [Deps.Work]'s, set by [Register].
 	Withdraw WithdrawDeps
 
 	// Chat is Chatlet. Every half nil omits all nine tools, which

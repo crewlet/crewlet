@@ -1507,10 +1507,8 @@ var rules = map[Action]rule{
 	// [rule.seatOnly].
 	ActionSessionsList: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	ActionSessionRead:  {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
-	// A SEAT'S OWN QUESTION WITHDRAWN, its own as its sessions are: the
-	// tracker's writer holds a question to its author, and a run to the seat
-	// it belongs to, so the row asks for nothing beyond being that seat. A
-	// person resolves their own question from the item ([rule.seatOnly]).
+	// A SEAT'S OWN QUESTION WITHDRAWN: the tracker's writer holds it to its
+	// author and a run to its seat, so the row asks nothing more.
 	ActionWithdrawAsk: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
 	// seat's turn, and the ROLE decides which seats are offered it. No

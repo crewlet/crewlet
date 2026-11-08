@@ -14,9 +14,10 @@ import (
 
 // request is one review of the SRE.
 func request() accessreview.Request {
-	return accessreview.Request{Handle: "sre", Baseline: "t-told", Digest: "d-new",
-		Lines: []string{"Cloudflare: your level is now Read (was Operate)."}, Open: 3,
-		At: time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)}
+	return accessreview.Request{Handle: "sre", Baseline: "t-told",
+		BaselineAt: time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC), Digest: "d-new",
+		ChangedAt: time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC),
+		Lines:     []string{"Cloudflare: your level is now Read (was Operate)."}, Open: 3}
 }
 
 // A REQUEST IS ITS DELIVERY'S ONE SHAPE: what is published reads back whole,
@@ -32,13 +33,14 @@ func TestARequestIsItsDeliverysOneShape(t *testing.T) {
 	}
 	got, err := accessreview.Decode(w)
 	if err != nil || got.Handle != "sre" || got.Baseline != "t-told" || got.Digest != "d-new" ||
-		got.Open != 3 || len(got.Lines) != 1 || !got.At.Equal(request().At) {
+		got.Open != 3 || len(got.Lines) != 1 || !got.ChangedAt.Equal(request().ChangedAt) {
 		t.Fatalf("the request read back as %+v (%v)", got, err)
 	}
 	for name, broken := range map[string]func(*accessreview.Request){
 		"no seat":     func(r *accessreview.Request) { r.Handle = " " },
 		"no baseline": func(r *accessreview.Request) { r.Baseline = "" },
 		"no digest":   func(r *accessreview.Request) { r.Digest = "" },
+		"no instant":  func(r *accessreview.Request) { r.ChangedAt = time.Time{} },
 	} {
 		r := request()
 		broken(&r)
@@ -72,25 +74,69 @@ func TestARequestsLinesAreBoundedAsATurnsAre(t *testing.T) {
 	}
 }
 
-// A WAKE IS DERIVED FROM ITS SEAT, ITS TOLD RECORD AND ITS DIGEST: a republish
-// is the same wake, and a change measured from a newer told record (a revert
-// and the same change again) is a wake of its own.
+// A WAKE IS DERIVED FROM ITS SEAT, ITS TOLD RECORD, ITS DIGEST AND WHEN THE
+// CHANGE WAS MEASURED: a republish is the same wake, and the same change made
+// again after a revert, measured afresh, is a wake of its own.
 //
-// Mutation: derive the id from the digest alone and the second change of a
-// revert-and-redo is collapsed into the first.
+// Mutation: leave the measured instant out of the id and the redo collapses.
 func TestAWakeIsDerivedFromItsSeatItsToldRecordAndItsDigest(t *testing.T) {
 	t.Parallel()
 	a, b := request(), request()
-	b.Lines, b.Open, b.At = nil, 9, b.At.Add(time.Hour)
+	b.Lines, b.Open = nil, 9
 	if accessreview.WakeID(a) != accessreview.WakeID(b) {
 		t.Error("two copies of one review derived two wakes")
 	}
-	later := request()
-	later.Baseline = "t-review"
-	other := request()
-	other.Handle = "pm"
-	if accessreview.WakeID(a) == accessreview.WakeID(later) || accessreview.WakeID(a) == accessreview.WakeID(other) {
-		t.Error("a review from a newer told record, or of another seat, is the same wake")
+	for name, change := range map[string]func(*accessreview.Request){
+		"a newer told record": func(r *accessreview.Request) { r.Baseline = "t-review" },
+		"another seat":        func(r *accessreview.Request) { r.Handle = "pm" },
+		"the change made again": func(r *accessreview.Request) {
+			r.ChangedAt = r.ChangedAt.Add(time.Minute)
+		},
+	} {
+		r := request()
+		change(&r)
+		if accessreview.WakeID(r) == accessreview.WakeID(a) {
+			t.Errorf("%s derived the same wake", name)
+		}
+	}
+}
+
+// EVERY COPY OF ONE WAKE CARRIES ONE INSTANT, the baseline told record's,
+// which the turn derives its operation ids from.
+//
+// Mutation: stamp the wake with the parse's clock and two copies differ.
+func TestEveryCopyOfAWakeCarriesOneInstant(t *testing.T) {
+	t.Parallel()
+	var at []time.Time
+	for range 2 {
+		w, err := accessreview.Encode(request())
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		routed, err := accessreview.Parser{}.Parse(t.Context(), w, nil)
+		if err != nil || len(routed) != 1 {
+			t.Fatalf("Parse answered %d wakes (%v)", len(routed), err)
+		}
+		at = append(at, routed[0].WakeAt)
+	}
+	if !at[0].Equal(at[1]) || !at[0].Equal(request().BaselineAt) {
+		t.Errorf("two copies of one wake carry %v, want the baseline told record's %v", at, request().BaselineAt)
+	}
+}
+
+// A QUESTION IS STALE UNTIL THE CHANGE IS TOLD: one asked before any turn was
+// told it, or before the turn that was, and none asked after.
+func TestAQuestionIsStaleUntilTheChangeIsTold(t *testing.T) {
+	t.Parallel()
+	told := time.Date(2026, 11, 8, 9, 30, 0, 0, time.UTC)
+	untold := accessreview.Pending{Baseline: "t-told", Digest: "d"}
+	if !untold.Stale(told.Add(time.Hour)) {
+		t.Error("a question while no turn was told the change is not stale")
+	}
+	reviewing := untold
+	reviewing.ToldTurn, reviewing.ToldAt = "t-review", told
+	if !reviewing.Stale(told.Add(-time.Minute)) || reviewing.Stale(told.Add(time.Minute)) {
+		t.Error("the told instant does not divide the stale questions from the current ones")
 	}
 }
 
@@ -112,7 +158,7 @@ func TestAReviewIsTheCompanysOwnTurn(t *testing.T) {
 	}
 	r := routed[0]
 	if r.To.Handle != "sre" || r.Sender != "" || r.Writer != nil ||
-		r.WakeID != accessreview.WakeID(request()) || !r.WakeAt.Equal(request().At) {
+		r.WakeID != accessreview.WakeID(request()) || !r.WakeAt.Equal(request().BaselineAt) {
 		t.Errorf("the wake is %+v, want the SRE's, named by nobody, with its derived id", r)
 	}
 	p := accessreview.Prompt{}
@@ -143,8 +189,10 @@ func TestTheSectionNamesTheWorkAndHowToWithdrawIt(t *testing.T) {
 		Items: []accessreview.Item{{Key: "ENG-14", Status: "in_progress"},
 			{Key: "ENG-20", Status: "todo", Blocked: true}},
 	}
-	if w.Count() != 8 {
-		t.Errorf("the work counts %d items, want 8", w.Count())
+	// DISTINCT ITEMS: ENG-12 carries a question and a waiting run, and counts
+	// once; the run on no item counts on its own, and the rest as counted.
+	if w.Count() != 7 {
+		t.Errorf("the work counts %d items, want 7", w.Count())
 	}
 	got := w.Section()
 	for _, want := range []string{

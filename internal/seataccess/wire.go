@@ -193,20 +193,16 @@ type PlanAnswer struct {
 	// StepUp is whether saving the whole draft needs a fresh step-up.
 	StepUp bool `json:"step_up,omitempty"`
 
-	// Reviews are the agents whose access the draft changes, by the closed
-	// change list a turn is told, and that have open work raised under
-	// their access now: each reviews it once the draft is saved (ADR-0111).
-	// Absent where the open work could not be counted.
+	// Reviews are the agents the draft changes the access of that have open
+	// work to review once it is saved (ADR-0111); absent where not counted.
 	Reviews []SeatReview `json:"reviews,omitempty"`
 }
 
 // SeatReview is one agent the draft asks to review its open work.
 type SeatReview struct {
 	Handle string `json:"handle"`
-	// Open is how many of its open items were raised or started under its
-	// access now: questions it asked that are still open, what its executor
-	// waits on a person for, and the work items assigned to it that are in
-	// progress or blocked.
+	// Open is how many distinct open items it has: questions still open, runs
+	// waiting on a person, and work items in progress or blocked.
 	Open int `json:"open"`
 	// Changes are the change lines it will be told, at most twenty.
 	Changes []string `json:"changes"`

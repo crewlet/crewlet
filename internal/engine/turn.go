@@ -155,10 +155,8 @@ type Dispatcher struct {
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
 
-	// ReviewSettled reports whether an access review of a seat has nothing
-	// left to tell it ([Engine.AccessReviewSettled]): a delivery that is
-	// access reviews alone is then acked without a turn, since the turn that
-	// told the change asked for the review with it. Nil settles nothing.
+	// ReviewSettled reports an access review with nothing left to tell
+	// ([Engine.AccessReviewSettled]), acked without a turn. Nil settles nothing.
 	ReviewSettled func(ctx context.Context, handle string) bool
 
 	// Observe publishes an engine-side observability event.
@@ -577,10 +575,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
-	// AN ACCESS REVIEW WITH NOTHING LEFT TO TELL, acked unrun: the seat's
-	// access is what it was last told, so the turn that told it (its review,
-	// or any turn that told the change first and asked for the review with
-	// it) already ran (internal/accessreview).
+	// AN ACCESS REVIEW WITH NOTHING LEFT TO TELL, acked unrun: the turn that
+	// told the change already asked for the review (internal/accessreview).
 	if d.ReviewSettled != nil && accessReviewsOnly(surviving) && d.ReviewSettled(ctx, handle) {
 		log.InfoContext(ctx, "access_review_settled", "seat", handle, "events", len(surviving),
 			"detail", "the seat was already told its access as it stands; no review turn runs")

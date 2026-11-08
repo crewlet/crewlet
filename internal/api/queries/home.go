@@ -15,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -619,62 +621,65 @@ type DecisionItem struct {
 	Ask *worklet.AskRow `json:"ask,omitempty"`
 	Run map[string]any  `json:"run,omitempty"`
 
-	// AccessChanged is set where the agent that asked was asked under access
-	// it no longer holds: its access changed after the question was raised
-	// (ADR-0111). Absent once it asks again, or for a question a person put.
+	// AccessChanged is set on a question its agent asked before an access
+	// change it has not reviewed yet (ADR-0111).
 	AccessChanged *AccessChanged `json:"access_changed,omitempty"`
 }
 
-// AccessChanged is what changed in an asking agent's access since it asked:
-// the change lines its next turn is told, at most [capability.MaxLines], and
-// none where the change cannot be said line by line.
+// AccessChanged notes a question asked before an access change its agent has
+// not reviewed yet; Lines go only to a caller who may read the setup.
 type AccessChanged struct {
 	Lines []string `json:"lines"`
 }
 
-// AccessHistory says what changed in an agent seat's access since an instant
-// (ADR-0111): the engine, over the access log and the seat's access now. The
-// function it answers takes the instant a question was raised.
-type AccessHistory interface {
-	AccessSince(ctx context.Context, handle string) (func(at time.Time) ([]string, bool), error)
+// AccessReviews is each agent seat's access change waiting on its review
+// (ADR-0111), one read per seat.
+type AccessReviews interface {
+	PendingAccessReview(ctx context.Context, handle string) (accessreview.Pending, bool, error)
 }
 
-// accessChanges answers, per asking seat, what changed in its access since an
-// instant, reading each seat's history once per answer. A history that cannot
-// be read leaves that seat's questions without a note, said in the log: the
-// list is still the person's to answer.
+// accessChanges answers, per asking seat, whether a question it asked waits on
+// a review of its access, reading each seat's record once per answer.
 type accessChanges struct {
-	history AccessHistory
-	read    map[string]func(time.Time) ([]string, bool)
+	reviews AccessReviews
+	// detailed is whether the caller may read the company's setup.
+	detailed bool
+	read     map[string]*accessreview.Pending
 }
 
-// of is what changed in seat handle's access since at, nil where nothing did
-// or nothing can be said.
-func (a *accessChanges) of(ctx context.Context, handle string, at time.Time) *AccessChanged {
-	if a.history == nil || handle == "" || at.IsZero() {
+// newAccessChanges is the per-answer reader for the caller in ctx.
+func newAccessChanges(ctx context.Context, reviews AccessReviews) *accessChanges {
+	principal, how := iam.From(ctx)
+	detailed := how == iam.Resolved && authz.Decide(ctx, principal, authz.ActionSetupRead,
+		authz.Object{}, authz.NoChart{}, authz.DecidedAt(ctx)).Allowed
+	return &accessChanges{reviews: reviews, detailed: detailed, read: map[string]*accessreview.Pending{}}
+}
+
+// of is the note on a question seat handle asked at asked, nil for none. A
+// record that cannot be read notes nothing, said in the log.
+func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) *AccessChanged {
+	if a.reviews == nil || handle == "" {
 		return nil
 	}
-	since, ok := a.read[handle]
+	pending, ok := a.read[handle]
 	if !ok {
-		var err error
-		if since, err = a.history.AccessSince(ctx, handle); err != nil {
-			log.WarnContext(ctx, "decisions_access_history_unread", "agent", handle,
+		p, found, err := a.reviews.PendingAccessReview(ctx, handle)
+		if err != nil {
+			log.WarnContext(ctx, "decisions_access_review_unread", "agent", handle,
 				"error", err.Error(), "detail", "this seat's open questions show no access note")
-			since = nil
 		}
-		a.read[handle] = since
+		if found && err == nil {
+			pending = &p
+		}
+		a.read[handle] = pending
 	}
-	if since == nil {
+	if pending == nil || !pending.Stale(asked) {
 		return nil
 	}
-	lines, changed := since(at)
-	if !changed {
-		return nil
+	if !a.detailed {
+		return &AccessChanged{Lines: []string{}}
 	}
-	if lines == nil {
-		lines = []string{}
-	}
-	return &AccessChanged{Lines: lines}
+	return &AccessChanged{Lines: append([]string{}, pending.Lines...)}
 }
 
 // decisions answers what is waiting on one person — the open asks put to
@@ -706,10 +711,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	var items []DecisionItem
 	total, capped := 0, false
 	var oldest *time.Time
-	// WHAT CHANGED IN AN ASKING AGENT'S ACCESS SINCE IT ASKED, so a person
-	// answers a question knowing it was raised under access the agent no
-	// longer holds (ADR-0111).
-	changes := &accessChanges{history: s.Access, read: map[string]func(time.Time) ([]string, bool){}}
+	// A QUESTION ASKED BEFORE AN UNREVIEWED ACCESS CHANGE SAYS SO (ADR-0111).
+	changes := newAccessChanges(ctx, s.Access)
 	older := func(at time.Time) {
 		if oldest == nil || at.Before(*oldest) {
 			oldest = &at

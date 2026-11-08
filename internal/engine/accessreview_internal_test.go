@@ -90,32 +90,85 @@ func (c *captured) got() []accessreview.Request {
 	return append([]accessreview.Request(nil), c.reqs...)
 }
 
-// withReviews arms e's review debounce where the node did not.
-func withReviews(t *testing.T, e *Engine) {
+// withReviews arms e's review debounce with a timer that never fires on its
+// own, and answers the timers it armed.
+func withReviews(t *testing.T, e *Engine) *[]func() {
 	t.Helper()
-	if e.accessReviews.Load() == nil {
-		e.accessReviews.Store(newAccessReviews(t.Context(), e.checkAccessReviews))
+	var armed []func()
+	var mu sync.Mutex
+	r := newAccessReviews(t.Context(), e.checkAccessReviews)
+	r.after = func(_ time.Duration, f func()) func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		armed = append(armed, f)
+		return func() bool { return true }
+	}
+	e.accessReviews.Store(r)
+	return &armed
+}
+
+// clock is a seam's clock that moves a second on every read.
+func clock() func() time.Time {
+	at := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
+	return func() time.Time {
+		at = at.Add(time.Second)
+		return at
 	}
 }
 
-// A LEVEL CHANGE ASKS FOR EXACTLY ONE REVIEW. The SRE's Cloudflare level
-// lowered from Operate to Read is a change the closed list counts, measured
-// from the told record, and a seat checked twice for the same change, on an
-// apply that changed nothing further, is asked once: its wake's id is derived
-// from the seat, the told record and the new digest, so a republish by another
-// node collapses into the same wake.
+// seamsOf are e's review seams with the work, publisher and clock a case states.
+func seamsOf(e *Engine, work func(context.Context, *Company, string) (accessreview.Work, error),
+	pub *captured) reviewSeams {
+
+	s := e.reviewSeams()
+	s.work, s.publish, s.now = work, pub.publish, clock()
+	return s
+}
+
+// A LEVEL CHANGE ASKS FOR EXACTLY ONE REVIEW. A lowered level is a change the
+// closed list counts, measured from the told record, and a seat checked twice
+// for one change is asked once, under one wake id another node derives too.
 //
-// Mutation: drop the asked memo and the second check publishes again; derive
-// the request from the previous revision rather than the told record and the
-// baseline is not the told turn.
+// Mutation: drop the asked memo and the second check publishes again.
 func TestALevelChangeAsksForExactlyOneReview(t *testing.T) {
 	t.Parallel()
-	req, owed := reviewOf(sreSnapshot(sreAccess("read")), toldAs("t-told", sreSnapshot(sreAccess("operate"))), "sre")
-	if !owed || req.Baseline != "t-told" || len(req.Lines) != 1 ||
-		!strings.Contains(req.Lines[0], "Cloudflare: your level is now") {
-		t.Fatalf("a lowered level owes %+v (%v), want one review measured from the told turn", req, owed)
+	m, owed := measured(sreSnapshot(sreAccess("read")), toldAs("t-told", sreSnapshot(sreAccess("operate"))))
+	if !owed || m.base.Turn != "t-told" || len(m.seatLines) != 1 ||
+		!strings.Contains(m.seatLines[0], "Cloudflare: your level is now") ||
+		!strings.Contains(m.personLines[0], "Cloudflare: its level is now") {
+		t.Fatalf("a lowered level measures %+v (%v), want one line in each voice", m, owed)
 	}
 
+	e, _ := aRunningNode(t)
+	withReviews(t, e)
+	first, turnID := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes."))
+	launchTurn(t, e, first, turnID)
+	after := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
+	pub := &captured{}
+	seams := seamsOf(e, someWork, pub)
+	for range 2 {
+		if err := e.reviewSeat(t.Context(), after, "ceo", seams); err != nil {
+			t.Fatalf("reviewSeat: %v", err)
+		}
+	}
+	got := pub.got()
+	if len(got) != 1 || got[0].Baseline != turnID || got[0].Open != 2 || len(got[0].Lines) != 1 {
+		t.Fatalf("two checks of one change asked for %+v, want one measured from %s", got, turnID)
+	}
+	pending, found, err := e.PendingAccessReview(t.Context(), "ceo")
+	if err != nil || !found || accessreview.WakeID(accessreview.RequestFor("ceo", pending, nil, 0)) !=
+		accessreview.WakeID(got[0]) {
+		t.Errorf("the recorded change %+v (%v, %v) derives another wake than the one asked", pending, found, err)
+	}
+}
+
+// A CHANGE MADE, REVERTED AND MADE AGAIN IS REVIEWED AGAIN, with no turn in
+// between: the revert drops the untold record, and the redo is measured afresh
+// under a wake id of its own.
+//
+// Mutation: keep the record across the revert and the redo is never asked.
+func TestAChangeRevertedAndMadeAgainIsReviewedAgain(t *testing.T) {
+	t.Parallel()
 	e, _ := aRunningNode(t)
 	withReviews(t, e)
 	before := capabilityCompany(t, "Ship small changes.")
@@ -123,31 +176,22 @@ func TestALevelChangeAsksForExactlyOneReview(t *testing.T) {
 	launchTurn(t, e, first, turnID)
 	after := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
 	pub := &captured{}
-	seams := reviewSeams{work: someWork, publish: pub.publish}
-	for range 2 {
-		if err := e.reviewSeat(t.Context(), after, "ceo", seams); err != nil {
+	seams := seamsOf(e, someWork, pub)
+	for _, c := range []*Company{after, before, after} {
+		if err := e.reviewSeat(t.Context(), c, "ceo", seams); err != nil {
 			t.Fatalf("reviewSeat: %v", err)
 		}
 	}
 	got := pub.got()
-	if len(got) != 1 {
-		t.Fatalf("two checks of one change asked for %d reviews, want 1: %+v", len(got), got)
-	}
-	if got[0].Baseline != turnID || got[0].Open != 2 || len(got[0].Lines) != 1 {
-		t.Errorf("the review asked for is %+v, want it measured from %s with 2 open items", got[0], turnID)
-	}
-	again, owedAgain, err := e.reviewOwed(t.Context(), after, "ceo")
-	if err != nil || !owedAgain || accessreview.WakeID(again) != accessreview.WakeID(got[0]) {
-		t.Errorf("the same change measured again wakes %v (%v, %v), want the same wake %v",
-			accessreview.WakeID(again), owedAgain, err, accessreview.WakeID(got[0]))
+	if len(got) != 2 || accessreview.WakeID(got[0]) == accessreview.WakeID(got[1]) {
+		t.Fatalf("a change, its revert and the change again asked for %d reviews, want 2 under two wakes", len(got))
 	}
 }
 
-// THREE QUICK REVISIONS ASK FOR ONE REVIEW. Every apply restarts the quiet
-// window, so a person's run of saves is measured once, after the last of them.
+// THREE QUICK REVISIONS ASK FOR ONE REVIEW: every apply restarts the quiet
+// window, so a run of saves is measured once.
 //
-// Mutation: arm a timer per kick without stopping the one before and three
-// checks run.
+// Mutation: arm a timer per kick without stopping the one before.
 func TestThreeQuickRevisionsAskForOneReview(t *testing.T) {
 	t.Parallel()
 	var (
@@ -193,20 +237,41 @@ func TestThreeQuickRevisionsAskForOneReview(t *testing.T) {
 	}
 }
 
-// A PAUSED SEAT REVIEWS WHEN IT RESUMES. A review is asked for whatever the
-// seat's pause, and its wake waits on the seat's inbox like any mail: parked
-// while the seat is paused, delivered once it is resumed, and dispatched as a
-// review there.
+// A LEDGER WRITE MEASURES THE SEAT IT NAMES: access a sync or a vendor step
+// changes, with no revision, is measured too.
 //
-// Mutation: drop a review addressed to a paused seat and nothing reaches it on
-// its resume.
+// Mutation: hand out the ledger unwrapped and the write asks for nothing.
+func TestALedgerWriteMeasuresTheSeatItNames(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	armed := withReviews(t, e)
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		t.Fatalf("SeatAccessLedger: %v", err)
+	}
+	if err := ledger.Put(t.Context(), seataccess.Record{Kind: integration.KindCloudflare,
+		Handle: "sre"}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	r := e.accessReviews.Load()
+	r.mu.Lock()
+	named, timers := r.handles["sre"], len(*armed)
+	r.mu.Unlock()
+	if !named || timers != 1 {
+		t.Errorf("a ledger write named sre %v and armed %d windows, want the seat measured once", named, timers)
+	}
+}
+
+// A PAUSED SEAT REVIEWS WHEN IT RESUMES: its review wake waits on the inbox
+// like any mail, parked while paused and dispatched as a review once resumed.
+//
+// Mutation: drop a review addressed to a paused seat.
 func TestAPausedSeatReviewsWhenItResumes(t *testing.T) {
 	t.Parallel()
-	wake := reviewWake()
 	ready := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
 	paused := ready
 	paused.Paused = true
-	held := inbox.Screen(paused, []*events.Event{wake})
+	held := inbox.Screen(paused, []*events.Event{reviewWake()})
 	if held.Action != inbox.ActionPauseAndPark || len(held.Events) != 1 {
 		t.Fatalf("a review reaching a paused seat is %s with %d events, want parked whole",
 			held.Action, len(held.Events))
@@ -229,9 +294,7 @@ func TestAPausedSeatReviewsWhenItResumes(t *testing.T) {
 	}
 }
 
-// A SETTLED REVIEW IS ACKED WITHOUT A TURN. A review whose seat was already
-// told its access as it stands (by its review, or a turn that told the change
-// first) runs nothing; one that still has a change to tell runs.
+// A SETTLED REVIEW IS ACKED WITHOUT A TURN; one with a change to tell runs.
 //
 // Mutation: drop the settled check and a seat told twice reviews twice.
 func TestASettledReviewIsAckedWithoutATurn(t *testing.T) {
@@ -255,7 +318,7 @@ func TestASettledReviewIsAckedWithoutATurn(t *testing.T) {
 	}
 }
 
-// reviewWake is a review's wake as the notify spine delivers it to the seat.
+// reviewWake is a review's wake as the notify spine delivers it.
 func reviewWake() *events.Event {
 	return events.New(types.ExternalNotification{
 		NotificationSource: accessreview.Source, SourceEventType: accessreview.EventType,
@@ -263,20 +326,17 @@ func reviewWake() *events.Event {
 	}, events.NewTrace())
 }
 
-// THE REVIEW TURN'S TOLD RECORD STOPS THE NEXT TURN REPEATING THE CHANGE. The
-// review turn is told the change and the seat's open work through the one
-// dispatch every turn takes, its launch writes the told record, and from then
-// the seat owes no review and its next turn is told nothing.
+// THE REVIEW TURN'S TOLD RECORD STOPS THE NEXT TURN REPEATING THE CHANGE: from
+// its launch the seat owes no review and its next turn is told nothing.
 //
-// Mutation: tell the review turn the change without writing its told record
-// and the next turn repeats it.
+// Mutation: tell the review turn the change without writing its told record.
 func TestAReviewTurnsToldRecordStopsTheNextTurnRepeatingIt(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	first, turnID := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes."))
 	launchTurn(t, e, first, turnID)
 	after := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
-	if _, owed, err := e.reviewOwed(t.Context(), after, "ceo"); err != nil || !owed {
+	if _, owed, err := e.measureAccess(t.Context(), after, "ceo"); err != nil || !owed {
 		t.Fatalf("the premise: the changed seat owes no review (%v)", err)
 	}
 	if e.reviewSettled(t.Context(), after, "ceo") {
@@ -287,7 +347,7 @@ func TestAReviewTurnsToldRecordStopsTheNextTurnRepeatingIt(t *testing.T) {
 		t.Fatalf("the review turn is told:\n%s", review.changes)
 	}
 	launchTurn(t, e, review, reviewTurn)
-	if _, owed, err := e.reviewOwed(t.Context(), after, "ceo"); err != nil || owed {
+	if _, owed, err := e.measureAccess(t.Context(), after, "ceo"); err != nil || owed {
 		t.Errorf("after the review turn launched the seat owes a review (%v)", err)
 	}
 	if !e.reviewSettled(t.Context(), after, "ceo") {
@@ -298,43 +358,56 @@ func TestAReviewTurnsToldRecordStopsTheNextTurnRepeatingIt(t *testing.T) {
 	}
 }
 
-// AN ASK RAISED BEFORE A CHANGE CARRIES THE NOTE UNTIL IT IS ASKED AGAIN. A
-// question asked under Operate, with the level lowered to Read since, notes
-// the change; once the review turn is told Read and asks again, the new
-// question notes nothing, and a revert to Operate clears the old one's note.
+// AN ASK RAISED BEFORE A CHANGE CARRIES THE NOTE UNTIL THE REVIEW ENDS. A
+// question asked before the change is stale from the change's record on; one
+// asked after the review turn was told it is not; and once the turn told it
+// ends, the record goes and no question is noted. Another turn's end, or a
+// later check, leaves it.
 //
-// Mutation: measure against the next told record instead of the access now
-// and the reverted question still carries a note.
+// Mutation: drop the record at the told record's write rather than the turn's
+// end and the note goes while the agent is still reviewing.
 func TestAnAskRaisedBeforeAChangeCarriesTheNoteUntilAskedAgain(t *testing.T) {
 	t.Parallel()
-	operate, read := sreSnapshot(sreAccess("operate")), sreSnapshot(sreAccess("read"))
-	t1 := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
-	rows := []accessdomain.ToldRow{{Turn: "t-1", At: t1, Digest: operate.Digest(), Snapshot: operate.JSON()}}
-	asked := t1.Add(time.Minute)
-	lines, changed := changedSince(rows, read, asked)
-	if !changed || len(lines) != 1 || !strings.Contains(lines[0], "level") {
-		t.Fatalf("a question asked under Operate, with Read now, notes %v (%v)", lines, changed)
+	e, _ := aRunningNode(t)
+	withReviews(t, e)
+	first, turnID := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes."))
+	launchTurn(t, e, first, turnID)
+	asked := time.Now().UTC()
+	after := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
+	pub := &captured{}
+	if err := e.reviewSeat(t.Context(), after, "ceo", seamsOf(e, someWork, pub)); err != nil {
+		t.Fatalf("reviewSeat: %v", err)
 	}
-	rows = append([]accessdomain.ToldRow{{Turn: "t-review", At: t1.Add(10 * time.Minute),
-		Digest: read.Digest(), Snapshot: read.JSON()}}, rows...)
-	if lines, changed := changedSince(rows, read, t1.Add(11*time.Minute)); changed {
-		t.Errorf("the question asked again after the review notes %v", lines)
+	pending, found, err := e.PendingAccessReview(t.Context(), "ceo")
+	if err != nil || !found || !pending.Stale(asked) || len(pending.Lines) != 1 ||
+		!strings.Contains(pending.Lines[0], "Policy added") {
+		t.Fatalf("the change's record is %+v (%v, %v), want a pending review noting the earlier ask",
+			pending, found, err)
 	}
-	if lines, changed := changedSince(rows, operate, asked); changed {
-		t.Errorf("a question asked under Operate, with Operate back now, notes %v", lines)
+	review, reviewTurn := dispatchTurn(t, e, after)
+	launchTurn(t, e, review, reviewTurn)
+	if pending, _, _ = e.PendingAccessReview(t.Context(), "ceo"); pending.ToldTurn != reviewTurn ||
+		!pending.Stale(asked) || pending.Stale(pending.ToldAt.Add(time.Second)) {
+		t.Fatalf("after the review turn launched the record is %+v, want it told to %s", pending, reviewTurn)
 	}
-	if lines, changed := changedSince(rows, read, t1.Add(-time.Hour)); changed {
-		t.Errorf("a question older than every told record notes %v, want nothing said", lines)
+	e.endReviewOnTurnEnd(t.Context(), "ceo", turnID)
+	if err := e.reviewSeat(t.Context(), after, "ceo", seamsOf(e, someWork, pub)); err != nil {
+		t.Fatalf("reviewSeat: %v", err)
+	}
+	if _, found, _ := e.PendingAccessReview(t.Context(), "ceo"); !found {
+		t.Fatal("another turn's end, or a check while the review runs, dropped the record")
+	}
+	e.endReviewOnTurnEnd(t.Context(), "ceo", reviewTurn)
+	if _, found, _ := e.PendingAccessReview(t.Context(), "ceo"); found {
+		t.Error("the review turn ended and its change is still noted")
 	}
 }
 
-// THE SAVE'S DRY RUN COUNTS OPEN ITEMS. A draft lowering the SRE's Cloudflare
-// level names the SRE with its open items and the line it will be told; a draft
-// that changes nothing the seat is told, or a seat with nothing open, names
-// nobody.
+// THE SAVE'S DRY RUN COUNTS DISTINCT OPEN ITEMS. A draft lowering the SRE's
+// level names it with its open items and the line, in a person's words; a draft
+// that changes nothing, or a seat with nothing open, names nobody.
 //
-// Mutation: measure the draft without writing its settings into the copy and
-// no seat is named.
+// Mutation: measure the draft without the save's edits and no seat is named.
 func TestTheSaveDryRunCountsOpenItems(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -353,35 +426,35 @@ func TestTheSaveDryRunCountsOpenItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Organization: %v", err)
 	}
-	lower := seataccess.Draft{Seats: map[string]map[seataccess.Lane]seataccess.Desired{
-		"sre": {seataccess.LaneCloudflare: {Enabled: true, Level: "read"}},
-	}}
-	reviews, err := e.draftReviews(t.Context(), cfg, roster, lower, someWork)
+	current := seataccess.Answer{Seats: []seataccess.SeatAnswer{{Handle: "sre",
+		Lanes: map[seataccess.Lane]seataccess.LaneAnswer{
+			seataccess.LaneCloudflare: {Desired: seataccess.Desired{Enabled: true, Level: "operate"}},
+		}}}}
+	draftOf := func(level string) seataccess.Draft {
+		return seataccess.Draft{Seats: map[string]map[seataccess.Lane]seataccess.Desired{
+			"sre": {seataccess.LaneCloudflare: {Enabled: true, Level: level}},
+		}}
+	}
+	reviews, err := e.draftReviews(t.Context(), cfg, roster, current, draftOf("read"), someWork)
 	if err != nil {
 		t.Fatalf("draftReviews: %v", err)
 	}
 	if len(reviews) != 1 || reviews[0].Handle != "sre" || reviews[0].Open != 2 ||
-		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "level") {
+		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "its level is now") {
 		t.Fatalf("the dry run of a lowered level names %+v, want the SRE with 2 open items", reviews)
 	}
-	if reviews, err := e.draftReviews(t.Context(), cfg, roster, lower, noWork); err != nil || len(reviews) != 0 {
+	if reviews, err := e.draftReviews(t.Context(), cfg, roster, current, draftOf("read"), noWork); err != nil || len(reviews) != 0 {
 		t.Errorf("a seat with nothing open is named %+v (%v)", reviews, err)
 	}
-	same := seataccess.Draft{Seats: map[string]map[seataccess.Lane]seataccess.Desired{
-		"sre": {seataccess.LaneCloudflare: {Enabled: true, Level: "operate"}},
-	}}
-	if reviews, err := e.draftReviews(t.Context(), cfg, roster, same, someWork); err != nil || len(reviews) != 0 {
+	if reviews, err := e.draftReviews(t.Context(), cfg, roster, current, draftOf("operate"), someWork); err != nil || len(reviews) != 0 {
 		t.Errorf("a draft that changes nothing names %+v (%v)", reviews, err)
 	}
 }
 
-// A CHANGE OUTSIDE THE CLOSED LIST ASKS FOR NO REVIEW. The mission, the vision
-// and the seat's availability are not what a seat is told about its access, so a
-// revision that changes them leaves the seat's snapshot as it was told, and
-// nothing is asked.
+// A CHANGE OUTSIDE THE CLOSED LIST ASKS FOR NO REVIEW: the mission, the vision
+// and the seat's availability are not what a seat is told about its access.
 //
-// Mutation: compare whole documents rather than snapshots and the mission's
-// change asks for a review.
+// Mutation: compare whole documents rather than snapshots.
 func TestAChangeOutsideTheClosedListAsksForNoReview(t *testing.T) {
 	t.Parallel()
 	before := sreAccess("operate")
@@ -389,15 +462,15 @@ func TestAChangeOutsideTheClosedListAsksForNoReview(t *testing.T) {
 	after.Mission = "Ship it faster."
 	after.Vision = "Every release is boring."
 	after.Roles[0].Availability = "Weekdays."
-	if req, owed := reviewOf(sreSnapshot(after), toldAs("t-told", sreSnapshot(before)), "sre"); owed {
-		t.Errorf("a mission, vision and availability change owe a review %+v", req)
+	if m, owed := measured(sreSnapshot(after), toldAs("t-told", sreSnapshot(before))); owed {
+		t.Errorf("a mission, vision and availability change owe a review %+v", m)
 	}
 }
 
-// A SEAT WITH NOTHING OPEN IS ASKED FOR NO REVIEW. Its change is told at its
-// next turn, as every change is; a turn now would review nothing.
+// A SEAT WITH NOTHING OPEN IS ASKED FOR NO REVIEW; once it has open work, the
+// same change is asked for.
 //
-// Mutation: ask for a review whatever the open work and this seat is woken.
+// Mutation: ask for a review whatever the open work.
 func TestASeatWithNothingOpenIsAskedForNoReview(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -406,14 +479,13 @@ func TestASeatWithNothingOpenIsAskedForNoReview(t *testing.T) {
 	launchTurn(t, e, first, turnID)
 	after := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
 	pub := &captured{}
-	if err := e.reviewSeat(t.Context(), after, "ceo", reviewSeams{work: noWork, publish: pub.publish}); err != nil {
+	if err := e.reviewSeat(t.Context(), after, "ceo", seamsOf(e, noWork, pub)); err != nil {
 		t.Fatalf("reviewSeat: %v", err)
 	}
 	if got := pub.got(); len(got) != 0 {
 		t.Errorf("a seat with nothing open was asked for %+v", got)
 	}
-	// AND ONCE IT HAS SOMETHING OPEN, the same change is asked for.
-	if err := e.reviewSeat(t.Context(), after, "ceo", reviewSeams{work: someWork, publish: pub.publish}); err != nil {
+	if err := e.reviewSeat(t.Context(), after, "ceo", seamsOf(e, someWork, pub)); err != nil {
 		t.Fatalf("reviewSeat: %v", err)
 	}
 	if got := pub.got(); len(got) != 1 {

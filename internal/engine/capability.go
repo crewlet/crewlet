@@ -414,6 +414,9 @@ func (e *Engine) tellCapability(ctx context.Context, t *turnctx.Turn, told *told
 			return
 		}
 		e.publishCapabilityTold(writeCtx, told)
+		if !told.pending.Baseline {
+			e.noteReviewTold(writeCtx, told.pending.Handle, told.pending.Turn, told.pending.Digest)
+		}
 	})
 }
 
@@ -463,10 +466,8 @@ func (e *Engine) turnMintedAt(ctx context.Context, turnID, workKey string, workS
 	return identity.OperationSince(), nil
 }
 
-// withOpenWork is the changes block a turn is told, followed by the seat's open
-// work and what to do about it (accessreview.Work.Section). A seat whose work
-// could not be read is told the change alone, and says so in the log: the
-// change is still news, and a list it could not vouch for is no list.
+// withOpenWork is the changes block followed by the seat's open work
+// (accessreview.Work.Section); work that could not be read is left out, logged.
 func (e *Engine) withOpenWork(ctx context.Context, company *Company, handle, changes string) string {
 	work, err := e.openWork(ctx, company, handle)
 	if err != nil {

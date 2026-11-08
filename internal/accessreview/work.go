@@ -11,18 +11,11 @@ import (
 const SectionTitle = "Your open work raised under your earlier access"
 
 // MaxListed is the most items of each kind a section names; the rest are
-// counted. Ten: a seat reads each one it is shown with its own tools, and a
-// review past thirty reads is one the seat is better told to page through
-// with them than handed whole.
+// counted. Ten: a seat reads each one with its own tools.
 const MaxListed = 10
 
-// Work is one seat's open work a review covers: what may assume access the
-// seat no longer has, or work around access it now has.
-//
-// KEYS AND IDS, NEVER TITLES. A title is words somebody else wrote, which a
-// prompt may hand a seat only fenced (ADR-0040); the seat reads each item
-// with its own tools, which fence it, so the section names what to read and
-// nothing anybody else wrote.
+// Work is one seat's open work a review covers, named by key and run id and
+// never by anybody's words, which a prompt hands a seat only fenced (ADR-0040).
 type Work struct {
 	// Asks are the work items carrying a question the seat asked that is
 	// still open, by key, and MoreAsks how many more there are.
@@ -60,20 +53,39 @@ type Item struct {
 	Blocked bool
 }
 
-// Count is how many open items the work holds, the counted rest included.
+// Count is how many distinct open items the work holds: a work item counts
+// once whether it carries a question, is assigned or has a run waiting on it,
+// and the counted rest is added.
 func (w Work) Count() int {
-	return len(w.Asks) + w.MoreAsks + len(w.Runs) + w.MoreRuns + len(w.Items) + w.MoreItems
+	seen := map[string]bool{}
+	n := 0
+	add := func(key string) {
+		if key == "" {
+			n++
+			return
+		}
+		if !seen[key] {
+			seen[key] = true
+			n++
+		}
+	}
+	for _, key := range w.Asks {
+		add(key)
+	}
+	for _, it := range w.Items {
+		add(it.Key)
+	}
+	for _, r := range w.Runs {
+		add(r.Task)
+	}
+	return n + w.MoreAsks + w.MoreItems + w.MoreRuns
 }
 
 // Empty reports work holding nothing to review.
 func (w Work) Empty() bool { return w.Count() == 0 }
 
-// Section is the open work as a turn that is told a change reads it, under
-// [SectionTitle], with what to do about each item. Empty for no work.
-//
-// ONE SECTION FOR EVERY TURN THAT TELLS A CHANGE, the review's and any other:
-// whichever turn tells the change first is the one that asks for the review,
-// since its told record keeps every later turn from being told it again.
+// Section is the open work under [SectionTitle], with what to do about each
+// item, for every turn that tells a change; empty for no work.
 func (w Work) Section() string {
 	if w.Empty() {
 		return ""
@@ -113,9 +125,8 @@ var Instructions = "For each one the change affects, update it or withdraw it, a
 	"a held call your executor waits on with `" + toolname.WithdrawAsk + "` and its `run`. " +
 	"Leave everything the change does not affect as it is."
 
-// UpdatedPrefix opens what a seat says, in its own voice, about an item it
-// updated or withdrew after a change to its access: the person who reads the
-// item reads why it moved.
+// UpdatedPrefix opens what a seat says about an item it updated or withdrew
+// after a change to its access.
 const UpdatedPrefix = "Updated after my access changed: "
 
 // line names one waiting run.

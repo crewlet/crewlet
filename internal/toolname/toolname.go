@@ -130,10 +130,8 @@ const (
 	CreateWorkItem = "create_work_item"
 )
 
-// WithdrawAsk withdraws a question a seat asked, or a call its executor holds
-// for approval. The builtins implement it; it is here because the access
-// review (internal/accessreview), which the builtins sit above, tells a seat
-// to call it.
+// WithdrawAsk withdraws a seat's own question or held call; here because the
+// access review (internal/accessreview), below the builtins, names it.
 const WithdrawAsk = "withdraw_ask"
 
 // WriteProject is the tracker's one project write a seat holds. The tracker

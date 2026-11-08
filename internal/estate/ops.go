@@ -1444,11 +1444,8 @@ type resolveCommentOnTaskArgs struct {
 	Notify    *worklet.Notify
 }
 
-// RESOLVING ONE'S OWN REMARK on a work item, an open question among them: its
-// asker withdrawing it. Its author is decided in the decide's own snapshot on
-// the serving node ([worklet.ErrNotAuthor]), against the SIGNED actor, as an
-// edit's is: a resolve whose author a request could choose would close
-// somebody else's question in their name.
+// RESOLVING ONE'S OWN REMARK, a question its asker withdraws: the author is
+// decided against the SIGNED actor ([worklet.ErrNotAuthor]), as an edit's is.
 var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a resolveCommentOnTaskArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)

@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -23,9 +22,8 @@ import (
 // WithdrawAskTool is the tool's wire name.
 const WithdrawAskTool = toolname.WithdrawAsk
 
-// MaxWithdrawReasonBytes bounds why a question is withdrawn: the page an
-// answer to a parked run is held to ([MaxRunAnswerBytes]), since a run's
-// withdrawal travels as its answer, and far inside a comment's own cap.
+// MaxWithdrawReasonBytes bounds why a question is withdrawn: a run's
+// withdrawal travels as its answer ([MaxRunAnswerBytes]).
 const MaxWithdrawReasonBytes = MaxRunAnswerBytes
 
 // AskResolver resolves a comment as its author: a question its asker
@@ -36,8 +34,7 @@ type AskResolver interface {
 }
 
 // WithdrawDeps are withdraw_ask's dependencies: the tracker's, for a question
-// on a work item, and the run desk, for a question or a held call the seat's
-// executor waits on. Either half alone offers the tool for that half.
+// on a work item, and the run desk, for what the seat's executor waits on.
 type WithdrawDeps struct {
 	// Work reads the item and posts the reason in the question's thread.
 	Work WorkDeps
@@ -56,24 +53,9 @@ func (d WithdrawDeps) tracker() bool {
 // serves reports whether either half is wired.
 func (d WithdrawDeps) serves() bool { return d.tracker() || d.Desk != nil }
 
-// withdrawAsk withdraws a question the calling seat asked, or a call its
-// executor holds for a person's approval (ADR-0111).
-//
-// # Only the seat's own
-//
-// A question on a work item is resolved by its author alone, which the
-// tracker's writer decides in its own snapshot ([worklet.ErrNotAuthor]); a
-// run is the seat's own when its row names the seat, read here. Nobody else's
-// question is withdrawn through this tool, and a person's is never: a person
-// resolves their own from the item.
-//
-// # It says why, where the person reads it
-//
-// On a work item the reason is posted in the question's thread before the
-// question is resolved, so the person asked reads why it closed. A run is told
-// its question was withdrawn, with the reason, as its answer: a held call is
-// answered Deny by the seat itself, so the call is never made, and the run
-// carries on under the access it holds now.
+// withdrawAsk withdraws the calling seat's own question, its reason posted in
+// the question's thread, or what its own executor waits on, answered by the
+// seat itself (a held call as Deny) (ADR-0111).
 type withdrawAsk struct {
 	deps WithdrawDeps
 }
@@ -162,8 +144,7 @@ func (t *withdrawAsk) withdrawRun(ctx context.Context, seat, turnID, reason stri
 		return readFailure(ctx, WithdrawAskTool, err), nil
 	}
 	if !found || run.AgentHandle != seat {
-		// ANOTHER SEAT'S RUN READS AS NONE: what a run of somebody else's
-		// waits on is not this seat's to withdraw, nor to learn about.
+		// ANOTHER SEAT'S RUN READS AS NONE.
 		return refused(tools.RefusalNotFound, fmt.Sprintf("No run %s of yours waits on a "+
 			"person. Name one of your own runs by its turn id.", clip(turnID))), nil
 	}
@@ -175,15 +156,12 @@ func (t *withdrawAsk) withdrawRun(ctx context.Context, seat, turnID, reason stri
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		Answer: reason, AnsweredBy: seat, AnsweredByKind: string(iam.ActorAgent),
-		// THE QUESTION THIS WITHDRAWS, off the row just read as waiting:
-		// the withdrawal carries the run on only while it still waits on
-		// that question, and is spent otherwise.
+		// THE QUESTION THIS WITHDRAWS: spent if the run moved on.
 		LaunchID: run.LaunchID,
 	}
 	what := "question"
 	if held := run.HeldCall; held != nil {
-		// A HELD CALL IS WITHDRAWN AS DENY, by the seat itself: the call is
-		// never made, and the run is told it withdrew it.
+		// A HELD CALL IS WITHDRAWN AS DENY, by the seat itself.
 		given.Choice, given.Approval, what = sandbox.HeldDeny, held.ID, "held call"
 	}
 	outcome := statelog.OutcomePending
@@ -227,16 +205,9 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	if denied != "" {
 		return failed(denied), nil
 	}
-	// A REPLY IN A THREAD IS A COMMENT, decided as one: the tracker's app,
-	// for the seat and for whoever woke the turn (ADR-0109).
-	holder, refusal := work.itemGate(ctx, authz.ActionWorkComment)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	if !holder {
-		return refused(tools.RefusalForbidden, WithdrawAskTool+" posts the reason on the item, "+
-			"which takes Worklet."), nil
-	}
+	// THE ASKER'S ARM, as answering is the asked one's: a seat withdraws its own
+	// question by authorship, which the tracker's writer decides, never by the
+	// app, as a held call is withdrawn by its own seat whoever woke the turn.
 	before, err := work.Reader.Task(ctx, ref, worklet.DetailWants{Comment: askID}, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):

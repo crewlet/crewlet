@@ -2,10 +2,12 @@ package builtin_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -37,6 +39,15 @@ func withdrawRig(t *testing.T, runs map[string]sandbox.PendingRun) (tools.Callab
 	*resolverFake, *deskFake) {
 
 	t.Helper()
+	return withdrawRigAuthorized(t, runs, nil)
+}
+
+// withdrawRigAuthorized is [withdrawRig] decided by authorize, nil for the real
+// table's decision.
+func withdrawRigAuthorized(t *testing.T, runs map[string]sandbox.PendingRun,
+	authorize builtin.Authorizer) (tools.Callable, *fakeTracker, *resolverFake, *deskFake) {
+
+	t.Helper()
 	trk := newFakeTracker()
 	detail := trk.tasks["ENG-1"]
 	detail.Comments = []worklet.Comment{{ID: "c-ask", Task: "i1", Author: "agent-cto",
@@ -46,8 +57,9 @@ func withdrawRig(t *testing.T, runs map[string]sandbox.PendingRun) (tools.Callab
 	res := &resolverFake{}
 	desk := &deskFake{runs: runs}
 	tool := registered(t, builtin.Deps{
-		Work:     builtin.WorkDeps{Reader: trk, Writer: trk.as},
-		Withdraw: builtin.WithdrawDeps{Resolver: res.as, Desk: desk},
+		Work:      builtin.WorkDeps{Reader: trk, Writer: trk.as},
+		Withdraw:  builtin.WithdrawDeps{Resolver: res.as, Desk: desk},
+		Authorize: authorize,
 	}, builtin.WithdrawAskTool)
 	return tool, trk, res, desk
 }
@@ -141,5 +153,29 @@ func TestASeatCannotWithdrawAQuestionItDidNotAsk(t *testing.T) {
 	}
 	if len(trk.patched) != 0 || len(res.resolved) != 0 {
 		t.Errorf("refused withdrawals wrote %+v and resolved %v", trk.patched, res.resolved)
+	}
+}
+
+// A SEAT WITHDRAWS ITS OWN QUESTION WHOEVER WOKE THE TURN: the asker's arm, as
+// answering is the asked person's, decided by authorship and never by the
+// Worklet app, so a turn woken by somebody kept off Worklet still withdraws it,
+// as it withdraws a held call.
+//
+// Mutation: gate the withdrawal on the comment verb and it is refused here.
+func TestASeatWithdrawsItsOwnQuestionWhoeverWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	table := builtin.Decide(authz.NoChart{})
+	noWorklet := func(ctx context.Context, action authz.Action, object authz.Object) error {
+		if action == authz.ActionWorkComment {
+			return fmt.Errorf("%w: whoever woke this turn does not use Worklet", builtin.ErrRefused)
+		}
+		return table(ctx, action, object)
+	}
+	tool, trk, res, _ := withdrawRigAuthorized(t, nil, noWorklet)
+	got := callFor(t, tool, turnFor(t, "agent-cto"), map[string]any{"item": "ENG-1", "ask": "c-ask",
+		"reason": "Updated after my access changed: I can only read the server now."})
+	if got.Failed || len(trk.patched) != 1 || len(res.resolved) != 1 {
+		t.Errorf("the withdrawal answered %s with %d reasons and %v resolved, want it withdrawn",
+			got.Output, len(trk.patched), res.resolved)
 	}
 }
