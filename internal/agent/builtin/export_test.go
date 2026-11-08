@@ -19,3 +19,7 @@ const CodeStatusJudges = codeStatusJudges
 func ReadSessionWithin(deps SessionDeps, within time.Duration) tools.SeatCallable {
 	return &readSession{deps: deps, within: within}
 }
+
+// ListedProseBytes is the most of each of a listed row's words, for the
+// cases that hold a listed row's words to their cut.
+const ListedProseBytes = listedProseBytes

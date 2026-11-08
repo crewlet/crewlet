@@ -27,9 +27,12 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -470,6 +473,93 @@ func TestTheMarksNameThisTurnAndThisConversation(t *testing.T) {
 			t.Errorf("turn %s is marked this turn %v, this conversation %v, want %v", turnID,
 				marks[turnID][0], marks[turnID][1], want)
 		}
+	}
+}
+
+// A SEAT IS TOLD OF A SESSION IN PROGRESS, AND OF ONE ITS TURN WENT PAST, WHAT
+// A PERSON IS: both tools show a row with the domain's own words for the
+// session it keeps (executordomain.Session.KeptNote), asked of the row's shown
+// form, fenced as the row's words are. The reading turn's earlier launch's
+// session — `this_turn`, its turn not ended — is in progress, never an ended
+// turn's, its sentence whole in a listing and on the read's first page; an
+// ended row kept up to a session its turn went on past says so, the reason its
+// newer capture was not kept redacted, cut in a listing as the row's other
+// words are and whole on the read's first page; and a row at its turn's last
+// word says neither.
+//
+// Mutation: ask the note of the row as it is held, and the token reaches the
+// seat; leave in_progress or kept_note off the row, or show WentOnNote for it,
+// and a row says nothing; cut the read's first page's note, and its reason is
+// lost there; leave a listed note uncut, and the listing's row runs past its
+// words' bound.
+func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	planted := "ghp_" + strings.Repeat("Qx7Rb2", 6)
+	own := k.keep(t, "agent-cto", "chat:room", "this turn's earlier launch")
+	own.Ending, own.EndedAt = nil, time.Time{}
+	k.replace("agent-cto", own.Turn, &own)
+	past := k.keep(t, "agent-cto", "chat:room", "a turn that went on")
+	past.LaunchSeq, past.CaptureSeq = 1, 1
+	past.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: "ana.diaz", WentOn: true,
+		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "the upload was refused while it read " +
+			planted + strings.Repeat(", and the store said why", 20)}}
+	k.replace("agent-cto", past.Turn, &past)
+	last := k.keep(t, "agent-cto", "chat:room", "a turn that ended on its last word")
+	last.LaunchSeq, last.CaptureSeq = 1, 1
+	last.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, WentOn: true,
+		LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}
+	k.replace("agent-cto", last.Turn, &last)
+	turn, b := readerTurn(t)
+	turn.RunID, turn.ConversationKey = own.Turn, "chat:room"
+	list := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ListSessionsTool)
+	read := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ReadSessionTool)
+
+	listed := map[string]map[string]any{}
+	for _, row := range sessionAnswer(t, callFor(t, list, turn, nil))["sessions"].([]any) {
+		r := row.(map[string]any)
+		listed[r["turn_id"].(string)] = r
+	}
+	if this, _ := listed[own.Turn]["this_turn"].(bool); !this {
+		t.Fatalf("the reading turn's own session is listed as %v, not this turn's", listed[own.Turn])
+	}
+	for _, c := range []struct {
+		name     string
+		row      executordomain.Session
+		progress bool
+	}{
+		{"this turn's session, in progress", own, true},
+		{"a session its turn went on past", past, false},
+		{"a session at its turn's last word", last, false},
+	} {
+		whole := c.row.Redacted().KeptNote()
+		first := sessionAnswer(t, callFor(t, read, turn, map[string]any{"turn_id": c.row.Turn}))
+		for where, w := range map[string]struct {
+			row  map[string]any
+			note string
+		}{
+			"listed":                 {listed[c.row.Turn], textcut.Within(whole, builtin.ListedProseBytes)},
+			"read on its first page": {first["session"].(map[string]any), whole},
+		} {
+			sent, _ := w.row["kept_note"].(string)
+			note := provenance.Unfence(b, sent)
+			if progress, _ := w.row["in_progress"].(bool); progress != c.progress || note != w.note {
+				t.Errorf("%s, %s: in progress %v, told %q; want in progress %v, told %q", c.name, where,
+					w.row["in_progress"], note, c.progress, w.note)
+			}
+			if note != "" && note == sent {
+				t.Errorf("%s, %s: its note %q is not fenced", c.name, where, sent)
+			}
+			if strings.Contains(sent, planted) {
+				t.Errorf("%s, %s: its note %q quotes the unkept capture's reason unredacted", c.name, where, sent)
+			}
+		}
+	}
+	if whole := past.Redacted().KeptNote(); !strings.Contains(whole, redact.Marker) ||
+		len(whole) <= builtin.ListedProseBytes || !strings.HasPrefix(own.Redacted().KeptNote(),
+		"This turn has not ended") {
+		t.Fatalf("the premise: the notes are %q and %q, want a redacted one past a listing's bound beside a "+
+			"session in progress's", whole, own.Redacted().KeptNote())
 	}
 }
 
