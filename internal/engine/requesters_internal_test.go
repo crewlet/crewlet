@@ -141,7 +141,7 @@ func TestAPersonRequesterIsComposedFromThatSeatsHolderAlone(t *testing.T) {
 	}
 }
 
-// A PERSON REQUESTER USES THE APPS THEIR GRANTS NAME, AND NO MORE (ADR-0105):
+// A PERSON REQUESTER USES THE APPS THEIR GRANTS NAME, AND NO MORE (ADR-0108):
 // every app admin includes where they hold admin, never admin itself — which
 // no ceiling carries — and never a name this build does not know, which
 // grants nothing; none at all at a stage that may not act, for a removed
@@ -150,7 +150,7 @@ func TestAPersonRequesterIsComposedFromThatSeatsHolderAlone(t *testing.T) {
 // every app. Composed with every app for every person, as it was, the ceiling
 // held no app verb to anybody.
 //
-// Mutation: give every person every app (the composition before ADR-0105) —
+// Mutation: give every person every app (the composition before ADR-0108) —
 // the worklet-only person reads as using Doclet.
 func TestTheRequesterCarriesTheirApps(t *testing.T) {
 	t.Parallel()

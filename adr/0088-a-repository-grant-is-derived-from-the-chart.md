@@ -96,7 +96,7 @@ nothing here bounds what a seat already knows, from its memory or a read made in
 ## Amendment: the requester's apps bound a seat's verbs
 
 A person still bounds no repository relation: a person maintains everywhere.
-Since [ADR-0105](0105-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), the requester's apps bound every app verb a seat takes in a
+Since [ADR-0108](0108-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), the requester's apps bound every app verb a seat takes in a
 turn they woke. The code verbs name no app yet. Once Gitlet is an app (piece
 5 of crewlet#733), a turn woken by a person without it reaches no repository,
 and its executor is given none.

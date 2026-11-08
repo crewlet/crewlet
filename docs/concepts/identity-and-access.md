@@ -545,7 +545,7 @@ Inside a turn somebody woke — a person's message, their assignment of a work
 item, their comment, a colleague seat's ask, a pipeline's token filing work —
 an agent uses **only the apps that somebody uses**. Every verb whose row names an app is decided twice: once
 for the agent, which holds every app, and once for the app of whoever woke the
-turn ([ADR-0105](../../adr/0105-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+turn ([ADR-0108](../../adr/0108-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 A person kept off Worklet cannot have an agent create, read or close work
 items for them; one kept off Doclet cannot have it read or write pages; one
 kept off Chatlet cannot have it post in a room; one without `artifacts` cannot
@@ -2568,6 +2568,15 @@ is decided on `fleet.health.read` (`fleet_health`) or `code.read`
 (`code_status`), rows everybody of the company holds, and never on the grant's
 own row, which no requester holds — so a turn a stranger woke is answered
 nothing. See [The health tools](../guides/fleet.md#the-health-tools).
+
+**And the SSH tools the same way.** `ssh_read` and `ssh_operate` are admin's,
+and their rows name the seat grants an agent's SSH block carries: `ssh_read`
+where the block is on with a server, `ssh_operate` where it is at `operate`.
+In a turn somebody woke, whoever woke it is decided on `ssh.requester.read`, a row
+everybody of the company holds, so a turn a stranger woke reaches no server.
+Answering an `ssh_operate` call is `ssh.operate.approve`, **human-only**: an
+administrator, or a person `integrations.ssh.approvers` names, at a fresh
+step-up. See [SSH](../integrations/ssh.md#the-agents-tools).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat

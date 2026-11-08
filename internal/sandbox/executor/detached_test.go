@@ -46,8 +46,8 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
-		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
-		p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
+		p.ClaudeSkillsSettings(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
 		p.SessionPackStaging(), p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
 	} {
@@ -198,7 +198,8 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(),
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
-		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
+		p.ClaudeSkillsSettings(), p.OpenCodeConfig(),
 		// And its session's pieces: a run that packs nothing must never be
 		// collected with the last run's capture as its own, nor restore the
 		// last run's carried archive.

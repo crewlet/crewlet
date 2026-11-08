@@ -99,7 +99,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	// AND WHO EACH TURN IS ACTING FOR, which the gate binds to every call a
 	// seat makes in a turn somebody woke: every app verb is held to the apps
-	// that somebody uses (ADR-0105), and the relation families read the same
+	// that somebody uses (ADR-0108), and the relation families read the same
 	// composition. Left out, a seat would use every app for anybody.
 	deps.Requesters = turnRequesters{engine: e}
 	deps.Work = e.workDeps(c)
@@ -127,6 +127,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// table refuses every other seat, which is what leaves them off its
 	// surfaces ([Company.withheldFrom]).
 	deps.Health = HealthToolDeps(e)
+	// AND THE SSH TOOLS, the same way: registered for every seat, offered
+	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
+	deps.SSH = SSHToolDeps(e)
 	// AND THE ROOMS. Without this the nine chat tools were built,
 	// documented and registered against a zero [builtin.ChatDeps] — which
 	// gates every one of them off — so a company on `chat.backend: chatlet`

@@ -205,7 +205,7 @@ roles:
 // what the thin-trigger gate exists for — from the founder, by the Slack id the
 // company document gives her seat, so the turn is worked for somebody the
 // company knows (a vendor's sender it cannot place is a stranger, for whom an
-// agent uses no app: ADR-0105).
+// agent uses no app: ADR-0108).
 func wakeWithPointer(t *testing.T, n *node, handle string) {
 	t.Helper()
 	body := "PR !42 got a comment"
@@ -241,7 +241,7 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	waitForSeat(t, n, "ceo")
 	// THE POINTER IS THE FOUNDER'S, employed: the search the executor
 	// recovers is Doclet's, which an agent uses only for somebody who uses it
-	// (ADR-0105).
+	// (ADR-0108).
 	employFounder(t, n)
 
 	n.model.searchOnExecute("staging login redirect proxy")

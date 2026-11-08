@@ -96,7 +96,7 @@ func gateDecided() []authz.Action {
 }
 
 // EVERY APP VERB A SEAT TAKES IN A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY
-// USE (ADR-0105), through the gate every builtin passes: a call the seat's own
+// USE (ADR-0108), through the gate every builtin passes: a call the seat's own
 // row admits is refused [authz.ReasonCeiling] when the person whose turn it is
 // does not use the row's app, with the app named for them — and the same call
 // in a turn nobody woke, or one a person using the app woke, runs. A
@@ -297,7 +297,7 @@ func machine(login string, grants ...iam.Grant) iam.Principal {
 	return iam.Principal{Kind: iam.KindMachine, Login: login, Stage: iam.StageActive, Grants: grants}
 }
 
-// A TOKEN'S WORK USES THE APPS IT HOLDS, AND NONE IT DOES NOT (ADR-0105): a
+// A TOKEN'S WORK USES THE APPS IT HOLDS, AND NONE IT DOES NOT (ADR-0108): a
 // credential acting as no seat that woke a turn is that turn's requester, by
 // its own apps and never admin. A pipeline's `[worklet]` token that filed an
 // item has the agent comment on it and refuses it the pages, naming the
@@ -373,7 +373,7 @@ func TestATokensWorkUsesTheAppsItHolds(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL IS BOUND BY THE NARROWER OF ITS WRITE AND THIS NODE (ADR-0105).
+// A CREDENTIAL IS BOUND BY THE NARROWER OF ITS WRITE AND THIS NODE (ADR-0108).
 // Tier A is per node: the apps a token's write carried are what the node that
 // took it resolved, and this node's resolution is what the token is here, now.
 // Each alone widens it somewhere — a token one node narrowed acting on

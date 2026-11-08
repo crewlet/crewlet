@@ -99,6 +99,28 @@ type vault struct {
 	fail      error
 	failAfter int
 	failName  string
+	// replaced is what the next Set of a name stores in place of its value:
+	// another writer's value winning the store.
+	replaced map[string]string
+}
+
+// override makes the next Set of name store value instead.
+func (v *vault) override(name, value string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.replaced == nil {
+		v.replaced = map[string]string{}
+	}
+	v.replaced[name] = value
+}
+
+// Unset removes a value, as the fleet store's does.
+func (v *vault) Unset(_ context.Context, name string) (bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, had := v.values[name]
+	delete(v.values, name)
+	return had, nil
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -112,6 +134,10 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 	}
 	if v.values == nil {
 		v.values, v.authors = map[string]string{}, map[string]secrets.Author{}
+	}
+	if winner, ok := v.replaced[name]; ok {
+		value = winner
+		delete(v.replaced, name)
 	}
 	v.values[name] = value
 	v.authors[name] = by
@@ -320,6 +346,12 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.SlackApps == nil {
 		opts.SlackApps = func() map[string]string { return nil }
 	}
+	if opts.SSHTests == nil {
+		opts.SSHTests = coordmemory.NewFleet()
+	}
+	if opts.SSH == nil {
+		opts.SSH = &fakeSSHAccess{}
+	}
 	if opts.StateClaims == nil {
 		opts.StateClaims = coordmemory.NewFleet()
 	}
@@ -364,6 +396,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			StateClaims:    coordmemory.NewFleet(),
 			WebhookBaseKey: oneListener,
 			Access:         &fakeAccess{},
+			SSHTests:       coordmemory.NewFleet(),
+			SSH:            &fakeSSHAccess{},
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
@@ -382,6 +416,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"StateClaims":    func(o *setupapi.Options) { o.StateClaims = nil },
 		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
 		"Access":         func(o *setupapi.Options) { o.Access = nil },
+		"SSHTests":       func(o *setupapi.Options) { o.SSHTests = nil },
+		"SSH":            func(o *setupapi.Options) { o.SSH = nil },
 	} {
 		opts := complete()
 		strip(&opts)

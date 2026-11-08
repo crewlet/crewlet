@@ -96,3 +96,34 @@ func TestTheInboxReadsWhatAHeldCallSends(t *testing.T) {
 		}
 	}
 }
+
+// A HELD OPERATE CALL IS IN ITS APPROVERS' INBOX AND ANSWERED THERE ALONE: the
+// decisions read puts it to the approvers the park wrote and to nobody else,
+// and its row says it cannot be answered in chat, whatever conversation it
+// came from.
+//
+// Mutation: answer answerable_in_chat by the conversation alone, and a held
+// call reads as one a chat reply answers.
+func TestAHeldOperateCallIsInItsApproversInbox(t *testing.T) {
+	t.Parallel()
+	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-000000000003", LaunchID: "launch-3",
+		Server: "crewlet", Tool: "ssh_operate", Raw: "ssh_operate", Digest: "sha256:abc", Fixed: true,
+		Approvers: sandbox.HeldApproversSSH, HeldAt: time.Now().UTC()}
+	run := sandbox.PendingRun{TurnID: "t-op", LaunchID: "launch-3", AgentHandle: "sre",
+		Status: sandbox.StatusAwaiting, HeldCall: &held, ConversationKey: "chatlet:room-1:thread-9",
+		AudienceHandles: []string{"ops-lead", "founder"}}
+	for handle, want := range map[string]bool{"ops-lead": true, "founder": true, "pm": false, "": false} {
+		if got := putTo(run, handle); got != want {
+			t.Errorf("the decisions read puts the held call to %q: %v, want %v", handle, got, want)
+		}
+	}
+	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run))
+	if row["answerable_in_chat"] != false {
+		t.Fatalf("a held call reads answerable in chat: %v", row["answerable_in_chat"])
+	}
+	unheld := run
+	unheld.HeldCall = nil
+	if row := serialiseRun(unheld, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(unheld)); row["answerable_in_chat"] != true {
+		t.Fatalf("the premise: a question on a conversation reads answerable in chat, got %v", row["answerable_in_chat"])
+	}
+}

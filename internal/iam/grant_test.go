@@ -114,7 +114,7 @@ func TestEveryGrantIsOneLowercaseWord(t *testing.T) {
 }
 
 // WHAT A REQUESTER USES IS APPS, AND NEVER ADMIN: admin includes every app, and
-// running the company is nothing a turn may do for somebody (ADR-0105). A name
+// running the company is nothing a turn may do for somebody (ADR-0108). A name
 // this build does not know grants nothing, and the answer never aliases the
 // row it was read from.
 func TestAppsOfIsEveryAppAdminIncludesAndNeverAdmin(t *testing.T) {

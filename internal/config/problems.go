@@ -643,6 +643,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.executorWarnings()...)
 	out = append(out, c.budgetWarnings()...)
 	out = append(out, c.codeWarnings()...)
+	out = append(out, c.sshAdvisories()...)
 	out = append(out, c.accessAdvisories()...)
 	return append(out, c.channelAdvisories()...)
 }

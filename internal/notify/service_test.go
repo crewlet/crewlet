@@ -372,7 +372,7 @@ func TestAFirstPartyWriterIsASeatByItsKindAlone(t *testing.T) {
 
 // A CREDENTIAL'S WRITER CARRIES THE APPS ITS RECORD NAMES, AND ONLY APPS: once
 // each, in iam.Apps order, and never admin or a name this build does not
-// know — what a turn the write wakes may use for it is apps alone (ADR-0105).
+// know — what a turn the write wakes may use for it is apps alone (ADR-0108).
 func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
 	w := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", []iam.Grant{
 		iam.GrantDoclet, iam.GrantAdmin, "teleport", iam.GrantWorklet, iam.GrantDoclet,

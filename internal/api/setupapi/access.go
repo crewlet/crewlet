@@ -680,7 +680,7 @@ func accessSavePolicy() authz.Policy {
 // route refuses such a kind with, and what it declares ([authz.Absent]).
 const accessElsewhere = "an agent's access is set on an integration that manages one " +
 	"account per agent (slack, mattermost, atlassian for Jira and Confluence, github, " +
-	"gitlab, datadog, cloudflare, expo, digitalocean, scaleway, aws, google_cloud); connect one with POST /setup/integrations/{kind}/inputs first"
+	"gitlab, datadog, cloudflare, expo, digitalocean, scaleway, aws, google_cloud, ssh); connect one with POST /setup/integrations/{kind}/inputs first"
 
 // accessAct serves POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}.
 //

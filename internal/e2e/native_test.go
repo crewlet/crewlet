@@ -32,7 +32,7 @@ func operator(t *testing.T, n *node) *worklet.Writer {
 	t.Helper()
 	// AS EVERY SURFACE WRITES THE TOKEN'S WORK ([builtin.ActorOf]): under its
 	// login, with the apps it holds riding every record that wakes somebody,
-	// which a turn the work wakes is held to (ADR-0105). A name of the
+	// which a turn the work wakes is held to (ADR-0108). A name of the
 	// harness's own carrying no apps is a write no surface makes, and the turn
 	// it woke was worked for a stranger.
 	actor := builtin.ActorOf(e2eOperator())

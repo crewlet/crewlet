@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -30,6 +31,12 @@ type HeldCall struct {
 	// Choice is the person's answer: [sandbox.HeldOnce],
 	// [sandbox.HeldAlways] or [sandbox.HeldDeny].
 	Choice string
+
+	// Approver is who answered, HeldID the held call's id, and Fixed a call
+	// to an engine tool that asks before every call, whose denial its tool
+	// records ([denialRecorder]).
+	Approver, HeldID, Binding string
+	Fixed                     bool
 
 	// Commit is how the call is made at most once, on the run's row.
 	Commit HeldCommit
@@ -107,6 +114,13 @@ func (p HeldPrior) outcome() heldOutcome {
 // ([mcp.Definition.Digest]).
 type digested interface{ Digest() string }
 
+// denialRecorder is an engine tool that keeps its own record of a call a person
+// denied (ssh_operate's command audit): told the call, its arguments and who
+// denied it, before the run is told it was refused.
+type denialRecorder interface {
+	RecordDenied(ctx context.Context, turn *turnctx.Turn, args map[string]any) error
+}
+
 // heldOutcome is what became of a held call, as the run is told it.
 type heldOutcome struct {
 	kind   heldKind
@@ -175,7 +189,14 @@ const (
 // turn's context ended while the call ran.
 func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err error) {
 	defer origin.Stamp(&err)
+	ctx = tools.WithApproval(ctx, tools.Approval{By: held.Approver, HeldID: held.HeldID, Binding: held.Binding})
 	if !sandbox.HeldMakes(held.Choice) {
+		// A DENIAL RAN NOTHING, so a record that did not land is logged and
+		// the run is still told it was refused.
+		if denyErr := held.recordDenied(ctx, surface); denyErr != nil {
+			log.ErrorContext(ctx, "held_call_denial_unrecorded", "tool", held.Tool, "held_call", held.HeldID,
+				"error", denyErr.Error())
+		}
 		held.outcome = heldOutcome{kind: heldDenied}
 		return nil
 	}
@@ -204,7 +225,13 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 	}
 	result := sandbox.HeldResult{Output: textcut.Within(res.Output, sandbox.MaxHeldResultBytes),
 		Failed: res.Failed}
-	if err := held.Commit.Record(ctx, result, res); err != nil {
+	// AN OUTPUT NO RECORD KEEPS reaches this run alone: the row keeps its
+	// size and digest, which a later attempt is told in its place.
+	recorded := result
+	if res.Unkept {
+		recorded.Output = tools.UnkeptOutput(res.Output)
+	}
+	if err := held.Commit.Record(ctx, recorded, res); err != nil {
 		// THE CALL IS MADE, and the run is told what it returned whatever
 		// the record says: only a later attempt at the same answer, which
 		// would then say the result is unknown, reads the record.
@@ -216,6 +243,24 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 	}
 	held.outcome = heldOutcome{kind: heldMade, result: result}
 	return nil
+}
+
+// recordDenied tells a fixed call's tool that a person denied it, where the
+// tool keeps such a record and the call's arguments opened; nothing for any
+// other call.
+func (h *HeldCall) recordDenied(ctx context.Context, surface *tools.Surface) error {
+	if !h.Fixed || h.Args == nil {
+		return nil
+	}
+	entry, known := surface.Universe().Lookup(h.Tool)
+	if !known {
+		return nil
+	}
+	recorder, ok := tools.Innermost(entry.Tool).(denialRecorder)
+	if !ok {
+		return nil
+	}
+	return recorder.RecordDenied(ctx, surface.Turn(), h.Args)
 }
 
 // notMade is why h is not to be made through surface, "" where it may be: its
@@ -231,7 +276,7 @@ func (h *HeldCall) notMade(surface *tools.Surface) string {
 		return "the tool is no longer filed for this agent (it was blocked, or its server removed " +
 			"or turned off, since the call was held)"
 	}
-	if tool, ok := entry.Tool.(digested); !ok || tool.Digest() != h.Digest {
+	if tool, ok := tools.Innermost(entry.Tool).(digested); !ok || tool.Digest() != h.Digest {
 		return "the tool's definition changed since the call was held, so it is not the tool the " +
 			"person approved; call it again to ask about the tool as it is now"
 	}

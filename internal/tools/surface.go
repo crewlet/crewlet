@@ -163,7 +163,7 @@ type SeatCallable interface {
 // TurnBound is a tool that is TOLD the turn a seat's call is made in without
 // being seat-scoped: the builtin gate, which decides every call a seat makes
 // inside a turn somebody woke for whoever woke it too (the requester ceiling,
-// ADR-0105), and answers a call made outside any turn as the plain Callable it
+// ADR-0108), and answers a call made outside any turn as the plain Callable it
 // wraps — so a read-only builtin still answers the operator's surface and the
 // HTTP one, and is never refused there as a seat's tool would be.
 //
@@ -591,7 +591,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	}
 	if refusedByContract {
 		recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: res.Output,
-			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
+			Failed: true, Cause: RefusalInvalid}, e.Annotations, target, false)
 		s.reportLoop(name, target, run, turn)
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
@@ -602,7 +602,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	// THE MODEL READS TEXT, so the note is rendered after the output here
 	// ([Rendered]), and the ledger records what the model read.
 	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res),
-		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
+		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target, e.OutputUnkept)
 	res.Output = recorded.Output
 	s.reportLoop(name, target, run, turn)
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
@@ -631,7 +631,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
-		Origin: e.Origin, Server: server, Source: e.Origin,
+		Origin: e.Origin, Server: server, Source: e.Origin, Unkept: e.OutputUnkept,
 	}, nil
 }
 

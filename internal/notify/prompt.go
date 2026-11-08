@@ -285,7 +285,7 @@ type Inbound struct {
 // THE ONE PLACE A WRITER IS BUILT, and the apps a parameter rather than an
 // option, so no producer names a credential's write without what a turn it
 // wakes may use for it: a credential's writer carrying no apps is worked for
-// as a stranger (ADR-0105). Kept for a credential's write alone, and only as
+// as a stranger (ADR-0108). Kept for a credential's write alone, and only as
 // apps this build knows, once each, in iam.Apps order: what a seat's or a
 // person's record carries is not its requester's to use — the running node
 // reads who holds the seat.

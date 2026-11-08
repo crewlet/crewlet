@@ -423,6 +423,11 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("google_cloud", in.GoogleCloud.Enabled, nil, map[string]any{"provisioner": prov})
 	}
+	if in.SSH != nil {
+		// NOTHING INBOUND: the engine dials out to each registered server,
+		// and the row says how many there are.
+		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are
 		// sites this engine reads as an account; this is where the account

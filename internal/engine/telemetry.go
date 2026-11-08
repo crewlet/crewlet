@@ -143,6 +143,9 @@ type turnTelemetry struct {
 	// trigger is described from, or off the parked row on a resume, by the
 	// seat's handle (ADR-0013).
 	requester string
+	// stranger is a turn a colleague's ask woke for somebody the company
+	// does not know ([turnctx.Turn.Stranger]).
+	stranger bool
 
 	// requesterLogin and requesterApps are the credential acting as no seat
 	// whose write started this turn, and the apps its writes carried — see
@@ -341,6 +344,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
 	t.requesterLogin, t.requesterApps = credentialRequesterOf(req.Events, req.Ask(),
 		t.interactions, req.Handle)
+	t.stranger = strangerAsk(req.Events)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -471,9 +475,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
-			Requester: t.requester,
+			Requester: t.requester, Stranger: t.stranger,
 			// OR THE CREDENTIAL that did, which no question reaches: what
-			// the turn may use for it is bounded by its apps (ADR-0105).
+			// the turn may use for it is bounded by its apps (ADR-0108).
 			RequesterLogin: t.requesterLogin,
 			RequesterApps:  slices.Clone(t.requesterApps),
 			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
@@ -999,7 +1003,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// answer is somebody replying to the run, not somebody asking this
 		// turn for something, so a second run the resumed turn detaches is
 		// still the first requester's.
-		requester: in.Run.Requester,
+		requester: in.Run.Requester, stranger: in.Run.Stranger,
 		// AND THE CREDENTIAL, off the row for the same reason: the turn is
 		// still worked for whoever its first segment was.
 		requesterLogin: in.Run.RequesterLogin,
@@ -1180,7 +1184,7 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, s
 // interactions carry no apps): a merge must not launder a constraint, so a
 // burst a token began before it was narrowed is held to the narrower record.
 // A write that carries none — an older build's — leaves none, and a
-// credential's turn with no apps is worked for as a stranger (ADR-0105).
+// credential's turn with no apps is worked for as a stranger (ADR-0108).
 func credentialRequesterOf(evs, ask []*events.Event, interactions []types.InboundInteraction,
 	seat string) (string, []iam.Grant) {
 
@@ -1237,6 +1241,20 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 		}
 	}
 	return out
+}
+
+// strangerAsk reports whether the colleague's ask that woke a turn carried
+// somebody the company does not know, off the first event as [requesterOf]
+// reads the asker.
+func strangerAsk(evs []*events.Event) bool {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		ask, ok := events.DataAs[*types.A2ARequest](ev)
+		return ok && ask.Stranger
+	}
+	return false
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

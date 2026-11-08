@@ -621,7 +621,7 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 			Handle: subject.Handle, ExternalID: subject.ExternalID,
 			Platform: subject.Platform, DisplayName: subject.Name,
 			// A CREDENTIAL ACTING AS NO SEAT, by its login: the requester a
-			// turn it woke is worked for (ADR-0105).
+			// turn it woke is worked for (ADR-0108).
 			Login: credentialLogin(writer),
 		},
 		Body:       body,

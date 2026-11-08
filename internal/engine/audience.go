@@ -44,6 +44,10 @@ func (r audienceResolver) ResolveAudience(run sandbox.PendingRun, label string) 
 	if company == nil || company.Org == nil {
 		return sandbox.Audience{Fallback: true}
 	}
+	if run.HeldCall != nil {
+		// A HELD CALL IS PUT TO WHO MAY ANSWER IT, whatever the run named.
+		return heldAudience(company, run, r.engine.adminSeats())
+	}
 	return resolveAudience(company.Org, r.engine.LookupSecret, r.engine.WithheldContacts(),
 		run, label)
 }

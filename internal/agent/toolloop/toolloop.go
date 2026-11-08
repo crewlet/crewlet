@@ -267,6 +267,10 @@ type ToolResult struct {
 	// ended the job, as a submission or a question does.
 	Held bool
 
+	// Unkept is an output the model reads and no record keeps: a record of
+	// the call keeps its size and digest alone (tools.Entry.OutputUnkept).
+	Unkept bool
+
 	// Origin is where the tool that ANSWERED came from — the registry's
 	// grammar, `builtin` or `mcp:<server>` — and Server the bare MCP server
 	// name for an `mcp:` origin. Set by the surface, which is the one frame

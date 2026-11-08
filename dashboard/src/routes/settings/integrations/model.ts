@@ -183,6 +183,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
   },
+  ssh: {
+    does: [
+      "Run each server's allowlisted read commands, such as service status, disk and logs",
+      "Run any command a person approves, once, exactly as approved, where you allow operate",
+      "Reach only the servers you grant each agent, each one pinned by its host key",
+    ],
+    identity:
+      "Crewlet signs a certificate for each agent's session that names the agent and its turn, so each server's log says which agent ran each command.",
+    byHand:
+      "Save to create Crewlet's certificate authority, then add each server, compare its host key with the server's console, and run the server setup Crewlet gives you as root.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

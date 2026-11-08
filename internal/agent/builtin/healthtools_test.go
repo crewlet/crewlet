@@ -507,6 +507,8 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
 	deps.Health = healthFleet(backend, chart)
+	// THE SSH TOOLS' OWN GRANTS are their own test's: this chart grants none.
+	deps.SSH = builtin.SSHDeps{}
 	deps.Health.Status, deps.Health.Code = &statusAsker{}, deps.Code
 	deps.Requesters = deps.Health.Requesters
 	reg := tools.NewRegistry()

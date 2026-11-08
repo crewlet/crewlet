@@ -47,7 +47,8 @@ export type AccessLaneKey =
   | "digitalocean"
   | "scaleway"
   | "aws"
-  | "google_cloud";
+  | "google_cloud"
+  | "ssh";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -480,6 +481,9 @@ func TestAHeldCallIsNotAnsweredByAnswerExecutor(t *testing.T) {
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 		!strings.Contains(got.Output, "/mcp-approvals/"+run.HeldCall.ID) {
 		t.Fatalf("an answer to a held call = %+v, %v, want it refused naming the approval route", got, err)
+	}
+	if words := got.PersonRefusal.Person(); words != caveat.HeldCallAnswer().Person() {
+		t.Errorf("a person is told %q, want the held call's own answers named", words)
 	}
 	if len(desk.delivered) != 0 {
 		t.Fatalf("delivered %+v, want nothing", desk.delivered)

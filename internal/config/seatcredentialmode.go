@@ -54,6 +54,8 @@ const (
 //   - google_cloud: an enabled block with `provisioning`, whose provisioner
 //     service account creates each agent's service account and issues its
 //     token.
+//   - ssh: an enabled block with `provisioning`, whose certificate authority
+//     signs each agent's certificates at use.
 //   - slack: the sealed app-configuration token
 //     (`integrations.slack.app_config_token`) the engine creates each agent's
 //     app with (D11). The block alone grants no authority: an operator renders
@@ -94,6 +96,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.AWS != nil && in.AWS.Enabled && in.AWS.Provisioning != nil
 	case "google_cloud":
 		engine = in.GoogleCloud != nil && in.GoogleCloud.Enabled && in.GoogleCloud.Provisioning != nil
+	case "ssh":
+		engine = in.SSH != nil && in.SSH.Enabled && in.SSH.Provisioning != nil
 	}
 	if engine {
 		return SeatCredentialEngine

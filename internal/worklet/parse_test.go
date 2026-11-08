@@ -90,7 +90,7 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 		{"ana", worklet.AuthorHuman, nil, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
 		{"bo", worklet.AuthorAgent, nil, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
 		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
-		// node that took its write recorded for it (ADR-0105).
+		// node that took its write recorded for it (ADR-0108).
 		{"token:ci", worklet.AuthorOperator, []iam.Grant{iam.GrantWorklet},
 			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
 				Apps: []iam.Grant{iam.GrantWorklet}}},

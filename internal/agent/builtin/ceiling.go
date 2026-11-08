@@ -17,7 +17,7 @@ import (
 // WHO A SEAT'S TURN IS ACTING FOR — the requester ceiling ([authz.Ceiling]),
 // which every call a seat makes inside a turn somebody woke is decided against
 // at the one gate (authority.go): the app every app verb names, for every
-// family alike ([authz.DecideWithinApps], ADR-0105), and the relation the
+// family alike ([authz.DecideWithinApps], ADR-0108), and the relation the
 // families whose objects carry one decide beside it — the artifacts tools and
 // their datastore's on the stored artifact ([authz.DecideWithin]), and the code
 // tools on a repository's grant as well (codetools.go).
@@ -106,7 +106,7 @@ type ceilingKey struct{}
 // and no relation for anybody reads nothing of the identity directory. It is
 // bound per call, as the principal already is ([Authorizer]), and never
 // captured: the next call composes afresh, so an administrator's revocation
-// applies at the turn's next call (ADR-0105).
+// applies at the turn's next call (ADR-0108).
 //
 // A call that is not a seat's binds nothing: a principal acting through their
 // own credential is no deputy. A seat's call binds even with no composer to
@@ -145,7 +145,7 @@ func OutsideAnyTurn(ctx context.Context) context.Context {
 // credentialCeiling is the ceiling of a turn a credential acting as no seat
 // woke ([turnctx.Turn.RequesterLogin]): that credential, using the apps its
 // writes carried AND the apps this node resolves it to now, whichever is
-// narrower — never admin, and no app either side lacks (ADR-0105).
+// narrower — never admin, and no app either side lacks (ADR-0108).
 //
 // BOTH, because each alone is wrong. The carried apps are what the node that
 // took the write resolved, and Tier A is per node: read alone, a token this
@@ -189,6 +189,10 @@ func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requ
 	if turn == nil {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}
+	// A STRANGER'S ASK STAYS A STRANGER'S through every colleague it passes.
+	if turn.Stranger {
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
 	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != seat {
 		if r == nil {
 			return authz.Ceiling{}, errNoRequesters
@@ -202,13 +206,34 @@ func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requ
 	if login := strings.TrimSpace(turn.RequesterLogin); login != "" {
 		return credentialCeiling(ctx, login, turn.RequesterApps, r)
 	}
-	if slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
+	if unknownSender(turn, seat) {
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
+	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+}
+
+// unknownSender reports whether a sender of turn is somebody other than seat
+// that the company does not know.
+func unknownSender(turn *turnctx.Turn, seat string) bool {
+	return slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
 		// AN EMPTY HANDLE IS NOBODY'S, never the seat's: a seat the
 		// caller named as "" must not make every unknown sender its own.
 		handle := strings.TrimSpace(s.Handle)
 		return handle == "" || handle != seat
-	}) {
-		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	})
+}
+
+// strangerWoken reports whether turn acts for somebody the company does not
+// know, by the rule [ceilingOf] reads it with, so a colleague's ask from it
+// carries them on.
+func strangerWoken(turn *turnctx.Turn, seat string) bool {
+	switch {
+	case turn == nil:
+		return false
+	case turn.Stranger:
+		return true
+	case strings.TrimSpace(turn.Requester) != "" && strings.TrimSpace(turn.Requester) != seat:
+		return false
 	}
-	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+	return unknownSender(turn, seat)
 }

@@ -33,7 +33,7 @@ func (t *turnTold) CallInTurn(_ context.Context, turn *turnctx.Turn, _ map[strin
 
 // A SEAT'S CALL TELLS A TURN-BOUND TOOL ITS TURN, and any other call does not:
 // builtin's gate binds the requester ceiling from the turn a seat's call is
-// made in (ADR-0105), for the read-only builtins as for the seat-scoped ones,
+// made in (ADR-0108), for the read-only builtins as for the seat-scoped ones,
 // so every surface a seat calls through — the turn's loop, a delegate worker,
 // the executor's bridge, each of which invokes as the seat — hands it over,
 // and the operator's surface and the HTTP one, which call as their own

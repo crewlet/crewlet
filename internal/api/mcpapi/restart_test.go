@@ -265,6 +265,8 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		// A HELD CALL'S ANSWER, decided again on the run's seat once the
 		// handler has read it (approvals.go).
 		"POST /mcp-approvals/{id}": authz.ActionToolsApprove,
+		// AND THE CALL WHOLE, read by whoever may answer it.
+		"GET /mcp-approvals/{id}": authz.ActionToolsApprove,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {

@@ -117,6 +117,9 @@ type TurnRef struct {
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
+	// Stranger is a turn acting for somebody the company does not know
+	// through a colleague's ask ([turnctx.Turn.Stranger]).
+	Stranger bool
 
 	// RequesterLogin and RequesterApps are the credential acting as no seat
 	// whose write started the turn, and the apps its writes carried — see
@@ -574,7 +577,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		WorkItem: req.Turn.WorkItem,
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
-		Requester: req.Turn.Requester,
+		Requester: req.Turn.Requester, Stranger: req.Turn.Stranger,
 		// Or the credential that did, for every segment that resumes the
 		// turn: each call it makes is still bounded by it.
 		RequesterLogin: req.Turn.RequesterLogin,

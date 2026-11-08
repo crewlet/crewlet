@@ -1303,6 +1303,26 @@ export interface McpHeldCall {
   digest: string;
   /** When the call was held; "" where the row does not say. */
   held_at: string;
+  /** A call its tool asks about every time (an SSH operate command): answered Allow once or Deny alone. */
+  fixed?: boolean;
+  /** Who answers it where not the seat's lead: `ssh` for an SSH operate command's approvers. */
+  approvers?: string;
+}
+
+/** `GET /mcp-approvals/{id}`: the held call whole, for whoever may answer it. */
+export interface McpHeldWhole {
+  id: string;
+  server: string;
+  tool: string;
+  seat: string;
+  turn_id: string;
+  launch_id: string;
+  question: string;
+  context: string;
+  /** Every argument the call would send, opened from its seal. */
+  arguments: Record<string, unknown>;
+  /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it. */
+  arguments_sha256: string;
 }
 
 /**

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -333,4 +335,51 @@ func survivor(text string, body []string) string {
 		}
 	}
 	return ""
+}
+
+// A PASTED SSH CERTIFICATE IS SCRUBBED: a user certificate as its file holds
+// it, signed for the run, leaves no part of its body in the text, whether it
+// stands alone, in a JSON value or after a word.
+func TestAnSSHCertificateIsScrubbed(t *testing.T) {
+	t.Parallel()
+	certificate := sshCertificateLine(t)
+	body := strings.Fields(certificate)[1]
+	for name, text := range map[string]string{
+		"alone":    certificate + "\n",
+		"in JSON":  `{"certificate": "` + certificate + `"}`,
+		"in prose": "the agent used " + certificate + " to sign in",
+	} {
+		got := redact.Secrets(text)
+		if strings.Contains(got, body[8:48]) || !strings.Contains(got, redact.Marker+"ssh-certificate]") {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+// sshCertificateLine is an OpenSSH user certificate's line, signed for the
+// run by a made-up authority.
+func sshCertificateLine(t *testing.T) string {
+	t.Helper()
+	_, caKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := ssh.NewSignerFromKey(caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &ssh.Certificate{Key: key, CertType: ssh.UserCert, KeyId: "crewlet/sre/turn",
+		ValidPrincipals: []string{"crewlet.api-1.read"}, ValidBefore: ssh.CertTimeInfinity}
+	if err := cert.SignCert(rand.Reader, ca); err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(cert)))
 }

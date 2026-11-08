@@ -314,7 +314,7 @@ func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool stri
 		// A CREDENTIAL ACTING AS NO SEAT changes nothing of the company's
 		// code itself — it holds no seat a write is judged as, and its grant
 		// is read (code.GrantOf) — so a write made for it is held to the
-		// seat's own work, as a stranger's is (ADR-0105). Its reads are
+		// seat's own work, as a stranger's is (ADR-0108). Its reads are
 		// bounded by nothing: it reads every repository itself.
 		c.write = &code.WriteCeiling{Kind: code.WriteCeilingNobody}
 	}

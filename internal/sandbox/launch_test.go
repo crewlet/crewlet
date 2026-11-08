@@ -354,7 +354,7 @@ func TestTheHarnessIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	}
 }
 
-// THE ROW CARRIES THE CREDENTIAL A TOKEN'S TURN IS WORKED FOR (ADR-0105): every
+// THE ROW CARRIES THE CREDENTIAL A TOKEN'S TURN IS WORKED FOR (ADR-0108): every
 // segment that resumes the turn, and every call its box makes after a
 // takeover, is still bounded by that credential and the apps its write
 // carried, and the row is the one place they reach those frames from. A turn

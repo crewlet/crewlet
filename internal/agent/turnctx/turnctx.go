@@ -271,13 +271,18 @@ type Turn struct {
 	// set, and for a turn no credential woke.
 	//
 	// NOT Requester: that is a seat a question is put to, and a credential is
-	// nobody to ask. What it is for is the turn's ceiling (ADR-0105): every
+	// nobody to ask. What it is for is the turn's ceiling (ADR-0108): every
 	// call is decided for the credential too, with these apps narrowed again
 	// by what the node running the call resolves the login to — so a token
 	// narrowed or removed after it wrote narrows the turn at its next call,
 	// and one a node's Tier A gives wider grants never widens it.
 	RequesterLogin string
 	RequesterApps  []iam.Grant
+
+	// Stranger is a turn acting, through a colleague's ask, for somebody the
+	// company does not know: the requester ceiling is theirs whoever asked
+	// ([types.A2ARequest.Stranger]). Carried on the run's row with Requester.
+	Stranger bool
 
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke — the same people the turn-start memory filter was told about,

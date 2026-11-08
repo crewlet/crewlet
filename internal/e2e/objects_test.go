@@ -125,7 +125,7 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	})
 	// FOR THE FOUNDER, employed on the data node: a stranger's turn writes
 	// no project file, since an agent uses no app for somebody the company
-	// does not know (ADR-0105).
+	// does not know (ADR-0108).
 	employFounder(t, p.data, p.agent)
 	wakeAsFounder(t, p.agent, "ceo")
 

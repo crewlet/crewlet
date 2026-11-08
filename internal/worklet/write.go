@@ -634,7 +634,7 @@ type Provenance struct {
 	// ([AuthorOperator]) used when this node resolved it (iam.ActorApps),
 	// carried on every record the writer appends that wakes somebody
 	// ([MutationRecord.ActorApps]) so a turn the record wakes uses no app the
-	// credential did not use here (ADR-0105). Kept for an operator alone ([Writer.As]): a seat's or a
+	// credential did not use here (ADR-0108). Kept for an operator alone ([Writer.As]): a seat's or a
 	// person's record names the seat, whose holder the turn's node reads.
 	Apps []iam.Grant
 

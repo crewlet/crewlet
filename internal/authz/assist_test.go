@@ -295,7 +295,7 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionSessionEnd, authz.ActionSessionInvalidate,
 		// a credential or a secret in clear
 		authz.ActionSecretReveal, authz.ActionSecretWrite, authz.ActionSetupConnect,
-		authz.ActionArtifactTicket,
+		authz.ActionArtifactTicket, authz.ActionSSHAuditRead,
 		// the assistant's own decisions
 		authz.ActionAssistantConverse, authz.ActionAssistantConversationRead,
 		authz.ActionAssistantApprove, authz.ActionAssistantDecline,
@@ -306,8 +306,8 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady, authz.ActionCodeReportCheck,
 		// an agent seat's own
 		authz.ActionColleagueAsk, authz.ActionSessionsList, authz.ActionSessionRead,
-		// a person's approval of an agent's call
-		authz.ActionToolsApprove,
+		// a person's approval of an agent's call, and of its production command
+		authz.ActionToolsApprove, authz.ActionSSHOperateApprove,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {
@@ -365,5 +365,17 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 			t.Errorf("%s is decided by %s at %s, not as %s is (%s at %s)", a, class,
 				recency, document, wantClass, wantRecency)
 		}
+	}
+}
+
+// THE SSH AUDIT IS NEVER THE ASSISTANT'S: it opens each command's text, which
+// can carry a credential typed into it, so it stays out of a model's context.
+func TestTheSSHAuditIsNeverTheAssistants(t *testing.T) {
+	t.Parallel()
+	if authz.AssistNeverSentence(authz.ActionSSHAuditRead) == "" {
+		t.Fatal("ssh.audit.read is a verb the assistant may take")
+	}
+	if human, ok := authz.HumanOnlyOf(authz.ActionSSHAuditRead); !ok || !human {
+		t.Fatal("ssh.audit.read is not a person's own verb")
 	}
 }

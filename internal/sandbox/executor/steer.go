@@ -23,10 +23,10 @@ import (
 // the harness keeps in front of its model, and the id OpenCode admits a note under —
 // because those are facts about the harnesses, measured on them, and this package is
 // where every other such fact lives. And how a harness is set up to ask for them at
-// all: Claude Code's settings file ([ClaudeCode.WriteConfig]), OpenCode's plugin
-// ([OpenCode.WriteConfig], opencode_steer.js), and the standing instruction that
-// tells a run's model what a note is ([ClaudeCodeSteerInstruction],
-// [OpenCodeSteerInstruction]).
+// all: Claude Code's settings with the notes' hooks ([ClaudeCode.WriteConfig]),
+// OpenCode's plugin ([OpenCode.WriteConfig], opencode_steer.js), and the
+// standing instruction that tells a run's model what a note is
+// ([ClaudeCodeSteerInstruction], [OpenCodeSteerInstruction]).
 
 // The standing instruction a run whose harness takes a person's notes between its
 // steps is given, after its report instruction: what a note is, where it
@@ -120,24 +120,22 @@ const (
 	claudeEventFinish    = "Stop"
 )
 
-// claudeSettings is the settings file a Claude Code run is started with
-// (`--settings`, [Paths.ClaudeSettings]): its hooks, and nothing else.
+// claudeNotesSettings is the settings file a Claude Code run wired to its
+// turn's notes is started with on a release that reads them (`--settings`,
+// [Paths.ClaudeNotesSettings], [claudeNotesGate]): the settings of a run that
+// starts a hook of the engine's ([claudeHooksOnSettings]), its hooks, and
+// nothing else.
 //
 // NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118 onwards) — a 2.1.150 reads the
 // file whole, measured — because in print mode the harness ignores a settings file
 // that fails its validation WITHOUT A WORD, so a field a harness does not know yet
-// costs every hook in the file. What a later release added is what the harness
-// READS of a hook's answer: a Stop hook's additional context reaches the model
-// from 2.1.163, and a run on an older release is started without this file
-// ([claudeNotesFloor]).
-type claudeSettings struct {
-	// DisableAllHooks is written FALSE, never left out — the posture. A
-	// repository's own `.claude/settings.json` that sets it true switches
-	// every hook off with no error, and an explicit false in the run's
-	// settings wins over it (measured on 2.1.263 and 2.1.310). It wins for
-	// the repository's own hooks too, which is why a hook of theirs that
-	// stops the loop is read as the failure it is ([ClaudeCode.Parse]).
-	DisableAllHooks bool `json:"disableAllHooks"`
+// costs every hook in the file, and the retention beside them. Every run's
+// setting is far older (0.2.116 has it), and so is disableAllHooks (1.0.68).
+// What a later release added is what the harness READS of a hook's answer: a
+// Stop hook's additional context reaches the model from 2.1.163, and a run on
+// an older release is started without this file ([claudeNotesFloor]).
+type claudeNotesSettings struct {
+	claudeHooksOnSettings
 
 	// Hooks maps an event to its matchers. A map, so the file is written in
 	// one order: encoding/json sorts its keys.
@@ -182,18 +180,19 @@ type claudeHookInput struct {
 	Agent string `json:"agent"`
 }
 
-// claudeSteerSettings is the settings file of a run whose notes are reached
-// through w: one hook at each event, calling w's tool on w's server.
-func claudeSteerSettings(w sandbox.SteerWiring) ([]byte, error) {
+// claudeSteerSettings is the settings of a run whose notes are reached through
+// w: those of a run that starts a hook of the engine's, and one hook at each
+// event, calling w's tool on w's server.
+func claudeSteerSettings(w sandbox.SteerWiring) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
 		Type: "mcp_tool", Server: w.Server, Tool: w.Tool,
 		Input:   claudeHookInput{Event: "${hook_event_name}", Agent: "${agent_id}"},
 		Timeout: int(ClaudeHookTimeout / time.Second),
 	}}}}
-	return json.MarshalIndent(claudeSettings{
-		DisableAllHooks: false,
-		Hooks:           map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
-	}, "", "  ")
+	return claudeNotesSettings{
+		claudeHooksOnSettings: newClaudeHooksOnSettings(),
+		Hooks:                 map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
+	}
 }
 
 // ClaudeContextBudget is how much one Claude Code hook answer carries, in

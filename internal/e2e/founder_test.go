@@ -19,7 +19,7 @@ import (
 //
 // The company document declares the founder's human seat and a Slack id for
 // it, and nobody on it. Inside a turn somebody woke an agent uses only the
-// apps that somebody uses (ADR-0105), and a human seat nobody holds in the
+// apps that somebody uses (ADR-0108), and a human seat nobody holds in the
 // identity directory is somebody the company knows by their contacts alone,
 // who uses none — so a case whose subject is what a seat does for the
 // founder's word (answers in a room, files a task, searches the pages) employs
