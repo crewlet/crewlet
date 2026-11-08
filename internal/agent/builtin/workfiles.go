@@ -188,7 +188,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Freshness: statelog.Freshness{Level: seatReadLevel},
 	})
 	if err != nil {
-		return fileReadFailure(ctx, t.Name(), project, "", err), nil
+		return fileReadFailure(ctx, t.Name(), tools.RefusalNotFound, project, "", err), nil
 	}
 	// A FILE'S PATH is a name its writers chose (ADR-0040): each row names
 	// who created the file and who wrote it last, and a path renamed between
@@ -287,7 +287,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	detail, err := t.deps.Files.File(ctx, project, filePath,
 		statelog.Freshness{Level: seatReadLevel})
 	if err != nil {
-		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
+		return fileReadFailure(ctx, t.Name(), tools.RefusalNotFound, project, filePath, err), nil
 	}
 	f := detail.File
 	// THE CONTENT IS SOMEBODY'S WORDS, labelled for the handle this call
@@ -385,13 +385,22 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 // file that is not there apart from a read that failed — the second must never
 // read as the first. The tracker's own sentinel rides beneath the class, so a
 // caller branching on it and a reader asking for the class read one value.
-func fileReadFailure(ctx context.Context, tool, project, filePath string, err error) tools.Result {
+//
+// ABSENT IS THE CALL'S OWN STATEMENT ([refusedBy]): [tools.RefusalNotFound]
+// to a call ABOUT the file or its project — a read, a listing, a removal — and
+// [tools.RefusalInvalid] to one that only NAMES it, as the source of a copy
+// (`from_project_file`): that call is about the artifact it writes, and a
+// not-found there is a 404 about the artifact, which a person's screen reads
+// as gone. The words are the same either way.
+func fileReadFailure(ctx context.Context, tool string, absent tools.Refusal,
+	project, filePath string, err error) tools.Result {
+
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
-		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
+		return refusedBy(absent, err, fmt.Sprintf("%s: there is no "+
 			"project %s. List them with %s.", tool, project, worklet.ListProjectsTool))
 	case errors.Is(err, worklet.ErrNoFile):
-		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
+		return refusedBy(absent, err, fmt.Sprintf("%s: there is no "+
 			"file %s in %s. List them with %s.", tool, filePath, project,
 			worklet.ListProjectFilesTool))
 	}
@@ -731,7 +740,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		uint64(max(argInt(args, "if_version", 0), 0)))
 	switch {
 	case errors.Is(err, worklet.ErrNoFile):
-		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
+		return fileReadFailure(ctx, t.Name(), tools.RefusalNotFound, project, filePath, err), nil
 	case err != nil:
 		return writeFailure(ctx, actor, t.Name(), err), nil
 	}

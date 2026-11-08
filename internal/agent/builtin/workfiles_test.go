@@ -59,14 +59,27 @@ func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileL
 	return out, nil
 }
 
-func (f *fakeFiles) File(_ context.Context, project, path string,
+// File answers one file as the tracker's reader does ([worklet.Reader.File]):
+// the project's key normalised and the path held to the tracker's rule first,
+// refused in the tracker's error; a project other than ENG
+// [worklet.ErrNoProject], as [fakeFiles.Files] answers one; and a file it
+// holds no row for, or holds removed, [worklet.ErrNoFile].
+func (f *fakeFiles) File(_ context.Context, project, filePath string,
 	_ statelog.Freshness) (worklet.FileDetail, error) {
 
+	project = worklet.ProjectKey(project)
+	filePath, err := worklet.NormalizeFilePath(filePath)
+	if err != nil {
+		return worklet.FileDetail{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	file, ok := f.files[f.key(project, path)]
+	if project != "ENG" {
+		return worklet.FileDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, project)
+	}
+	file, ok := f.files[f.key(project, filePath)]
 	if !ok || file.Removed() {
-		return worklet.FileDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoFile, path)
+		return worklet.FileDetail{}, fmt.Errorf("%w: %s in %s", worklet.ErrNoFile, filePath, project)
 	}
 	return worklet.FileDetail{File: file}, nil
 }
@@ -352,6 +365,52 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	if strings.Contains(got.Output, "no such object") || !errors.Is(got.Cause, objstore.ErrNotFound) {
 		t.Errorf("the object store's error reached the sentence, or left the cause: %s",
 			got.Output)
+	}
+}
+
+// A FILE TOOL ABOUT WHAT IS NOT THERE ANSWERS not_found: a listing of a
+// project that is not there, a read of a project or a file that is not there,
+// and a removal of a file that is not there are each ABOUT what is missing, so
+// each is refused not_found, with the tracker's own sentinel beneath it. A
+// copy that only NAMES the file answers the same words invalid
+// (TestACopyNamingWhatIsNotThereIsTheArgumentToChange): the class is each
+// call's own statement, which is why fileReadFailure takes it from its caller.
+//
+// Mutation: pass invalid from the listing, the read or the removal and that
+// tool's rows go red.
+func TestAFileToolAboutWhatIsNotThereAnswersNotFound(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		sentinel   error
+	}{
+		{"a listing of a project that is not there", worklet.ListProjectFilesTool,
+			map[string]any{"project": "ops"}, worklet.ErrNoProject},
+		{"a read of a project that is not there", worklet.ReadProjectFileTool,
+			map[string]any{"project": "ops", "path": "reports/q3.md"}, worklet.ErrNoProject},
+		{"a read of a file that is not there", worklet.ReadProjectFileTool,
+			map[string]any{"path": "reports/q4.md"}, worklet.ErrNoFile},
+		{"a removal of a file that is not there", worklet.RemoveProjectFileTool,
+			map[string]any{"path": "reports/q4.md"}, worklet.ErrNoFile},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			files, objects := newFakeFiles(), newFakeObjects()
+			reg := workRegistry(t, fileDeps(files, objects))
+			if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
+				"path": "reports/q3.md", "content": "# Q3",
+			}); got.Failed {
+				t.Fatal(got.Output)
+			}
+			got := callWork(t, reg, c.tool, c.args)
+			switch {
+			case !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound:
+				t.Errorf("answered %v %q, want not_found", tools.RefusalOf(got), got.Output)
+			case !errors.Is(got.Cause, c.sentinel):
+				t.Errorf("the refusal carries %v, not the tracker's %v", got.Cause, c.sentinel)
+			}
+		})
 	}
 }
 

@@ -333,7 +333,7 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	// AN ASSET IS ALWAYS AN UPLOAD of its own, never carried and never
 	// inline in a record, so inline bytes are streamed through the same
 	// reservation as a box's.
-	files.files[0] = streamedInline(files.files[0])
+	files.files[0] = files.streamedInline(files.files[0])
 	call := t.deps.call(c, dec.Standing.Role, dec.Elevated)
 	upload, _, refusal := files.stage(ctx, call, h.ID, true)
 	if refusal != nil {
