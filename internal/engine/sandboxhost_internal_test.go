@@ -41,6 +41,8 @@ func (nobodyAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audien
 	return sandbox.Audience{}
 }
 
+func (nobodyAudience) MayAnswer(context.Context, string) (bool, error) { return true, nil }
+
 // hostFleet is two nodes over one run store and one broker.
 func hostFleet(t *testing.T) (store sandbox.PendingStore, a, b *hostNode) {
 	t.Helper()
