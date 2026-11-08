@@ -131,6 +131,5 @@ Turning `integrations.ssh` off, turning an agent off, or removing a server from 
 
 ## What is not supported yet
 
-- **Test connection**, and the certificate authority's rotation routes.
 - The agents' `ssh_read` and `ssh_operate` tools, and the audit of every certificate and command.
 - Receiving events from a server.

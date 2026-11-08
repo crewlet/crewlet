@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -269,4 +271,89 @@ func newSurfaceWithSSH(t *testing.T, access setupapi.SSHAccess, tests setupapi.S
 func seatedAdmin(seat string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: seat + ".person", Kind: iam.KindPerson, Seat: seat,
 		Stage: iam.StageActive, Grants: iam.AllGrants, ReauthAt: time.Now().Add(time.Hour)}
+}
+
+// A ROTATION STAGES, PROMOTES ONLY ONCE EVERY SERVER PASSED, AND CANCELS: stage
+// seals a second authority the setup trusts beside the current one and is
+// refused while one is staged; promote is refused until every server's latest
+// test with the staged authority passed, then seals it under the current name
+// and clears the staged reference, answering the retired line; cancel drops a
+// staged one, and is refused with none staged.
+func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *testing.T) {
+	t.Parallel()
+	tests := coordmemory.NewFleet()
+	s := newSurfaceWithSSH(t, &fakeSSHAccess{}, tests)
+	s.seed(t)
+	s.connect(t, "ssh", `{"values": {"enabled": "true"}, "generate": ["certificate_authority"]}`)
+	line, _ := sshHostKeyLine(t)
+	host := `{"address": "api-1.example.com", "host_keys": ["` + line + `"], "users": {"read": "crewlet-read"}}`
+	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", host, nil); res.Code != http.StatusOK {
+		t.Fatalf("add the server = %d: %s", res.Code, res.Body)
+	}
+	rotate := func(action string) *httptest.ResponseRecorder {
+		return s.do(t, http.MethodPost, "/setup/integrations/ssh/rotation", `{"action": "`+action+`"}`, nil)
+	}
+	oldValue, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY")
+	old, err := setup.ParseSSHCertificateAuthority(oldValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"promote", "cancel"} {
+		if res := rotate(action); res.Code != http.StatusConflict {
+			t.Errorf("%s with nothing staged = %d: %s", action, res.Code, res.Body)
+		}
+	}
+	if res := rotate("stage"); res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "next_ca_public_key") ||
+		strings.Contains(res.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("stage = %d: %s", res.Code, res.Body)
+	}
+	nextValue, ok := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT")
+	next, err := setup.ParseSSHCertificateAuthority(nextValue)
+	if !ok || err != nil {
+		t.Fatalf("nothing usable was staged: %v", err)
+	}
+	if res := rotate("stage"); res.Code != http.StatusConflict {
+		t.Errorf("a second stage = %d: %s", res.Code, res.Body)
+	}
+	script := s.do(t, http.MethodGet, "/setup/integrations/ssh/hosts/api-1/setup", "", nil).Body.String()
+	for _, ca := range []*setup.SSHCertificateAuthority{old, next} {
+		if !strings.Contains(script, strings.Fields(ca.PublicLine())[1]) {
+			t.Errorf("the setup while staged does not trust %s", ca.Fingerprint())
+		}
+	}
+	if res := rotate("promote"); res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "api-1") {
+		t.Fatalf("promote before any test = %d: %s", res.Code, res.Body)
+	}
+	for _, passed := range []bool{false, true} {
+		if _, err := tests.PutSSHTest(t.Context(), coord.SSHTest{Host: "api-1", Authority: next.Fingerprint(),
+			At: time.Now(), By: "ops-lead", ByKind: iam.ActorHuman, OK: passed,
+			Steps: []coord.SSHTestStep{{ID: sshint.StepReach, OK: passed, Detail: "Reached."}}}); err != nil {
+			t.Fatal(err)
+		}
+		res := rotate("promote")
+		if !passed {
+			if res.Code != http.StatusConflict {
+				t.Fatalf("promote after a failed test = %d: %s", res.Code, res.Body)
+			}
+			continue
+		}
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), old.PublicLine()) {
+			t.Fatalf("promote = %d: %s", res.Code, res.Body)
+		}
+	}
+	if current, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY"); current != nextValue {
+		t.Fatal("promote did not seal the staged authority as the current one")
+	}
+	if doc := s.do(t, http.MethodGet, "/config", "", nil).Body.String(); strings.Contains(doc, "SSH_CERTIFICATE_AUTHORITY_NEXT") {
+		t.Fatal("the document still points at a staged authority after promote")
+	}
+	if res := rotate("stage"); res.Code != http.StatusOK {
+		t.Fatalf("stage after promote = %d: %s", res.Code, res.Body)
+	}
+	if res := rotate("cancel"); res.Code != http.StatusOK {
+		t.Fatalf("cancel = %d: %s", res.Code, res.Body)
+	}
+	if res := rotate("rotate"); res.Code != http.StatusBadRequest {
+		t.Errorf("an unknown action = %d: %s", res.Code, res.Body)
+	}
 }
