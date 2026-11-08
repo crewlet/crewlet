@@ -18,6 +18,15 @@ import "~/styles/frame.css";
 import "~/styles/screens.css";
 import "~/styles/chatlet-room.css";
 import "~/styles/chatlet-panes.css";
+import type { ReactNode } from "react";
+import { vi } from "vitest";
+import { Announcer, LayerHost, ToastProvider } from "@crewlethq/ui";
+import { Router } from "~/app/router.tsx";
+import { FrameReadings } from "~/app/Shell.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 const REPLACED = new Set([
   "IMG",
@@ -85,4 +94,131 @@ export function sidewaysScrollers(box: Element): string[] {
   return readerScrollers(box)
     .filter((scroller) => scroller.scrollWidth > scroller.clientWidth)
     .map((scroller) => `${label(scroller)} ${scroller.scrollWidth}/${scroller.clientWidth}`);
+}
+
+export interface Glyph {
+  c: string;
+  left: number;
+  right: number;
+  bottom: number;
+}
+
+/** Every glyph a reader sees in `el`, in order: what only a screen reader hears is left out. */
+export function glyphs(el: Element): Glyph[] {
+  const out: Glyph[] = [];
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+    if (node.parentElement?.closest(".crewlet-inline-ref__said, .crewlet-visually-hidden"))
+      continue;
+    const text = node.textContent ?? "";
+    for (let i = 0; i < text.length; i++) {
+      const range = document.createRange();
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      const rect = range.getClientRects()[0];
+      if (rect && rect.width > 0) {
+        out.push({ c: text[i]!, left: rect.left, right: rect.right, bottom: rect.bottom });
+      }
+    }
+  }
+  return out;
+}
+
+export const sameLine = (a: Glyph, b: Glyph) => Math.abs(a.bottom - b.bottom) < 6;
+
+/** Each "(" whose next glyph, or ")" whose glyph before, sits on another line. */
+export function strandedPunctuation(el: Element): string[] {
+  const all = glyphs(el).filter((g) => g.c.trim());
+  const out: string[] = [];
+  all.forEach((g, i) => {
+    if (g.c === "(" && all[i + 1] && !sameLine(g, all[i + 1]!))
+      out.push(`"(" before "${all[i + 1]!.c}"`);
+    if (g.c === ")" && all[i - 1] && !sameLine(all[i - 1]!, g))
+      out.push(`")" after "${all[i - 1]!.c}"`);
+  });
+  return out;
+}
+
+/** The words of `el` by line: runs of glyphs between spaces, a run cut where a line breaks. */
+export function lines(el: Element): Glyph[][][] {
+  const words: Glyph[][] = [];
+  let word: Glyph[] | null = null;
+  for (const g of glyphs(el)) {
+    if (!g.c.trim()) word = null;
+    else if (word && sameLine(word[0]!, g)) word.push(g);
+    else words.push((word = [g]));
+  }
+  const rows: Glyph[][][] = [];
+  for (const w of words) {
+    const row = rows.find((r) => sameLine(r[0]![0]!, w[0]!));
+    if (row) row.push(w);
+    else rows.push([w]);
+  }
+  return rows;
+}
+
+/** Where `el`'s first line left room for the next two words: what a balanced title does. */
+export function firstLineRoom(el: Element): number | null {
+  const rows = lines(el);
+  if (rows.length < 2) return null;
+  const span = (w: Glyph[] | undefined) => (w ? w.at(-1)!.right - w[0]!.left : 0);
+  const gap = el.getBoundingClientRect().right - rows[0]!.at(-1)!.at(-1)!.right;
+  const [next, after] = rows[1]!;
+  const space = 6;
+  return gap >= span(next) + space + span(after) + space ? Math.round(gap) : null;
+}
+
+export class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+/** Every read a layout case's screen asks, answered from `answers`, around `children`. */
+export function LayoutClient({
+  answers,
+  org,
+  children,
+}: {
+  answers: Record<string, unknown>;
+  org: Record<string, unknown>;
+  children: ReactNode;
+}) {
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(org) as never);
+  store.applySeats([] as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string) => Promise.resolve(answers[what] ?? {})) as typeof socket.query;
+  return (
+    <ToastProvider>
+      <Announcer label="Announcements" />
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>{children}</Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>
+  );
+}
+
+/** An engine that takes every write: the act route answers each tool as applied. */
+export function actsApplied(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string) => {
+    const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+    return new Response(
+      JSON.stringify({
+        tool,
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:99",
+        receipt: {},
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  });
 }

@@ -3226,7 +3226,13 @@ asks put to this person and the executors parked on a question to them
 a spent token budget, and the conditions a person decides (`lib/attention.ts`,
 the subjects whose home is `seat`). **Updates** follows: what reached them and
 is not read yet (`inbox{unread, snoozed: exclude}`, the tracker's notices and
-Gitlet's interleaved by when each happened). Decisions are never
+Gitlet's interleaved by when each happened), as a closed, counted group
+("Updates 12") drawn with the same disclosure as Answered. It is closed on
+every visit, because notices are many and what waits on the reader comes
+first; opened, its rows step with `j` and `k` like any other, and a link that
+names one of its rows opens it. Mark all read, the Snoozed link, the frame's
+badge and Home's Updates count the same updates whether it is open or not.
+Decisions are never
 interleaved with updates by time, which would eventually rank "a task you
 watch moved" above the CEO asking whether to hold a release. An ask is ONE
 row: the notice that told the person they were asked rides on the decision it
@@ -3350,7 +3356,12 @@ closed and counts it, and one polite announcement says both ("Answered. Next:
 An answer the engine has accepted and not yet settled stays where it stood,
 shown as sent, until it settles. Needs you's count is what is still open. A
 read or snoozed update shows its new state, and 700 ms later (`ADVANCE_MS`)
-the next item after it opens, unless the reader has moved on first.
+the next item after it opens, unless the reader has moved on first. The next
+item is never a row in a closed group: with Needs you empty and Updates
+closed, the pane says **All clear** rather than opening an update. Every item
+opens at its head: the reading pane is told which row it reads, and whatever
+scrolls it goes back to the row's top, whether an answer, a click on a row,
+`j` and `k` or a link opened it.
 
 **What was answered before waits in a closed group.** The asks put to the
 reader and closed in the last week, and the executors' questions the reader
