@@ -40,14 +40,34 @@ func (a sshAudit) RecordCertificate(ctx context.Context, rec sshint.CertificateR
 		ValidAfter: rec.ValidAfter, ValidBefore: rec.ValidBefore,
 		PublicKeySHA256: rec.PublicKeySHA256, CASHA256: rec.CASHA256, Node: c.nodeID,
 	})
+	return accessLanded(res, err, fmt.Sprintf("certificate %016x", rec.Serial))
+}
+
+var _ sshint.CommandRecorder = sshAudit{}
+
+// RecordCommand writes cmd as the access log's command record, its text
+// sealed to it.
+func (a sshAudit) RecordCommand(ctx context.Context, minted time.Time, cmd accessdomain.NewCommand) error {
+	c := a.engine.core.Load()
+	if c == nil || c.accessWriter == nil {
+		return errNoAccessLog
+	}
+	res, err := c.accessWriter.Ran(ctx, accessdomain.Call{
+		By: sshAuditor, OpID: accessdomain.RanOpID(minted, cmd.Handle, cmd.ID),
+	}, cmd)
+	return accessLanded(res, err, "command "+cmd.ID)
+}
+
+// accessLanded is nil where what's record was applied or is pending, and otherwise
+// why it is not known to have landed.
+func accessLanded(res statelog.Result, err error, what string) error {
 	switch {
 	case err != nil:
-		return fmt.Errorf("engine: record certificate %016x: %w", rec.Serial, err)
+		return fmt.Errorf("engine: record %s: %w", what, err)
 	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
 		return nil
 	}
-	return fmt.Errorf("engine: whether certificate %016x's record landed is %s, so it is not used",
-		rec.Serial, res.Outcome)
+	return fmt.Errorf("engine: whether %s's record landed is %s", what, res.Outcome)
 }
 
 // SSHAccess is the setup surface's half of Test connection and the SSH audit

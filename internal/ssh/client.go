@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -88,6 +89,32 @@ type Result struct {
 	// OutputSHA256 is the SHA-256, in hex, of the two streams' own SHA-256
 	// digests, stdout's then stderr's, each over the whole stream.
 	OutputSHA256 string
+	// Started is a command the server began: the rest describes what it did.
+	Started bool
+}
+
+// RunError is a command that did not run or did not finish, with the closed
+// word the access log records it by.
+type RunError struct {
+	Failure accessdomain.CommandFailure
+	Err     error
+}
+
+func (e *RunError) Error() string { return e.Err.Error() }
+func (e *RunError) Unwrap() error { return e.Err }
+
+// FailureOf is the access log's word for err: engine_error for an error the
+// client did not classify.
+func FailureOf(err error) accessdomain.CommandFailure {
+	var run *RunError
+	if errors.As(err, &run) {
+		return run.Failure
+	}
+	return accessdomain.FailureEngineError
+}
+
+func failed(word accessdomain.CommandFailure, err error) error {
+	return &RunError{Failure: word, Err: err}
 }
 
 // hostKeys is the host's pinned keys and the algorithms that negotiate them.
@@ -129,25 +156,42 @@ func pinned(keys []ssh.PublicKey) ssh.HostKeyCallback {
 func (c *Client) connect(ctx context.Context, h config.SSHHost, user string, auth ssh.Signer) (*ssh.Client, error) {
 	keys, algos, err := hostKeys(h)
 	if err != nil {
-		return nil, err
+		return nil, failed(accessdomain.FailureEngineError, err)
 	}
 	addr := net.JoinHostPort(h.Address, strconv.Itoa(h.PortOrDefault()))
 	dialCtx, cancel := context.WithTimeout(ctx, DialTimeout)
 	defer cancel()
 	conn, err := c.dial(dialCtx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("ssh: reach %s: %w", h.ID, err)
+		return nil, failed(accessdomain.FailureUnreachable, fmt.Errorf("ssh: reach %s: %w", h.ID, err))
 	}
 	deadline, _ := dialCtx.Deadline()
 	_ = conn.SetDeadline(deadline)
+	// VERIFIED is a server that passed the pin: a handshake that fails after
+	// it is the server refusing the certificate.
+	verified, check := false, pinned(keys)
 	cfg := &ssh.ClientConfig{
 		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(auth)},
-		HostKeyCallback: pinned(keys), HostKeyAlgorithms: algos, Timeout: DialTimeout,
+		HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
+			if err := check(host, remote, key); err != nil {
+				return err
+			}
+			verified = true
+			return nil
+		},
+		HostKeyAlgorithms: algos, Timeout: DialTimeout,
 	}
 	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("ssh: sign in to %s as %s: %w", h.ID, user, err)
+		word := accessdomain.FailureUnreachable
+		switch {
+		case errors.Is(err, ErrHostKey):
+			word = accessdomain.FailureHostKeyRefused
+		case verified:
+			word = accessdomain.FailureAuthenticationRefused
+		}
+		return nil, failed(word, fmt.Errorf("ssh: sign in to %s as %s: %w", h.ID, user, err))
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return ssh.NewClient(sc, chans, reqs), nil
@@ -164,7 +208,7 @@ func (c *Client) Run(ctx context.Context, h config.SSHHost, user string, auth ss
 	defer func() { _ = client.Close() }()
 	session, err := client.NewSession()
 	if err != nil {
-		return Result{}, fmt.Errorf("ssh: open a session on %s: %w", h.ID, err)
+		return Result{}, failed(accessdomain.FailureSessionFailed, fmt.Errorf("ssh: open a session on %s: %w", h.ID, err))
 	}
 	defer func() { _ = session.Close() }()
 	stdout, stderr := newCapped(c.maxOutput), newCapped(c.maxOutput)
@@ -173,7 +217,7 @@ func (c *Client) Run(ctx context.Context, h config.SSHHost, user string, auth ss
 		session.Stdin = bytes.NewReader(cmd.Stdin)
 	}
 	if err := session.Start(cmd.Line); err != nil {
-		return Result{}, fmt.Errorf("ssh: start the command on %s: %w", h.ID, err)
+		return Result{}, failed(accessdomain.FailureSessionFailed, fmt.Errorf("ssh: start the command on %s: %w", h.ID, err))
 	}
 	done := make(chan error, 1)
 	go func() { done <- session.Wait() }()
@@ -200,7 +244,7 @@ func (c *Client) Run(ctx context.Context, h config.SSHHost, user string, auth ss
 		Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes(),
 		StdoutBytes: stdout.total, StderrBytes: stderr.total,
 		Truncated: stdout.cut || stderr.cut, TimedOut: timedOut, Duration: time.Since(started),
-		OutputSHA256: outputDigest(stdout.sum, stderr.sum),
+		OutputSHA256: outputDigest(stdout.sum, stderr.sum), Started: true,
 	}
 	var exit *ssh.ExitError
 	var missing *ssh.ExitMissingError
@@ -213,7 +257,7 @@ func (c *Client) Run(ctx context.Context, h config.SSHHost, user string, auth ss
 	case errors.As(waitErr, &missing):
 		res.ExitCode = -1
 	default:
-		return res, fmt.Errorf("ssh: run the command on %s: %w", h.ID, waitErr)
+		return res, failed(accessdomain.FailureSessionFailed, fmt.Errorf("ssh: run the command on %s: %w", h.ID, waitErr))
 	}
 	return res, nil
 }
