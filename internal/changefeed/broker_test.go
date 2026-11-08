@@ -57,6 +57,14 @@ func (r groupRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 	}, nil
 }
 
+// Reopen reads a kept frame as the record whose payload it is: this fixture's
+// log carries its records unsealed.
+func (r groupRecords) Reopen(frame []byte, at changefeed.Record) (*changefeed.Message, error) {
+	rec := at
+	rec.Payload = frame
+	return &changefeed.Message{Record: rec, Frame: frame}, nil
+}
+
 func (r groupRecords) Stop() error { return r.group.Stop() }
 
 // keys is every published wake's record key, in order.

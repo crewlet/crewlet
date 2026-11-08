@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -142,73 +141,110 @@ type domainRecords struct {
 // a signed log, and the feed is the second one. What travels on
 // [changefeed.Record.Payload] is therefore the BODY: the wake's own
 // translators decode it again ([worklet.DecodeEnvelope], [doclet.Decode]), so a
-// framed payload here would fail in a package that never heard of a frame.
+// framed payload here would fail in a package that never heard of a frame. The
+// frame itself travels beside it, untouched ([changefeed.Message.Frame]), for
+// the one reader that needs it: a dead letter, which keeps the record whole.
 //
 // THE OPERATION ID IS THE DELIVERY'S IDENTITY, taken from the envelope every
 // build can read. It is what makes a redelivery collapse: a translator with no
 // id of its own uses it, and the wake id derived from it is the same on every
 // redelivery and on every node.
 //
-// A record this node cannot read is ACKNOWLEDGED and skipped rather than
-// retried for ever, and all three reasons meet here: a frame whose key this
-// node does not hold, a frame that is not this fleet's at all, and an envelope
-// from a build that writes a version this one does not. None is transient —
-// the bytes will not improve — and the framework's own contract is that a
-// record no build can read is retained by the APPLIER, at its position, where
-// a later build or a later keyring reprocesses it. Blocking the wake feed on
-// it would stop every notification in the company behind one record.
+// A record this node cannot read meets one of three ends here, and only one
+// is an acknowledgement:
 //
-// NONE OF THE THREE DERIVES A WAKE, which is the half that matters: a
-// notification derived from bytes this node could not authenticate is the
-// engine acting on an instruction it cannot attribute, and the applier is
-// where a forged record stops the fleet.
+//   - A FRAME SEALED UNDER A KEY THIS NODE DOES NOT HOLD, and AN ENVELOPE A
+//     NEWER BUILD WRITES, are DEFERRED to a peer ([changefeed.Message.Deferred]):
+//     handed to the feed with no payload, which returns them for redelivery
+//     with a backoff and dead-letters them past [changefeed.DeadLetterAge].
+//     "The bytes will not improve" is true on THIS node and false on a peer
+//     that holds the key or runs the newer build — and every node pulls the
+//     feed from ONE durable consumer, so a record acked here was one no peer
+//     would ever see: its wake was gone fleet-wide (#838).
+//   - A TAMPERED FRAME — a MAC that fails under a key this node holds, or
+//     bytes that are not a frame at all — is ACKNOWLEDGED and skipped: no node
+//     should act on a frame this fleet did not write, and the applier is where
+//     a forged record stops the fleet.
+//
+// Either way the APPLIER retains the record at its position, where a later
+// build or keyring reprocesses it; what is decided here is only the wake.
+//
+// NONE OF THE THREE DERIVES A WAKE ON THIS NODE, which is the half that
+// matters: a notification derived from bytes this node could not authenticate
+// is the engine acting on an instruction it cannot attribute.
 func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 	for {
 		delivery, err := r.group.Next(ctx)
 		if err != nil || delivery == nil {
 			return nil, err
 		}
-		env, body, verdict, err := openRecord(r.verify, r.envel, delivery.Payload)
-		switch {
-		case verdict != recordseal.Verified:
-			// TAMPERED IS LOUDER THAN UNKNOWN because the two are
-			// different events: a key this node has not been given is
-			// an operator's pending change, and a MAC that fails under
-			// a key it does hold is something that is not this fleet
+		msg, err := r.read(delivery.Payload, placeOf(r.stream, delivery))
+		if err != nil {
+			// TAMPERED, and louder than a deferral: a MAC that fails under
+			// a key this node holds is something that is not this fleet
 			// writing to its log.
-			level := slog.LevelWarn
-			detail := "acknowledged and skipped: the applier retains the record " +
-				"at its own position, and reprocesses it when this node is given " +
-				"the key it names"
-			if verdict == recordseal.Tampered {
-				level = slog.LevelError
-				detail = "acknowledged and skipped, and NO wake is derived from " +
-					"it: the applier is what stops the node on a record this " +
-					"fleet did not write"
+			log.ErrorContext(ctx, "changefeed_record_unverified",
+				"stream", r.stream, "consumer", r.group.Name(), "seq", delivery.Seq,
+				"error", err.Error(), "holds", r.verify.KeyIDs(),
+				"detail", "acknowledged and skipped, and NO wake is derived from "+
+					"it: the applier is what stops the node on a record this "+
+					"fleet did not write")
+			if err := delivery.Ack(); err != nil {
+				return nil, err
 			}
-			log.Log(ctx, level, "changefeed_record_unverified",
-				"stream", r.stream, "consumer", r.group.Name(), "seq", delivery.Seq,
-				"verdict", string(verdict), "holds", r.verify.KeyIDs(),
-				"detail", detail)
-		case err != nil:
-			// The frame opened and the ENVELOPE did not: a record from
-			// a build that writes a shape this one cannot read.
-			log.WarnContext(ctx, "changefeed_record_undecodable",
-				"stream", r.stream, "consumer", r.group.Name(), "seq", delivery.Seq,
-				"error", err.Error(),
-				"detail", "acknowledged and skipped: the bytes will not improve, "+
-					"and the applier retains the record at its own position for "+
-					"a build that can read it")
-		default:
-			return &changefeed.Message{
-				Record: feedRecord(r.stream, env, body, delivery),
-				Ack:    delivery.Ack,
-				Nak:    delivery.Nak,
-			}, nil
+			continue
 		}
-		if err := delivery.Ack(); err != nil {
-			return nil, err
-		}
+		msg.Ack, msg.Nak = delivery.Ack, delivery.Nak
+		return msg, nil
+	}
+}
+
+// Reopen implements [changefeed.Records]: a dead letter's frame read exactly as
+// [domainRecords.Next] reads a delivery — through this node's verifier, which
+// is built once at boot and never changes, so a key that arrived with a
+// restart is the key this reads it with — at the place the dead letter kept.
+func (r *domainRecords) Reopen(frame []byte, at changefeed.Record) (*changefeed.Message, error) {
+	return r.read(frame, at)
+}
+
+// read is one frame as the feed reads it, at the place at names: the frame
+// verified ([openRecord]), the envelope read, and the record handed over — or
+// DEFERRED where this node cannot read it and a peer can, with no payload (the
+// envelope's op id and generation unread, and no byte of an unopened frame
+// travelling on), or [changefeed.ErrForeignFrame] for a frame this fleet did
+// not write. The frame rides on every message, a deferred one included.
+func (r *domainRecords) read(frame []byte, at changefeed.Record) (*changefeed.Message, error) {
+	env, body, verdict, err := openRecord(r.verify, r.envel, frame)
+	switch {
+	case verdict == recordseal.KeyUnknown:
+		// AN OPERATOR'S PENDING CHANGE — a key the rotation runbook adds on
+		// every node before anything is sealed under it, and this node has
+		// not restarted onto yet — which a peer that holds the key reads.
+		return deferredAt(frame, at, changefeed.DeferUnknownKey,
+			fmt.Errorf("the frame is sealed under a key this node does not hold (it holds %v)",
+				r.verify.KeyIDs())), nil
+	case verdict != recordseal.Verified:
+		return nil, fmt.Errorf("%w: the frame is %s under this node's keyring",
+			changefeed.ErrForeignFrame, verdict)
+	case err != nil:
+		// The frame opened and the ENVELOPE did not: a record from a build
+		// that writes a shape this one cannot read, which a peer on that
+		// build reads.
+		return deferredAt(frame, at, changefeed.DeferNewerEnvelope, err), nil
+	}
+	return &changefeed.Message{Record: feedRecord(at, env, body), Frame: frame}, nil
+}
+
+// deferredAt is a frame this node cannot open and a peer can, handed to the
+// feed to defer: its place in the log and the broker's instant and count, and
+// NO payload.
+func deferredAt(frame []byte, at changefeed.Record, reason changefeed.DeferReason,
+	err error) *changefeed.Message {
+
+	return &changefeed.Message{
+		Record:   at,
+		Frame:    frame,
+		Deferred: &changefeed.Deferral{Reason: reason, Err: err},
 	}
 }
 
@@ -220,21 +256,26 @@ func (r *domainRecords) Stop() error {
 	return err
 }
 
-// feedRecord is one verified delivery of a log as the change feed reads it:
-// the envelope's operation id and generation, the delivery's place on stream,
-// its subject, the broker's instant for it — what the wake it becomes is timed
-// from — and the opened body.
-func feedRecord(stream string, env statelog.Envelope, body []byte,
-	delivery *jetstream.DomainDelivery) changefeed.Record {
+// placeOf is where a delivery was delivered from, as a record carries it: its
+// place on stream, its subject, the broker's instant for it — what the wake it
+// becomes is timed from — and how many times the broker has delivered it, which
+// a deferral backs off by. What Next knows of a delivery before its frame is
+// read, and what a dead letter keeps of it.
+func placeOf(stream string, delivery *jetstream.DomainDelivery) changefeed.Record {
 	return changefeed.Record{
-		ID:       env.OpID,
-		Position: delivery.Seq,
-		Stream:   stream,
-		Gen:      uint64(env.Gen),
-		Key:      delivery.Subject,
-		StoredAt: delivery.StoredAt,
-		Payload:  body,
+		Position:  delivery.Seq,
+		Stream:    stream,
+		Key:       delivery.Subject,
+		StoredAt:  delivery.StoredAt,
+		Delivered: delivery.Delivered,
 	}
+}
+
+// feedRecord is the record at at whose frame opened to env and body: the
+// envelope's operation id and generation, and the opened body.
+func feedRecord(at changefeed.Record, env statelog.Envelope, body []byte) changefeed.Record {
+	at.ID, at.Gen, at.Payload = env.OpID, uint64(env.Gen), body
+	return at
 }
 
 // feedFor is the wake feed one running domain declares: the translator that

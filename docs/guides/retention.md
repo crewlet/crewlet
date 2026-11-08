@@ -170,7 +170,13 @@ its group `crewlet-chat-feed` on `CREWLET_CHAT_LOG`, and its group
 records tell ([How a seat is woken](../concepts/gitlet.md#how-a-seat-is-woken))
 — because a record that feed has not acknowledged is one nobody has been woken
 for yet. So a feed that has stopped holds back its own log and no other, and
-`blocked_by: feed_ack_floor` on a domain names that domain's feed.
+`blocked_by: feed_ack_floor` on a domain names that domain's feed. A record no
+node could read yet — one a newer build wrote, during a roll — is handed back
+rather than acknowledged, so it holds its log's floor too, until its first
+delivery after it is an hour old, when the feed keeps it whole as a dead letter
+and acknowledges it ([Dead letters](../concepts/event-system.md#dead-letters)):
+the log can then trim it, since the dead letter needs nothing of the log to be
+replayed.
 
 A feed whose consumer fails (a broker that misses a heartbeat, a host that
 slept, a consumer the broker refuses) opens its group again on its own, waiting

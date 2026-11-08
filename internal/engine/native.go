@@ -1228,10 +1228,16 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		if !e.joins(ctx, translator.Source().Group) {
 			continue
 		}
+		// AND THE QUEUE'S DEAD-LETTER STREAM, where the feed keeps a record
+		// it handed back for an hour and its start replays what it kept,
+		// through the ledger that accounts for every entry a replay drops,
+		// so the alarm reading never counts one as a lost wake
+		// (feeddeadletters.go).
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 			Metrics: e.metrics, Objectives: e.objectives,
+			DeadLetters: e.feedDeadLetters(),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",

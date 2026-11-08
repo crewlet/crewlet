@@ -757,7 +757,11 @@ rolling upgrade an old node applies everything the new nodes write except the
 records that use something new, and it retains those whole rather than apply
 them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
-holds nothing back at all.
+holds nothing back at all. The wake such a record sends is held back the same
+way: an old node's wake feed hands the record to a node on the newer build
+rather than acknowledge it for the fleet, and a roll that outlasts the hour has
+it kept as a dead letter until a node that reads it starts
+([Dead letters](../concepts/event-system.md#dead-letters)).
 
 **Every strict domain states that as a table**, and the table is the rule
 rather than a description of it. Each field a record has gained since the base

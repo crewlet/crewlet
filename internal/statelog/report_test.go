@@ -862,6 +862,8 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
 	d.DeferredAge = statelog.DeferralGrace + time.Minute
 	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
+	// ITS WAKE FEED HOLDING A DEAD LETTER.
+	d.FeedDeadLetters = []statelog.FeedDeadLetter{{Age: 2 * time.Hour, ExpiresIn: 29 * 24 * time.Hour}}
 	// AND READ LINEARIZABLY PAST ITS CENSUS, by more than the drift factor.
 	d.LinearizableReadsExpected = 1_000
 	d.LinearizableReads = int(statelog.CensusDriftFactor*1_000) + 1

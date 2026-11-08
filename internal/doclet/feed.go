@@ -89,11 +89,13 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 		// A RECORD FROM A NEWER BUILD. Its envelope decoded, so this
 		// node knows what it is about and knows it cannot read the
 		// rules — and waking somebody from a payload it cannot decode
-		// would be inventing a notification. A peer on the newer build
-		// wins the next redelivery; this one is handled, not lost.
+		// would be inventing a notification. It is DEFERRED to a peer on
+		// the newer build, never answered "no wake": the feed's consumer
+		// is the fleet's, so a record this node acked is one no peer
+		// would ever see (#838).
 		var future *ErrFutureVersion
 		if errors.As(err, &future) {
-			return changefeed.Delivery{}, false, nil
+			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
 		}
 		return changefeed.Delivery{}, false, fmt.Errorf(
 			"doclet: read the record on %s: %w", rec.Key, err)

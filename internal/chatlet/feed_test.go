@@ -2,6 +2,7 @@ package chatlet_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -133,8 +134,9 @@ func TestTheFeedRelaysAMessageWithEverythingTheRecordCarried(t *testing.T) {
 // Each row states a different reason a record has nothing to say, because each
 // would have to be found separately if it were missing: the three machinery
 // kinds are the fleet talking to itself, the quiet ops are gestures nobody is
-// told about, a newer build's payload is rules this one cannot read, and an
-// absent routing snapshot is a record that says so itself.
+// told about, and an absent routing snapshot is a record that says so itself.
+// A newer build's payload is not among them: this build decided nothing about
+// it, and it is deferred (TestTheFeedDefersANewerBuildsRecordToAPeerThatCanReadIt).
 //
 // A row that ACKS is the assertion. Naking any of them puts one durable
 // consumer into a redelivery loop over a record no build will ever accept.
@@ -177,16 +179,20 @@ func TestTheFeedAcksEveryChangeThatWakesNobody(t *testing.T) {
 	}
 }
 
-// A PAYLOAD FROM A NEWER BUILD IS DROPPED WITHOUT WAKING, and that is neither
-// a loss nor an error.
+// A PAYLOAD FROM A NEWER BUILD IS DEFERRED TO A PEER ON THAT BUILD, never
+// answered "no wake".
 //
 // The envelope decodes at every version, so this node knows what the record is
 // about and knows it cannot read the rules it was written under. Waking
-// somebody from a payload it cannot decode would be inventing a notification.
-// A peer on that build wins the next redelivery of the same record, which is
-// what makes a rolling upgrade a period of reduced coverage rather than an
-// outage — so this one is HANDLED.
-func TestTheFeedDropsANewerBuildsRecordWithoutWakingAnybody(t *testing.T) {
+// somebody from a payload it cannot decode would be inventing a notification —
+// and answering "no wake" is no better: the feed acknowledges a decision, and
+// its consumer is the fleet's, so the record would reach no peer on the newer
+// build either and its wake would be gone fleet-wide (#838). It answers the
+// feed's deferral, which hands the record back for that peer.
+//
+// Mutation: answer the newer build's record "no wake" again, and it is not
+// deferred.
+func TestTheFeedDefersANewerBuildsRecordToAPeerThatCanReadIt(t *testing.T) {
 	t.Parallel()
 	payload, err := chatlet.Encode(aPost())
 	if err != nil {
@@ -204,14 +210,15 @@ func TestTheFeedDropsANewerBuildsRecordWithoutWakingAnybody(t *testing.T) {
 
 	delivery, wake, err := chatlet.NewTranslator(nil).Translate(t.Context(),
 		changefeed.Record{Payload: future, Key: "chat.message.room-1"})
-	if err != nil {
-		t.Fatalf("a record from a newer build failed the feed: %v — it is "+
-			"handled, because naking it would spin this consumer for ever "+
-			"while every node on the older build does the same", err)
-	}
 	if wake {
 		t.Fatalf("a record this build cannot decode produced a wake: %+v",
 			delivery)
+	}
+	var deferral *changefeed.Deferral
+	if !errors.As(err, &deferral) || deferral.Reason != changefeed.DeferNewerRecord {
+		t.Fatalf("a record from a newer build answered %v, want it deferred to a peer "+
+			"on that build (%s): a record this build decided nothing about is one "+
+			"the feed must not acknowledge for the fleet", err, changefeed.DeferNewerRecord)
 	}
 }
 
