@@ -734,8 +734,11 @@ func claudePack(paths Paths, at packAt) string {
 //     busybox's tar leaves out with exit 1); a member that is not a `.jsonl`
 //     transcript was WRITTEN since the marker (find's -newer, held to files —
 //     a directory gaining a thread or a spilled result is newer too, and read
-//     so every pack during one would fail — and to the archive's members,
-//     since a file made after tar read its directory is not in it); a
+//     so every pack during one would fail wherever a box's tar lists a
+//     directory as find names it: GNU's and busybox's end one in a slash
+//     (measured), which the filter by members alone keeps out, and -type f
+//     keeps out any tar's — and to the archive's members, since a file made
+//     after tar read its directory is not in it); a
 //     `.jsonl` member written since the marker is not A BYTE PREFIX of the
 //     live file — the member's cksum, read back out of the archive, against
 //     the live file's first as many bytes — which catches the in-place rewrite

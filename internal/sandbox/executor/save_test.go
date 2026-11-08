@@ -502,18 +502,24 @@ func madeAndRemoved(f sessionFiles) string {
 // file — the last two no transcripts, written after tar read their
 // directories, so in no archive. Tar says so as each tar does — GNU's exit 1,
 // "file changed as we read it", beside a find that compares the clock's own
-// grain, and busybox's exit 0 and nothing, beside a find of a coarse grain,
-// its listing naming a directory without the slash GNU's ends one in. Either
-// way the save is made, holding each transcript as tar first read it — a whole
-// prefix of the live file — and nothing made after tar read its directory.
+// grain, and busybox's exit 0 and nothing, beside a find of a coarse grain —
+// and both list a directory with the slash they end one in (measured on GNU
+// tar 1.35 and BusyBox 1.37.0), which no file find names matches; a tar that
+// lists one without it is played too, so that the check of what was written
+// reads files alone, however a box's tar names a directory: the directories
+// that gained a thread and a spilled result are newer than the marker, and
+// listed so they match what find names. Every way the save is made, holding
+// each transcript as tar first read it — a whole prefix of the live file — and
+// nothing made after tar read its directory.
 //
 // Mutation: refuse tar's exit 1 where every check holds, hold a `.jsonl` to
 // the check that a file was written since the marker, compare a grown
 // transcript's whole live file rather than its first as many bytes as the
 // archive holds, count a thread made after the tar as one the archive lost,
-// hold a file written after tar read its directory to the check of what was
-// written though no archive holds it, or read a directory newer than the
-// marker as a file written, and a save is refused.
+// or hold a file written after tar read its directory to the check of what
+// was written though no archive holds it, and a save is refused; read a
+// directory newer than the marker as a file written, and the save beside the
+// tar that lists a directory without its slash is.
 func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -524,7 +530,9 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 	}{
 		{name: "as GNU's tar and find read it",
 			said: `echo "tar: $grown: file changed as we read it" >&2; exit 1`},
-		{name: "as busybox's tar and find read it", coarse: true, said: `exit 0`,
+		{name: "as busybox's tar and find read it", coarse: true, said: `exit 0`},
+		{name: "as a tar that lists a directory without the slash GNU's and busybox's end one in",
+			said:   `exit 0`,
 			others: `if [ "$1" = -tzf ]; then "$tar" -tzf "$2" | sed 's,/$,,'; exit 0; fi`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
