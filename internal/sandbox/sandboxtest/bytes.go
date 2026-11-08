@@ -43,6 +43,8 @@ var bytesCases = []struct {
 		testAnAppendIsTheSameCallOnlyAtItsPlaceInstantNameAndIdentity},
 	{"AWithheldCallIsKeptWithoutItsIdentity", testAWithheldCallIsKeptWithoutItsIdentity},
 	{"AnAnswerPastItsShareIsRefused", testAnAnswerPastItsShareIsRefused},
+	{"AnAnswerPastItsShareToAQuestionNoLongerWaitingIsNoRefusal",
+		testAnAnswerPastItsShareToAQuestionNoLongerWaitingIsNoRefusal},
 	{"AHeldCallPastItsShareIsRefused", testAHeldCallPastItsShareIsRefused},
 	{"ANotePastItsBoundIsRefused", testANotePastItsBoundIsRefused},
 	{"AQuestionIsPutToTheFirstOfItsAudience", testAQuestionIsPutToTheFirstOfItsAudience},
@@ -727,6 +729,40 @@ func testAnAnswerPastItsShareIsRefused(t *testing.T, s sandbox.PendingStore) {
 	}
 	if _, ok, err := s.RecordAnswer(ctx, r.TurnID, launch, replyBatch(3, 2<<10), sandbox.Fence{}); err != nil || !ok {
 		t.Errorf("a reply of three short messages = %v, %v; want it recorded", ok, err)
+	}
+}
+
+// AN ANSWER PAST ITS SHARE TO A QUESTION NO LONGER WAITING IS NO REFUSAL. What a
+// reply weighs is decided against the run as the write finds it: to a run
+// answered another way since the caller matched it, or asked of a question the
+// run no longer waits on, the reply is false with no error, whatever it weighs,
+// as every reply after an answer is — the ordinary message it looks like, never
+// a refusal saying the run waits for a shorter answer to a question it is no
+// longer asking. The run is left as the earlier answer left it.
+//
+// Mutation: refuse the share before the row is read, as the store did, and
+// both replies come back ErrAnswerTooLarge.
+func testAnAnswerPastItsShareToAQuestionNoLongerWaitingIsNoRefusal(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bytes-answered")
+	launch := mustLaunched(t, s, r)
+	park(t, s, r.TurnID)
+	if _, ok, err := s.RecordAnswer(ctx, r.TurnID, launch, replyBatch(1, 64), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("the premise: a short reply = %v, %v; want it recorded", ok, err)
+	}
+	for name, asked := range map[string]string{
+		"answered another way":          launch,
+		"a question it no longer waits": launch + "-earlier",
+	} {
+		got, ok, err := s.RecordAnswer(ctx, r.TurnID, asked, replyBatch(20, 32<<10), sandbox.Fence{})
+		if err != nil || ok || got.TurnID != "" {
+			t.Errorf("%s: a reply past its share = %+v, %v, %v; want false with no error, the "+
+				"reply after an answer that it is", name, got.TurnID, ok, err)
+		}
+	}
+	if got := mustGet(t, s, r.TurnID); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
+		len(got.Answer.EventIDs) != 1 {
+		t.Errorf("the run is %s holding %+v; want it answered by the short reply alone", got.Status, got.Answer)
 	}
 }
 

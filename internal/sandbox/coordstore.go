@@ -953,24 +953,35 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		answer.RecordedAt = s.clock()
 	}
 	// HELD TO ITS SHARE OF THE ROW, as written and as its decline would owe
-	// it, before anything is written: see [MaxAnswerBytes].
-	if err := answerFits(turnID, answer); err != nil {
-		return PendingRun{}, false, err
+	// it, before anything is written: see [MaxAnswerBytes]. MEASURED ONCE,
+	// here, since what it weighs is the answer's alone, and REFUSED INSIDE
+	// THE WRITE, only once the row as it stands is found still waiting on the
+	// question ([PendingRun.takesAnswer]): a reply to a run answered another
+	// way, moved on or ending since the caller matched it is that run's
+	// ordinary loss whatever it weighs. Refused before the row was read, it
+	// was announced as a reply too large for a question nobody was waiting
+	// on any more.
+	fits := answerFits(turnID, answer)
+	if fits != nil && !errors.Is(fits, ErrAnswerTooLarge) {
+		return PendingRun{}, false, fits
 	}
 	ownedBy := int64(0)
+	var refused error
 	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		// EVERY ATTEMPT DECIDES AFRESH: the store re-reads and re-decides a
+		// lost race, and a refusal the last read did not make is no answer.
+		refused = nil
 		if superseded(*run, fence) {
 			ownedBy = run.OwnerEpoch
 			return false
 		}
 		ownedBy = 0
-		if run.LaunchID != launch || !slices.Contains(Awaiting, run.Status) || run.Answer != nil {
+		if !run.takesAnswer(launch, answer.EventIDs) {
 			return false
 		}
-		for _, id := range answer.EventIDs {
-			if slices.Contains(run.DeclinedAnswers, id) {
-				return false
-			}
+		if fits != nil {
+			refused = fits
+			return false
 		}
 		recorded := answer
 		recorded.From = run.Status
@@ -978,9 +989,12 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		run.Answer = &recorded
 		return true
 	})
-	if err == nil && ownedBy > 0 {
+	switch {
+	case err == nil && ownedBy > 0:
 		err = fmt.Errorf("sandbox: recording an answer to run %s, which a newer lease (epoch %d) "+
 			"than the recording node's (%d) owns: %w", turnID, ownedBy, fence.Epoch, ErrSeatNotHeld)
+	case err == nil && refused != nil:
+		return PendingRun{}, false, refused
 	}
 	return recorded, won, err
 }

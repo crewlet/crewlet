@@ -328,7 +328,8 @@ var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its 
 // ErrAnswerTooLarge is a reply past its share of the row ([MaxAnswerBytes]) as
 // the answer it would be recorded as — its seal and its deliveries — or as the
 // copies letting it go would owe the seat: refused by
-// [PendingStore.RecordAnswer] before anything is written, as an
+// [PendingStore.RecordAnswer] before anything is written, and only to a run
+// the write finds still waiting on the question, as an
 // [*AnswerTooLargeError] naming what it weighs. Nothing of the reply is lost
 // by it: a chat reply goes its way as the ordinary message it is, the refusal
 // is recorded for its author as `executor_answered` with the outcome too_large

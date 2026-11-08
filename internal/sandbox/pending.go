@@ -2809,8 +2809,14 @@ type PendingStore interface {
 	// AN ANSWER PAST ITS SHARE OF THE ROW ([MaxAnswerBytes]) is refused with
 	// [ErrAnswerTooLarge] before anything is written — as the row would hold
 	// it, or as the copies letting it go would owe the seat, which a decline
-	// cannot refuse to write. The reply is then not the run's answer, and
-	// goes its way as the ordinary message it is.
+	// cannot refuse to write — and ONLY WHERE THE ROW, AS THE WRITE FINDS IT,
+	// WOULD HAVE TAKEN THE ANSWER ([PendingRun.takesAnswer]). To a run
+	// answered another way, moved on to another question or ending since the
+	// caller matched it, it is false with no error, whatever it weighs, like
+	// any other answer the question no longer takes: the reply is the
+	// ordinary message a reply after an answer is, and never a refusal that
+	// says a run no longer waiting on the question waits for a shorter
+	// answer to it.
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
 	) (PendingRun, bool, error)
 
@@ -3300,6 +3306,29 @@ type RecordedAnswer struct {
 // Taken reports whether a resumed turn took this answer — see
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
+
+// takesAnswer reports whether this run would record an answer made of the
+// deliveries ids as the answer to the question launch asked: it still waits on
+// that question, with no answer recorded and its ending undecided, and none of
+// ids is a reply the question let go of ([PendingRun.DeclinedAnswers]).
+//
+// THE ONE RULE for both halves of an answer's fate at the store: whether
+// [PendingStore.RecordAnswer] records it, and whether one past its share of
+// the row is refused as too large for the question or is the ordinary reply
+// to a question already answered — so a reply is never refused for its size
+// as the answer to a question the store would not have recorded it against.
+func (r PendingRun) takesAnswer(launch string, ids []string) bool {
+	if r.LaunchID != launch || !slices.Contains(Awaiting, r.Status) || r.Answer != nil ||
+		r.Ending != nil {
+		return false
+	}
+	for _, id := range ids {
+		if slices.Contains(r.DeclinedAnswers, id) {
+			return false
+		}
+	}
+	return true
+}
 
 // HandedBack is one copy of a declined answer's delivery, owed to the seat's
 // inbox as the ordinary message it is — see [PendingRun.HandBack].
