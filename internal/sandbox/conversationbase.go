@@ -117,10 +117,11 @@ type BaseSession struct {
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	Interrupted   bool  `json:"interrupted,omitempty"`
 
-	// CapturedAt is when it was kept, and WentOn that its turn went on past
-	// it, or may have — Lost, a turn lost with its executor's box or host —
-	// so the run that continues it is told it was kept while that turn still
-	// worked, not that it runs through the turn's end
+	// CapturedAt is when it was kept; WentOn that its turn's end said the turn
+	// went on past it, so the run that continues it is told it was kept while
+	// that turn still worked, not that it runs through the turn's end; and
+	// Lost that the turn ended lost, which no frame of it saw end, so the run
+	// is told the session may not hold the last of what that turn did
 	// ([executorkeep.TurnRow.WentOn]).
 	CapturedAt time.Time `json:"captured_at,omitzero"`
 	WentOn     bool      `json:"went_on,omitempty"`

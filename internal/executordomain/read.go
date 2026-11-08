@@ -147,12 +147,13 @@ func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 // stands whether or not the row still names a session: an end stamped below
 // [wentOnVersion] took the older one off, and one stamped at or above kept it,
 // saying the turn went on past it ([Session.WentOnNote] names the capture not
-// kept beside it). Every account of an end reads the unkept capture through
-// this one rule, so none tells a session the row keeps as one that was not:
-// [Session.NotKept], [Session.WentOnNote], and [Session.Redacted], the one form
-// every reader is shown a row in — the read surface's, a seat's own reads and
-// searches of its sessions, and the account of the turn its conversation's
-// next turn is told.
+// kept beside it) — until the seat's budget releases that session, which
+// [Session.NotKept] tells apart. Every account of an end reads the unkept
+// capture through this one rule, so none tells a session the row keeps as one
+// that was not: [Session.NotKept], [Session.WentOnNote], and
+// [Session.Redacted], the one form every reader is shown a row in — the read
+// surface's, a seat's own reads and searches of its sessions, and the account
+// of the turn its conversation's next turn is told.
 func (s Session) Unkept() *executorkeep.Unkept {
 	if s.Ending == nil || s.Ending.Unkept == nil ||
 		!unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq) {
@@ -165,22 +166,24 @@ func (s Session) Unkept() *executorkeep.Unkept {
 // WentOn reports a row naming a session its turn WENT ON PAST, or may have: an
 // ended row naming an object whose end said the turn went on past it
 // ([executorkeep.Ending.WentOn]) — kept from a capture taken while its job still
-// worked, or from an earlier launch's — or whose turn was LOST with its
-// executor's box or host, which nobody saw end and whose session may not hold
-// the last of what it did. Such a row is still continued by the conversation's
-// next turn, which is told so ([Session.Kept]), and still read as the turn's
-// session; only never as all the turn did.
+// worked, or from an earlier launch's, or beside a newer capture that was not
+// kept — or whose turn ended LOST ([executorkeep.OutcomeLost]), which no frame
+// of it saw end, so its session may not hold the last of what it did. Such a
+// row is still continued by the conversation's next turn, which is told which
+// of the two it is ([Session.Kept]), and still read as the turn's session; only
+// never as all the turn did.
 func (s Session) WentOn() bool {
 	return s.HasObject() && s.Ending != nil &&
 		(s.Ending.WentOn || s.Ending.Outcome == executorkeep.OutcomeLost)
 }
 
-// WentOnNote is what a reader is told of a row its turn went on past
-// ([Session.WentOn]), "" of any other: that it is kept up to a session the turn
-// went on past — or, of a lost turn whose end did not say so, may have — and,
-// where its end names a newer capture that was not kept, which and why. Of an
-// end that said so, that the session was taken while the turn still worked
-// and what the turn did after is not in it.
+// WentOnNote is a row its turn went on past ([Session.WentOn]) in a reader's
+// words, "" of any other: that it is kept up to a session the turn went on past
+// — or, of a lost turn whose end did not say so, may have — and, where its end
+// names a newer capture that was not kept, which and why. Of an end that said
+// so, that the session was taken while the turn still worked and what the
+// turn did after is not in it. The one sentence of it, for every surface that
+// shows a row in words to say.
 //
 // THE NOTE IS THE ROW'S OWN FIELDS IN A READER'S WORDS, and the unkept capture
 // it names is the one [Session.Unkept] stands: an end stamped [wentOnVersion]
@@ -196,16 +199,12 @@ func (s Session) WentOnNote() string {
 	note := "kept up to a session taken while the turn still worked; the turn went on past it, and what " +
 		"it did after is not in it"
 	if !s.Ending.WentOn {
-		note = "kept up to a session its turn may have gone on past: the turn was lost with its executor's " +
-			"box or host, so the session may not hold the last of what it did"
+		note = "kept up to a session its turn may have gone on past: the turn was lost, so the session may " +
+			"not hold the last of what it did"
 	}
 	if unkept := s.Unkept(); unkept != nil {
-		reason := unkept.Reason
-		if reason == "" {
-			reason = "no reason was recorded"
-		}
 		note += fmt.Sprintf("; its newer capture (launch %d, capture %d) was not kept: %s", unkept.LaunchSeq,
-			unkept.CaptureSeq, reason)
+			unkept.CaptureSeq, unkeptReason(*unkept))
 	}
 	return note
 }
@@ -215,7 +214,14 @@ func (s Session) WentOnNote() string {
 // view of it, which the engine's restore and the read surface both make, so a
 // reader of whether a relaunch would continue the session decides on the
 // fields the relaunch does — and the conversation's next turn, continuing a
-// session its turn went on past, is told so ([Session.WentOn]).
+// session its turn went on past or one of a lost turn, is told which.
+//
+// THE TWO FACTS [Session.WentOn] JOINS, APART: whether the turn's end said it
+// went on past the session the row names, and whether the turn was lost. Of
+// the first the next turn is told where the session ends, which the end knew;
+// of the second only that it may not hold the last of what the turn did,
+// which is all a lost turn's end can say — and a lost turn whose end said the
+// first is told the first.
 func (s Session) Kept() executorkeep.TurnRow {
 	return executorkeep.TurnRow{
 		Handle: s.Handle, Turn: s.Turn,
@@ -225,7 +231,8 @@ func (s Session) Kept() executorkeep.TurnRow {
 		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
 		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
 		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, CapturedAt: s.CapturedAt,
-		WentOn: s.WentOn(), Lost: s.Ending != nil && s.Ending.Outcome == executorkeep.OutcomeLost,
+		WentOn:  s.HasObject() && s.Ending != nil && s.Ending.WentOn,
+		Lost:    s.Ending != nil && s.Ending.Outcome == executorkeep.OutcomeLost,
 		EndedAt: s.EndedAt, BaseTurn: s.BaseTurn,
 	}
 }
@@ -283,31 +290,48 @@ func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statel
 // ([seatPlan]), the one other release that leaves a row, and one that takes
 // only an ended turn's.
 //
+// A SESSION ITS END KEPT IS ONE ONLY THE BUDGET RELEASES: an end that says its
+// turn went on past the row's session ([executorkeep.Ending.WentOn]) keeps it
+// beside the newer capture it names unkept, so a row that had kept a session
+// and names none under such an end was released by the seat's budget — said
+// so, with the newer capture that was not kept — never by the capture the end
+// named, which was refused before the end and took nothing off the row.
+//
 // SOMEBODY ELSE'S WORDS IN IT: the unkept capture's reason quotes what refused
 // it — an error a box or a store wrote — so a reader redacts what this
 // answers, as it redacts every text a row holds.
 func (s Session) NotKept() string {
 	unkept := s.Unkept()
+	keptByItsEnd := s.Ending != nil && s.Ending.WentOn && !s.CapturedAt.IsZero()
 	switch {
 	case s.HasObject():
 		return ""
 	case s.RetiredBy != "":
 		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
-	case unkept != nil:
-		reason := unkept.Reason
-		if reason == "" {
-			reason = "no reason was recorded"
-		}
+	case unkept != nil && !keptByItsEnd:
 		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
-			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, reason)
+			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
 	case s.CapturedAt.IsZero() && !s.Ended():
 		return "nothing of this turn's session has been captured yet"
 	case s.CapturedAt.IsZero():
 		return "nothing of this turn's session was captured: its run ended before its harness packed one, " +
 			"its harness carries none, or the company kept no session"
 	}
-	return "the seat's session budget released this session's object to make room for newer ones; how the " +
-		"turn ended is kept"
+	released := "the seat's session budget released this session's object to make room for newer ones"
+	if unkept != nil {
+		released += fmt.Sprintf(" — its turn had gone on past it, and its newer capture (launch %d, capture %d) "+
+			"was not kept: %s", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
+	}
+	return released + "; how the turn ended is kept"
+}
+
+// unkeptReason is why u was not kept, as a reader is told it: its reason, or
+// that none was recorded.
+func unkeptReason(u executorkeep.Unkept) string {
+	if u.Reason == "" {
+		return "no reason was recorded"
+	}
+	return u.Reason
 }
 
 // rowScanner is one row, from a query or a query row.

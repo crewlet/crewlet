@@ -10,15 +10,17 @@ import (
 // A HEAD ITS TURN WENT ON PAST IS HANDED THE NEXT TURN AS ONE. A turn's dispatch
 // reads its conversation's head, and its first launch freezes it as the base it
 // continues: where the head's end said its turn went on past the session its
-// row names, or the turn was lost, the base the launch is answered says so,
-// with when that session was kept — what the run is told where the session
-// ends — through the row's one view of itself, the frozen base and the basis
-// the engine builds from it. A head whose turn ended on its last word is
-// handed as one.
+// row names, the base the launch is answered says so, with when that session
+// was kept — what the run is told where the session ends — and where the turn
+// was lost, it says that apart, so a lost turn whose end said nothing of going
+// on is told only what a lost turn's end can say. Through the row's one view of
+// itself, the frozen base and the basis the engine builds from it. A head
+// whose turn ended on its last word is handed as one.
 //
 // Mutation: leave WentOn, Lost or CapturedAt off the frozen base, or off the
 // basis the engine builds from it, and the next turn is told the session runs
-// through its turn's end.
+// through its turn's end; join the two, and a lost turn is told its session was
+// kept while it still worked.
 func TestAHeadItsTurnWentOnPastIsHandedTheNextTurnAsOne(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -28,8 +30,9 @@ func TestAHeadItsTurnWentOnPastIsHandedTheNextTurnAsOne(t *testing.T) {
 	}{
 		{name: "its end said it went on past the session",
 			ending: executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true}, wentOn: true},
-		{name: "it was lost", ending: executorkeep.Ending{Outcome: executorkeep.OutcomeLost}, wentOn: true,
-			lost: true},
+		{name: "it was lost", ending: executorkeep.Ending{Outcome: executorkeep.OutcomeLost}, lost: true},
+		{name: "its end said it went on past the session, and it was lost",
+			ending: executorkeep.Ending{Outcome: executorkeep.OutcomeLost, WentOn: true}, wentOn: true, lost: true},
 		{name: "it ended on its last word", ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
