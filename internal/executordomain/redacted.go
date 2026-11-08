@@ -15,9 +15,10 @@ import "github.com/crewlet/crewlet/internal/redact"
 // only where the row's session is older than the last word it named, or it
 // named none ([Session.endWentPast]), so a row that holds its turn's last word
 // is shown as one. Every other field is exactly as the row holds it, the
-// ending's last word among them; what a reader is told of a row its turn went
-// on past ([Session.WentOnNote]) is asked of this form, so the unkept capture's
-// reason it quotes is the redacted one.
+// ending's last word among them; what a reader is told of the session a row
+// keeps ([Session.KeptNote]: that it is in progress, or that its turn went on
+// past it) is asked of this form, so the unkept capture's reason it quotes is
+// the redacted one.
 //
 // THE UNKEPT CAPTURE AND WENT_ON AS THEY STAND ON THE ROW, never as the end
 // said them, for every reader by the same token: an end is decided off the
