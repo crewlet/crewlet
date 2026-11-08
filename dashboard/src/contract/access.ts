@@ -414,7 +414,7 @@ interface AccessSeatPlan {
  * told, with open work raised under its access now: it reviews that work once
  * the draft is saved.
  */
-export interface AccessSeatReview {
+interface AccessSeatReview {
   handle: string;
   /** Its open questions, what its executor waits on, and its work in progress or blocked. */
   open: number;

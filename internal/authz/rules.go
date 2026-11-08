@@ -2173,6 +2173,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionWithdrawAsk: {"an agent seat's own verb: a person resolves their own question from its " +
+		"work item, and withdraws nothing an agent's run waits on", tellSeat},
 	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
 		"person reads a seat's as its trail", tellSeat},
 	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
