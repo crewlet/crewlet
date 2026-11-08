@@ -1575,8 +1575,9 @@ func nextCaptureSeq(run PendingRun) int64 {
 }
 
 // maxScrubBytes bounds what one capture scrubs out by value, in all: what its
-// launch handed the box ([MaxHandedBytes]) and its seeded logins read again, in
-// the box and on the host ([Coordinator.scrubValues]).
+// box was handed — by its launch and by the poll's renewals since, bounded
+// together ([MaxHandedBytes]) — and its seeded logins read again, in the box
+// and on the host ([Coordinator.scrubValues]).
 //
 // FOUR TIMES WHAT A LAUNCH MAY HAND: a launch at its bound, and every login it
 // was seeded with read again twice — a login document is a kibibyte or two —
@@ -1589,16 +1590,22 @@ func nextCaptureSeq(run PendingRun) int64 {
 const maxScrubBytes = 4 * MaxHandedBytes
 
 // scrubValues is every value a capture of run's box scrubs out by value: what
-// its launch handed the box ([PendingStore.Handed]), and its seeded logins as
-// they are NOW, in the box and on the host, since a refresh mints values the
-// launch never saw. [ErrHandedUnknown] where they cannot be known — see
-// handed.go — which refuses the capture rather than scrub less; and refused
-// too past its bounds — a login read again larger than a whole launch may hand
+// its launch handed the box and every token the poll renewed in it since,
+// recorded before the poll wrote it ([PendingStore.Handed],
+// [PendingStore.AddHanded]), and its seeded logins as they are NOW, in the box
+// and on the host, since a refresh mints values the launch never saw.
+// [ErrHandedUnknown] where they cannot be known — see handed.go — a set marked
+// as holding less than its box among them ([ErrHandedIncomplete]), which
+// refuses the capture rather than scrub less; and refused too past its bounds
+// — a login read again larger than a whole launch may hand
 // ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
 // code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
 	sealed, err := c.pending.Handed(ctx, run)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrHandedIncomplete):
+		return nil, fmt.Errorf("%w: %w", ErrHandedUnknown, err)
+	case err != nil:
 		return nil, fmt.Errorf("%w: what its box was handed could not be read: %w", ErrHandedUnknown, err)
 	}
 	if sealed == "" {

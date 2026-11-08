@@ -89,6 +89,36 @@ describe("the words", () => {
     ).toBe(false);
   });
 
+  // THE ROOM'S STANDING AUDIENCE IS SAID BY THE COMPOSER, not under every
+  // line. Mutation: return true for any recipient and every message in a room
+  // whose agents hear everything takes a receipt line.
+  test("draw no receipt for agents that hear every message, unless one answered", () => {
+    const agent = (handle: string) => handle === "pm" || handle === "qa";
+    const everyone = {
+      recipients: [
+        { handle: "pm", reason: "follow_all" },
+        { handle: "qa", reason: "follow_all" },
+      ],
+    };
+    expect(showsReceipt(said({ reach: everyone }), agent)).toBe(false);
+    expect(showsReceipt(said({ reach: everyone }), agent, [])).toBe(false);
+    expect(
+      showsReceipt(said({ reach: everyone }), agent, [
+        { handle: "pm", message_id: "m-2", at: "2026-01-01T00:01:00Z" },
+      ]),
+    ).toBe(true);
+    const named = {
+      recipients: [
+        { handle: "pm", reason: "mention" },
+        { handle: "qa", reason: "follow_all" },
+      ],
+    };
+    expect(showsReceipt(said({ reach: named, mentions: ["pm"] }), agent)).toBe(true);
+    expect(
+      showsReceipt(said({ reach: { recipients: [{ handle: "qa", reason: "follow" }] } }), agent),
+    ).toBe(true);
+  });
+
   test("say why a draft reaches no agent", () => {
     expect(quietHint("no_agent")).toMatch(/Mention one/);
     expect(quietHint("addressed_to_people")).toMatch(/only people/);

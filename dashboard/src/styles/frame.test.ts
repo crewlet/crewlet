@@ -953,6 +953,59 @@ describe("the frame's layout", () => {
   });
 });
 
+// ONE RHYTHM FOR A PAGE TOOLBAR, the Work list's. The bar's padding is the
+// only space between its controls and the work under them: the content
+// column's padding stacked on it above, and its box's gap stacked on it below,
+// 28px either side on every screen but the Work list.
+describe("a page toolbar's rhythm", () => {
+  test("the band adds nothing above its controls and hands back its box's gap below", () => {
+    const bar = block(sheet("frame.css"), ".toolbar");
+    expect(bar).toMatch(/padding:\s*var\(--spacing-2\)\s+0/);
+    expect(bar).toMatch(/margin-top:\s*calc\(-1 \* var\(--spacing-2\)\)/);
+    expect(bar).toMatch(/--toolbar-host-gap:\s*inherit/);
+    expect(bar).toMatch(/margin-bottom:\s*calc\(-1 \* var\(--toolbar-host-gap\)\)/);
+    // READ FROM ITS OWN PARENT ALONE: an inherited property would hand a bar in
+    // a gapless box (the Work list's) its ancestor's gap, and the rows would
+    // slide up under it.
+    const registered =
+      /@property --toolbar-host-gap\s*\{([^}]*)\}/.exec(sheet("frame.css"))?.[1] ?? "";
+    expect(registered).toMatch(/inherits:\s*false/);
+    expect(registered).toMatch(/initial-value:\s*0px/);
+  });
+
+  test("every box a toolbar stands in names the gap it lays its blocks on", () => {
+    // Each declares the gap and lays its blocks on that one value, so the two
+    // cannot drift apart.
+    for (const [file, selector, step] of [
+      ["frame.css", ".app .crewlet-app-shell__content", "--spacing-5"],
+      ["frame.css", ".app .crewlet-section-frame__body", "--spacing-5"],
+      ["components.css", ".tabpanel", "--spacing-5"],
+      ["screens.css", ".live-now", "--spacing-5"],
+      ["screens.css", ".work-main", "--spacing-4"],
+    ] as const) {
+      const body = block(sheet(file), selector);
+      expect(body, selector).toMatch(new RegExp(`--toolbar-host-gap:\\s*var\\(${step}\\)`));
+      expect(body, selector).toMatch(/(^|;|\s)gap:\s*var\(--toolbar-host-gap\)/);
+    }
+    // A kit stack names its own gap, which the bar reads as it is.
+    expect(block(sheet("frame.css"), ".app .crewlet-stack")).toMatch(
+      /--toolbar-host-gap:\s*var\(--crewlet-layout-gap\)/,
+    );
+    // THE KIT'S TWO BOXES are restated here at the kit's own step, so a kit
+    // that moves either fails this rather than leaving a bar on the wrong gap.
+    const kit = kitSheet();
+    for (const selector of [".crewlet-app-shell__content", ".crewlet-section-frame__body"]) {
+      expect(block(kit, selector), selector).toMatch(/gap:\s*var\(--spacing-5\)/);
+    }
+  });
+
+  test("the band is one row of small controls and its own padding", () => {
+    expect(sheet("tokens.css")).toMatch(
+      /--toolbar-h:\s*calc\(var\(--size-control-sm\) \+ var\(--spacing-2\) \* 2\)/,
+    );
+  });
+});
+
 test("no stylesheet negates a var() with a unary minus", () => {
   // `left: -var(--spacing-1)` is not CSS. There is no unary minus in front of a
   // function, so the value is invalid at computed-value time and the WHOLE
@@ -1369,33 +1422,29 @@ describe("the Spend overview's rows", () => {
       block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
     ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
     expect(block(sheet("chatlet-panes.css"), ".chat-activity-list")).toMatch(
-      /padding:\s*var\(--tab-panel-gap\) /,
+      /padding-top:\s*var\(--tab-panel-gap\);/,
     );
   });
 
-  // CHATLET'S ACTIVITY LIST KEEPS THE VIEW'S SIDE LINE. Its rows began at the
-  // view's own edge, the selected fill flush against it and each face 4px in,
-  // while the view's title and its first tab stood on the side line, 20px in;
-  // and the list sat flush against the tab bar. A row pads itself by the first
-  // step, so the list stands that step inside the line and the faces start on
-  // it. The inset is the list's own, inside its column, so the column's
-  // hairline still meets the tab bar.
-  test("Chatlet's Activity list starts its faces on the view's side line", () => {
+  // CHATLET'S ACTIVITY LIST IS THE WHOLE VIEW UNTIL AN ITEM OPENS, then half
+  // of it, flush at the hairline. Its rows are the kit's chat density, full
+  // bleed and inset on the conversation's side line by the kit, so the list
+  // draws no side inset of its own: one would stop every row's fill short of
+  // the column's edge, which is how the rows came to end 32px before the
+  // hairline (the kit's list slot kept its gutter for a wrapped inbox).
+  test("Chatlet's Activity list runs the whole view, its rows the kit's chat density", () => {
     const panes = sheet("chatlet-panes.css");
-    expect(block(panes, ".chat-activity-list")).toMatch(
-      /padding:\s*var\(--tab-panel-gap\) 0 var\(--spacing-3\)\s+calc\(var\(--crewlet-chat-pad-x\) - var\(--spacing-2\)\);/,
+    expect(block(panes, ".chat-activity-list")).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+    expect(block(panes, ".chat-activity-list")).not.toMatch(
+      /padding(-left|-right|-inline[a-z-]*)?:/,
     );
-    // WIDE ENOUGH FOR THE ROOM: at the kit's 17rem the clamp took the room's
-    // name off "replied to a thread in #engineering".
-    expect(block(panes, ".chat-activity")).toMatch(/--crewlet-list-detail-list:\s*20rem;/);
-    expect(block(panes, ".chat-activity")).not.toMatch(/padding/);
+    expect(block(panes, ".chat-activity")).not.toMatch(/--crewlet-list-detail-list|padding/);
     const views = readFileSync(
       fileURLToPath(new URL("../routes/chatlet/Views.tsx", import.meta.url)),
       "utf8",
     );
-    expect(views).toMatch(
-      /list=\{\s*<div className="chat-activity-list">\s*<InboxList label="Activity">/,
-    );
+    expect(views).toMatch(/<InboxList label="Activity" density="chat">/);
+    expect(views).toMatch(/listWidth="half"\s+flush/);
   });
 
   // A ROOM IN BROWSE ROOMS AND SEARCH'S ROOMS IS THE KIT'S ROW: the name that

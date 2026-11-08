@@ -31,10 +31,12 @@ import (
 // does not is extended the other way, with a key of its own at the top of the
 // record (as [PendingRun.Stop] is, beside [RecordedEnding]). And the log kept
 // beside the record, [BridgeLog], is a value of its own with an Extra of its
-// own at its top, under the same rule. The handed set kept beside it too
-// ([handedSet]) needs none: it is never read, changed and written back, only
-// replaced whole by the attach of the job it names, so nothing another build
-// wrote into it is any later write's to keep.
+// own at its top, under the same rule. So is the handed part kept beside it
+// ([handedSet]), and the set it seals ([HandedSecrets]): the attach of each job
+// writes its own whole, but every token the completion poll renews in the
+// job's box is a read of the part, an open of the set, a change and a write
+// back of both ([CoordStore.AddHanded], [Coordinator.addHanded]), on whichever
+// node polls the box, every few minutes of a long run.
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept
@@ -249,6 +251,44 @@ func (l *BridgeLog) UnmarshalJSON(raw []byte) error {
 	}
 	*l = BridgeLog(p)
 	l.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the part with the keys a later build added to it.
+func (h handedSet) MarshalJSON() ([]byte, error) {
+	type plain handedSet
+	return marshalCarrying(plain(h), wireKeys(reflect.TypeFor[handedSet]()), h.Extra)
+}
+
+// UnmarshalJSON reads the part and keeps the keys this build does not know.
+func (h *handedSet) UnmarshalJSON(raw []byte) error {
+	type plain handedSet
+	p := plain(*h)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[handedSet]()))
+	if err != nil {
+		return err
+	}
+	*h = handedSet(p)
+	h.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the set with the keys a later build added to it.
+func (h HandedSecrets) MarshalJSON() ([]byte, error) {
+	type plain HandedSecrets
+	return marshalCarrying(plain(h), wireKeys(reflect.TypeFor[HandedSecrets]()), h.Extra)
+}
+
+// UnmarshalJSON reads the set and keeps the keys this build does not know.
+func (h *HandedSecrets) UnmarshalJSON(raw []byte) error {
+	type plain HandedSecrets
+	p := plain(*h)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[HandedSecrets]()))
+	if err != nil {
+		return err
+	}
+	*h = HandedSecrets(p)
+	h.Extra = extra
 	return nil
 }
 

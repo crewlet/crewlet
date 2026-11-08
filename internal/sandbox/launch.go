@@ -719,9 +719,15 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
 	// it, which already names this box, its cell, its harness and its host: a
 	// kept box is the previous job's, continued only where all four match
-	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]).
+	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). EACH TOKEN IT
+	// WRITES IS KEPT FOR THE JOB'S SEALED SET (renewed), which the attach that
+	// names the job's command writes: the refresh runs before that set exists.
+	var renewed HandedSecrets
 	if reused && c.refresh != nil {
-		c.refresh(ctx, m, opened, box)
+		c.refresh(ctx, m, opened, box, func(_ context.Context, value string, expires time.Time) error {
+			renewed.record(value, expires)
+			return nil
+		})
 	}
 
 	// THE TURN'S SESSION, CONTINUED in whatever box this job got — its kept
@@ -806,8 +812,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub —
 		// with what the jobs before it handed this box, where it continues
 		// in it: the box holds them still, and the session it resumes their
-		// lines ([PriorBox.Handed]).
-		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused),
+		// lines ([PriorBox.Handed]); and the tokens the refresh above wrote
+		// into it.
+		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused, renewed),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
 		// publishes beside whether its run did continue the session.
 		Brief: continued.kind,

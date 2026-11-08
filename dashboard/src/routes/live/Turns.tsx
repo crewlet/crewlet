@@ -88,6 +88,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
 import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** A day, the window a slow read offers instead of a longer one. */
 const DAY_MS = 86_400_000;
@@ -335,8 +336,9 @@ export function Turns() {
         what="this list"
       />
 
-      <div className="toolbar">
+      <PageToolbar>
         <Select
+          size="sm"
           width="auto"
           value={seat}
           onChange={(value) => setSeat(String(value))}
@@ -350,6 +352,7 @@ export function Turns() {
           active={seat !== ""}
         />
         <SegmentedControl
+          size="sm"
           semantics="radio"
           activate="manual"
           label="Which turns"
@@ -359,6 +362,7 @@ export function Turns() {
         />
         <span className="spacer" />
         <SegmentedControl
+          size="sm"
           semantics="radio"
           activate="manual"
           label="Order"
@@ -366,7 +370,7 @@ export function Turns() {
           onValueChange={setSort}
           options={TURN_ORDERS}
         />
-      </div>
+      </PageToolbar>
 
       {list.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading turns" />

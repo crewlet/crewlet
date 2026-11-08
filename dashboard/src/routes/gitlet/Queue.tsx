@@ -84,6 +84,7 @@ import type { CodeCheckRow, CodeEjectedRow, CodeParty, CodeQueueAnswer } from "~
 import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
 import { REPO_PARAM } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * How often the queues are read again: HALF A MINUTE, the checks listings'
@@ -123,15 +124,15 @@ export function Queue() {
 
   return (
     <>
-      <div className="toolbar">
-        <RepoPicker repo={repo} onChoose={setRepo} every="Every repository" />
+      <PageToolbar>
+        <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
         {repo === "" && (
           <span className="t-caption">
             Every repository’s queues; choose one for its trains, its checks and what it put out
             lately.
           </span>
         )}
-      </div>
+      </PageToolbar>
       {repo !== "" && !named ? (
         <Callout variant="warning">
           “{repo}” is not a repository’s name: one is lowercase letters, digits and hyphens,

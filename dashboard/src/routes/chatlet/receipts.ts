@@ -43,20 +43,33 @@ export function reachRecipients(
 }
 
 /**
- * Whether a message carries a receipt: a person's own words with a reach that
- * reached an agent, or that named one and reached none.
+ * Whether a message carries a receipt: a person's own words with a reach of
+ * their own (an agent they named, a thread it follows, the room's answerer),
+ * an answer to them, or an agent they named and did not reach.
  *
  * "REACHED NO AGENT" ONLY WHERE THE WORDS ASKED ONE. A post that names nobody
  * in a room no agent answers is the room's standing state, which the
  * composer's reach line says before the send; warned under every message, a
  * room of people read as failing.
+ *
+ * AND NOT THE ROOM'S STANDING AUDIENCE EITHER. Agents that hear every message
+ * in a room hear this one for that reason alone; the composer names them
+ * before the send, and repeated under every line the receipt took a line of
+ * every message in the room.
  */
-export function showsReceipt(message: ChatMessage, isAgent: (handle: string) => boolean): boolean {
+export function showsReceipt(
+  message: ChatMessage,
+  isAgent: (handle: string) => boolean,
+  answered?: readonly ChatAnswer[],
+): boolean {
   const reach = message.reach;
   if (!reach || message.event || message.deleted_at || message.author_kind !== "human") {
     return false;
   }
-  if ((reach.recipients ?? []).length > 0) return true;
+  const recipients = reach.recipients ?? [];
+  if (recipients.length > 0) {
+    return (answered ?? []).length > 0 || recipients.some((r) => r.reason !== "follow_all");
+  }
   return (message.mentions ?? []).some(isAgent);
 }
 

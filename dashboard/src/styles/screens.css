@@ -823,9 +823,10 @@
    design's 1.62 : 1 where one card is the primary (the running turns beside
    what waits on a person) and even where neither is. */
 .live-now {
+  --toolbar-host-gap: var(--spacing-5);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
+  gap: var(--toolbar-host-gap);
   min-width: 0;
 }
 .live-filters {
@@ -3768,9 +3769,10 @@ a.knowledge-reader-how:hover {
 /* ---- The main column and the project head ------------------------------- */
 
 .work-main {
+  --toolbar-host-gap: var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--toolbar-host-gap);
   min-width: 0;
 }
 
@@ -3806,7 +3808,7 @@ a.knowledge-reader-how:hover {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  min-height: var(--size-control-md);
+  min-height: var(--size-control-sm);
 }
 .work-bar-draw {
   flex-wrap: wrap;
@@ -3861,8 +3863,8 @@ a.knowledge-reader-how:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--size-control-md);
-  height: var(--size-control-md);
+  width: var(--size-control-sm);
+  height: var(--size-control-sm);
   border-radius: var(--radius-sm);
   color: var(--color-text-tertiary);
 }
@@ -3983,7 +3985,7 @@ a.knowledge-reader-how:hover {
   padding: 0;
   min-width: 0;
   /* One control tall, so it lines up with the row's other clusters. */
-  min-height: var(--size-control-md);
+  min-height: var(--size-control-sm);
 }
 
 /* ---- The two menus: Filter and Display ---------------------------------- */

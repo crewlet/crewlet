@@ -5,8 +5,8 @@
  * # Everything is an address
  *
  * A PLACE is a path under `#/chatlet`: a room (`#/chatlet/{id}`), or one of the
- * views beside the rooms (`activity`, `threads`, `drafts`, `saved`, `search`,
- * `browse`, `new`). The bare `#/chatlet` is no place of its own: it is
+ * views beside the rooms (`activity`, `dms`, `threads`, `drafts`, `saved`,
+ * `search`, `browse`, `new`). The bare `#/chatlet` is no place of its own: it is
  * Activity, Chatlet's landing, said differently ([placeOf]). A PANE is ONE query parameter, `pane`, on whatever place
  * the reader is at: a thread, a room's details, a profile, or a catch up. One
  * parameter rather than one per kind, so two panes can never be open at once
@@ -64,7 +64,10 @@ import type { RoomListOptions } from "./rooms.ts";
 export type ChatPlace =
   /** A room. `message` is the one a link landed on, drawn flashed. */
   | { kind: "room"; id: string; message?: string | undefined }
-  | { kind: "activity" }
+  /** `item` is the activity open beside the list, by its key. */
+  | { kind: "activity"; item?: string | undefined }
+  /** Direct messages: every conversation, and `room` open beside them. */
+  | { kind: "dms"; room?: string | undefined }
   | { kind: "threads" }
   | { kind: "drafts" }
   | { kind: "saved" }
@@ -176,6 +179,10 @@ export function placeOf(
       const dm = query.get("dm");
       return dm ? { kind: "new", to: [dm] } : { kind: "activity" };
     }
+    case "activity":
+      return { kind: "activity", item: query.get("item") || undefined };
+    case "dms":
+      return { kind: "dms", room: query.get("room") || undefined };
     case "search":
       return {
         kind: "search",
@@ -200,6 +207,8 @@ export function placePath(place: ChatPlace): string[] {
 export function placeQuery(place: ChatPlace, pane: ChatPane | null = null): Record<string, string> {
   const query: Record<string, string> = {};
   if (place.kind === "room" && place.message) query.message = place.message;
+  if (place.kind === "activity" && place.item) query.item = place.item;
+  if (place.kind === "dms" && place.room) query.room = place.room;
   if (place.kind === "search") {
     if (place.q) query.q = place.q;
     if (place.room) query.in = place.room;
@@ -222,6 +231,18 @@ export function samePlace(a: ChatPlace, b: ChatPlace): boolean {
 }
 
 /**
+ * The room a place holds open, or "" for none: a room, or the conversation
+ * open beside Direct messages. What acts on "the open room" (its scope, its
+ * detail, the top bar's actions, a pane about it) asks this, so a
+ * conversation opened in the page is the same open room as one opened alone.
+ */
+export function openRoomOf(place: ChatPlace): string {
+  if (place.kind === "room") return place.id;
+  if (place.kind === "dms") return place.room ?? "";
+  return "";
+}
+
+/**
  * Which pane survives a move to `place`.
  *
  * A PROFILE IS NOBODY'S ROOM, so it stays wherever the reader goes: they were
@@ -233,7 +254,7 @@ export function paneAfter(pane: ChatPane | null, place: ChatPlace): ChatPane | n
   if (!pane) return null;
   const room = paneRoom(pane);
   if (room === "") return pane;
-  return place.kind === "room" && place.id === room ? pane : null;
+  return openRoomOf(place) === room ? pane : null;
 }
 
 // ---------------------------------------------------------------------------

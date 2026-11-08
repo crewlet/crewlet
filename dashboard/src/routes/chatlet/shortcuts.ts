@@ -10,7 +10,7 @@ import { usePeek } from "~/app/frame/peekAddress.ts";
 import { useKeymap } from "~/app/keymap.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
-import type { ChatFrame, ChatNav } from "./nav.tsx";
+import { openRoomOf, type ChatFrame, type ChatNav } from "./nav.tsx";
 import { roomTitle, sectionRooms, unreadIn } from "./rooms.ts";
 
 /**
@@ -60,7 +60,7 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
   // A PEEK OPEN OVER THE SCREEN TAKES ESCAPE, which closes it and marks
   // nothing read (`app/keymap.ts`'s `SCOPES_APART`).
   const peek = usePeek();
-  const room = nav.place.kind === "room" ? nav.place.id : "";
+  const room = openRoomOf(nav.place);
   const toMark = markable(
     frame.channels.find((summary) => summary.channel.id === room),
     frame.measured,
