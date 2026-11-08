@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
 
 // SetupProbes is which vendor check answers each integration's Test button
@@ -49,5 +50,6 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindMattermost:   mattermost.Probe(nil, nil),
 		integration.KindScaleway:     scaleway.Probe(nil),
 		integration.KindSlack:        slack.Probe(nil),
+		integration.KindSSH:          sshint.Probe(nil),
 	}
 }

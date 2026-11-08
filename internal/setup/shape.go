@@ -46,6 +46,12 @@ const (
 	// Only ever minted, never pasted.
 	ShapeCertificateAuthority Shape = "certificate_authority"
 
+	// ShapeSSHCertificateAuthority is an SSH certificate authority the
+	// engine signs short-lived user certificates with: an unencrypted
+	// OpenSSH Ed25519 private key ([GenerateSSHCertificateAuthority]).
+	// Servers are shown only its public line.
+	ShapeSSHCertificateAuthority Shape = "ssh_certificate_authority"
+
 	// ShapeGoogleServiceAccount is a Google Cloud service account's email,
 	// `<id>@<project>.iam.gserviceaccount.com`, as config holds it.
 	ShapeGoogleServiceAccount Shape = "google_service_account"
@@ -79,7 +85,9 @@ var (
 
 // Multiline reports a shape whose values span lines, which its own rule
 // judges whole ([Shape.Problem]) in place of a credential's one-line rule.
-func (s Shape) Multiline() bool { return s == ShapeES256Key || s == ShapeCertificateAuthority }
+func (s Shape) Multiline() bool {
+	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority
+}
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
 // takes. noun names the field's value ("provisioner token"). It never quotes
@@ -94,6 +102,13 @@ func (s Shape) Problem(noun, value string) string {
 		return ""
 	}
 	switch s {
+	case ShapeSSHCertificateAuthority:
+		if _, err := ParseSSHCertificateAuthority(value); err != nil {
+			return fmt.Sprintf("This %s is not an SSH certificate authority the engine can sign with: it is "+
+				"one unencrypted OpenSSH private key holding an Ed25519 key. Leave the field to the engine, "+
+				"which mints one on Save.", noun)
+		}
+		return ""
 	case ShapeES256Key:
 		if _, err := parseES256(value); err != nil {
 			return fmt.Sprintf("This %s is not a key the engine minted: it is one PKCS#8 PEM "+
@@ -168,6 +183,8 @@ func (s Shape) Mint(token func() string) (string, error) {
 		return whsec.Mint()
 	case ShapeCertificateAuthority:
 		return GenerateCertificateAuthority(CertificateAuthorityName(), time.Now())
+	case ShapeSSHCertificateAuthority:
+		return GenerateSSHCertificateAuthority()
 	case ShapeES256Key:
 		return mintES256()
 	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider:

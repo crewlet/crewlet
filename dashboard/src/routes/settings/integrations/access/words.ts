@@ -376,6 +376,25 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     issued: "an hour",
     boxNote: "gcloud token file provided; the Google Cloud CLI must be in the box image",
   },
+  ssh: {
+    name: "SSH",
+    access: "Level on its servers",
+    turnOn:
+      "Turning it on lets the agent reach the chosen servers at the chosen level. Crewlet signs a certificate for each session; nothing is created on a server.",
+    off: "Crewlet stops signing the agent's certificates at once, and any it already holds expire within 15 minutes.",
+    remove: "There is nothing to remove: the agent's certificates expire on their own.",
+    rotate:
+      "Crewlet signs the agent's certificates for minutes at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Servers",
+      singular: "server",
+      empty: "No server",
+      none: "No servers are added yet",
+      noneLink: { label: "Add a server", doc: "ssh", anchor: "add-a-server" },
+    },
+    tool: "ssh_read and ssh_operate, built in",
+    issued: "15 minutes",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */

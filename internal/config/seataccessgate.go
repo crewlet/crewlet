@@ -80,6 +80,8 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 		return in.AWS != nil
 	case "google_cloud":
 		return in.GoogleCloud != nil
+	case "ssh":
+		return in.SSH != nil
 	}
 	return false
 }

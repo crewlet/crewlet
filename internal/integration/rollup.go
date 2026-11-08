@@ -86,6 +86,7 @@ var Tools = []Tool{
 	{Key: "scaleway", Surfaces: []ToolSurface{{string(KindScaleway), "Scaleway"}}},
 	{Key: "aws", Surfaces: []ToolSurface{{string(KindAWS), "AWS"}}},
 	{Key: "google_cloud", Surfaces: []ToolSurface{{string(KindGoogleCloud), "Google Cloud"}}},
+	{Key: "ssh", Surfaces: []ToolSurface{{string(KindSSH), "SSH"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does

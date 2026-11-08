@@ -956,7 +956,7 @@ func New(opts Options) (*App, error) {
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
-		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(),
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), HeldCalls: sources.HeldCalls,
 		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.

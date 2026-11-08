@@ -141,6 +141,9 @@ type turnTelemetry struct {
 	// trigger is described from, or off the parked row on a resume, by the
 	// seat's handle (ADR-0013).
 	requester string
+	// stranger is a turn a colleague's ask woke for somebody the company
+	// does not know ([turnctx.Turn.Stranger]).
+	stranger bool
 
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
@@ -329,6 +332,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.ask, t.askLabel = t.askParts.Text(), t.askParts.Label()
 	t.senders = sendersSpoken(t.interactions)
 	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
+	t.stranger = strangerAsk(req.Events)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -459,7 +463,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
-			Requester: t.requester,
+			Requester: t.requester, Stranger: t.stranger,
 			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
 			// filter — see [turnctx.Turn.Senders]. Off the telemetry rather
 			// than the interactions, which a resumed segment does not have:
@@ -983,7 +987,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// answer is somebody replying to the run, not somebody asking this
 		// turn for something, so a second run the resumed turn detaches is
 		// still the first requester's.
-		requester: in.Run.Requester,
+		requester: in.Run.Requester, stranger: in.Run.Stranger,
 		// WHAT IT WAS ASKED, off the park: the event that resumed it is a
 		// collection or a reply, and its ask is not the turn's.
 		ask:      in.State.Ask,
@@ -1144,6 +1148,20 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, s
 		return in.Sender.Handle
 	}
 	return ""
+}
+
+// strangerAsk reports whether the colleague's ask that woke a turn carried
+// somebody the company does not know, off the first event as [requesterOf]
+// reads the asker.
+func strangerAsk(evs []*events.Event) bool {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		ask, ok := events.DataAs[*types.A2ARequest](ev)
+		return ok && ask.Stranger
+	}
+	return false
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

@@ -676,3 +676,56 @@ func TestANewKindMigratesWithNothingToMove(t *testing.T) {
 		t.Errorf("the QA seat is %s", qa)
 	}
 }
+
+// SSH IS BORN MIGRATED: connected into a document that never had it, every
+// agent seat that does not say is written off, a seat that says on keeps its
+// level and hosts, nothing is moved or seeded (there is no account anywhere),
+// and the kind is marked so its access pass may act at once.
+func TestSSHIsBornMigrated(t *testing.T) {
+	t.Parallel()
+	var root map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"name": "Acme",
+		"integrations": {"ssh": {"enabled": true,
+			"provisioning": {"certificate_authority": "${SSH_CERTIFICATE_AUTHORITY}"}}},
+		"roles": [{"name": "Owner", "handle": "owner", "kind": "human"}],
+		"units": [{"name": "Platform", "id": "platform", "roles": [
+			{"name": "SRE", "handle": "sre", "integrations": {}},
+			{"name": "QA", "handle": "qa", "integrations": {"ssh": {
+				"enabled": true, "level": "operate", "hosts": ["api-1"]}}}]}]
+	}`), &root); err != nil {
+		t.Fatal(err)
+	}
+	m := plan(t, root, &vendors{})
+	if !slices.Contains(m.Migrated, integration.KindSSH) || m.Pending[integration.KindSSH] != nil {
+		t.Fatalf("migrated %v, pending %v; want SSH migrated", m.Migrated, m.Pending)
+	}
+	if got, written := m.Seats["sre"][seataccess.LaneSSH]; !written || got.Enabled {
+		t.Errorf("the SRE's SSH lane = %+v (written %v), want written off", got, written)
+	}
+	if _, written := m.Seats["qa"][seataccess.LaneSSH]; written {
+		t.Error("QA's own SSH block was rewritten")
+	}
+	for _, mv := range append(slices.Clone(m.Moves), m.Kept...) {
+		if mv.Kind == integration.KindSSH {
+			t.Errorf("an SSH credential moved: %+v", mv)
+		}
+	}
+	for _, s := range m.Seeds {
+		if s.Kind == integration.KindSSH {
+			t.Errorf("an SSH account was seeded: %+v", s)
+		}
+	}
+	if _, err := accessmigrate.Apply(root, m); err != nil {
+		t.Fatal(err)
+	}
+	if got := accessmigrate.Unmigrated(root); slices.Contains(got, integration.KindSSH) {
+		t.Errorf("unmigrated = %v after the migration", got)
+	}
+	if sre := mustJSON(t, seat(t, root, "sre")); !strings.Contains(sre, `"ssh":{"enabled":false}`) {
+		t.Errorf("the SRE seat is %s", sre)
+	}
+	if qa := mustJSON(t, seat(t, root, "qa")); !strings.Contains(qa, `"ssh":{"enabled":true,"hosts":["api-1"],"level":"operate"}`) {
+		t.Errorf("the QA seat is %s", qa)
+	}
+}

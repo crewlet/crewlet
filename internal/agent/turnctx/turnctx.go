@@ -263,6 +263,11 @@ type Turn struct {
 	// row names the same seat for as long as the seat exists.
 	Requester string
 
+	// Stranger is a turn acting, through a colleague's ask, for somebody the
+	// company does not know: the requester ceiling is theirs whoever asked
+	// ([types.A2ARequest.Stranger]). Carried on the run's row with Requester.
+	Stranger bool
+
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke — the same people the turn-start memory filter was told about,
 	// carried so a tool that re-runs that filter mid-turn (refresh_memory)

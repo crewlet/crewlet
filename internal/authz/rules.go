@@ -466,6 +466,24 @@ const (
 	// call. Always allow also writes the tool's level, so it is
 	// `config.write` on top, at that verb's step-up (internal/api/mcpapi).
 	ActionToolsApprove Action = "tools.approve"
+	// ActionSSHOperateApprove answers an agent's operate command over SSH,
+	// held for a person's approval before the engine runs it
+	// (`POST /mcp-approvals/{id}`): allow it once or deny it. An
+	// administrator's, or a person `integrations.ssh.approvers` names, at
+	// the step-up window; never a lead's, an agent's or the assistant's.
+	ActionSSHOperateApprove Action = "ssh.operate.approve"
+	// ActionSSHRead runs an allowlisted read command on one of the agent's
+	// SSH hosts, which the server's gate holds to its allowlist; an agent's
+	// alone by its SSH grant, in its own run.
+	ActionSSHRead Action = "ssh_read"
+	// ActionSSHOperate asks to run any command on one of the agent's SSH
+	// hosts, held for a person's approval every time (ADR-0077); an agent's
+	// alone by its operate grant, in its own run.
+	ActionSSHOperate Action = "ssh_operate"
+	// ActionSSHRequester is a server reached FOR whoever woke the turn of an
+	// agent holding an SSH grant: anybody of the company who may act, a
+	// colleague seat among them, and nobody outside it.
+	ActionSSHRequester Action = "ssh.requester.read"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -714,6 +732,10 @@ const (
 	// proof, every read recorded beside the reader's name and reason and
 	// shown to the conversation's owner.
 	ActionAssistantAuditRead Action = "assistant.conversation.audit_read"
+	// ActionSSHAuditRead is reading the SSH audit: every certificate the
+	// engine signed and every command it ran, each command's text opened. A
+	// command may carry a credential typed inline, so it is a person's read.
+	ActionSSHAuditRead Action = "ssh.audit.read"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -770,10 +792,18 @@ const (
 	// SeatGrantHealth is `role.health_tools`: the fleet's health and
 	// Gitlet's status, which a person reads as an administrator.
 	SeatGrantHealth SeatGrant = "health_tools"
+
+	// SeatGrantSSHRead is an agent on at SSH with at least one host
+	// (`roles[].integrations.ssh`): the server's allowlisted reads.
+	SeatGrantSSHRead SeatGrant = "ssh_read"
+
+	// SeatGrantSSHOperate is an agent on at SSH at operate: commands a
+	// person approves one at a time.
+	SeatGrantSSHOperate SeatGrant = "ssh_operate"
 )
 
 // SeatGrants are every grant, in declaration order.
-var SeatGrants = []SeatGrant{SeatGrantHealth}
+var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate}
 
 // Valid reports whether a grant is one this build knows.
 func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
@@ -1647,6 +1677,23 @@ var rules = map[Action]rule{
 	// human-only list keeps the assistant from it.
 	ActionToolsApprove: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// A PRODUCTION COMMAND IS APPROVED BY A PERSON THE COMPANY CHOSE, as
+	// recently confirmed as any other raise of power: the list the document
+	// names, or an administrator, never a lead by position in the chart.
+	ActionSSHOperateApprove: {class: ClassNamed, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
+	// A SERVER IS REACHED BY AN AGENT ITS ROLE GRANTS IT TO, its SSH block on
+	// with a host for a read and at operate for a command a person approves.
+	// The tools answer only an agent's own run; a person reaches a server
+	// with their own key.
+	ActionSSHRead: {class: ClassAdmin, seatGrant: SeatGrantSSHRead, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionSSHOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools
+	// read for them ([ActionFleetHealthRead]): the seat's grant decides what is
+	// reached, and this row only whom it is reached for.
+	ActionSSHRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
@@ -1859,6 +1906,7 @@ var rules = map[Action]rule{
 		presence: PresenceRequired, assist: AssistApprove},
 	ActionAssistantAuditRead: {class: ClassAdmin, humanOnly: true,
 		recency: iam.RecencyStepUp, presence: PresenceRequired, assist: AssistRead},
+	ActionSSHAuditRead: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -2053,6 +2101,8 @@ const (
 		"you: answer it from the Inbox or Settings › MCP & tools."
 	tellCheck = "A check result is reported by the CI that ran the check, with its own token: " +
 		"Ask Crewlet runs no CI."
+	tellSSHAudit = "An SSH command's text can carry a credential typed into it, so the SSH audit " +
+		"stays with you: read it from Integrations."
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
@@ -2123,6 +2173,10 @@ var assistantNever = map[Action]neverEntry{
 		"no CI, so its report would be a result nobody ran", tellCheck},
 	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
 		"and the assistant deciding it would be a model approving a model's call", tellApproval},
+	ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
+		"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
+	ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
+		"credential typed into it", tellSSHAudit},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and

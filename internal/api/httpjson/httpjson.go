@@ -336,6 +336,14 @@ const (
 	// had already done is undone, so re-running is safe.
 	CodeVendorRefused Code = "vendor_refused"
 
+	// CodeNotConnected is an integration's own route asked of an integration
+	// the company has not connected, or has switched off.
+	CodeNotConnected Code = "not_connected"
+
+	// CodeServerUnreachable is a server the engine could not reach, or that
+	// presented no host key it can pin.
+	CodeServerUnreachable Code = "server_unreachable"
+
 	// THE REST OF `/setup`'s refusals, which were declared in the route
 	// file with no sentence behind them — so a screen that rendered the
 	// envelope showed the code and nothing a person could act on. Two
@@ -1410,6 +1418,10 @@ var codes = map[Code]string{
 		"written. Ask whoever owns it.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
+	CodeNotConnected: "This integration is not connected, or it is switched off. " +
+		"Connect it first, then try again.",
+	CodeServerUnreachable: "The server could not be reached, or it presented no key " +
+		"Crewlet can pin. Check its address and port, and that it accepts the engine's address.",
 	CodeInvalid: "That change was refused, and nothing was written. Check " +
 		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +

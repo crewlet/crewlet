@@ -182,10 +182,22 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 // [foreignRead.fence], whose rule is a hosted surface's, which reads a text
 // nobody named as a colleague's. Empty text is not fenced.
 func (r *foreignRead) fenceRepository(path fieldPath, src provenance.Source, text string) {
+	r.fenceLabelled(path, provenance.Repository(src), text)
+}
+
+// fenceServer registers the string at path in the answer as what a command
+// printed on one of the company's servers, by [provenance.ServerOutput]:
+// naming nobody, at the least trust. Empty text is not fenced.
+func (r *foreignRead) fenceServer(path fieldPath, text string) {
+	r.fenceLabelled(path, provenance.ServerOutput(), text)
+}
+
+// fenceLabelled registers the string at path under label. Empty text is not
+// fenced.
+func (r *foreignRead) fenceLabelled(path fieldPath, label provenance.Label, text string) {
 	if text == "" {
 		return
 	}
-	label := provenance.Repository(src)
 	r.trusts = append(r.trusts, label.Trust)
 	r.fences[path.id()] = label.Fence(r.boundary, text)
 }

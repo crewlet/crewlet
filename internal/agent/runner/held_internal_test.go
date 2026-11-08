@@ -338,3 +338,33 @@ type holdNothing struct{}
 func (holdNothing) Hold(context.Context, *turnctx.Turn, tools.HeldCall) (tools.Result, bool) {
 	return tools.Result{}, false
 }
+
+// AN APPROVED CALL WHOSE OUTPUT NO RECORD KEEPS HANDS IT TO THE RUN ALONE: the
+// run is told what the tool printed, and the row's held result keeps its size
+// and digest, which a later attempt is told in its place.
+//
+// Mutation: record the result as the run is told it, and the row keeps what a
+// server printed.
+func TestAnApprovedCallsUnkeptOutputReachesTheRunAlone(t *testing.T) {
+	t.Parallel()
+	tool := &closeIssue{digest: "sha256:d1"}
+	reg := tools.NewRegistry()
+	if err := reg.RegisterWith(tool, tools.Origin("tracker"), tools.Annotations{},
+		func(e *tools.Entry) { e.NeedsApproval = true }, tools.KeepsNoOutput); err != nil {
+		t.Fatal(err)
+	}
+	surface := tools.NewSurface("execute", reg.Snapshot(), nil)
+	commit := &ledgerCommit{}
+	held := &HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:d1",
+		Args: map[string]any{"id": "7"}, Choice: sandbox.HeldOnce, Commit: commit}
+	if err := makeHeld(t.Context(), surface, held); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(held.outcome.result.Output, "closed #7") {
+		t.Fatalf("the run is told %q, want what the tool printed", held.outcome.result.Output)
+	}
+	if commit.result == nil || strings.Contains(commit.result.Output, "closed #7") ||
+		!strings.Contains(commit.result.Output, "output not kept") {
+		t.Fatalf("the row keeps %+v, want the output's size and digest alone", commit.result)
+	}
+}

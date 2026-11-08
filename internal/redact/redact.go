@@ -399,6 +399,7 @@ var rules = sync.OnceValue(func() []rule {
 		token(`dop_v1_[0-9a-f]{20,}`, "digitalocean-token"),
 		token(`doo_v1_[0-9a-f]{20,}`, "digitalocean-token"),
 		token(`dor_v1_[0-9a-f]{20,}`, "digitalocean-token"),
+		token(sshCertificatePattern, "ssh-certificate"),
 	}
 	for _, k := range awsSecretKeys {
 		table = append(table, awsSecret(k.key, k.what))
@@ -474,6 +475,13 @@ const googleTokenPattern = `ya29\.[A-Za-z0-9_.-]{19,}[A-Za-z0-9_-]`
 // can hold what reads as a JWT: taken first, the JWT would leave the Google
 // token's head and its tail.
 const jwtPattern = `eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*`
+
+// sshCertificatePattern is an OpenSSH certificate as a line writes it, from its
+// type's `-cert-v01@openssh.com` suffix through its base64 body: what a
+// certificate file, `ssh-keygen -L`'s input and an agent's pasted line hold.
+// Opened on the suffix, a literal RE2 skips ahead on; the key type before it
+// names nothing and stays.
+const sshCertificatePattern = `-cert-v01@openssh\.com[ \t]+[A-Za-z0-9+/]{40,}={0,3}`
 
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.

@@ -156,6 +156,9 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// which one. Nil when this turn is on nothing, and then the
 		// answering turn is on nothing either.
 		WorkItem: turn.WorkItem, WorkItemBasis: turn.WorkItemBasis,
+		// AND WHOEVER THIS TURN ACTS FOR, where the company does not know
+		// them: the colleague acts for them too, never for this seat alone.
+		Stranger: strangerWoken(turn, seat.Handle()),
 	})
 	switch {
 	case errors.Is(err, a2a.ErrSelfChannel), errors.Is(err, a2a.ErrNotAnAgent):

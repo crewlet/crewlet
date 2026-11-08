@@ -157,6 +157,10 @@ type Ask struct {
 	// [types.A2ARequest.WorkItem]. Nil when the asker is on nothing.
 	WorkItem      *types.WorkItem
 	WorkItemBasis types.WorkItemBasis
+
+	// Stranger is an ask made from a turn somebody the company does not
+	// know woke ([types.A2ARequest.Stranger]).
+	Stranger bool
 }
 
 // Open opens a channel and wakes the target, carrying the brief.
@@ -227,7 +231,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 
 	request := types.A2ARequest{
 		ChannelID: id, Requester: ask.Requester,
-		SenderRole: ask.SenderRole, Content: ask.Brief,
+		SenderRole: ask.SenderRole, Content: ask.Brief, Stranger: ask.Stranger,
 	}
 	if ask.WorkItem != nil && ask.WorkItem.ID != "" {
 		// A COPY, never the asker's pointer: the wake is published and

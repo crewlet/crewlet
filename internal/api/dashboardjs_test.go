@@ -2125,8 +2125,12 @@ const (
 	// fills its first line, and the kit's side panel that fills its column),
 	// took it from 5671.6 KiB (5,807,684 bytes) to 5673.4 KiB (5,809,565
 	// bytes, +1,881): script +1,969 and the sheets +14, with 102 fewer
-	// elsewhere. The measured size's next KiB: 5674 KiB.
-	treeBudget = 5<<20 + 554<<10
+	// elsewhere. The measured size's next KiB: 5674 KiB. The SSH integration's
+	// catalogue tile and its words took it to 5674.9 KiB (5,811,097 bytes,
+	// +1,532, all script). The measured size's next KiB: 5675 KiB. The SSH
+	// tools' catalogue group and gates took it to 5675.1 KiB (5,811,351 bytes,
+	// +254, all script). The measured size's next KiB: 5676 KiB.
+	treeBudget = 5<<20 + 556<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
