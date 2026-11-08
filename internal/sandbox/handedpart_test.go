@@ -89,8 +89,9 @@ func TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone(t *testing.T) {
 // A TOKEN IS RECORDED ONLY IN THE SET OF THE JOB ITS ROW HOLDS RUNNING, before
 // it is written into the job's box. The row is read first: a job its row holds
 // launching, read back by a collection, lost or ending — or a poll's copy of a
-// job a relaunch has replaced — takes nothing, add unasked, since an opening or
-// a capture may have read its set for the last time. The part decides the rest
+// job a relaunch has replaced, launching or already running before its own set
+// is written — takes nothing, add unasked, since an opening or a capture may
+// have read its set for the last time. The part decides the rest
 // by its own compare-and-swap: an answer that leaves the set as it was writes
 // nothing; one that cannot hold the token marks the set, which reads as
 // refusing every capture of the job, is asked nothing again and is never
@@ -98,10 +99,10 @@ func TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone(t *testing.T) {
 // nothing; and a job with no set at all is marked so, add unasked, for that
 // same late write.
 //
-// Mutation: skip the row's read, grow whatever set is beside the row, write a
-// set add left as it was, leave a job with no set unmarked, ask a marked set
-// again, or let the job's own write replace its mark, and a check below goes
-// red.
+// Mutation: skip the row's read, or read only whether its job runs and not
+// which job that is, grow whatever set is beside the row, write a set add left
+// as it was, leave a job with no set unmarked, ask a marked set again, or let
+// the job's own write replace its mark, and a check below goes red.
 func TestATokenIsRecordedOnlyInTheSetOfTheJobItsRowHoldsRunning(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -162,6 +163,9 @@ func TestATokenIsRecordedOnlyInTheSetOfTheJobItsRowHoldsRunning(t *testing.T) {
 		"read back by a collection": func(r *PendingRun) { r.Launch.Collected = true },
 		"lost":                      func(r *PendingRun) { r.Lost = &JobLoss{Cause: LossBoxGone} },
 		"ending":                    func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "e-1"} },
+		"replaced by a newer job that runs": func(r *PendingRun) {
+			r.LaunchID, r.LaunchSeq = "a-newer-job", r.LaunchSeq+1
+		},
 	} {
 		turnID := "t-" + strings.ReplaceAll(name, " ", "-")
 		job := rig.launch(turnID)
