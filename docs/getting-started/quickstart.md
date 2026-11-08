@@ -112,8 +112,8 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
                           #   non-empty: admin, worklet, doclet,
-                          #   artifacts, chatlet. Admin runs the company and
-                          #   includes every app.
+                          #   artifacts, chatlet, gitlet. Admin runs the
+                          #   company and includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -519,7 +519,7 @@ seat** in the page bar, and the **Person** section of its editor). Press
 
 - **your email address** — what the invitation is held against;
 - **your access**: tick **Admin**, which ticks and locks every app (Worklet,
-  Doclet, Artifacts and Chatlet) beside it. The founder token holds `admin`, and nobody can
+  Doclet, Artifacts, Chatlet and Gitlet) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -597,8 +597,8 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `worklet`, `doclet`, `artifacts`, `chatlet` or `none`, and left out
-on an invitation it sends every app and not admin.
+`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet` or `none`, and
+left out on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…

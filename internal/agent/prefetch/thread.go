@@ -261,8 +261,9 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // the block whose items are somebody else's prose.
 //
 // AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
-// — the ones after this seat's own last reply and before the message that
-// woke the turn — kept in step with the lines through every bound. Only a
+// — the waking message's writer's, after this seat's own last reply and before
+// the message that woke the turn ([waitingMessages]) — kept in step with the
+// lines through every bound. Only a
 // message rendered VERBATIM counts: one left out was never seen, and one
 // condensed into the middle's account was seen as a model's paraphrase, and a
 // message recorded as answered is one a later delivery of it is dropped for.
@@ -425,8 +426,8 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 }
 
 // waitingMessages marks, by position in the read, the messages that were
-// waiting for the turn trigger woke: somebody else's, after this seat's own
-// last reply, before the trigger itself.
+// waiting for the turn trigger woke: the trigger's own writer's, after this
+// seat's own last reply, before the trigger itself.
 //
 // NOTHING, unless the read reached the trigger: a read that stopped short is
 // missing the newest messages — the trigger among them — and a trigger the
@@ -434,6 +435,15 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 // Every message up to the seat's own last reply is excluded because that
 // reply is where the seat last answered the thread: what came before it is
 // not waiting for anybody.
+//
+// ONLY THE TRIGGER'S WRITER'S, by the backend's sender id in this same read,
+// both known: one turn works for one writer (ADR-0109), and a message another
+// writer sent is owed a turn of its own, worked for them and held to their
+// apps. Recorded as worked here, it would be dropped when it came back behind
+// this turn, answered only inside a turn that worked for somebody else. The
+// price, accepted: when another writer's turn failed and its message comes
+// back behind this one, that turn answers it even where this turn already
+// spoke to it.
 func waitingMessages(read notify.Transcript, trigger string) map[int]string {
 	if trigger == "" || read.StoppedShort {
 		return nil
@@ -447,13 +457,17 @@ func waitingMessages(read notify.Transcript, trigger string) map[int]string {
 	if at < 0 {
 		return nil
 	}
+	writer := read.Messages[at].SenderID
+	if writer == "" {
+		return nil
+	}
 	out := map[int]string{}
 	for i := at - 1; i >= 0; i-- {
 		m := read.Messages[i]
 		if m.Own {
 			break
 		}
-		if m.ID != "" && m.ID != trigger {
+		if m.ID != "" && m.ID != trigger && m.SenderID == writer {
 			out[i] = m.ID
 		}
 	}

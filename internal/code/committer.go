@@ -1069,6 +1069,26 @@ func (c *Committer) dequeued(rc *repoCommitter, q *queued) {
 	rc.queued -= q.bytes
 }
 
+// Queued is how many proposals repoID's queue on this node holds now: every
+// one sent to it that the repository's goroutine has not yet taken off, so a
+// batch in flight holds none of its own, and a proposal its caller withdrew
+// counts until the goroutine meets it.
+//
+// THE ONE READING OF A QUEUE, which a case that holds a batch waits on before
+// it lets the batch go: the next batch takes what is queued when the held one
+// ends and nothing that arrives after it — without linger — so a batch let go
+// before its followers had all queued would carry them in several, and a wait
+// of any length would only make that unlikely. The committer's own suite and
+// internal/code/codetest's F19 read it for that.
+func (c *Committer) Queued(repoID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if rc := c.repos[repoID]; rc != nil {
+		return len(rc.inbox)
+	}
+	return 0
+}
+
 // refuseQueued answers what is carried and everything still queued
 // [ErrNotServing], and forgets the repository. Nothing can be queued after it:
 // a proposal is sent under mu only while the committer is not stopped, and

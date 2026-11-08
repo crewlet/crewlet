@@ -110,7 +110,7 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), code.CommitBudget+code.ReplyMargin+time.Second)
 		defer cancel()
 		waiting := proposeAsync(ctx, c, proposal(repo, update("refs/heads/waited", code.ZeroOID, oidOf("W"))))
-		eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+		eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
 		if a := await(t, waiting); a.err != nil || a.res.Answer.Refused != code.RefusalBusy {
 			t.Fatalf("a push that waited out its asker's attempt answered %+v, %v; want busy", a.res.Answer, a.err)
 		}
@@ -143,7 +143,7 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 		// refused as the batch it would lead forms.
 		waiting := proposeAsync(t.Context(), c, proposal(repo,
 			update("refs/heads/waited", code.ZeroOID, oidOf("W"))))
-		eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+		eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
 		clock.advance(code.CommitBudget)
 		gate.open()
 		requireOK(t, await(t, lead))

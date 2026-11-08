@@ -173,7 +173,8 @@ func TestAnAnnouncingWriterResolvesItsSeats(t *testing.T) {
 	}
 	wo := code.ChangeWriterOptions{Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
-		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false }, Events: &announced{}}
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false }, Events: &announced{},
+		People: &directory{}}
 	if _, err := code.NewChangeWriter(wo); err == nil {
 		t.Fatal("a change writer announcing with no AgentIDs was built")
 	}

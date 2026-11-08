@@ -37,11 +37,12 @@ import (
 // admin is refused it `403` naming admin, before Gitlet is asked, and
 // its read the same.
 //
-// THE READS AND THE GIT ROUTES ADMIT EVERYBODY THE GUARD RESOLVED: what each
-// may read, fetch or push is the per-repository grant the serving node
-// decides (ADR-0088), as a work item's thread is admitted for the comment's
-// own decision. The same caller reaches every one of them — the control that
-// shows the refusal above is the verb's and not the credential's.
+// THE READS AND THE GIT ROUTES ADMIT EVERY HOLDER OF THE GITLET APP THE GUARD
+// RESOLVED: what each may read, fetch or push is the per-repository grant the
+// serving node decides (ADR-0088), behind the app (ADR-0110;
+// [TestEveryGitletRouteNeedsTheApp] holds the app itself). The same caller
+// reaches every one of them — the control that shows the refusal above is the
+// verb's and not the credential's.
 //
 // Mutation: mount the code routes on the plain mux again, and the colleague
 // starts a check; mount the reads or the git routes on an admin verb, and the
@@ -135,6 +136,8 @@ func TestAGitRoutesRefusalIsOneLineGitPrints(t *testing.T) {
 	}{
 		{"a principal whose stage may not act", authz.Decision{Reason: authz.ReasonStage},
 			http.StatusForbidden, httpjson.CodeUnauthorized, ""},
+		{"a principal without the gitlet app", authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{iam.GrantGitlet}}, http.StatusForbidden, httpjson.CodeUnauthorized, ""},
 		{"a node that could not decide", authz.Decision{Err: errors.New("the directory is unreadable")},
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable, strconv.Itoa(authz.RetryUndecidedSeconds)},
 	} {
@@ -151,5 +154,88 @@ func TestAGitRoutesRefusalIsOneLineGitPrints(t *testing.T) {
 					rec.Header().Get("Retry-After"), tc.status, tc.code, tc.retryAfter)
 			}
 		})
+	}
+}
+
+// EVERY GITLET ROUTE NEEDS THE APP, AND GIT SAYS WHICH (ADR-0110).
+//
+// Reaching a repository takes the gitlet app through every door, so a token
+// carrying every other app is refused each of Gitlet's reads — the rows, a
+// repository, its pushes, a search — 403 `unauthorized` naming exactly
+// gitlet, and each git route in git's own form, one line that names the
+// Gitlet permission rather than every permission there is; and Gitlet is
+// asked nothing, so no answer, count or advertisement says what a repository
+// holds. The CONTROL is a token carrying gitlet alone, served every one of
+// them: the refusal is the app's, not the routes'.
+//
+// Mutation: put code.git back on everybody and the git routes serve the
+// token without the app; word the git line by its code again and it names
+// every permission.
+func TestEveryGitletRouteNeedsTheApp(t *testing.T) {
+	t.Parallel()
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	b := closedPosture()
+	authorize(&b, config.APIToken{ID: "founder", Token: "secret"},
+		config.APIToken{ID: "colleague", Token: "every-app-but-gitlet", Grants: others},
+		config.APIToken{ID: "ci", Token: "gitlet-alone", Grants: []iam.Grant{iam.GrantGitlet}})
+	reads := &fakeCodeReads{}
+	a := newApp(t, api.Options{Bootstrap: &b, Code: fixedCode{git: fakeGitRoutes{}, reads: reads}})
+	as := func(token, method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, r)
+		return rec
+	}
+	paths := []string{"/gitlet/repos", "/gitlet/repos/web", "/gitlet/repos/web/pushes"}
+	for _, path := range paths {
+		rec := as("every-app-but-gitlet", http.MethodGet, path)
+		var body struct {
+			Error  string   `json:"error"`
+			Grants []string `json:"grants"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET %s answered %d %q: %v", path, rec.Code, rec.Body.String(), err)
+		}
+		if rec.Code != http.StatusForbidden || body.Error != string(httpjson.CodeUnauthorized) ||
+			!slices.Equal(body.Grants, []string{string(iam.GrantGitlet)}) {
+			t.Errorf("GET %s without gitlet answered %d %s, want 403 %s naming [gitlet]",
+				path, rec.Code, rec.Body.String(), httpjson.CodeUnauthorized)
+		}
+	}
+	for _, req := range gitRequests {
+		rec := as("every-app-but-gitlet", req.method, req.path)
+		body := rec.Body.String()
+		if rec.Code != http.StatusForbidden || strings.HasPrefix(body, "served ") ||
+			!strings.Contains(body, "(Gitlet)") || strings.Contains(body, "Admin") ||
+			!strings.HasSuffix(body, "("+string(httpjson.CodeUnauthorized)+")\n") {
+			t.Errorf("%s %s without gitlet answered %d %q, want 403 one line naming Gitlet alone",
+				req.method, req.path, rec.Code, body)
+		}
+	}
+	reads.mu.Lock()
+	asked := len(reads.asked)
+	reads.mu.Unlock()
+	if asked != 0 {
+		t.Errorf("a caller without gitlet reached Gitlet's reads %d time(s)", asked)
+	}
+	for _, path := range paths {
+		if rec := as("gitlet-alone", http.MethodGet, path); rec.Code != http.StatusOK {
+			t.Errorf("GET %s holding gitlet alone answered %d %q, want the read", path, rec.Code,
+				rec.Body.String())
+		}
+	}
+	for _, req := range gitRequests {
+		if rec := as("gitlet-alone", req.method, req.path); rec.Code != http.StatusOK ||
+			!strings.HasPrefix(rec.Body.String(), "served ") {
+			t.Errorf("%s %s holding gitlet alone answered %d %q, want Gitlet's own answer",
+				req.method, req.path, rec.Code, rec.Body.String())
+		}
 	}
 }

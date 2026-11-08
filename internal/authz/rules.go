@@ -88,15 +88,18 @@ const (
 
 	// --- the company's code ----------------------------------------- //
 	//
-	// ADMITTED AT THE ROUTE AND DECIDED PER REPOSITORY, as a work item's
-	// thread is. Who may read a repository, fetch from it or push to it is
-	// a GRANT the serving node derives from the chart for the repository a
-	// request names (code.GrantOf, ADR-0088): a person maintains every
+	// THE GITLET APP AT THE ROUTE, AND DECIDED PER REPOSITORY behind it. A
+	// principal without [iam.GrantGitlet] reaches no repository through any
+	// door: every verb below names the app, so it is refused here, before
+	// any repository is read, with the app's own refusal (ADR-0110). Who
+	// among the holders may read a repository, fetch from it or push to it
+	// is a GRANT the serving node derives from the chart for the repository
+	// a request names (code.GrantOf, ADR-0088): a person maintains every
 	// repository, and a seat holds the least of its code tier and its
 	// relation to the repository's owner — a question the route cannot ask
 	// before the repository is read, and that this table has no chart arm
-	// for. So the route admits everybody the guard resolved, and the grant
-	// decides. DOTTED, because no tool is named for either.
+	// for. So the route admits every holder of the app the guard resolved,
+	// and the grant decides. DOTTED, because no tool is named for either.
 	//
 	// ActionCodeRead admits Gitlet's rows: the repositories, one
 	// repository, its push history — the query registry's code questions,
@@ -112,7 +115,7 @@ const (
 
 	// THE CODE READ TOOLS, a seat's and an operator's assistant's, named
 	// after the tools and decided as the REST reads above are: admitted for
-	// every principal, and judged per repository by the grant the SERVING
+	// every holder of the app, and judged per repository by the grant the SERVING
 	// node derives from its own chart — a listing leaves out what the asker
 	// may not read, and a read of one such repository is refused
 	// `not_permitted`. ActionCodeReadFile is the tool `code_read`, a file
@@ -153,7 +156,7 @@ const (
 
 	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
 	// the tools and decided as the git transport's push is: admitted for
-	// every principal, and judged per repository where it is decided — an
+	// every holder of the app, and judged per repository where it is decided — an
 	// engine write by the grant's ref rule and the protections on the Gitlet
 	// node that builds it and again at the repository's committer, a
 	// repository's lifecycle by the one lifecycle rule on the data node that
@@ -854,8 +857,8 @@ type rule struct {
 	class Class
 
 	// app is the app this verb belongs to ([iam.GrantWorklet],
-	// [iam.GrantDoclet], [iam.GrantArtifacts], [iam.GrantChatlet]), or empty
-	// for a verb that belongs to none. It is
+	// [iam.GrantDoclet], [iam.GrantArtifacts], [iam.GrantChatlet],
+	// [iam.GrantGitlet]), or empty for a verb that belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
 	// use Worklet does not set its policy, and a comment's author who no
@@ -1136,86 +1139,124 @@ var rules = map[Action]rule{
 	// [ActionWorkThread].
 	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
 
-	// THE CODE ROUTES ADMIT EVERYBODY and decide nothing: the repository's
-	// grant decides once the repository is read. See [ActionCodeRead] and
-	// [ActionCodeGit]. A machine token takes both — the git transport is
-	// what a person's token is for — and neither asks a proof, since a
-	// read changes nothing and a push is decided per ref by its grant.
-	ActionCodeRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeGit:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// THE CODE ROUTES TAKE THE GITLET APP and decide nothing more: the
+	// repository's grant decides once the repository is read. See
+	// [ActionCodeRead] and [ActionCodeGit]. A machine token takes both — the
+	// git transport is what a person's token is for — when its grants carry
+	// the app (a token bound to no seat fetches and never pushes, ADR-0085),
+	// and neither asks a proof, since a read changes nothing and a push is
+	// decided per ref by its grant.
+	ActionCodeRead: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeGit: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND THE CODE READ TOOLS, on the same footing: the gate admits every
-	// principal and the repository's grant decides on the node that answers
-	// the read. Not seat-only — a person's assistant reads through them too —
-	// and not human-only, since reading the code is a seat's work. Neither
-	// asks a proof: a read changes nothing.
-	ActionCodeListRepos: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeGetRepo:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeResolve:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeReadFile:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeDiff:      {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeCompare:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeLog:       {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeBlame:     {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// holder of the app and the repository's grant decides on the node that
+	// answers the read. Not seat-only — a person's assistant reads through
+	// them too — and not human-only, since reading the code is a seat's work.
+	// Neither asks a proof: a read changes nothing.
+	ActionCodeListRepos: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeGetRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeResolve: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeReadFile: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeDiff: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeCompare: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeLandedIn: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeLog: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeBlame: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
 	// A CHANGE IS ITS REPOSITORY'S CONTENTS, read on the footing of the
-	// reads above: admitted for every principal, and judged by the grant on
-	// the change's repository on the data node that answers — a listing
-	// leaves out the changes of a repository the asker may not read, and a
-	// read of one such change is refused `not_permitted`.
-	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// reads above: admitted for every holder of the app, and judged by the
+	// grant on the change's repository on the data node that answers — a
+	// listing leaves out the changes of a repository the asker may not read,
+	// and a read of one such change is refused `not_permitted`.
+	ActionCodeListChanges: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeGetChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
 	// A SEARCH IS A READ OF EVERY REPOSITORY IT COVERS, on the same footing:
-	// admitted for every principal, and judged per repository where it is
-	// answered — a repository the asker may not read is never searched, and
-	// one a repo: filter names is refused `not_permitted`.
-	ActionCodeSearch: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// admitted for every holder of the app, and judged per repository where
+	// it is answered — a repository the asker may not read is never
+	// searched, and one a repo: filter names is refused `not_permitted`.
+	ActionCodeSearch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
 	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
-	// every principal and the repository decides — an engine write by the
-	// grant's ref rule and the protections, a lifecycle request by the one
-	// lifecycle rule — on the node that decides it, from its own chart. Not
-	// human-only, since committing is a seat's work; and no proof, as a push
-	// asks none: who may move which ref is the grant's question, which a
-	// table row keyed on the verb cannot answer before the repository is
+	// every holder of the app and the repository decides — an engine write
+	// by the grant's ref rule and the protections, a lifecycle request by the
+	// one lifecycle rule — on the node that decides it, from its own chart.
+	// Not human-only, since committing is a seat's work; and no proof, as a
+	// push asks none: who may move which ref is the grant's question, which
+	// a table row keyed on the verb cannot answer before the repository is
 	// read.
-	ActionCodeCommitFiles:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeRevert:        {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeCherryPick:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeCreateBranch:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeDeleteBranch:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeCreateRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeUpdateRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeDeleteRepo:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeRestoreRepo:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeProtectBranch: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeCommitFiles: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeRevert: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCherryPick: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCreateBranch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeDeleteBranch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCreateRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeUpdateRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeDeleteRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeRestoreRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeProtectBranch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND THE CHANGE WRITES, on the same footing: a change's lifecycle is
 	// decided by the repository's committer from its own chart — who may push
 	// the branch an open proposes, who owns or maintains a change it steers —
 	// and a seat opens and steers its own changes, so neither human-only nor
 	// asking a proof, as a push asks none.
-	ActionCodeOpenChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeUpdateChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeCloseChange:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeOpenChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeUpdateChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCloseChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND ITS CONVERSATION, decided by the change's writer from its own chart
 	// — who may review the repository, who wrote the change, who raised a
 	// finding — on the same footing: a seat reviews, so neither human-only nor
 	// asking a proof.
-	ActionCodeRequestReview:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeReviewChange:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeCommentOnChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeResolveFinding:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeRequestReview: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeReviewChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCommentOnChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeResolveFinding: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND ITS SUGGESTIONS APPLIED, on code.git's footing as every engine write.
-	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeApplySuggestions: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND ITS REBASE, on the same footing.
-	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeRebaseChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND ITS MERGE AND ITS DEQUEUE, decided per repository by its
 	// committer — who may merge into the target is the gate's merge_by, an
 	// override is a person's alone — so neither human-only nor asking a
 	// proof here: a seat merges a change its gate lets it merge.
-	ActionCodeMergeChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeDequeueChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeMergeChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeDequeueChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND ITS REVERT, a branch the caller may create and the change its push
 	// opens, on the footing of every engine write.
-	ActionCodeRevertChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeRevertChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
 	// each decided per repository in the tool and by the checks writer from
 	// its chart, on the same footing — a seat reads what failed and reruns
@@ -1224,29 +1265,32 @@ var rules = map[Action]rule{
 	// would be a check result nobody ran (M5-D24); for the same reason no
 	// assistant carries one, since it ran no CI either (the human-only list,
 	// [assistantNever]).
-	ActionCodeGetCheckFailures: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
-	ActionCodeRerunChecks:      {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
-	ActionCodeReportCheck: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+	ActionCodeGetCheckFailures: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCodeRerunChecks: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	ActionCodeReportCheck: {class: ClassApp, app: iam.GrantGitlet, humanOnly: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// A PURGE OF A REPOSITORY'S UNREACHABLE OBJECTS IS A PERSON'S, and a
 	// fresh proof of who they are: it drops history no ref reaches, which
 	// nothing brings back — the purge of a leaked secret is its use — so
 	// never an agent's, whose say-so would have a model erase what the
 	// company's code held, and a step-up as every purge is
-	// ([ActionWorkPurge]). EVERYBODY at the gate, since who maintains the
+	// ([ActionWorkPurge]). THE APP at the gate, since who maintains the
 	// repository is its grant, which the tool judges once it is read.
-	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, irreversible: true,
-		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionCodePurgeUnreachable: {class: ClassApp, app: iam.GrantGitlet, humanOnly: true,
+		irreversible: true, recency: iam.RecencyStepUp, assist: AssistApprove},
 	// AN IMPORT IS A PERSON'S (U49 a), on the footing of every create: it
 	// has Gitlet DIAL ANOTHER HOST for the company — once, or for
 	// good as a pull mirror — which a model's say-so would point at any URL
 	// a page it read named, so never an agent's; and the deciding data node
 	// refuses a seat's create carrying an import or a mirror again, whatever
-	// its grant. EVERYBODY at the gate and no step-up: every person
-	// maintains every repository (ADR-0088) and may create a project for any
-	// owner the chart holds, and an import, like a create, takes nothing
-	// away — a mistaken one is deleted as any repository is.
-	ActionCodeImportRepo: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
+	// its grant. THE APP at the gate and no step-up: every person holding it
+	// maintains every repository (ADR-0088, ADR-0110) and may create a
+	// project for any owner the chart holds, and an import, like a create,
+	// takes nothing away — a mistaken one is deleted as any repository is.
+	ActionCodeImportRepo: {class: ClassApp, app: iam.GrantGitlet, humanOnly: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the
@@ -1260,10 +1304,11 @@ var rules = map[Action]rule{
 	// AND A PERSON'S CODE MARKS ARE THEIR OWN, as their Worklet marks are
 	// ([ActionInboxMark]): marking somebody's mail read is a gesture nobody
 	// asked a lead to make. HUMAN-ONLY, since a seat has no inbox to mark —
-	// it is woken, never shown a list — and NO APP: every person reads every
-	// repository (ADR-0088), so the code half of an inbox is every person's,
-	// where Worklet's half takes the worklet app.
-	ActionCodeMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
+	// it is woken, never shown a list — and THE GITLET APP, as Worklet's half
+	// takes the worklet app: a person without it reaches no repository
+	// (ADR-0110), so no code notice is theirs to list, count or mark.
+	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label

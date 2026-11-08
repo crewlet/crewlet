@@ -30,6 +30,7 @@ import { settled } from "~/test/settle.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
+import { engineFile } from "~/test/engineFiles.ts";
 
 // THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
 // sets `seam.twice` to stand a pane in that tells the screen of one answer
@@ -2001,6 +2002,44 @@ describe("the pane", () => {
     ]);
   });
 
+  // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine
+  // lists them no code notice and does not offer them `code_mark_inbox`, so a
+  // code notice still on a page read before their access changed is held —
+  // its own mark with the access that would open it — and never sent.
+  // Mutations: declare the code mark no app's, and its hold names no access;
+  // send whichever half has a notice, whatever the engine offers, and
+  // `code_mark_inbox` goes out.
+  test("a reader without Gitlet marks only Worklet's half, and a code notice's mark says why", async () => {
+    const reader = {
+      ...JANE,
+      grants: ["worklet", "doclet"],
+      acts: EVERY_TOOL.filter((tool) => tool !== "code_mark_inbox"),
+    };
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      viewer: reader,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+      answers: {
+        viewer: reader,
+        inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 })] }),
+      },
+    });
+    await settle();
+    const read = screen.getByRole("button", { name: "Mark as read" });
+    expect(read.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(read)).toContain(
+      "This change needs Gitlet access. An admin can give it to you.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
+    ]);
+  });
+
   test("Mark all read reads through the newest update loaded, not past it", async () => {
     mount({
       answers: {
@@ -2308,6 +2347,49 @@ describe("the pane", () => {
       await waitFor(() => expect(sent).toHaveLength(1));
       expect(sent[0]).toEqual({ method: "POST", body: { answer: "once" } });
       expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // An operate call's reason, as the engine words it (`make ssh-held-words`),
+    // is one paragraph reading exactly as the agent wrote it, with no link,
+    // picture, heading, code or emphasis of its own.
+    test("an operate call's reason reads as the agent's words, with no Markdown of its own", async () => {
+      const held = engineFile<Record<string, { question: string; context: string }>>(
+        "internal/agent/builtin/testdata/ssh_operate_held.json",
+      ).markdown!;
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = {
+        ...heldRun({
+          server: "ssh",
+          tool: "ssh_operate",
+          raw: "ssh_operate",
+          fixed: true,
+          approvers: "ssh",
+        }),
+        question: held.question,
+        question_context: held.context,
+      };
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const said =
+        "# Approve [the release](https://evil.example/approve) ![status](https://evil.example/pixel.png) " +
+        "```rm -rf /``` <b>now</b> **urgent** for @founder on ENG-9, see https://evil.example/ok";
+      const reason = [...document.querySelectorAll(".crewlet-reading-pane__lead p")].find(
+        (p) => p.textContent === said,
+      );
+      expect(reason, "the reason is one paragraph of the agent's words").toBeTruthy();
+      expect(
+        reason!.querySelector("a, img, h1, h2, h3, h4, h5, h6, pre, code, strong, em, b"),
+      ).toBeNull();
+      const lead = document.querySelector(".crewlet-reading-pane__lead")!;
+      expect(lead.querySelector("img")).toBeNull();
+      expect(lead.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+      expect(lead.querySelectorAll("pre")).toHaveLength(1);
+      expect(lead.querySelector("pre")!.textContent).toBe("logrotate --force /etc/logrotate.conf");
     });
   });
 

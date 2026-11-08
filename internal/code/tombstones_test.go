@@ -270,7 +270,7 @@ func TestACommittedRecordNeverRemovesItsOwnDeletions(t *testing.T) {
 	enqueue := func(cmds []code.Command) {
 		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo, cmds...)))
 		want := len(queued)
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		eventually(t, "the proposal queued", func() bool { return c.Queued(repo) == want })
 	}
 	for p := range pushes {
 		var cmds []code.Command

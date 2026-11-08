@@ -503,7 +503,7 @@ func TestACompactionIsNeverBatchedWithPushes(t *testing.T) {
 	before := n.end()
 
 	ahead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/main", oidOf("A"), oidOf("B"))))
-	eventually(t, "the push ahead queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	eventually(t, "the push ahead queued", func() bool { return c.Queued(repo) == 1 })
 	compacted := make(chan struct {
 		res code.CompactResult
 		err error
@@ -515,9 +515,9 @@ func TestACompactionIsNeverBatchedWithPushes(t *testing.T) {
 			err error
 		}{res, err}
 	}()
-	eventually(t, "the compaction queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "the compaction queued", func() bool { return c.Queued(repo) == 2 })
 	behind := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/main", oidOf("B"), oidOf("C"))))
-	eventually(t, "the push behind queued", func() bool { return code.CommitterQueued(c, repo) == 3 })
+	eventually(t, "the push behind queued", func() bool { return c.Queued(repo) == 3 })
 	gate.open()
 
 	requireOK(t, await(t, lead))

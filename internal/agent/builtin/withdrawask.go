@@ -58,7 +58,8 @@ func (d WithdrawDeps) serves() bool { return d.tracker() || d.Desk != nil }
 // the question's thread, or what its own executor waits on, answered by the
 // seat itself (a held call as Deny) (ADR-0111).
 type withdrawAsk struct {
-	deps WithdrawDeps
+	deps       WithdrawDeps
+	requesters Requesters
 }
 
 var _ tools.SeatCallable = (*withdrawAsk)(nil)
@@ -111,8 +112,15 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if seat == "" {
 		return notInATurn(WithdrawAskTool), nil
 	}
-	if turn.Stranger {
-		// SOMEBODY OUTSIDE THE COMPANY never has the seat withdraw anything.
+	// WHOEVER THE TURN WORKS FOR (ADR-0109): somebody outside the company never
+	// has the seat withdraw anything, and the asked arm is theirs.
+	ceiling, err := ceilingOf(ctx, turn, seat, t.requesters)
+	switch {
+	case err != nil:
+		return refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			WithdrawAskTool+" could not establish who this turn's work is for. Nothing was "+
+				"withdrawn. Try again shortly."), nil
+	case ceiling.Kind == authz.CeilingStranger:
 		return refused(tools.RefusalForbidden, WithdrawAskTool+" is not taken for somebody "+
 			"outside the company."), nil
 	}
@@ -133,7 +141,7 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case run != "":
 		return t.withdrawRun(ctx, seat, run, reason)
 	case item != "" && ask != "":
-		return t.withdrawQuestion(ctx, turn, item, ask, reason, args)
+		return t.withdrawQuestion(ctx, turn, workingForSeat(ceiling), item, ask, reason, args)
 	}
 	return failed(WithdrawAskTool + " needs `item` and `ask` (a question on a work item) or " +
 		"`run` (what your executor waits on)."), nil
@@ -195,7 +203,7 @@ func (t *withdrawAsk) withdrawRun(ctx context.Context, seat, turnID, reason stri
 
 // withdrawQuestion withdraws seat's own open question on a work item: the
 // reason posted in its thread, then the question resolved as its author.
-func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, ref, askID,
+func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, workingFor, ref, askID,
 	reason string, args map[string]any) (tools.Result, error) {
 
 	if !t.deps.tracker() {
@@ -244,7 +252,7 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	case question.Resolved:
 		return refused(tools.RefusalAlreadyAnswered, fmt.Sprintf("Your question %s on %s is "+
 			"already closed. Nothing is withdrawn.", question.ID, before.Named())), nil
-	case !holder && (turn.Requester == "" || turn.Requester != question.Ask):
+	case !holder && (workingFor == "" || workingFor != question.Ask):
 		return refused(tools.RefusalForbidden, fmt.Sprintf("Your question %s on %s is withdrawn "+
 			"only for somebody who uses Worklet, or for the person it asks.", question.ID,
 			before.Named())), nil
@@ -293,4 +301,13 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
 	}, before), actor))
+}
+
+// workingForSeat is the seat of the person or colleague a ceiling works for,
+// empty for any other.
+func workingForSeat(c authz.Ceiling) string {
+	if c.Kind != authz.CeilingRequester {
+		return ""
+	}
+	return c.Principal.Seat
 }

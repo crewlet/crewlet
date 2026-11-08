@@ -23,14 +23,17 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -1593,7 +1596,7 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: m.Reason, Stored: m.At,
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: inboxApp(m.Source),
 		})
 	}
 }
@@ -1601,7 +1604,22 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 // pushInboxGap tells every watched inbox to read itself again: the engine
 // switched where this node's movements of source come from, and what moved in
 // the gap is not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source) }
+func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source, inboxApp(source)) }
+
+// inboxApp is the app whose half of a person's inbox a domain's movements are
+// about — the tracker's is Worklet's, the code log's Gitlet's (ADR-0110) — or
+// "" for a domain that keeps none, whose movement then reaches nobody
+// ([stream.InboxChange.ForReader]). Named by each domain's own state log name,
+// which is what an [inbox.Movement] carries.
+func inboxApp(source string) iam.Grant {
+	switch source {
+	case worklet.Domain{}.Name():
+		return iam.GrantWorklet
+	case code.Domain{}.Name():
+		return iam.GrantGitlet
+	}
+	return ""
+}
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }

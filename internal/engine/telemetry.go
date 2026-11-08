@@ -143,9 +143,9 @@ type turnTelemetry struct {
 	// trigger is described from, or off the parked row on a resume, by the
 	// seat's handle (ADR-0013).
 	requester string
-	// stranger is a turn a colleague's ask woke for somebody the company
-	// does not know ([turnctx.Turn.Stranger]).
-	stranger bool
+	// workingFor is who a colleague's ask, or the answer to this seat's
+	// own ask, handed the turn on to work for ([turnctx.Turn.WorkingFor]).
+	workingFor *types.WorkingFor
 
 	// requesterLogin and requesterApps are the credential acting as no seat
 	// whose write started this turn, and the apps its writes carried — see
@@ -344,7 +344,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
 	t.requesterLogin, t.requesterApps = credentialRequesterOf(req.Events, req.Ask(),
 		t.interactions, req.Handle)
-	t.stranger = strangerAsk(req.Events)
+	t.workingFor = workingForIn(req.Events)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -475,7 +475,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
-			Requester: t.requester, Stranger: t.stranger,
+			Requester: t.requester, WorkingFor: t.workingFor,
 			// OR THE CREDENTIAL that did, which no question reaches: what
 			// the turn may use for it is bounded by its apps (ADR-0109).
 			RequesterLogin: t.requesterLogin,
@@ -1003,7 +1003,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// answer is somebody replying to the run, not somebody asking this
 		// turn for something, so a second run the resumed turn detaches is
 		// still the first requester's.
-		requester: in.Run.Requester, stranger: in.Run.Stranger,
+		requester: in.Run.Requester, workingFor: in.Run.WorkingFor,
 		// AND THE CREDENTIAL, off the row for the same reason: the turn is
 		// still worked for whoever its first segment was.
 		requesterLogin: in.Run.RequesterLogin,
@@ -1243,18 +1243,26 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 	return out
 }
 
-// strangerAsk reports whether the colleague's ask that woke a turn carried
-// somebody the company does not know, off the first event as [requesterOf]
-// reads the asker.
-func strangerAsk(evs []*events.Event) bool {
+// workingForIn is who the wake that started a turn handed it on to work for
+// ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
+// a colleague's ask carries whoever the asking turn worked for, and the
+// answer to this seat's own ask carries whoever the answering turn worked
+// for, which is who this seat worked for when it asked. Nil for any other
+// wake, and for one that carried nobody.
+func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {
 		if ev == nil {
 			continue
 		}
-		ask, ok := events.DataAs[*types.A2ARequest](ev)
-		return ok && ask.Stranger
+		if ask, ok := events.DataAs[*types.A2ARequest](ev); ok && ask != nil {
+			return ask.WorkingFor
+		}
+		if answer, ok := events.DataAs[*types.A2AMessage](ev); ok && answer != nil {
+			return answer.WorkingFor
+		}
+		return nil
 	}
-	return false
+	return nil
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

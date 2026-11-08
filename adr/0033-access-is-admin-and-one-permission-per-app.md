@@ -111,3 +111,10 @@ inside a turn a principal woke, only the apps that principal holds. A person
 holds the apps their grants name, and never admin. A stranger and a human seat
 nobody holds in the directory hold none. The seat's own grants are unchanged,
 and a turn nobody woke is bounded by them alone.
+
+## Amendment: Gitlet is the fifth app
+
+Since [ADR-0110](0110-reaching-a-repository-takes-the-gitlet-permission.md) there are six permissions.
+`gitlet` uses Gitlet, the engine's own git host, and was appended after `chatlet`, as `chatlet` was
+after `artifacts`, so no stored row moved. "Everything else is everybody's" no longer includes the
+company's code: reaching a repository takes the app, as reading a work item takes `worklet`.

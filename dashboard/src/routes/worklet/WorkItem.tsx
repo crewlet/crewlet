@@ -290,13 +290,19 @@ export function changeWorkRef(itemId: string): string {
  * So the probe follows `next` (`useCodeQuery`'s fill) until it keeps one, and
  * a reading that stops at its bound with `next` still set draws the tab as
  * well: there may be one, and the tab's own listing pages to it.
+ *
+ * ASKED ONLY OF A READER HOLDING GITLET (ADR-0110): a listing of changes is
+ * the code log's question, refused to anybody else before anything is read,
+ * so for them the task keeps its one tab, as it does wherever no change was
+ * found. A lock would say there is a change behind it, which nobody asked.
  */
 function useTaskHasChanges(itemId: string): boolean {
   const ask = useServicesAsk();
+  const viewer = useViewer();
   const probe = useCodeQuery(
     "code_changes",
     { work: changeWorkRef(itemId), limit: 1 },
-    { enabled: ask.code && itemId !== "", pollMs: CODE_LIST_POLL_MS, fill: 1 },
+    { enabled: ask.code && viewer.gitlet && itemId !== "", pollMs: CODE_LIST_POLL_MS, fill: 1 },
   );
   return (probe.data?.changes?.length ?? 0) > 0 || Boolean(probe.data?.next);
 }

@@ -41,6 +41,9 @@ type a2aAsk struct {
 	svc Asker
 	// env resolves the chart's `${VAR}` contacts ([Deps.Env]).
 	env org.EnvLookup
+	// requesters composes who the asking turn works for where no gate
+	// bound the call's ceiling ([ceilingOf], [Deps.Requesters]).
+	requesters Requesters
 }
 
 var _ tools.SeatCallable = (*a2aAsk)(nil)
@@ -125,6 +128,17 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		return failed(A2AAskTool + " cannot address your own seat."), nil
 	}
 
+	// WHOEVER THIS TURN WORKS FOR, from the call's own bound ceiling: the
+	// colleague works for them too, never for this seat alone (ADR-0109).
+	// A turn whose ceiling cannot be composed asks nobody, since an ask
+	// carrying nobody would be worked for this seat, every app.
+	ceiling, err := ceilingOf(ctx, turn, seat.Handle(), t.requesters)
+	if err != nil {
+		return refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, which a colleague's ask "+
+				"carries to them. Nobody was asked. Try again shortly.", A2AAskTool)), nil
+	}
+
 	id, err := t.svc.Open(ctx, a2a.Ask{
 		Requester: seat.Handle(), Target: resolved.Handle, Brief: brief,
 		SenderRole: seat.Name,
@@ -156,9 +170,9 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// which one. Nil when this turn is on nothing, and then the
 		// answering turn is on nothing either.
 		WorkItem: turn.WorkItem, WorkItemBasis: turn.WorkItemBasis,
-		// AND WHOEVER THIS TURN ACTS FOR, where the company does not know
-		// them: the colleague acts for them too, never for this seat alone.
-		Stranger: strangerWoken(turn, seat.Handle()),
+		// AND WHOEVER THIS TURN WORKS FOR, composed from the ceiling above
+		// and never from this call's arguments.
+		WorkingFor: workingForOf(ceiling),
 	})
 	switch {
 	case errors.Is(err, a2a.ErrSelfChannel), errors.Is(err, a2a.ErrNotAnAgent):

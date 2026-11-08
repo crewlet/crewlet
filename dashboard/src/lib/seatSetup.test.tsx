@@ -28,6 +28,7 @@ const READER: ViewerState = {
   worklet: false,
   doclet: false,
   chatlet: false,
+  gitlet: false,
   handle: "",
   owner: "jane.doe",
   name: "",

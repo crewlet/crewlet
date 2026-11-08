@@ -796,7 +796,9 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 		t.Fatalf("the pass a gap asked read at %+v, none at the gap's position %s", floors, through)
 	}
 	// COUNTED AS THE TURN ENDS, after the write that emptied the deaf home's
-	// list (TestOnlyTheHomeWorksARepository says why).
+	// list (TestOnlyTheHomeWorksARepository says why), and WORKED HOWEVER LONG
+	// IT RAN: its work returned, which its twenty-millisecond bound on a
+	// loaded runner does not change (TestATurnWhoseWorkFinishesPastItsBoundDidIt).
 	waitTurns(t, rec, 1)
 	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got == 0 {

@@ -260,6 +260,15 @@ type Reply struct {
 
 	// Events are the delivery's events, oldest first.
 	Events []*events.Event
+
+	// Writer is the seat the delivery's writer holds, resolved by the engine
+	// through its party registry and never from the delivery's words: the
+	// newest event's writer, which after the partition function is the
+	// delivery's only one (one turn works for one writer, ADR-0109). Empty
+	// for a writer who holds no seat (a stranger, a credential acting as no
+	// seat, the engine itself), whose reply answers no parked question
+	// ([Reply.putTo]).
+	Writer string
 }
 
 // Posted is when the delivery's NEWEST event was posted — the vendor's own
@@ -333,15 +342,34 @@ func (r Reply) qualifies(run PendingRun) bool {
 // Best is the parked run this delivery answers, out of a seat's runs: the
 // conversation decides which questions it may answer and which of them it
 // does ([ConversationRef.Best]), among the ones still waiting that it
-// QUALIFIES for.
+// QUALIFIES for and whose question its writer was PUT TO ([Reply.putTo]).
 func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 	var parked []PendingRun
 	for _, run := range runs {
-		if slices.Contains(Awaiting, run.Status) && r.qualifies(run) {
+		if slices.Contains(Awaiting, run.Status) && r.qualifies(run) && r.putTo(run) {
 			parked = append(parked, run)
 		}
 	}
 	return r.Conv.Best(parked)
+}
+
+// putTo reports whether run's question was put to this delivery's writer: a
+// seat of the question's audience ([PendingRun.AudienceHandles]), resolved
+// once at the park, or the run's requester ([PendingRun.Requester]), who owns
+// an executor's question on the dashboard's route too.
+//
+// ONE TURN WORKS FOR ONE WRITER (ADR-0109), and the answer is what the run
+// carries on with: a reply in the conversation from somebody the question was
+// never put to (a stranger, a person or seat outside the audience, a
+// credential, which holds no seat) is not the answer. It runs as the ordinary
+// message it is, its own turn bounded by its own writer, and the run stays
+// parked. A row naming neither an audience nor a requester (a question that
+// resolved to nobody) admits nobody from the conversation, never anybody: the
+// dashboard's route, decided by authority, still answers it. Whether the seat's
+// holder may act NOW is the coordinator's to ask, once a run would take the
+// reply ([AudienceResolver.MayAnswer]).
+func (r Reply) putTo(run PendingRun) bool {
+	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer))
 }
 
 // recordedOn is the run this delivery is ALREADY the recorded answer of.

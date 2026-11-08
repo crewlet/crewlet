@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -206,7 +207,10 @@ func TestAWithdrawalIsHeldToWhoeverWokeTheTurn(t *testing.T) {
 				Status: sandbox.StatusAwaiting, HeldCall: &sandbox.HeldCall{ID: "h-1", Tool: "ssh_operate"},
 			}}, people)
 			turn := turnFor(t, "agent-cto")
-			turn.Requester, turn.Stranger = c.requester, c.stranger
+			turn.Requester = c.requester
+			if c.stranger {
+				turn.WorkingFor = &types.WorkingFor{Kind: types.WorkingForStranger}
+			}
 			got := callFor(t, tool, turn, map[string]any{"item": "ENG-1", "ask": "c-ask",
 				"reason": "Updated after my access changed: I can only read the server now."})
 			if withdrawn := !got.Failed && len(trk.patched) == 1 && len(res.resolved) == 1; withdrawn != c.withdrawn {

@@ -165,6 +165,11 @@ const (
 	// GateArtifacts names an agent that authors artifacts ([authz.ClassApp] on
 	// [iam.GrantArtifacts]).
 	GateArtifacts Gate = "artifacts"
+	// GateGitlet names an agent that uses Gitlet ([authz.ClassApp] on
+	// [iam.GrantGitlet]), which every seat does as it uses every app: what it
+	// may do to a repository is its grant there, which the code domain
+	// decides, and never this gate.
+	GateGitlet Gate = "gitlet"
 	// GateArtifactViewer names anybody the artifact is shared with, as a viewer
 	// or more ([authz.ClassShared], least role viewer, no app).
 	GateArtifactViewer Gate = "artifact_viewer"
@@ -188,10 +193,10 @@ const (
 	GateSSHOperate Gate = "ssh_operate"
 )
 
-// Gates are the fourteen, in declaration order.
+// Gates are the fifteen, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
-	GateDoclet, GateChatlet, GateArtifacts, GateArtifactViewer,
+	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateArtifactViewer,
 	GateArtifactEditor, GateArtifactOwner, GateHealthTools, GateSSHRead, GateSSHOperate,
 }
 
@@ -275,51 +280,52 @@ var filed = []struct {
 	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer},
 	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor},
 
-	// GITLET'S TOOLS ARE EVERYBODY'S ON THE TABLE, because what a
-	// seat may do to a repository is decided in the code domain, by the
-	// repository's grant for the seat and for whoever woke its turn — never
-	// by a permission a role could hold without the grant. The reads, the
-	// everyday first; then the writes: a branch's, a repository's, a
-	// change's lifecycle and conversation, and its checks. Not the three a
-	// person alone makes (code_report_check, code_purge_unreachable,
-	// code_import_repo), whose rows bar every agent, so no seat is offered
-	// them.
-	{CodeListReposTool, GroupCode, GateEverybody},
-	{CodeGetRepoTool, GroupCode, GateEverybody},
-	{CodeResolveTool, GroupCode, GateEverybody},
-	{CodeReadTool, GroupCode, GateEverybody},
-	{CodeSearchTool, GroupCode, GateEverybody},
-	{CodeDiffTool, GroupCode, GateEverybody},
-	{CodeCompareTool, GroupCode, GateEverybody},
-	{CodeLandedInTool, GroupCode, GateEverybody},
-	{CodeLogTool, GroupCode, GateEverybody},
-	{CodeBlameTool, GroupCode, GateEverybody},
-	{CodeListChangesTool, GroupCode, GateEverybody},
-	{CodeGetChangeTool, GroupCode, GateEverybody},
-	{CodeGetCheckFailuresTool, GroupCode, GateEverybody},
-	{CodeCommitFilesTool, GroupCode, GateEverybody},
-	{CodeRevertTool, GroupCode, GateEverybody},
-	{CodeCherryPickTool, GroupCode, GateEverybody},
-	{CodeCreateBranchTool, GroupCode, GateEverybody},
-	{CodeDeleteBranchTool, GroupCode, GateEverybody},
-	{CodeCreateRepoTool, GroupCode, GateEverybody},
-	{CodeUpdateRepoTool, GroupCode, GateEverybody},
-	{CodeDeleteRepoTool, GroupCode, GateEverybody},
-	{CodeRestoreRepoTool, GroupCode, GateEverybody},
-	{CodeProtectBranchTool, GroupCode, GateEverybody},
-	{CodeOpenChangeTool, GroupCode, GateEverybody},
-	{CodeUpdateChangeTool, GroupCode, GateEverybody},
-	{CodeCloseChangeTool, GroupCode, GateEverybody},
-	{CodeRequestReviewTool, GroupCode, GateEverybody},
-	{CodeReviewChangeTool, GroupCode, GateEverybody},
-	{CodeCommentOnChangeTool, GroupCode, GateEverybody},
-	{CodeResolveFindingTool, GroupCode, GateEverybody},
-	{CodeApplySuggestionsTool, GroupCode, GateEverybody},
-	{CodeRebaseChangeTool, GroupCode, GateEverybody},
-	{CodeMergeChangeTool, GroupCode, GateEverybody},
-	{CodeDequeueChangeTool, GroupCode, GateEverybody},
-	{CodeRevertChangeTool, GroupCode, GateEverybody},
-	{CodeRerunChecksTool, GroupCode, GateEverybody},
+	// GITLET'S TOOLS TAKE THE APP ON THE TABLE (ADR-0110), which every
+	// seat holds as it holds every app, and which a turn somebody woke holds
+	// to whether they use it (ADR-0109); what a seat may do to a repository
+	// is then decided in the code domain, by the repository's grant for the
+	// seat and for whoever woke its turn — never by a permission a role
+	// could hold without the grant. The reads, the everyday first; then the
+	// writes: a branch's, a repository's, a change's lifecycle and
+	// conversation, and its checks. Not the three a person alone makes
+	// (code_report_check, code_purge_unreachable, code_import_repo), whose
+	// rows bar every agent, so no seat is offered them.
+	{CodeListReposTool, GroupCode, GateGitlet},
+	{CodeGetRepoTool, GroupCode, GateGitlet},
+	{CodeResolveTool, GroupCode, GateGitlet},
+	{CodeReadTool, GroupCode, GateGitlet},
+	{CodeSearchTool, GroupCode, GateGitlet},
+	{CodeDiffTool, GroupCode, GateGitlet},
+	{CodeCompareTool, GroupCode, GateGitlet},
+	{CodeLandedInTool, GroupCode, GateGitlet},
+	{CodeLogTool, GroupCode, GateGitlet},
+	{CodeBlameTool, GroupCode, GateGitlet},
+	{CodeListChangesTool, GroupCode, GateGitlet},
+	{CodeGetChangeTool, GroupCode, GateGitlet},
+	{CodeGetCheckFailuresTool, GroupCode, GateGitlet},
+	{CodeCommitFilesTool, GroupCode, GateGitlet},
+	{CodeRevertTool, GroupCode, GateGitlet},
+	{CodeCherryPickTool, GroupCode, GateGitlet},
+	{CodeCreateBranchTool, GroupCode, GateGitlet},
+	{CodeDeleteBranchTool, GroupCode, GateGitlet},
+	{CodeCreateRepoTool, GroupCode, GateGitlet},
+	{CodeUpdateRepoTool, GroupCode, GateGitlet},
+	{CodeDeleteRepoTool, GroupCode, GateGitlet},
+	{CodeRestoreRepoTool, GroupCode, GateGitlet},
+	{CodeProtectBranchTool, GroupCode, GateGitlet},
+	{CodeOpenChangeTool, GroupCode, GateGitlet},
+	{CodeUpdateChangeTool, GroupCode, GateGitlet},
+	{CodeCloseChangeTool, GroupCode, GateGitlet},
+	{CodeRequestReviewTool, GroupCode, GateGitlet},
+	{CodeReviewChangeTool, GroupCode, GateGitlet},
+	{CodeCommentOnChangeTool, GroupCode, GateGitlet},
+	{CodeResolveFindingTool, GroupCode, GateGitlet},
+	{CodeApplySuggestionsTool, GroupCode, GateGitlet},
+	{CodeRebaseChangeTool, GroupCode, GateGitlet},
+	{CodeMergeChangeTool, GroupCode, GateGitlet},
+	{CodeDequeueChangeTool, GroupCode, GateGitlet},
+	{CodeRevertChangeTool, GroupCode, GateGitlet},
+	{CodeRerunChecksTool, GroupCode, GateGitlet},
 
 	{FleetHealthTool, GroupHealth, GateHealthTools},
 	{CodeStatusTool, GroupHealth, GateHealthTools},

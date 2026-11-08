@@ -57,9 +57,12 @@
  * The page is the OVERVIEW's: anybody signed in reads a seat's state, its
  * figures and its schedules. What it is working on is Worklet's, so the
  * open work (the strip's count, the Overview's card, the Work tab) is asked
- * only of a reader holding Worklet. What it SAID (the Turns and Memory tabs,
- * a call's prompt and answer) is its trail, which the engine answers to an
- * admin and to whoever leads the seat (`seat/profile.ts`' `mayReadTrail`);
+ * only of a reader holding Worklet; and what it does on Gitlet (the Work
+ * tab's changes and reviews) only of a reader holding Gitlet, every other
+ * reader finding that block locked in place. What it SAID (the Turns and
+ * Memory tabs, a call's prompt and answer) is its trail, which the engine
+ * answers to an admin and to whoever leads the seat (`seat/profile.ts`'
+ * `mayReadTrail`);
  * every other reader finds those tabs drawn and locked, saying what would
  * open them, and nothing is asked.
  *
@@ -141,7 +144,7 @@ import {
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { ADMIN, WORKLET } from "~/lib/access.ts";
+import { ADMIN, GITLET, WORKLET } from "~/lib/access.ts";
 import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
@@ -546,11 +549,20 @@ export function SeatScreen({ handle }: { handle: string }) {
                 ) : (
                   <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
                 ))}
-              {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
-                  holds each row to the reader's grant on its repository. */}
+              {/* GITLET'S, as the block above is Worklet's: every read in it
+                  is a code question, which the engine refuses a reader
+                  without the app (ADR-0110), so none is asked and the lock
+                  says what to ask for. A holder's rows are held to their
+                  grant on each repository. */}
               {runs.code && (
                 <SeatSectionBlock section="code">
-                  <SeatCode seat={seat} human={human} />
+                  {viewer.loading ? (
+                    <AccessPending />
+                  ) : viewer.gitlet ? (
+                    <SeatCode seat={seat} human={human} />
+                  ) : (
+                    <GrantRequired size="compact" grants={[GITLET]} reader={viewer.login} />
+                  )}
                 </SeatSectionBlock>
               )}
             </div>

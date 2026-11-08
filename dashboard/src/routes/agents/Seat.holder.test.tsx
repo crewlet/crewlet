@@ -208,7 +208,7 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
   const post = sent.find((s) => s.method === "POST");
   expect(post?.body).toEqual({
     email: "sam@example.com",
-    grants: ["worklet", "doclet", "artifacts", "chatlet"],
+    grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
     seat: "sam",
   });
 });
@@ -243,7 +243,7 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
     kind: "person",
     seat: "sam",
     email: "sam.ito@example.com",
-    grants: ["worklet", "doclet", "artifacts", "chatlet"],
+    grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
   });
   expect(within(dialog).getByText("https://x/dashboard#/reset/c-first.s")).toBeTruthy();
   expect(within(dialog).getByText("sam.ito")).toBeTruthy();

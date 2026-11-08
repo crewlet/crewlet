@@ -70,7 +70,29 @@ func colleagueAskOf(ask *events.Event) *sandbox.ColleagueAsk {
 		ChannelID: askChannel(ask), Question: askedQuestion(ask),
 		Chain:   slices.Clone(ask.DelegationChain),
 		TraceID: ask.TraceID, SpanID: ask.SpanID, ParentSpanID: ask.ParentSpanID,
+		WorkingFor: answeredFor(ask),
 	}
+}
+
+// answeredFor is who the answer to ask is worked for back on the asker
+// ([sandbox.ColleagueAsk.WorkingFor]): whoever the ask carried, which the
+// answering turn worked for too, or the asking seat itself where the ask
+// carried nobody, so the turn the answer wakes is the asker's own work as its
+// ask was, and never the answering colleague's. The engine's, from the ask
+// the engine built, never from anything the answering turn wrote.
+func answeredFor(ask *events.Event) *types.WorkingFor {
+	req, ok := events.DataAs[*types.A2ARequest](ask)
+	switch {
+	case !ok || req == nil:
+		return nil
+	case req.WorkingFor != nil:
+		w := *req.WorkingFor
+		w.Apps = slices.Clone(req.WorkingFor.Apps)
+		return &w
+	case strings.TrimSpace(req.Requester) != "":
+		return &types.WorkingFor{Kind: types.WorkingForSeat, Seat: strings.TrimSpace(req.Requester)}
+	}
+	return nil
 }
 
 // answeringTurn is the turn that answers an ask, as the reply names it.
@@ -184,6 +206,9 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 		// attempt at it actually answered. See ADR-0017.
 		TurnID:  by.runID,
 		WorkKey: by.workKey,
+		// AND WHOEVER THE ASKER WORKED FOR, carried back: the turn this
+		// answer wakes works for them too, never for this seat.
+		WorkingFor: ask.WorkingFor,
 	}
 	if c.Org != nil {
 		if seat := c.Org.AgentSeatByHandle(by.handle); seat != nil {

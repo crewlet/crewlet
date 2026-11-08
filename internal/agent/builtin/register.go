@@ -222,7 +222,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// the tool every other addressing decision goes through.
 	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
-		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
+		{&a2aAsk{svc: deps.A2A, env: deps.Env, requesters: deps.Requesters}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
 			skills:   deps.Refinable,
@@ -260,7 +260,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND WITHDRAWING ONE'S OWN QUESTION, on a work item or one the
 		// seat's executor waits on. See withdrawask.go.
-		{&withdrawAsk{deps: withdraw}, withdraw.serves()},
+		{&withdrawAsk{deps: withdraw, requesters: deps.Requesters}, withdraw.serves()},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can
