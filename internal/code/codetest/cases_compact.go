@@ -606,23 +606,64 @@ func bulkPacks(c *Case, p *Person, repoID, tip string, n int) {
 			if err = code.StoreBundle(ctx, objects, path, ref, nil); err != nil {
 				return err
 			}
-			res, err := c.Fleet.Propose(ctx, code.Proposal{
+			cmds, err := proposeLanded(ctx, c.Fleet, code.Proposal{
 				PushID: pushID, RepoID: repoID, Principal: principal, Via: code.ViaGit,
 				Node: c.Fleet.Nodes()[0].ID(), ReceivedAt: time.Now().UTC(), Pack: ref,
 				Commands: []code.Command{{Ref: fmt.Sprintf("refs/heads/bulk/%04d", i), Old: code.ZeroOID, New: tip}},
 			})
 			switch {
 			case err != nil:
-				return fmt.Errorf("propose bulk pack %d: %w", i, err)
-			case res.Outcome != statelog.OutcomeApplied || len(res.Answer.Commands) != 1 ||
-				res.Answer.Commands[0].Result != code.ResultOK:
-				return fmt.Errorf("bulk pack %d was answered %s: %+v", i, res.Outcome, res.Answer.Commands)
+				return fmt.Errorf("bulk pack %d: %w", i, err)
+			case len(cmds) != 1 || cmds[0].Result != code.ResultOK:
+				return fmt.Errorf("bulk pack %d was answered %+v", i, cmds)
 			}
 			return os.RemoveAll(dir)
 		})
 	}
 	if err := g.Wait(); err != nil {
 		c.T.Fatalf("the bulk packs: %v", err)
+	}
+}
+
+// proposeLanded proposes p through f and answers what became of its commands,
+// as a git node's host tells git: the commands of the row the push landed, or
+// the decision's where it laid no record.
+//
+// A PENDING ANSWER IS RESOLVED, NOT FAILED. statelog answers pending a record
+// durable at its position whose outcome is unresolved where it was proposed,
+// which is what a loaded runner's applier lagging the committer's own wait
+// gives any proposal, and documents it as never a failure: a setup that read
+// it as one went red on a schedule rather than on a defect (#799). So it is
+// read at that position, as the host reads a push it was answered pending
+// ((*host.Server).awaitPending). Found, the row's commands are the answer,
+// never the decision's that came with the pending one. Not found there, a gate
+// dropped the record and the push applied nowhere. A node that has not reached
+// the position within the read's own budget refuses `behind` and is asked
+// again, bounded by ctx as every wait on an applier here is: proposing again
+// would be another push, not what became of this one.
+func proposeLanded(ctx context.Context, f Fleet, p code.Proposal) ([]code.Command, error) {
+	res, err := f.Propose(ctx, p)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("propose: %w", err)
+	case res.Outcome == statelog.OutcomeUnknown:
+		return nil, fmt.Errorf("answered %s (op %s)", res.Outcome, res.OpID)
+	case res.Outcome != statelog.OutcomePending:
+		return res.Answer.Commands, nil
+	}
+	for {
+		out, err := f.PushOutcome(ctx, code.OutcomeQuery{RepoID: p.RepoID, PushID: p.PushID, At: res.Position})
+		var refused *statelog.Refused
+		switch {
+		case errors.As(err, &refused) && refused.Code == statelog.RefuseBehind && ctx.Err() == nil:
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("answered pending at %s, and what became of it could not be read: %w",
+				res.Position, err)
+		case !out.Found:
+			return nil, fmt.Errorf("answered pending at %s, and applied nowhere", res.Position)
+		}
+		return out.Push.Commands, nil
 	}
 }
 

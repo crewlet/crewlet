@@ -149,6 +149,11 @@ type Fleet interface {
 	// the packs of a fixture it built and stored itself, a person's git
 	// paying for none of them.
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
+	// PushOutcome is what became of one push, read at its record's position
+	// through the data nodes, as a git node's host reads the outcome of one
+	// it was answered pending: for a case whose own proposal was answered so
+	// ([proposeLanded]).
+	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	// Expunge is an expunge proposal asked of the repository's committer
 	// through the data nodes — a person's purge request, as
 	// code_purge_unreachable asks one, or a begin or a commit, as a git
@@ -773,6 +778,11 @@ func (f *SoloFleet) State(ctx context.Context, q code.StateQuery) (code.RepoSnap
 // node itself answered as the router answers it (Fleet).
 func (f *SoloFleet) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
 	return (&soloEstate{data: f.data}).Propose(ctx, p)
+}
+
+// PushOutcome is what became of one push, read from the data node (Fleet).
+func (f *SoloFleet) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+	return (&soloEstate{data: f.data}).PushOutcome(ctx, q)
 }
 
 // Expunge is an expunge proposal asked of the data node's committer — what

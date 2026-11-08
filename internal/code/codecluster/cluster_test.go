@@ -1075,6 +1075,16 @@ func (c *cluster) Propose(ctx context.Context, p code.Proposal) (code.ProposeRes
 	return m.router.Load().Code().Propose(ctx, p)
 }
 
+// PushOutcome is what became of one push, read through the first running
+// member's router, as Propose asks it (codetest.Fleet).
+func (c *cluster) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.PushOutcome{}, err
+	}
+	return m.router.Load().Code().PushOutcome(ctx, q)
+}
+
 // Expunge is an expunge proposal asked through the first running member's
 // router — of the repository's committer first, its runner-up after — as a
 // member's compactor asks its begins and commits (codetest.Fleet).
