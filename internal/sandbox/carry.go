@@ -19,9 +19,10 @@ import (
 // that archive, written into the box before its run starts
 // ([RunRequest.Carried]) and restored there by the run's own script before its
 // harness takes the session up. What a harness's archive holds, and what it never holds
-// — a login, the harness's own settings, a checkpoint of files — is its runner's to
-// say (internal/sandbox/executor), and so is whether a box can continue one
-// at all ([CarryCheck]).
+// — a login, the harness's own settings, Claude Code's file-edit snapshots of the
+// files a run edited (`file-history/`) — is its runner's to say
+// (internal/sandbox/executor), and so is whether a box can continue one at all
+// ([CarryCheck]).
 
 // SessionArchive describes a harness's session packed into one archive: by
 // the box its run ended in, or as it is carried into another.

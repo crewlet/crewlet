@@ -579,8 +579,8 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 //
 // NEVER ANYTHING ELSE: not the login (`.credentials.json`) or the harness's own
 // state (`.claude.json`), which the pinned configuration directory holds beside
-// them, and not `file-history/`, a checkpoint of the files the run edited,
-// which carries the checkout rather than the conversation and is off.
+// them, and not `file-history/`, the file-edit snapshots of the files the run
+// edited, which carry the checkout rather than the conversation and are off.
 //
 // NOTHING TO PACK IS SAID NOWHERE: a harness that wrote no transcript — one that
 // failed as it started, a release that files it elsewhere — has no session to
