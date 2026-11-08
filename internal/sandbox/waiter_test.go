@@ -799,7 +799,7 @@ func (r *waiterRig) park(turnID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
 	r.ask(turnID, Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
-	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{AskedAt: r.now}); err != nil {
+	if err := r.pending.MarkAwaiting(ctx, turnID, questionAt(r.now)); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := r.pending.MarkBoxPaused(ctx, turnID, r.now); err != nil {

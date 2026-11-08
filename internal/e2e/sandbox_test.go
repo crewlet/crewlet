@@ -448,6 +448,11 @@ func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS AND ANSWERS HOLDS THEIR SEAT: a reply in the
+	// conversation answers the run's question only from a seat it was put to
+	// whose holder may act now, and the founder's is the run's requester
+	// (ADR-0077's amendment).
+	employFounder(t, n.node)
 	// IN A DM THREAD, which is the shape that stranded every clarification:
 	// the run parks under the thread it was asked in, and a person answering
 	// on the DM line arrives in a different batch entirely. Matched on the
@@ -1200,6 +1205,9 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS AND ANSWERS HOLDS THEIR SEAT, as in
+	// TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer.
+	employFounder(t, n.node)
 	// ON A CONVERSATION, which is what a person's answer is matched on.
 	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
