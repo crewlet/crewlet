@@ -331,6 +331,11 @@ type Queue struct {
 	paused      bool
 	closed      bool
 
+	// answering is the gate of each [Queue.Serve] registration of this
+	// client still standing, by its subject, for [Queue.Answering]. Made by
+	// the first registration, so a Queue built without one reads empty.
+	answering map[string][]*queue.AnswerGate
+
 	// inFlight counts handler invocations, which is the number an
 	// operator watches converge to zero during a drain.
 	inFlight queue.Inflight

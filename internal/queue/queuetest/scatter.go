@@ -37,6 +37,14 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// READ OFF THE DEADLINE ITSELF, which is the claim: the second answerer
+	// never answers, so an ask that waits for it ends only on its deadline,
+	// and has passed it when it returns. A reading of the clock held to half
+	// the deadline was a stand-in for that, and a loaded runner lost it on an
+	// ask that had not waited at all.
+	//
+	// Mutation: collect until the deadline whatever want says, and the ask
+	// returns with its deadline passed.
 	t.Run("reaching_want_returns_without_waiting_out_the_deadline", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -53,7 +61,6 @@ func (s *suite) runScatter(t *testing.T) {
 
 		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		started := time.Now()
 		replies, err := q.Ask(deadline, subject, []byte("q"), 1)
 		if err != nil {
 			t.Fatalf("ask: %v", err)
@@ -61,50 +68,70 @@ func (s *suite) runScatter(t *testing.T) {
 		if len(replies) != 1 {
 			t.Fatalf("asked for 1 reply and got %d", len(replies))
 		}
-		if elapsed := time.Since(started); elapsed > 5*time.Second {
-			t.Fatalf("an ask satisfied by its first reply took %s of a 10s "+
-				"deadline — a fan-out that waits for the slowest answerer it "+
-				"did not need is a fan-out with no latency benefit", elapsed)
+		if deadline.Err() != nil {
+			t.Fatal("an ask satisfied by its first reply returned only once its 10s " +
+				"deadline had passed — a fan-out that waits for the slowest answerer it " +
+				"did not need is a fan-out with no latency benefit")
 		}
 	})
 
+	// THE FIRST REPLY IS HANDED OVER BEFORE THE ASK ENDS, read off the ask's
+	// own deadline as each is handed it — which is the difference this verb
+	// exists for, since an ask that collects for the end hands it over only
+	// once that deadline has passed. A reading of the clock held to half the
+	// deadline stood in for it, and a loaded runner lost it.
+	//
+	// The second answerer answers only once the first reply has been handed
+	// over, so a healthy ask ends on its second reply, long before its
+	// deadline, and one that collects for the end never sees that reply.
+	//
+	// Mutation: buffer the replies until the deadline and hand them over
+	// then, and each is handed the first one with the deadline passed.
 	t.Run("ask_each_hands_a_reply_over_as_it_arrives", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		subject := ns(t) + ".ask"
 		serve(ctx, t, q, subject, echo("fast"))
-		// AN ANSWERER THAT NEVER ANSWERS, so the ask runs its whole
-		// deadline: what this case asks is whether the fast reply was
-		// handed over before that, not whether the ask ended early.
+		handedOver := make(chan struct{})
 		serve(ctx, t, q, subject, func(ctx context.Context, _ []byte) ([]byte, error) {
-			<-ctx.Done()
-			return nil, ctx.Err()
+			select {
+			case <-handedOver:
+				return []byte("slow:q"), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		})
-		deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
+		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		started := time.Now()
 		var (
-			got     []string
-			arrived time.Duration
+			got  []string
+			late error
 		)
 		err := q.AskEach(deadline, subject, []byte("q"), func(reply []byte) bool {
 			if got = append(got, string(reply)); len(got) == 1 {
-				arrived = time.Since(started)
+				late = deadline.Err()
+				close(handedOver)
 			}
-			return true
+			return len(got) < 2
 		})
 		if err != nil {
 			t.Fatalf("ask each: %v", err)
 		}
-		if !sameSet(got, []string{"fast:q"}) {
-			t.Fatalf("ask each handed over %v, want the one answer that came", got)
+		if late != nil {
+			t.Fatal("the first reply was handed over only once the ask's 10s deadline " +
+				"had passed: AskEach that collects for the end is Ask under another name")
 		}
-		if arrived > time.Second {
-			t.Fatalf("the first reply was handed over %s into a 2s ask: AskEach "+
-				"that collects for the end is Ask under another name", arrived)
+		if !sameSet(got, []string{"fast:q", "slow:q"}) {
+			t.Fatalf("ask each handed over %v, want the fast answer and the one it let through", got)
 		}
 	})
 
+	// READ OFF THE DEADLINE ITSELF, as reaching_want's is: the second
+	// answerer never answers, so an ask that ignored each's false ends only
+	// on its deadline.
+	//
+	// Mutation: carry on collecting after each answers false, and the ask
+	// returns with its deadline passed.
 	t.Run("ask_each_ends_when_each_says_so", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -116,7 +143,6 @@ func (s *suite) runScatter(t *testing.T) {
 		})
 		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		started := time.Now()
 		calls := 0
 		if err := q.AskEach(deadline, subject, []byte("q"), func([]byte) bool {
 			calls++
@@ -127,8 +153,8 @@ func (s *suite) runScatter(t *testing.T) {
 		if calls != 1 {
 			t.Fatalf("each was called %d times after answering false the first time", calls)
 		}
-		if elapsed := time.Since(started); elapsed > 5*time.Second {
-			t.Fatalf("an ask its caller ended took %s of a 10s deadline", elapsed)
+		if deadline.Err() != nil {
+			t.Fatal("an ask its caller ended returned only once its 10s deadline had passed")
 		}
 	})
 
@@ -192,7 +218,7 @@ func (s *suite) runScatter(t *testing.T) {
 				t.Fatalf("the ask returned %v, want the one answer that "+
 					"arrived before its deadline", got)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatal("an answerer that never returned held the asker past its " +
 				"own deadline — the deadline is the asker's and only the " +
 				"asker can enforce it, because only the asker knows it")
@@ -385,7 +411,7 @@ func (s *suite) runScatter(t *testing.T) {
 		// answered first.
 		select {
 		case <-holding:
-		case <-time.After(5 * time.Second):
+		case <-time.After(5 * time.Second): //fixedwait:liveness
 			t.Fatal("the first request never reached the answerer")
 		}
 
@@ -399,7 +425,7 @@ func (s *suite) runScatter(t *testing.T) {
 		if got := replyTexts(replies); !sameSet(got, []string{"next"}) {
 			t.Fatalf("a request behind a held answer got %v after %s — one "+
 				"registration answering one request at a time", got,
-				time.Since(started))
+				time.Since(started)) //fixedwait:measure the failure message's own reading, which decides nothing
 		}
 	})
 
@@ -411,8 +437,18 @@ func (s *suite) runScatter(t *testing.T) {
 	// earlier pushes, held for its asker's whole attempt — sit beside one
 	// whose answers do not: on one gate, sixty-four such waits hold every
 	// request the process answers.
+	//
+	// THAT THE ONE PAST THE BOUND WAITS is read off the registration's own
+	// count once it has decided, never off the answerer staying quiet for a
+	// while: a request the registration admits past its bound reaches the
+	// answerer whenever its answer runs, which a loaded runner puts after any
+	// pause.
+	//
+	// Mutation: serve with a bound wider than the one the registration
+	// states, and the request past it is counted running.
 	t.Run("a_registration_answers_up_to_its_own_bound_and_holds_no_other", func(t *testing.T) {
 		t.Parallel()
+		answering := s.needAnswering(t)
 		q := s.start(ctx, t)
 		full := ns(t) + ".full"
 		const bound = 2
@@ -457,18 +493,28 @@ func (s *suite) runScatter(t *testing.T) {
 		for range bound {
 			select {
 			case <-entered:
-			case <-time.After(5 * time.Second):
+			case <-time.After(5 * time.Second): //fixedwait:liveness
 				t.Fatalf("fewer than %d requests reached a registration bounded at %d", bound, bound)
 			}
 		}
-		// THE ONE PAST THE BOUND WAITS for a slot of this registration.
+		// THE ONE PAST THE BOUND WAITS for a slot of this registration:
+		// counted waiting once the registration holds it, or running, or
+		// at the answerer, once it has let it past.
+		awaitState(t, "the request past the bound to reach the registration", func() bool {
+			running, waiting := answering(q, full)
+			return waiting > 0 || running > bound || len(entered) > 0
+		})
+		if running, waiting := answering(q, full); running != bound || waiting != 1 {
+			t.Fatalf("with %d requests sent to a registration bounded at %d it was running %d "+
+				"answers and holding %d for a slot — the bound is the registration's to "+
+				"state, and one that ignores it gives an answerer that waits on a queue of "+
+				"its own as many waiting answers as it is sent", bound+1, bound, running, waiting)
+		}
 		select {
 		case req := <-entered:
-			t.Fatalf("%s reached the answerer with %d already in flight on a registration "+
-				"bounded at %d — the bound is the registration's to state, and one that "+
-				"ignores it gives an answerer that waits on a queue of its own as many "+
-				"waiting answers as it is sent", req, bound, bound)
-		case <-time.After(300 * time.Millisecond):
+			t.Fatalf("%s reached the answerer while its registration, bounded at %d, was "+
+				"holding it for a slot", req, bound)
+		default:
 		}
 
 		// ANOTHER REGISTRATION, beside the full one, is answered at once.
@@ -486,7 +532,7 @@ func (s *suite) runScatter(t *testing.T) {
 			select {
 			case reply := <-answered:
 				got = append(got, reply)
-			case <-time.After(10 * time.Second):
+			case <-time.After(10 * time.Second): //fixedwait:liveness
 				t.Fatalf("after its slots were released the registration answered %v of %d "+
 					"requests — the one past the bound waits for a slot, it is never dropped",
 					got, bound+1)
@@ -513,43 +559,42 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// A WITHDRAWAL WAITS FOR THE ANSWERS IN FLIGHT, read off its answer to
+	// its own bound, as a listener's is in runBroadcast: with an answer held,
+	// a withdrawal under a bound that has already ended answers that bound's
+	// error if it waited, and success or another error if it did not. And a
+	// bound that outlasts the answer is answered with success once the answer
+	// has returned.
+	//
+	// Mutation: return from the withdrawal without waiting on the gate, or
+	// wait on a context other than its bound, and the first half fails.
 	t.Run("a_withdrawal_waits_for_the_answers_in_flight", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
-		subject := ns(t) + ".ask"
-		entered := make(chan struct{})
-		release := make(chan struct{})
-		var finished atomic.Bool
-		stop, err := q.Serve(ctx, subject, queue.ConcurrentAnswers, func(context.Context, []byte) ([]byte, error) {
-			close(entered)
-			// IGNORES ITS CONTEXT, which is what makes the wait visible:
-			// one that watched it would return the moment the withdrawal
-			// cancelled it and the case could not tell a wait from none.
-			<-release
-			finished.Store(true)
-			return []byte("done"), nil
-		})
-		if err != nil {
-			t.Fatalf("serve: %v", err)
-		}
-		asked, cancelAsk := context.WithTimeout(ctx, 10*time.Second)
-		defer cancelAsk()
-		go func() { _, _ = q.Ask(asked, subject, []byte("q"), 1) }()
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("the answerer was never called")
-		}
-		go func() {
-			time.Sleep(300 * time.Millisecond)
-			close(release)
-		}()
-		bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+		held := holdAnswer(ctx, t, q, ns(t)+".ask")
+		ended, cancel := context.WithTimeout(ctx, 0)
 		defer cancel()
-		if err := stop(bounded); err != nil {
-			t.Fatalf("stop serving: %v", err)
+		err := withdraw(ended, t, held, "a withdrawal under a bound that had ended", nil)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a withdrawal under a bound that had ended, with an answer still "+
+				"running, answered %v, want the bound's own %v — a withdrawal that returns "+
+				"without waiting says the answer is done, and a caller that closes what the "+
+				"answerer reads straight after it closes it under that answer",
+				err, context.DeadlineExceeded)
 		}
-		if !finished.Load() {
+		if held.finished.Load() {
+			t.Fatal("the held answer had finished before the case released it: the " +
+				"withdrawal above was answered with no answer running")
+		}
+		held.release()
+
+		waited := holdAnswer(ctx, t, q, ns(t)+".ask")
+		if err := withdraw(ctx, t, waited, "a withdrawal whose bound outlasted the answer",
+			waited.release); err != nil {
+			t.Fatalf("a withdrawal whose bound outlasted the answer answered %v once the "+
+				"answer had returned, want success", err)
+		}
+		if !waited.finished.Load() {
 			t.Fatal("the withdrawal returned with an answer still running — a " +
 				"caller that closes what the answerer reads straight after " +
 				"withdrawing would close it under that answer")
@@ -641,6 +686,45 @@ func serve(ctx context.Context, t *testing.T, q queue.EventQueue, subject string
 			t.Errorf("stop serving %s: %v", subject, err)
 		}
 	})
+}
+
+// holdAnswer makes q an answerer on subject whose answer is held inside the
+// first request until the returned handler's release, which every exit of the
+// case calls too, asks it once, and returns once that answer is running.
+//
+// THE ANSWER IGNORES ITS CONTEXT, which is what makes a withdrawal's wait
+// visible: one that watched it would return the moment the withdrawal
+// cancelled it, and a case could not tell a wait from none.
+func holdAnswer(ctx context.Context, t *testing.T, q queue.EventQueue, subject string) heldHandler {
+	t.Helper()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var finished atomic.Bool
+	var enter, free sync.Once
+	stop, err := q.Serve(ctx, subject, queue.ConcurrentAnswers, func(context.Context, []byte) ([]byte, error) {
+		enter.Do(func() { close(entered) })
+		<-release
+		finished.Store(true)
+		return []byte("done"), nil
+	})
+	if err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	h := heldHandler{stop: stop, finished: &finished,
+		release: func() { free.Do(func() { close(release) }) }}
+	// RELEASED ON EVERY EXIT, the failing ones included, and registered
+	// after the queue's Stop so it runs first.
+	t.Cleanup(h.release)
+	// BOUNDED only so the ask cannot outlive the case; nothing is read off
+	// when it ends.
+	asked, cancelAsk := context.WithTimeout(ctx, 10*time.Second)
+	t.Cleanup(cancelAsk)
+	go func() { _, _ = q.Ask(asked, subject, []byte("q"), 1) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second): //fixedwait:liveness
+		t.Fatal("the answerer was never called")
+	}
+	return h
 }
 
 // ask scatters with a bounded deadline and fails the test on an error.

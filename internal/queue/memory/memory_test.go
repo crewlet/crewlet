@@ -73,6 +73,15 @@ func TestConformance(t *testing.T) {
 			Lingering: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Lingering(topic, group)
 			},
+			ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
+				t.Helper()
+				if err := q.(*memory.Queue).ListenBarrier(ctx); err != nil {
+					t.Fatalf("ListenBarrier: %v", err)
+				}
+			},
+			Answering: func(q queue.EventQueue, subject string) (running, waiting int) {
+				return q.(*memory.Queue).Answering(subject)
+			},
 			// Declared although a create here is a map insert rather than
 			// a replicated write: what the case asserts is that the
 			// second ensure never REACHED the create, which is the same

@@ -9,7 +9,10 @@
 //
 // The suite is written for an ASYNCHRONOUS backend even though the in-memory
 // twin dispatches inline: every positive assertion waits for the handler to
-// speak (a channel wake, not a poll), and every negative assertion holds a
+// speak (a channel wake, not a poll), and a negative assertion is read behind
+// something that would have carried what it rules out — a later broadcast of
+// the same sender, a barrier through the listeners, a withdrawal's answer to
+// its own bound, the backend's own count — or, where nothing does yet, holds a
 // quiet window open. An assertion that reads state the instant after Publish
 // returns would pass on the twin and fail on a real broker, which is precisely
 // the divergence this suite exists to prevent.
@@ -344,6 +347,34 @@ type Capabilities struct {
 	// opens never reports one, so a case waiting on this fails rather than
 	// passing on nothing.
 	Lingering func(q queue.EventQueue, topic, group string) bool
+
+	// ListenBarrier returns once every broadcast q itself has sent has been
+	// handled by each of q's own listeners it reached — the handler called
+	// on it and returned — failing the case if ctx ends first.
+	//
+	// THE BARRIER A LISTENER'S SILENCE IS READ BEHIND where no broadcast can
+	// fence it. One process's broadcasts reach a listener in the order sent,
+	// so a later one is a fence for the listener that hears it; but a
+	// WITHDRAWN listener hears the fence no more than the broadcast, and its
+	// silence after one is the same on a withdrawal that left it standing,
+	// whose handler had simply not run yet. A barrier through every
+	// listener q still holds is what such a registration would have carried
+	// the broadcast past. On the backend that ships it is the NATS client's
+	// own Barrier behind a flush; on the twin, a marker through each inbox.
+	ListenBarrier func(ctx context.Context, t *testing.T, q queue.EventQueue)
+
+	// Answering reports, of q's own Serve registrations on subject, the
+	// answers they are running and the requests they are holding for a
+	// slot — [queue.AnswerGate.Occupancy], summed.
+	//
+	// THE STATE A BOUND IS READ OFF. That the request past a registration's
+	// bound waits is otherwise an absence — the answerer was not called —
+	// and an absence read after a pause passes a registration that ignores
+	// its bound whenever that request reaches the answerer late. Held, the
+	// request is counted waiting by the bound's own decision; admitted, it is
+	// counted running, so a case reads one of the two rather than waiting to
+	// see whether the answerer is called.
+	Answering func(q queue.EventQueue, subject string) (running, waiting int)
 
 	// ConsumerProposals reports how many consumer creates THIS client has
 	// asked the broker for since it was built — the cost side of
@@ -1091,6 +1122,41 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// --- withdrawals ----------------------------------------------------------
+
+// heldHandler is a registration — a listener or an answerer — whose handler a
+// case holds inside the first message it is handed, until release.
+type heldHandler struct {
+	stop queue.Unsubscribe
+	// release lets the held handler return. Idempotent, and registered as a
+	// cleanup by whatever built the registration, so a case that fails with
+	// the handler held does not leave its queue's stop waiting on it.
+	release func()
+	// finished is set as the handler returns.
+	finished *atomic.Bool
+}
+
+// withdraw runs h's withdrawal under bound on a goroutine of its own, calls
+// meanwhile (when set) while it runs, and returns what the withdrawal answered.
+//
+// BOUNDED AS LIVENESS, through awaitSignal, which releases the held handler
+// before it fails the case: a withdrawal that ignores its bound waits on that
+// handler for ever, and only it meets the bound.
+func withdraw(bound context.Context, t *testing.T, h heldHandler, what string, meanwhile func()) error {
+	t.Helper()
+	answered := make(chan struct{})
+	var err error
+	go func() {
+		defer close(answered)
+		err = h.stop(bound)
+	}()
+	if meanwhile != nil {
+		meanwhile()
+	}
+	awaitSignal(t, answered, what, h.release)
+	return err
+}
+
 // --- events ---------------------------------------------------------------
 
 // newEvent builds a probe event whose Type carries the test's label for it.
@@ -1356,6 +1422,33 @@ func (s *suite) needLingering(t *testing.T) func(q queue.EventQueue, topic, grou
 		t.Skip("backend cannot report whether a batch is held in an open linger window")
 	}
 	return s.caps.Lingering
+}
+
+// needListenBarrier returns the barrier a listener's silence is read behind
+// where no broadcast can fence it — a withdrawn listener's.
+func (s *suite) needListenBarrier(t *testing.T) func(ctx context.Context, q queue.EventQueue) {
+	t.Helper()
+	if s.caps.ListenBarrier == nil {
+		t.Skip("backend cannot report its listeners having handled what they were handed")
+	}
+	return func(ctx context.Context, q queue.EventQueue) {
+		// BOUNDED AS LIVENESS by settleFor: the barrier waits only for
+		// handlers to return, and no case holds one while it asks, so
+		// only a barrier that never passes meets the bound — and fails.
+		bounded, cancel := context.WithTimeout(ctx, settleFor)
+		defer cancel()
+		s.caps.ListenBarrier(bounded, t, q)
+	}
+}
+
+// needAnswering returns the view of what a client's registrations on a
+// subject are running and holding for a slot — the state a bound is read off.
+func (s *suite) needAnswering(t *testing.T) func(q queue.EventQueue, subject string) (running, waiting int) {
+	t.Helper()
+	if s.caps.Answering == nil {
+		t.Skip("backend cannot report what a registration holds for a slot")
+	}
+	return s.caps.Answering
 }
 
 func (s *suite) needPeer(t *testing.T) func(t *testing.T, q queue.EventQueue) queue.EventQueue {

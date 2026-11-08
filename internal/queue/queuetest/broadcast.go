@@ -38,6 +38,8 @@ func (s *suite) runBroadcast(t *testing.T) {
 		b.waitFor(t, "second listener", subject+"=one", subject+"=two")
 	})
 
+	// Mutation: let a listener's matching run wider than its pattern, and
+	// the one-token pattern hears a stray subject ahead of the fence.
 	t.Run("a_pattern_hears_the_subjects_it_matches_and_no_other", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -48,18 +50,35 @@ func (s *suite) runBroadcast(t *testing.T) {
 		broadcast(ctx, t, q, base+".a.presence", []byte("x"))
 		broadcast(ctx, t, q, base+".a.b.presence", []byte("y"))
 		broadcast(ctx, t, q, base+".elsewhere", []byte("z"))
+		// FENCED BY A LATER BROADCAST THE ONE-TOKEN PATTERN DOES MATCH: one
+		// process's broadcasts reach a listener in the order sent, so a
+		// subject the pattern should not have matched is heard before the
+		// fence or never, however late its delivery runs.
+		fence := base + ".fence.presence"
+		broadcast(ctx, t, q, fence, []byte("f"))
+		one.waitFor(t, "the one-token pattern", fence+"=f")
 		all.waitFor(t, "the trailing pattern", base+".a.presence=x",
-			base+".a.b.presence=y", base+".elsewhere=z")
-		// SETTLED BY THE TRAILING LISTENER: every message has been handed
-		// out once it heard all three, so the one-token pattern's set is
-		// final and an extra arrival would be a match it should not make.
-		settleBroadcasts()
-		if got := one.all(); !slices.Equal(got, []string{base + ".a.presence=x"}) {
-			t.Fatalf("a one-token pattern heard %v, want only the subject it matches: "+
-				"two backends with their own matchers disagree about who is in a room", got)
+			base+".a.b.presence=y", base+".elsewhere=z", fence+"=f")
+		if got := one.all(); !slices.Equal(got, []string{base + ".a.presence=x", fence + "=f"}) {
+			t.Fatalf("a one-token pattern heard %v up to a later broadcast it matches, want "+
+				"only the subject it matches before it: two backends with their own matchers "+
+				"disagree about who is in a room", got)
+		}
+		// AND THE ORDER THE FENCE RIDES, asserted where it is ridden: a
+		// backend that reordered one sender's broadcasts could land a stray
+		// match after the fence, and the check above would pass on it.
+		want := []string{base + ".a.presence=x", base + ".a.b.presence=y",
+			base + ".elsewhere=z", fence + "=f"}
+		if got := all.all(); !slices.Equal(got, want) {
+			t.Fatalf("a listener heard one sender's broadcasts as %v, want the order they "+
+				"were sent in, %v: a later broadcast is no fence for one that can overtake it",
+				got, want)
 		}
 	})
 
+	// Mutation: keep a broadcast nobody heard and hand it to the next
+	// listener that registers, and the late listener hears it ahead of
+	// "now".
 	t.Run("a_message_nobody_listened_for_is_never_heard", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -69,17 +88,24 @@ func (s *suite) runBroadcast(t *testing.T) {
 		broadcast(ctx, t, q, subject, []byte("early"))
 		late := newHeard()
 		listen(ctx, t, q, subject, late.record)
+		// "now" IS THE FENCE. It is sent after "early" by the same process,
+		// so a listener that has heard it has heard "early" already or never
+		// will: a broadcast kept for a later listener — a durable path,
+		// which is the failure this case names — is handed over in the order
+		// it was sent, ahead of what followed it.
 		broadcast(ctx, t, q, subject, []byte("now"))
 		late.waitFor(t, "the late listener", subject+"=now")
-		settleBroadcasts()
 		if got := late.all(); !slices.Equal(got, []string{subject + "=now"}) {
 			t.Fatalf("a listener that arrived after a broadcast heard %v; a broadcast "+
 				"retained for a later listener is a heartbeat replayed after its moment", got)
 		}
 	})
 
+	// Mutation: leave the withdrawn registration standing, and the barrier
+	// carries the broadcast to it before the case looks.
 	t.Run("a_withdrawn_listener_hears_nothing_more", func(t *testing.T) {
 		t.Parallel()
+		barrier := s.needListenBarrier(t)
 		q := s.start(ctx, t)
 		subject := ns(t) + ".room"
 		stays, goes := newHeard(), newHeard()
@@ -93,44 +119,56 @@ func (s *suite) runBroadcast(t *testing.T) {
 		}
 		broadcast(ctx, t, q, subject, []byte("after"))
 		stays.waitFor(t, "the remaining listener", subject+"=after")
-		settleBroadcasts()
+		// READ BEHIND A BARRIER, NOT A FENCE: a withdrawn listener hears a
+		// later broadcast no more than this one, so its silence after one
+		// is the same on a withdrawal that left it standing and whose
+		// handler had not run yet. A barrier through every listener this
+		// client still holds is what such a registration would have
+		// carried the broadcast past.
+		barrier(ctx, q)
 		if got := goes.all(); len(got) != 0 {
 			t.Fatalf("a listener that withdrew went on hearing %v", got)
 		}
 	})
 
+	// A WITHDRAWAL WAITS FOR THE HANDLER RUNNING, bounded by the context it
+	// is given, and the bound is what makes the wait readable. With a
+	// handler held, a withdrawal under a bound that has already ended either
+	// waited for it — and gave up at once, answering that bound's own error
+	// — or did not, and answered success, or an error that is not the
+	// bound's. Its answer is the signal, read with the handler still held;
+	// no pause stands in for one. And a bound that outlasts the handler is
+	// answered with success once the handler has returned.
+	//
+	// Mutation: return from the withdrawal without waiting on the gate, or
+	// wait on a context other than its bound, and the first half fails.
 	t.Run("a_withdrawal_waits_for_the_handler_running", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
-		subject := ns(t) + ".room"
-		entered := make(chan struct{})
-		release := make(chan struct{})
-		var finished atomic.Bool
-		var once sync.Once
-		stop, err := q.Listen(ctx, subject, func(string, []byte) {
-			once.Do(func() { close(entered) })
-			<-release
-			finished.Store(true)
-		})
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		broadcast(ctx, t, q, subject, []byte("held"))
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("the listener was never handed the message")
-		}
-		go func() {
-			time.Sleep(300 * time.Millisecond)
-			close(release)
-		}()
-		bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+		held := holdListener(ctx, t, q, ns(t)+".room")
+		ended, cancel := context.WithTimeout(ctx, 0)
 		defer cancel()
-		if err := stop(bounded); err != nil {
-			t.Fatalf("stop listening: %v", err)
+		err := withdraw(ended, t, held, "a withdrawal under a bound that had ended", nil)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a withdrawal under a bound that had ended, with a handler still "+
+				"running, answered %v, want the bound's own %v: a withdrawal that returns "+
+				"without waiting says the handler is done, and a caller that tears down "+
+				"what the handler reads straight after withdrawing tears it down under "+
+				"that handler", err, context.DeadlineExceeded)
 		}
-		if !finished.Load() {
+		if held.finished.Load() {
+			t.Fatal("the held handler had finished before the case released it: the " +
+				"withdrawal above was answered with no handler running")
+		}
+		held.release()
+
+		waited := holdListener(ctx, t, q, ns(t)+".room")
+		if err := withdraw(ctx, t, waited, "a withdrawal whose bound outlasted the handler",
+			waited.release); err != nil {
+			t.Fatalf("a withdrawal whose bound outlasted the handler answered %v once the "+
+				"handler had returned, want success", err)
+		}
+		if !waited.finished.Load() {
 			t.Fatal("the withdrawal returned with a handler still running; a caller " +
 				"that tears down what the handler reads straight after withdrawing " +
 				"would tear it down under that handler")
@@ -201,7 +239,7 @@ func (s *suite) runBroadcast(t *testing.T) {
 			if string(p) != string(payload) {
 				t.Fatalf("a broadcast arrived as %q, want %q", p, payload)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(5 * time.Second): //fixedwait:liveness
 			t.Fatal("the broadcast never arrived")
 		}
 	})
@@ -325,14 +363,33 @@ func (h *heard) waitFor(t *testing.T, who string, want ...string) {
 	}
 }
 
-// broadcastSettle is how long a case waits for a message that must NOT arrive.
-//
-// HALF A SECOND, the scatter cases' own bound for an answer that must not come:
-// a broadcast on a warm in-process broker arrives in microseconds, so a message
-// still in flight after this is one the backend held rather than one it was
-// slow to deliver.
-const broadcastSettle = 500 * time.Millisecond
-
-// settleBroadcasts waits out [broadcastSettle], so a message that should never
-// arrive has had its chance to.
-func settleBroadcasts() { time.Sleep(broadcastSettle) }
+// holdListener makes q a listener on subject whose handler is held inside the
+// first broadcast it is handed until the returned handler's release, which
+// every exit of the case calls too, and returns once that handler is running.
+func holdListener(ctx context.Context, t *testing.T, q queue.EventQueue, subject string) heldHandler {
+	t.Helper()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var finished atomic.Bool
+	var enter, free sync.Once
+	stop, err := q.Listen(ctx, subject, func(string, []byte) {
+		enter.Do(func() { close(entered) })
+		<-release
+		finished.Store(true)
+	})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	h := heldHandler{stop: stop, finished: &finished,
+		release: func() { free.Do(func() { close(release) }) }}
+	// RELEASED ON EVERY EXIT, the failing ones included, and registered
+	// after the queue's Stop so it runs first: a stop waits for a handler
+	// still running.
+	t.Cleanup(h.release)
+	broadcast(ctx, t, q, subject, []byte("held"))
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second): //fixedwait:liveness
+		t.Fatal("the listener was never handed the message")
+	}
+	return h
+}

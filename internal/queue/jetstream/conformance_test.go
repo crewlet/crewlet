@@ -299,6 +299,35 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return q.(*Queue).Lingering(topic, group)
 		},
 
+		// THE CLIENT'S OWN BARRIER, BEHIND A FLUSH. A broadcast this
+		// client sent reaches its own listeners from its own server, which
+		// delivers it to the connection ahead of the PONG the flush waits
+		// for, so once the flush returns the client has queued it to every
+		// subscription it matched; nats.Conn.Barrier then runs once each of
+		// the connection's callback subscriptions has delivered what it held
+		// — the listeners' handlers called and returned.
+		ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
+			t.Helper()
+			nc := q.(*Queue).Conn()
+			if err := nc.FlushWithContext(ctx); err != nil {
+				t.Fatalf("flush ahead of the listen barrier: %v", err)
+			}
+			passed := make(chan struct{})
+			if err := nc.Barrier(func() { close(passed) }); err != nil {
+				t.Fatalf("Barrier: %v", err)
+			}
+			select {
+			case <-passed:
+			case <-ctx.Done():
+				t.Fatalf("the client's barrier had not passed its listeners when the case's "+
+					"bound ended: %v", ctx.Err())
+			}
+		},
+
+		Answering: func(q queue.EventQueue, subject string) (running, waiting int) {
+			return q.(*Queue).Answering(subject)
+		},
+
 		// THE QUEUE UNDER TEST, never the inspector: this counts what the
 		// client being certified asked the broker for, and the admin
 		// connection asked for none of it. Reading it through inspector()

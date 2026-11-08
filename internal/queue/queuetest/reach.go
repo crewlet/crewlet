@@ -100,18 +100,27 @@ func (s *suite) runReachability(t *testing.T) {
 		// into a reconnect buffer answers the same mark once the deadline
 		// ends, having queued a request that goes out to its servers after
 		// the asker was told it failed; one that refuses answers at once.
-		// Half the deadline is a margin no refusal comes near and no wait
-		// for the deadline gets under.
-		asked, cancelAsk := context.WithTimeout(ctx, reachWithin)
-		begun := time.Now()
+		// So it is read off the deadline itself, which a refusal answers
+		// ahead of and a buffered request ends on, never off a reading of
+		// the clock held to a margin of it, which a loaded runner lost on a
+		// refusal.
+		//
+		// SETTLEFOR, not reachWithin: this ask must NOT end on its
+		// deadline, so the deadline only sets how long a backend that
+		// buffered it takes to be caught, and a refusal never comes near
+		// it.
+		//
+		// Mutation: have the refusal wait out the ask's deadline before it
+		// answers, and the ask returns with its deadline passed.
+		asked, cancelAsk := context.WithTimeout(ctx, settleFor)
 		_, err := q.Ask(asked, "reach.refused", []byte("reach"), 1)
-		took := time.Since(begun)
+		ended := asked.Err()
 		cancelAsk()
-		if !errors.Is(err, queue.ErrUnavailable) || took >= reachWithin/2 {
-			t.Errorf("an Ask with its broker gone answered %v after %s, want "+
-				"queue.ErrUnavailable well inside its %s deadline: a request "+
-				"held for the reconnect is a retained one, delivered after its "+
-				"asker has gone", err, took, reachWithin)
+		if !errors.Is(err, queue.ErrUnavailable) || ended != nil {
+			t.Errorf("an Ask with its broker gone answered %v, its %s deadline %s, want "+
+				"queue.ErrUnavailable before its deadline: a request held for the "+
+				"reconnect is a retained one, delivered after its asker has gone",
+				err, settleFor, deadlineState(ended))
 		}
 
 		// A DELETE THE BROKER CANNOT HEAR STILL DETACHES, on both backends
@@ -195,6 +204,15 @@ func (s *suite) runReachability(t *testing.T) {
 			}
 		}
 	})
+}
+
+// deadlineState names what a context's error says of its deadline, for a
+// failure message.
+func deadlineState(err error) string {
+	if err != nil {
+		return "passed"
+	}
+	return "still ahead"
 }
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -137,10 +138,12 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		return nil, fmt.Errorf("serve %s: register the subscription: %w", subject,
 			q.brokerFailed(ctx, err))
 	}
+	q.answer(subject, gate)
 	q.log.Debug("scatter_server_added", "subject", subject)
 
 	return func(ctx context.Context) error {
 		stopped.Store(true)
+		q.unanswer(subject, gate)
 		var unsubErr error
 		if err := sub.Unsubscribe(); err != nil && !q.isClosed() {
 			unsubErr = fmt.Errorf("stop serving %s: %w", subject, err)
@@ -155,6 +158,48 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		q.log.Debug("scatter_server_removed", "subject", subject)
 		return unsubErr
 	}, nil
+}
+
+// answer records gate as a standing registration of this client on subject.
+func (q *Queue) answer(subject string, gate *queue.AnswerGate) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.answering == nil {
+		q.answering = map[string][]*queue.AnswerGate{}
+	}
+	q.answering[subject] = append(q.answering[subject], gate)
+}
+
+// unanswer forgets gate's registration on subject, which its withdrawal does
+// first, as it stops the subscription delivering. Idempotent.
+func (q *Queue) unanswer(subject string, gate *queue.AnswerGate) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	left := slices.DeleteFunc(q.answering[subject], func(g *queue.AnswerGate) bool { return g == gate })
+	if len(left) == 0 {
+		delete(q.answering, subject)
+		return
+	}
+	q.answering[subject] = left
+}
+
+// Answering reports, of THIS client's registrations on subject, the answers
+// they are running and the requests they are holding for a slot — the sum of
+// their gates' [queue.AnswerGate.Occupancy].
+//
+// Reported so the conformance suite can see a registration's bound hold a
+// request. Here the one it holds is the subscription's own callback, parked in
+// the gate, and nothing the connection reports tells it from a request the
+// client has not yet handed to that callback: both are pending to it.
+func (q *Queue) Answering(subject string) (running, waiting int) {
+	q.mu.Lock()
+	gates := slices.Clone(q.answering[subject])
+	q.mu.Unlock()
+	for _, g := range gates {
+		r, w := g.Occupancy()
+		running, waiting = running+r, waiting+w
+	}
+	return running, waiting
 }
 
 // flushBudget bounds the round trip that confirms the broker holds what this
