@@ -198,12 +198,16 @@ const claudeSkillsFloor = "2.1.118"
 // claudeSkillsGate is the part of a run's script, handed skills of its own, that
 // adds the plugin holding them to the script's arguments by the harness's
 // release ([claudeRelease]): at or after [claudeSkillsFloor] it is
-// `--plugin-dir <plugin>`. On an older release a run with a REQUIRED skill is
-// refused before the harness starts — every call to a tool the skill covers
-// would be refused, the load that unlocks them never reported, so the run
-// could only fail its task — and any other run starts without its skills,
-// which its error stream says: an advisory skill held nothing back.
-func claudeSkillsGate(plugin string, required bool) string {
+// `--plugin-dir <plugin>`, and the run's settings (cs) are those that switch
+// hooks on (settings, [Paths.ClaudeSkillsSettings]) — the plugin's hook is the
+// engine's, which a repository's own `disableAllHooks: true` would switch off
+// with no error, so a load would never be reported and a required skill never
+// unlock. On an older release a run with a REQUIRED skill is refused before
+// the harness starts — every call to a tool the skill covers would be refused,
+// the load that unlocks them never reported, so the run could only fail its
+// task — and any other run starts without its skills, and on every run's
+// settings, which its error stream says: an advisory skill held nothing back.
+func claudeSkillsGate(plugin, settings string, required bool) string {
 	older := `echo "crewlet: this box runs Claude Code $n, older than ` + claudeSkillsFloor + `, the oldest ` +
 		`that reports loading a skill; the run starts without its company's skills" >&2`
 	if required {
@@ -212,7 +216,7 @@ func claudeSkillsGate(plugin string, required bool) string {
 			`tools; upgrade Claude Code in the box image" >&2; exit 1`
 	}
 	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + sandbox.ShellQuote(plugin) +
-		"; else " + older + "; fi\n"
+		"; cs=" + sandbox.ShellQuote(settings) + "; else " + older + "; fi\n"
 }
 
 // anyRequired reports whether any of skills is required.

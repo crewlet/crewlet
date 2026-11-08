@@ -41,14 +41,16 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 }
 
 // A minimal call stays minimal: an unset cap must not become a flag, nor an
-// unset wiring the settings that hold the notes' hooks. The settings every run
-// has are named even here, since no field of the request sets them
+// unset wiring the settings that hold the notes' hooks, nor no skills the
+// settings that keep theirs on. The settings every run has are named even
+// here, since no field of the request sets them
 // ([TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff]).
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{}
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, ""))
-	for _, absent := range []string{"--max-turns", "--model", "--mcp-config", p.ClaudeNotesSettings()} {
+	for _, absent := range []string{"--max-turns", "--model", "--mcp-config", p.ClaudeNotesSettings(),
+		p.ClaudeSkillsSettings()} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}

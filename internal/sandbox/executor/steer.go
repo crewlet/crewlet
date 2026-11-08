@@ -122,28 +122,20 @@ const (
 
 // claudeNotesSettings is the settings file a Claude Code run wired to its
 // turn's notes is started with on a release that reads them (`--settings`,
-// [Paths.ClaudeNotesSettings], [claudeNotesGate]): every run's settings
-// ([claudeSettings]), its hooks, and nothing else.
+// [Paths.ClaudeNotesSettings], [claudeNotesGate]): the settings of a run that
+// starts a hook of the engine's ([claudeHooksOnSettings]), its hooks, and
+// nothing else.
 //
 // NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118 onwards) — a 2.1.150 reads the
 // file whole, measured — because in print mode the harness ignores a settings file
 // that fails its validation WITHOUT A WORD, so a field a harness does not know yet
 // costs every hook in the file, and the retention beside them. Every run's
-// setting is far older (0.2.117), and so is disableAllHooks (1.0.68). What a
-// later release added is what the harness READS of a hook's answer: a Stop
-// hook's additional context reaches the model from 2.1.163, and a run on an
-// older release is started with every run's settings in this file's place
-// ([claudeNotesFloor]).
+// setting is far older (0.2.116 has it), and so is disableAllHooks (1.0.68).
+// What a later release added is what the harness READS of a hook's answer: a
+// Stop hook's additional context reaches the model from 2.1.163, and a run on
+// an older release is started without this file ([claudeNotesFloor]).
 type claudeNotesSettings struct {
-	claudeSettings
-
-	// DisableAllHooks is written FALSE, never left out — the posture. A
-	// repository's own `.claude/settings.json` that sets it true switches
-	// every hook off with no error, and an explicit false in the run's
-	// settings wins over it (measured on 2.1.263 and 2.1.310). It wins for
-	// the repository's own hooks too, which is why a hook of theirs that
-	// stops the loop is read as the failure it is ([ClaudeCode.Parse]).
-	DisableAllHooks bool `json:"disableAllHooks"`
+	claudeHooksOnSettings
 
 	// Hooks maps an event to its matchers. A map, so the file is written in
 	// one order: encoding/json sorts its keys.
@@ -189,7 +181,8 @@ type claudeHookInput struct {
 }
 
 // claudeSteerSettings is the settings of a run whose notes are reached through
-// w: every run's, and one hook at each event, calling w's tool on w's server.
+// w: those of a run that starts a hook of the engine's, and one hook at each
+// event, calling w's tool on w's server.
 func claudeSteerSettings(w sandbox.SteerWiring) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
 		Type: "mcp_tool", Server: w.Server, Tool: w.Tool,
@@ -197,9 +190,8 @@ func claudeSteerSettings(w sandbox.SteerWiring) claudeNotesSettings {
 		Timeout: int(ClaudeHookTimeout / time.Second),
 	}}}}
 	return claudeNotesSettings{
-		claudeSettings:  newClaudeSettings(),
-		DisableAllHooks: false,
-		Hooks:           map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
+		claudeHooksOnSettings: newClaudeHooksOnSettings(),
+		Hooks:                 map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
 	}
 }
 

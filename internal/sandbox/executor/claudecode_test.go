@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -93,16 +94,16 @@ var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
 // The brief is the prompt `-p` reads on stdin: a brief carries every note the
 // turn has read, one argument is capped at 128 KiB, and a command line is
 // readable by every account on a direct box's host. So no part of it — a quote
-// included — is on the command line at all. Every run names the settings every
-// run has; a run wired to its notes names the settings holding its hooks too,
-// for its release to choose between, and one that is not never names them. And
-// nothing that drops the repository's own settings (--setting-sources, which
-// also drops its CLAUDE.md) or doubles the stream (--include-hook-events) is
-// ever passed.
+// included — is on the command line at all. Every run names one settings file,
+// the settings every run has unless a gate names others: a run wired to its
+// notes names the settings holding its hooks too, for its release to choose
+// between, and one that is not never names them. And nothing that drops the
+// repository's own settings (--setting-sources, which also drops its CLAUDE.md)
+// or doubles the stream (--include-hook-events) is ever passed.
 //
 // Mutation: put the brief back after -p and the first row goes red; name the
 // hooked settings whatever the request and the unwired row does; drop
-// --settings from the unwired run's arguments and it goes red too.
+// --settings from the run's arguments and both do.
 func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
@@ -130,10 +131,11 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 			if !strings.Contains(cmd, "\nclaude -p --output-format stream-json --verbose ") {
 				t.Errorf("-p is not the bare print flag, with the prompt left to stdin:\n%s", cmd)
 			}
-			if every := "--settings '" + p.ClaudeSettings() + "'"; !strings.Contains(cmd, every) {
-				t.Errorf("the run does not name %s, the settings every run has:\n%s", every, cmd)
+			if every := "cs='" + p.ClaudeSettings() + "'"; !strings.Contains(cmd, every) ||
+				!strings.Contains(cmd, `set -- "$@" --settings "$cs"`) {
+				t.Errorf("the run is not started with one settings file, %s by default:\n%s", every, cmd)
 			}
-			hooked := "--settings '" + p.ClaudeNotesSettings() + "'"
+			hooked := "cs='" + p.ClaudeNotesSettings() + "'"
 			if got := strings.Contains(cmd, hooked); got != tc.hooked {
 				t.Errorf("names %s: %v, want %v:\n%s", hooked, got, tc.hooked, cmd)
 			}
@@ -210,9 +212,10 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 }
 
 // THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
-// holds the harness's own retention sweep off and nothing else; a run wired to
-// its notes has them again with its hooks: `disableAllHooks` written false (a
-// repository's own true otherwise switches every hook off without a word), one
+// holds the harness's own retention sweep off and nothing else; a run handed
+// skills has them again with `disableAllHooks` written false (a repository's
+// own true otherwise switches every hook off without a word, the skills'
+// plugin's among them); a run wired to its notes has those with its hooks: one
 // mcp_tool hook at PostToolBatch and one at Stop, each calling the tool the
 // launch named on the server it named, with the event and the agent id the
 // harness fills in, under a ten-second timeout. No field newer than the oldest
@@ -220,7 +223,7 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 // retention and all — which the whole-document comparisons hold: a key added is
 // a key this case did not measure.
 //
-// Mutation: tag disableAllHooks omitempty and the hooked document loses it;
+// Mutation: tag disableAllHooks omitempty and the hooked documents lose it;
 // write the hooks into every run's settings and the unwired document gains
 // them.
 func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
@@ -247,10 +250,12 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), b,
-		sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p); err != nil {
+		sandbox.RunRequest{Brief: "x", Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()},
+		p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, b, p.ClaudeSettings(), every)
+	shape(t, b, p.ClaudeSkillsSettings(), `{"cleanupPeriodDays": 36500, "disableAllHooks": false}`)
 	shape(t, b, p.ClaudeNotesSettings(), `{
 		"cleanupPeriodDays": 36500,
 		"disableAllHooks": false,
@@ -265,17 +270,21 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 		t.Errorf("the hook timeout is %v, and the file says ten seconds", executor.ClaudeHookTimeout)
 	}
 
-	// A RUN WIRED TO NO NOTES WRITES NO HOOKS: the assistant's deep work has
-	// no inbox, and hooks calling a tool its bridge does not serve would be a
-	// call at every step for nothing. It has every run's settings all the same.
+	// A RUN WIRED TO NO NOTES WRITES NO HOOKS, AND ONE HANDED NO SKILLS
+	// SWITCHES NONE ON: the assistant's deep work has no inbox, and hooks
+	// calling a tool its bridge does not serve would be a call at every step
+	// for nothing. It has every run's settings all the same.
 	plain := sandbox.NewFakeSandbox("box-2")
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
 		sandbox.RunRequest{Brief: "x"}, executor.PathsFor(plain)); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, plain, executor.PathsFor(plain).ClaudeSettings(), every)
-	if raw, _ := plain.ReadFile(t.Context(), executor.PathsFor(plain).ClaudeNotesSettings()); raw != nil {
-		t.Errorf("a run wired to no notes wrote the notes' hooks: %s", raw)
+	for _, none := range []string{executor.PathsFor(plain).ClaudeNotesSettings(),
+		executor.PathsFor(plain).ClaudeSkillsSettings()} {
+		if raw, _ := plain.ReadFile(t.Context(), none); raw != nil {
+			t.Errorf("a run wired to no notes and handed no skills wrote %s: %s", none, raw)
+		}
 	}
 }
 
@@ -294,8 +303,9 @@ func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	p := executor.PathsFor(box)
 	files := map[string]string{
 		// What each holds of this run's own writing.
-		p.ClaudeSettings():      `"cleanupPeriodDays"`,
-		p.ClaudeNotesSettings(): `"steer_take"`,
+		p.ClaudeSettings():       `"cleanupPeriodDays"`,
+		p.ClaudeSkillsSettings(): `"disableAllHooks"`,
+		p.ClaudeNotesSettings():  `"steer_take"`,
 	}
 	for file := range files {
 		if !strings.HasPrefix(file, p.WorkDir()+"/") || strings.Contains(file, "/"+sandbox.WorkspaceSubdir+"/") {
@@ -311,7 +321,8 @@ func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 		}
 	}
 	installClaude(t, box, `echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`)
-	waitRun(t, runner, box, sandbox.RunRequest{Brief: "x", Steer: steerWiring})
+	waitRun(t, runner, box, sandbox.RunRequest{Brief: "x", Steer: steerWiring, Skills: handedSkills(),
+		SkillLoads: skillWiring()})
 
 	for file, own := range files {
 		info, err := os.Stat(file)
@@ -572,39 +583,265 @@ func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, box := realBox(t)
-			p := executor.PathsFor(box)
-			record := t.TempDir()
-			writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\n"+
-				`[ "$1" = --version ] && { echo `+shQuote(tc.version)+`; exit 0; }`+"\n"+
-				`d=`+shQuote(record)+"\n"+
-				`for a in "$@"; do printf '%s\n' "$a"; done > "$d/argv"`+"\n"+
-				`prev=; for a in "$@"; do [ "$prev" = --settings ] && cp "$a" "$d/settings.json"; prev=$a; done`+"\n"+
-				`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")
-			waitRun(t, runner, box, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer})
-
-			argv := lines(t, filepath.Join(record, "argv"))
-			want := p.ClaudeSettings()
+			run := startOn(t, tc.version, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer})
+			want := run.paths.ClaudeSettings()
 			if tc.hooks {
-				want = p.ClaudeNotesSettings()
+				want = run.paths.ClaudeNotesSettings()
 			}
-			if n := strings.Count(strings.Join(argv, "\n"), "--settings"); n != 1 || after(argv, "--settings") != want {
-				t.Fatalf("the harness was handed %d settings files, %q, want %q alone (argv %q)",
-					n, after(argv, "--settings"), want, argv)
+			if run.named != want {
+				t.Fatalf("the harness was handed %q, want %q (argv %q)", run.named, want, run.argv)
 			}
-			var settings struct {
-				CleanupPeriodDays *int            `json:"cleanupPeriodDays"`
-				Hooks             json.RawMessage `json:"hooks"`
+			if days := string(run.settings["cleanupPeriodDays"]); days != "36500" {
+				t.Errorf("the settings the harness was handed hold cleanupPeriodDays %q, want 36500: "+
+					"its box would sweep the session it carries", days)
 			}
-			readJSON(t, filepath.Join(record, "settings.json"), &settings)
-			if settings.CleanupPeriodDays == nil || *settings.CleanupPeriodDays != 36500 {
-				t.Errorf("the settings the harness was handed hold cleanupPeriodDays %v, want 36500: "+
-					"its box would sweep the session it carries", settings.CleanupPeriodDays)
-			}
-			if hooked := len(settings.Hooks) > 0; hooked != tc.hooks {
+			if hooked := len(run.settings["hooks"]) > 0; hooked != tc.hooks {
 				t.Errorf("the settings the harness was handed hold hooks: %v, want %v", hooked, tc.hooks)
 			}
 		})
+	}
+}
+
+// startedOn is what a Claude Code run's harness was started with on a real box
+// ([startOn]): its argv, the box's paths, and the settings file its --settings
+// named, by key, as the harness read it.
+type startedOn struct {
+	argv     []string
+	paths    executor.Paths
+	named    string
+	settings map[string]json.RawMessage
+}
+
+// startOn runs req on a real box whose stand-in Claude Code answers `--version`
+// with release, keeps the argv it was started with and the settings file its
+// one --settings names, and answers a result.
+func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
+	t.Helper()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	record := t.TempDir()
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\n"+
+		`[ "$1" = --version ] && { echo `+shQuote(release)+`; exit 0; }`+"\n"+
+		`d=`+shQuote(record)+"\n"+
+		`for a in "$@"; do printf '%s\n' "$a"; done > "$d/argv"`+"\n"+
+		`prev=; for a in "$@"; do [ "$prev" = --settings ] && cp "$a" "$d/settings.json"; prev=$a; done`+"\n"+
+		`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")
+	waitRun(t, runner, box, req)
+	argv := lines(t, filepath.Join(record, "argv"))
+	if n := strings.Count(strings.Join(argv, "\n"), "--settings"); n != 1 {
+		t.Fatalf("the harness was handed %d settings files, want one (argv %q)", n, argv)
+	}
+	var settings map[string]json.RawMessage
+	readJSON(t, filepath.Join(record, "settings.json"), &settings)
+	return startedOn{argv: argv, paths: p, named: after(argv, "--settings"), settings: settings}
+}
+
+// A RUN THAT CARRIES THE ENGINE'S SKILL HOOK SWITCHES HOOKS ON: on a release
+// that runs its skills' plugin (2.1.118 onwards), the settings its harness is
+// handed write `disableAllHooks` false beside the retention — the settings
+// that keep that hook on, or the notes' where it starts those, which hold the
+// same. The plugin's hook reports each load a required skill's tools are
+// unlocked by, and a repository's own `disableAllHooks: true` switches every
+// hook off without a word, a plugin's among them, where an explicit false in
+// the run's settings wins over it. Played on a real box, the harness a
+// stand-in that keeps the file its --settings names.
+//
+// Mutation: name every run's settings at the skills' gate, or write the
+// skills' settings without the key, and a row goes red.
+func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		release string
+		steer   sandbox.SteerWiring
+		notes   bool
+	}{
+		"at the skills' floor, wired to its notes": {"2.1.118 (Claude Code)", steerWiring, false},
+		"below the note floor, wired to its notes": {"2.1.150 (Claude Code)", steerWiring, false},
+		"wired to none": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false},
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := startOn(t, tc.release, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer,
+				Skills: handedSkills(), SkillLoads: skillWiring()})
+			if !slices.Contains(run.argv, "--plugin-dir") {
+				t.Fatalf("the run was started without its skills' plugin (argv %q)", run.argv)
+			}
+			want := run.paths.ClaudeSkillsSettings()
+			if tc.notes {
+				want = run.paths.ClaudeNotesSettings()
+			}
+			if run.named != want {
+				t.Errorf("the harness was handed %q, want %q (argv %q)", run.named, want, run.argv)
+			}
+			if on := string(run.settings["disableAllHooks"]); on != "false" {
+				t.Errorf("the settings of a run carrying the skills' hook hold disableAllHooks %q, want false: "+
+					"a repository's own true would switch the hook off and no load would be reported", on)
+			}
+			if days := string(run.settings["cleanupPeriodDays"]); days != "36500" {
+				t.Errorf("the settings hold cleanupPeriodDays %q, want 36500", days)
+			}
+		})
+	}
+}
+
+// A RUN THAT CARRIES NO HOOK OF THE ENGINE'S LEAVES HOOKS AS THE REPOSITORY SETS
+// THEM: the settings its harness is handed hold the retention and no
+// `disableAllHooks`, which would switch the repository's own hooks on for no hook
+// of the engine's to run — a run handed no skills and wired to none, one
+// wired to its notes on a release that does not read them, and one whose
+// skills are advisory on a release older than the skills' floor, which starts
+// without them.
+//
+// Mutation: write disableAllHooks into every run's settings, or name the
+// skills' settings whatever the release, and a row goes red.
+func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		release string
+		steer   sandbox.SteerWiring
+		skills  []sandbox.Skill
+	}{
+		"handed no skills, wired to none":                 {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil},
+		"handed no skills, below the note floor":          {"2.1.150 (Claude Code)", steerWiring, nil},
+		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring, handedSkills()[1:]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer}
+			if tc.skills != nil {
+				req.Skills, req.SkillLoads = tc.skills, skillWiring()
+			}
+			run := startOn(t, tc.release, req)
+			if slices.Contains(run.argv, "--plugin-dir") {
+				t.Fatalf("the run was started with a plugin (argv %q)", run.argv)
+			}
+			if run.named != run.paths.ClaudeSettings() {
+				t.Errorf("the harness was handed %q, want every run's settings, %q", run.named,
+					run.paths.ClaudeSettings())
+			}
+			if on, set := run.settings["disableAllHooks"]; set {
+				t.Errorf("the settings of a run carrying no hook of the engine's hold disableAllHooks %s, "+
+					"which switches the repository's own hooks on", on)
+			}
+			if days := string(run.settings["cleanupPeriodDays"]); days != "36500" {
+				t.Errorf("the settings hold cleanupPeriodDays %q, want 36500", days)
+			}
+		})
+	}
+}
+
+// writesRecorded is a fake box that records the path of every file written to it.
+type writesRecorded struct {
+	*sandbox.FakeSandbox
+	written []string
+}
+
+func (b *writesRecorded) WriteFile(ctx context.Context, path string, content []byte) error {
+	b.written = append(b.written, path)
+	return b.FakeSandbox.WriteFile(ctx, path, content)
+}
+
+// claudeSettingsSince is, for each key a run's settings may hold, the oldest
+// Claude Code release read whose shipped settings schema declares it — the
+// first that does, where the release before it was read as well.
+var claudeSettingsSince = map[string]string{
+	// Declared, a whole number at least 0, in the shipped schema of 0.2.116,
+	// the oldest read (its changelog introduces it in 0.2.117): far older
+	// than any file's floor, so no older release needs reading.
+	"cleanupPeriodDays": "0.2.116",
+	// Declared, a boolean, in the shipped schema of 1.0.68 and in no
+	// earlier one: 1.0.67's has no such key.
+	"disableAllHooks": "1.0.68",
+	// The key is older. What the engine writes under it is mcp_tool hooks
+	// alone (held below), which 2.1.118 is the first to run (its changelog:
+	// "Hooks can now invoke MCP tools directly via `type: \"mcp_tool\"`").
+	"hooks": "2.1.118",
+}
+
+// NO SETTINGS FILE HOLDS A KEY NEWER THAN THE OLDEST RELEASE IT IS HANDED. A
+// file holding a key its harness does not know is ignored whole in print mode,
+// without a word, the retention with it. Every run's settings are handed to
+// every release from 1.0.61, the first with --settings — no older one starts a
+// run at all, since every run is handed --append-system-prompt-file, which
+// 1.0.61 does not know (both read in its shipped code); the skills' from the
+// release that first runs their hook; the notes' from the one that first reads
+// a Stop hook's answer. Every key of every settings file a run's configuration
+// writes is held to the first release that declares it, and a key or a file
+// this case knows no release of goes red too.
+//
+// Mutation: write disableAllHooks into every run's settings, or lower the
+// skills' floor below 1.0.68, and this goes red.
+func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T) {
+	t.Parallel()
+	b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
+	p := executor.PathsFor(b)
+	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
+		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	oldest := map[string]string{
+		p.ClaudeSettings():       "1.0.61",
+		p.ClaudeSkillsSettings(): executor.ClaudeSkillsFloor,
+		p.ClaudeNotesSettings():  executor.ClaudeNotesFloor,
+	}
+	held := map[string]bool{}
+	for _, file := range b.written {
+		if !strings.HasPrefix(filepath.Base(file), "claude-settings") {
+			continue
+		}
+		floor, ok := oldest[file]
+		if !ok {
+			t.Errorf("the configuration writes %s, a settings file this case knows no oldest release of", file)
+			continue
+		}
+		held[file] = true
+		raw, err := b.ReadFile(t.Context(), file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		var doc map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s is not JSON: %v\n%s", file, err, raw)
+		}
+		for key, value := range doc {
+			since, known := claudeSettingsSince[key]
+			if !known {
+				t.Errorf("%s holds %q, whose first release this case has not read: read it in the "+
+					"shipped code and add it", file, key)
+				continue
+			}
+			if !executor.ReleaseAtLeast(floor, since) {
+				t.Errorf("%s is handed to Claude Code %s and later, older than %s, the first whose settings "+
+					"know %q: those would ignore the whole file, its retention with it", file, floor, since, key)
+			}
+			if key != "hooks" {
+				continue
+			}
+			var hooks map[string][]struct {
+				Hooks []struct {
+					Type string `json:"type"`
+				} `json:"hooks"`
+			}
+			if err = json.Unmarshal(value, &hooks); err != nil {
+				t.Fatalf("the hooks of %s do not read: %v", file, err)
+			}
+			for event, matchers := range hooks {
+				for _, matcher := range matchers {
+					for _, hook := range matcher.Hooks {
+						if hook.Type != "mcp_tool" {
+							t.Errorf("%s holds a %s hook of type %q, whose first release this case has not read",
+								file, event, hook.Type)
+						}
+					}
+				}
+			}
+		}
+	}
+	for file := range oldest {
+		if !held[file] {
+			t.Errorf("the configuration of a run wired to its notes and handed skills wrote no %s", file)
+		}
 	}
 }
 

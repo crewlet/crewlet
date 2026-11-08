@@ -294,6 +294,15 @@ func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.
 // reason it is.
 func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
 
+// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
+// its settings written with hooks switched on ([claudeHooksOnSettings]), so
+// the plugin's hook that reports each load runs whatever the repository's own
+// settings say: the file the run's script names in place of
+// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
+// unless it starts the notes' hooks, whose own settings switch hooks on too
+// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
+func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
+
 // OpenCodeConfig is where an OpenCode run's own configuration is written
 // ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
 // content to the run's server alone as OPENCODE_CONFIG_CONTENT
