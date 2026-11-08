@@ -636,7 +636,12 @@ type Provenance struct {
 	// ([MutationRecord.ActorApps]) so a turn the record wakes uses no app the
 	// credential did not use here (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
 	// person's record names the seat, whose holder the turn's node reads.
-	Apps []iam.Grant
+	//
+	// SENT ONLY WHERE SET: a provenance crosses to a data node inside the
+	// estate's signed envelope (internal/estate's Actor), and a write that
+	// carries no apps — every seat's and every person's — goes out byte for
+	// byte as a build without the field sends it.
+	Apps []iam.Grant `json:",omitempty"`
 
 	// Written is where the tasks this writer's records COMMIT to are
 	// reported — the turn's own set, so the engine can charge a turn that

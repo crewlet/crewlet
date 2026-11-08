@@ -497,7 +497,11 @@ type Actor struct {
 	// record wakes uses no app the credential did not use here (ADR-0109). Ignored for every other
 	// kind: a seat's or a person's record names the seat, whose holder the
 	// turn's node reads.
-	Apps []iam.Grant
+	//
+	// SENT ONLY WHERE SET: an actor crosses to a data node in a page write's
+	// arguments (internal/estate), and one that carries no apps goes out
+	// byte for byte as a build without the field sends it.
+	Apps []iam.Grant `json:",omitempty"`
 
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every write here derives its operation

@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // carriedByServer is every field an operation's types hold that the wire does
@@ -359,8 +361,9 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 }
 
 // THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, one asked again
-// after a node refused it, a reply that answers it, admission's ping and a
-// copy out of service. A field added to the
+// after a node refused it, a write by a seat and one by a credential with the
+// apps it uses, a reply that answers it, admission's ping and a copy out of
+// service. A field added to the
 // envelope, renamed or made to send its zero value changes what every node of
 // a fleet reads of every other, and this is where that shows — rather than in
 // a router that silently reads a field its peer stopped sending. What is pinned
@@ -400,6 +403,18 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent",` +
 				`"provenance":{"OperatorID":"","TurnID":"","Chain":null,"Origin":null}},` +
 				`"deadline":"2026-10-04T12:00:00Z","accept_lagging":true}`,
+		},
+		// A CREDENTIAL'S WRITE CARRIES THE APPS IT USES, which hold the turn
+		// the write wakes (ADR-0109); a write that carries none, as the
+		// seat's above, sends no key for them at all.
+		"a credential's write": {
+			value: request{ID: "r-6", Op: opCreateTask.spec.name, Actor: &Actor{
+				Handle: "token:ci", Kind: worklet.AuthorOperator,
+				Provenance: worklet.Provenance{OperatorID: "token:ci", Apps: []iam.Grant{iam.GrantWorklet}},
+			}, Deadline: envelopeInstant},
+			want: `{"id":"r-6","op":"tracker.create_task","actor":{"handle":"token:ci","kind":"operator",` +
+				`"provenance":{"OperatorID":"token:ci","TurnID":"","Chain":null,"Origin":null,` +
+				`"Apps":["worklet"]}},"deadline":"2026-10-04T12:00:00Z"}`,
 		},
 		"admission's ping": {
 			value: pingEnvelope,
