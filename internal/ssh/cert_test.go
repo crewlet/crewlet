@@ -56,7 +56,7 @@ func TestACertificateCarriesTheLockedFields(t *testing.T) {
 			map[string]string{"source-address": "203.0.113.7/32"}},
 		{"operate", sshint.Request{Purpose: sshint.PurposeOperate, Seat: "sre", Turn: "turn-1", HeldCall: "call-9",
 			Hosts: []string{"api-1"}, Level: config.SSHLevelOperate, ForceCommand: sshint.OperateCommand(approved),
-			SourceAddresses: []string{"203.0.113.7/32", "2001:db8::/32"}, Now: now},
+			SourceAddresses: []string{" 203.0.113.7/32", "2001:db8::/32 "}, Now: now},
 			"crewlet/sre/turn-1/call-9", []string{"crewlet.api-1.operate"}, 5 * time.Minute,
 			map[string]string{"force-command": "/usr/local/sbin/crewlet-gate operate " +
 				base64.StdEncoding.EncodeToString(approved), "source-address": "203.0.113.7/32,2001:db8::/32"}},
@@ -109,7 +109,9 @@ func TestACertificateCarriesTheLockedFields(t *testing.T) {
 
 // A REQUEST OUTSIDE THE LOCKED SHAPES IS NOT SIGNED: operate on two hosts or
 // at read, a read certificate binding a command, an operate one binding
-// anything but the gate, a key ID part holding a slash, and no host.
+// anything but the gate handed one command, a certificate of any purpose at
+// operate without the gate (a test binds only the version), a key ID part
+// holding a slash, no host, and a source that is no address range.
 func TestARequestOutsideTheLockedShapesIsNotSigned(t *testing.T) {
 	t.Parallel()
 	ca := authority(t)
@@ -127,7 +129,24 @@ func TestARequestOutsideTheLockedShapesIsNotSigned(t *testing.T) {
 		"read binding a command": func(r *sshint.Request) {
 			r.Purpose, r.Level, r.HeldCall = sshint.PurposeRead, config.SSHLevelRead, ""
 		},
-		"a two-line command": func(r *sshint.Request) { r.ForceCommand += "\nid" },
+		"a two-line command":            func(r *sshint.Request) { r.ForceCommand += "\nid" },
+		"operate with an empty command": func(r *sshint.Request) { r.ForceCommand = sshint.OperateCommand(nil) },
+		"operate with a payload that is no base64": func(r *sshint.Request) {
+			r.ForceCommand = "/usr/local/sbin/crewlet-gate operate id;id"
+		},
+		"a test at operate binding nothing": func(r *sshint.Request) {
+			r.Purpose, r.Person, r.Nonce, r.Seat, r.Turn, r.HeldCall, r.ForceCommand =
+				sshint.PurposeTest, "ops-lead", "01", "", "", "", ""
+		},
+		"a test at operate binding a command": func(r *sshint.Request) {
+			r.Purpose, r.Person, r.Nonce, r.Seat, r.Turn, r.HeldCall =
+				sshint.PurposeTest, "ops-lead", "01", "", "", ""
+		},
+		"a test at read binding a command": func(r *sshint.Request) {
+			r.Purpose, r.Person, r.Nonce, r.Seat, r.Turn, r.HeldCall, r.Level, r.ForceCommand =
+				sshint.PurposeTest, "ops-lead", "01", "", "", "", config.SSHLevelRead, sshint.GateVersionCommand
+		},
+		"a source that is no range": func(r *sshint.Request) { r.SourceAddresses = []string{"203.0.113.7"} },
 	} {
 		req := ok
 		mutate(&req)

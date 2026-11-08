@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -195,19 +196,28 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 	if err != nil {
 		return Issued{}, err
 	}
+	// AN OPERATE PRINCIPAL ALWAYS CARRIES THE GATE: the operate user has no
+	// server-side forced command, so a certificate reaching it without one
+	// would be a shell, whatever its purpose.
 	options := map[string]string{}
 	switch {
-	case req.Purpose == PurposeOperate && !strings.HasPrefix(req.ForceCommand, GatePath+" operate "):
-		return Issued{}, fmt.Errorf("%w: an operate certificate binds the approved command through the gate", ErrRequest)
-	case (req.Purpose == PurposeRead || req.Purpose == PurposeBoxRead) && req.ForceCommand != "":
-		return Issued{}, fmt.Errorf("%w: a read certificate binds no command; the server forces its own", ErrRequest)
 	case strings.ContainsAny(req.ForceCommand, "\r\n\x00"):
 		return Issued{}, fmt.Errorf("%w: a force-command is one line", ErrRequest)
+	case req.Level == config.SSHLevelOperate && req.Purpose == PurposeTest && req.ForceCommand != GateVersionCommand:
+		return Issued{}, fmt.Errorf("%w: a test certificate at operate binds only the gate's version", ErrRequest)
+	case req.Level == config.SSHLevelOperate && req.Purpose != PurposeTest && !operateBinding(req.ForceCommand):
+		return Issued{}, fmt.Errorf("%w: an operate certificate binds the approved command through the gate", ErrRequest)
+	case req.Level != config.SSHLevelOperate && req.ForceCommand != "":
+		return Issued{}, fmt.Errorf("%w: a read certificate binds no command; the server forces its own", ErrRequest)
 	case req.ForceCommand != "":
 		options["force-command"] = req.ForceCommand
 	}
 	if len(req.SourceAddresses) > 0 {
-		options["source-address"] = strings.Join(req.SourceAddresses, ",")
+		sources, sourceErr := canonicalSources(req.SourceAddresses)
+		if sourceErr != nil {
+			return Issued{}, sourceErr
+		}
+		options["source-address"] = sources
 	}
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -242,6 +252,31 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 		ValidAfter: after, ValidBefore: before,
 		PublicKeySHA256: ssh.FingerprintSHA256(signer.PublicKey()), CASHA256: ca.Fingerprint(),
 	}}, nil
+}
+
+// operateBinding reports whether force is the gate handed one non-empty
+// command as standard base64.
+func operateBinding(force string) bool {
+	payload, ok := strings.CutPrefix(force, GatePath+" operate ")
+	if !ok {
+		return false
+	}
+	command, err := base64.StdEncoding.DecodeString(payload)
+	return err == nil && len(command) > 0 && base64.StdEncoding.EncodeToString(command) == payload
+}
+
+// canonicalSources is the address ranges as sshd reads them: each parsed and
+// written in its canonical form, so stray spaces never reach the option.
+func canonicalSources(ranges []string) (string, error) {
+	out := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(r))
+		if err != nil || prefix.Masked() != prefix {
+			return "", fmt.Errorf("%w: %q is not an address range", ErrRequest, r)
+		}
+		out = append(out, prefix.String())
+	}
+	return strings.Join(out, ","), nil
 }
 
 func hostIDs(hosts []string) []string {
