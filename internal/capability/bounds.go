@@ -25,21 +25,26 @@ const (
 	// itself, so two never collide.
 	ItemMaxBytes = 128
 
-	// LabelMaxBytes bounds a scope entry's label, and NoteMaxBytes a level's
-	// note, which a change line ends with.
+	// LabelMaxBytes bounds a scope entry's label.
 	LabelMaxBytes = 100
-	NoteMaxBytes  = MaxLineBytes
+
+	// NoteMaxBytes bounds a level's note, which a change line ends with.
+	NoteMaxBytes = MaxLineBytes
 
 	// PolicyExcerptBytes is as much of a policy's text as a change line can
 	// show: the snapshot keeps that and the whole text's digest.
 	PolicyExcerptBytes = MaxLineBytes
 
-	// The lists' caps.
-	MaxScope    = 16
-	MaxTools    = 16
-	MaxServers  = 32
+	// MaxScope caps an integration's scope list.
+	MaxScope = 16
+	// MaxTools caps each of a tool server's three tool lists.
+	MaxTools = 16
+	// MaxServers caps the tool servers.
+	MaxServers = 32
+	// MaxPolicies caps the policies.
 	MaxPolicies = 32
-	MaxSetup    = 32
+	// MaxSetup caps the setup steps.
+	MaxSetup = 32
 
 	// compactCap is every list's cap once a snapshot is shortened.
 	compactCap = 4

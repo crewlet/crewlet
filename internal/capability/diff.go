@@ -173,7 +173,7 @@ func integrationChanges(old, now Snapshot) []Change {
 			c.Line = vendor + ": you now have your own account" + grantedAt(is) + "."
 			out = append(out, c)
 			continue
-		case had && was.On && !(has && is.On):
+		case had && was.On && (!has || !is.On):
 			c := base
 			c.Kind, c.From = ChangeIntegrationOff, was.LevelName
 			c.Line = vendor + ": no longer granted to you."
@@ -182,7 +182,7 @@ func integrationChanges(old, now Snapshot) []Change {
 			}
 			out = append(out, c)
 			continue
-		case !(had && was.On && has && is.On):
+		case !had || !was.On || !has || !is.On:
 			// NEITHER SIDE CAN ACT: a grant whose account is not made yet,
 			// or one turned off at the vendor, changes nothing the seat can
 			// use until it is on.

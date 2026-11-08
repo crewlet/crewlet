@@ -376,11 +376,11 @@ func (e *Engine) tellCapability(ctx context.Context, t *turnctx.Turn, told *told
 				"agent", told.pending.Handle, "error", err.Error())
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), toldRecordBudget)
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), toldRecordBudget)
 		defer cancel()
 		call := accessdomain.Call{By: accessAuthor,
 			OpID: accessdomain.ToldOpID(minted, told.pending.Handle, told.pending.Turn)}
-		res, err := writes.Tell(ctx, call, *told.pending)
+		res, err := writes.Tell(writeCtx, call, *told.pending)
 		switch {
 		case errors.Is(err, accessdomain.ErrRecorded):
 			return
@@ -394,7 +394,7 @@ func (e *Engine) tellCapability(ctx context.Context, t *turnctx.Turn, told *told
 				"agent", told.pending.Handle, "op_id", res.OpID)
 			return
 		}
-		e.publishCapabilityTold(ctx, told)
+		e.publishCapabilityTold(writeCtx, told)
 	})
 }
 
