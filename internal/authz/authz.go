@@ -430,7 +430,7 @@ type Object struct {
 	// nobody has looked.
 	Asked string
 
-	// Named are the seats and logins the company document names for a
+	// Named are the seat handles the company document names for a
 	// [ClassNamed] gesture (integrations.ssh.approvers), read from the
 	// document by the caller, never from an argument.
 	Named []string

@@ -202,11 +202,12 @@ const (
 	// artifact's data and does not publish it.
 	ClassShared Class = "shared"
 
-	// ClassNamed — a gesture the company document reserves for administrators
-	// and the people it names for it ([Object.Named]): approving an agent's
-	// production command over SSH. Admin, or a principal whose seat or login
-	// the object names. Nobody else, not a lead: who may approve is a list the
-	// company wrote, not a line of the chart.
+	// ClassNamed is a gesture the company document reserves for
+	// administrators and the people it names for it ([Object.Named]):
+	// approving an agent's production command over SSH. Admin, or a principal
+	// whose seat the object names: the list names seat handles, and a login
+	// that spells one is nobody's. Nobody else, not a lead: who may approve is
+	// a list the company wrote, not a line of the chart.
 	ClassNamed Class = "named"
 )
 
@@ -768,7 +769,7 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		for _, name := range o.Named {
-			if name != "" && (p.Seat == name || p.Login == name) {
+			if name != "" && p.Seat == name {
 				return consulting(Decision{Allowed: true, Reason: ReasonAsked}, adminGrant)
 			}
 		}
