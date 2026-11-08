@@ -151,12 +151,13 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 // A CARRIED-ON SESSION IS TOLD WHAT CAME AFTER IT WAS SAVED. A lost job's round
 // continues the job's kept session, saved before the job was cut off: so it is
 // told it was cut off, that its transcript may end mid-call, and every call the
-// run made through the seat's tools that the session had not been answered —
-// every call the round's log took after the read the session's save point is,
-// so after the point it ends and one still in flight when it was saved, which
-// the log took once its tool answered — with the call's outcome, never one the
-// session holds. A round lost a second time starts a session of its own,
-// rather than replay the state it was lost in toward the round's limit.
+// run made through the seat's tools that the session may not have been
+// answered — every call the round's log took after the read the session's save
+// point is, so after the point it ends and one still in flight when it was
+// saved, which the log took once its tool answered — with the call's outcome,
+// never one the log took before that read. A round lost a second time starts a
+// session of its own, rather than replay the state it was lost in toward the
+// round's limit.
 //
 // Mutation: list every call of the round, read the save point against the
 // order the calls were made in rather than the order the log took them (and
