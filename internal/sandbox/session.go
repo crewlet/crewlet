@@ -79,7 +79,9 @@ import (
 // ([PendingStore.StampCapture]), with its SAVE POINT — how many of its round's
 // calls the run's log had taken when it was read before the pack
 // ([SessionCapture.Through]; every call the log takes is numbered as it is
-// appended, [BridgeCall.Appended]) — and the note the job had read through: what
+// appended, [BridgeCall.Appended]), or, for the take of a job still working,
+// the newest its launch is known to hold (savepoint.go) — and the note the
+// job had read through: what
 // a launch that continues the session would need to know of what came after
 // it. How it came out is stamped beside: LANDED, REFUSED with why (no box to
 // read it out of, a pack that failed, a session past its bounds, the seat's
@@ -1191,7 +1193,20 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	stamp.placeAt(calls)
+	// A JOB STILL WORKING IS PLACED AS A SAVE IS, at the newest save point its
+	// launch is known to hold ([SessionCapture.placeAtNewest]), never at the
+	// read above: its harness may have made a call, and had it answered,
+	// before it wrote the call to its record — Claude Code 2.1.310 writes a
+	// message only once the whole of it has streamed (measured) — so the
+	// calls the log had taken before the pack are no measure of what the
+	// archive holds, and a continuation told only the calls after them was
+	// never told those. A job that is over is placed by the read
+	// (savepoint.go says why).
+	if at.final {
+		stamp.placeAt(calls)
+	} else {
+		stamp.placeAtNewest(savePlaces{run: current})
+	}
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
 	// reservation answered after the take's deadline reserves a place for a
 	// take that can no longer spool, and leaves the outcome stamp none of the

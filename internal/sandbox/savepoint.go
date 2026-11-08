@@ -6,9 +6,12 @@ import "slices"
 //
 // A capture is placed by one read of its round's log made before its pack
 // ([SessionCapture.placeAt]): every call the log had taken by then had been
-// answered before the pack began, and a job that is OVER wrote every call it
-// made before it ended, so its session holds each. A SAVE is packed while its
-// job still works, and a harness writes a call to its record only once the
+// answered before the pack began, and a job that is OVER had recorded every
+// call it made — its harness gone by itself, or on its end's SIGTERM, which
+// Claude Code 2.1.310 answers by recording the call it was cut off in
+// (measured) — so its session holds each. A SAVE, and the TAKE OF A JOB STILL
+// WORKING (one its box would not end, [readCapture]), are packed while the job
+// still works, and a harness writes a call to its record only once the
 // model's whole message has streamed: measured on Claude Code 2.1.310 against
 // a scripted model, a call is made — and can be answered — before its
 // tool_use line is in the transcript (eleven of thirteen timed calls started
@@ -17,11 +20,12 @@ import "slices"
 // works can name calls its session does not hold yet, and a continuation told
 // only the calls after that count would never be told those.
 //
-// So a save of a running session is placed at the NEWEST SAVE POINT ITS LAUNCH
-// IS ALREADY KNOWN TO HOLD, each one sound by itself, since what a running
-// session holds only grows:
+// So a capture of a running session — a save, or the take of a job still
+// working ([Coordinator.takeCapture]) — is placed at the NEWEST SAVE POINT ITS
+// LAUNCH IS ALREADY KNOWN TO HOLD, each one sound by itself, since what a
+// running session holds only grows:
 //
-//   - the save point of the launch's newest landed save: that session's
+//   - the save point of the launch's newest landed capture: that session's
 //     archive only grows, so every call it held, this one holds;
 //   - the save point of the capture the launch continued, where it carried its
 //     round on: the brief that continued it told the run every call after it;
@@ -31,30 +35,35 @@ import "slices"
 //     its brief handed it what it needed, and every call of its round is then
 //     told again.
 //
-// A continuation from such a save is told every call after that point, a
+// A continuation from such a capture is told every call after that point, a
 // subagent's included, and the ones its harness had already recorded are told
 // twice, as a continuation already accepts ([SessionCapture.Through]): told
 // twice, never not at all. The places an older build reads a save point by
 // come from the same capture as the point ([SessionCapture.BridgeSeq],
 // [SessionCapture.BridgeOpen]), so a peer reading them is never told less.
 
-// savePlaces is what a save of the session a launch is still working in is
-// placed by ([SessionCapture.placeAtNewest]).
+// savePlaces is what a capture of the session a launch is still working in — a
+// save, or the take of a job still working — is placed by
+// ([SessionCapture.placeAtNewest]).
 type savePlaces struct {
-	// run is the run's row as the save read it, its launch the one still
+	// run is the run's row as the capture read it, its launch the one still
 	// working: its kept capture ([PendingRun.Kept]) is that launch's newest
-	// landed save where it is one of that launch's.
+	// landed capture where it is one of that launch's.
 	run PendingRun
 
 	// continued is the capture of the job before that the launch's box took
 	// up and continued, as the launch was asked to ([LaunchRequest.Session]);
 	// nil where it continued none — a session of its own, the one its
 	// conversation's last turn left, or the copy its job before left in the
-	// box, continued in place, which no capture places.
+	// box, continued in place, which no capture places — and nil where the
+	// reader cannot say which it continued: a launch records none on its row,
+	// so the take of a job still working hands none, and is placed at its
+	// launch's own newest landed capture or at zero, which tells more, never
+	// less.
 	continued *SessionCapture
 }
 
-// placeAtNewest places c, a save of the session from.run's launch is still
+// placeAtNewest places c, a capture of the session from.run's launch is still
 // working in, at the NEWEST save point that launch is known to hold (see the
 // file comment): its save point ([SessionCapture.Through]) and, off the same
 // capture, the places an older build reads it by — or the round's start, zero,
@@ -78,8 +87,8 @@ func (c *SessionCapture) placeAtNewest(from savePlaces) {
 // a save point counted in its own round's log.
 //
 // THE KEPT CAPTURE ONLY WHERE IT IS THIS LAUNCH'S: the row's kept capture is
-// the turn's newest landed one, which before this launch's first save lands is
-// an earlier job's — one this launch may never have continued. THE CONTINUED
+// the turn's newest landed one, which before this launch's first capture lands
+// is an earlier job's — one this launch may never have continued. THE CONTINUED
 // ONE ONLY WHERE THE LAUNCH CARRIED ITS ROUND ON ([PendingRun.Round], which
 // names the job that opened the round): a launch that opened a round began a
 // log that numbers its calls from its start, and a capture of the round
