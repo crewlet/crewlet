@@ -2134,8 +2134,10 @@ const (
 	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB. A
 	// held call answered in the Inbox's reading pane by its own buttons took
 	// it to 5677.9 KiB (5,814,186 bytes, +1,036, all script). The measured
-	// size's next KiB: 5678 KiB.
-	treeBudget = 5<<20 + 558<<10
+	// size's next KiB: 5678 KiB. The access change review's Inbox note and the
+	// access save's review callout took it to 5679.0 KiB (5,815,272 bytes,
+	// +1,086, all script). The measured size's next KiB: 5679 KiB.
+	treeBudget = 5<<20 + 559<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
