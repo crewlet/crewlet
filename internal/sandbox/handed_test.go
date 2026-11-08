@@ -29,7 +29,8 @@ import (
 // setting it holds among them — the engine tells a document's credential from
 // its settings by no more than the names they are written under, so what sits
 // in a credential position goes whole (handed.go, "Whole, and by every string a
-// document holds"). Nothing blank and nothing twice, and the whole of it
+// document holds"), but for the constants a Google service-account key's format
+// fixes (TestAServiceAccountKeysPublishedConstantsStayInItsSessions). Nothing blank and nothing twice, and the whole of it
 // round-trips through what the row's seal covers.
 //
 // Mutation: leave a class out of handedSecrets, add the run's environment or
@@ -135,6 +136,86 @@ func TestSecretsPastWhatARowKeepsAreRefusedWhole(t *testing.T) {
 	handed := HandedSecrets{Values: []string{strings.Repeat("k", MaxHandedBytes)}}
 	if _, err := handed.encode(); err == nil {
 		t.Fatal("secrets past the row's bound were encoded")
+	}
+}
+
+// A SERVICE-ACCOUNT KEY'S PUBLISHED CONSTANTS STAY IN ITS SESSIONS, and every
+// other string of it goes. A Google service-account key's `type`, `auth_uri`,
+// `token_uri`, `auth_provider_x509_cert_url` and `universe_domain` are fixed by
+// Google's format, the same in every key, so none is a secret; taken out by
+// value, they blanked every googleapis.com URL from the transcripts of a seat
+// handed one. Its private key and that key's id, its client's email and id,
+// its project and its client certificate's URL, which names the client's
+// email, are the account's, and go as every string of a document in a
+// credential position does: where the launch handed the key, and where the box
+// was seeded with it as a login. A document of any other format keeps no
+// constant: its `type` and its URLs, under the very same names, go with the
+// rest.
+//
+// Mutation: drop the format check, and the other format's `type` and URLs are
+// kept; exempt a member of the account's, and its value is kept; walk the
+// constants too, and they go.
+func TestAServiceAccountKeysPublishedConstantsStayInItsSessions(t *testing.T) {
+	t.Parallel()
+	constants := map[string]string{
+		"type":                        "service_account",
+		"auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
+		"token_uri":                   "https://oauth2.googleapis.com/token",
+		"auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+		"universe_domain":             "googleapis.com",
+	}
+	account := map[string]string{
+		"project_id":     "nimbus-prod-4711",
+		"private_key_id": "0123456789abcdef0123456789abcdef01234567",
+		"private_key":    "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n",
+		"client_email":   "agent-swe@nimbus-prod-4711.iam.gserviceaccount.com",
+		"client_id":      "103456789012345678901",
+		"client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/" +
+			"agent-swe%40nimbus-prod-4711.iam.gserviceaccount.com",
+	}
+	document := func(members ...map[string]string) string {
+		t.Helper()
+		whole := map[string]string{}
+		for _, m := range members {
+			for name, value := range m {
+				whole[name] = value
+			}
+		}
+		raw, err := json.Marshal(whole)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	key := document(constants, account)
+	for how, values := range map[string][]string{
+		"handed by the launch":      handedSecrets(LaunchRequest{Secrets: []string{key}}, nil).Values,
+		"seeded as the box's login": loginValues([]byte(key)),
+	} {
+		for member, value := range account {
+			if !slices.Contains(values, value) {
+				t.Errorf("a service-account key %s keeps its %s (%q) in its sessions: %q", how, member, value, values)
+			}
+		}
+		for member, value := range constants {
+			if slices.Contains(values, value) {
+				t.Errorf("a service-account key %s takes its format's %s (%q) out of its sessions: %q",
+					how, member, value, values)
+			}
+		}
+	}
+
+	other := map[string]string{
+		"type":            "vendor_service_key",
+		"token_uri":       "https://login.vendor.example/oauth/token",
+		"universe_domain": "vendor.example.com",
+		"client_email":    "agent-swe@vendor.example.com",
+	}
+	values := handedSecrets(LaunchRequest{Secrets: []string{document(other)}}, nil).Values
+	for member, value := range other {
+		if !slices.Contains(values, value) {
+			t.Errorf("a document of another format keeps its %s (%q) in its sessions: %q", member, value, values)
+		}
 	}
 }
 

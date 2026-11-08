@@ -124,11 +124,19 @@ import (
 // members are written under, and a secret under a name no credential's rule
 // reads, printed bare, would be kept. So what else a document holds goes with
 // it: a Google Cloud service-account key handed through a reference gives up
-// its project ID, its client email and its endpoints' URLs, which every kept
-// transcript of the seat loses wherever it names them. A setting kept beside
-// the secret instead — written in the document, or in a variable of its own —
-// is never taken out by value; and a seat on the engine's own Google Cloud
-// integration is issued a bare token.
+// its project ID and its client email, which every kept transcript of the
+// seat loses wherever it names them. A setting kept beside the secret instead
+// — written in the document, or in a variable of its own — is never taken out
+// by value; and a seat on the engine's own Google Cloud integration is issued a
+// bare token.
+//
+// BUT NOT A FORMAT'S OWN PUBLISHED CONSTANTS, which cannot be secrets: of a
+// Google service-account key — a document whose `type` is exactly
+// `service_account` — the values of its `type`, `auth_uri`, `token_uri`,
+// `auth_provider_x509_cert_url` and `universe_domain` are fixed by Google's
+// format, not by the account, and are kept, so the seat's transcripts keep
+// every googleapis.com URL its tools print ([serviceAccountConstant]). One
+// closed list for one format; every other document keeps every string.
 //
 // AT THE FLOOR EVERY VALUE IS HELD TO, and of its strings alone. The scrub
 // takes nothing out by value under eight bytes (internal/sandbox/executor's
@@ -137,8 +145,8 @@ import (
 // members' names, numbers, booleans and nulls are no strings it holds. So a
 // `true`, a `1` or a short word in a document, and the registry host a Docker
 // config files its credentials under, are never taken out by value; a longer
-// setting, such as a service-account key's `service_account` type, is, which
-// is the cost above.
+// setting, such as a service-account key's project ID, is, which is the cost
+// above.
 //
 // # A capture that cannot know them keeps nothing
 //
@@ -489,8 +497,9 @@ func decodeHanded(raw []byte) (HandedSecrets, error) {
 // tokens and its keys, however its harness spells their names. Every string,
 // not only those under a credential's key; what else such a document holds is a
 // scope or a plan's name, whose occurrences a transcript loses nothing by. A
-// document that is not JSON is taken whole, a line at a time, as a setup step's
-// file is.
+// login that is a Google service-account key keeps its format's constants, as
+// a secret that is one does ([jsonStrings]). A document that is not JSON is
+// taken whole, a line at a time, as a setup step's file is.
 func loginValues(doc []byte) []string {
 	strs, isJSON := jsonStrings(doc)
 	if !isJSON {
@@ -509,11 +518,12 @@ func loginValues(doc []byte) []string {
 // token printed alone is matched by no whole document and named by no shape.
 // What else such a document holds goes with it, as the file comment says — an
 // AWS session's expiry, as the instant it is written in, and every setting of a
-// document the operator put in a credential position. Its members' names, its
-// numbers, booleans and nulls are no strings it holds, and a string under
-// eight bytes is left to the shapes, as every value is: the scrub's floor
-// (internal/sandbox/executor's minScrubBytes) is applied to every value it is
-// handed, these among them, so it is not applied here.
+// document the operator put in a credential position, but for the constants a
+// Google service-account key's format fixes ([serviceAccountConstant]). Its
+// members' names, its numbers, booleans and nulls are no strings it holds, and
+// a string under eight bytes is left to the shapes, as every value is: the
+// scrub's floor (internal/sandbox/executor's minScrubBytes) is applied to every
+// value it is handed, these among them, so it is not applied here.
 func secretValues(value string) []string {
 	strs, _ := jsonStrings([]byte(value))
 	return append([]string{value}, strs...)
@@ -521,7 +531,8 @@ func secretValues(value string) []string {
 
 // jsonStrings is every string the JSON value doc holds — an object's members
 // by name, an array's in order, depth first — and whether doc is one JSON value
-// at all.
+// at all; of a Google service-account key, every string but the values of the
+// members its format fixes ([serviceAccountConstant]).
 func jsonStrings(doc []byte) ([]string, bool) {
 	var tree any
 	if err := json.Unmarshal(doc, &tree); err != nil {
@@ -543,8 +554,44 @@ func jsonStrings(doc []byte) ([]string, bool) {
 			}
 		}
 	}
-	walk(tree)
+	members, isObject := tree.(map[string]any)
+	if !isObject || members["type"] != serviceAccountType {
+		walk(tree)
+		return out, true
+	}
+	for _, key := range slices.Sorted(maps.Keys(members)) {
+		if !serviceAccountConstant(key) {
+			walk(members[key])
+		}
+	}
 	return out, true
+}
+
+// serviceAccountType is the `type` a Google service-account key declares
+// itself by, and the only one [jsonStrings] reads a format's constants of.
+const serviceAccountType = "service_account"
+
+// serviceAccountConstant reports whether member is one whose value Google's
+// service-account key format fixes: its `type`, the endpoints its token is
+// asked of and its certificates are read from, and the universe it belongs to.
+//
+// A FORMAT'S OWN PUBLISHED CONSTANTS CANNOT BE SECRETS: they are the same in
+// every key Google issues for a universe, printed in its documentation, and
+// open nothing. Taken out by value, they blanked every googleapis.com URL in
+// every tool output of a seat handed such a key, from the very sessions the
+// next turn continues. So one closed list, for one format the engine has a
+// first-class integration for, and decided on the key's declared `type` alone.
+// Everything else of the key — its private key and that key's id, its
+// client's email and id, its project, and its client certificate's URL, which
+// names the client's email — is the account's and goes as every string of a
+// document in a credential position does; a document of any other format
+// keeps no constant, its `type` going with the rest.
+func serviceAccountConstant(member string) bool {
+	switch member {
+	case "type", "auth_uri", "token_uri", "auth_provider_x509_cert_url", "universe_domain":
+		return true
+	}
+	return false
 }
 
 // boxLoginPath is where a login seeded at rel relative to the box's home lives
