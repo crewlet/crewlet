@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -255,16 +256,20 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 // past the allowance its other give-backs had already spent. Through the lease
 // store the engine hands its coordinator ([holdLeases]), the give-back is a
 // step of the stop: here the allowance is spent before the sandbox stops, and
-// the release, against a store that answers nothing, ends at once rather than
-// an interval later.
+// the release, against a store that answers nothing, is cut by the stop — its
+// call cancelled the moment it is made — rather than by its own interval's
+// deadline. TOLD BY WHAT CUT THE CALL, as the store saw it, never by how long
+// the stop took, which a loaded runner's clock would decide.
 //
 // AN ENGINE LITERAL WITH AN ALLOWANCE ALREADY SPENT, as the give-backs before
 // the sandbox's leave it on a store that has gone, and a TTL below the floor a
 // booted engine is held to ([config.MinLeaseTTL]) for the reason the hold's
-// case above gives: every bound read is a fraction of it.
+// case above gives: the interval the mutation below waits out is a fraction of
+// it.
 //
 // Mutation: hand the coordinator the node's lease store as it is, and the
-// release waits out its own interval against the stalled store.
+// release against the stalled store is cut by its own interval's deadline
+// rather than by the stop.
 func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 6 * time.Second
@@ -297,25 +302,32 @@ func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
 	e.tearingDown()
 	every := ttl / coord.KeptRenewals
 	slow.stall.Store(int64(4 * every))
-	started := time.Now()
 	e.stopSandbox()
-	// HALF AN INTERVAL separates the outcomes with room on both sides: a step
-	// of a spent allowance ends at once, and a release left to its own bound
-	// takes the whole interval.
-	if took := time.Since(started); took >= every/2 {
-		t.Fatalf("the sandbox's stop took %v to give its taker lease back once the stop's allowance was "+
-			"spent, against a %v renewal interval: the release waited out its own bound beside the "+
-			"allowance", took, every)
+	// HOW THE STALLED RELEASE WAS CUT, as the store saw it, never a clock read:
+	// a step of a spent allowance is cancelled by the stop at once, and a
+	// release left to its own bound runs out its interval's deadline first —
+	// the stall outlasts both.
+	switch cut := slow.cutBy(); {
+	case cut == nil:
+		t.Fatal("the premise: the sandbox's stop gave its taker lease back on no call the stalled store cut")
+	case !errors.Is(cut, context.Canceled):
+		t.Fatalf("the sandbox's stop gave its taker lease back on a call cut by %v once the stop's allowance "+
+			"was spent, want it cancelled by the stop: the release waited out its own %v bound beside the "+
+			"allowance", cut, every)
 	}
 }
 
 // slowReleases is a lease store that answers a release only after stall, or
 // when the request's context ends first, saying on entered — when it is not
-// nil and has room — that a release has begun stalling.
+// nil and has room — that a release has begun stalling, and keeping what cut
+// the last one its context ended ([slowReleases.cutBy]).
 type slowReleases struct {
 	coord.Backend
 	stall   atomic.Int64
 	entered chan struct{}
+
+	mu  sync.Mutex
+	cut error
 }
 
 func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
@@ -326,11 +338,23 @@ func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoc
 		}
 		select {
 		case <-ctx.Done():
+			s.mu.Lock()
+			s.cut = ctx.Err()
+			s.mu.Unlock()
 			return false, ctx.Err()
 		case <-time.After(d):
 		}
 	}
 	return s.Backend.Release(ctx, resource, owner, epoch)
+}
+
+// cutBy is the error the context of the last release the stall held ended
+// with — the stop's cancellation, or the release's own deadline — and nil where
+// no stalled release was cut.
+func (s *slowReleases) cutBy() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cut
 }
 
 // AN ADMISSION IS WITHDRAWN ON A SHARE NO GIVE-BACK BEFORE IT CAN SPEND.
