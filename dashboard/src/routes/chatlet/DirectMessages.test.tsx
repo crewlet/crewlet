@@ -118,7 +118,10 @@ test("lists every direct conversation, newest first, and no room", async () => {
   // Each row is an item of a list, and nothing is open on arrival.
   expect(bo.closest("li")?.parentElement?.tagName).toBe("UL");
   expect(screen.getByText("Choose a conversation")).toBeTruthy();
-  expect(screen.getByRole("heading", { level: 1 })).toBeTruthy();
+  // The page's one heading is the trail's last crumb; the list's menu is a control.
+  expect(screen.getAllByRole("heading", { level: 1 }).map((h) => h.textContent)).toEqual([
+    "Direct messages",
+  ]);
 });
 
 test("a row's date is long where the column is wide, and short, with the switch's word dropped, where it is narrow", async () => {

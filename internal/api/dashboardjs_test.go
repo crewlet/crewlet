@@ -2110,9 +2110,9 @@ const (
 	// line under the box, on kit 0.117.0 (the list-detail modes, the inbox's
 	// chat density and arrow keys, flush chat logs, and the measured rich-text,
 	// composer-tool and day-pill steps), took it from 5649.0 KiB (5,784,598
-	// bytes) to 5667.5 KiB (5,803,537 bytes, +18,939): script +11,384 (the
-	// Chatlet chunk +8,195) and the sheets +7,555 (the one sheet +5,834,
-	// Chatlet's +1,721). The measured size's next KiB: 5668 KiB.
+	// bytes) to 5667.4 KiB (5,803,441 bytes, +18,843): script +11,328 (the
+	// Chatlet chunk +8,139) and the sheets +7,515 (the one sheet +5,834,
+	// Chatlet's +1,681). The measured size's next KiB: 5668 KiB.
 	treeBudget = 5<<20 + 548<<10
 )
 

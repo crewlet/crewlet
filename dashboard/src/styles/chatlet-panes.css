@@ -651,11 +651,6 @@
   padding: var(--spacing-2) var(--spacing-3) 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
 }
 
-.chat-dms-heading {
-  margin: 0;
-  font: inherit;
-}
-
 .chat-dms-title {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);

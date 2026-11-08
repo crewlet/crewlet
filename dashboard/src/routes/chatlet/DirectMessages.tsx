@@ -118,43 +118,41 @@ export function DirectMessagesView() {
       {/* THE HEAD AND THE FIND FIELD STAY while the conversations scroll under them. */}
       <div className="chat-dms-top">
         <div className="chat-dms-head">
-          {/* THE PAGE'S HEADING IS ITS MENU'S TRIGGER, a control inside the
-            heading rather than a heading inside a control. */}
-          <h1 className="chat-dms-heading">
-            <Menu
-              label="Direct messages"
-              activeDescendant
-              entrance="instant"
-              renderTrigger={(props) => (
-                <Button
-                  {...props}
-                  className="chat-dms-title"
-                  variant="ghost"
-                  size="medium"
-                  trailingIcon={<ChevronDownGlyph size="sm" />}
-                >
-                  Direct messages
-                </Button>
-              )}
-              items={[
-                {
-                  key: "new",
-                  label: "New message",
-                  icon: <SquarePenGlyph size="sm" />,
-                  onSelect: () => nav.go({ kind: "new" }),
+          {/* THE LIST'S MENU IS A CONTROL, NOT A HEADING: the page's one `h1`
+            is the page trail's last crumb, which names it. */}
+          <Menu
+            label="Direct messages"
+            activeDescendant
+            entrance="instant"
+            renderTrigger={(props) => (
+              <Button
+                {...props}
+                className="chat-dms-title"
+                variant="ghost"
+                size="medium"
+                trailingIcon={<ChevronDownGlyph size="sm" />}
+              >
+                Direct messages
+              </Button>
+            )}
+            items={[
+              {
+                key: "new",
+                label: "New message",
+                icon: <SquarePenGlyph size="sm" />,
+                onSelect: () => nav.go({ kind: "new" }),
+              },
+              {
+                key: "read-all",
+                label: "Mark all as read",
+                icon: <CheckGlyph size="sm" />,
+                disabled: waiting.length === 0,
+                onSelect: () => {
+                  for (const row of waiting) frame.markRead(row.channel.id);
                 },
-                {
-                  key: "read-all",
-                  label: "Mark all as read",
-                  icon: <CheckGlyph size="sm" />,
-                  disabled: waiting.length === 0,
-                  onSelect: () => {
-                    for (const row of waiting) frame.markRead(row.channel.id);
-                  },
-                },
-              ]}
-            />
-          </h1>
+              },
+            ]}
+          />
           <span className="chat-dms-tools">
             <Tooltip content="Unreads" disabled={!narrow}>
               <Switch
