@@ -1343,7 +1343,7 @@ const (
 	// 398 KiB, 2.17 seconds.
 	// Kit 0.117.0 (the list-detail modes, the inbox's chat density, line
 	// clamps, context line and quick actions, and the kit's other releases since
-	// 0.113.2) took it from 397.9 KiB to 398.7 KiB: the one sheet +0.8 KiB
+	// 0.114.0) took it from 397.9 KiB to 398.7 KiB: the one sheet +0.8 KiB
 	// gzipped and the authority remedy chunk +0.1, with no screen's module in
 	// the entry. So it moved to 399 KiB, 2.18 seconds.
 	initialBudget = 399 << 10
@@ -2105,11 +2105,14 @@ const (
 	// +7,929): the sheets +5,189 (the one sheet +5,582, Chatlet's -393) and
 	// script +2,740 (the Chatlet chunk +2,689). The measured size's next KiB:
 	// 5650 KiB.
-	// Chatlet's Activity read full width until an item opens beside it, and the
-	// Direct messages page, on kit 0.117.0 (the list-detail modes, the inbox's
-	// chat density and arrow keys) took it from 5649.9 KiB (5,785,447 bytes) to
-	// 5667.4 KiB (5,803,450 bytes, +18,003): script +10,741 and the sheets
-	// +7,262. The measured size's next KiB: 5668 KiB.
+	// Chatlet's Activity read full width until an item opens beside it, the
+	// Direct messages page, and Chatlet's rows run edge to edge with one status
+	// line under the box, on kit 0.117.0 (the list-detail modes, the inbox's
+	// chat density and arrow keys, flush chat logs, and the measured rich-text,
+	// composer-tool and day-pill steps), took it from 5649.0 KiB (5,784,598
+	// bytes) to 5667.5 KiB (5,803,537 bytes, +18,939): script +11,384 (the
+	// Chatlet chunk +8,195) and the sheets +7,555 (the one sheet +5,834,
+	// Chatlet's +1,721). The measured size's next KiB: 5668 KiB.
 	treeBudget = 5<<20 + 548<<10
 )
 
