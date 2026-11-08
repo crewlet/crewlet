@@ -825,9 +825,12 @@ func claudePack(paths Paths, at packAt) string {
 // removes ([claudeSessionGate]); and, since WRITTEN rests on the same clock, a
 // file that is no transcript written as it was packed — rewritten in place (a
 // task file, a subagent's `.meta.json`) or still being written (a spilled tool
-// result) — kept torn or cut short. Neither reads as written a file stamped in
-// the box's future before the pack began, which the pack sets back before its
-// marker (above).
+// result) — kept torn or cut short. Neither WRITTEN nor the narrowing reads as
+// written a file stamped in the box's future before the pack began, which the
+// pack sets to the box's present before its marker (above) — unless the clock
+// steps back after the pack set it and before the marker: then both read it as
+// written, and that one pack refuses it where it is no transcript and reads it
+// back where it is a thread; the next pack sets it to its own present.
 //
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
 // BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
@@ -1310,7 +1313,7 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // harness perhaps writing as tar reads — and to the run's own end's where the
 // job is over: killed before its script could pack, lost with its engine, its
 // own pack failed. The take knows which ([sandbox.SessionTake.Pack]); a job
-// that is over has no writer left to hold a pack against, and the working
+// that is over has no harness left to write under a pack, and the working
 // rule would cost it the wait for the box's clock, and refuse a file that a
 // process its harness started, outliving it, writes as it packs.
 func (ClaudeCode) Pack(paths Paths, session string, working bool) string {
