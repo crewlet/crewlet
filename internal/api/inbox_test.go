@@ -317,6 +317,21 @@ func (s *inboxSocket) nextInbox(t *testing.T) inboxFrame {
 	}
 }
 
+// watchSeat watches seat and returns once the socket has handled the watch: a
+// socket reads its frames in order and installs a watch before it reads the
+// next one, so its answer to a ping sent after the watch is the signal that
+// the watch reached the index, never a wait on the clock.
+func (s *inboxSocket) watchSeat(t *testing.T, seat string) {
+	t.Helper()
+	s.send(t, map[string]any{"kind": "watch", "seat": seat})
+	s.send(t, map[string]any{"kind": "ping"})
+	for {
+		if f := s.read(t); f.Kind == "pong" {
+			return
+		}
+	}
+}
+
 // drainUntilPong asks the socket to answer a ping and fails on any
 // inbox_changed frame queued in front of the answer — every movement was
 // fanned out before the ping was written, so a frame this socket was sent
@@ -399,16 +414,11 @@ func TestACodeMovementReachesOnlyAWatcherHoldingGitlet(t *testing.T) {
 
 	alice := dialInbox(t, srv.URL, "alice-token-long-enough-to-pass")
 	bob := dialInbox(t, srv.URL, "bob-token-long-enough-to-pass")
-	alice.send(t, map[string]any{"kind": "watch", "seat": "alice-seat"})
-	bob.send(t, map[string]any{"kind": "watch", "seat": "bob-seat"})
-	hub := a.Stream().Hub()
-	deadline := time.Now().Add(10 * time.Second)
-	for hub.Watchers("alice-seat") != 1 || hub.Watchers("bob-seat") != 1 {
-		if time.Now().After(deadline) {
-			t.Fatalf("the watches never reached the index (alice %d, bob %d)",
-				hub.Watchers("alice-seat"), hub.Watchers("bob-seat"))
-		}
-		time.Sleep(5 * time.Millisecond)
+	alice.watchSeat(t, "alice-seat")
+	bob.watchSeat(t, "bob-seat")
+	if hub := a.Stream().Hub(); hub.Watchers("alice-seat") != 1 || hub.Watchers("bob-seat") != 1 {
+		t.Fatalf("the watches had not reached the index by their sockets' pongs (alice %d, bob %d)",
+			hub.Watchers("alice-seat"), hub.Watchers("bob-seat"))
 	}
 
 	for _, seat := range []string{"alice-seat", "bob-seat"} {
