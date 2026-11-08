@@ -1,6 +1,7 @@
 package ssh_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,5 +47,24 @@ func TestTheSSHFormMintsItsAuthorityAndShowsItsPublicLine(t *testing.T) {
 	broken := sshint.Requirements(block, func(string) (string, bool) { return "not a key", true })[0]
 	if broken.Public != nil {
 		t.Errorf("a value that is no authority is shown as %+v", broken.Public)
+	}
+}
+
+// A HOST'S READ COMMANDS ARE LISTED AS AN AGENT TYPES THEM: every program by
+// its bare name, the one sudo runs included, and a placeholder for each word a
+// rule leaves open, from the host's own list where it has one.
+func TestAHostsReadCommandsAreListedAsAnAgentTypesThem(t *testing.T) {
+	t.Parallel()
+	got := sshint.ReadCommands(config.SSHHost{ID: "api-1", Containers: true})
+	for _, want := range []string{"uptime", "free -m", "df -h", "systemctl status <unit>",
+		"journalctl --no-pager -u <unit> -n <n>", "journalctl --no-pager -u <unit> --since=<value>",
+		"sudo -n docker ps", "sudo -n docker logs --tail <n> <container>"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("the default list as typed is %q, missing %q", got, want)
+		}
+	}
+	own := sshint.ReadCommands(config.SSHHost{ID: "api-1", ReadAllowlist: []string{"/usr/bin/tail -n * /var/log/syslog"}})
+	if !slices.Equal(own, []string{"tail -n <n> /var/log/syslog"}) {
+		t.Errorf("a host's own list as typed is %q", own)
 	}
 }

@@ -89,7 +89,23 @@ func integrationLine(in Integration) string {
 	if tool := toolSentence(seataccess.ToolState(in.Tool), false); tool != "" {
 		parts = append(parts, capitalized(tool))
 	}
+	for _, hc := range in.Commands {
+		parts = append(parts, commandsSentence(hc))
+	}
 	return head + ": " + strings.Join(parts, " ")
+}
+
+// commandsSentence is one SSH host's read commands, as the seat types them.
+func commandsSentence(hc HostCommands) string {
+	run := make([]string, 0, len(hc.Run))
+	for _, line := range hc.Run {
+		run = append(run, "`"+line+"`")
+	}
+	out := "Read commands on " + hc.Host + ": " + strings.Join(run, ", ")
+	if hc.More > 0 {
+		out += fmt.Sprintf(", and %d more", hc.More)
+	}
+	return out + "."
 }
 
 // permissionWords is GitHub's grants in effect, what is requested and not in

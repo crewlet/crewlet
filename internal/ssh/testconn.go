@@ -57,8 +57,8 @@ type TestInput struct {
 // unlistedProbe is a command no allowlist names, which the gate must refuse.
 const unlistedProbe = "/usr/local/sbin/crewlet-gate-unlisted-probe"
 
-// gateRefused is the exit status the gate refuses a command with.
-const gateRefused = 126
+// GateRefused is the exit status the gate refuses a command with.
+const GateRefused = 126
 
 // TestConnection runs the steps against in.Host, recording each certificate
 // it signs before using it.
@@ -104,7 +104,7 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 		return steps
 	}
 	_, code, err = c.runOn(ctx, client, unlistedProbe)
-	if !add(StepAllowlist, err == nil && code == gateRefused, allowlistDetail(code, err)) {
+	if !add(StepAllowlist, err == nil && code == GateRefused, allowlistDetail(code, err)) {
 		return steps
 	}
 	if h.Users.Operate == "" {
@@ -205,7 +205,7 @@ func allowlistDetail(code int, err error) string {
 	switch {
 	case err != nil:
 		return "The read user's session failed: " + err.Error()
-	case code == gateRefused:
+	case code == GateRefused:
 		return "A command off the allowlist was refused."
 	}
 	return fmt.Sprintf("A command off the allowlist was not refused (exit %d): the read user's commands are "+

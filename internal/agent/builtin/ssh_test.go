@@ -600,3 +600,49 @@ func TestAnAskFromAStrangersTurnCarriesTheStranger(t *testing.T) {
 		t.Fatalf("the asks carried %+v, want the first a stranger's and the second not", svc.asks)
 	}
 }
+
+// A READ THE SERVER'S GATE REFUSED IS ANSWERED WITH THE HOST'S READ COMMANDS,
+// as the seat types them, so the seat retries correctly in the same turn; a
+// read that ran carries no list.
+//
+// Mutation: drop the list from the 126 answer and the seat is told only that
+// the server refused.
+func TestARefusedReadNamesTheHostsReadCommands(t *testing.T) {
+	t.Parallel()
+	cfg, o, chart := sshFixture(t)
+	for _, c := range []struct {
+		name string
+		res  sshint.Result
+		told bool
+	}{
+		{name: "refused", res: sshint.Result{ExitCode: sshint.GateRefused, Started: true,
+			Stderr: []byte("crewlet-gate: refused\n")}, told: true},
+		{name: "ran", res: sshint.Result{Stdout: []byte("up 3 days\n"), Started: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			servers := &fakeServers{cfg: cfg, res: c.res}
+			byName := sshTools(t, servers, chart)
+			got, err := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), sshTurn(o, "sre", "", nil),
+				map[string]any{"host": "api-1", "command": "/bin/cat /etc/shadow"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := strings.Contains(got.Output, `"read_commands"`)
+			if listed != c.told {
+				t.Fatalf("the answer lists read commands %v, want %v:\n%s", listed, c.told, got.Output)
+			}
+			if !c.told {
+				return
+			}
+			for _, want := range []string{`"uptime"`, `"systemctl status <unit>"`, "Retry with one of them"} {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the refused read's answer does not say %s:\n%s", want, got.Output)
+				}
+			}
+			if strings.Contains(got.Output, "docker") {
+				t.Errorf("the answer lists a command api-1 does not admit:\n%s", got.Output)
+			}
+		})
+	}
+}

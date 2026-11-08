@@ -137,7 +137,7 @@ func TestTheRenderedSetupPassesSshdAndIsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, before)
 		}
-		if out := r.setup(t); !strings.Contains(out, "Crewlet SSH setup 1 applied for api-1.") {
+		if out := r.setup(t); !strings.Contains(out, fmt.Sprintf("Crewlet SSH setup %d applied for api-1.", SetupVersion)) {
 			t.Errorf("the second run said %q", out)
 		}
 		after, _ := r.srv.Exec(nil, "sh", "-c", state)
@@ -412,6 +412,30 @@ func TestTheGateRefusesShellCharactersAndOptionInjection(t *testing.T) {
 	}
 	if res := r.run(t, "crewlet-read", read.Signer, "journalctl --no-pager -u ssh --since=-1h", nil); res.ExitCode == 126 {
 		t.Errorf("an allowed option value was refused: %q", res.Stderr)
+	}
+}
+
+// THE GATE TAKES A PROGRAM'S BARE NAME AFTER SUDO -N ON A REAL SERVER: with the
+// container reads on, `sudo -n docker ps` and `sudo -n docker logs --tail 50
+// <container>` pass the gate (sudo then answers that this image has no docker,
+// which is not the gate's refusal), and a path in the program's place, an
+// option the rule does not name and another docker verb are refused with 126.
+func TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, sshdtest.Images[1], "api-1", false, func(h *config.SSHHost) { h.Containers = true })
+	read := r.read(t)
+	for _, line := range []string{"sudo -n docker ps", "sudo -n docker logs --tail 50 api-backend-production",
+		"/usr/bin/sudo -n /usr/bin/docker ps"} {
+		if res := r.run(t, "crewlet-read", read.Signer, line, nil); res.ExitCode == GateRefused ||
+			strings.Contains(string(res.Stderr), "crewlet-gate: refused") {
+			t.Errorf("%q was refused by the gate: exit %d, %q", line, res.ExitCode, res.Stderr)
+		}
+	}
+	for _, line := range []string{"sudo -n ./docker ps", "sudo -n /tmp/docker ps", "sudo -n docker ps -a",
+		"sudo -n docker exec api-backend-production sh"} {
+		if res := r.run(t, "crewlet-read", read.Signer, line, nil); res.ExitCode != GateRefused {
+			t.Errorf("%q: exit %d, %q; want the gate's refusal", line, res.ExitCode, res.Stderr)
+		}
 	}
 }
 

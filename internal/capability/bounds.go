@@ -3,8 +3,10 @@ package capability
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -37,6 +39,8 @@ const (
 
 	// MaxScope caps an integration's scope list.
 	MaxScope = 16
+	// MaxCommands caps one SSH host's read commands.
+	MaxCommands = sshint.MaxListedCommands
 	// MaxTools caps each of a tool server's three tool lists.
 	MaxTools = 16
 	// MaxServers caps the tool servers.
@@ -113,6 +117,17 @@ func shortenItems(s Snapshot) Snapshot {
 		in.Level, in.LevelName = shortened(in.Level), shortened(in.LevelName)
 		in.LevelNote = textcut.Within(in.LevelNote, NoteMaxBytes)
 		in.Scope = shortenAll(in.Scope)
+		if len(in.Commands) > 0 {
+			commands := make([]HostCommands, len(in.Commands))
+			for j, hc := range in.Commands {
+				run := make([]string, len(hc.Run))
+				for k, line := range hc.Run {
+					run[k] = shortened(line)
+				}
+				commands[j] = HostCommands{Host: shortened(hc.Host), Run: run, More: hc.More}
+			}
+			in.Commands = commands
+		}
 		if len(in.ScopeLabels) > 0 {
 			labels := make(map[string]string, len(in.ScopeLabels))
 			for entry, label := range in.ScopeLabels {
@@ -166,7 +181,7 @@ func (s Snapshot) at(level int) Snapshot {
 	ins := make([]Integration, len(s.Integrations))
 	for i, in := range s.Integrations {
 		if level >= 1 {
-			in.LevelNote, in.PermissionNames, in.ScopeLabels = "", nil, nil
+			in.LevelNote, in.PermissionNames, in.ScopeLabels, in.Commands = "", nil, nil, nil
 		}
 		in.Scope, in.ScopeMore, in.ScopeDigest = fold(in.Scope, in.ScopeMore, in.ScopeDigest, c.scope)
 		if len(in.Scope) == 0 {
@@ -176,6 +191,17 @@ func (s Snapshot) at(level int) Snapshot {
 			if !containsString(in.Scope, entry) {
 				delete(in.ScopeLabels, entry)
 			}
+		}
+		in.Commands = slices.DeleteFunc(slices.Clone(in.Commands), func(hc HostCommands) bool {
+			return !containsString(in.Scope, hc.Host)
+		})
+		for j, hc := range in.Commands {
+			if over := len(hc.Run) - MaxCommands; over > 0 {
+				in.Commands[j] = HostCommands{Host: hc.Host, Run: hc.Run[:MaxCommands], More: hc.More + over}
+			}
+		}
+		if len(in.Commands) == 0 {
+			in.Commands = nil
 		}
 		ins[i] = in
 	}

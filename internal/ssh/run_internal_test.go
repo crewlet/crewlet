@@ -82,8 +82,8 @@ func TestEveryCertificateAndCommandIsRecorded(t *testing.T) {
 			t.Fatalf("read %q: exit %d, %v", line, res.ExitCode, err)
 		}
 	}
-	if res, err := run.Read(t.Context(), r.readCall("cat /etc/shadow")); err != nil || res.ExitCode != gateRefused {
-		t.Fatalf("an unlisted read exited %d, %v, want the gate's %d", res.ExitCode, err, gateRefused)
+	if res, err := run.Read(t.Context(), r.readCall("cat /etc/shadow")); err != nil || res.ExitCode != GateRefused {
+		t.Fatalf("an unlisted read exited %d, %v, want the gate's %d", res.ExitCode, err, GateRefused)
 	}
 	if len(a.certs) != 1 || a.certs[0].Purpose != PurposeRead || a.certs[0].Turn != "turn-1" {
 		t.Fatalf("three reads in one turn recorded certificates %+v, want one read certificate", a.certs)

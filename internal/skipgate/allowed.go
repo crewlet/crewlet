@@ -277,6 +277,13 @@ var allowed = []Allowance{
 	},
 	{
 		Package: "internal/ssh",
+		Test:    "TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves the gate and sudo admit a program's bare name and nothing else.",
+	},
+	{
+		Package: "internal/ssh",
 		Test:    "TestAHeldOperateCallApprovedOnceRunsOnce",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +

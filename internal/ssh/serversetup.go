@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -21,7 +22,7 @@ import (
 
 // SetupVersion is the version of the setup a script renders; the gate answers
 // its own version, which Test connection compares.
-const SetupVersion = 1
+const SetupVersion = 2
 
 // GatePath is where the setup installs the gate.
 const GatePath = "/usr/local/sbin/crewlet-gate"
@@ -212,4 +213,60 @@ func OperateBinding(h config.SSHHost) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// ReadCommands is the read commands h's allowlist admits, in the form an agent
+// types them: each program by its bare name, as the gate takes it first and
+// after `sudo -n`, and a placeholder for each word a rule leaves open.
+func ReadCommands(h config.SSHHost) []string {
+	rules := ReadAllowlist(h)
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, typedRule(strings.Fields(rule)))
+	}
+	return out
+}
+
+// MaxListedCommands caps the read commands an agent is told for one host.
+const MaxListedCommands = 16
+
+// ListedCommands is h's first [MaxListedCommands] read commands, as
+// [ReadCommands] has them, and how many more the allowlist holds.
+func ListedCommands(h config.SSHHost) (run []string, more int) {
+	run = ReadCommands(h)
+	more = max(0, len(run)-MaxListedCommands)
+	return run[:len(run)-more], more
+}
+
+// typedRule is one allowlist rule as an agent types it.
+func typedRule(words []string) string {
+	out := make([]string, 0, len(words))
+	for i, w := range words {
+		program := i == 0 || (i == 2 && path.Base(words[0]) == "sudo" && words[1] == "-n" && strings.HasPrefix(w, "/"))
+		switch {
+		case program:
+			out = append(out, path.Base(w))
+		case w == "*":
+			out = append(out, placeholder(words, i))
+		case strings.HasSuffix(w, "=*"):
+			out = append(out, strings.TrimSuffix(w, "*")+"<value>")
+		default:
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// placeholder names the word a rule leaves open at i, by what comes before it.
+func placeholder(words []string, i int) string {
+	switch words[i-1] {
+	case "-u", "--unit", "status", "is-active":
+		return "<unit>"
+	case "-n", "--lines", "--tail":
+		return "<n>"
+	}
+	if slices.Contains(words[:i], "logs") {
+		return "<container>"
+	}
+	return "<arg>"
 }
