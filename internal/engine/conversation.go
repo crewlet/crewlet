@@ -220,7 +220,11 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 	t.Delivered, t.DeliveredTo, t.DeliveryUnknown = e.Delivered, e.DeliveredTo, e.DeliveryUnknown
 	t.CompletedWork, t.BlockedOn = e.CompletedWork, e.BlockedOn
 	t.StoppedBy, t.StopReason, t.Failure = e.StoppedBy, e.StopReason, e.Failure
-	if u := e.Unkept; u != nil {
+	// THE UNKEPT CAPTURE AS IT STANDS ON THE ROW ([executordomain.Session.Unkept]),
+	// never as the end named it: one whose record the log took before the end is
+	// the row's own, the very session a head's next turn continues, and told
+	// as not kept that turn would read its own session as lost.
+	if u := s.Unkept(); u != nil {
 		t.Unkept = u.Reason
 		if t.Unkept == "" {
 			t.Unkept = "no reason was recorded"
