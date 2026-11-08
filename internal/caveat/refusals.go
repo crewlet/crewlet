@@ -70,6 +70,13 @@ func AnsweredAlready(handle string) Refusal {
 		"so your answer was not used.", handle)}
 }
 
+// HeldCallAnswer is a reply or a choice given to an executor that is waiting
+// for a call to be approved, which only the call's own answers settle.
+func HeldCallAnswer() Refusal {
+	return Refusal{person: "This request waits for approval and is answered with Allow once or " +
+		"Deny, not with a reply, so nothing was answered."}
+}
+
 // QuestionChanged is an answer to an executor's question given against a
 // question the run no longer asks: it moved on to another since the person
 // read it, which is the one they need to see before they answer.

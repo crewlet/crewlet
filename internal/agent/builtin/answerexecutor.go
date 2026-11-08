@@ -254,10 +254,10 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// writes the level an Always allow sets. This tool asks only
 		// whether the caller may answer the run, which a run's requester
 		// may, so an answer here would approve a call on a narrower grant.
-		return refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is waiting "+
-			"for a person to approve a call to %s, which is answered with POST /mcp-approvals/%s "+
-			"by an administrator or a lead of the seat's unit, not by this tool. Nothing was "+
-			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), nil
+		return toPerson(refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is "+
+			"waiting for a person to approve a call to %s, which is answered with POST "+
+			"/mcp-approvals/%s by a person its approval admits, not by this tool. Nothing was "+
+			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), caveat.HeldCallAnswer()), nil
 	}
 	// THE QUESTION THE PERSON READ, never the one the run asks now if
 	// those differ: a run that moved on to another question since would
