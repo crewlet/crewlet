@@ -36,9 +36,9 @@ func TestOneAttemptCannotSpendTheWholeBudget(t *testing.T) {
 	if !first.Before(ceiling) {
 		t.Errorf("the first attempt may run until %s and the whole budget "+
 			"ends at %s — one hung attempt then consumes every retry",
-			first.Sub(start), jetstreamtest.ClusterStartBudget)
+			first.Sub(start), jetstreamtest.ClusterStartBudget) //fixedwait:stated start, a fixed date, and the attempt's end computed from it
 	}
-	if got := first.Sub(start); got != jetstreamtest.ClusterStartTerm {
+	if got := first.Sub(start); got != jetstreamtest.ClusterStartTerm { //fixedwait:stated start, a fixed date, and the attempt's end computed from it
 		t.Errorf("the first attempt's term is %s, want %s", got,
 			jetstreamtest.ClusterStartTerm)
 	}
@@ -59,7 +59,7 @@ func TestOneAttemptCannotSpendTheWholeBudget(t *testing.T) {
 	late := ceiling.Add(-time.Second)
 	if got := jetstreamtest.StartAttemptEnd(late, ceiling); !got.Equal(ceiling) {
 		t.Errorf("an attempt starting %s before the ceiling may run until %s, "+
-			"past the budget", ceiling.Sub(late), got.Sub(late))
+			"past the budget", ceiling.Sub(late), got.Sub(late)) //fixedwait:stated the ceiling, a second before it and the end computed from them, all on a fixed date
 	}
 
 	// AND AN EXPIRED BUDGET GRANTS NOTHING. The loop checks the ceiling after

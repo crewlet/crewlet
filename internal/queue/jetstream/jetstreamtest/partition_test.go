@@ -110,10 +110,10 @@ func TestAMajoritySurvivesAPartition(t *testing.T) {
 		last = q.Publish(t.Context(), topic, events.New(probe{N: 2}, events.TraceContext{}))
 		if last == nil {
 			t.Logf("the majority accepted a publish %v after the partition",
-				time.Since(started).Round(100*time.Millisecond))
+				time.Since(started).Round(100*time.Millisecond)) //fixedwait:measure the log line's own reading, which decides nothing
 			return
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatalf("the surviving majority never accepted a publish: %v — two of three "+
 		"replicas is a quorum, so a cluster that cannot commit here has lost more "+
@@ -136,7 +136,7 @@ func awaitRoutes(t *testing.T, c *Cluster, i, want int) {
 		if time.Now().After(deadline) {
 			t.Fatalf("member %d is routed to %v, want %d peers", i, got, want)
 		}
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

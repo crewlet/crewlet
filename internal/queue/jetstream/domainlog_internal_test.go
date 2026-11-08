@@ -1310,33 +1310,52 @@ func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
 // lifetime, in the loop that also evaluates the node's alarms, and asked until
 // somebody answered, a read of a broker the node could not reach held both for
 // good.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), where the read's timers fire at exactly
+// their time, so the read is held to ending AT its ceiling to the nanosecond.
+// On the machine's clock it was held to ending inside ten of them, which was
+// the claim and a loose one: a read held to five ceilings passed, and a runner
+// that lost ten failed a read that ended at one.
+//
+// Mutation: hold a deadline-less read to another ceiling than the lookup
+// ceiling, and it ends at that one; ask until somebody answers, and it is still
+// being asked ten ceilings on.
 func TestADomainLogReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
 	t.Parallel()
-	s := &silentLeaderStream{}
-	s.lost.Store(1 << 30)
-	l := logOver(s)
-	// A CEILING OF TWENTY REQUESTS rather than production's thirty seconds,
-	// so the case waits it out in about a second.
-	ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
-	l.q.timing.Lookup = ceiling
-	done := make(chan error, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		_, err := l.Stats(ctx)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !jsprovision.Unanswered(ctx, err) {
-			t.Errorf("a read nobody answered ended with %v, not as silence", err)
+	inBubble(t, func(t *testing.T) {
+		s := &silentLeaderStream{}
+		s.lost.Store(1 << 30)
+		l := logOver(s)
+		// A CEILING OF TWENTY REQUESTS rather than production's thirty
+		// seconds, which at this cadence is over five hundred of them, every
+		// one still outstanding when the ceiling ends the read.
+		ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
+		l.q.timing.Lookup = ceiling
+		done := make(chan error, 1)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		began := time.Now()
+		go func() {
+			_, err := l.Stats(ctx)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !jsprovision.Unanswered(ctx, err) {
+				t.Errorf("a read nobody answered ended with %v, not as silence", err)
+			}
+			if took := time.Since(began); took != ceiling {
+				t.Errorf("a read nobody answered ended %v after it began, want "+
+					"exactly its %v lookup ceiling (%d requests)", took, ceiling,
+					s.calls.Load())
+			}
+		case <-time.After(10 * ceiling):
+			cancel()
+			<-done
+			t.Fatalf("a read nobody answers was still being asked %v later, ten "+
+				"times its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
 		}
-	case <-time.After(10 * ceiling):
-		cancel()
-		<-done
-		t.Fatalf("a read nobody answers was still being asked %v later, ten times "+
-			"its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
-	}
+	})
 }
 
 // logOver is a domain log over s, read at [shortReads].
@@ -1359,7 +1378,7 @@ type slowLeaderStream struct {
 func (s *slowLeaderStream) slow(ctx context.Context) error {
 	s.calls.Add(1)
 	select {
-	case <-time.After(s.late):
+	case <-time.After(s.late): //fixedwait:simulated a leader whose backed-up API queue answers each request late
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

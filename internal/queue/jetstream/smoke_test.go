@@ -104,7 +104,7 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 			if n != want {
 				t.Errorf("received %d, want %d — mail replayed out of order", n, want)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatalf("timed out waiting for event %d", want)
 		}
 	}
@@ -159,7 +159,7 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 			t.Errorf("received %d before the sentinel; a publish with no "+
 				"subscription must be dropped", n)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the sentinel published to an existing subscription never arrived")
 	}
 }
@@ -189,7 +189,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	}
 	select {
 	case <-deferred:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("handler never ran")
 	}
 
@@ -201,7 +201,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	a := atts[0]
 	deadline := time.Now().Add(5 * time.Second)
 	for !a.quiesced.Load() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if !a.quiesced.Load() {
 		t.Error("a deferred delivery did not quiesce its attachment")
@@ -225,7 +225,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 		if n != 1 {
 			t.Errorf("successor received %d, want 1", n)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(15 * time.Second): //fixedwait:liveness
 		t.Fatal("deferred work never reached the successor")
 	}
 }
@@ -265,7 +265,7 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 	}
 
 	var seen []int
-	deadline := time.After(20 * time.Second)
+	deadline := time.After(20 * time.Second) //fixedwait:liveness
 	for len(seen) < 5 {
 		select {
 		case b := <-batches:

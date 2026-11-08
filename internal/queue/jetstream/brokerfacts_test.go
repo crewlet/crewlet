@@ -381,7 +381,7 @@ func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 			}
 			deadline := time.Now().Add(10 * time.Second)
 			for !nc.IsClosed() && !reconnected() && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
+				time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 			}
 			switch {
 			case nc.IsClosed():

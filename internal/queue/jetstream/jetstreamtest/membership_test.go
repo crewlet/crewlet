@@ -231,6 +231,6 @@ func awaitGroup(t *testing.T, srv *js.Server, done func(js.MetaGroup) bool) js.M
 			t.Fatalf("the metadata group never reached the state this case needs: "+
 				"%+v (%v)", group, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 }

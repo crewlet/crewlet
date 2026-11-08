@@ -226,7 +226,7 @@ func refused(t *testing.T, srv *js.Server, member, stream, what string,
 		}
 		t.Logf("%s through %s answered %v while it still believed it led %s — the "+
 			"server's lost-quorum window; asking again", what, member, answer, stream)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -269,7 +269,7 @@ func staleThrough(t *testing.T, kv jetstream.KeyValue, key string) []byte {
 				"answered (%v), so this case cannot tell a read the leader answers from "+
 				"one nobody does", key, kv.Bucket(), err)
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -282,7 +282,7 @@ func retry(t *testing.T, what string, op func() error) {
 		if last = op(); last == nil {
 			return
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatal(fmt.Errorf("%s: the majority never answered: %w", what, last))
 }

@@ -328,7 +328,7 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 		if got = rec.matching(closed) - before; got >= listings {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if got < listings {
 		t.Errorf("%d key listings produced %d close lines; the listing no longer "+

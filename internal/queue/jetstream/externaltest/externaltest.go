@@ -281,6 +281,6 @@ func (s *Server) Restart(maxPayload int32, nc *nats.Conn) {
 				"within %s (connected=%v, reading a max_payload of %d, want %d)",
 				readyWithin, nc.IsConnected(), nc.MaxPayload(), want)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

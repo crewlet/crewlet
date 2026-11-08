@@ -592,7 +592,7 @@ func awaitAcknowledged(t *testing.T, c *DomainConsumer, through uint64) {
 				"none — without them this case is not the state it claims to "+
 				"stage", info.AckFloor.Stream, info.NumAckPending, through)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -679,7 +679,7 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("a group's blocking read outlived its cancelled context, so " +
 			"anything joining it waits for ever")
 	}
@@ -955,12 +955,12 @@ func TestAStatusEndsOnlyTheRequestItNames(t *testing.T) {
 			p.mu.Unlock()
 			t.Fatal("the server's 404 for a no-wait request never reached the inbox")
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 	p.mu.Unlock()
 	select {
 	case <-p.wake:
-	case <-time.After(5 * time.Second):
+	case <-time.After(5 * time.Second): //fixedwait:liveness
 		t.Fatal("the inbox's callback did not take the 404")
 	}
 	p.mu.Lock()
@@ -1042,8 +1042,17 @@ func TestAFetchIsBoundedEvenWhenItsRequestNeverEnds(t *testing.T) {
 // that request's end never comes, the presumption is the only thing that lets
 // this fetch send its own: evaluated only on a wake, it did not, and a record
 // appended meanwhile was delivered to nobody until the fetch's whole wait had
-// passed. The wait here is twenty seconds; the request must reach the server
-// inside [waitStanding]'s five.
+// passed.
+//
+// THE FETCH WAITS AN HOUR, so one that asks only once its wait has passed asks
+// an hour from now, past every bound here: [waitStanding]'s and the case's own
+// only end waits that such a fetch never ends inside them. It used to wait
+// twenty seconds against waitStanding's five, so the five were the claim: a
+// fetch that asked at its twenty seconds passed any bound past them.
+//
+// Mutation: presume a request gone only on a wake, and the fetch does not ask
+// until its hour has passed; never presume one gone, and it does not ask at
+// all.
 func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_LEFT_LOG", "crewlet.left.log")
@@ -1058,7 +1067,7 @@ func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
 	}
 	done := make(chan fetched, 1)
 	go func() {
-		got, err := cons.Fetch(t.Context(), 1, 0, 20*time.Second)
+		got, err := cons.Fetch(t.Context(), 1, 0, time.Hour)
 		done <- fetched{got, err}
 	}()
 	waitStanding(t, cons)
@@ -1069,7 +1078,10 @@ func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
 			t.Fatalf("the fetch returned %d record(s) from %d, %v, want sequence 1",
 				len(f.got), seqOf(f.got), f.err)
 		}
-	case <-time.After(15 * time.Second):
+	// LIVENESS: a fetch whose own request stands hands the record over once
+	// it arrives, and one that holds it for its wait returns an hour from
+	// now; this only ends that wait, as the failure it is.
+	case <-time.After(15 * time.Second): //fixedwait:liveness
 		t.Fatal("a record appended into a fetch's own request was not handed over")
 	}
 }
@@ -1109,7 +1121,7 @@ func waitWaiting(t *testing.T, cons *DomainConsumer, n int) {
 			t.Fatalf("the server holds %d request(s) on %s, want %d — a request "+
 				"did not reach it", info.NumWaiting, cons.name, n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -1208,7 +1220,7 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 				"sequence 1 — the closed handle's request was served it",
 				len(f.got), seqOf(f.got), f.err)
 		}
-	case <-time.After(25 * time.Second):
+	case <-time.After(25 * time.Second): //fixedwait:liveness
 		t.Fatal("the successor's fetch did not return")
 	}
 	// AND THE INBOX IS GONE, so nothing the server still sends it can
@@ -1284,7 +1296,7 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatalf("waited five seconds for %s", what)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -1419,6 +1431,18 @@ func TestAPullHonoursBothOfItsBounds(t *testing.T) {
 // there; a consumer deleted under a standing request says nothing CAN be
 // there, and an applier told the first would sit on a log it is no longer
 // reading and report itself caught up.
+//
+// AND IT IS REPORTED WHEN IT COMES, not when the fetch's wait runs out. THE
+// FETCH WAITS AN HOUR, so one that is told of the failure and not woken by it
+// is still waiting when the case gives up on it, and one woken by it has
+// returned long before. It used to wait ten seconds and be held to five by
+// the case's clock: that bound was the only check on the wake, a fetch that
+// reported the failure at its ten seconds passed any bound past them, and a
+// runner that lost five seconds failed one that reported it at once.
+//
+// Mutation: record a refusing status as an ordinary end, and the fetch asks
+// the deleted consumer again rather than reporting anything; record it
+// without waking the fetch, and the fetch reports it an hour later.
 func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 	t.Parallel()
 	q, _ := openDomain(t, "CREWLET_REFUSED_LOG", "crewlet.refused.log")
@@ -1428,7 +1452,7 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := cons.Fetch(t.Context(), 10, 1<<20, 10*time.Second)
+		_, err := cons.Fetch(t.Context(), 10, 1<<20, time.Hour)
 		done <- err
 	}()
 	// THE REQUEST MUST BE STANDING before the consumer goes, or the
@@ -1445,7 +1469,7 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the pull never reached the server")
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if err := q.JetStream().DeleteConsumer(t.Context(), "CREWLET_REFUSED_LOG", cons.Name()); err != nil {
 		t.Fatalf("delete the consumer: %v", err)
@@ -1456,7 +1480,10 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 			t.Fatalf("a pull whose consumer was deleted under it returned %v, "+
 				"want the refusal — an empty answer reads as a quiet log", err)
 		}
-	case <-time.After(5 * time.Second):
+	// LIVENESS: a fetch woken by its pull's failure returns once the failure
+	// arrives, and one that is not returns an hour from now; this only ends
+	// that wait, as the failure it is.
+	case <-time.After(20 * time.Second): //fixedwait:liveness
 		t.Fatal("a pull whose consumer was deleted under it went on waiting " +
 			"for its whole expiry")
 	}
@@ -1518,7 +1545,7 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 			t.Fatalf("the second record never reached the standing request: %d "+
 				"in flight, %d waiting", info.NumAckPending, info.NumWaiting)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 
 	// THE FAILURE: the consumer goes under the standing request — and the
@@ -1547,7 +1574,7 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the pull was never told its consumer went")
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if _, err := cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second); !errors.Is(err, errPullRefused) {
 		t.Fatalf("the fetch after the consumer went returned %v, want the refusal", err)

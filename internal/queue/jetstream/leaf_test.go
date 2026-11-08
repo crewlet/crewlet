@@ -308,7 +308,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("a leaf whose only member shut down still reports its link up")
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if err := q.Link(); !strings.Contains(err.Error(), "leaf") {
 		t.Errorf("the link error %q does not name the leaf link", err)
@@ -418,6 +418,6 @@ func TestALeafLinksOnlyWithAKeyItsMemberHolds(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the member counted %v, want the stranger's leaf/unknown", refused)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

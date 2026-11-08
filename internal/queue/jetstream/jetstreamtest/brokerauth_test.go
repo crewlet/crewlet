@@ -82,7 +82,7 @@ func eventually(t testing.TB, budget time.Duration, what string, cond func() boo
 		if time.Now().After(deadline) {
 			t.Fatalf("waited %s for %s", budget, what)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

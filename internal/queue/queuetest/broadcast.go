@@ -341,7 +341,7 @@ func (h *heard) all() []string {
 // what, never in which order.
 func (h *heard) waitFor(t *testing.T, who string, want ...string) {
 	t.Helper()
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(10 * time.Second) //fixedwait:liveness
 	for {
 		got := h.all()
 		missing := false

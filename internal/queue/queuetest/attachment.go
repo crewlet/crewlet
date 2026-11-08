@@ -316,7 +316,7 @@ func (s *suite) runAttachment(t *testing.T) {
 				close(release)
 				t.Fatalf("Detach: %v", err)
 			}
-		case <-time.After(settleFor):
+		case <-time.After(settleFor): //fixedwait:liveness
 			// Release the handler so the process can still exit: a
 			// conformance suite that hangs a backend's test binary costs
 			// its author ten minutes and a goroutine dump to learn what

@@ -305,7 +305,7 @@ func TestAFatalfAfterTheBootIsDeclaredOnTheServersDeath(t *testing.T) {
 
 	select {
 	case <-death.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(5 * time.Second): //fixedwait:liveness
 		t.Fatal("a Fatalf after the boot never reached the server's death")
 	}
 	cause := death.Err()

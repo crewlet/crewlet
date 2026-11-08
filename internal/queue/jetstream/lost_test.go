@@ -84,7 +84,7 @@ func lost(t *testing.T, q *Queue) error {
 	t.Helper()
 	select {
 	case <-q.Lost():
-	case <-time.After(lostWithin):
+	case <-time.After(lostWithin): //fixedwait:liveness
 		t.Fatalf("the server closed the connection for good and the queue "+
 			"reported nothing within %s", lostWithin)
 	}
@@ -612,7 +612,7 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 		if got == nil || got.Error() != step.Error() {
 			t.Errorf("a stopped queue that lost nothing answered %q", got)
 		}
-	case <-time.After(lostWithin):
+	case <-time.After(lostWithin): //fixedwait:liveness
 		t.Fatalf("LostDuring on a stopped queue waited %s for a handler its own "+
 			"Stop suppressed", lostWithin)
 	}
@@ -634,7 +634,7 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 			t.Fatal("an open under a cancelled context succeeded: the case " +
 				"staged nothing")
 		}
-	case <-time.After(lostWithin):
+	case <-time.After(lostWithin): //fixedwait:liveness
 		t.Fatalf("an open that failed for a reason of its own waited %s for a "+
 			"handler its own close suppressed", lostWithin)
 	}

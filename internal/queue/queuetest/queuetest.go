@@ -770,7 +770,7 @@ func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool
 // two awaits on one journal cannot inherit each other's expectation.
 func (j *journal) awaitExpecting(t *testing.T, what string, cond func(seen []string) bool, want []string, hasWant bool) {
 	t.Helper()
-	deadline := time.NewTimer(settleFor)
+	deadline := time.NewTimer(settleFor) //fixedwait:liveness
 	defer deadline.Stop()
 	for {
 		if cond(j.all()) {
@@ -1041,7 +1041,7 @@ func (b *batchJournal) await(t *testing.T, what string, cond func(batches [][]st
 
 func (b *batchJournal) awaitExpecting(t *testing.T, what string, cond func(batches [][]string) bool, want []int, hasWant bool) {
 	t.Helper()
-	deadline := time.NewTimer(settleFor)
+	deadline := time.NewTimer(settleFor) //fixedwait:liveness
 	defer deadline.Stop()
 	for {
 		if cond(b.all()) {
@@ -1086,7 +1086,7 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	t.Helper()
 	select {
 	case <-ch:
-	case <-time.After(settleFor):
+	case <-time.After(settleFor): //fixedwait:liveness
 		if rescue != nil {
 			rescue()
 		}
@@ -1118,7 +1118,7 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 			// case's subject and setup.
 			timedOut(t, what, verdictUnmet, nil)
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

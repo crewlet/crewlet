@@ -191,7 +191,7 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 			t.Fatalf("the failure map held %d entries when the redelivery ran, "+
 				"want the 1 its NAK recorded — this case never drove the hazard", held)
 		}
-	case <-time.After(20 * time.Second):
+	case <-time.After(20 * time.Second): //fixedwait:liveness
 		t.Fatal("the redelivery never reached the handler")
 	}
 
@@ -201,7 +201,7 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 			t.Fatalf("the failure map still holds %d settled message(s) after the "+
 				"partition acked", failureEntries(q, topic, group))
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

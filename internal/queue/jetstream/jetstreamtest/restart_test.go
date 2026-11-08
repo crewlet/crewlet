@@ -72,7 +72,7 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the restarted member routes to %v, want %v", c.Servers[member].RoutePeers(), others)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	group := awaitGroup(t, c.Servers[member], func(g js.MetaGroup) bool {
 		return g.Leader != "" && len(g.Peers) == 3

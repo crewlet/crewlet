@@ -210,7 +210,7 @@ func takeBrokerDown(t *testing.T, q queue.EventQueue) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the connection still reads CONNECTED 10s after its server stopped")
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
