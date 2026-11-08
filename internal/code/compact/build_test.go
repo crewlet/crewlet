@@ -176,7 +176,7 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 }
 
 // A COMPACTION'S OUTPUT FITS THE BUNDLE RULE: every output is a bundle every
-// git node installs — its index version 2 and its reverse index written beside
+// Gitlet node installs — its index version 2 and its reverse index written beside
 // it, held to its seal (code.CheckBundle) as every stored pack is — with its
 // pack section under code.MaxPackBytes.
 //
@@ -214,7 +214,7 @@ func TestACompactionOutputFitsTheBundleRule(t *testing.T) {
 			err = code.CheckBundle(o.Ref(), seal)
 		}
 		if err != nil {
-			t.Errorf("output %s is no bundle a git node installs: %v", o.PackID, err)
+			t.Errorf("output %s is no bundle a Gitlet node installs: %v", o.PackID, err)
 		}
 		if o.Ref().PackBytes() >= code.MaxPackBytes {
 			t.Errorf("output %s's pack section is %d bytes, past %d", o.PackID, o.Ref().PackBytes(),

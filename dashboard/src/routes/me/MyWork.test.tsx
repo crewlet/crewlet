@@ -1616,7 +1616,7 @@ test("Reviews lists the changes waiting on their review and their fix, and asks 
     { viewer: { ...ada, grants: [] } },
     {
       ...flatOrg,
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
     },
   );
   mount("reviews");
@@ -1660,7 +1660,7 @@ test("an unbound reader's own Reviews asks Gitlet nothing, and says why", async 
     { viewer: unbound, work_my_work: { ...emptyDay, handle: "token:ops-7" }, work_items: noWork },
     {
       ...flatOrg,
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
     },
   );
   mount("reviews");

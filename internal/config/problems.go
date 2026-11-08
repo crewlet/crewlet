@@ -1089,13 +1089,13 @@ func (b *Bootstrap) Warnings() []Warning {
 				"destination records it: "+b.unrecordedDebug()))
 	}
 
-	// A GIT BLOCK ON A NODE THAT SERVES NO GIT is read by nothing: the cache,
+	// A GITLET BLOCK ON A NODE WITHOUT THE GITLET ROLE is read by nothing: the cache,
 	// its budget and its processes exist only where the role does, and an
 	// operator who sized them believes this node serves code.
-	if !b.Git.IsZero() && !b.Profile("").Roles.Has(placement.RoleGit) {
-		out = append(out, advisory(field("git"), fmt.Sprintf(
-			"is set and this node does not serve git (node.roles names no %q), "+
-				"so nothing reads it", placement.RoleGit)))
+	if !b.Gitlet.IsZero() && !b.Profile("").Roles.Has(placement.RoleGitlet) {
+		out = append(out, advisory(field("gitlet"), fmt.Sprintf(
+			"is set and this node does not serve Gitlet (node.roles names no %q), "+
+				"so nothing reads it", placement.RoleGitlet)))
 	}
 
 	out = append(out, b.API.warnings(b.ServesAPI())...)
@@ -1221,12 +1221,12 @@ func (b *Bootstrap) loggingLevelName() string {
 //
 // Each is located at the field whose change answers it, and printed in three
 // places: `crewlet validate` given both files, a configuration write's answer
-// (where a person turning code.native on reads the consequence in the answer
+// (where a person turning Gitlet on reads the consequence in the answer
 // that applied it), and the engine's own log, once per node per applied epoch
 // (config_tier_warning) — the engine's through [NodeTierWarnings], which also
 // knows the cache budget this node derived.
 //
-// THE DOCUMENTS ALONE compare only an EXPLICIT git.cache_max_bytes with the
+// THE DOCUMENTS ALONE compare only an EXPLICIT gitlet.cache_max_bytes with the
 // company's repository limit: a derived budget is a share of a volume neither
 // file describes, so `crewlet validate` and a configuration write, which run
 // where that volume is not, cannot know it.
@@ -1234,11 +1234,11 @@ func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 	if boot == nil {
 		return nil
 	}
-	return tierWarnings(boot, company, CacheBudget{Bytes: boot.Git.CacheMaxBytes})
+	return tierWarnings(boot, company, CacheBudget{Bytes: boot.Gitlet.CacheMaxBytes})
 }
 
 // CacheBudget is the code cache's budget as a node resolved it: its bytes, and
-// whether it was DERIVED from the cache's volume because git.cache_max_bytes is
+// whether it was DERIVED from the cache's volume because gitlet.cache_max_bytes is
 // unset. The zero value is a node that has resolved none — it serves no git, or
 // has not built Gitlet — which compares nothing.
 type CacheBudget struct {
@@ -1248,7 +1248,7 @@ type CacheBudget struct {
 
 // NodeTierWarnings is [TierWarnings] on a running node that knows its code
 // cache's RESOLVED budget, derived or explicit — the engine's own log of them,
-// once per applied epoch. A derived budget is the default on every git node,
+// once per applied epoch. A derived budget is the default on every Gitlet node,
 // and one smaller than the company's repository size limit is the same fact as
 // an explicit one: such a repository is served and evicted as soon as it is
 // idle, every later busy period a cold sync of the whole repository, one GET a
@@ -1259,7 +1259,7 @@ func NodeTierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Wa
 		return nil
 	}
 	if cache.Bytes <= 0 {
-		cache = CacheBudget{Bytes: boot.Git.CacheMaxBytes}
+		cache = CacheBudget{Bytes: boot.Gitlet.CacheMaxBytes}
 	}
 	return tierWarnings(boot, company, cache)
 }
@@ -1271,7 +1271,7 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 		return nil
 	}
 	var out []Warning
-	servesGit := boot.Profile("").Roles.Has(placement.RoleGit)
+	servesGit := boot.Profile("").Roles.Has(placement.RoleGitlet)
 
 	// EVERY MEMBER HOLDING THE FILES BUCKET HOLDS EVERY PACK. The default
 	// object store is a bucket on the fleet's own broker, replicated to
@@ -1281,7 +1281,7 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 	// company; S3 is the production store for code. A solo member is the
 	// single-process deployment, where the one disk holds everything
 	// whichever store is chosen.
-	if company.Code.Native && boot.Store.Objects.BackendOrDefault() == ObjectBackendNATS &&
+	if company.CodeBackendFor() == CodeGitlet && boot.Store.Objects.BackendOrDefault() == ObjectBackendNATS &&
 		(boot.declaresFleet() || boot.BrokerKind() == placement.BrokerClient) {
 		out = append(out, advisory(field("store.objects.backend"),
 			"every broker member holding a copy of the files bucket holds every pack "+
@@ -1289,19 +1289,19 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 				"takes store.objects.backend: s3"))
 	}
 
-	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository
+	// A REPOSITORY LARGER THAN THE CACHE. A Gitlet node caches a repository
 	// whole, and one past its budget is served and evicted as soon as its
 	// last reader lets go — so every fetch of it is a cold sync, one GET a
 	// push. Compared at whatever budget the caller knows: an explicit one from
 	// the file, and on a running node the one it derived from its volume.
-	if servesGit && company.Code.Native && cache.Bytes > 0 {
+	if servesGit && company.CodeBackendFor() == CodeGitlet && cache.Bytes > 0 {
 		if limit := company.Code.Limits.Resolved().RepoMaxBytes; cache.Bytes < limit {
 			budget := fmt.Sprintf("this node's budget (%d)", cache.Bytes)
 			if cache.Derived {
-				budget = fmt.Sprintf("this node's budget (%d, derived from git.cache_dir's "+
-					"volume because git.cache_max_bytes is unset)", cache.Bytes)
+				budget = fmt.Sprintf("this node's budget (%d, derived from gitlet.cache_dir's "+
+					"volume because gitlet.cache_max_bytes is unset)", cache.Bytes)
 			}
-			out = append(out, advisory(field("git.cache_max_bytes"), fmt.Sprintf(
+			out = append(out, advisory(field("gitlet.cache_max_bytes"), fmt.Sprintf(
 				"a repository at its size limit (code.limits.repo_max_bytes, %d) cannot "+
 					"be cached within %s: it is served, and evicted as soon as it is idle, "+
 					"so every busy period after is a cold sync of the whole repository",

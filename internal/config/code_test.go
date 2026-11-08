@@ -37,57 +37,57 @@ func TestTheCodeBlocksRules(t *testing.T) {
 		// says is what the message must name, beside the path.
 		says []string
 	}{
-		"native alone": {code: "code:\n  native: true\n"},
-		"native with every limit at its bound": {code: "code:\n  native: true\n  limits:\n" +
+		"native alone": {code: "code:\n  backend: gitlet\n"},
+		"native with every limit at its bound": {code: "code:\n  backend: gitlet\n  limits:\n" +
 			"    max_push_bytes: 1073741824\n    max_blob_bytes: 1024\n    repo_max_bytes: 1099511627776\n" +
 			"    pushes_per_seat_day: 100000\n"},
-		"a seat's quota of one push a day": {code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: 1\n"},
+		"a seat's quota of one push a day": {code: "code:\n  backend: gitlet\n  limits:\n    pushes_per_seat_day: 1\n"},
 		"limits with nothing hosting code": {
 			code: "code:\n  limits:\n    max_blob_bytes: 1048576\n",
-			path: "code.limits", kind: "conflict", says: []string{"code.native"},
+			path: "code.limits", kind: "conflict", says: []string{"code.backend: gitlet"},
 		},
 		"a seat's quota with nothing hosting code": {
 			code: "code:\n  limits:\n    pushes_per_seat_day: 50\n",
-			path: "code.limits", kind: "conflict", says: []string{"code.native"},
+			path: "code.limits", kind: "conflict", says: []string{"code.backend: gitlet"},
 		},
 		"a seat's quota below one push": {
-			code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: -1\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    pushes_per_seat_day: -1\n",
 			path: "code.limits.pushes_per_seat_day", kind: "out_of_range", says: []string{"1..100000", "1000"},
 		},
 		"a seat's quota past its ceiling": {
-			code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: 100001\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    pushes_per_seat_day: 100001\n",
 			path: "code.limits.pushes_per_seat_day", kind: "out_of_range", says: []string{"100001", "1..100000"},
 		},
 		"a push limit below a mebibyte": {
-			code: "code:\n  native: true\n  limits:\n    max_push_bytes: 512\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    max_push_bytes: 512\n",
 			path: "code.limits.max_push_bytes", kind: "out_of_range", says: []string{"1048576"},
 		},
 		"a file limit past the push ceiling": {
-			code: "code:\n  native: true\n  limits:\n    max_blob_bytes: 2147483648\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    max_blob_bytes: 2147483648\n",
 			path: "code.limits.max_blob_bytes", kind: "out_of_range", says: []string{"1073741824"},
 		},
 		"a repository limit past a tebibyte": {
-			code: "code:\n  native: true\n  limits:\n    repo_max_bytes: 2199023255552\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    repo_max_bytes: 2199023255552\n",
 			path: "code.limits.repo_max_bytes", kind: "out_of_range", says: []string{"1099511627776"},
 		},
 		"a file limit past the push limit, both set": {
-			code: "code:\n  native: true\n  limits:\n    max_push_bytes: 52428800\n" +
+			code: "code:\n  backend: gitlet\n  limits:\n    max_push_bytes: 52428800\n" +
 				"    max_blob_bytes: 62914560\n",
 			path: "code.limits.max_blob_bytes", kind: "conflict",
 			says: []string{"62914560", "52428800"},
 		},
 		"a push limit alone below the default file limit": {
-			code: "code:\n  native: true\n  limits:\n    max_push_bytes: 10485760\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    max_push_bytes: 10485760\n",
 			path: "code.limits.max_push_bytes", kind: "conflict",
 			says: []string{"max_blob_bytes (unset: its default, 52428800)", "10485760"},
 		},
 		"a repository limit alone below the default push limit": {
-			code: "code:\n  native: true\n  limits:\n    repo_max_bytes: 1048576\n",
+			code: "code:\n  backend: gitlet\n  limits:\n    repo_max_bytes: 1048576\n",
 			path: "code.limits.repo_max_bytes", kind: "conflict",
 			says: []string{"max_push_bytes (unset: its default, 1073741824)", "1048576"},
 		},
 		"a push limit past the repository limit, both set": {
-			code: "code:\n  native: true\n  limits:\n    max_push_bytes: 20971520\n" +
+			code: "code:\n  backend: gitlet\n  limits:\n    max_push_bytes: 20971520\n" +
 				"    max_blob_bytes: 1048576\n    repo_max_bytes: 10485760\n",
 			path: "code.limits.max_push_bytes", kind: "conflict",
 			says: []string{"20971520", "10485760"},
@@ -165,7 +165,7 @@ func TestTheCodeLimitsAreTheSchemasBounds(t *testing.T) {
 // — and at most a year, and a cap of 0..1000 scratch repositories a seat.
 func TestTheCodeScratchIsBounded(t *testing.T) {
 	t.Parallel()
-	const company = "name: Acme\ncode:\n  native: true\n  scratch:\n"
+	const company = "name: Acme\ncode:\n  backend: gitlet\n  scratch:\n"
 	for name, tc := range map[string]struct {
 		scratch    string
 		path, kind string
@@ -208,18 +208,74 @@ func TestTheCodeScratchIsBounded(t *testing.T) {
 	}
 }
 
+// THE GIT HOST IS A CLOSED SET, AND UNSET IS NONE: `code.backend` takes gitlet
+// or none, and a value outside them is refused as unknown and as nothing else.
+// Whether the block's other settings have a host to configure turns on the
+// value nobody can read yet, so the conflicts they would raise on a company
+// hosting nothing would bury the one line that fixes them all. `none`,
+// written or left unset, hosts nothing, and its settings are refused as
+// such.
+//
+// Mutation: drop the unknown-value refusal, or let the conflicts run beside
+// it, and the misspelled row goes red; read an unset backend as gitlet, and
+// the unset row goes red.
+func TestTheGitHostIsAClosedSetAndUnsetIsNone(t *testing.T) {
+	t.Parallel()
+	const limits = "  limits:\n    max_push_bytes: 104857600\n"
+	for name, tc := range map[string]struct {
+		backend    string
+		path, kind string
+	}{
+		"gitlet hosts its limits":   {backend: "  backend: gitlet\n"},
+		"none hosts nothing":        {backend: "  backend: none\n", path: "code.limits", kind: "conflict"},
+		"unset is none":             {backend: "", path: "code.limits", kind: "conflict"},
+		"a misspelling is one line": {backend: "  backend: gitlab\n", path: "code.backend", kind: "unknown_value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.ParseCompany([]byte("name: Acme\ncode:\n" + tc.backend + limits))
+			if tc.path == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			problems := config.Problems(err)
+			if len(problems) != 1 || problems[0].Path != tc.path || problems[0].Kind != tc.kind {
+				t.Fatalf("problems = %+v, want one %s at %s", problems, tc.kind, tc.path)
+			}
+			if tc.kind == "conflict" && !strings.Contains(problems[0].Message, "code.backend: gitlet") {
+				t.Errorf("message = %q, want it to name code.backend: gitlet", problems[0].Message)
+			}
+			if tc.kind == "unknown_value" && !strings.Contains(problems[0].Message, `"gitlet" or "none"`) {
+				t.Errorf("message = %q, want it to name the set it is outside", problems[0].Message)
+			}
+		})
+	}
+	// THE RESOLVED BACKEND is what everything downstream reads: none for an
+	// unset one, the document's value otherwise.
+	for _, tc := range []struct {
+		set, want config.CodeBackend
+	}{{"", config.CodeNone}, {config.CodeNone, config.CodeNone}, {config.CodeGitlet, config.CodeGitlet}} {
+		c := config.Company{Code: config.Code{Backend: tc.set}}
+		if got := c.CodeBackendFor(); got != tc.want {
+			t.Errorf("code.backend %q resolves to %q, want %q", tc.set, got, tc.want)
+		}
+	}
+}
+
 // NOTHING HOSTS A SCRATCH POLICY WITHOUT GITLET: a block that
 // would read as live and govern nothing is refused, as code.limits is.
 //
 // Mutation: drop the scratch arm of the rule and the block is accepted — red.
-func TestCodeScratchNeedsTheNativeHost(t *testing.T) {
+func TestCodeScratchNeedsGitlet(t *testing.T) {
 	t.Parallel()
 	_, err := config.ParseCompany([]byte("name: Acme\ncode:\n  scratch:\n    idle_days: 3\n"))
 	problems := config.Problems(err)
 	if len(problems) != 1 || problems[0].Path != "code.scratch" || problems[0].Kind != "conflict" ||
-		!strings.Contains(problems[0].Message, "code.native: true") {
+		!strings.Contains(problems[0].Message, "code.backend: gitlet") {
 		t.Fatalf("code.scratch with nothing hosting code = %+v, want one conflict at code.scratch naming "+
-			"code.native: true", problems)
+			"code.backend: gitlet", problems)
 	}
 }
 
@@ -241,7 +297,7 @@ func TestScratchMaxPerSeatZeroIsASetting(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			c, err := config.ParseCompany([]byte("name: Acme\ncode:\n  native: true\n" + tc.scratch))
+			c, err := config.ParseCompany([]byte("name: Acme\ncode:\n  backend: gitlet\n" + tc.scratch))
 			if err != nil {
 				t.Fatalf("refused: %v", err)
 			}
@@ -337,7 +393,7 @@ units:
 // FORGE_TOKEN declared for forge.example.com, the forge every case's remotes
 // name.
 func codeRepos(repos string) string {
-	return codeChart + "code:\n  native: true\n" +
+	return codeChart + "code:\n  backend: gitlet\n" +
 		"  remote_credentials:\n    FORGE_TOKEN: {hosts: [forge.example.com]}\n" +
 		"  repos:\n" + repos
 }
@@ -370,18 +426,18 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 	}{
 		"repositories with nothing hosting code": {
 			doc:  codeChart + "code:\n  repos:\n" + web,
-			path: "code.repos", kind: "conflict", says: []string{"code.native"},
+			path: "code.repos", kind: "conflict", says: []string{"code.backend: gitlet"},
 		},
 		"a retention with nothing hosting code": {
 			doc:  codeChart + "code:\n  deleted_retention_days: 30\n",
-			path: "code.deleted_retention_days", kind: "conflict", says: []string{"code.native"},
+			path: "code.deleted_retention_days", kind: "conflict", says: []string{"code.backend: gitlet"},
 		},
 		"a retention past a year": {
-			doc:  codeChart + "code:\n  native: true\n  deleted_retention_days: 366\n",
+			doc:  codeChart + "code:\n  backend: gitlet\n  deleted_retention_days: 366\n",
 			path: "code.deleted_retention_days", kind: "out_of_range", says: []string{"1..365", "366"},
 		},
 		"a negative retention": {
-			doc:  codeChart + "code:\n  native: true\n  deleted_retention_days: -1\n",
+			doc:  codeChart + "code:\n  backend: gitlet\n  deleted_retention_days: -1\n",
 			path: "code.deleted_retention_days", kind: "out_of_range", says: []string{"1..365"},
 		},
 		"no name": {
@@ -631,12 +687,12 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			says: []string{"tag never moves", `"merge_by" and "checks"`},
 		},
 		"a merge floor nobody knows": {
-			doc:  codeChart + "code:\n  native: true\n  merge_by_floor: admins\n",
+			doc:  codeChart + "code:\n  backend: gitlet\n  merge_by_floor: admins\n",
 			path: "code.merge_by_floor", kind: "unknown_value", says: []string{"admins", "writers"},
 		},
 		"a merge floor with nothing hosting code": {
 			doc:  codeChart + "code:\n  merge_by_floor: persons\n",
-			path: "code.merge_by_floor", kind: "conflict", says: []string{"code.native"},
+			path: "code.merge_by_floor", kind: "conflict", says: []string{"code.backend: gitlet"},
 		},
 		// A REPOSITORY'S MIRRORS AND ITS IMPORT: each URL read by the rule its
 		// dial reads it by, each credential one whole ${VAR}, a push mirror's
@@ -721,7 +777,7 @@ func TestPathOwnersAreBounded(t *testing.T) {
 			fmt.Fprintf(&list, "        - {paths: [\"t%d/**\"], unit: team-%d}\n", i, i)
 		}
 		return "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\nunits:\n" + units.String() +
-			"code:\n  native: true\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
+			"code:\n  backend: gitlet\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
 			list.String()
 	}
 	if _, err := config.ParseCompany([]byte(doc(config.CodeMaxPathOwners))); err != nil {
@@ -774,7 +830,7 @@ func TestPathOwnersAreBoundedByWhatTheyWeigh(t *testing.T) {
 			t.Fatal(err)
 		}
 		return "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\nunits:\n" + units.String() +
-			"code:\n  native: true\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
+			"code:\n  backend: gitlet\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
 			list.String(), len(weight)
 	}
 	under, weighs := doc(1)
@@ -1045,7 +1101,7 @@ units:
     roles:
       - {name: Ops, handle: ops, code: {access: full_access}}
 code:
-  native: true
+  backend: gitlet
 `
 	const slow = "{branch: main, checks: [unit], landing: {depth: 1, batch: 1}"
 	for name, tc := range map[string]struct {
@@ -1129,7 +1185,7 @@ func TestACheckIsNamedByOneRule(t *testing.T) {
 func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompany([]byte(codeChart + `code:
-  native: true
+  backend: gitlet
   deleted_retention_days: 30
   merge_by_floor: maintainers
   repos:
@@ -1368,7 +1424,7 @@ func TestTheIdentityDomainIsADNSName(t *testing.T) {
 		{"example.", false}, {"ex ample.com", false}, {"ex_ample.com", false}, {"bücher.example", false},
 		{"a@b.example", false},
 	} {
-		doc := fmt.Sprintf("name: Acme\ncode:\n  native: true\n  identity_domain: %q\n", tc.domain)
+		doc := fmt.Sprintf("name: Acme\ncode:\n  backend: gitlet\n  identity_domain: %q\n", tc.domain)
 		_, err := config.ParseCompany([]byte(doc))
 		problems := config.Problems(err)
 		switch {
@@ -1386,9 +1442,9 @@ func TestTheIdentityDomainIsADNSName(t *testing.T) {
 	}
 	_, err = config.ParseCompany([]byte("name: Acme\ncode:\n  identity_domain: example.com\n"))
 	if problems := config.Problems(err); len(problems) != 1 || problems[0].Path != "code.identity_domain" ||
-		problems[0].Kind != "conflict" || !strings.Contains(problems[0].Message, "code.native") {
+		problems[0].Kind != "conflict" || !strings.Contains(problems[0].Message, "code.backend: gitlet") {
 		t.Errorf("an identity domain with nothing hosting code: problems %+v, want one conflict naming "+
-			"code.native", problems)
+			"code.backend: gitlet", problems)
 	}
 	if config.DefaultCodeIdentityDomain != "seats.invalid" {
 		t.Errorf("the default identity domain is %q, want seats.invalid: a name under RFC 2606's .invalid, "+
@@ -1445,14 +1501,14 @@ func TestADescriptionThatIsNotUTF8IsRefused(t *testing.T) {
 //
 // Mutation: put either check back in Code.validate and ValidateRunnable
 // refuses the stored revision.
-func TestTheCodeHostsPolicyBoundsAreAdmissionRules(t *testing.T) {
+func TestGitletsPolicyBoundsAreAdmissionRules(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
 	for i := range config.CodeMaxRepos + 1 {
 		fmt.Fprintf(&b, "    - {name: r%d, owner: {seat: swe}, protect: [{branch: main}]}\n", i)
 	}
-	doc := strings.Replace(codeRepos(b.String()), "  native: true\n",
-		fmt.Sprintf("  native: true\n  deleted_retention_days: %d\n", config.CodeMaxDeletedRetentionDays+1), 1)
+	doc := strings.Replace(codeRepos(b.String()), "  backend: gitlet\n",
+		fmt.Sprintf("  backend: gitlet\n  deleted_retention_days: %d\n", config.CodeMaxDeletedRetentionDays+1), 1)
 	c, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1502,7 +1558,7 @@ func BenchmarkValidatingTheMostRepositories(b *testing.B) {
 			fmt.Fprintf(&doc, "      - {name: Seat %d %d}\n", u, s)
 		}
 	}
-	doc.WriteString("code:\n  native: true\n  repos:\n")
+	doc.WriteString("code:\n  backend: gitlet\n  repos:\n")
 	for i := range config.CodeMaxRepos {
 		owner := fmt.Sprintf("{unit: Unit %d}", i%300)
 		if i%2 == 1 {
@@ -1534,7 +1590,7 @@ func BenchmarkWarningAboutTheMostUnitRepositories(b *testing.B) {
 	for _, visibility := range []string{"unit", ""} {
 		var doc strings.Builder
 		doc.WriteString(ledChartDoc(30))
-		doc.WriteString("code:\n  native: true\n  repos:\n")
+		doc.WriteString("code:\n  backend: gitlet\n  repos:\n")
 		field := ""
 		if visibility != "" {
 			field = ", visibility: " + visibility
@@ -1577,8 +1633,8 @@ func TestARetentionNoDurationHoldsIsRefusedToRun(t *testing.T) {
 		refuse bool
 	}{{held, false}, {held + 1, true}} {
 		doc := codeRepos("    - {name: web, owner: {seat: swe}, protect: [{branch: main}]}\n")
-		doc = strings.Replace(doc, "  native: true\n",
-			fmt.Sprintf("  native: true\n  deleted_retention_days: %d\n", tc.days), 1)
+		doc = strings.Replace(doc, "  backend: gitlet\n",
+			fmt.Sprintf("  backend: gitlet\n  deleted_retention_days: %d\n", tc.days), 1)
 		c, err := config.ParseCompanyDocument([]byte(doc))
 		if err != nil {
 			t.Fatalf("decode: %v", err)
@@ -1663,7 +1719,7 @@ func TestAnUnknownVisibilityIsRefused(t *testing.T) {
 }
 
 // A SEARCH MODE THIS BUILD DOES NOT KNOW IS REFUSED at the field, naming the
-// closed set, as one problem: read as `indexed` it would have every git node
+// closed set, as one problem: read as `indexed` it would have every Gitlet node
 // keeping an index build one its author did not ask for, and read as `grep` it
 // would leave a repository out of every search across the company's that its
 // author meant to be in. Unset reads as indexed — a declared repository is a
@@ -1746,7 +1802,7 @@ units:
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			c, err := config.ParseCompanyDocument([]byte(chart + "code:\n  native: true\n  repos:\n" +
+			c, err := config.ParseCompanyDocument([]byte(chart + "code:\n  backend: gitlet\n  repos:\n" +
 				"    - name: web\n      " + tc.repo + "\n      protect: [{branch: main}]\n"))
 			if err != nil {
 				t.Fatalf("not decoded: %v", err)
@@ -1776,17 +1832,17 @@ units:
 
 // A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED:
 // Gitlet is the only thing a tier caps, so on a company that
-// hosts no code (`code.native` unset) `code.access` reads as a grant and grants
+// hosts no code (`code.backend` is not `gitlet`) `code.access` reads as a grant and grants
 // nothing, and the warning says where a tier counts. A seat's own GitHub App
 // changes nothing: its access is its own permissions in GitHub's terms, so
 // the app is no second reader of the tier, and the warning points at
 // integrations.github.permissions instead. Every tier, read_only included;
-// not where the company sets code.native; and not on a human seat, whose tier
+// not where the company sets code.backend: gitlet; and not on a human seat, whose tier
 // is an admission refusal of its own, nor for a tier validation refuses.
 //
 // Mutation: skip a seat with a GitHub App of its own (the retired reading),
 // and the three rows with an app go silent.
-func TestATierNoCodeHostReadsWarns(t *testing.T) {
+func TestATierNoGitletReadsWarns(t *testing.T) {
 	t.Parallel()
 	const ownApp = "    code: {access: review}\n    integrations:\n      github: {repos: [acme/api]}\n"
 	const why = "the only place a tier caps"
@@ -1813,7 +1869,7 @@ func TestATierNoCodeHostReadsWarns(t *testing.T) {
 		"its own app, no github integration": {doc: on("", ownApp), warns: "review", why: why},
 		"its own app, the integration off": {doc: on("integrations:\n  github: {enabled: false}\n", ownApp),
 			warns: "review", why: why},
-		"on Gitlet": {doc: seat("    code: {access: full_access}\n") + "code:\n  native: true\n"},
+		"on Gitlet": {doc: seat("    code: {access: full_access}\n") + "code:\n  backend: gitlet\n"},
 		"a human seat, refused instead": {doc: "name: Acme\nroles:\n  - name: Founder\n    kind: human\n" +
 			"    contact: {slack_user_id: U0FOUNDER}\n    code: {access: full_access}\n"},
 		"a tier validation refuses": {doc: seat("    code: {access: admin}\n")},

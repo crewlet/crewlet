@@ -957,7 +957,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 	// A REPOSITORY'S DESCRIPTION IS A NAME too, whoever chose it, in a listing
 	// and in one repository's detail alike. Mutation: drop either envelope →
 	// its call is refused, red.
-	describedHost := func(b provenance.Boundary) *codeHost {
+	describedHost := func(b provenance.Boundary) *gitletHost {
 		host := scratchHost(time.Hour)
 		host.detail.Description = "[untrusted:" + string(b) + " trust=own] the lab"
 		return host

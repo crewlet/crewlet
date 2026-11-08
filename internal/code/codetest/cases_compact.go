@@ -34,11 +34,11 @@ import (
 
 // THE COMPACTION CASES (C1–C8): a repository's packs merged by its maintainer
 // and decided by its committer (ADR-0090), the merged packs retired for
-// a day and swept, and every git node's cache following by a swap — through
-// the production compactor every git node of a topology is built with
+// a day and swept, and every Gitlet node's cache following by a swap — through
+// the production compactor every Gitlet node of a topology is built with
 // (Node.Compactor), never started, so each case drives its passes itself.
 
-// pushEach makes n pushes to main through the first git node, each one commit
+// pushEach makes n pushes to main through the first Gitlet node, each one commit
 // adding a file of size random bytes, and answers the last commit.
 func pushEach(c *Case, p *Person, work string, n, size int) string {
 	c.T.Helper()
@@ -95,7 +95,7 @@ func tryCompactOn(ctx context.Context, c *Case, n Node) (compact.Outcome, error)
 	}
 }
 
-// compactAtMaintainer is a pass of every git node's compactor, in turn, until
+// compactAtMaintainer is a pass of every Gitlet node's compactor, in turn, until
 // the repository's maintainer has compacted it — a node that is not its
 // maintainer skips it — asked again while a pass finds it busy; it answers the
 // maintainer.
@@ -115,7 +115,7 @@ func compactAtMaintainer(c *Case) Node {
 			}
 		}
 		if time.Now().After(deadline) {
-			c.T.Fatalf("no git node's pass compacted %s in a minute", RepoName)
+			c.T.Fatalf("no Gitlet node's pass compacted %s in a minute", RepoName)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -221,12 +221,12 @@ func fsckCaches(c *Case, p *Person, repoID string) {
 }
 
 // C1: a compaction merges a repository's packs on its maintainer, its
-// committer retires them in one record, and every git node's cache follows —
+// committer retires them in one record, and every Gitlet node's cache follows —
 // the maintainer by adopting the output it built, the other by its next
 // fetch's swap, keeping the commit-graph — while every clone checks out every
 // commit.
 func aCompactionMergesPacksAndEveryCacheFollows(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	// Past the floor, so the home's first pass is due.
@@ -719,7 +719,7 @@ func aCrashAtEveryCompactionStepLeavesATruthfulState(t *testing.T, newFleet NewF
 
 // compactCrashAt is C6 at one point.
 func compactCrashAt(t *testing.T, newFleet NewFleet, crash compactCrash) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	// A PUSH OF 64 KiB EACH, so an output is past one read of its upload and
@@ -923,7 +923,7 @@ func diskAsTheCrashLeftIt(t *testing.T, dir string) {
 	}
 }
 
-// C8: a git node that was down while a compaction applied reads the
+// C8: a Gitlet node that was down while a compaction applied reads the
 // repository whole at its first round — and the retirements above its own
 // position with it — so it sheds the merged packs keeping the commit-graph it
 // had, the same file; without those retirements (the control) it cannot tell
@@ -949,7 +949,7 @@ func (e retirementsWithheld) RepoState(ctx context.Context, q code.StateQuery) (
 
 // restartedNodeKeepsGraph is C8, its retirements withheld where control.
 func restartedNodeKeepsGraph(t *testing.T, newFleet NewFleet, control bool) {
-	shape := Shape{GitNodes: 2}
+	shape := Shape{GitletNodes: 2}
 	if control {
 		shape.WrapEstate = func(e host.Estate) host.Estate { return retirementsWithheld{e} }
 	}

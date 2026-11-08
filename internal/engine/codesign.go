@@ -24,7 +24,7 @@ import (
 //     most 254 bytes, and a `${VAR}` reference — which names no address
 //     until something resolves it — fall back to the seat's handle and to
 //     `<handle>@<code.identity_domain>`. NEVER org.Role.ResolvedEmail: it
-//     reads THIS node's environment, which a retry on another git node need
+//     reads THIS node's environment, which a retry on another Gitlet node need
 //     not share — two nodes would build two commits of one write — and an
 //     address a company kept out of its document would be written into
 //     history for good.
@@ -38,7 +38,7 @@ import (
 //
 // A node with no epoch, or whose chart holds no such seat, signs nothing:
 // code.ErrNotServing, about this node, so the write runs nothing here and the
-// walk asks a git node serving a chart that holds it.
+// walk asks a Gitlet node serving a chart that holds it.
 type codeSigner struct{ e *Engine }
 
 // The engine's committer name and the local part of its address.

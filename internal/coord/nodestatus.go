@@ -42,18 +42,18 @@ import (
 // one of them eventually shadows the other.
 const StatusKey = "status"
 
-// GitBackgroundKey is where a git node's presence lease carries what its git
+// GitBackgroundKey is where a Gitlet node's presence lease carries what its git
 // cache gives its background work: its MAINTENANCE BUDGET, the figure every
 // run of a repository's maintenance on that node is admitted against — the
 // node's memory less what its serving keeps — read again at every maintenance
 // pass, so a container resized in place says its new figure within a pass and
-// a beat (internal/code/cache, Cache.BackgroundBudget). Every git node weighs
+// a beat (internal/code/cache, Cache.BackgroundBudget). Every Gitlet node weighs
 // every other by it to place a repository's maintenance on the first node of
 // the repository's git order whose budget holds the work, the home on a fleet
 // of alike nodes (internal/estate, Router.Maintainer).
 //
-// ON THE HEARTBEAT, for the reason a node's status is: which git node can hold
-// a repository's maintenance is a question every git node asks about every
+// ON THE HEARTBEAT, for the reason a node's status is: which Gitlet node can hold
+// a repository's maintenance is a question every Gitlet node asks about every
 // other, and a request/reply asking each in turn would be the fan-out whose
 // partial answers the file head refused. Its freshness is a heartbeat, and a
 // budget moves only when a container is resized.
@@ -62,20 +62,20 @@ const StatusKey = "status"
 // beat, because answering reads the broker and the control plane, and a beat
 // whose hook overruns that share publishes no status at all — right for a
 // display column, which then reads as not saying, and wrong for a placement
-// input, which would go with it: a git node whose status was dropped for a
+// input, which would go with it: a Gitlet node whose status was dropped for a
 // beat would say nothing of what it can hold, the large node of a fleet would
 // be weighed as one known to hold nothing, and every repository only it can
 // maintain would be left to a node whose own admission refuses the work. The
 // budget is a figure in memory that nothing can overrun, so the seat host
 // writes it on EVERY beat beside the status, as it writes its own held count
-// (internal/seat/placement, HeldKey): a live git node of this build always
+// (internal/seat/placement, HeldKey): a live Gitlet node of this build always
 // says it.
 //
-// ZERO IS WRITTEN, never left out: it is a claim — a git node that has not
+// ZERO IS WRITTEN, never left out: it is a claim — a Gitlet node that has not
 // built Gitlet yet, or whose transfers keep all of its memory, has nothing to
 // give — and a row without the key is the other fact, a node NOT SAYING (a
 // build or a host that writes none), which [GitBackgroundFromMeta] reports as
-// such. A node without the git role writes none.
+// such. A node without the gitlet role writes none.
 const GitBackgroundKey = "git_background_bytes"
 
 // GitBackgroundFromMeta reads a peer's maintenance budget off its presence

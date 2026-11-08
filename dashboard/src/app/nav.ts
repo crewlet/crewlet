@@ -66,7 +66,7 @@
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
  * Worklet, its knowledge base, Doclet, its chat, Chatlet, or its git host,
- * Gitlet, for a company that sets `code.native`) names it
+ * Gitlet, for a company on `code.backend: gitlet`) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -104,7 +104,7 @@ export type Workspace =
  * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
  * work), `knowledge` is Doclet (spaces and pages), `chat` is Chatlet (rooms,
  * threads and direct messages), `code` is Gitlet, the engine's own git host
- * (the repositories a company that sets `code.native` keeps in it). Named here
+ * (the repositories a company on `code.backend: gitlet` keeps in it). Named here
  * because the navigation hides what reads one the company does not run.
  */
 export type Service = "tracker" | "knowledge" | "chat" | "code";
@@ -769,7 +769,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "workspace",
     renderer: "tabs",
     // GITLET'S: hidden, never locked, where the company does not set
-    // `code.native`.
+    // `code.backend: gitlet`.
     //
     // AND NO PERMISSION, because no app gates code (ADR-0033): every person
     // reads every repository (ADR-0088), and the engine holds each answer to

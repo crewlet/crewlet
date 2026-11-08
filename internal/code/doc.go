@@ -18,7 +18,7 @@
 // receive-pack wrote for it, back to back (bundle.go) — and a code_packs row
 // names it. That table is declared [objstore.Required] ([PackReferences],
 // ADR-0026 and ADR-0081), so the collector keeps every object a live row names,
-// the audit checks each one and a backup carries them. A git node's bare
+// the audit checks each one and a backup carries them. A Gitlet node's bare
 // repository is never the record: it is a cache derived from these rows,
 // disposable, rebuilt from them whenever it is lost or wrong — which holds
 // only because a repository's refs and packs move by records on its own
@@ -27,10 +27,10 @@
 //
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
-// One object a push — one PUT, and one GET on every git node that installs it,
+// One object a push — one PUT, and one GET on every Gitlet node that installs it,
 // with no index-pack anywhere but inside the receiving receive-pack — because a
 // cold sync from S3 is bound by how many GETs it makes, and re-indexing what it
-// downloaded would make it bound by CPU on every git node. The format stays
+// downloaded would make it bound by CPU on every Gitlet node. The format stays
 // EXACT for ever by a rule rather than by luck: a pack index grows a table of
 // 64-bit offsets only past 2 GiB, and NO WRITER OF A STORED PACK MAY PRODUCE
 // ONE. A push is held to [MaxPackBytes], under 2 GiB, and whatever later
@@ -108,7 +108,7 @@
 // row. A write that asks for what the change already says is answered from the
 // row with no record. A seat's is judged from the chart of the deciding node's
 // epoch ([SeatRules]), and a node that cannot judge one decides none. A
-// LANDING ([ChangeLanded]) is the repository's home git node's own write, of a
+// LANDING ([ChangeLanded]) is the repository's home Gitlet node's own write, of a
 // change whose target came to hold its head by a push past it — which no
 // push's apply can see, since only git says one commit holds another — naming
 // no asker and judged by no chart, decided against the change's head and the
@@ -222,7 +222,7 @@
 // it.
 //
 // A REVISION'S FACTS ARE ON THE CHANGE'S SUBJECT TOO (revise.go): what the
-// repository's home git node read of the change's head revision against its
+// repository's home Gitlet node read of the change's head revision against its
 // target — its base, the trees of its base and its head, its patch-id, the
 // files it touches and their classes ([RevisionClasses]) — and the path owners
 // whose globs those files match, MATCHED ON THE HOME ([MatchOwners]) beside
@@ -361,7 +361,7 @@
 // token outlives the check's timeout by [CheckBoxGrace], a backstop the row
 // overrides the moment the attempt ends.
 //
-// A CHECK IS RUN BY A GIT NODE (internal/code/checkrun), which finds what it
+// A CHECK IS RUN BY A GITLET NODE (internal/code/checkrun), which finds what it
 // may claim by a `checks_queued` read ([ReadChecksQueued]: the queued attempts
 // naming one cell oldest queued first, each with its definition and its
 // repository's name),
@@ -827,7 +827,7 @@
 // declares, so their plans are the framework's to hold rather than this
 // package's, and no test holds them.
 //
-// # What a seat and a git node read
+// # What a seat and a Gitlet node read
 //
 // A repository's REFS are listed by name under a prefix — its branches, its
 // tags, or a seat's own namespace — a page at a time ([MaxRefsPerPage]),
@@ -843,13 +843,13 @@
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
 // (repo_id, position, push_id) (replicated 0084), because a record's
 // instant is the broker's and steps back across a stream leader's change, so
-// "every push above this position" — what a git node's index of which push
+// "every push above this position" — what a Gitlet node's index of which push
 // introduced each commit is built from — could not be read by it. The
 // history listing pages newest first by position; the `introduced` read,
 // the engine's own, which names no asker and states its level, pages
 // ascending over a range or descending below a position; and a delta
 // snapshot asked for its PUSHES PHASE serves every push applied in (Since,
-// its position], each once across its pages, so the index a git node folds
+// its position], each once across its pages, so the index a Gitlet node folds
 // them into is level with its copy at every round. Those two send each push
 // CONDENSED to the refs it landed, and hold a page to the commands it read as
 // well as to the rows it sends, since a push row stores every command its
@@ -872,27 +872,27 @@
 // purge part and its count — reads the reordered one, so it is one index,
 // not two.
 //
-// A read of a repository's CONTENT is a git node's (internal/code/query), and
+// A read of a repository's CONTENT is a Gitlet node's (internal/code/query), and
 // this package holds only what both ends of one import: its wire — [GitQuery]
 // and its answers, every revision an object id ([ValidRev]) and every path one
-// no git grammar reads ([GitPath]) — the node's [GitShare], half a git node's
+// no git grammar reads ([GitPath]) — the node's [GitShare], half a Gitlet node's
 // read lane, which every kind of seat git work takes its unit of, so a burst
 // of seat reads never takes the half a person's push scans wait in, and the
 // instant a served read's answer is due ([AnswerBy]), a reply's margin before
 // its asker stops listening, at which every wait of the read ends and is
 // answered unready rather than late ([AnswerDue]). A
-// git node judges the asker's grant from its own chart as a reader of the rows
+// Gitlet node judges the asker's grant from its own chart as a reader of the rows
 // does, and one that cannot answer for a reason about ITSELF — a copy still
 // syncing, its share full, no chart yet, its configuration behind, a failure
 // of its own, or no copy at all where the read is not its walk's filler's
-// ([GitQuery.Home]) — says [ErrGitUnready], which another git node may
+// ([GitQuery.Home]) — says [ErrGitUnready], which another Gitlet node may
 // answer, with a reason that tells the walk whether it may let the next node
-// fill a copy instead ([UnreadyReason.PassesFill]). Which git node a read is
+// fill a copy instead ([UnreadyReason.PassesFill]). Which Gitlet node a read is
 // asked of first is the estate router's: the repository's HOME, the first of
-// its rendezvous order over the live git nodes (ADR-0089).
+// its rendezvous order over the live Gitlet nodes (ADR-0089).
 //
 // Two of those reads answer with text git leaves unbounded: a path's HISTORY
-// ([GitLog], its literal [LogQuery.Grep] matched by the git node, never by
+// ([GitLog], its literal [LogQuery.Grep] matched by the Gitlet node, never by
 // git) and a file's BLAME ([GitBlame]). Each such field — a commit's subject,
 // its author's name and address, its parents, a blamed line — is DESCRIBED BY
 // ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and its kin, each of
@@ -900,14 +900,14 @@
 // commit, always fit one page. A kind is an estate request's and no record's,
 // so a kind added moves no [RecordVersion].
 //
-// # An engine write is built on a git node and lands as a push
+// # An engine write is built on a Gitlet node and lands as a push
 //
-// A seat's or a person's change made through a tool is BUILT on a git node
+// A seat's or a person's change made through a tool is BUILT on a Gitlet node
 // holding the repository (internal/code/host's Server.Write) and lands as a
 // push through the one landing every push takes (ADR-0092). This package
 // holds what both ends of one import, as it does for a read by object id: the
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's own
-// refusals ([WriteRefusal], UNRECORDED — decided on the git node before
+// refusals ([WriteRefusal], UNRECORDED — decided on the Gitlet node before
 // anything is stored), the ONE rule every party holds a write to
 // ([EngineWrite.Validate], every new path to [ValidTreePath] and every path it
 // names to [MaxTreePathDepth] components), and the bounds that size it — the
@@ -980,7 +980,7 @@
 // measure), where keeping every comment to the walk's end took nine, and
 // thirty times the allocation.
 //
-// A REVISION'S CLASSES RIDE ITS FACTS ([Revise], revise.go): the home's git
+// A REVISION'S CLASSES RIDE ITS FACTS ([Revise], revise.go): the home's Gitlet
 // node lexes each touched Go file changed in place — a regular file on both
 // sides, in one mode — within [MaxClassedBytes] of Go a revision, and the
 // facts name each classed path by its place in the touched list
@@ -1016,9 +1016,9 @@
 // NO ROW OF A REPOSITORY CARRIES A GATE. A push is judged by its rules' flags
 // and direct push and never by a gate, and a repository's row ([RepoRef]) is
 // what the admission of every git request reads ([Reader.Resolve]), every page
-// of a git node's sync carries ([Reader.Snapshot]) and its cache's state file
+// of a Gitlet node's sync carries ([Reader.Snapshot]) and its cache's state file
 // keeps, rewritten and made durable at every round that changes anything — on
-// every push, on every git node. So the row's rules are each rule as a push is
+// every push, on every Gitlet node. So the row's rules are each rule as a push is
 // judged by it ([PushRule]), read without the gate's column ([pushRulesIn]),
 // as the push decide's are and a listing's: at their bound a repository's
 // gates are half a mebibyte of JSON, which each of those would decode, ship
@@ -1061,7 +1061,7 @@
 // asking for one is refused not_permitted naming why, a person's included. The
 // rows carry the mode in code_repos.search, beside code_repos_search_idx over
 // the active and archived repositories by mode and then name — the walk of the
-// [ReadIndexed] listing, by which a git node's indexer finds the repositories
+// [ReadIndexed] listing, by which a Gitlet node's indexer finds the repositories
 // whose code index it may keep, the first [IndexHolders] of each one's git
 // order (internal/code/cache). This package records the mode, serves it and
 // lets a maintainer change it; it indexes and searches nothing.
@@ -1069,7 +1069,7 @@
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
-// the pushes a receiving node proposes, the compactions and expunges a git
+// the pushes a receiving node proposes, the compactions and expunges a Gitlet
 // node proposes, the purges a person asks for and the lifecycle requests a
 // tool sends (lifecycle.go: a repository made, renamed, changed, retired or
 // held by a tool, and the code-retention pass's release of an old name and
@@ -1131,7 +1131,7 @@
 //     the grace, oldest first by instant, with whatever its rows leave of
 //     [MaxRecordRows] once the tombstones have had theirs: after them, since
 //     a drop forgotten late costs a row where a tombstone's room taken costs
-//     every git node a full read, and no fixed share, which falls behind even
+//     every Gitlet node a full read, and no fixed share, which falls behind even
 //     one push of [MaxCommandsPerPush] forced updates. That keeps pace with
 //     one such push a record, and with deletions while their tombstones are
 //     not yet due; it falls behind a record the committer fills with them —
@@ -1193,7 +1193,7 @@
 //     pack learns it from: a snapshot serves it in a RETIRED phase — a delta
 //     every retirement above its floor, a full answer those above its
 //     caller's [StateQuery.RetiredSince] when it can serve every one, at
-//     most [MaxFullRetirements] (a page, against a commit-graph every git
+//     most [MaxFullRetirements] (a page, against a commit-graph every Gitlet
 //     node holding the repository would otherwise drop and rewrite) — and
 //     the mark is the one past which a delta is no longer complete, so a
 //     delta from below it is answered in full, as below the tombstone mark.
@@ -1208,7 +1208,7 @@
 //
 // Every push stores a pack, so a busy repository's pack count grows with its
 // pushes, and every cold sync pays a GET a pack and every request a lookup a
-// pack. A COMPACTION merges some of them into fewer: the repository's HOME git
+// pack. A COMPACTION merges some of them into fewer: the repository's HOME Gitlet
 // node (internal/code/compact, ADR-0089) builds the outputs, stores each as one
 // bundle and proposes ONE record — OpCompact on the repository's subject
 // ([Compaction]), naming the packs it retires and the rows of the outputs it
@@ -1280,7 +1280,7 @@
 // whatever its pushes do. A compaction adds no pack and is decided at the
 // bound as below it: it is what makes room.
 //
-// A git node finds the repositories a compaction may be due in by the
+// A Gitlet node finds the repositories a compaction may be due in by the
 // [ReadCompactionDue] listing: the active and archived repositories holding
 // at least MinPacks live packs, MOST FIRST, each with its row's version and
 // the objects its packs hold, one backward walk of code_repos_packs_idx
@@ -1288,14 +1288,14 @@
 //
 // # A publication puts a published layer on the chain, decided as a compaction
 //
-// A git node serving a repository answers a fetch from a multi-pack-index and
+// A Gitlet node serving a repository answers a fetch from a multi-pack-index and
 // its bitmap, and writing them costs the history whatever was added since — so
-// Gitlet writes them ONCE for the fleet and every git node installs
+// Gitlet writes them ONCE for the fleet and every Gitlet node installs
 // them: a repository's PUBLISHED CHAIN, git's own incremental multi-pack-index
 // layers with their bitmaps and commit-graph layers, root first, its rows in
 // code_layers and its bytes the parts code_layer_parts names
 // ([LayerReferences], DERIVED under ADR-0081: kept while named, never audited,
-// never carried by a backup, since any git node can build a layer again). A
+// never carried by a backup, since any Gitlet node can build a layer again). A
 // layer is put on the chain by a PUBLICATION: a compaction carrying a
 // [LayerRef] ([Compaction.Layer]), so the repository's committer — the one
 // writer of its packs — is the one writer of its chain, its repack (when it
@@ -1339,7 +1339,7 @@
 //
 // A git process trusts a layer's files by their names — a layer's
 // multi-pack-index and its commit-graph layer are named by their own trailing
-// checksum, and git reads neither checksum when it opens one — so every git
+// checksum, and git reads neither checksum when it opens one — so every Gitlet
 // node holds a layer's three files to its row before any git process is
 // handed them, and the maintainer states a row's byte fields from the files
 // its build wrote, by ONE reading of git's three formats (layer.go,
@@ -1366,13 +1366,13 @@
 //
 // Every file git writes through its hashfile — a pack, its index, a
 // multi-pack-index, its bitmap, a commit-graph and its layers — ends in the
-// hash of every byte before it, which git never reads back, and a git node
+// hash of every byte before it, which git never reads back, and a Gitlet node
 // holds such files to it in two places: its cache's check and scrub
 // (internal/code/cache) and a published layer's check. Both judge by ONE
 // implementation, [HashTrailer] over the piece loop [HashPieces]
 // (hashfile.go, ADR-0008), because the same layer files reach both — fetched,
 // then kept. It reads a file a PIECE at a time, each in a slot its caller's
-// hold takes ([Pieces]: a git node's read lane, a piece of the cache's
+// hold takes ([Pieces]: a Gitlet node's read lane, a piece of the cache's
 // CheckPieceBytes), checking its context before every read: the root layer of
 // the largest repository the defaults admit is some 2.6 GB, seconds of a core
 // warm and minutes cold, which a node stopping, or a request queued in the
@@ -1844,7 +1844,7 @@
 // full answer reads the most for a delta from below every row of that
 // repository beside [MaxFullRetirements] retirements, the most a full answer
 // serves: it counts every one, then the delta's refs one row past the full
-// answer's own rows deep when asked as a git node's cache asks, from one
+// answer's own rows deep when asked as a Gitlet node's cache asks, from one
 // position for both floors, and past those retirements too when the full
 // answer's are asked from below the delta's floor, every one of them between
 // the two — the deepest any ask reads. Measured in one run beside the

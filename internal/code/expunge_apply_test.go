@@ -268,7 +268,7 @@ func (e *estate) seedLayers(id string, layers ...[]string) []string {
 }
 
 // A BEGIN REMOVES THE LAYERS OVER ITS INPUTS: a layer naming a pack the begin
-// retires is no layer a git node can load once it applies, and a layer above
+// retires is no layer a Gitlet node can load once it applies, and a layer above
 // it no layer whose base stands, so a begin drops the chain's top from the
 // lowest layer naming an input — exactly those, in chain order, else it is
 // stale — with their parts; the published counts are recounted from the rows
@@ -648,7 +648,7 @@ func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
 // the latest pack each replaced. A retired row keeps the instant its row
 // held. This is what an expunge on its maintainer's schedule keeps a young
 // pack whole by (internal/code/compact's weekly cases read it as a snapshot
-// serves it, through a git node's cache).
+// serves it, through a Gitlet node's cache).
 //
 // Mutation: date a compaction's output at its own record, and the merge of a
 // month-old pack reads young for another fortnight; date it at the OLDEST

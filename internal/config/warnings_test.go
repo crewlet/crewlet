@@ -731,7 +731,7 @@ func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 
 // THE TWO TIERS TOGETHER SAY WHAT NEITHER CAN ALONE: a company hosting code on
 // the default object store of a fleet, whose every bucket member then holds
-// every pack, and a git node whose explicit budget cannot hold a repository at
+// every pack, and a Gitlet node whose explicit budget cannot hold a repository at
 // its size limit. Each fires on its trigger and on none of its negations, and
 // either document absent is no warning.
 //
@@ -748,7 +748,7 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		boot   func(*config.Bootstrap)
-		native bool
+		gitlet bool
 		path   string // "" is no warning at all
 	}{
 		"a fleet hosting code on the files bucket": {fleet, true, "store.objects.backend"},
@@ -765,17 +765,17 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 		"a fleet hosting no code":                        {fleet, false, ""},
 
 		"an explicit budget below the repository limit": {func(b *config.Bootstrap) {
-			b.Git.CacheMaxBytes = 8 * gib
-		}, true, "git.cache_max_bytes"},
+			b.Gitlet.CacheMaxBytes = 8 * gib
+		}, true, "gitlet.cache_max_bytes"},
 		"an explicit budget at the repository limit": {func(b *config.Bootstrap) {
-			b.Git.CacheMaxBytes = config.DefaultCodeRepoMaxBytes
+			b.Gitlet.CacheMaxBytes = config.DefaultCodeRepoMaxBytes
 		}, true, ""},
 		"a small budget on a node that serves no git": {func(b *config.Bootstrap) {
 			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
-			b.Git.CacheMaxBytes = 8 * gib
+			b.Gitlet.CacheMaxBytes = 8 * gib
 		}, true, ""},
 		"a small budget where no code is hosted": {func(b *config.Bootstrap) {
-			b.Git.CacheMaxBytes = 8 * gib
+			b.Gitlet.CacheMaxBytes = 8 * gib
 		}, false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -784,7 +784,9 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 			tc.boot(&b)
 			c := config.DefaultCompany()
 			c.Name = "Acme"
-			c.Code.Native = tc.native
+			if tc.gitlet {
+				c.Code.Backend = config.CodeGitlet
+			}
 			got := config.TierWarnings(&b, &c)
 			switch {
 			case tc.path == "" && len(got) != 0:
@@ -796,8 +798,8 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 		})
 	}
 	b, c := config.DefaultBootstrap(), config.DefaultCompany()
-	c.Code.Native = true
-	b.Git.CacheMaxBytes = 8 * gib
+	c.Code.Backend = config.CodeGitlet
+	b.Gitlet.CacheMaxBytes = 8 * gib
 	if got := config.TierWarnings(nil, &c); got != nil {
 		t.Errorf("no bootstrap: warned %+v", got)
 	}
@@ -807,7 +809,7 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 }
 
 // A RUNNING NODE COMPARES THE BUDGET IT DERIVED, NOT ONLY AN EXPLICIT ONE. A
-// derived budget is the default on every git node, and one below the company's
+// derived budget is the default on every Gitlet node, and one below the company's
 // repository size limit has the same consequence as an explicit one — such a
 // repository is served and evicted once idle — which the node knows the moment
 // it sizes its cache. The documents alone cannot know it, so `crewlet validate`
@@ -820,14 +822,14 @@ func TestANodeComparesTheCacheBudgetItDerived(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
 	b, c := config.DefaultBootstrap(), config.DefaultCompany()
-	c.Name, c.Code.Native = "Acme", true
+	c.Name, c.Code.Backend = "Acme", config.CodeGitlet
 	limit := c.Code.Limits.Resolved().RepoMaxBytes
 
 	got := config.NodeTierWarnings(&b, &c, config.CacheBudget{Bytes: 6 * gib, Derived: true})
-	if len(got) != 1 || got[0].Path != "git.cache_max_bytes" ||
-		!strings.Contains(got[0].Message, "derived from git.cache_dir's volume") {
+	if len(got) != 1 || got[0].Path != "gitlet.cache_max_bytes" ||
+		!strings.Contains(got[0].Message, "derived from gitlet.cache_dir's volume") {
 		t.Fatalf("a derived budget below the repository limit: warnings %+v, want one at "+
-			"git.cache_max_bytes saying the budget was derived", got)
+			"gitlet.cache_max_bytes saying the budget was derived", got)
 	}
 	if got := config.NodeTierWarnings(&b, &c, config.CacheBudget{Bytes: limit, Derived: true}); len(got) != 0 {
 		t.Errorf("a derived budget at the repository limit: warned %+v", got)
@@ -837,7 +839,7 @@ func TestANodeComparesTheCacheBudgetItDerived(t *testing.T) {
 			"share of a volume neither file describes", got)
 	}
 	// A NODE THAT RESOLVED NONE — it serves no git yet — falls back to the file.
-	b.Git.CacheMaxBytes = 8 * gib
+	b.Gitlet.CacheMaxBytes = 8 * gib
 	if got := config.NodeTierWarnings(&b, &c, config.CacheBudget{}); len(got) != 1 ||
 		strings.Contains(got[0].Message, "derived") {
 		t.Errorf("no resolved budget beside an explicit one: warnings %+v, want the explicit "+

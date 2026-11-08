@@ -178,7 +178,7 @@ async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
     withDerived({
       name: "Acme",
       roles: [],
-      services: { tracker: "worklet", knowledge: "doclet", chat, code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat, code: "gitlet" },
     }),
   );
   const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };

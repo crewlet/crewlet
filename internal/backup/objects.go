@@ -184,7 +184,7 @@ var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could
 // second per partitioned prefix, and every object the engine writes is under
 // one (`files/`); thirty-two out are about 140 to 250 requests a second at the
 // first bytes above — under a twentieth of it, the rest left to the company's
-// own downloads, the git nodes' syncs and the collector on the same prefix.
+// own downloads, the Gitlet nodes' syncs and the collector on the same prefix.
 //
 // AT httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides a
 // connection the bucket's own transport keeps warm — s3obj's clone of httpx's,

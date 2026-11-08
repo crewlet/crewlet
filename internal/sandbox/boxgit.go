@@ -11,12 +11,12 @@ import (
 // environment the engine hands the launch, never a file in the box and never
 // a setup step of the operator's.
 
-// BoxGitURLVar is the base a box dials for Gitlet: a git
+// BoxGitURLVar is the base a box dials for Gitlet: a Gitlet
 // node's public listener and the /box/git prefix — https://git.example.com/box/git,
-// or a balancer over every git node's. Read by every node that launches
+// or a balancer over every Gitlet node's. Read by every node that launches
 // executors, through [ParseBoxURL] like the other two addresses a box dials back to
 // the engine. Unlike the tool bridge's URL, which must address the launching
-// node itself, ANY git node serves any box: the run is admitted by its row,
+// node itself, ANY Gitlet node serves any box: the run is admitted by its row,
 // which every node reads.
 const BoxGitURLVar = "CREWLET_BOX_GIT_URL"
 

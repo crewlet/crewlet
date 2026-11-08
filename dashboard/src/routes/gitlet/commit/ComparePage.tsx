@@ -8,7 +8,7 @@
  * `code_compare` resolves both revisions in one read at the caller's
  * freshness and answers how the two commits relate — their merge base, which
  * contains which, how many commits each has that the other lacks — and the
- * merge preview, asked of the repository's home git node BY THE TWO WHOLE IDS
+ * merge preview, asked of the repository's home Gitlet node BY THE TWO WHOLE IDS
  * the comparison answered, so the preview merges exactly the commits compared,
  * by the one merge a change's mergeability is recorded by. What head changed
  * is read from the merge base to head, both whole, so it is immutable: the
@@ -306,8 +306,8 @@ function Relation({
         </Callout>
       ) : preview.state === "unknown" ? (
         <p className="muted">
-          Its home git node could not decide the merge within a read’s time; reading the comparison
-          again may.
+          Its home Gitlet node could not decide the merge within a read’s time; reading the
+          comparison again may.
         </p>
       ) : null}
     </Stack>

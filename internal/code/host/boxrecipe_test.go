@@ -23,12 +23,12 @@ import (
 
 // THE BOX RECIPES CLONE FROM GITLET on the pinned git, as the floors'
 // arm holds them to on the client floor's own build (TestTheGitFloorsPassTheSuite).
-func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
+func TestTheBoxRecipesCloneFromGitlet(t *testing.T) {
 	t.Parallel()
 	boxRecipes(t, codetest.SoloOptions{}, gittest.Require(t))
 }
 
-// boxRecipes is the box half of Gitlet's suite: on a git node serving a
+// boxRecipes is the box half of Gitlet's suite: on a Gitlet node serving a
 // repository, the steps a coding box is given its repositories by — the
 // version check, the coding clone and the check's single-commit checkout —
 // run as a box runs them, `sh -c` in the box's working directory, under git

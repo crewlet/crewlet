@@ -47,14 +47,14 @@ var RetiredPackReferences = objstore.ReferenceTable{
 }
 
 // LayerReferences declares code_layer_parts: the objects a published layer's
-// bytes are stored in. DERIVED (ADR-0081): any git node can build the layer
+// bytes are stored in. DERIVED (ADR-0081): any Gitlet node can build the layer
 // again from the packs code_packs names, so the collector keeps a part while a
 // row names it, the audit never reads the table — a lost part costs a
 // publication, never data, and `objects_missing` is the alarm for lost data —
 // and a backup copies, counts or asks after none (on nats they ride the
 // bucket's stream snapshot uncounted), while a store move copies them, since
 // every node of a moved fleet would otherwise build them again. A publication
-// that replaces a layer removes its rows at once, with no grace: a git node
+// that replaces a layer removes its rows at once, with no grace: a Gitlet node
 // whose fetch of a part finds it gone reads the rows again for what replaced
 // it. It declares no Log, Deferred or Records, which a backup reads of a
 // Required table alone.

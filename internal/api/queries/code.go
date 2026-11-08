@@ -27,11 +27,11 @@ import (
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
 // `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
-// `code_compare` and `code_commit`, decided per repository alike — the git
+// `code_compare` and `code_commit`, decided per repository alike — the Gitlet
 // node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
 // (codechecks.go): `code_queue`, `code_checks`, `code_check` and
 // `code_check_log`, decided per repository alike; AND A SEARCH OF ITS LINES
-// (codesearch.go): `code_search`, decided per repository alike by every git
+// (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
 // answers at the tip it names.
 //
@@ -62,7 +62,7 @@ import (
 // # Found per question
 //
 // The code reads come up with the native runtime, at boot or at the first
-// apply whose company sets code.native — after the API was assembled on a node
+// apply whose company sets code.backend: gitlet — after the API was assembled on a node
 // that booted with no company — so the source ([CodeSource]) is asked for them
 // on every question, and answers, where this node serves none now, WHY, in
 // this surface's own vocabulary: a company hosting no code is [NotFound]
@@ -77,7 +77,7 @@ import (
 //   - ReasonNotDeclared — nobody declared a repository of that name:
 //     declaring one in code.repos, and waiting for the activation, is what
 //     makes it;
-//   - ReasonNotHosted — the company hosts no code at all (code.native is not
+//   - ReasonNotHosted — the company hosts no code at all (code.backend is not gitlet
 //     set): declaring a repository changes nothing until it does.
 //
 // The git routes say the same in git's one text/plain line, where nothing
@@ -94,7 +94,7 @@ func RepoNotDeclared(name string) string {
 }
 
 // CodeReads is the code domain's read, wherever its rows are served, and a
-// read of a repository's content by object id, asked of its home git node;
+// read of a repository's content by object id, asked of its home Gitlet node;
 // estate.CodeSeam satisfies it.
 type CodeReads interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
@@ -103,7 +103,7 @@ type CodeReads interface {
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 	// MergePreview is what merging one commit into another would do, asked
-	// of the repository's home git node by the merge its mergeability is
+	// of the repository's home Gitlet node by the merge its mergeability is
 	// recorded by (code.merge_preview): a comparison's preview.
 	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
 	// FloorOf is this node's own floor on a repository — the furthest of
@@ -136,7 +136,7 @@ type CodeSource interface {
 	// name it.
 	CheckLogs() (CheckLogs, error)
 
-	// CodeSearcher is the code search over the fleet's git nodes
+	// CodeSearcher is the code search over the fleet's Gitlet nodes
 	// (codesearch.go), or why this node serves none, on CodeReads' terms
 	// and in the same vocabulary: a search reads what the code reads do.
 	CodeSearcher() (CodeSearcher, error)
@@ -331,7 +331,7 @@ func askedFor(p Params, key string) (bool, error) {
 // and so is a change it holds no such number of (`no_change`), an attempt of
 // a check it holds no row of (`no_check`), a ref no live
 // ref holds (`no_ref`) and an object or a path a revision does not hold
-// (`no_object`); no git node able to answer now is [ErrUnavailable];
+// (`no_object`); no Gitlet node able to answer now is [ErrUnavailable];
 // a repository the asker's grant does not cover is [NotPermitted] with the
 // reader's own sentence; a level, a cursor or a parameter the reader refuses
 // is [ErrBadParams] with the reader's own sentence; and everything else — a
@@ -363,7 +363,7 @@ func codeRefusal(repo string, err error) error {
 		errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrSliceTooLarge):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	case errors.As(err, new(*code.ErrGitUnready)), errors.Is(err, code.ErrNotServing):
-		// NO GIT NODE COULD ANSWER NOW — none holding the repository in
+		// NO GITLET NODE COULD ANSWER NOW — none holding the repository in
 		// time, every one behind its configuration or stopping — which is
 		// never an answer about the repository: a wait clears it.
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)

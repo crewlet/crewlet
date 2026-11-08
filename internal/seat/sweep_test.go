@@ -109,16 +109,16 @@ func TestASlowStatusHookDoesNotHoldThePresenceRenewal(t *testing.T) {
 	}
 }
 
-// A GIT NODE'S BUDGET RIDES EVERY BEAT, WHATEVER ITS STATUS DOES. It is what
-// every git node places a repository's maintenance by, so a beat whose status
-// hook overran — which publishes no status at all — still says it, and a git
+// A GITLET NODE'S BUDGET RIDES EVERY BEAT, WHATEVER ITS STATUS DOES. It is what
+// every Gitlet node places a repository's maintenance by, so a beat whose status
+// hook overran — which publishes no status at all — still says it, and a Gitlet
 // node with nothing to give says zero rather than nothing; a node with no git
-// budget to give (no hook: not a git node) writes no key, a node not saying.
+// budget to give (no hook: not a Gitlet node) writes no key, a node not saying.
 //
 // Mutations: write the budget only once the status hook has answered — the
 // overrun beat says nothing, red; write it only where it is above zero — the
-// git node with nothing to give reads as not saying, red.
-func TestAGitNodesBudgetRidesEveryBeatWhateverItsStatusDoes(t *testing.T) {
+// Gitlet node with nothing to give reads as not saying, red.
+func TestAGitletNodesBudgetRidesEveryBeatWhateverItsStatusDoes(t *testing.T) {
 	t.Parallel()
 	const budget = int64(64)<<30 + 12_345
 	f := newFleet(t)
@@ -430,25 +430,25 @@ func TestEveryRoleSaysWhatAFleetWithoutItLoses(t *testing.T) {
 	}
 }
 
-// A ROLE THE COMPANY DOES NOT NEED IS NEVER REPORTED UNMANNED. git serves
+// A ROLE THE COMPANY DOES NOT NEED IS NEVER REPORTED UNMANNED. gitlet serves
 // nothing for a company that hosts no code, so a fleet whose every node
-// declared its roles without git is missing nothing — until the company turns
+// declared its roles without gitlet is missing nothing — until the company turns
 // code on, which is said once; and when it turns code off again the role is
-// said to be UNNEEDED, never manned, since no git node came back.
+// said to be UNNEEDED, never manned, since no Gitlet node came back.
 //
 // Mutation: drop the check's `continue` for an unneeded role, and the first
-// sweep reports git unmanned.
+// sweep reports gitlet unmanned.
 func TestAnUnneededRoleIsNeverReportedUnmanned(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	var hostsCode atomic.Bool
 	h := f.newHost("node-a", Config{RoleNeeded: func(role placement.NodeRole) bool {
-		return role != placement.RoleGit || hostsCode.Load()
+		return role != placement.RoleGitlet || hostsCode.Load()
 	}})
 	roles := placement.Roles(placement.RoleData, placement.RoleIngress, placement.RoleSeats,
 		placement.RoleWorkers)
 	live := []placement.NodeProfile{{ID: "node-a", Roles: roles}, {ID: "node-b", Roles: roles}}
-	git := []placement.NodeRole{placement.RoleGit}
+	gitlet := []placement.NodeRole{placement.RoleGitlet}
 
 	for sweep := range 2 {
 		if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
@@ -456,15 +456,15 @@ func TestAnUnneededRoleIsNeverReportedUnmanned(t *testing.T) {
 		}
 	}
 	hostsCode.Store(true)
-	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unmanned: git}) {
-		t.Fatalf("the sweep after code is hosted: %+v, want git unmanned once", got)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unmanned: gitlet}) {
+		t.Fatalf("the sweep after code is hosted: %+v, want gitlet unmanned once", got)
 	}
 	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
 		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
 	}
 	hostsCode.Store(false)
-	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unneeded: git}) {
-		t.Fatalf("the sweep after code is turned off: %+v, want git unneeded and never manned", got)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unneeded: gitlet}) {
+		t.Fatalf("the sweep after code is turned off: %+v, want gitlet unneeded and never manned", got)
 	}
 	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
 		t.Fatalf("the sweep after that: %+v, want nothing said again", got)

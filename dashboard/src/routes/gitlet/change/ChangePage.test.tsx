@@ -48,7 +48,7 @@ const ORG = withDerived({
     { name: "Engineer", handle: "dev" },
   ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** The reader: bound to `jane`, offered every change write. */
@@ -441,7 +441,7 @@ test("a refused standing read holds the review until it is read again", async ()
 });
 
 // A DIFF IS READ ONCE FOR WHAT IT IS A FUNCTION OF: a revision's files and a
-// file's patch are git reads on the home git node whose answer moves only
+// file's patch are git reads on the home Gitlet node whose answer moves only
 // with the revision's head and the base its facts record, so minutes on the
 // Files tab ask neither again while the detail says neither has moved — and a
 // version the detail moves asks both again, as a base its facts record anew

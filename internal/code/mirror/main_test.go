@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 )
 
-// TestMain runs Gitlet's hook relay when a git node's receive-pack
+// TestMain runs Gitlet's hook relay when a Gitlet node's receive-pack
 // asks for it, as every package standing up a codetest fleet does.
 func TestMain(m *testing.M) {
 	if status, ok := codetest.RunHookIfAsked(); ok {

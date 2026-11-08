@@ -11,7 +11,7 @@ import (
 // THE CODE TOOLS' ENGINE WIRING: the same deps for a seat's registry and for
 // the operator catalogue, over Gitlet through this node's estate router
 // — its own copy of the code log where it serves, a data node's otherwise, and
-// a repository's home git node for its content and its engine-built writes —
+// a repository's home Gitlet node for its content and its engine-built writes —
 // the address a person's git clones from, and whoever a turn is acting for
 // with the chart that decides them (the requester ceiling, the artifacts tools'
 // own: [turnRequesters] and [ChartAuthorityOf]).
@@ -27,12 +27,12 @@ import (
 // it [Engine.nativeHalves]' — so a seat's code tools and a person's `/gitlet/`
 // reads on one node are offered on exactly the same terms. None for a company
 // that does not host code, whose tools would answer every call that no
-// repository is served; none for one that turned `code.native` on until this
+// repository is served; none for one that turned Gitlet on until this
 // node restarts into it, where `/gitlet/` answers `native_backend_needs_restart`
 // too; and still the tools for one that turned it off, until that restart,
 // since the runtime goes on serving its repositories as git and `/gitlet/` do.
 // WHATEVER THIS NODE'S ROLES: a node holding no copy of the code log and no
-// `git` role reaches both through its router.
+// `gitlet` role reaches both through its router.
 //
 // EXPORTED for the operator surface, which builds its catalogue outside this
 // package for every call; a seat's registry takes the value at every apply
@@ -52,7 +52,7 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// a later activation replaced.
 	//
 	// AND THE WRITES AND THE HOLDS, over the same seam: an engine write is
-	// asked of the repository's home git node and a lifecycle request — a
+	// asked of the repository's home Gitlet node and a lifecycle request — a
 	// tool's, or a turn's hold record on a scratch repository it named —
 	// of a data node, each through the router a read takes. The holder is
 	// wired whether or not a seat writes, since a seat that only reads
@@ -60,10 +60,10 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// nothing whatever is wired here.
 	//
 	// AND WHERE A REPOSITORY'S WORK IS PLACED, which a person's purge is
-	// answered with: the router's own view of the git nodes, read per call.
+	// answered with: the router's own view of the Gitlet nodes, read per call.
 	//
 	// AND THE SEARCH, the engine itself ([Engine.CodeSearch]): the one
-	// scatter over the git nodes the `code_search` question asks too, which
+	// scatter over the Gitlet nodes the `code_search` question asks too, which
 	// finds the runtime as it stands when it is asked — so the seat's tool
 	// and a person's route search on the same terms.
 	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
@@ -145,4 +145,4 @@ func (p codePlacement) Maintainer(repoID string, liveObjects int64) (string, err
 	return p.router.Maintainer(repoID, charge)
 }
 
-func (p codePlacement) GitNodes(repoID string) ([]string, error) { return p.router.GitOrder(repoID) }
+func (p codePlacement) GitletNodes(repoID string) ([]string, error) { return p.router.GitOrder(repoID) }

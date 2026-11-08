@@ -26,10 +26,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE HOME'S MERGE OVER A REAL COPY: a solo fleet's one git node — its cache
+// THE HOME'S MERGE OVER A REAL COPY: a solo fleet's one Gitlet node — its cache
 // and its pool — holding a repository a person pushed branches to, and the
 // home's loop over it, its estate the stand-in that lists the changes a case
-// makes due (estate): so each case merges real commits with the git node's
+// makes due (estate): so each case merges real commits with the Gitlet node's
 // own git, in the scratch the loop makes beside the node's copy, and reads
 // what the loop asked to be recorded.
 
@@ -57,7 +57,7 @@ func newGitHome(t testing.TB, settings code.RepoSettings) *gitHome {
 	return h
 }
 
-// node is the fleet's one git node.
+// node is the fleet's one Gitlet node.
 func (h *gitHome) node() codetest.Node { return h.f.Nodes()[0] }
 
 // commit commits files on the work tree's branch, answering the commit.
@@ -72,7 +72,7 @@ func (h *gitHome) git(args ...string) string {
 	return h.p.Git().Run(h.t, h.work, args...)
 }
 
-// push pushes refspecs through the git node, forced, and reads the
+// push pushes refspecs through the Gitlet node, forced, and reads the
 // repository's rows at the log's head: its id, and the position its listing
 // is answered at.
 func (h *gitHome) push(refspecs ...string) {
@@ -112,7 +112,7 @@ func (h *gitHome) mergedTree(tip, head string) string {
 	return tree
 }
 
-// incarnation is the git node's copy of the repository, synced to the log's
+// incarnation is the Gitlet node's copy of the repository, synced to the log's
 // head: the directory every merge's scratch leans on.
 func (h *gitHome) incarnation() string {
 	h.t.Helper()
@@ -131,7 +131,7 @@ func (h *gitHome) holds(dir, id string) bool {
 	return err == nil
 }
 
-// homeLoop is the git node's loop over h's estate — home to the repository,
+// homeLoop is the Gitlet node's loop over h's estate — home to the repository,
 // merging over the node's own cache and pool — its backstop backstop and its
 // clock now, started; tune sets what a case scales before the start.
 func (h *gitHome) homeLoop(t *testing.T, n *nudges, backstop time.Duration, now func() time.Time,
@@ -1070,7 +1070,7 @@ func (g *countedGit) count() int {
 }
 
 // BenchmarkMergeability is one home's merge of a change into its moved target
-// over a copy of the repository on its git node — the step a change's
+// over a copy of the repository on its Gitlet node — the step a change's
 // mergeability is recorded by, and what a moved target's rechecks cost a home
 // one each: the copy synced and pinned, a scratch beside it, the ancestry
 // asked, the merge, the scratch removed. Each arm merges a change touching

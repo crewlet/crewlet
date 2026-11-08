@@ -13,7 +13,7 @@ import (
 // RepoName is the repository every case declares.
 const RepoName = "acme"
 
-// ExternalBase is the deployment's address every git node's host is told, as
+// ExternalBase is the deployment's address every Gitlet node's host is told, as
 // the engine tells its own `api.external_url`: the base the line git prints
 // for a push's change links the change's page on.
 const ExternalBase = "https://crewlet.example.com"
@@ -36,7 +36,7 @@ type Case struct {
 	Ctx   context.Context
 }
 
-// URL is RepoName's URL through the i-th git node — read again at every call,
+// URL is RepoName's URL through the i-th Gitlet node — read again at every call,
 // because a restarted node listens on a new one.
 func (c *Case) URL(i int) string { return c.Fleet.Nodes()[i].URL() + "/git/" + RepoName }
 

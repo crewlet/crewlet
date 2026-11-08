@@ -249,7 +249,7 @@ func (r *read) recallWhole(ctx context.Context, at cursor) (code.GitAnswer, bool
 // the leader's run failed, was too large, or memoized nothing — runs its own,
 // as any miss does, leading nothing. The wait holds no unit of the share and
 // no slot of the read lane, and ends with the read's answer as a wait for the
-// share does: due, it answers unready (share), which another git node answers
+// share does: due, it answers unready (share), which another Gitlet node answers
 // meanwhile.
 func (r *read) await(ctx context.Context, whole map[string]string, at cursor) (code.GitAnswer, bool, error) {
 	k := flightKey{repo: r.q.RepoID, key: r.memoKey(whole, at)}
@@ -266,7 +266,7 @@ func (r *read) await(ctx context.Context, whole map[string]string, at cursor) (c
 		r.s.waiting.Add(-1)
 		if code.AnswerDue(ctx) {
 			return code.GitAnswer{}, false, r.unready(code.UnreadyShare, fmt.Sprintf("%s was cutting the page "+
-				"for another read until the read's answer fell due, its asker's attempt spent; another git node "+
+				"for another read until the read's answer fell due, its asker's attempt spent; another Gitlet node "+
 				"answers meanwhile", r.s.o.NodeID))
 		}
 		return code.GitAnswer{}, false, ctx.Err()

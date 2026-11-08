@@ -86,7 +86,7 @@ import (
 // history scans on until the budget ends the page. Only a page that found
 // nothing — whose walk did not reach the end of a commit in the time it had —
 // is no answer: too large where it ran the read's whole budget (narrow it),
-// unready where its answer fell due, which another git node answers.
+// unready where its answer fell due, which another Gitlet node answers.
 //
 // GREP is a literal matched here, never by git, over each message as it
 // streams by (literal.go), so a message of any length is searched whole in

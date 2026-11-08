@@ -678,7 +678,7 @@ func TestARepositoryNoRowHoldsCostsNoDirectory(t *testing.T) {
 	}
 }
 
-// A CACHE HOLDS A COPY ONLY ONCE IT HAS ONE OR IS FILLING ONE — what a git node
+// A CACHE HOLDS A COPY ONLY ONCE IT HAS ONE OR IS FILLING ONE — what a Gitlet node
 // asks before a read it was not asked to fill (ADR-0089), so that one node a
 // walk fills a repository nobody holds. Not one it never synced, nor one whose
 // only round ended before any copy (its estate read refused); one whose round

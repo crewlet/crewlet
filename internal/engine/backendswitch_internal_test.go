@@ -35,7 +35,7 @@ tracker:
 func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 	t.Parallel()
 	native := builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
-		chat: config.ChatChatlet}
+		chat: config.ChatChatlet, code: config.CodeNone}
 	jira := &config.Company{
 		Tracker:      config.Tracker{Backend: config.TrackerJira},
 		Integrations: config.Integrations{Jira: &config.Jira{}},
@@ -98,35 +98,38 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 			Running: "chatlet", Activated: "none", Holds: true,
 		}},
 	}, {
-		// GITLET TURNED ON: its one field is already whether the
-		// half is native, so every change of it is a switch.
+		// GITLET TURNED ON: its axis names no vendor, so every change of
+		// it is a switch — and unset, which reads as none, says `none`.
 		name: "Gitlet turned on", built: native,
-		activated: &config.Company{Code: config.Code{Native: true}},
+		activated: &config.Company{Code: config.Code{Backend: config.CodeGitlet}},
 		want: []backendSwitch{{
-			Field: "code.native", Half: "Gitlet",
-			Running: "false", Activated: "true", Holds: false,
+			Field: "code.backend", Half: "Gitlet",
+			Running: "none", Activated: "gitlet", Holds: false,
 		}},
 	}, {
 		name: "Gitlet turned off, after the other halves",
 		built: builtWith{
 			tracker: config.TrackerWorklet, knowledge: config.KnowledgeConfluence,
-			chat: config.ChatChatlet, code: true,
+			chat: config.ChatChatlet, code: config.CodeGitlet,
 		},
 		activated: &config.Company{},
 		want: []backendSwitch{{
 			Field: "knowledge.backend", Half: "Doclet",
 			Running: "confluence", Activated: "doclet", Holds: false,
 		}, {
-			Field: "code.native", Half: "Gitlet",
-			Running: "true", Activated: "false", Holds: true,
+			Field: "code.backend", Half: "Gitlet",
+			Running: "gitlet", Activated: "none", Holds: true,
 		}},
 	}, {
 		name: "built as activated", built: native, activated: &config.Company{},
 	}, {
+		name:  "built as activated, unset as none",
+		built: native, activated: &config.Company{Code: config.Code{Backend: config.CodeNone}},
+	}, {
 		name: "built as activated, hosting code",
 		built: builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
-			chat: config.ChatChatlet, code: true},
-		activated: &config.Company{Code: config.Code{Native: true}},
+			chat: config.ChatChatlet, code: config.CodeGitlet},
+		activated: &config.Company{Code: config.Code{Backend: config.CodeGitlet}},
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

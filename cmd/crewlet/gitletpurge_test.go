@@ -20,7 +20,7 @@ func TestGitletPurgeActsThroughTheActTransport(t *testing.T) {
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"outcome": "applied", "repo": "site",
 		"request": "019a0c2e-0000-7000-8000-0000000000e0", "position": "CREWLET_CODE_LOG@1:42",
-		"maintainer": "git-2", "holds": map[string]any{"git_nodes": []string{"git-2", "git-1"},
+		"maintainer": "git-2", "holds": map[string]any{"gitlet_nodes": []string{"git-2", "git-1"},
 			"backups_before": "every backup taken before the purge commits", "store_until": "a day after"}}
 	stdout, stderr, err := cli(t, "gitlet", "purge-unreachable", "site", bootstrapForURL(t, node.server.URL))
 	if err != nil {

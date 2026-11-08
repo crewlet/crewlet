@@ -29,7 +29,7 @@ import (
 // make room for (overBudget): the memo's own trim gives it back. An idle repository costs disk the budget already bounds, while
 // evicting it costs ONE GET A PUSH the next time anybody fetches it — nothing
 // compacts a repository's packs — so a weekend's idle eviction was every
-// repository nobody fetched re-downloaded whole on Monday, on every git node.
+// repository nobody fetched re-downloaded whole on Monday, on every Gitlet node.
 // A cache older than the rows' tombstone horizon is brought forward by a
 // whole read that reuses every pack it holds, so correctness never needed an
 // eviction either. A repository a request holds is never evicted, even over

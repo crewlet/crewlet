@@ -12,12 +12,12 @@ import (
 )
 
 // The reads of a repository by object id through a fleet's routing — asked of
-// the repository's home git node (ADR-0089) — as a seat's tool asks them.
+// the repository's home Gitlet node (ADR-0089) — as a seat's tool asks them.
 
 // homeWait is how long a case waits for a read through the fleet's routing to
 // be answered by the node it expects: a home asked to fill a copy answers
 // `syncing` until its download lands, and the walk meanwhile asks the other
-// git nodes, so the case asks again until the copy is warm. A minute is far
+// Gitlet nodes, so the case asks again until the copy is warm. A minute is far
 // past a small repository's cold sync on a loaded runner (a second or two)
 // and well inside a case's own deadline.
 const homeWait = time.Minute
@@ -49,16 +49,16 @@ func lists(a code.GitAnswer, path string) bool {
 }
 
 // F26: A READ IS ANSWERED BY THE HOME (ADR-0089). A read of a repository by
-// object id through the fleet's routing is asked of the repository's home git
-// node — the first of rendezvous.Order(repository, every git node) — and once
-// the home's copy is warm it is the node that answers: a fleet of three git
+// object id through the fleet's routing is asked of the repository's home Gitlet
+// node — the first of rendezvous.Order(repository, every Gitlet node) — and once
+// the home's copy is warm it is the node that answers: a fleet of three Gitlet
 // nodes, a push through the first, and the home whichever node the order puts
 // first. Meanwhile the walk may be answered by the node the push filled, which
 // holds a copy whatever its place; and the third node — neither the home nor
 // the pusher — holds no copy after, since only the walk's effective home is
 // ever asked to fill one.
 func aReadIsAnsweredByTheHome(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 3}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 3}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := p.Commit(work, map[string]string{"README.md": "home\n"}, "home")

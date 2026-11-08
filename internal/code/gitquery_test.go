@@ -17,7 +17,7 @@ import (
 // A READ BY OBJECT ID NAMES OBJECTS, NEVER REVISIONS, AND PATHS NO GRAMMAR
 // READS. Every revision is a whole id or an abbreviation of git's default
 // length or more — never a ref, `^`, `~` or `:`, which would hand git's
-// revision grammar to the git node, nor fewer digits than name one object of a
+// revision grammar to the Gitlet node, nor fewer digits than name one object of a
 // large repository — every path is clean and relative (git reads `./` and
 // `../` as relative to a work tree, which dies over a bare repository's whole
 // batch), and each refusal names its field.

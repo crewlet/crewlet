@@ -72,7 +72,7 @@ function mount(
   );
 }
 
-const JIRA: OrgServices = { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "native" };
+const JIRA: OrgServices = { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "gitlet" };
 
 // THE SERVICES' PAGES ARE EVERY READER'S: a reader holding only Worklet who
 // followed a link to Worklet is told in place and offered the page about the
@@ -90,7 +90,7 @@ test("a hidden knowledge base offers Doclet's page", async () => {
   mount(
     "knowledge",
     ["doclet"],
-    { tracker: "worklet", knowledge: "confluence", chat: "chatlet", code: "native" },
+    { tracker: "worklet", knowledge: "confluence", chat: "chatlet", code: "gitlet" },
     ["admin"],
   );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
@@ -104,7 +104,7 @@ test("a chat run elsewhere offers Chatlet's page", async () => {
   mount(
     "chat",
     ["chatlet"],
-    { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
+    { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "gitlet" },
     ["admin"],
   );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
@@ -126,7 +126,7 @@ test("a company hosting no code is told so in place, with the step a reader can 
   expect(
     await screen.findByText("Crewlet is not hosting git repositories for this company"),
   ).toBeTruthy();
-  expect(screen.queryByText(/code\.native/)).toBeNull();
+  expect(screen.queryByText(/code\.backend/)).toBeNull();
   expect(screen.queryByRole("link", { name: "See what is built into Crewlet" })).toBeNull();
   expect(
     (await screen.findByRole("link", { name: "Open Configuration" })).getAttribute("href"),
@@ -163,7 +163,7 @@ test("each hidden place says why it is not here", () => {
       tracker: "none",
       knowledge: "doclet",
       chat: "chatlet",
-      code: "native",
+      code: "gitlet",
     }),
   ).toBe("This company runs no work tracker");
   expect(
@@ -171,7 +171,7 @@ test("each hidden place says why it is not here", () => {
       tracker: "worklet",
       knowledge: "confluence",
       chat: "chatlet",
-      code: "native",
+      code: "gitlet",
     }),
   ).toBe("Confluence holds this company's knowledge");
   expect(
@@ -189,7 +189,7 @@ test("an address under Chatlet names where the company talks instead", async () 
     tracker: "worklet",
     knowledge: "doclet",
     chat: "vendor",
-    code: "native",
+    code: "gitlet",
   };
   mount("chat", ["chatlet"], slack, ["chatlet"], ["slack"]);
   expect(await screen.findByText("This company talks on Slack")).toBeTruthy();

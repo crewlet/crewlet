@@ -16,23 +16,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A GIT NODE'S CHECKS (internal/code/checkrun): its runner, which claims and
+// A GITLET NODE'S CHECKS (internal/code/checkrun): its runner, which claims and
 // runs the company's queued checks in boxes of this node's sandbox catalogue
-// — on every git node, ranked per repository by its git order — and its share
+// — on every Gitlet node, ranked per repository by its git order — and its share
 // of the HOMES' sweep of the checks whose runner is gone, a worker of the
-// home's loop on every git node, working the repositories it is home to.
+// home's loop on every Gitlet node, working the repositories it is home to.
 
 // buildChecks builds this node's check runner and registers the home's sweep
 // with its home loop, beside Gitlet, which they serve — over the router's code
 // seam, the router's git orders, the current sandbox catalogue and epoch read
 // at every walk and attempt, Gitlet's check tokens and this node's
-// CREWLET_BOX_GIT_URL, its container cells git.max_checks of this machine's
+// CREWLET_BOX_GIT_URL, its container cells gitlet.max_checks of this machine's
 // cores, its remote cells held to the company's caps on the coordination
 // store (code.checks.remote), nudged by a watch on this node's own code log.
 // The runner is BUILT here and STARTED with the native half's duties beside
 // the home's loop ([Engine.startNativeDuties]), for that loop's reasons; it is
 // stopped FIRST in Gitlet's one bounded stop, before the home's loop
-// and the host its boxes clone from ([native.stopCodeHost]).
+// and the host its boxes clone from ([native.stopGitletHost]).
 //
 // A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK: a check's box clones its
 // commit from Gitlet at that address and has no other way to reach
@@ -52,15 +52,15 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 		return nil, err
 	}
 	if e.boxGitURL == "" {
-		log.Warn("code_checks_not_run", "detail", "this git node runs none of the company's checks: a check's "+
+		log.Warn("code_checks_not_run", "detail", "this Gitlet node runs none of the company's checks: a check's "+
 			"box clones its commit from Gitlet at "+sandbox.BoxGitURLVar+", which this node does not set; "+
-			"the fleet's other git nodes run them, and code_checks_backlog names a fleet where none does")
+			"the fleet's other Gitlet nodes run them, and code_checks_backlog names a fleet where none does")
 		return nil, nil
 	}
 	o := checkrun.Options{
 		NodeID: nodeID, Estate: seam, Order: e.router, Boxes: e.checkBoxes, Company: e.checkCompany,
 		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL, CodeBase: checkCodeBase(e.boxGitURL),
-		Slots: boot.Git.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
+		Slots: boot.Gitlet.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
 		// THE COMPANY'S REMOTE CAPS are the coordination store's: a slot
 		// leased for each remote box, its minutes on the fleet's counter.
 		Leases: e.backends.Coord, Minutes: e.backends.Fleet,

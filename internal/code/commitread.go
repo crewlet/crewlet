@@ -15,7 +15,7 @@ import (
 // each whose merge it is (code_changes_merge_idx) and each revision it heads
 // (code_revisions_head_idx), "revision 2 of web!42" — held to the asker's
 // grant on the repository as that read is. The commit itself, and the push
-// that introduced it, are the repository's content and its git node's index,
+// that introduced it, are the repository's content and its Gitlet node's index,
 // never these rows: a question asks them by object id beside this read.
 //
 // A commit belongs to a handful of changes in practice — two branches at one

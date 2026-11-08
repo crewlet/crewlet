@@ -31,7 +31,7 @@ import (
 // enqueued it — the merger a merge commit is authored by (U43 a) — and each
 // entry's own instant, its author date: the instant its enqueue was minted at
 // ([QueueEntryID] keeps it), so a chain built again from the same rows is the
-// same chain, byte for byte, whichever git node builds it and however often
+// same chain, byte for byte, whichever Gitlet node builds it and however often
 // (a bisect builds the same prefix twice). Nothing it carries is read from a
 // row by the build: the caller formed it from the rows it decided on, and its
 // record's decide holds those rows again.
@@ -69,7 +69,7 @@ import (
 //
 // # In process, never a record
 //
-// These are the home's call of its own git node's builder, through the
+// These are the home's call of its own Gitlet node's builder, through the
 // consumer interface the engine wires: no field here is ever encoded onto a
 // log, so none is held to the code domain's record format. The record the
 // chain's caller publishes — its candidate — names its commits and its pack,
@@ -142,7 +142,7 @@ const ChainPackDeadline = 10 * time.Second
 // chain, never a reason to refuse this one.
 const ChainBuildDeadline = MergeBuildDeadline + ChainPackDeadline
 
-// ChainBuild is one chain a repository's home asks its git node to build:
+// ChainBuild is one chain a repository's home asks its Gitlet node to build:
 // Entries merged in order onto Base, the tip of TargetRef the caller read at
 // Seen.
 type ChainBuild struct {
@@ -252,7 +252,7 @@ type ChainResult struct {
 	Settle    func(ctx context.Context, applied bool) error
 }
 
-// Validate refuses a chain no git node may build ([ErrInvalid], naming the
+// Validate refuses a chain no Gitlet node may build ([ErrInvalid], naming the
 // field): the one rule the home that asks it and the builder both hold it to.
 func (b ChainBuild) Validate() error {
 	if id, err := uuid.Parse(b.RepoID); err != nil || id.String() != b.RepoID {

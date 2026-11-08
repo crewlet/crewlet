@@ -183,7 +183,7 @@ var remoteBase = []gitproc.KV{
 // word that would open a network off the internet; and a name answering one
 // public and one private address, which its owner can point either way
 // between the judgment and the next lookup. The refusal is
-// httpx.ErrNotPublic, naming git.import_allow_private — which pins the
+// httpx.ErrNotPublic, naming gitlet.import_allow_private — which pins the
 // answers as they come — and a resolver that cannot say which prefixes its
 // network translates through, for an address whose verdict they decide, fails
 // the resolve rather than judging on a guess.
@@ -191,7 +191,7 @@ var remoteBase = []gitproc.KV{
 // Mutation: judge the answers by the rule without the network's discovered
 // prefixes, and the DNS64 row goes red; count a prefix the resolver names
 // wherever it lies, and the unique-local DNS64 row does; pin a private answer
-// without git.import_allow_private, and every refused row does.
+// without gitlet.import_allow_private, and every refused row does.
 func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 	t.Parallel()
 	const named = "https://" + remoteHost + "/team/r.git"
@@ -228,10 +228,10 @@ func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 			dns := &resolver{answers: map[string][]netip.Addr{remoteHost: tc.answers, ipv4onlyArpa: tc.nat64}}
 			env := gitproc.RemoteEnv{Resolver: dns}
 			r, err := gitproc.ResolveRemoteWith(t.Context(), env, tc.url, false)
-			if !errors.Is(err, httpx.ErrNotPublic) || !strings.Contains(err.Error(), "git.import_allow_private") {
-				t.Fatalf("resolved to %v, %v: want httpx.ErrNotPublic naming git.import_allow_private", r, err)
+			if !errors.Is(err, httpx.ErrNotPublic) || !strings.Contains(err.Error(), "gitlet.import_allow_private") {
+				t.Fatalf("resolved to %v, %v: want httpx.ErrNotPublic naming gitlet.import_allow_private", r, err)
 			}
-			// git.import_allow_private pins the answers as they come.
+			// gitlet.import_allow_private pins the answers as they come.
 			allowed := resolve(t, env, tc.url, true)
 			want := tc.pinned
 			if want == nil {
@@ -318,7 +318,7 @@ func TestARemoteURLIsWrittenBackOneWay(t *testing.T) {
 
 // A REMOTE BEHIND THE PROCESS'S PROXY IS DIALED THROUGH IT, AS ITSELF: the
 // proxy the process names for the URL resolves the host, so nothing is
-// resolved here — no lookup, no pin, no rule, git.import_allow_private
+// resolved here — no lookup, no pin, no rule, gitlet.import_allow_private
 // changing nothing — and git is handed the proxy as libcurl reads the one Go
 // read: a SOCKS5 proxy as socks5h, which hands the proxy the name rather than
 // resolving it on this node, where no pin covers it. A proxy neither reads is
@@ -687,7 +687,7 @@ func TestARemoteRunIsHeldToItsRemote(t *testing.T) {
 
 // tlsRemote serves h over TLS for remoteHost: the remote a git process dials
 // it at — the name resolved to the server's own address, which only
-// git.import_allow_private lets a run dial, since it is loopback — with the
+// gitlet.import_allow_private lets a run dial, since it is loopback — with the
 // file of the authority that signed the server's certificate as the
 // process's SSL_CERT_FILE, and the server.
 func tlsRemote(t *testing.T, path string, h http.Handler) (gitproc.Remote, *httptest.Server) {
@@ -721,7 +721,7 @@ func fetchFrom(t *testing.T, p *gitproc.Pool, r gitproc.Remote, dir string) (git
 // a repository at git.example.com — a name no DNS answers with this case's
 // server — is fetched whole and its refs listed, over TLS verified against the
 // authority the process names, at the address the run was pinned to, on every
-// git a git node may run.
+// git a Gitlet node may run.
 //
 // Mutation: leave http.curloptResolve out, and libcurl looks the name up
 // itself and reaches no server of this case's; leave http.sslCAInfo out, and
@@ -823,7 +823,7 @@ func redirectOn(t *testing.T, git string) {
 // no progress, no keepalive, the quietest a working server is — for two and a
 // half times the stall, scaled to six seconds so the probes go out every
 // second after three seconds of quiet (and are answered), is waited on, and
-// the pack it then sends is fetched whole, on every git a git node may run.
+// the pack it then sends is fetched whole, on every git a Gitlet node may run.
 //
 // Mutation: hand libcurl back its low-speed check (http.lowSpeedLimit 1,
 // http.lowSpeedTime the stall), and the run is ended — curl 28, "Operation

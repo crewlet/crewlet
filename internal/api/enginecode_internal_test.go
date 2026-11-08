@@ -22,7 +22,7 @@ import (
 // [EngineCode]'s VerifyBox is the seam a deployment's box routes ask on a node
 // serving none of Gitlet ([App.boxGitRoute], [App.boxCodeRoute]); the
 // route suites drive a fake of it, so this holds the adapter itself, over a
-// real engine: a git node whose company hosts no code — Gitlet not built,
+// real engine: a Gitlet node whose company hosts no code — Gitlet not built,
 // every node such a route answers for. An executor's token and a check's,
 // each minted over the keyring the node booted on, as any other node of its
 // fleet mints them, are told the reason — the company hosts no code, 404, in
@@ -41,7 +41,7 @@ import (
 func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 	t.Parallel()
 	e, boot := bootNode(t, "")
-	if _, hosts := e.CodeHost(); hosts {
+	if _, hosts := e.GitletHost(); hosts {
 		t.Fatal("the premise: a company hosting no code built Gitlet")
 	}
 	if why := e.CodeUnserved(); !errors.Is(why, engine.ErrCodeNotHosted) {

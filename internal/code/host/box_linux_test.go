@@ -20,7 +20,7 @@ import (
 // What a box sends is a few bytes of pack for every megabyte of commit text,
 // and its committers are read before anything is stored, so a scan that held
 // every commit it was handed would let a pack of a megabyte hold gigabytes of
-// the git node's memory. The box sends sixteen commits of 8 MiB messages —
+// the Gitlet node's memory. The box sends sixteen commits of 8 MiB messages —
 // each a line of its own repeated, so nothing deltas against anything and the
 // pack stays small — on 8 192 small ones, so a listing that prints only once
 // it has read every commit still writes more than its pipe holds, and is alive

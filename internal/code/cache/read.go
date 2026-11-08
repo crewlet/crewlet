@@ -528,7 +528,7 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 
 // addLayers validates the published chain page 1 served and takes it in, as
 // the domain keeps it (code.LayerRow): at most code.MaxPublishedLayers rows,
-// each a layer every git node may hold to its files (code.LayerRef.Check) and
+// each a layer every Gitlet node may hold to its files (code.LayerRef.Check) and
 // none a replacement; Seq 1 up, one by one; the root over no base and every
 // other layer over the one below it — a layer is valid only over its exact
 // base, and the chain's order is the only thing that names it; no layer, and
@@ -679,8 +679,8 @@ func validPush(p code.IntroducedRow) error {
 // checkPack is a pack row this build can install, decided before any GET:
 // the one part this build splits, and the row-level half of the one bundle
 // rule (code.PackRef.Check) — the very rule the domain admitted the row by,
-// so a row no git node can install is one no proposal was ever published
-// with, rather than one this copy alone refuses on every git node for good.
+// so a row no Gitlet node can install is one no proposal was ever published
+// with, rather than one this copy alone refuses on every Gitlet node for good.
 func checkPack(p code.PackRow) error {
 	switch {
 	case p.Part != "pack":
