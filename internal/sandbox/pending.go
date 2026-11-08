@@ -2595,13 +2595,17 @@ type PendingStore interface {
 	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
 	// capture of the box's session takes out by value. Kept BESIDE the
 	// record, never on it — up to [MaxHandedBytes] before sealing, which
-	// every read of the record would carry though only a capture and the
-	// next launch's opening read it — named for the job it was written for,
-	// written by the attach that names the job's command once that attach
-	// has landed ([PendingStore.AttachSandbox]), and replaced by the next
-	// job's attach, which carries it forward where that job continues in the
-	// same box, since the box still holds what the jobs before it were handed
-	// and the session it resumes holds their lines ([PriorBox.Handed]).
+	// every read of the record would carry though only a capture, the next
+	// launch's opening and the poll's record of a renewed token read it —
+	// named for the job it was written for, written by the attach that names
+	// the job's command once that attach has landed
+	// ([PendingStore.AttachSandbox]), GROWN by every token the completion
+	// poll renews in the job's box before it writes it there, or marked as
+	// holding less than the box ([PendingStore.AddHanded]), and replaced by
+	// the next job's attach, which carries it forward where that job
+	// continues in the same box, since the box still holds what the jobs
+	// before it were handed and the session it resumes holds their lines
+	// ([PriorBox.Handed]).
 	//
 	// "" WHERE THE JOB HAS NONE: a launch that could not seal them, an
 	// attach whose write of them did not land, or a set a later job's

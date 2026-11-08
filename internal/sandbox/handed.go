@@ -59,7 +59,8 @@ import (
 // the job ([PendingStore.Handed]): the coordination store is not encrypted, a
 // capture may be made on any node whose host the box is on, and the row, which
 // every git request of a coding box and every listing reads whole, is kept
-// small of what only a capture and the next launch read.
+// small of what only a capture, the next launch and the poll's record of a
+// renewed token (below) read.
 //
 // # Carried forward where a box is kept
 //
@@ -93,7 +94,11 @@ import (
 // not answer, or the row no longer holds the job running — is not written, and
 // the next poll asks again. So the set holds every value the box was given
 // before the box holds it, and a capture made once its job has stopped reading
-// files holds every value the box could hold.
+// files holds every value the box could hold. A capture of a job its box
+// would not end, taken as it stands, reads the set before its pack
+// ([Coordinator.takeCapture]), so a token the poll renews while that pack is
+// made is not among the values it scrubs by: printed meanwhile by the job
+// still working, it goes only where a shape names it.
 //
 // IN [HandedSecrets.Values] ITSELF, where an older build's scrub, which decodes
 // that alone, takes the renewed values too; when each one lapses rides beside
@@ -112,6 +117,18 @@ import (
 // reaches its box as the document its credential_process prints, and a
 // transcript prints the session's token bare, which the whole document never
 // matches and no shape names.
+//
+// EVERY STRING, NOT ONLY THOSE UNDER A CREDENTIAL'S KEY, of every document in a
+// credential position, the operator's own as much as the engine's: the engine
+// cannot tell a document's credential from its settings but by the names its
+// members are written under, and a secret under a name no credential's rule
+// reads, printed bare, would be kept. So what else a document holds goes with
+// it: a Google Cloud service-account key handed through a reference gives up
+// its project ID, its client email and its endpoints' URLs, which every kept
+// transcript of the seat loses wherever it names them. A setting kept beside
+// the secret instead — written in the document, or in a variable of its own —
+// is never taken out by value; and a seat on the engine's own Google Cloud
+// integration is issued a bare token.
 //
 // # A capture that cannot know them keeps nothing
 //
@@ -148,6 +165,14 @@ type HandedSecrets struct {
 	// nothing of a lapse, still decodes and scrubs every value, and carries
 	// every one forward — never dropped, which only costs it room.
 	Expires map[string]time.Time `json:"expires,omitempty"`
+
+	// Extra is every key of the set this build does not know, kept verbatim
+	// through every write of the set this build makes — a renewal's record,
+	// a launch's carry of it into the box's next job ([HandedSecrets.union])
+	// — so a later build's fact about the values it holds survives this
+	// build's poll on a fleet running both (wirekeys.go). Filled by the
+	// decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // MaxHandedBytes bounds the secrets one launch keeps, encoded, before
@@ -278,9 +303,10 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 // union is h with what carried holds that h does not: the secrets a job before
 // this one handed the same box ([PriorBox.Handed]), or the tokens a launch's
 // refresh wrote into it before its job started, with their values, their
-// logins and their lapses. A value either holds for good — one a launch handed
-// — is held for good; one both hold until a lapse lapses at the later of the
-// two.
+// logins, their lapses and the keys a later build wrote into either
+// ([HandedSecrets.Extra], h's where both hold one). A value either holds for
+// good — one a launch handed — is held for good; one both hold until a lapse
+// lapses at the later of the two.
 func (h HandedSecrets) union(carried HandedSecrets) HandedSecrets {
 	out := HandedSecrets{Values: dedupe(append(slices.Clone(h.Values), carried.Values...))}
 	if len(h.Logins)+len(carried.Logins) > 0 {
@@ -289,6 +315,13 @@ func (h HandedSecrets) union(carried HandedSecrets) HandedSecrets {
 			out.Logins = map[string]string{}
 		}
 		maps.Copy(out.Logins, h.Logins)
+	}
+	if len(h.Extra)+len(carried.Extra) > 0 {
+		out.Extra = maps.Clone(carried.Extra)
+		if out.Extra == nil {
+			out.Extra = map[string]json.RawMessage{}
+		}
+		maps.Copy(out.Extra, h.Extra)
 	}
 	inH, inCarried := valueSet(h.Values), valueSet(carried.Values)
 	for _, v := range out.Values {
@@ -464,10 +497,11 @@ func loginValues(doc []byte) []string {
 // what it read out of it. An AWS session reaches its box as the document its
 // credential_process prints (internal/engine's awstoken.go), and its session
 // token printed alone is matched by no whole document and named by no shape.
-// What else such a document holds goes with it — an AWS session's expiry, as
-// the instant it is written in — which a transcript loses as little by as by a
-// login's scopes; its member names are no strings it holds, and a string under
-// eight bytes is left to the shapes, as every value is.
+// What else such a document holds goes with it, as the file comment says — an
+// AWS session's expiry, as the instant it is written in, and every setting of a
+// document the operator put in a credential position; its member names are no
+// strings it holds, and a string under eight bytes is left to the shapes, as
+// every value is.
 func secretValues(value string) []string {
 	strs, _ := jsonStrings([]byte(value))
 	return append([]string{value}, strs...)

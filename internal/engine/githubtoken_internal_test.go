@@ -636,6 +636,15 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 // it publishes, each ticked alone: a waiter built there without the refresh —
 // from options of its own rather than the shared constructor — goes red here,
 // and so does one that refreshed the other waiter's box.
+//
+// AND EACH RECORDS THE TOKEN BEFORE IT WRITES IT, in the sealed set beside the
+// job's row that every capture of the job's session is scrubbed by, through
+// the coordinator the node runs ([sandbox.Coordinator.RecordHanded]): a token
+// in the box its set does not hold is a live secret no capture is scrubbed of.
+//
+// Mutation: build a waiter without the refresh, have one refresh the other's
+// box, or hand the refresh a recorder that records nothing, and a check below
+// goes red.
 func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -644,6 +653,9 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	e.id = "node-a"
 	e.backends = &Backends{Queue: memory.New()}
 	e.answers = testAnswers()
+	// THE KEYRING THE JOBS' SETS ARE SEALED UNDER, as a node's is.
+	e.cipher = valueRing(t, "k1")
+	keep := executorKeep{engine: e}
 	// AN HOUR TO EACH LOOP'S FIRST PASS, so the loops the waiters start
 	// never poll beside the passes this case runs itself.
 	e.sandboxPollInterval = time.Hour
@@ -673,7 +685,8 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	t.Cleanup(e.stopSandbox)
 
 	// ONE RUNNING JOB IN EACH KIND OF CELL, each box holding the token its
-	// launch was handed, since expired; the direct one launched here.
+	// launch was handed, since expired, and the job's set of what its launch
+	// handed the box beside its row; the direct one launched here.
 	ctx := t.Context()
 	boxes := map[sandbox.Placement]*sandbox.FakeSandbox{}
 	for _, cell := range []sandbox.Placement{sandbox.Direct, sandbox.E2B} {
@@ -691,9 +704,17 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch %s: %v", cell, err)
 		}
+		raw, err := json.Marshal(sandbox.HandedSecrets{Values: []string{"ghs_expired"}})
+		if err != nil {
+			t.Fatalf("encoding %s's set: %v", cell, err)
+		}
+		handed, err := keep.SealHanded(turn, raw)
+		if err != nil {
+			t.Fatalf("sealing %s's set: %v", cell, err)
+		}
 		if err := pending.AttachSandbox(ctx, turn, sandbox.BoxRef{
 			SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell), Node: e.id,
-			Harness: "claude-code",
+			Harness: "claude-code", Handed: handed,
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox %s: %v", cell, err)
 		}
@@ -715,6 +736,29 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		held, _ := boxes[cell].ReadFile(ctx, path)
 		return strings.HasPrefix(string(held), "ghs_test_")
 	}
+	// recorded reports whether the job's set beside its row holds the token
+	// its box's file does, opened as a capture opens it.
+	recorded := func(cell sandbox.Placement) bool {
+		t.Helper()
+		held, _ := boxes[cell].ReadFile(ctx, path)
+		run, found, err := pending.Get(ctx, "turn-"+string(cell))
+		if err != nil || !found {
+			t.Fatalf("reading %s's run: %v, %v", cell, found, err)
+		}
+		sealed, err := pending.Handed(ctx, run)
+		if err != nil {
+			t.Fatalf("reading %s's set: %v", cell, err)
+		}
+		raw, err := keep.OpenHanded(run.TurnID, sealed)
+		if err != nil {
+			t.Fatalf("opening %s's set: %v", cell, err)
+		}
+		var set sandbox.HandedSecrets
+		if err := json.Unmarshal(raw, &set); err != nil {
+			t.Fatalf("decoding %s's set: %v", cell, err)
+		}
+		return slices.Contains(set.Values, string(held))
+	}
 	tick := func(name string, w *sandbox.Waiter) {
 		if _, err := w.Tick(ctx); err != nil {
 			t.Fatalf("the %s waiter's pass: %v", name, err)
@@ -725,12 +769,18 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	if !issued(sandbox.Direct) {
 		t.Error("the node's own waiter left its direct box's token file holding the launch's token")
 	}
+	if !recorded(sandbox.Direct) {
+		t.Error("the node's own waiter wrote a token its job's set does not hold")
+	}
 	if issued(sandbox.E2B) {
 		t.Fatal("the node's own waiter refreshed an e2b box, which only the fleet's polls")
 	}
 	tick("fleet's", fleet)
 	if !issued(sandbox.E2B) {
 		t.Error("the fleet's waiter left its e2b box's token file holding the launch's token")
+	}
+	if !recorded(sandbox.E2B) {
+		t.Error("the fleet's waiter wrote a token its job's set does not hold")
 	}
 }
 

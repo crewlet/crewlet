@@ -1522,13 +1522,17 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 
 // handedSet is the part kept beside a run's row holding what its job's box
 // was handed, sealed ([CoordStore.Handed]), named for the job it was written
-// for.
+// for: by its launch, and every token the completion poll renewed in the box
+// since ([CoordStore.AddHanded]).
 //
 // BESIDE THE ROW, NEVER ON IT ([coord.RunHanded]): up to [MaxHandedBytes]
 // before sealing — a launch whose environment holds a large file comes near
 // it — which every read of the row would carry, every git request of a coding
-// box and every listing among them, though only a capture of the job's
-// session and the next launch's opening read it.
+// box and every listing among them, though only three read it: a capture of
+// the job's session, to scrub it out; the next launch's opening, to carry it
+// into a box it continues in; and the poll's record of a token it renews in
+// the box, which reads the part and grows it by one compare-and-swap, or marks
+// it ([handedSet.Incomplete]).
 type handedSet struct {
 	// Launch is the job the set was written for ([PendingRun.LaunchID]): a
 	// set read for another job is none.
@@ -1548,6 +1552,12 @@ type handedSet struct {
 	// and a later job continuing in the box carries nothing of it, and
 	// refuses its own ([Coordinator.carryHanded]).
 	Incomplete string `json:"incomplete,omitempty"`
+
+	// Extra is every key of the part this build does not know, kept
+	// verbatim through a renewal's write of it (wirekeys.go), and dropped
+	// with the job's set by the next job's attach, which replaces it whole.
+	// Filled by the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // of is the sealed set where it was written for launch, and "" otherwise.
@@ -1678,6 +1688,9 @@ func (s *CoordStore) AddHanded(ctx context.Context, run PendingRun,
 				// is refused, so the token adds nothing to keep.
 				return nil, nil
 			case held.Launch == run.LaunchID:
+				// THE JOB'S OWN PART, written back with the keys a later
+				// build put in it (wirekeys.go): a renewal changes the seal
+				// and the mark, and nothing else of it.
 				next, why := add(held.Sealed)
 				if next == held.Sealed {
 					return nil, nil

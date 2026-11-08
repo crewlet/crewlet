@@ -1291,6 +1291,29 @@ func TestAWaiterNeedsItsCollaborators(t *testing.T) {
 	}
 }
 
+// A WAITER THAT REFRESHES THE BOXES IT POLLS RECORDS EACH TOKEN FIRST, or is
+// not built: a token its refresh wrote into a box that nothing recorded beside
+// the job's row would be a live secret no capture of the job's session is
+// scrubbed of ([WaiterOptions.Record]).
+//
+// Mutation: build a waiter that refreshes with nothing to record in, or refuse
+// one that has both, and a check below goes red.
+func TestAWaiterThatRefreshesIsRefusedWithoutARecorder(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	opts := WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+		Refresh: func(context.Context, *Manager, PendingRun, Sandbox, RecordHanded) {},
+	}
+	if _, err := NewWaiter(opts); err == nil {
+		t.Error("a waiter that refreshes the boxes it polls was built with nothing to record each token in")
+	}
+	opts.Record = func(context.Context, PendingRun, string, time.Time) error { return nil }
+	if _, err := NewWaiter(opts); err != nil {
+		t.Errorf("a waiter that refreshes and records was refused: %v", err)
+	}
+}
+
 // A COMPLETION CARRIES THE UNIT OF WORK TOO, by the same rule and for the same
 // reason: see TestAnAnnouncementCarriesTheRunsUnitOfWork. This is the
 // announcement the dashboard's board reads and the one that routes the resume,

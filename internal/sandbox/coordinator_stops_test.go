@@ -284,6 +284,21 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"RecordHanded": {{
+		// IT ENDS NOTHING: it records a token the poll's refresh is about to
+		// write into the run's box in the sealed set beside the job's row,
+		// and writes nothing of the row itself — a job the row no longer
+		// holds running is answered as one, its token written nowhere, and
+		// whatever becomes of the run is the poll's to say as it always does.
+		name: "a token the poll renews in the run's box, recorded before it is written",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			if err := rig.coordinator.RecordHanded(t.Context(), run, "a-token-the-poll-renewed",
+				rig.now.Add(15*time.Minute)); err != nil {
+				t.Logf("RecordHanded: %v", err)
+			}
+		},
+	}},
 	"OweEnd": {{
 		// IT ENDS NOTHING: it writes onto the run's record the end its turn
 		// owes the executor log, which the run's own ending records before

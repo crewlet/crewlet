@@ -464,8 +464,8 @@ func (e *Engine) seatResolver(
 // poll, fifteen seconds later, asks again, well inside the five minutes the
 // shortest renewal (an AWS session's) leaves; or the job is no longer running,
 // and nothing more is written for it. So the job's set holds a token before
-// its box does, and every capture of the job's session is scrubbed of it
-// (internal/sandbox's handed.go).
+// its box does, and every capture of the job's session taken once the job has
+// ended is scrubbed of it (internal/sandbox's handed.go).
 //
 // NEVER LOGGED, never returned: the lines here name the seat, the path and
 // when the token expires.
@@ -652,7 +652,9 @@ func tokenRecordJob(job, name string) string { return job + "\x01" + name }
 // tokenWait is the story a poll tells of a running job whose seat's issued
 // tokens could not all be issued now, read off two facts: whether the job's
 // files for them hold a token, and why the issues failed; or of one of its
-// token files the poll could not write the issued token into.
+// token files the poll could not write the issued token into; or of a token
+// of one of its variables the poll could not record for the scrub of the
+// run's sessions, and so wrote into none of the variable's files.
 //
 // FOUR STORIES OF A TOKEN NOT ISSUED, because each pair of answers is a
 // different thing to say:
@@ -684,7 +686,10 @@ func tokenRecordJob(job, name string) string { return job + "\x01" + name }
 // AND ONE OF A TOKEN THE POLL COULD NOT RECORD for the scrub of the run's
 // sessions before writing it ([Engine.recordToken]): the store did not answer,
 // so none of the variable's files is written on this poll, and they keep what
-// they hold until a later poll's record lands, which settles it.
+// they hold until a later poll's record lands, which settles it, as a record
+// that finds the job no longer running does. Told once for the variable
+// ([tokenRecordJob]), and again only when the store's error, or whether the
+// files hold a token, changes.
 //
 // KIND-AGNOSTIC WORDS, with the variables beside them in the line: a job's
 // story covers every variable it waits on, whichever integrations issue them.
@@ -772,19 +777,22 @@ func (w tokenWait) detail() string {
 }
 
 // tokenWaits is what this node's polls have said of the jobs they reach whose
-// seat's tokens could not be issued, or could not be written into one of the
-// job's files: each story ONCE PER JOB (once per file for a write), and a
-// refusal once per reason its vendor gives, rather than on every pass, which
-// at the poll's interval and the nudges besides buried the one line under a
-// hundred copies of it for the life of the run.
+// seat's tokens could not be issued, could not be written into one of the
+// job's files, or could not be recorded for the scrub of the run's sessions
+// before they were written: each story ONCE PER JOB (once per file for a
+// write, once per variable for a record), and a refusal once per reason its
+// vendor gives, rather than on every pass, which at the poll's interval and
+// the nudges besides buried the one line under a hundred copies of it for the
+// life of the run.
 //
 // IN MEMORY, keyed by the job ([sandbox.PendingRun.LaunchID] under its run;
-// [tokenFileJob] for one of its files), and forgotten once the job is issued
-// every token again, or the file takes it ([tokenWaits.settle]), or goes
-// unpolled on this node past [Engine.tokenWaitForget]: a restart, a duty that
-// moved, a run that ended. Each costs at most one more line where the next
-// poll finds the job still waiting, which is the right thing to say to a
-// reader of that node's log.
+// [tokenFileJob] for one of its files; [tokenRecordJob] for the record of one
+// of its variables), and forgotten once the job is issued every token again,
+// the file takes it, or the variable's record lands or finds the job no longer
+// running ([tokenWaits.settle]), or goes unpolled on this node past
+// [Engine.tokenWaitForget]: a restart, a duty that moved, a run that ended.
+// Each costs at most one more line where the next poll finds the job still
+// waiting, which is the right thing to say to a reader of that node's log.
 type tokenWaits struct {
 	mu   sync.Mutex
 	said map[string]tokenWaitSaid
@@ -846,8 +854,9 @@ func (w *tokenWaits) first(job string, story tokenWait, forget time.Duration) bo
 	return !known || said.story != story
 }
 
-// settle forgets job's wait: its seat is issued every token again, or the file
-// the key names took it, so a later wait is a new one and said as such.
+// settle forgets job's wait: its seat is issued every token again, the file
+// the key names took it, or the record the key names landed or found the job
+// no longer running, so a later wait is a new one and said as such.
 func (w *tokenWaits) settle(job string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
