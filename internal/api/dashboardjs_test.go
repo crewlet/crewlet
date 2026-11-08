@@ -2113,7 +2113,13 @@ const (
 	// bytes) to 5667.4 KiB (5,803,441 bytes, +18,843): script +11,328 (the
 	// Chatlet chunk +8,139) and the sheets +7,515 (the one sheet +5,834,
 	// Chatlet's +1,681). The measured size's next KiB: 5668 KiB.
-	treeBudget = 5<<20 + 548<<10
+	// Every message box sending on Enter, page toolbars on one compact rhythm
+	// and no panel scrolling sideways, on kit 0.119.2 (the send keys, one edge
+	// and one height for a row of controls, and references and whole code
+	// chips that wrap inside any box), took it from 5667.4 KiB (5,803,441
+	// bytes) to 5671.5 KiB (5,807,659 bytes, +4,218): script +2,373 and the
+	// sheets +1,845 (the one sheet). The measured size's next KiB: 5672 KiB.
+	treeBudget = 5<<20 + 552<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
