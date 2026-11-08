@@ -298,10 +298,6 @@ func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seat
 	if err != nil {
 		return seataccess.Options{}, err
 	}
-	out := make([]seataccess.Level, 0, len(levels))
-	for _, l := range levels {
-		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note, Administers: l.administers})
-	}
 	scope := make([]string, 0, len(projects))
 	names := make(map[string]string, len(projects))
 	for _, p := range projects {
@@ -313,10 +309,20 @@ func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seat
 	}
 	slices.Sort(scope)
 	return seataccess.Options{
-		Lane: lane, Levels: seataccess.OfferGaps(out, gaps),
+		Lane: lane, Levels: seataccess.OfferGaps(accessVendor{}.FixedLevels(lane), gaps),
 		Scope: slices.Compact(scope), ScopeNames: names, ScopeLive: true,
 		Scoped: true, ScopeRequired: true, Rotatable: true, ActionURL: ApplicationsURL,
 	}, nil
+}
+
+// FixedLevels is Scaleway's three levels, least access first
+// ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
+	out := make([]seataccess.Level, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note, Administers: l.administers})
+	}
+	return out
 }
 
 // seatApp is one seat's application as a step and a read see it: the

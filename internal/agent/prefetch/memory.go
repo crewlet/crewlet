@@ -135,7 +135,7 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 	}
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
-		bullets = append(bullets, renderMemory(r.Boundary, entry))
+		bullets = append(bullets, renderMemory(r.Boundary, entry, r.Told))
 	}
 	return joinBullets(bullets)
 }
@@ -324,11 +324,15 @@ func memoryKindLabel(entry learning.DiaryEntry) string {
 // the turn's token (ADR-0040): a memory is what a post-turn model concluded
 // from other people's words, or what the seat noted mid-turn, and it is
 // shown beside the turn's fences, which nothing in it may open or close.
-func renderMemory(b provenance.Boundary, entry learning.DiaryEntry) string {
+//
+// A note older than an access change it names is marked as such
+// ([WrittenBefore]): the seat reads it beside "Your access", which wins.
+func renderMemory(b provenance.Boundary, entry learning.DiaryEntry, told []ToldChange) string {
 	content := provenance.Neutralise(b, collapse(entry.Content))
 	if content == "" {
 		return ""
 	}
+	content += WrittenBefore(entry, told)
 	if entry.Kind == learning.DiaryShort && !entry.TTLUntil.IsZero() {
 		// The EXPIRY, rendered. A short memory read as permanent is
 		// worse than not having it: an agent that keeps honouring last

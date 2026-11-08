@@ -47,16 +47,7 @@ const (
 )
 
 // LevelLabel is a level as GitHub's settings page names it.
-func LevelLabel(l Level) string {
-	switch l {
-	case LevelRead:
-		return "Read-only"
-	case LevelWrite:
-		return "Read and write"
-	default:
-		return "No access"
-	}
-}
+func LevelLabel(l Level) string { return l.Label() }
 
 // Permission is one GitHub App permission an agent seat may hold.
 type Permission struct {

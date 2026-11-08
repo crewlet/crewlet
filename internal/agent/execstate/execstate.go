@@ -318,6 +318,13 @@ type Frozen struct {
 	// since is the next turn's to be told, as the read the turn's end absorbs
 	// is the one these bytes told.
 	Endings string `json:"endings,omitempty"`
+
+	// Access is the seat's "## Your access" section and CapabilityChanges what
+	// changed in it since the seat was last told (internal/capability),
+	// rendered at the turn's dispatch: every launch of the turn carries the
+	// same bytes.
+	Access            string `json:"access,omitempty"`
+	CapabilityChanges string `json:"capability_changes,omitempty"`
 }
 
 // Uncharged is spend carried across a park, in the counters a work item's

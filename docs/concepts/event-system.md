@@ -317,6 +317,11 @@ seat_access_drift_restored # an access sync put a seat's level or scope at a
                            # vendor back to what the document asks after
                            # somebody changed it there (integration, lane,
                            # agent_handle, before, after, restored_at)
+agent_capability_told      # a turn's first launch carried the seat what
+                           # changed in its access since it was last told,
+                           # or its first snapshot (agent_handle, digest,
+                           # baseline, changes, lines, revision_from,
+                           # revision_to, told_at)
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection

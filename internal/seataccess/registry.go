@@ -98,6 +98,29 @@ func Lookup(kind integration.Kind) (Vendor, bool) {
 	return v, ok
 }
 
+// FixedLevels is a vendor whose levels are this engine's own fixed set rather
+// than a list it reads from the vendor, so they can be named with no session:
+// the levels its [Session.Options] offers, before any of them is marked
+// unavailable.
+type FixedLevels interface {
+	FixedLevels(lane Lane) []Level
+}
+
+// KnownLevels is lane's levels as kind's vendor fixes them, least access
+// first, and false for a vendor that lists its levels live or is not
+// registered.
+func KnownLevels(kind integration.Kind, lane Lane) ([]Level, bool) {
+	v, ok := Lookup(kind)
+	if !ok {
+		return nil, false
+	}
+	fixed, ok := v.(FixedLevels)
+	if !ok {
+		return nil, false
+	}
+	return fixed.FixedLevels(lane), true
+}
+
 // Registered is every registered vendor, in [Kinds] order.
 func Registered() []Vendor {
 	registry.RLock()

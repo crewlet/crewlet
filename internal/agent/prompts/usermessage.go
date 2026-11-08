@@ -67,6 +67,13 @@ type UserMessage struct {
 	// the same bytes.
 	Endings string
 
+	// CapabilityChanges is what changed in the seat's access since it was
+	// last told, rendered whole with its own heading (internal/capability's
+	// ChangesBlock). Computed at the turn's dispatch and frozen on its park
+	// beside Endings, so every brief of the turn carries the same bytes;
+	// empty when nothing changed and on the seat's first told turn.
+	CapabilityChanges string
+
 	// Steered is every note a person sent this turn that the brief carries,
 	// each rendered by [SteerMessage]: the ones the turn has already read, in
 	// the order read, then the ones this brief is the first to read.
@@ -78,6 +85,10 @@ type UserMessage struct {
 	// phase of the turn but the one that does the work again.
 	Steered []string
 }
+
+// KeyCapabilityChanges is the outline key of the access changes the turn is
+// told.
+const KeyCapabilityChanges = "capability_changes"
 
 // taskHeader introduces the ask.
 //
@@ -114,6 +125,11 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 	b := NewBuilder("\n\n")
 	if m.Endings != "" {
 		b.Heading("conversation_endings", m.Endings)
+	}
+	// AFTER THE ENDINGS AND BEFORE THE ASK: an access change is news the
+	// seat reads before it decides how to do what it was asked.
+	if m.CapabilityChanges != "" {
+		b.Heading(KeyCapabilityChanges, m.CapabilityChanges)
 	}
 	b.Heading("task", taskHeader+"\n"+task)
 	if m.PriorWork != "" {

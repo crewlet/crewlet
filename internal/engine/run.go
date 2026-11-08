@@ -719,6 +719,10 @@ type Engine struct {
 	router *estate.Router
 	local  *localEstate
 
+	// toldUnreadable is every told record whose changes this node could not
+	// decode and has said so once (capability.go).
+	toldUnreadable sync.Map
+
 	// executorLog is the executor log's writes the sandbox runtime records
 	// every capture of a launch's session and every turn's end through: the
 	// router's (estate.ExecutorWrites), set in [New] beside it; nil on an
@@ -3769,7 +3773,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// thin trigger whose turn-start search was skipped — is served by the
 	// executor calling search_knowledge over the same seam, on a query it
 	// writes once it knows what the task needs.
-	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary)
+	// THE SEAT'S ACCESS, AND WHAT CHANGED IN IT SINCE IT WAS LAST TOLD, read
+	// once here and frozen on the turn like the endings below; its notes
+	// written before a told change are marked (capability.go).
+	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told.memory)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -3792,7 +3800,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
@@ -3802,15 +3810,18 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 		Reply:   reply,
 		// BOUNDED AT RENDER: the newest endings whole while they fit, the
 		// rest counted ([prompts.EndingsMaxBytes]), and frozen on every park.
-		Endings:   conversation.endingsBlock(),
-		Publisher: e.backends.Queue,
-		Turn:      turnIdentity,
-		Sessions:  e.sessions,
-		Metrics:   e.metrics,
-		Launcher:  launcher,
-		Steer:     box,
-		Markers:   e.markers(),
-		Latch:     e.onboarded,
+		Endings: conversation.endingsBlock(),
+		// THE SEAT'S ACCESS AND WHAT CHANGED IN IT, frozen beside the endings.
+		Access:            told.access,
+		CapabilityChanges: told.changes,
+		Publisher:         e.backends.Queue,
+		Turn:              turnIdentity,
+		Sessions:          e.sessions,
+		Metrics:           e.metrics,
+		Launcher:          launcher,
+		Steer:             box,
+		Markers:           e.markers(),
+		Latch:             e.onboarded,
 		// The meter the context assembly was charged through — see above.
 		Budget: tel.budget.budget(),
 		// The round-cap extension judge, from the same pinned epoch, for
