@@ -563,7 +563,9 @@ test("a live session kept again reads in the run's words", () => {
   // A LIVE TURN'S ROW THAT HAS KEPT NOTHING IS NOT IN PROGRESS, so a capture
   // after it is any capture.
   expect(
-    recapturedWords(live({ kept: false, object_bytes: 0, in_progress: false, kept_note: undefined })),
+    recapturedWords(
+      live({ kept: false, object_bytes: 0, in_progress: false, kept_note: undefined }),
+    ),
   ).toBe("This session was captured again since this transcript was read.");
   for (const words of [recapturedWords(live()), unfollowedWords(live())]) {
     expect(words).not.toMatch(/sav(e|ed|ing)/i);
