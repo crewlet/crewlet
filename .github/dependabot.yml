@@ -185,6 +185,7 @@ updates:
         patterns:
           - "vite"
           - "vitest"
+          - "@vitest/*"
           - "@vitejs/plugin-react"
       crewlethq:
         patterns:
