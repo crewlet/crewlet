@@ -64,7 +64,7 @@ func TestTheCheckpointIsCarriedOnlyOverWhatTheReadWasReleasedPast(t *testing.T) 
 // just answered at, and took a linearizable answer below its mark for its
 // log gone back.
 //
-// Released, A commits everything it reached, and a read past nothing it has
+// Released, A commits every record on the log, and a read past nothing it has
 // not committed is handed its row exactly, with the instant of the record the
 // row names.
 func TestAStampedReadIsNeverBelowOneAnotherNodeAnsweredBeforeIt(t *testing.T) {
@@ -138,9 +138,23 @@ func TestAStampedReadIsNeverBelowOneAnotherNodeAnsweredBeforeIt(t *testing.T) {
 			onB.KeyedTo)
 	}
 
+	// THE LOG'S LAST RECORD, which nothing appends past: A's own read's
+	// barrier. That is what A has to commit before its row stops moving, and
+	// never its reached position, which is how far A has decoded rather than
+	// where the log ends. A's read was released on the record before its
+	// barrier, so the barrier can still be on its way to A's loop when A has
+	// committed everything it reached, and a fetch that fails puts the
+	// reached position back on the checkpoint. Either way the two met below
+	// the end, A committed the rest between the row read below and the read
+	// compared with it, and that read was handed the later row.
+	_, last, err := a.log.Bounds(ctx)
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	end := written.Position.At(last)
 	hold.Release()
-	until(t, "node A committing every barrier it reached, once released", func() bool {
-		return a.runner.Committed() == a.runner.Reached()
+	until(t, "node A committing every record on the log, once released", func() bool {
+		return a.runner.Committed() == end
 	})
 	row, _, err := statelog.CheckpointOf(ctx, a.estate, a.spec.Name)
 	if err != nil {
