@@ -9,7 +9,7 @@ import (
 )
 
 // A CREDENTIAL'S WRITE THAT WAKES SOMEBODY CARRIES THE APPS IT USED HERE, AND
-// NOTHING ELSE DOES (ADR-0108), on the knowledge base's store as on the
+// NOTHING ELSE DOES (ADR-0109), on the knowledge base's store as on the
 // tracker's. A pipeline's token commenting on a page records, beside its login,
 // the apps the node that took the write resolved for it — a turn the comment's
 // notice wakes is bounded by them — at the version that carries them. Its

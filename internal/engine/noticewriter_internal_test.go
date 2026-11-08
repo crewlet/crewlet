@@ -69,7 +69,7 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 		// reports — is nobody's errand: no counterparty, no requester.
 		{name: "the engine's own", writer: writer{"node-a", "system", nil}, trackerOnly: true},
 		// A CREDENTIAL ACTING AS NO SEAT is the requester by its own login,
-		// with the apps its record carried (ADR-0108) — never its token.
+		// with the apps its record carried (ADR-0109) — never its token.
 		{name: "a credential's acting as no seat",
 			writer: writer{"token:ci", "operator", []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}},
 			login:  "token:ci", apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}},

@@ -37,7 +37,7 @@ func refusedForACredential(got tools.Result) bool {
 		errors.As(got.Cause, &refused) && refused.Decision.Reason == authz.ReasonCeiling
 }
 
-// A TURN A CREDENTIAL WOKE READS NO FLEET HEALTH AND NO SERVER (ADR-0108).
+// A TURN A CREDENTIAL WOKE READS NO FLEET HEALTH AND NO SERVER (ADR-0109).
 //
 // A token or a service account acting as no seat is somebody of the company
 // for the apps its grants name alone, its reach stated at its pin, and the

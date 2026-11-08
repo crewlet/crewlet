@@ -163,3 +163,60 @@ func TestTheGateLogsOneLinePerCommand(t *testing.T) {
 		}
 	}
 }
+
+// THE GATE TAKES A PROGRAM'S BARE NAME AFTER SUDO -N, AND NOWHERE ELSE: a rule
+// running /usr/bin/docker through `sudo -n` admits `sudo -n docker ps`, which
+// sudo resolves through its secure_path and holds to the sudoers line naming
+// /usr/bin/docker; a path in that place is matched whole, so `./docker` and
+// `/tmp/docker` are refused; every other word, a path argument included, is
+// matched exactly. Run against the gate's own text, its allowlist moved and its
+// exec said rather than made, so nothing runs on this machine.
+//
+// Mutation: match the program's base name for any word after sudo, and
+// `sudo -n /tmp/docker ps` runs.
+func TestTheGateTakesAProgramsBareNameAfterSudo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	allowlist := filepath.Join(dir, "read-allowlist")
+	rules := "/usr/bin/uptime\n/usr/bin/sudo -n /usr/bin/docker ps\n/usr/bin/sudo -n /usr/bin/docker logs --tail * *\n" +
+		"/usr/bin/tail -n * /var/log/syslog\n"
+	gate := strings.Replace(gateScript, "ALLOWLIST=/etc/ssh/crewlet/read-allowlist", "ALLOWLIST="+allowlist, 1)
+	gate = strings.Replace(gate, `exec "$bin" "$@"`, `echo "ran $bin $*"; exit 0`, 1)
+	if !strings.Contains(gate, "ALLOWLIST="+allowlist) || !strings.Contains(gate, "ran $bin") {
+		t.Fatal("the gate's allowlist or exec line moved; this case no longer reads it")
+	}
+	script := filepath.Join(dir, "gate.sh")
+	logger := filepath.Join(dir, "logger")
+	for path, body := range map[string]string{allowlist: rules, script: gate, logger: "#!/bin/sh\nexit 0\n"} {
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(line string) (string, int) {
+		cmd := exec.CommandContext(t.Context(), "/bin/sh", script, "read")
+		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "SSH_ORIGINAL_COMMAND=" + line}
+		out, err := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return string(out), exit.ExitCode()
+		}
+		return string(out), 0
+	}
+	for line, ran := range map[string]string{
+		"sudo -n docker ps":                         "ran /usr/bin/sudo -n docker ps",
+		"sudo -n docker logs --tail 50 api-backend": "ran /usr/bin/sudo -n docker logs --tail 50 api-backend",
+		"/usr/bin/sudo -n /usr/bin/docker ps":       "ran /usr/bin/sudo -n /usr/bin/docker ps",
+		"uptime":                                    "ran /usr/bin/uptime",
+		"tail -n 20 /var/log/syslog":                "ran /usr/bin/tail -n 20 /var/log/syslog",
+	} {
+		if out, code := read(line); code != 0 || strings.TrimSpace(out) != ran {
+			t.Errorf("%q: exit %d, %q; want %q", line, code, out, ran)
+		}
+	}
+	for _, line := range []string{"sudo -n ./docker ps", "sudo -n /tmp/docker ps", "sudo -n docker ps -a",
+		"sudo -n docker exec api sh", "sudo docker ps", "sudo -n bin/docker ps", "tail -n 20 syslog"} {
+		if out, code := read(line); code != GateRefused {
+			t.Errorf("%q: exit %d, %q; want refused", line, code, out)
+		}
+	}
+}

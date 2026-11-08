@@ -147,3 +147,46 @@ func TestAShortenedSnapshotIsComparedAtItsOwnLevel(t *testing.T) {
 		t.Errorf("one access at two levels is told as %+v", changes)
 	}
 }
+
+// A HOST'S READ COMMANDS ARE BOUNDED: each list stops at its cap and counts
+// the rest, every line is shortened, a host past the scope cap lists none,
+// and the shorter levels drop them, so the snapshot keeps its size bound.
+//
+// Mutation: skip the per-host cap in at and the first host lists forty.
+func TestAHostsReadCommandsAreBounded(t *testing.T) {
+	t.Parallel()
+	in := Integration{Kind: "ssh", Lane: "ssh", On: true}
+	for i := range MaxScope + 2 {
+		host := fmt.Sprintf("host-%02d", i)
+		in.Scope = append(in.Scope, host)
+		hc := HostCommands{Host: host}
+		for j := range 40 {
+			hc.Run = append(hc.Run, fmt.Sprintf("cmd-%02d %s", j, strings.Repeat("x", 400)))
+		}
+		in.Commands = append(in.Commands, hc)
+	}
+	whole := bound(Snapshot{V: Version, Integrations: []Integration{in}})
+	if whole.Compact != 0 {
+		t.Fatalf("the premise: level %d", whole.Compact)
+	}
+	got := whole.Integrations[0].Commands
+	if len(got) != MaxScope {
+		t.Fatalf("%d hosts list commands, want the %d in scope", len(got), MaxScope)
+	}
+	for _, hc := range got {
+		if len(hc.Run) != MaxCommands || hc.More != 40-MaxCommands {
+			t.Fatalf("host %s lists %d commands and %d more", hc.Host, len(hc.Run), hc.More)
+		}
+		for _, line := range hc.Run {
+			if len(line) > ItemMaxBytes {
+				t.Fatalf("a command line of %d bytes, past %d", len(line), ItemMaxBytes)
+			}
+		}
+	}
+	if n := len(whole.JSON()); n > MaxSnapshotBytes {
+		t.Fatalf("the snapshot encodes to %d bytes, past %d", n, MaxSnapshotBytes)
+	}
+	if short := whole.at(1); short.Integrations[0].Commands != nil {
+		t.Error("the shorter level keeps the read commands")
+	}
+}

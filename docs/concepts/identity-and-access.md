@@ -545,7 +545,7 @@ Inside a turn somebody woke — a person's message, their assignment of a work
 item, their comment, a colleague seat's ask, a pipeline's token filing work —
 an agent uses **only the apps that somebody uses**. Every verb whose row names an app is decided twice: once
 for the agent, which holds every app, and once for the app of whoever woke the
-turn ([ADR-0108](../../adr/0108-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+turn ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 A person kept off Worklet cannot have an agent create, read or close work
 items for them; one kept off Doclet cannot have it read or write pages; one
 kept off Chatlet cannot have it post in a room; one without `artifacts` cannot

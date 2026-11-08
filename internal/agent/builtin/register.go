@@ -177,7 +177,7 @@ type Deps struct {
 
 	// Requesters composes who a seat's turn is acting for — the requester
 	// ceiling — which the gate binds to every call the turn makes, so every
-	// app verb is held to the apps whoever woke the turn uses (ADR-0108) and
+	// app verb is held to the apps whoever woke the turn uses (ADR-0109) and
 	// the families that decide a relation for them read the same
 	// composition. Nil binds nobody, and a call is then decided for the seat
 	// alone, as on a surface no seat calls through: a seat's registry is

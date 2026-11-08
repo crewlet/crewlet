@@ -405,7 +405,7 @@ type Actor struct {
 	// when this node resolved it (iam.ActorApps), and nil for every other
 	// author: carried on the records it writes that wake somebody, so a turn
 	// one of them wakes is worked for the credential no wider than this node
-	// resolved it (ADR-0108). Set by [ActorOf] alone.
+	// resolved it (ADR-0109). Set by [ActorOf] alone.
 	Apps []iam.Grant
 
 	// TurnID is the RUN that produced this write — provenance, so an

@@ -162,7 +162,7 @@ func ActorFor(p Principal) Actor {
 // kind.
 //
 // ON THE RECORD, because a turn the write wakes is worked for that credential
-// (ADR-0108), and the node that runs the turn may not be the node that took
+// (ADR-0109), and the node that runs the turn may not be the node that took
 // the write: Tier A is per node, and the directory a node reads may lag. The
 // running node bounds the turn by these apps AND by its own resolution of the
 // credential, so a token one node narrowed never acts on another node's wider

@@ -9,7 +9,7 @@ import (
 )
 
 // A CREDENTIAL'S WRITE THAT WAKES SOMEBODY CARRIES THE APPS IT USED HERE, AND
-// NOTHING ELSE DOES (ADR-0108). A task a pipeline's token files with its wake
+// NOTHING ELSE DOES (ADR-0109). A task a pipeline's token files with its wake
 // records, beside its login, the apps the node that took the write resolved
 // for it — the turn the wake starts is bounded by them — at the version that
 // carries them, which an older build retains rather than applying without

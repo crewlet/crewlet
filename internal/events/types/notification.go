@@ -49,13 +49,13 @@ type NotificationWriter struct {
 	// seat (`operator`) — `token:<id>` for a Tier A token, the directory
 	// machine's login otherwise — and empty for the other three kinds. A
 	// LOGIN, NEVER A TOKEN'S VALUE: it names the credential a turn the write
-	// woke is worked for (ADR-0108), which the node running it resolves again.
+	// woke is worked for (ADR-0109), which the node running it resolves again.
 	Login string `json:"login,omitempty"`
 
 	// Apps are the apps that credential used when the node that took its
 	// write resolved it (iam.ActorApps), and empty for the other kinds. The
 	// turn the write wakes uses no app outside them, nor outside what the
-	// running node resolves the login to now (ADR-0108): Tier A is per node,
+	// running node resolves the login to now (ADR-0109): Tier A is per node,
 	// so the running node's answer alone would let a token one node narrowed
 	// act on another node's wider grants. An operator writer carrying none —
 	// an older build's — is worked for as a stranger.

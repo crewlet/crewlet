@@ -181,7 +181,7 @@ type Engine struct {
 	// the grants each declares: for [Engine.HolderRecord], which answers a
 	// login no entry declares as nobody's, and for a turn such a token woke,
 	// whose every call is bounded by the apps it holds HERE
-	// (turnRequesters.Credential, ADR-0108). Tier A, so read once at boot like
+	// (turnRequesters.Credential, ADR-0109). Tier A, so read once at boot like
 	// the posture beside it.
 	tierATokens map[string][]iam.Grant
 

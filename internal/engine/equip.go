@@ -99,7 +99,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	// AND WHO EACH TURN IS ACTING FOR, which the gate binds to every call a
 	// seat makes in a turn somebody woke: every app verb is held to the apps
-	// that somebody uses (ADR-0108), and the relation families read the same
+	// that somebody uses (ADR-0109), and the relation families read the same
 	// composition. Left out, a seat would use every app for anybody.
 	deps.Requesters = turnRequesters{engine: e}
 	deps.Work = e.workDeps(c)

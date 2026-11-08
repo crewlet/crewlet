@@ -1358,7 +1358,7 @@ type PendingRun struct {
 	// its box makes through the bridge after a takeover, is still worked for
 	// that credential: what each call may use for it is these apps and the
 	// running node's own resolution of the login, whichever is narrower
-	// (ADR-0108). A row without them — an older build's — reads the turn as
+	// (ADR-0109). A row without them — an older build's — reads the turn as
 	// a stranger's, which is what an older build's own turn did. Nobody is
 	// asked anything for a credential: a question addressed to "requester"
 	// resolves to the fallback, as a row naming no requester does.

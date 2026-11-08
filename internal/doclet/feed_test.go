@@ -152,7 +152,7 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 		{author("jane"), types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
 		{agent("swe"), types.NotificationWriter{Kind: iam.ActorAgent, Seat: "swe"}},
 		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
-		// node that took its write recorded for it (ADR-0108).
+		// node that took its write recorded for it (ADR-0109).
 		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator,
 			Apps: []iam.Grant{iam.GrantDoclet}},
 			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",

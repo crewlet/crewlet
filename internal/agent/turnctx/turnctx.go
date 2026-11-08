@@ -271,7 +271,7 @@ type Turn struct {
 	// set, and for a turn no credential woke.
 	//
 	// NOT Requester: that is a seat a question is put to, and a credential is
-	// nobody to ask. What it is for is the turn's ceiling (ADR-0108): every
+	// nobody to ask. What it is for is the turn's ceiling (ADR-0109): every
 	// call is decided for the credential too, with these apps narrowed again
 	// by what the node running the call resolves the login to — so a token
 	// narrowed or removed after it wrote narrows the turn at its next call,

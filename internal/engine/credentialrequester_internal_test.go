@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CREDENTIAL IS PLACED BY ITS LOGIN'S NAMESPACE, AND ONLY THERE (ADR-0108).
+// A CREDENTIAL IS PLACED BY ITS LOGIN'S NAMESPACE, AND ONLY THERE (ADR-0109).
 //
 // A turn a credential acting as no seat woke is worked for it as THIS node
 // resolves it: a `token:` login by this node's own Tier A — a token another
@@ -157,7 +157,7 @@ func TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL'S TURN IS STILL ITS TURN WHEN IT RESUMES (ADR-0108). The
+// A CREDENTIAL'S TURN IS STILL ITS TURN WHEN IT RESUMES (ADR-0109). The
 // credential and the apps its write carried reach the turn's context at
 // dispatch, the launch that records the run's row, and the context a resumed
 // segment rebuilds from that row — so every call the turn makes after its

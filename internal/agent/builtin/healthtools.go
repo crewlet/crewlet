@@ -563,7 +563,7 @@ type requesterTerms struct {
 //
 // A CREDENTIAL ACTING AS NO SEAT is refused too ([worksForACredential]): a
 // token or a service account is somebody of the company for the apps its
-// grants name alone (ADR-0108), its reach stated at its pin, and what these
+// grants name alone (ADR-0109), its reach stated at its pin, and what these
 // tools read — the deployment's health, a server — is no app. So a turn a
 // `[worklet]` CI token woke reads neither, as it never could before it was a
 // requester at all, and neither does an `[admin]` token's, whose requester

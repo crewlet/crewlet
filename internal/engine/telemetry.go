@@ -477,7 +477,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// "the requester" long after this frame is gone.
 			Requester: t.requester, Stranger: t.stranger,
 			// OR THE CREDENTIAL that did, which no question reaches: what
-			// the turn may use for it is bounded by its apps (ADR-0108).
+			// the turn may use for it is bounded by its apps (ADR-0109).
 			RequesterLogin: t.requesterLogin,
 			RequesterApps:  slices.Clone(t.requesterApps),
 			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
@@ -1184,7 +1184,7 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, s
 // interactions carry no apps): a merge must not launder a constraint, so a
 // burst a token began before it was narrowed is held to the narrower record.
 // A write that carries none — an older build's — leaves none, and a
-// credential's turn with no apps is worked for as a stranger (ADR-0108).
+// credential's turn with no apps is worked for as a stranger (ADR-0109).
 func credentialRequesterOf(evs, ask []*events.Event, interactions []types.InboundInteraction,
 	seat string) (string, []iam.Grant) {
 

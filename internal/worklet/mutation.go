@@ -776,7 +776,7 @@ type MutationRecord struct {
 	// resolved it (iam.ActorApps), and absent on every other record — one
 	// that wakes nobody included, a gate among them. NOT APPLIED to any row:
 	// the change feed reads it, and a turn the record wakes uses no app
-	// outside it (ADR-0108, notify.FirstPartyWriter). Version 2: an older
+	// outside it (ADR-0109, notify.FirstPartyWriter). Version 2: an older
 	// build retains a record carrying it rather than waking a seat for a
 	// credential it would read as a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`

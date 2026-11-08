@@ -494,7 +494,7 @@ type Actor struct {
 	// Apps are the apps the credential behind an [AuthorOperator] actor used
 	// when this node resolved it (iam.ActorApps), carried on every record it
 	// writes that wakes somebody ([MutationRecord.ActorApps]) so a turn the
-	// record wakes uses no app the credential did not use here (ADR-0108). Ignored for every other
+	// record wakes uses no app the credential did not use here (ADR-0109). Ignored for every other
 	// kind: a seat's or a person's record names the seat, whose holder the
 	// turn's node reads.
 	Apps []iam.Grant

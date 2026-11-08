@@ -284,7 +284,7 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 	}
 	// THE FOUNDER, employed and read on every member: the seat answers her on
 	// whichever member holds it, and an agent uses no app for a seat nobody
-	// holds (ADR-0108).
+	// holds (ADR-0109).
 	employFounder(t, writer, c.nodes...)
 
 	// NO AGENT IN THE ROOM: the seat is reached by being named, which a

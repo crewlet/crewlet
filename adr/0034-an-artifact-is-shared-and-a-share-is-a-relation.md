@@ -122,7 +122,7 @@ recent proof, as for every other purge in the engine.
 "Every artifact tool passes the requester ceiling, so an agent reads for
 somebody only what that somebody could read, and writes for them only what they
 could write" holds for the app as well as the relation, since
-[ADR-0108](0108-a-turn-somebody-woke-is-held-to-the-apps-they-use.md): a requester without `artifacts` has no artifact authored for them.
+[ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md): a requester without `artifacts` has no artifact authored for them.
 The exception for an artifact the agent owns no longer reaches past the app.
 A requester who does not use the app steers none of its edits, and a stranger,
 who uses none, steers only an edit no app gates, such as filling in the agent's
