@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -64,13 +63,6 @@ func IssuedOpID(minted time.Time, handle string, serial uint64) string {
 // RanOpID is the operation a command's record is published under.
 func RanOpID(minted time.Time, handle, commandID string) string {
 	return statelog.DeriveOpID(minted, "access-ran", "crewlet.access", handle, commandID)
-}
-
-// ForgetOpID is the operation a removed seat's told records are forgotten
-// under: the seat, at the instant its retirement was marked.
-func ForgetOpID(retiring time.Time, handle string) string {
-	return statelog.DeriveOpID(retiring, "access-forget", "crewlet.access", handle,
-		retiring.UTC().Format(time.RFC3339Nano))
 }
 
 // WriterDeps is what a writer is built from.
@@ -222,6 +214,10 @@ type NewTold struct {
 	RevisionFrom string
 	RevisionTo   string
 	Authors      []string
+
+	// ReadThrough is where the dispatch read the seat's baseline
+	// ([Recent.Position]), which a told record newer than it outranks.
+	ReadThrough statelog.Position
 }
 
 // validate refuses a told record the log could not hold.
@@ -245,6 +241,8 @@ func (n NewTold) validate() error {
 		return invalid("a told record that is not a baseline carries its changes as JSON")
 	case len(n.Changes) > ChangesMaxBytes:
 		return invalid("the changes are %d bytes and the maximum is %d", len(n.Changes), ChangesMaxBytes)
+	case n.ReadThrough.Stream != "" && n.ReadThrough.Stream != Domain{}.Stream().Name:
+		return invalid("the baseline was read at a position on %s, not on the access log", n.ReadThrough.Stream)
 	case len(n.Authors) > MaxAuthors:
 		return invalid("a told record names %d authors and the maximum is %d", len(n.Authors), MaxAuthors)
 	}
@@ -283,6 +281,7 @@ func (w *Writer) Tell(ctx context.Context, c Call, n NewTold) (statelog.Result, 
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn, Digest: n.Digest,
 		Snapshot: snapshot, Changes: changes, Baseline: n.Baseline,
 		RevisionFrom: n.RevisionFrom, RevisionTo: n.RevisionTo, Authors: n.Authors,
+		ReadThrough: n.ReadThrough.Packed(),
 	}
 	subject, scope := ToldSubject(n.Handle, n.Turn), ScopeSet{Subject: true}
 	return publish(ctx, w.publisher, request(subject, scope, c.OpID, statelog.PatternCreate,
@@ -432,7 +431,10 @@ type NewCommand struct {
 	Decision CommandDecision
 
 	CertificateSerial uint64
-	Error             string
+
+	// Failure is why the command did not run or did not finish, one of
+	// [CommandFailures]: never the command, its output or an error's text.
+	Failure CommandFailure
 }
 
 // validate refuses a command record the log could not hold.
@@ -458,8 +460,13 @@ func (n NewCommand) validate() error {
 		return invalid("an operate command names who answered it and what they answered")
 	case n.Decision == DecisionDenied && n.Ran:
 		return invalid("a denied command did not run")
-	case !n.Ran && n.Decision != DecisionDenied && strings.TrimSpace(n.Error) == "":
+	case !n.Failure.Valid():
+		return invalid("failure %q is not one of %s: a command's failure is a closed word, never "+
+			"its text or its output", n.Failure, words.Or(CommandFailures))
+	case !n.Ran && n.Decision != DecisionDenied && n.Failure == FailureNone:
 		return invalid("a command that did not run says why")
+	case n.Decision == DecisionDenied && n.Failure != FailureNone:
+		return invalid("a denied command did not fail; it was denied")
 	case strings.TrimSpace(n.Command) == "":
 		return invalid("a command names what it ran")
 	case n.StdinBytes < 0 || n.StdoutBytes < 0 || n.StderrBytes < 0 || n.Duration < 0:
@@ -530,7 +537,7 @@ func (w *Writer) RanSealed(ctx context.Context, c Call, n NewCommand,
 		ExitCode: n.ExitCode, DurationMS: n.Duration.Milliseconds(), StdoutBytes: n.StdoutBytes,
 		StderrBytes: n.StderrBytes, OutputSHA256: n.OutputSHA256, Truncated: n.Truncated,
 		Approver: n.Approver, Decision: n.Decision, CertificateSerial: n.CertificateSerial,
-		Error: textcut.Bytes(n.Error, ErrorMaxBytes),
+		Failure: n.Failure,
 	}
 	subject, scope := CommandSubject(n.Handle, n.ID), ScopeSet{Subject: true}
 	return publish(ctx, w.publisher, request(subject, scope, c.OpID, statelog.PatternCreate,

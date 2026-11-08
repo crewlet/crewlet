@@ -45,10 +45,6 @@ const (
 	// CommandMaxBytes bounds a command's text, the SSH tools' own bound.
 	CommandMaxBytes = 4096
 
-	// ErrorMaxBytes bounds the engine's account of why a command did not run,
-	// cut on a rune boundary rather than refused.
-	ErrorMaxBytes = 1024
-
 	// MaxPageSize is the most rows a page answers, DefaultPageSize what a page
 	// that names none takes.
 	MaxPageSize     = 100

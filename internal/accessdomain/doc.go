@@ -29,8 +29,10 @@
 //     purpose, hosts, principals, validity and fingerprints. Never a key.
 //   - `ran` records one SSH command: its text SEALED by the writer under the
 //     fleet keyring and bound to the record ([AAD], [Sealer]), the sizes and
-//     SHA-256 digests of its stdin and output (never the bytes), its exit and
-//     who approved or denied it. Only an administrator's audit read opens it.
+//     SHA-256 digests of its stdin and output (never the bytes), its exit, a
+//     closed failure word where it did not run or finish (never an error's
+//     text), and who approved or denied it. Only an administrator's audit read
+//     opens it.
 //   - `forget` removes what a seat the company removed was told, and records the
 //     removal: a told record decided before a removal it did not see lands as
 //     nothing, so a turn racing its seat's removal is not told into a seat that

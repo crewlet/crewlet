@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/accessdomain`
-- **Enforced-by:** `internal/accessdomain.TestEveryAccessRecordIsSigned`, `internal/accessdomain.TestAnAccessRecordAppliesOnceOnEveryNode`, `internal/accessdomain.TestACommandIsSealedAtRest`, `internal/accessdomain.TestAccessRecordsAreKeptForTheirRetention`, `internal/accessdomain.TestTheAccessDomainIsACertifiedDomain`, `internal/estate.TestACommandCrossesTheRouterSealed`
+- **Enforced-by:** `internal/accessdomain.TestEveryAccessRecordIsSigned`, `internal/accessdomain.TestAnAccessRecordAppliesOnceOnEveryNode`, `internal/accessdomain.TestACommandIsSealedAtRest`, `internal/accessdomain.TestACommandsFailureIsAClosedWord`, `internal/accessdomain.TestAToldRecordReadBeforeANewerOneIsNotTheBaseline`, `internal/accessdomain.TestAccessRecordsAreKeptForTheirRetention`, `internal/accessdomain.TestTheAccessDomainIsACertifiedDomain`, `internal/estate.TestACommandCrossesTheRouterSealed`
 - **Measured:** about 2 MB a day at the reference company's 100 seats, ten of them at SSH: thirty dispatch barriers a seat a day of about 140 bytes each, a told record of about 8 KiB whenever a seat's access changes, and about one certificate and three commands of about a kibibyte each a turn at SSH. The log's 128 MiB default holds about two months of a completely blocked trim.
 - **Tag-status:** unreleased
 
@@ -15,12 +15,26 @@ own: what one turn of a seat was told about its access (the snapshot it ran
 under and the changes since its previous told record), one SSH certificate the
 engine signed (its public facts, never a key), and one SSH command the engine
 ran or a person denied. A seat's newest told record is its baseline: its next
-turn, dispatched on any node, diffs against it, read at `linearizable`.
+turn, dispatched on any node, diffs against it, read at `linearizable`. A
+record that lands after a told record newer than the read its turn was diffed
+from is kept, but is not the baseline.
 
 **A command's text is sealed under the fleet keyring before it leaves the node
 that ran it**, bound to its record, written through by the applier and opened
 only by an administrator's audit read. Its stdin and output are kept as their
 sizes and SHA-256 digests alone.
+
+**A command's text stays sealed under the keyring key that wrote it for as
+long as its record is kept**, and no rekey moves it in this release: a key may
+leave the ring only once no command is sealed under it (`access_values` on
+`GET /secrets` counts them), or the commands sealed under it read as
+unreadable in the audit. That is up to `access_history.retention_days` (400 by
+default, 3650 at most), far past the 30 to 365 days the assistant's and the
+executor's sealed values live. Nothing writes a command yet: the SSH
+integration is the first writer, and a reseal of a command's text under the
+active key through `crewlet secrets rekey` is a requirement of that series
+before it reaches `main`. A command's failure is a closed word, never text, so
+no error can carry the command or its output into a row in the clear.
 
 **Records are kept for the company's `access_history.retention_days`** (400 by
 default, 90 to 3650) and expired an hour at a time by the trash reaper, every
