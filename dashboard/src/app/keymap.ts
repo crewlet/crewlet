@@ -67,7 +67,6 @@ export type KeyScope =
   | "create"
   | "charter"
   | "search"
-  | "assistant"
   | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
@@ -87,7 +86,6 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
-  { scope: "assistant", title: "In Ask Crewlet" },
   {
     scope: "layer",
     title: "In a dialog, a menu, the navigation drawer, an artifact's panel or Ask Crewlet",
@@ -413,28 +411,23 @@ const PAGE: KeyRow[] = [
 ];
 
 /**
- * THE SEND KEYS FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
- * by every box that says it.
+ * THE SEND KEY OF EVERY BOX A PERSON SAYS SOMETHING IN: a chat message, a
+ * thread reply or a rewrite, a reply in the Inbox, a comment on a task, a page
+ * or a change, a question to Ask Crewlet and an agent's brief. Enter sends and
+ * Shift+Enter is a new line, answered inside the field by the kit
+ * (`useSendOnEnter`, which the kit's `Composer` is built on); the command key
+ * with Enter sends too, for the habit, and a touch keyboard's Return is a new
+ * line. Long-form editors (a description, a page, code) keep Enter for a line.
  *
- * A LETTER TAKES THE COMMAND KEY: a reply in the Inbox and a comment on a task
- * (`components/Composer.tsx`, through [matchesRow]), where Enter alone is a new
- * line, because what is said there is often several lines: a list, a pasted
- * stack trace.
- *
- * A CHAT MESSAGE TAKES ENTER ([CHATBOX]'s `chatbox.send`), with Shift for a
- * new line: a room is talked in a line at a time, and the box grows for the
- * message that needs more. The assistant's question box sends the same way
- * ([ASSISTANT]'s `assistant.send`).
- *
- * The chat box's own keys are [CHATBOX]'s.
+ * The chat box's other keys are [CHATBOX]'s.
  */
 const COMPOSE: KeyRow[] = [
   {
     id: "compose.send",
     scope: "compose",
-    presses: [{ key: "enter", mod: true }],
-    does: "Send a reply or a comment",
-    by: "dashboard",
+    presses: [{ key: "enter" }],
+    does: "Send it; with Shift, a new line",
+    by: "kit",
     whileTyping: true,
   },
 ];
@@ -494,21 +487,13 @@ const CHAT: KeyRow[] = [
 ];
 
 /**
- * A CHAT BOX'S OWN KEYS, read from inside its field (`routes/chatlet/Composer.tsx`):
- * Enter sends (the kit's `Composer` with `submitOn="enter"`), Up in an empty
+ * A CHAT BOX'S OWN KEYS, read from inside its field (`routes/chatlet/Composer.tsx`),
+ * beside the send key every message box shares ([COMPOSE]): Up in an empty
  * box opens the reader's last message for a rewrite, and the command key with
  * B or I marks the selection. A field's own keys, so a list's bare keys and a
  * focused message's never fire beside them ([SCOPES_APART]).
  */
 const CHATBOX: KeyRow[] = [
-  {
-    id: "chatbox.send",
-    scope: "chatbox",
-    presses: [{ key: "enter" }],
-    does: "Send it; with Shift, a new line",
-    by: "kit",
-    whileTyping: true,
-  },
   {
     id: "chatbox.edit-last",
     scope: "chatbox",
@@ -636,20 +621,20 @@ const CHARTER: KeyRow[] = [
 /**
  * Scopes whose rows never answer one press together, which may therefore
  * share it: two never live on one screen, or one whose row stands aside
- * while the other is live (Chatlet's Escape while a peek is open). A
- * reply's composer is the Inbox's and a task's, and a create page is
- * neither, so Send and a create page's main action are both the command key
- * with Enter. Company › Principles holds no composer, no create page and no
- * peek, so its editor's Save and Escape are free there.
+ * while the other is live (Chatlet's Escape while a peek is open). A message
+ * box's Enter fires only inside its field, where a list's bare Enter never
+ * does, so the two share the key. Company › Principles holds no composer, no
+ * create page and no peek, so its editor's Save and Escape are free there.
  */
 export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
-  // A chat box's keys fire only inside its field, where a list's bare keys and
-  // a focused message's never do; and a message row is drawn only in Chatlet,
-  // never on an open artifact.
+  // A message box's and a chat box's keys fire only inside the field, where
+  // a list's bare keys and a focused message's never do; and a message row is
+  // drawn only in Chatlet, never on an open artifact.
+  ["compose", "list"],
+  ["compose", "message"],
   ["chatbox", "list"],
   ["chatbox", "message"],
   ["artifact", "message"],
-  ["compose", "create"],
   // CHATLET DRAWS NO CREATE PAGE AND NO CHARTER. A PEEK can be open over it
   // (any address may carry one), and Chatlet's Escape is bound only while
   // none is (`routes/chatlet/shortcuts.ts`), so the two never answer one
@@ -715,25 +700,6 @@ const SEARCH: KeyRow[] = [
   },
 ];
 
-/**
- * THE ASSISTANT'S OWN KEY, answered by the kit's `Composer` from inside its
- * field and claimed there, so it shares the layer's namespace rather than the
- * page's: Enter in the composer is never a list's Enter. Escape inside the
- * panel is the layer's row below, which the composer answers first while an
- * answer is running (it stops it) and the panel answers otherwise (it
- * closes), so one press never closes a peek under it.
- */
-const ASSISTANT: KeyRow[] = [
-  {
-    id: "assistant.send",
-    scope: "assistant",
-    presses: [{ key: "enter" }],
-    does: "Send the question; with Shift, a new line",
-    by: "kit",
-    whileTyping: true,
-  },
-];
-
 const LAYER: KeyRow[] = [
   {
     id: "layer.close",
@@ -756,18 +722,17 @@ export const KEYMAP: readonly KeyRow[] = [
   ...CREATE,
   ...CHARTER,
   ...SEARCH,
-  ...ASSISTANT,
   ...LAYER,
 ];
 
 /**
- * Whether a row is live only while a layer holds the keyboard — its own
+ * Whether a row is live only while a layer holds the keyboard: its own
  * namespace, since every page key stands aside then (`lib/keys.ts`). The
- * assistant's keys are in it too: they are answered inside its panel and
+ * palette's keys are in it too: they are answered inside its layer and
  * claimed there, so no page key ever hears them.
  */
 export function layerScoped(scope: KeyScope): boolean {
-  return scope === "layer" || scope === "search" || scope === "assistant";
+  return scope === "layer" || scope === "search";
 }
 
 const BY_ID = new Map(KEYMAP.map((row) => [row.id, row]));

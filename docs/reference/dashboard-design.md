@@ -2364,12 +2364,12 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox or a comment on a task. `Enter` alone is a new line, since such a letter is often several lines |
-| Writing a chat message | `Enter` sends it and `Shift+Enter` adds a line (bound by the design system's `Composer`), `Up` in an empty box edits your last message, `Mod+B` and `Mod+I` bold and italicise the selection |
+| Writing a reply or a message | `Enter` sends it and `Shift+Enter` adds a line, in every box a person says something in: a chat message, a thread reply or a rewrite, a reply in the Inbox, a comment on a task, a page or a change, a question to Ask Crewlet and an agent's brief (bound by the design system's `useSendOnEnter`, which its `Composer` is built on). `Mod+Enter` sends too. An input method's `Enter` never sends, an open `@` list takes its `Enter` to pick, and on a touch keyboard `Return` adds a line while the Send button sends. Long-form editors (a description, a page, code) keep `Enter` for a new line |
+| Writing a chat message | `Up` in an empty box edits your last message, `Mod+B` and `Mod+I` bold and italicise the selection |
 | On a focused chat message | `E` edits your message, `T` opens its thread, `S` saves it for later, `Delete` deletes it, `Up` and `Down` move to the message above and below |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
-| In Ask Crewlet | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
+| In Ask Crewlet | `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
 | In a dialog, a menu, the drawer or Ask Crewlet | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
@@ -2616,7 +2616,7 @@ is how Figma's and Notion's assistants and Linear's agent assignment sit
 beside the work, and it keeps the direct way the page's own.
 
 **The panel, top to bottom**: a line saying what the agent does with the
-brief, the brief (a composer, Command+Enter to send) with briefs to start
+brief, the brief (a composer: Enter sends, Shift+Enter adds a line) with briefs to start
 from while it is empty, the kind's own fields (a design's name and references), who
 builds it and in which project (`WhoBuildsIt`), **Goes with it** (what the
 reader already made: the doc's draft or template, the slides and theme, the
@@ -2624,7 +2624,7 @@ board's figures, the sheet's columns and rows, the design's boards, the HTML
 page's source and what it may use, and "Your brief alone" while there is
 nothing) with the task exactly as it is filed behind a disclosure, then
 **What happens next**. The send is the panel's foot, "Ask SRE Lead" beside
-that agent's character, pressed by Command+Enter anywhere in the panel; held,
+that agent's character, pressed by Enter in the brief or Command+Enter anywhere in the panel; held,
 it says why in words beside the button, and the engine's refusal is said
 above it. The bar's primary stays the direct create.
 
@@ -3049,7 +3049,7 @@ company did.** That is Home until its reader arranges it (see
   **Change** at the row's end, centred on the words. **Change** opens every
   option as a choice with its detail line and the recommended one tagged
   (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
-  `Composer`, up to 2,000 characters, Command+Enter to send) sends a reply
+  `Composer`, up to 2,000 characters, Enter to send and Shift+Enter for a new line) sends a reply
   instead of a choice; **Submit** sends what is chosen. While the options are
   open the recommendation line is hidden, and only one ask's options are open
   at a time. An ask with no recommendation offers **Answer** in place of
@@ -5187,9 +5187,9 @@ line above the cards says where the charter is changed instead.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
-press — a dialog is a form Enter submits without touching the button, a reply
-field sends on ⌘Enter, a one-line form (a sub-task, a title) files on Enter —
-because each reaches the same gate (`pressable` in `components/WriteButton.tsx`).
+press (a dialog is a form Enter submits without touching the button, a reply
+field sends on Enter, a one-line form such as a sub-task or a title files on
+Enter), because each reaches the same gate (`pressable` in `components/WriteButton.tsx`).
 They used to go straight to the write, and a second Enter before the first
 answer came back filed a second sub-task or posted the comment twice, under a
 new operation key the engine rightly took for a second change. On a task page a

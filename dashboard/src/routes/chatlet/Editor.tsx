@@ -3,8 +3,9 @@
  *
  * THE ROW BECOMES THE MESSAGE BOX, not a lighter field: the same formatting
  * row, the same `@` and `#` lists, emoji and attach, so a rewrite is written
- * with everything the message was. Enter saves and Escape cancels; with a list
- * open, Escape closes only the list. Cancel and Save stand where Send does.
+ * with everything the message was. Enter saves, Shift+Enter breaks the line and
+ * Escape cancels; with a list open, Escape closes only the list. Cancel and Save
+ * stand where Send does.
  *
  * WHY THE REWRITE WOULD CHANGE NOTHING THE ENGINE TAKES is said on Save before
  * the round trip: the same words again are no edit at all (the engine has no
@@ -25,7 +26,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { Button, Kbd } from "@crewlethq/ui";
+import { Button, Kbd, SendKeysHint } from "@crewlethq/ui";
 
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { pressable } from "~/components/WriteButton.tsx";
@@ -35,6 +36,9 @@ import type { ChatMessageView } from "~/protocol/index.ts";
 import { bodyBudget, bodyRefusal, MessageBox, SHORTEN_FIRST } from "./Composer.tsx";
 import { useChatNav } from "./nav.tsx";
 import { useRoomScope } from "./scope.tsx";
+
+/** A rewrite's Enter saves it. */
+const SAVE_KEYS = { send: "to save" };
 
 /** What Save says over a rewrite that is the message as it stands. */
 export const NOTHING_CHANGED = "Nothing has changed yet.";
@@ -141,6 +145,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
         label="Edit your message"
         autoFocus
         onSubmit={() => void save()}
+        sendLabels={SAVE_KEYS}
         onKey={(event) => {
           if (event.key !== "Escape") return;
           event.preventDefault();
@@ -168,7 +173,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
       {!nav.narrow && (
         <div className="chat-composer-reach">
           <span className="chat-composer-hint">
-            <Kbd keys={["Escape"]} subtle /> to cancel, <Kbd keys={["Enter"]} subtle /> to save
+            <Kbd keys={["Escape"]} subtle /> to cancel, <SendKeysHint labels={SAVE_KEYS} />
           </span>
         </div>
       )}
