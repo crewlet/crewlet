@@ -194,9 +194,13 @@ import (
 // The run's ending records it on the executor log ([Coordinator.publishEnd])
 // before it deletes the row, which the delete refuses until then
 // ([ErrEndOwed]): after every capture of the turn has settled, so the end's
-// tombstone never refuses the turn's own last session, and with the turn's
-// NEWEST capture where it was not kept ([executorkeep.Unkept]), so the log's
-// row never goes on naming an older session as the turn's last. On every frame
+// tombstone never refuses the turn's own last session, with the turn's NEWEST
+// capture where it was not kept ([executorkeep.Unkept]), and saying whether the
+// turn WENT ON PAST the session its row names ([wentOnPast]) — kept from a
+// capture taken while its job still worked, or from an earlier launch's — so
+// the log's row never names an older session as the turn's last without
+// saying so: the log keeps that session, and every reader of it is told the
+// turn went on past it. On every frame
 // somebody waits on — a completion's resume, a stop, a seat's recovery — the
 // ending is decided there and the end recorded by the ending's own retry,
 // armed at once ([errAskAway]): a capture still being kept, and the log's
@@ -2313,6 +2317,22 @@ func unkeptOf(run PendingRun) *executorkeep.Unkept {
 		Reason: redact.Secrets(why)}
 }
 
+// wentOnPast reports whether the turn went on past the session its row on the
+// executor log names ([executorkeep.Ending.WentOn]): run kept a capture, and it
+// is not the final capture of the turn's last launch — one taken while its job
+// still worked, or an earlier launch's, the jobs after it keeping nothing newer.
+// False where the turn kept none: its row then names no session to say it of.
+//
+// ITS LAST LAUNCH'S FINAL CAPTURE IS THE TURN'S LAST WORD, and the one: nothing
+// of a job is taken once a take found it ended ([Coordinator.takeCapture]), so
+// an end that says nothing of the kind names no unkept capture newer than the
+// one it kept ([unkeptOf]). Every unkept capture an end names beside a kept one
+// rides an end that says the turn went on past it.
+func wentOnPast(run PendingRun) bool {
+	kept := run.Kept
+	return kept != nil && (!kept.Final || kept.Launch != run.LaunchID)
+}
+
 // TurnEnd is how one turn that launched an executor ended, for the executor
 // log's `end` ([Coordinator.EndTurn]).
 type TurnEnd struct {
@@ -2417,9 +2437,15 @@ var endKeys = wireKeys(reflect.TypeFor[executorkeep.Ending]())
 
 // publishEnd records the end run's row owes on the executor log
 // ([Coordinator.recordEnd]) — after asking again a capture of the turn still
-// unresolved, and with the turn's newest capture where it was not kept
-// ([unkeptOf]) — and clears it from the row, marking it recorded. Returns the
-// row as it stands after, or why the end is still owed.
+// unresolved, with the turn's newest capture where it was not kept
+// ([unkeptOf]), and saying whether the turn went on past the session its row
+// names ([wentOnPast]) — and clears it from the row, marking it recorded.
+// Returns the row as it stands after, or why the end is still owed.
+//
+// THE END'S CAPTURE FIELDS ARE THE ROW'S TO SAY, never the frame's that owed
+// the end: they are decided here, after the turn's captures settled, over any
+// the owed end carried — a frame decides how the turn ended, not what of its
+// session was kept.
 //
 // # An end a newer build owed is left for a node that reads it
 //
@@ -2457,7 +2483,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
 	default:
 		run = c.settleUnresolved(ctx, time.Time{}, run)
-		ending.Unkept = unkeptOf(run)
+		ending.Unkept, ending.WentOn = unkeptOf(run), wentOnPast(run)
 		ending.Exhausted = run.ExhaustedSessions
 		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
 			return run, recordErr
