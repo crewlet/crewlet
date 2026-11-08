@@ -955,8 +955,10 @@ deployment for them, and both tools hold it to the company: a colleague seat
 or a person of the company is answered the seat's whole view — they need not
 hold `admin` themselves, the view being the seat's grant — while a turn woken
 by somebody the company does not know (a chat sender no seat or person maps
-to), or by a person who may not act in the company now, is answered nothing,
-so a seat that watches the deployment never relays it outside the company.
+to), by a person who may not act in the company now, or by a credential acting
+as no seat (a pipeline's token or a service account, whose reach is the apps
+its permissions name), is answered nothing, so a seat that watches the
+deployment never relays it outside the company or past a token's pin.
 `fleet_health` decides whoever woke the turn on `fleet.health.read`, which
 everybody of the company who may act holds, and `code_status` on Gitlet's
 read verb; its repository reads are code reads besides, made for that

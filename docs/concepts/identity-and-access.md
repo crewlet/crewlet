@@ -573,7 +573,10 @@ than another, never acts wider than the narrower answer. A `token:` login is
 placed by that node's own `api.auth.tokens` and nothing else, and any other
 login by the identity directory alone. Nobody is asked anything for a
 credential: a question its turn's executor addresses to the requester goes to
-the seat's lead chain instead, as one in a turn nobody woke does.
+the seat's lead chain instead, as one in a turn nobody woke does. And what no
+app gates stays out of its reach: a token's turn reads no fleet health and
+reaches no server (`fleet_health`, `code_status`, `ssh_read`, `ssh_operate`),
+an `admin` token's included.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

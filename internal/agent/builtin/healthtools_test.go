@@ -215,6 +215,12 @@ func healthRequesters() requesters {
 		"founder": founderPrincipal(iam.Apps...),
 		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
 			Stage: iam.StageRetired, Grants: iam.Apps},
+		// TWO CREDENTIALS ACTING AS NO SEAT, as this node resolves them: a
+		// pipeline's `[worklet]` token and an `[admin]` one.
+		"login:token:ci": {Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantWorklet}},
+		"login:token:ops": {Kind: iam.KindMachine, Login: "token:ops", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 }
 
