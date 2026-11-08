@@ -22,8 +22,10 @@ var plantedToken = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 // redaction knows: Redacted hands out what the turn was asked, the ending's
 // four prose fields and its unkept capture's reason redacted, and every other
 // field — the conversation's key and the work key among them, which are a
-// surface's and the engine's identifiers — exactly as the row holds it; and the
-// row it was called on keeps its words, its ending shared with no copy. The
+// surface's and the engine's identifiers, and the unkept capture and went_on,
+// which stand on a row older than the capture and the last word its end
+// names — exactly as the row holds it; and the row it was called on keeps its
+// words, its ending shared with no copy. The
 // fixture sets every field, which the test checks first, so a field added to
 // the row is set here too and this says whether it is shown as it is held.
 //
@@ -52,7 +54,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 			Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 			CompletedWork: said, BlockedOn: said, StoppedBy: "ana.diaz", StopReason: said, Failure: said,
 			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said}, WentOn: true,
-			Exhausted: []string{plantedToken}},
+			LastWord: &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 4}, Exhausted: []string{plantedToken}},
 		AskExcerpt: "fix the deploy with " + plantedToken,
 	}
 	everyFieldSet(t, "the row", reflect.ValueOf(row))

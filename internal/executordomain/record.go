@@ -32,9 +32,11 @@ import (
 //   - 3: an end's sessions that ran out of context
 //     ([executorkeep.Ending.Exhausted]), which its apply retires.
 //   - 4: an end that says its turn went on past the session its row names
-//     ([executorkeep.Ending.WentOn]), and the rule an end stamped 4 or above is
-//     applied by: it never takes the row's session off for an unkept attempt
-//     ([wentOnVersion]).
+//     ([executorkeep.Ending.WentOn]) and, beside it, the turn's last word
+//     where that was its newest capture ([executorkeep.Ending.LastWord]),
+//     which a reader holds the row's place to; and the rule an end stamped 4
+//     or above is applied by: it never takes the row's session off for an
+//     unkept attempt ([wentOnVersion]).
 const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format.
@@ -79,7 +81,11 @@ const GateRecordVersion = 1
 // without reading them would keep rows no other node keeps. And an end says its
 // turn went on past its row's session only where it did, which a build applying
 // it without reading it would answer by releasing that session where every
-// node of this build keeps it.
+// node of this build keeps it. It names the turn's last word only beside that,
+// so the last word stamps no end above where went_on already stamps it; its row
+// is its own all the same, because a field's version is the field's, whatever
+// rides beside it: a build reading 3 that applied an end carrying it would keep
+// an ending without it, which no copy of this build keeps.
 var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},
@@ -87,6 +93,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "End.Ending.Exhausted", Since: 3, Op: string(OpEnd), Path: []string{"mutation", "ending", "exhausted"}},
 	{Name: "End.Ending.WentOn", Since: wentOnVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "went_on"}},
+	{Name: "End.Ending.LastWord", Since: wentOnVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "last_word"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

@@ -134,11 +134,17 @@ type Ending struct {
 	//
 	// THE END IS WHERE IT IS SAID, for Unkept's reason: only the run's record
 	// knows which capture its last launch left, and that record is deleted
-	// with the turn. Decided off it as Unkept is, and so in the direction that
-	// costs least where the record and the log part: a capture the record holds
-	// refused that the log took after all is the row's, and the end, not
-	// knowing, says the turn went past a session it may not have — which sends
-	// whoever reads it to check what a run told the opposite would trust.
+	// with the turn. Decided off that record, it is HELD TO THE ROW'S OWN PLACE
+	// as Unkept is, because the record and the log can part: a capture the
+	// record holds refused can be on the log all the same — its taker had handed
+	// its record on before a wait's settle read the turn's row, and the log took
+	// it after — and where that capture is the turn's last word, the row names
+	// it and holds all the turn did. So the end NAMES ITS LAST WORD wherever it
+	// knows it ([Ending.LastWord]), and a reader holds the row's place to it:
+	// the turn went on past the session the row names only where the end names
+	// no last word, or the row's place is older than the one it names
+	// (internal/executordomain's Session.WentOn), and a row at that place is
+	// read as the turn's last word, as any whose final capture landed is.
 	//
 	// AN END THAT CARRIES IT KEEPS THE ROW'S SESSION: a prefix of what the turn
 	// did, told as one, holds more than the conversation's previous head or a
@@ -149,6 +155,26 @@ type Ending struct {
 	// every reader of the row is shown it here (internal/executordomain's
 	// Session.WentOn).
 	WentOn bool `json:"went_on,omitempty"`
+
+	// LastWord is the place of the turn's LAST WORD — the final capture of its
+	// last launch that ran a job — where the end says the turn went on
+	// ([Ending.WentOn]) and that capture is the turn's newest: refused, never
+	// answered, or begun and never finished, on the run's record. Nil
+	// anywhere else: beside an end that does not say the turn went on, whose
+	// last word was kept; and where the turn's last word was never taken — a
+	// stop or a loss whose box was already gone, a relaunch that kept nothing —
+	// or is not its newest capture.
+	//
+	// WHAT A READER HOLDS THE ROW'S PLACE TO: the end names the last word its
+	// record could not keep, and the log, which alone knows whether it took that
+	// capture's record all the same, settles whether the turn went on past the
+	// row's session. A row at this place or past it holds the turn's last word,
+	// and its turn went on past no session of it, whatever went_on says; a row
+	// older than it, or naming none, is one the turn went on past. Named only
+	// beside went_on, so it stamps no end at a version went_on does not
+	// (internal/executordomain's record version 4); placed, and never worded:
+	// the two ordinals every capture of the turn carries.
+	LastWord *CapturePlace `json:"last_word,omitempty"`
 
 	// Exhausted names the sessions a launch of the turn ran out of its model's
 	// context in. The end is where the fleet is told, for Unkept's reason, and the
@@ -177,10 +203,18 @@ type Unkept struct {
 	Reason string `json:"reason" untrusted:"fence"`
 }
 
+// CapturePlace is a capture's place among its turn's captures: the ordinals
+// every capture of the turn carries, its launch's and its own among that
+// launch's, each from 1 — the engine's own numbers, which hold no words.
+type CapturePlace struct {
+	LaunchSeq  int64 `json:"launch_seq"`
+	CaptureSeq int64 `json:"capture_seq"`
+}
+
 // Validate refuses an ending the engine could not mean: an unknown outcome,
-// an engine word past [WordMaxBytes] or not UTF-8, an unkept capture placed
-// before the first, an exhausted session outside its bounds. Prose is not
-// refused here; [Ending.Fit] cuts it. The error
+// an engine word past [WordMaxBytes] or not UTF-8, an unkept capture or a last
+// word placed before the first capture, an exhausted session outside its
+// bounds. Prose is not refused here; [Ending.Fit] cuts it. The error
 // names the field and what is wrong with it; the executor log's writer answers
 // it as its own refusal of an invalid write.
 func (e Ending) Validate() error {
@@ -214,6 +248,10 @@ func (e Ending) Validate() error {
 				"is placed from (1, 1)", u.LaunchSeq, u.CaptureSeq)
 		}
 		prose = append(prose, struct{ field, value string }{"unkept reason", u.Reason})
+	}
+	if w := e.LastWord; w != nil && (w.LaunchSeq <= 0 || w.CaptureSeq <= 0) {
+		return fmt.Errorf("the ending's last word is placed at (%d, %d), and every capture is placed "+
+			"from (1, 1)", w.LaunchSeq, w.CaptureSeq)
 	}
 	for _, p := range prose {
 		if !utf8.ValidString(p.value) {
@@ -304,5 +342,6 @@ func (e Ending) Within() bool {
 		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
 		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
 			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+		(e.LastWord == nil || (e.LastWord.LaunchSeq > 0 && e.LastWord.CaptureSeq > 0)) &&
 		e.exhaustedWithin()
 }

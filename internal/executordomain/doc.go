@@ -90,7 +90,10 @@
 //     and the row KEEPS whatever it names: a prefix of what the turn did, told
 //     as one, holds more than the conversation's previous head or a fresh
 //     session would, and the row says it is not the turn's last word
-//     ([Session.WentOn]), which the conversation's next turn is told. An end
+//     ([Session.WentOn]), which the conversation's next turn is told — unless
+//     its place is the last word the end names ([executorkeep.Ending.LastWord]):
+//     a capture the run's record held refused whose record the log took before
+//     the end all the same, which the row reads as all the turn did. An end
 //     stamped below version 4 is applied by the rule it was written under,
 //     which takes that older session off the row and absorbs nothing: a
 //     record's meaning is fixed by its stamp ([wentOnVersion]). Each session it

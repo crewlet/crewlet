@@ -7,21 +7,27 @@ import "github.com/crewlet/crewlet/internal/redact"
 // redacted: what the turn was asked, and the ending's prose — what the reviewer
 // said landed, what blocked a round, the reason a person gave for a stop, the
 // engine's account of a failure, and why the turn's newest capture was not
-// kept — each passed through [redact.Secrets]. And a capture the run's stamp
-// called unkept but the row keeps is shown as kept: the ending names its
+// kept — each passed through [redact.Secrets]. And what the end said of the
+// row's session is shown as it stands on the row: a capture the run's stamp
+// called unkept but the row keeps is shown as kept, the ending naming its
 // unkept capture only where that capture is newer than the row's own place
-// ([Session.Unkept]). Every other field is exactly as the row holds it, the
-// ending's went_on among them; what a reader is told of a row its turn went on
-// past ([Session.WentOnNote]) is asked of this form, so the unkept capture's
+// ([Session.Unkept]); and an end that said its turn went on is shown saying so
+// only where the row's session is older than the last word it named, or it
+// named none ([Session.endWentPast]), so a row that holds its turn's last word
+// is shown as one. Every other field is exactly as the row holds it, the
+// ending's last word among them; what a reader is told of a row its turn went
+// on past ([Session.WentOnNote]) is asked of this form, so the unkept capture's
 // reason it quotes is the redacted one.
 //
-// THE UNKEPT CAPTURE AS IT STANDS ON THE ROW, never as the end named it, for
-// every reader by the same token: an end is decided off the run's record, which
-// can name as not kept a capture whose record the log took before the end, and
-// that capture is then the row's own, kept. A reader shown the end's word for
-// it — a person's read surface, a seat's own read, a search's hit, the account
-// a conversation's next turn is told — would tell the session the row keeps as
-// one that was lost.
+// THE UNKEPT CAPTURE AND WENT_ON AS THEY STAND ON THE ROW, never as the end
+// said them, for every reader by the same token: an end is decided off the
+// run's record, which can name as not kept a capture whose record the log took
+// before the end, and that capture is then the row's own, kept — the turn's
+// last word, where it was its last launch's final capture. A reader shown the
+// end's word for it — a person's read surface, a seat's own read, a search's
+// hit, the account a conversation's next turn is told — would tell the session
+// the row keeps as one that was lost, or as one its turn went on past; and
+// none of them is shown the row's place to hold the end's word to.
 //
 // ONE REDACTION FOR EVERY READER of a row — a person's read surface, a seat's
 // own reads of its sessions, a search of them — so a field somebody's words
@@ -58,6 +64,7 @@ func (s Session) Redacted() Session {
 	if ending.Unkept != nil {
 		ending.Unkept.Reason = redact.Secrets(ending.Unkept.Reason)
 	}
+	ending.WentOn = s.endWentPast()
 	s.Ending = &ending
 	return s
 }

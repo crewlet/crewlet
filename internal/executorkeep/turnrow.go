@@ -71,14 +71,16 @@ type TurnRow struct {
 	CapturedAt time.Time
 
 	// WentOn says the turn's end said it went on past the session the row
-	// names ([Ending.WentOn]), false where the row names none; Lost that the
-	// turn ended lost ([OutcomeLost]), which no frame of it saw end. Two facts,
-	// never one: a conversation's next turn that continues the session is told
-	// of the first that the session was kept while the turn still worked and
-	// what that turn did after it is not in it — never that it runs through the
-	// turn's end — and of the second, where its end did not say the first, that
-	// it may not hold the last of what the turn did. A reader asking whether the
-	// row is the turn's last word asks both (executordomain.Session.WentOn).
+	// names ([Ending.WentOn]), held to the row's place against the last word it
+	// named ([Ending.LastWord]): false where the row holds that last word, and
+	// where it names no session. Lost says the turn ended lost ([OutcomeLost]),
+	// which no frame of it saw end. Two facts, never one: a conversation's next
+	// turn that continues the session is told of the first that the session was
+	// kept while the turn still worked and what that turn did after it is not in
+	// it — never that it runs through the turn's end — and of the second, where
+	// its end did not say the first, that it may not hold the last of what the
+	// turn did. A reader asking whether the row is the turn's last word asks
+	// both (executordomain.Session.WentOn).
 	WentOn bool
 	Lost   bool
 

@@ -24,6 +24,19 @@ import (
 // end can say. A row that names no session, a turn still working and one that
 // ended on its last word say nothing of the kind.
 //
+// THE END'S WORD IS HELD TO THE ROW'S PLACE. An end names the turn's last word
+// where it knows it ([executorkeep.Ending.LastWord]), and a row whose place is
+// that last word's — its final capture, which the run's record held refused and
+// the log took before the end all the same — holds all the turn did: it reads
+// as no row its turn went on past, says no note of it, is handed the next turn
+// as one through that turn, and is shown to every reader without went_on. A
+// row older than the last word named, of its own launch or an earlier one, is
+// one its turn went on past; and a lost turn's row at its last word is told
+// only what a lost turn's end can say. Whichever form of the row a reader asks
+// — as the row holds it, or as every reader is shown it, whose went_on is
+// already the end's word held to the row's place — it is told the same: the
+// row's own note, redacted, is its shown form's.
+//
 // Mutation: drop the lost outcome from WentOn, and the lost row reads as its
 // turn's whole session; name the unkept capture as the end did rather than as
 // it stands, and the row's own capture is told as not kept; tell a lost turn
@@ -31,6 +44,15 @@ import (
 // have; join the two facts in Kept, and a lost turn's next turn is told its
 // session was kept while it still worked; leave WentOn, Lost or CapturedAt out
 // of Kept, and the next turn is told the session runs through its turn's end.
+// Read went_on off the ending alone (endWentPast ignoring the last word), and
+// the row at its turn's last word reads, is noted, is handed on and is shown as
+// one its turn went on past; take every row as its last word's once one is
+// named, or hold the place to it at or after it, and the rows older than it, or
+// at it, read wrong; compare its launch or its capture alone, and a row older
+// than a later capture of its own launch, or than a later launch's, reads as
+// its turn's last word; choose the note, hand the row on, or show it by the
+// end's own went_on, and the lost row's note as the row holds it, the next turn
+// or the shown form at the last word says the turn went on past it.
 func TestARowKeptUpToASessionItsTurnWentPastSaysSo(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
@@ -45,25 +67,41 @@ func TestARowKeptUpToASessionItsTurnWentPastSaysSo(t *testing.T) {
 		return s
 	}
 	said := "the upload was refused while it read " + plantedToken
+	placed := func(launch, capture int64) *executorkeep.CapturePlace {
+		return &executorkeep.CapturePlace{LaunchSeq: launch, CaptureSeq: capture}
+	}
 	for _, c := range []struct {
 		name                  string
 		row                   executordomain.Session
 		wentOn, endSaid, lost bool
-		says, never           []string
+		// shownSaid is the went_on every reader is shown on the row's
+		// ending: the end's word held to the row's place, whether or not
+		// the row still names a session.
+		shownSaid   bool
+		says, never []string
 	}{
-		{name: "an end that said its turn went on past it, beside a newer capture not kept",
+		{name: "an end that said its turn went on past it, beside its last word not kept",
 			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true,
-				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: said}}),
-			wentOn: true, endSaid: true,
+				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: said}, LastWord: placed(1, 2)}),
+			wentOn: true, endSaid: true, shownSaid: true,
 			says: []string{"kept up to a session taken while the turn still worked", "the turn went on past it",
 				"what it did after is not in it", "its newer capture (launch 1, capture 2) was not kept: ",
 				redact.Marker},
 			never: []string{plantedToken, "may not hold"}},
-		{name: "an end that said so, the capture it names unkept the row's own",
+		{name: "an end that said so, the capture it names unkept the row's own and no last word",
 			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, WentOn: true,
 				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: said}}),
-			wentOn: true, endSaid: true, says: []string{"the turn went on past it"},
+			wentOn: true, endSaid: true, shownSaid: true, says: []string{"the turn went on past it"},
 			never: []string{"not kept", plantedToken}},
+		{name: "an end that said so, the last word it names the row's own",
+			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, WentOn: true,
+				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: said}, LastWord: placed(1, 1)})},
+		{name: "an end that said so, the last word it names a later launch's",
+			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, WentOn: true,
+				Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: said}, LastWord: placed(2, 1)}),
+			wentOn: true, endSaid: true, shownSaid: true,
+			says:  []string{"the turn went on past it", "its newer capture (launch 2, capture 1) was not kept: "},
+			never: []string{plantedToken}},
 		{name: "a turn that was lost",
 			row:    row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeLost}),
 			wentOn: true, lost: true,
@@ -72,11 +110,17 @@ func TestARowKeptUpToASessionItsTurnWentPastSaysSo(t *testing.T) {
 			never: []string{"taken while the turn still worked", "box or host"}},
 		{name: "a turn that was lost and whose end said it went on past the session",
 			row:    row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeLost, WentOn: true}),
-			wentOn: true, endSaid: true, lost: true, says: []string{"taken while the turn still worked"},
-			never: []string{"may have gone on past"}},
+			wentOn: true, endSaid: true, lost: true, shownSaid: true,
+			says: []string{"taken while the turn still worked"}, never: []string{"may have gone on past"}},
+		{name: "a turn that was lost, the last word its end names the row's own",
+			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeLost, WentOn: true,
+				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: said}, LastWord: placed(1, 1)}),
+			wentOn: true, lost: true,
+			says:  []string{"its turn may have gone on past", "may not hold the last of what it did"},
+			never: []string{"taken while the turn still worked", "not kept"}},
 		{name: "a turn that ended on its last word",
 			row: row(object, &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted})},
-		{name: "a row whose session went since",
+		{name: "a row whose session went since", shownSaid: true,
 			row: row(objstore.Object{}, &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true})},
 		{name: "a turn still working", row: row(object, nil)},
 	} {
@@ -85,6 +129,15 @@ func TestARowKeptUpToASessionItsTurnWentPastSaysSo(t *testing.T) {
 		if shown.WentOn() != c.wentOn || (note != "") != c.wentOn {
 			t.Errorf("%s: the row reads went on %v with the note %q, want %v", c.name, shown.WentOn(), note,
 				c.wentOn)
+		}
+		if c.row.WentOn() != shown.WentOn() {
+			t.Errorf("%s: the row reads went on %v, and its shown form %v", c.name, c.row.WentOn(), shown.WentOn())
+		}
+		if own := redact.Secrets(c.row.WentOnNote()); own != note {
+			t.Errorf("%s: the row as it is held is told %q, and its shown form %q", c.name, own, note)
+		}
+		if shown.Ending != nil && shown.Ending.WentOn != c.shownSaid {
+			t.Errorf("%s: every reader is shown went_on %v, want %v", c.name, shown.Ending.WentOn, c.shownSaid)
 		}
 		for _, want := range c.says {
 			if !strings.Contains(note, want) {

@@ -39,6 +39,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		Failure:   worst(executorkeep.FailureMaxBytes),
 		Unkept:    &executorkeep.Unkept{LaunchSeq: 1 << 62, CaptureSeq: 1 << 62, Reason: worst(executorkeep.UnkeptReasonMaxBytes)},
 		WentOn:    true,
+		LastWord:  &executorkeep.CapturePlace{LaunchSeq: 1 << 62, CaptureSeq: 1 << 62},
 		Exhausted: slices.Repeat([]string{worst(executorkeep.SessionIDMaxBytes)}, executorkeep.ExhaustedMaxSessions),
 	}.Fit()
 	if !ending.Within() {

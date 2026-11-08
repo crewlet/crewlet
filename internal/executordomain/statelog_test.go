@@ -34,8 +34,9 @@ func TestTheExecutorDomainIsACertifiedDomain(t *testing.T) {
 			// fields alone: a turn's begin, and a capture's context and its
 			// cut-off, each stamped at version 2; an end's sessions that ran
 			// out of context, at 3; and an end saying its turn went on past
-			// its row's session, at 4 — each of which a build reading the
-			// version below retains rather than applies.
+			// its row's session, and one naming the turn's last word, at 4 —
+			// each of which a build reading the version below retains rather
+			// than applies.
 			Fields:     executordomain.VersionedFields(),
 			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
@@ -215,6 +216,15 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true}}
+	case "End.Ending.LastWord":
+		// A TURN'S LAST WORD ALONE, without the went_on every end this build
+		// writes names it beside: carrying exactly the one field, the record
+		// is stamped by its own path, which a path that missed would leave at
+		// a version a build reading 3 applies.
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
+				LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
