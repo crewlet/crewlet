@@ -57,7 +57,7 @@ func (c *chainCase) entry(name, head string, method code.MergeMethod, at time.Ti
 			SourceRef: "refs/heads/" + name, Owner: codetest.FixturePat, Authors: []string{codetest.FixturePat}}}
 }
 
-// build asks the git node to build entries onto main's seed, as one chain read
+// build asks the Gitlet node to build entries onto main's seed, as one chain read
 // at the log's position now, and fails the case on an error.
 func (c *chainCase) build(entries ...code.ChainEntry) (code.ChainResult, string) {
 	c.T.Helper()
@@ -71,7 +71,7 @@ func (c *chainCase) build(entries ...code.ChainEntry) (code.ChainResult, string)
 	return res, b.ChainID
 }
 
-// scratch is the directory of chain id's scratch on the case's git node.
+// scratch is the directory of chain id's scratch on the case's Gitlet node.
 func (c *chainCase) scratch(id string) string {
 	return filepath.Join(c.Fleet.Nodes()[0].CacheDir(), "scratch", id+".git")
 }

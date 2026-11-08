@@ -786,6 +786,14 @@ type CoordinatorOptions struct {
 	// poll of the new job could rewrite it. A fresh box needs none of it:
 	// its setup has just written every file from the launch's own values.
 	//
+	// WHAT IT WRITES IS SEALED WITH THE JOB: the job's set does not exist yet
+	// — it is written with the job's command, once the job has started — so
+	// the recorder the launch hands the refresh keeps each token for that set
+	// ([Coordinator.sealHanded]), beside the job's own secrets and the ones
+	// carried from the jobs before it in the box, and records nothing beside
+	// the row. A launch that fails before the set is written reclaims the
+	// box, and nothing it wrote outlives it.
+	//
 	// It decides nothing about the launch: a refresh that fails is the
 	// implementation's to log, the job starts with what the box holds, and
 	// the poll tries again. Nil refreshes nothing.

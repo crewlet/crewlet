@@ -160,13 +160,13 @@ type OrgProjection struct {
 	Derived *config.Derived `json:"derived,omitempty"`
 }
 
-// OrgServices is which tracker, which knowledge base and which chat the
-// company runs, each as [config.Company.TrackerBackendFor],
-// [config.Company.KnowledgeBackendFor] and [config.Company.ChatBackendFor]
-// resolve it: the backend the document names, else the vendor whose block is
-// connected, else the engine's own: Worklet, Doclet and Chatlet (`chatlet`) —
-// and whether the engine hosts the company's git repositories, `code.native`
-// ([CodeHosts]).
+// OrgServices is which tracker, which knowledge base, which chat and which git
+// host the company runs, each as [config.Company.TrackerBackendFor],
+// [config.Company.KnowledgeBackendFor], [config.Company.ChatBackendFor] and
+// [config.Company.CodeBackendFor] resolve it: the backend the document names,
+// else the vendor whose block is connected, else the engine's own: Worklet,
+// Doclet and Chatlet (`chatlet`) — except the git host, which no vendor's
+// block names and which is `none` unless the document names `gitlet`.
 //
 // AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
 // `knowledge:`, `chat:` and `code:` blocks being guarded. What decides which
@@ -188,10 +188,15 @@ type OrgProjection struct {
 // since the place they would be named is hidden from everybody.
 //
 // A CLOSED SET on the wire, each member the backend's own constant: the
-// document's `backend` is refused at parse outside it, a derived one is one of
-// the same constants, and the code host is one of [CodeHosts]. Present on
-// every running company and absent only on `{}`, so a reader tells "not known
-// yet" from "none".
+// document's `backend` is refused at parse outside it, and a derived one is
+// one of the same constants. Present on every running company and absent only
+// on `{}`, so a reader tells "not known yet" from "none".
+//
+// THE GIT HOST NAMES NO VENDOR beside the engine's own: a company's
+// repositories on GitHub or GitLab are integrations its seats call, never a
+// host the dashboard draws in Gitlet's place, so where Gitlet does not run the
+// answer is `none` whatever else the company runs. The backend is the one fact
+// of the `code:` block a reader is handed.
 type OrgServices struct {
 	// Tracker is `worklet`, `jira` or `none`.
 	Tracker string `json:"tracker"`
@@ -199,47 +204,8 @@ type OrgServices struct {
 	Knowledge string `json:"knowledge"`
 	// Chat is `chatlet`, `vendor` or `none`.
 	Chat string `json:"chat"`
-	// Code is `native` or `none`: [CodeHost].
+	// Code is `gitlet` or `none`.
 	Code string `json:"code"`
-}
-
-// CodeHost is whether a company hosts its git repositories in the engine, as
-// [OrgServices.Code] carries it.
-//
-// THE PROJECTION'S OWN CLOSED SET, because the document says it with a
-// boolean (`code.native`) rather than a backend: the tracker's, the knowledge
-// base's and chat's sets are the document's own `backend` values, which the
-// schema offers and the validator holds, and this one is spelled where the
-// one value carrying it is built. It names no vendor beside the engine's own:
-// a company's repositories on GitHub or GitLab are integrations its seats
-// call, never a host the dashboard draws in the engine's place, so where the
-// engine hosts nothing the answer is `none` whatever else the company runs.
-type CodeHost string
-
-const (
-	// CodeHostNative is a company that sets `code.native`: the engine hosts
-	// its repositories, and the dashboard draws its Gitlet workspace.
-	CodeHostNative CodeHost = "native"
-	// CodeHostNone is a company that does not: the engine hosts none of its
-	// code, and the Gitlet workspace is not drawn.
-	CodeHostNone CodeHost = "none"
-)
-
-// CodeHosts is the closed set, the one list the dashboard's copy
-// (`contract/services.ts`'s `CodeHost`) is held to.
-var CodeHosts = []CodeHost{CodeHostNative, CodeHostNone}
-
-// Valid reports a value this build sends.
-func (h CodeHost) Valid() bool { return slices.Contains(CodeHosts, h) }
-
-// codeHostOf is the company's code host: Gitlet exactly where the
-// document sets `code.native` — the one fact of the `code:` block a reader is
-// handed.
-func codeHostOf(c *config.Company) CodeHost {
-	if c.Code.Native {
-		return CodeHostNative
-	}
-	return CodeHostNone
 }
 
 // servicesOf is the company's resolved backends.
@@ -248,7 +214,7 @@ func servicesOf(c *config.Company) *OrgServices {
 		Tracker:   string(c.TrackerBackendFor()),
 		Knowledge: string(c.KnowledgeBackendFor()),
 		Chat:      string(c.ChatBackendFor()),
-		Code:      string(codeHostOf(c)),
+		Code:      string(c.CodeBackendFor()),
 	}
 }
 

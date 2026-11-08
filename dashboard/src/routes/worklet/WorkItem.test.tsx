@@ -2466,7 +2466,7 @@ test("the title and the description open together are one draft, each set throug
 /** The company hosting code, so a task asks whether a change carries it out. */
 const CODE_ORG = {
   ...ORG,
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 };
 
 /** Answers `/query/code_changes` with `changes`, recording each ask. */

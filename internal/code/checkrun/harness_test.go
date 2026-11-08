@@ -196,7 +196,7 @@ func newFleet(t *testing.T) *fleet {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	f.company = &config.Company{Code: config.Code{Native: true, Checks: config.CodeChecks{
+	f.company = &config.Company{Code: config.Code{Backend: config.CodeGitlet, Checks: config.CodeChecks{
 		RunIn: config.PlacementContainer, AllowRunIn: []config.Placement{config.PlacementContainer, config.PlacementE2B},
 	}}}
 	return f

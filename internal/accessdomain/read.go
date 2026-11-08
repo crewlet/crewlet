@@ -257,7 +257,7 @@ func (q AuditQuery) validate() error {
 			return err
 		}
 	}
-	if q.Host != "" && !hostPattern.MatchString(q.Host) {
+	if q.Host != "" && !hostPattern().MatchString(q.Host) {
 		return invalid("%q is not a host id", q.Host)
 	}
 	if !q.Since.IsZero() && !q.Until.IsZero() && !q.Until.After(q.Since) {

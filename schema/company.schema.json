@@ -404,6 +404,15 @@
     "Code": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "description": "Which git host the company runs: gitlet, the engine's own, which hosts its repositories on the engine's own state log, every data node committing their pushes; or none. Empty is none. A node that has run no company yet starts Gitlet at the activation that hands it a company on it; on every other node, whatever backends its first company named, a move between the two takes effect at the node's restart, which the node says (native_backend_needs_restart).",
+          "enum": [
+            "gitlet",
+            "none",
+            "",
+            null
+          ]
+        },
         "checks": {
           "$ref": "#/$defs/CodeChecks"
         },
@@ -445,15 +454,6 @@
             "persons",
             "",
             null
-          ]
-        },
-        "native": {
-          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts Gitlet at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
           ]
         },
         "remote_credentials": {
@@ -532,7 +532,7 @@
           "$ref": "#/$defs/CodeChecksRemote"
         },
         "run_in": {
-          "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host.",
+          "description": "The cell a check whose checks file names none runs in: container — a container on a Gitlet node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host.",
           "enum": [
             "container",
             "e2b",
@@ -559,7 +559,7 @@
           ]
         },
         "max_running": {
-          "description": "How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit.",
+          "description": "How many remote (e2b) check boxes the company runs at once, whichever Gitlet node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit.",
           "maximum": 1024,
           "minimum": 0,
           "type": [
@@ -695,7 +695,7 @@
           ]
         },
         "repo_max_bytes": {
-          "description": "The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole.",
+          "description": "The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every Gitlet node serving a repository caches it whole.",
           "maximum": 1099511627776,
           "minimum": 1048576,
           "type": [
@@ -3420,7 +3420,7 @@
         },
         "code": {
           "$ref": "#/$defs/RoleCode",
-          "description": "This seat's access to the company's code on Gitlet, the engine's own git host (code.native)."
+          "description": "This seat's access to the company's code on Gitlet, the engine's own git host (code.backend: gitlet)."
         },
         "contact": {
           "$ref": "#/$defs/HumanContact",

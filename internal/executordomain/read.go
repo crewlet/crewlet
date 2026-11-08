@@ -143,12 +143,17 @@ func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 // record, which can name a capture as not kept whose record the log took all
 // the same — sent before the end was decided and taken before the end, a record
 // a taker handed on before its lease's window closed among them — and the row's
-// place is then that capture's, its session kept. Every account of an end
-// reads the unkept capture through this one rule, so none tells a session the
-// row keeps as one that was not: [Session.NotKept], and [Session.Redacted], the
-// one form every reader is shown a row in — the read surface's, a seat's own
-// reads and searches of its sessions, and the account of the turn its
-// conversation's next turn is told.
+// place is then that capture's, its session kept. One NEWER than the place
+// stands whether or not the row still names a session: an end stamped below
+// [wentOnVersion] took the older one off, and one stamped at or above kept it,
+// saying the turn went on past it ([Session.WentOnNote] names the capture not
+// kept beside it) — until the seat's budget releases that session, which
+// [Session.NotKept] tells apart. Every account of an end reads the unkept
+// capture through this one rule, so none tells a session the row keeps as one
+// that was not: [Session.NotKept], [Session.WentOnNote], and
+// [Session.Redacted], the one form every reader is shown a row in — the read
+// surface's, a seat's own reads and searches of its sessions, and the account
+// of the turn its conversation's next turn is told.
 func (s Session) Unkept() *executorkeep.Unkept {
 	if s.Ending == nil || s.Ending.Unkept == nil ||
 		!unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq) {
@@ -158,11 +163,100 @@ func (s Session) Unkept() *executorkeep.Unkept {
 	return &unkept
 }
 
+// endWentPast reports whether the row's end says its turn went on past THE
+// SESSION THIS ROW NAMES: the end says the turn went on
+// ([executorkeep.Ending.WentOn]), and the turn's last word it names
+// ([executorkeep.Ending.LastWord]), where it names one, is newer than the
+// place the row keeps. THE ONE READING OF WENT_ON: whether the row is read as
+// one its turn went on past ([Session.WentOn]), which note it is told in
+// ([Session.WentOnNote]), what the conversation's next turn is told of it
+// ([Session.Kept]) and the went_on every reader is shown ([Session.Redacted])
+// all decide on this, so no two of them tell one row two ways.
+//
+// HELD TO THE ROW'S OWN PLACE, as the unkept capture is ([Session.Unkept]): an
+// end is decided off the run's record, which can hold refused a capture whose
+// record the log took all the same — its taker's record handed on before a
+// wait's settle read the turn's row, and taken after it — and where that
+// capture is the turn's last word, the row's place is the last word's, and the
+// row holds all the turn did: read as any row whose final capture landed. An
+// end that names no last word went on past whatever the row names, its last
+// word never taken or not its newest capture. And read off the row's place at
+// read time, it is right whichever side of the end the late record landed on:
+// one the log took before the end is the row's place, whether the end was
+// decided before it landed or after, and one it took after the end is refused
+// by the end's tombstone, which leaves the row older than the last word.
+func (s Session) endWentPast() bool {
+	if s.Ending == nil || !s.Ending.WentOn {
+		return false
+	}
+	w := s.Ending.LastWord
+	return w == nil || newer(w.LaunchSeq, w.CaptureSeq, s.LaunchSeq, s.CaptureSeq)
+}
+
+// WentOn reports a row naming a session its turn WENT ON PAST, or may have: an
+// ended row naming an object whose end said the turn went on past THAT session
+// ([Session.endWentPast]) — kept from a capture taken while its job still
+// worked, or from an earlier launch's, or beside a newer capture that was not
+// kept — or whose turn ended LOST ([executorkeep.OutcomeLost]), which no frame
+// of it saw end, so its session may not hold the last of what it did. Such a
+// row is still continued by the conversation's next turn, which is told which
+// of the two it is ([Session.Kept]), and still read as the turn's session; only
+// never as all the turn did. A row that holds the last word its end named is
+// no row its turn went on past, however the end said the turn went on, and
+// reads as one only where its turn was lost, as every lost turn's row does.
+func (s Session) WentOn() bool {
+	return s.HasObject() && s.Ending != nil &&
+		(s.endWentPast() || s.Ending.Outcome == executorkeep.OutcomeLost)
+}
+
+// WentOnNote is a row its turn went on past ([Session.WentOn]) in a reader's
+// words, "" of any other: that it is kept up to a session the turn went on past
+// — or, of a lost turn whose end did not say so of this row's session
+// ([Session.endWentPast]), may have — and, where its end names a newer capture
+// that was not kept, which and why. Of an end that said so, that the session
+// was taken while the turn still worked and what the turn did after is not in
+// it. The one sentence of it, for every surface that shows a row in words to
+// say.
+//
+// THE NOTE IS THE ROW'S OWN FIELDS IN A READER'S WORDS, and the unkept capture
+// it names is the one [Session.Unkept] stands: an end stamped [wentOnVersion]
+// or above keeps the row's session beside an unkept capture newer than its
+// place, which the note says, and one no newer than the place is the row's
+// own. SOMEBODY ELSE'S WORDS IN IT, the unkept capture's reason quoting what
+// refused it, so a reader asks it of the shown form ([Session.Redacted]),
+// whose reason is redacted, as every reader of a row is shown it.
+func (s Session) WentOnNote() string {
+	if !s.WentOn() {
+		return ""
+	}
+	note := "kept up to a session taken while the turn still worked; the turn went on past it, and what " +
+		"it did after is not in it"
+	if !s.endWentPast() {
+		note = "kept up to a session its turn may have gone on past: the turn was lost, so the session may " +
+			"not hold the last of what it did"
+	}
+	if unkept := s.Unkept(); unkept != nil {
+		note += fmt.Sprintf("; its newer capture (launch %d, capture %d) was not kept: %s", unkept.LaunchSeq,
+			unkept.CaptureSeq, unkeptReason(*unkept))
+	}
+	return note
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, which the engine's restore and the read surface both make, so a
 // reader of whether a relaunch would continue the session decides on the
-// fields the relaunch does.
+// fields the relaunch does — and the conversation's next turn, continuing a
+// session its turn went on past or one of a lost turn, is told which.
+//
+// THE TWO FACTS [Session.WentOn] JOINS, APART: whether the turn's end said it
+// went on past the session the row names ([Session.endWentPast], held to the
+// row's place), and whether the turn was lost. Of the first the next turn is
+// told where the session ends, which the end knew; of the second only that it
+// may not hold the last of what the turn did, which is all a lost turn's end
+// can say — and a lost turn whose end said the first is told the first. A row
+// that names the turn's last word is told neither of a turn that was not
+// lost: the next turn is told the session runs through that turn.
 func (s Session) Kept() executorkeep.TurnRow {
 	return executorkeep.TurnRow{
 		Handle: s.Handle, Turn: s.Turn,
@@ -171,8 +265,10 @@ func (s Session) Kept() executorkeep.TurnRow {
 		Object: s.Object, Ended: s.Ended(),
 		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
 		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
-		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, EndedAt: s.EndedAt,
-		BaseTurn: s.BaseTurn,
+		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, CapturedAt: s.CapturedAt,
+		WentOn:  s.HasObject() && s.endWentPast(),
+		Lost:    s.Ending != nil && s.Ending.Outcome == executorkeep.OutcomeLost,
+		EndedAt: s.EndedAt, BaseTurn: s.BaseTurn,
 	}
 }
 
@@ -222,38 +318,60 @@ func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statel
 // domain's own and told apart off the row alone: a launch ran its session out of
 // its model's context, which retired it ([Session.RetiredBy]); nothing of the
 // turn's session was captured (yet, while the turn is live, its row its begin's);
-// the turn's newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
-// released the older capture the row named, if any ([applyEnd]) — told by the
-// unkept capture being newer than the place the row keeps, which a release
-// leaves as it was ([Session.Unkept]); or the seat's session budget released it to make room
+// the turn's newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) — and
+// no older one was, or an end stamped below [wentOnVersion] released the older one the row
+// named ([applyEnd]) — told by the unkept capture being newer than the place the row keeps,
+// which a release leaves as it was ([Session.Unkept]); or the seat's session budget released it to make room
 // ([seatPlan]), the one other release that leaves a row, and one that takes
 // only an ended turn's.
+//
+// A SESSION ITS END KEPT IS ONE ONLY THE BUDGET RELEASES: an end that says its
+// turn went on past the row's session ([executorkeep.Ending.WentOn]) keeps it
+// beside the newer capture it names unkept, so a row that had kept a session
+// and names none under such an end was released by the seat's budget — said
+// so, with the newer capture that was not kept — never by the capture the end
+// named, which was refused before the end and took nothing off the row. Asked
+// of the end's own went_on, which says what its apply did, and not of whether
+// the row's session went past its turn's last word ([Session.endWentPast]):
+// the two part only at a row whose place is that last word's, which stands no
+// unkept capture beside it ([Session.Unkept]), and is told as released by the
+// budget either way.
 //
 // SOMEBODY ELSE'S WORDS IN IT: the unkept capture's reason quotes what refused
 // it — an error a box or a store wrote — so a reader redacts what this
 // answers, as it redacts every text a row holds.
 func (s Session) NotKept() string {
 	unkept := s.Unkept()
+	keptByItsEnd := s.Ending != nil && s.Ending.WentOn && !s.CapturedAt.IsZero()
 	switch {
 	case s.HasObject():
 		return ""
 	case s.RetiredBy != "":
 		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
-	case unkept != nil:
-		reason := unkept.Reason
-		if reason == "" {
-			reason = "no reason was recorded"
-		}
+	case unkept != nil && !keptByItsEnd:
 		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
-			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, reason)
+			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
 	case s.CapturedAt.IsZero() && !s.Ended():
 		return "nothing of this turn's session has been captured yet"
 	case s.CapturedAt.IsZero():
 		return "nothing of this turn's session was captured: its run ended before its harness packed one, " +
 			"its harness carries none, or the company kept no session"
 	}
-	return "the seat's session budget released this session's object to make room for newer ones; how the " +
-		"turn ended is kept"
+	released := "the seat's session budget released this session's object to make room for newer ones"
+	if unkept != nil {
+		released += fmt.Sprintf(" — its turn had gone on past it, and its newer capture (launch %d, capture %d) "+
+			"was not kept: %s", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
+	}
+	return released + "; how the turn ended is kept"
+}
+
+// unkeptReason is why u was not kept, as a reader is told it: its reason, or
+// that none was recorded.
+func unkeptReason(u executorkeep.Unkept) string {
+	if u.Reason == "" {
+		return "no reason was recorded"
+	}
+	return u.Reason
 }
 
 // rowScanner is one row, from a query or a query row.

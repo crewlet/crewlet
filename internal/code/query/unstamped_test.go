@@ -119,7 +119,7 @@ func TestAnUnstampedPageIsAFunctionOfWhatItNames(t *testing.T) {
 // AN UNSTAMPED READ IS A PAGE'S. A landed-in read's answer is what the node's
 // index says of the push that landed a commit, and a revision's facts, a
 // re-anchoring and a checks file answer no page: none can be asked
-// unstamped, and each is refused before any git node is.
+// unstamped, and each is refused before any Gitlet node is.
 //
 // Mutation: drop Validate's unstamped arm — every one of them is accepted.
 func TestOnlyAPageIsReadUnstamped(t *testing.T) {

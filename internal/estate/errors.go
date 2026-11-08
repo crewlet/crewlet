@@ -128,9 +128,9 @@ var sentinels = []sentinel{
 	// GITLET'S, every one of them — ErrBadBundle, ErrBadLayer,
 	// ErrSuperseded, ErrAnswerDue and ErrMisplaced included, though none is
 	// answered across the wire today (a bad bundle never leaves the receiving
-	// node, nor a bad layer the git node that checked it; a superseded
+	// node, nor a bad layer the Gitlet node that checked it; a superseded
 	// reconcile is the deciding node's own; a read whose answer fell due is
-	// answered unready by the git node it fell due on; a re-anchoring answer
+	// answered unready by the Gitlet node it fell due on; a re-anchoring answer
 	// placing another set than its anchors is refused on the node that asked
 	// for it, as that node's own fault) — for the reason the list is complete
 	// at all.
@@ -310,7 +310,7 @@ var sentinels = []sentinel{
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
-	{"estate.ErrNoGitNode", ErrNoGitNode},
+	{"estate.ErrNoGitletNode", ErrNoGitletNode},
 }
 
 // typedKind is one error type whose value crosses the wire.

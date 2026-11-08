@@ -44,7 +44,12 @@ afterEach(() => {
 });
 
 const node = (id: string, alarms?: FleetNode["alarms"]): FleetNode =>
-  ({ id, roles: ["data", "git"], broker: "embedded", ...(alarms ? { alarms } : {}) }) as FleetNode;
+  ({
+    id,
+    roles: ["data", "gitlet"],
+    broker: "embedded",
+    ...(alarms ? { alarms } : {}),
+  }) as FleetNode;
 
 const fleet = (nodes: FleetNode[]): FleetAnswer =>
   ({
@@ -84,14 +89,14 @@ test("the alarms are Gitlet's kinds, oldest first, and a node that said nothing 
 // is the document's value. Mutation: draw an unset field as zero or empty, or
 // mark a set one as the default, and this fails.
 test("an unset scratch policy and identity domain read as the engine's defaults, marked as defaults", () => {
-  const unset = codePolicyOf({ code: { native: true } } as unknown as CompanyDocument);
+  const unset = codePolicyOf({ code: { backend: "gitlet" } } as unknown as CompanyDocument);
   expect(unset.idleDays).toEqual({ value: 7, set: false });
   expect(unset.maxPerSeat).toEqual({ value: 50, set: false });
   expect(unset.identityDomain).toEqual({ value: "seats.invalid", set: false });
 
   const set = codePolicyOf({
     code: {
-      native: true,
+      backend: "gitlet",
       scratch: { idle_days: 3, max_per_seat: 0 },
       identity_domain: "acme.example",
     },
@@ -229,7 +234,7 @@ const ORG = withDerived({
   name: "Acme",
   roles: [{ name: "CTO", handle: "cto" }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** A protected repository as the listing answers it. */

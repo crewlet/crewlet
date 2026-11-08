@@ -10,7 +10,7 @@ import (
 )
 
 // A COVERAGE'S WORDS FIT ONE BUDGET: a coverage at its worst — every set
-// holding thousands of repositories of the longest names, forty git nodes of
+// holding thousands of repositories of the longest names, forty Gitlet nodes of
 // the longest ids silent, each with a long reason full of characters JSON
 // escapes — encodes in at most its shape (under 600 bytes), MaxCoverageText
 // of names and reasons, and one entry of under 140 bytes for each silent

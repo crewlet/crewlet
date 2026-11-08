@@ -239,7 +239,7 @@ func New(o Options) (*Server, error) {
 //  1. q is validated (code.GitQuery.Validate), and its cursor read as one its
 //     kind issues.
 //  2. A SEAT'S read is refused about THIS node — code.ErrGitUnready, which
-//     another git node may answer — where the node is confirmed behind the
+//     another Gitlet node may answer — where the node is confirmed behind the
 //     company's configuration (behind_config) or holds no chart (no_chart):
 //     judged before the sync, so a node that cannot judge starts nothing. A
 //     person's or a token's read reads no chart and skips both.
@@ -339,7 +339,7 @@ func New(o Options) (*Server, error) {
 //
 // A STOPPED SERVER ANSWERS EVERY READ UNREADY, node_failed, having started
 // nothing, and its stop CUTS every read in flight, which is answered the same
-// ([Server.Stop]): about this node, so the walk asks the next git node and lets
+// ([Server.Stop]): about this node, so the walk asks the next Gitlet node and lets
 // it fill a copy.
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	rctx, end, ok := s.begin(ctx)
@@ -387,7 +387,7 @@ func (s *Server) begin(parent context.Context) (context.Context, func(), bool) {
 // (code.UnreadyReason.PassesFill).
 func (s *Server) stopping() error {
 	return &code.ErrGitUnready{Reason: code.UnreadyNodeFailed, Detail: fmt.Sprintf("%s is stopping its git reads; "+
-		"another git node answers, and fills a copy where none holds one", s.o.NodeID)}
+		"another Gitlet node answers, and fills a copy where none holds one", s.o.NodeID)}
 }
 
 // Stop ends the server: every read from now on is refused unready, about this
@@ -523,7 +523,7 @@ func (r *read) compute(ctx context.Context, at cursor) (code.GitAnswer, error) {
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
-				"share until the read's answer fell due, its asker's attempt spent; another git node answers "+
+				"share until the read's answer fell due, its asker's attempt spent; another Gitlet node answers "+
 				"meanwhile", r.s.o.NodeID))
 		}
 		return code.GitAnswer{}, err
@@ -637,11 +637,11 @@ func (r *read) judgeable() error {
 	}
 	if cur := r.s.o.Current; cur != nil && !cur() {
 		return r.unready(code.UnreadyBehindConfig, fmt.Sprintf("%s is behind the company's configuration and "+
-			"judges no seat's grant from the chart the fleet replaced; a current git node answers", r.s.o.NodeID))
+			"judges no seat's grant from the chart the fleet replaced; a current Gitlet node answers", r.s.o.NodeID))
 	}
 	if r.roster = r.s.o.Roster(); r.roster == nil {
 		return r.unready(code.UnreadyNoChart, fmt.Sprintf("%s holds no chart yet to judge seat %q's grant by; "+
-			"a git node holding one answers", r.s.o.NodeID, r.q.Asker.Seat))
+			"a Gitlet node holding one answers", r.s.o.NodeID, r.q.Asker.Seat))
 	}
 	return nil
 }
@@ -657,7 +657,7 @@ func (r *read) held() error {
 		return nil
 	}
 	return r.unready(code.UnreadyNotHeld, fmt.Sprintf("%s holds no copy of repository %s and the read is "+
-		"not its walk's home's, which is the one node that fills a copy; a git node holding one answers "+
+		"not its walk's home's, which is the one node that fills a copy; a Gitlet node holding one answers "+
 		"meanwhile", r.s.o.NodeID, r.q.RepoID))
 }
 
@@ -715,21 +715,21 @@ func (r *read) sync(ctx context.Context, fresh statelog.Freshness) error {
 		return fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
-			"the read's need before its answer fell due; the sync goes on, and another git node answers "+
+			"the read's need before its answer fell due; the sync goes on, and another Gitlet node answers "+
 			"meanwhile", r.s.o.NodeID, r.q.RepoID))
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case sctx.Err() != nil:
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
-			"the read's need within %s; the sync goes on, and another git node answers meanwhile",
+			"the read's need within %s; the sync goes on, and another Gitlet node answers meanwhile",
 			r.s.o.NodeID, r.q.RepoID, r.s.syncWait))
 	case cache.EveryFillMeets(err):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v — what every "+
-			"git node's copy is filled from, so a git node holding a copy answers meanwhile",
+			"Gitlet node's copy is filled from, so a Gitlet node holding a copy answers meanwhile",
 			r.s.o.NodeID, r.q.RepoID, err))
 	default:
 		return r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not sync repository %s: %v; another "+
-			"git node answers, and fills a copy where none holds one", r.s.o.NodeID, r.q.RepoID, err))
+			"Gitlet node answers, and fills a copy where none holds one", r.s.o.NodeID, r.q.RepoID, err))
 	}
 	r.synced.Release()
 	r.synced, r.linear = s, fresh.Level == statelog.ReadLinearizable
@@ -895,7 +895,7 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswe
 	return r.compareRead(ctx, objs, m)
 }
 
-// unready is a refusal about this node, which another git node may answer.
+// unready is a refusal about this node, which another Gitlet node may answer.
 func (r *read) unready(why code.UnreadyReason, detail string) error {
 	return &code.ErrGitUnready{Reason: why, Detail: detail}
 }
@@ -939,19 +939,19 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 	r.charge(res)
 	if res.Damage != nil {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
-			"repairing (%v); another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, res.Damage))
+			"repairing (%v); another Gitlet node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, res.Damage))
 	}
 	switch {
 	case err == nil:
 		return nil
 	case code.AnswerDue(ctx):
 		return r.unready(code.UnreadyShare, fmt.Sprintf("%s could not finish the %s over repository %s before "+
-			"the read's answer fell due — its asker's attempt spent on the waits before it; another git node "+
+			"the read's answer fell due — its asker's attempt spent on the waits before it; another Gitlet node "+
 			"answers meanwhile", r.s.o.NodeID, what, r.q.RepoID))
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, gitproc.ErrBusy):
-		return r.unready(code.UnreadyShare, fmt.Sprintf("%s's read lane was busy past %s; another git node "+
+		return r.unready(code.UnreadyShare, fmt.Sprintf("%s's read lane was busy past %s; another Gitlet node "+
 			"answers meanwhile", r.s.o.NodeID, gitproc.SlotWait))
 	case errors.Is(err, gitproc.ErrDeadline) && r.metered:
 		if slice == nil {
@@ -961,11 +961,11 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 		return slice
 	case errors.Is(err, gitproc.ErrDeadline):
 		return r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s's %s over repository %s ran its whole bound, "+
-			"which no healthy git node takes over it: %v; another git node answers", r.s.o.NodeID, what,
+			"which no healthy Gitlet node takes over it: %v; another Gitlet node answers", r.s.o.NodeID, what,
 			r.q.RepoID, err))
 	case errors.Is(err, gitproc.ErrRepoShape):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s did not complete: %v; "+
-			"another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, err))
+			"another Gitlet node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, err))
 	}
 	return fmt.Errorf("query: %s over repository %s: %w", what, r.q.RepoID, err)
 }

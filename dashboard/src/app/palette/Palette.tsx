@@ -348,7 +348,7 @@ export function CommandPalette({
     { enabled: wantsArtifacts },
   );
   // CODE IN ITS OWN SCOPE ONLY, and asked once the term has rested: a code
-  // search is a signed request to every git node holding a repository the
+  // search is a signed request to every Gitlet node holding a repository the
   // reader reads, so a word being typed asks nothing (`useQuiet`) — and a
   // reconnect asks again only a search that never reached the engine: its
   // answer names the commits it read, so asking again only repeats it.

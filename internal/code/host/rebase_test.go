@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHANGE REBASED ON ITS REPOSITORY'S GIT NODE (rebase.go): its commits its
+// A CHANGE REBASED ON ITS REPOSITORY'S GITLET NODE (rebase.go): its commits its
 // target does not hold, replayed onto the target's tip and landed as one
 // forced push of its source — each keeping its author, the first conflict
 // stopping it, a merge among them refusing it.

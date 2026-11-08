@@ -51,8 +51,8 @@ const EvictInterval = time.Minute
 // byte under about 35 ms, the fake's 30 ms arm among them.
 //
 // A NODE'S BOUND, NEVER THE FLEET'S. Every object is named under one `files/`
-// prefix (objstore.Key.Name, ADR-0026), and every git node that syncs a
-// repository it has never served asks this much of it: about 19 to 37 git
+// prefix (objstore.Key.Name, ADR-0026), and every Gitlet node that syncs a
+// repository it has never served asks this much of it: about 19 to 37 Gitlet
 // nodes cold-syncing at once, each at its full thirty-two — twice as many at
 // one repository's sixteen — reach the 5 500 GETs a second S3 serves one
 // prefix (a fresh fleet, or a repository imported and then fetched through
@@ -147,7 +147,7 @@ const MaxSnapshotRestarts = 3
 // BenchmarkServeASnapshotPage), nearly all of it the driver's scan. Every
 // other read the node serves takes one of the same connections, which
 // database/sql hands to a waiting read drawn at random, never the one that
-// has waited longest. A git node that holds the data reads its own copy
+// has waited longest. A Gitlet node that holds the data reads its own copy
 // instead, through the pool that serves those reads to every other node, so
 // the cap is every node's. Uncapped, a node that comes up with hundreds of
 // repositories asked of it — a balancer moving traffic onto it, CI fetching
@@ -162,7 +162,7 @@ const MaxSnapshotRestarts = 3
 // every page it holds; and four such nodes at once hold half of a data node's
 // answers, so the lane is never what fills first.
 //
-// A DELTA IS EXEMPT: it is the round every git node runs after every push,
+// A DELTA IS EXEMPT: it is the round every Gitlet node runs after every push,
 // usually one page, and a cap on it would put every fetch behind the full
 // reads of a node coming up. A delta the log answers in full (page 1 decides:
 // one that would outweigh the full answer, a floor below the swept tombstones
@@ -205,7 +205,7 @@ const MaxSnapshotRestarts = 3
 // nodes joining together under the rule, which sixteen breaks. A data node of
 // more cores opens more readers and would bring a restart up sooner at a
 // higher cap, and one whose store.max_open_conns sets fewer scans fewer; a
-// git node knows neither of the node it reads, so the cap is the fewest a
+// Gitlet node knows neither of the node it reads, so the cap is the fewest a
 // store opens unconfigured. In that join's sixteen seconds each node
 // downloads five to nine packs for each of its repositories from S3 (150 to
 // 290 small bundles a second, NodeFetches), so for repositories of more
@@ -213,7 +213,7 @@ const MaxSnapshotRestarts = 3
 // every page is a full page of refs, the dearest a page is: a repository of a
 // few hundred refs is one page of a few milliseconds, which holds its slot
 // and its reader a twentieth as long. What moves the cap is production's page
-// times: crewlet.code.cache.read.page.duration on the git node, a page's
+// times: crewlet.code.cache.read.page.duration on the Gitlet node, a page's
 // whole round trip, and crewlet.store.pool.wait on the data node it reads.
 const MaxFullRounds = store.MinReaderConns
 
@@ -368,7 +368,7 @@ const MidxMaxWait = MidxMinInterval
 // has just left with no multi-pack-index and no bitmap — goes without them
 // until the next run has written them, due this interval after the stop (or
 // MidxDutyCycle times what the stopped run had spent, where that is longer),
-// on each git node whose run the swap stopped — served meanwhile from its
+// on each Gitlet node whose run the swap stopped — served meanwhile from its
 // packs' own indexes, which a compacted repository keeps few of.
 const MidxMinInterval = 10 * time.Minute
 
@@ -552,7 +552,7 @@ const GraphBaseBytes = 100 << 20
 // (Cache.AdmitPublication, internal/code/compact), beside the room for one
 // clone of the repository every whole-repository step is charged (memory.go's
 // chargeOver) — and a figure a repository's maintenance is PLACED by
-// (Cache.MaintenanceCharge, the git node it falls to): a bitmap is
+// (Cache.MaintenanceCharge, the Gitlet node it falls to): a bitmap is
 // O(history), so the layer's own few objects say nothing of what it holds. A
 // layer over a base, the routine publication, is charged
 // PublishTailBytesPerObject; a repository is placed by its root's, since its
@@ -590,7 +590,7 @@ const PublishBytesPerObject = 600
 // object of the repository), 88 MiB over 100 MB (312) and 254 MiB over the
 // gigabyte (90), the largest rounded up to the next 50. Charged the root's
 // 600, a routine publication of the largest repository the defaults admit
-// (some 60 million objects) reserved about 50 GB of a large git node's
+// (some 60 million objects) reserved about 50 GB of a large Gitlet node's
 // background budget for its whole build — every other repository's
 // background work on that node refused or kept waiting for minutes at every
 // PublishMinInterval — where this charges it 35 GB, still more than the
@@ -754,7 +754,7 @@ const CheckPieceBytes = 64 << 20
 // behind it for as long as its bitmap takes.
 const MaintenanceMemoryPerCore int64 = 256 << 20
 
-// ServingMemoryPerCore is what a git node keeps, for each core of its git
+// ServingMemoryPerCore is what a Gitlet node keeps, for each core of its git
 // pool its memory backs, for the store, the broker, the engine and the read
 // lane's processes: with the transfer lane's, what the background work's
 // budget leaves out.
@@ -769,7 +769,7 @@ const MaintenanceMemoryPerCore int64 = 256 << 20
 // 16 GiB on four cores gives 9 GiB, a bitmap of up to some 11 million
 // objects with room for a clone of the repository beside it, an index without
 // one of up to some 30 million (docs/concepts/gitlet.md works these
-// through, and TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures computes
+// through, and TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures computes
 // them). And a node with less — 16 GiB seen beside 64 cores, a container
 // limited in memory and not in CPU — keeps it only for the eight cores its
 // memory backs, as its pool sized its transfer lane, so it gives its
@@ -804,7 +804,7 @@ const RebuildCooldown = 10 * time.Minute
 //
 // A DAY — reached at the ninth attempt in a row, ten minutes doubled eight
 // times being longer — at which a repository whose damage no rebuild ends
-// costs one whole download a day on each git node a failing request reaches,
+// costs one whole download a day on each Gitlet node a failing request reaches,
 // where the cooldown alone made it 144: 10 000 GETs a day for 10 000 pushes
 // rather than 1.44 million. The `unchanged` rule is held to the same day
 // rather than to the next push: the same verified rows and objects do make
@@ -931,15 +931,15 @@ const ProvenanceMergeFactor = 2
 const ProvenanceMergeWidth = 8
 
 // BackfillIdle is how long the backfill waits after each page it reads, as a
-// multiple of that page's own duration and of the fleet's ratio of live git
-// nodes to live data nodes (backfill.go): every git node backfills from the
+// multiple of that page's own duration and of the fleet's ratio of live Gitlet
+// nodes to live data nodes (backfill.go): every Gitlet node backfills from the
 // data nodes, so its share of them is the ratio.
 //
-// TWO: a git node then reads a third of the time at most against one data
-// node's worth of git nodes, so the fleet's backfills hold about a third of
+// TWO: a Gitlet node then reads a third of the time at most against one data
+// node's worth of Gitlet nodes, so the fleet's backfills hold about a third of
 // one reader of each data node — the code retention pass's share of the
 // estate's write lane (code.RetentionLaneShare), applied to a read — however
-// many git nodes share them, and the serving keeps the other two thirds.
+// many Gitlet nodes share them, and the serving keeps the other two thirds.
 const BackfillIdle = 2
 
 // HorizonEvery is how often the backfill asks the rows for the oldest push
@@ -963,7 +963,7 @@ const HorizonEvery = 24 * time.Hour
 //
 // FIVE SECONDS TO FIVE MINUTES: a data node that restarts or a router that
 // lost its placement answers again within seconds, and nobody waits on a
-// backfill, so a long outage costs one read every five minutes a git node
+// backfill, so a long outage costs one read every five minutes a Gitlet node
 // rather than a stream of them against a fleet that is already down, and
 // one repository whose rows cannot be served costs one read of them every
 // five minutes — the shape of the code reconciler's retries (engine's

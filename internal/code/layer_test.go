@@ -386,7 +386,7 @@ func layersEqual(a, b code.LayerRef) bool {
 		a.Objects == b.Objects && a.Commits == b.Commits && a.Git == b.Git && a.TookMs == b.TookMs
 }
 
-// layerBytes are a layer's three files' bytes, as a git node lays them back
+// layerBytes are a layer's three files' bytes, as a Gitlet node lays them back
 // from the layer's parts; a nil graph is a layer carrying none.
 type layerBytes [3][]byte
 
@@ -729,7 +729,7 @@ func (f *failingRead) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // A LAYER'S CHECK HASHES ITS FILES A PIECE A SLOT AND STOPS WITH ITS CALLER. A
-// git node's installer reads every byte of a layer for its trailers —
+// Gitlet node's installer reads every byte of a layer for its trailers —
 // gigabytes for the largest repository's root — on a node whose read lane
 // every request waits in, so the tip's three files, checked through a lane of
 // one slot in pieces of 64 bytes, pass with every byte before each file's

@@ -60,7 +60,7 @@ func publishWhileBusy(t testing.TB, c *compact.Compactor, cand code.PublicationC
 	}
 }
 
-// chain is the repository's published chain as x's git node's copy holds it,
+// chain is the repository's published chain as x's Gitlet node's copy holds it,
 // synced linearizable.
 func (x *fixture) chain() cache.Chain {
 	x.t.Helper()
@@ -72,7 +72,7 @@ func (x *fixture) chain() cache.Chain {
 	return x.node().Cache().Chain(s)
 }
 
-// awaitInstalled waits for x's git node's copy to hold the rows' whole chain
+// awaitInstalled waits for x's Gitlet node's copy to hold the rows' whole chain
 // of n layers installed — its installer places what its maintainer adopted in
 // the background — a minute at most, and answers it.
 func (x *fixture) awaitInstalled(n int) cache.Chain {

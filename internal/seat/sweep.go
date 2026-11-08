@@ -967,7 +967,7 @@ func (h *Host) placedCount() int {
 // not missing anything, and is neither manned nor unmanned. A role that stops
 // being needed while it was unmanned says so as THAT — fleet_role_unneeded —
 // never as fleet_role_manned: an operator who turned code off must not read
-// that a git node came back.
+// that a Gitlet node came back.
 func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 	edges := h.fleetRoleEdges(live)
 	ids := map[string]struct{}{}
@@ -1046,7 +1046,7 @@ func (h *Host) fleetRoleEdges(live []placement.NodeProfile) roleEdges {
 // The placement half — roles and labels — and the live half beside it under
 // its own key, both re-sent on every heartbeat. A node with no status hook
 // publishes only the placement half, which is what makes "did not say"
-// distinguishable from "said zero" on the reading side. And, on a git node,
+// distinguishable from "said zero" on the reading side. And, on a Gitlet node,
 // what its git cache gives its background work, under a key of its own and
 // outside the status ([Config.GitBackground]).
 //
@@ -1077,8 +1077,8 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	if withdrawn {
 		meta[placement.WithdrawnKey] = true
 	}
-	// WHAT THIS GIT NODE CAN GIVE ITS BACKGROUND WORK, on every beat and
-	// before the bounded hook, zero included: a placement input every git
+	// WHAT THIS GITLET NODE CAN GIVE ITS BACKGROUND WORK, on every beat and
+	// before the bounded hook, zero included: a placement input every Gitlet
 	// node weighs this one by, which a slow control plane must never drop
 	// for a beat ([coord.GitBackgroundKey]).
 	if h.gitBackground != nil {

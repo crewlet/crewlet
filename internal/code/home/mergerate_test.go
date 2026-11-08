@@ -120,7 +120,7 @@ func TestTheQueuePricesItsMergeRateAtTheRoundsItTimed(t *testing.T) {
 // timing — and dropped by the first reading past a window with neither, as a
 // queue whose home moved to another node, or whose repository was deleted,
 // is never turned here again and so never reached by a drained turn. A
-// long-lived git node holds a figure for the queues it is home to now, never
+// long-lived Gitlet node holds a figure for the queues it is home to now, never
 // one for every queue it ever was.
 //
 // Mutation: never forget a target → it is still held a window on, red;

@@ -8,17 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
 
-// BenchmarkHomeOf is what a git node pays to judge every repository the
+// BenchmarkHomeOf is what a Gitlet node pays to judge every repository the
 // backstop pass of the home's change work lists against ONE reading of who
 // serves git ([Router.HomeOf]): repos=10000 ids over a fleet of
-// git-nodes={8,16}, this node one of them and home to its share — ns/repo, the
+// gitlet-nodes={8,16}, this node one of them and home to its share — ns/repo, the
 // one read of the placement included, and home, the repositories it is home
 // to. It is what each listed repository this node is NOT home to costs a
-// pass, since every git node lists the same rows and only a repository's home
+// pass, since every Gitlet node lists the same rows and only a repository's home
 // works them (internal/code/home's Backstop).
 func BenchmarkHomeOf(b *testing.B) {
 	for _, n := range []int{8, 16} {
-		b.Run(fmt.Sprintf("repos=10000/git-nodes=%d", n), func(b *testing.B) {
+		b.Run(fmt.Sprintf("repos=10000/gitlet-nodes=%d", n), func(b *testing.B) {
 			nodes := make([]string, n)
 			for i := range nodes {
 				nodes[i] = fmt.Sprintf("git-%02d", i)

@@ -24,6 +24,7 @@ import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** A `line=` as the address spells it: a line number, or 0 for none. */
 function lineOf(param: string): number {
@@ -87,13 +88,14 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
   const shown = file || files[0]?.path || "";
   return (
     <Stack gap={3}>
-      <div className="toolbar">
+      <PageToolbar>
         {totals && (
           <span className="t-caption">
             {`${plural(totals.total, "file")} changed, +${fmtCount(totals.added)} −${fmtCount(totals.deleted)}`}
           </span>
         )}
         <Select
+          size="sm"
           width="auto"
           value={layout}
           onChange={(value) => setLayout(String(value))}
@@ -103,7 +105,7 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
           ]}
           ariaLabel="Layout"
         />
-      </div>
+      </PageToolbar>
       {first.loading && !first.data && (
         <Skeleton variant="text" rows={4} label="Loading the files" />
       )}

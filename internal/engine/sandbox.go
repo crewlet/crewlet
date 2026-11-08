@@ -3065,6 +3065,10 @@ func (e *Engine) sandboxWaiterOptions(
 		Node:     e.id,
 		Interval: interval,
 		Refresh:  e.refreshRunTokens,
+		// AND WHERE THE REFRESH RECORDS EACH TOKEN BEFORE IT WRITES IT: the
+		// job's sealed set beside its row, which every capture of the job's
+		// session is scrubbed by (issued.go, "Recorded before it is written").
+		Record: rt.coordinator.RecordHanded,
 	}
 }
 

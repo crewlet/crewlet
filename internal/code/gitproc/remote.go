@@ -200,7 +200,7 @@ type remoteEnv struct {
 // reaches no IPv4-only host this way, and names a proxy for it instead
 // (below). The prefixes are asked of the resolver the host is resolved with,
 // and only for an address whose verdict they can change. allowPrivate (Tier A
-// git.import_allow_private) lifts the rule: the host's addresses are pinned
+// gitlet.import_allow_private) lifts the rule: the host's addresses are pinned
 // as the resolver answers them.
 //
 // THROUGH A PROXY the process names for the URL — HTTPS_PROXY and NO_PROXY,
@@ -336,7 +336,7 @@ func remoteAddrs(ctx context.Context, res httpx.Resolver, host string, allowPriv
 		addrs, err = httpx.ResolvePublic(ctx, res, host)
 		if errors.Is(err, httpx.ErrNotPublic) {
 			return nil, fmt.Errorf("%w — a git process dials another host only at an address on the public "+
-				"internet, unless git.import_allow_private is set on the node that runs it", err)
+				"internet, unless gitlet.import_allow_private is set on the node that runs it", err)
 		}
 	} else if literal, perr := netip.ParseAddr(host); perr == nil {
 		addrs = []netip.Addr{literal}

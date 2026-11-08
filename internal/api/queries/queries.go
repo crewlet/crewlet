@@ -253,7 +253,7 @@ func (r *NotPermitted) Unwrap() error { return ErrUnauthorized }
 // are remedied differently — a code question's repository nobody declared
 // (`not_declared`, declared in code.repos) and its company hosting no code
 // (`not_hosted`, which declaring a repository changes nothing about until
-// code.native is set). A REST route carries both, as `reason` and `detail`;
+// code.backend: gitlet is set). A REST route carries both, as `reason` and `detail`;
 // the socket's frame carries codes and not prose, and answers `not_found`.
 type NotFound struct {
 	// Reason is which absence: a word a client switches on, never prose.

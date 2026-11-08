@@ -7,7 +7,7 @@
  *
  * THE HISTORY is git's (`code_log`): the commits that changed the path, or any
  * path, newest first from the revision, a page at a time, each with the push
- * that introduced it where the answering git node's index holds it — who
+ * that introduced it where the answering Gitlet node's index holds it — who
  * pushed it, which the commit's own author line is not — each opening the
  * commit's own page, and each branch but the default offering a comparison
  * with it. A page is what the
@@ -36,6 +36,7 @@ import type {
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** The repository's branches, the default first in name order as the engine lists them, each opening its files. */
 export function Branches({ repo }: { repo: CodeRepoDetail }) {
@@ -208,7 +209,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   }
   return (
     <>
-      <div className="toolbar">
+      <PageToolbar>
         <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
         {path && (
           <span className="row gap-1">
@@ -220,7 +221,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
             </Button>
           </span>
         )}
-      </div>
+      </PageToolbar>
       {paged.loading && rows.length === 0 && (
         <Skeleton
           variant="text"

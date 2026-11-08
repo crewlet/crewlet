@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A MERGED CHANGE REVERTED, ON THE GIT NODE (code.WriteRevertChange, M5-D25):
+// A MERGED CHANGE REVERTED, ON THE GITLET NODE (code.WriteRevertChange, M5-D25):
 // the change read in the build's copy's snapshot, its merge placed against
 // the target it was merged onto, ONE three-way merge undoing it onto the
 // target's tip, and ONE commit on a NEW branch, landed as one push whose

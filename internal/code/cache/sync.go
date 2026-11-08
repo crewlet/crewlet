@@ -199,11 +199,11 @@ func (c *Cache) indexSync(ctx context.Context, repoID string) (Synced, error) {
 // booted over — or a round running on it now. It reads memory alone and
 // starts nothing.
 //
-// It is what a git node asks before a read it was not asked to FILL a copy
+// It is what a Gitlet node asks before a read it was not asked to FILL a copy
 // for (code.GitQuery.Home, ADR-0089): a node that answers false starts
 // nothing for such a read (code.UnreadyNotHeld), so one read of a repository
-// no git node holds costs the fleet one download, by the walk's effective
-// home, rather than one by every git node the walk reaches — a round, once
+// no Gitlet node holds costs the fleet one download, by the walk's effective
+// home, rather than one by every Gitlet node the walk reaches — a round, once
 // begun, runs on under the cache's own lifetime after its caller stops
 // waiting. A round already running is held: a read that joins it adds no
 // download of its own.
@@ -1199,12 +1199,10 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			res.placing.discard(c)
 			res.placing = nil
 		}
-		// AN APPLY CHANGES WHAT THE BACKFILL MAY DO OF THE COPY, however it
-		// ends (schedule.go): a full one's check vouched for runs or found
-		// them failing, its repairs settled what checks had found, and its
-		// end converged the copy or did not; a delta's fold changed the index
-		// (which setRecord marks as well).
-		c.backfillDirty(e)
+		// What the apply changed of the backfill's work, however it ended —
+		// its check's vouches and findings for runs, the repairs it settled,
+		// its drops of the index, its fold, its convergence — was marked in
+		// the hold that changed it (schedule.go).
 		if res.checked.forced {
 			forcedCheck, forcedOn = res.checked, inc
 		}
@@ -1718,6 +1716,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	if snap.full {
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
+		// No step of the backfill is taken of a copy until a round converges
+		// it: marked in this hold, converged or not (schedule.go).
+		c.backfillDirty(e)
 		var reason RebuildReason
 		if inc.converged {
 			reason, inc.reread = inc.reread, ""

@@ -103,7 +103,9 @@ export function RefPicker({
     options.push({ value, label: revisionWord(repo, value) });
   }
   return (
+    // A TOOLBAR'S PICKER, at the row's small step: every caller draws it in one.
     <Select
+      size="sm"
       width="auto"
       searchable
       value={value}

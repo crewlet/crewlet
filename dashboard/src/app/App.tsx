@@ -229,6 +229,7 @@ export function screenFor(route: Resolved): ReactNode {
     case "chatlet":
       return <Chat id={route.id} />;
     case "chatlet-activity":
+    case "chatlet-dms":
     case "chatlet-threads":
     case "chatlet-drafts":
     case "chatlet-saved":

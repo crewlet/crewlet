@@ -35,7 +35,7 @@ import (
 //     PLACE IN FLIGHT: at most MaxRunRequests of the attempt's requests at
 //     once on this node, past them 503 run_busy, as an executor's
 //     (boxlimit.go). A /box/gitlet/ read holds none here: AdmitCheck admits it
-//     and returns, and the read runs on the repository's home git node,
+//     and returns, and the read runs on the repository's home Gitlet node,
 //     whose second look at the log's head draws on the same attempt's
 //     re-syncs there.
 //  4. THE NAME GIVEN — before any read of the code log: the URL's name must

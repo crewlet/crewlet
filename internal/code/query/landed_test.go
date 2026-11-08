@@ -83,17 +83,17 @@ func (x *fixture) pushesMoving(repo, ref, oid string) []code.IntroducedRow {
 	return found
 }
 
-// pushVia pushes refspecs of the work tree to name through the i-th git node,
+// pushVia pushes refspecs of the work tree to name through the i-th Gitlet node,
 // whichever others are running.
 func (x *fixture) pushVia(i int, name string, refspecs ...string) {
 	x.t.Helper()
-	url := x.f.GitNode(i).Node().URL() + "/git/" + name
+	url := x.f.GitletNode(i).Node().URL() + "/git/" + name
 	if res := x.p.PushArgs(x.t.Context(), x.work, []string{"--force"}, url, refspecs...); res.Err != nil {
 		x.t.Fatalf("git push %v through node %d: %s", refspecs, i, res)
 	}
 }
 
-// indexed waits until the i-th git node's index of repo can be read at the
+// indexed waits until the i-th Gitlet node's index of repo can be read at the
 // log's head: a run an earlier process wrote is read only once the backfill
 // has checked it, and a read meanwhile is answered without the index rather
 // than waiting on it.
@@ -302,7 +302,7 @@ func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
 // answer falls due, or the lane stays busy past gitproc.SlotWait, while the
 // search still has checks and budget left. Either leaves it knowing the
 // oldest move that kept the commit, which is answered — never the read
-// refused unready, which would throw that away and send the next git node to
+// refused unready, which would throw that away and send the next Gitlet node to
 // run the same checks under the same kind of queue. The check against the
 // tip is not the search's: ended so, nothing is known, and the read is
 // unready at the share as any read's git is. main is rewritten as in the
@@ -431,7 +431,7 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 		// A node that read nothing: its index begins at its first round,
 		// and nothing reads the history below it until a home's read wants
 		// it.
-		g, dir := x.f.GitNode(0), x.f.Nodes()[0].CacheDir()
+		g, dir := x.f.GitletNode(0), x.f.Nodes()[0].CacheDir()
 		g.Stop(t.Context())
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
@@ -458,7 +458,7 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 		t.Parallel()
 		var blocked atomic.Bool
 		x := newFixture(t, codetest.SoloOptions{
-			Shape: codetest.Shape{GitNodes: 2},
+			Shape: codetest.Shape{GitletNodes: 2},
 			// The backfill's pages fail while the case holds the gap open.
 			WrapReads: func(next codetest.Reads) codetest.Reads {
 				return func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -474,7 +474,7 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 		x.synced(0, repo)
 		// Down while another node takes a push: its first round back reads
 		// the repository whole, past a range of pushes it never read.
-		g := x.f.GitNode(0)
+		g := x.f.GitletNode(0)
 		g.Stop(t.Context())
 		blocked.Store(true)
 		inGap := x.p.Commit(x.work, map[string]string{"b.txt": "b\n"}, "landed while the node was down")

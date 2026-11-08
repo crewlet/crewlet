@@ -45,7 +45,7 @@ func introducing(t *testing.T, n *node, id string) (want []string, positions []s
 // INTRODUCED PAGES IN POSITION ORDER: a repository's pushes in log order,
 // ascending over (After, Through] or descending below Before, a limit at a
 // time — sixty-four pushes in one record and a page boundary inside it, none
-// repeated and none skipped — each row the push as a git node's index is
+// repeated and none skipped — each row the push as a Gitlet node's index is
 // built from it: who, where, when, the refs it LANDED and the commits it
 // introduced. A gap's range reads its pushes alone, and a read at session
 // waits for the position it names.

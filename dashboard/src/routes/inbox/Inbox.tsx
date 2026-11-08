@@ -9,14 +9,21 @@
  * question to them, from the engine's `decisions`; the seats stopped on a
  * spent budget; and the engine conditions a person decides,
  * `lib/attention.ts` with `where: seat`), then Updates, what reached them and
- * is not read yet. Decisions come first because they are what only this
- * person can unblock; they are never interleaved with the updates by time,
- * which would eventually rank "a task you watch moved" above the CEO asking
- * whether to hold a release. What was snoozed and what was read already are
- * two quiet links at the end, read when they are opened.
+ * is not read yet, as a closed, counted group ("Updates 12") that the reader
+ * opens. Decisions come first because they are what only this person can
+ * unblock; they are never interleaved with the updates by time, which would
+ * eventually rank "a task you watch moved" above the CEO asking whether to
+ * hold a release, and the updates are closed on every visit because they
+ * are many. Opened, Updates' rows step with `j` and `k` like any other; a
+ * link that names one of them opens the group. Mark all read, Snoozed, the
+ * frame's badge and Home's Updates count them whether the group is open or
+ * not. What was snoozed and what was read already are two quiet links at the
+ * end, read when they are opened.
  *
  * The right column is the open row read in full, top to bottom, with the
- * answer to it (`InboxPane.tsx`). Stepping down the list REPLACES history, so
+ * answer to it (`InboxPane.tsx`), and every row opens at its head: the pane
+ * is told which row it reads (`ReadingPane`'s `contentKey`), and whatever
+ * scrolls it goes back to the row's top, however the row was opened. Stepping down the list REPLACES history, so
  * four rows read through one open pane are one place the reader has been (the
  * rule the frame's own peek follows), and `j`/`k` step through it from the
  * keyboard. A task named on a row or in a byline opens beside the inbox, in
@@ -46,7 +53,8 @@
  * kept where it stands ([PaneProps.onSettled]'s `hold`), shown as sent. A
  * read or snoozed update shows its new state, and a moment later
  * (`ADVANCE_MS`) the next item opens, unless the reader has already moved
- * on.
+ * on. The next item is never a row in a closed group: with Needs you empty
+ * and Updates closed, the pane says All clear rather than opening an update.
  *
  * # What was answered before stays to be looked back at
  *
@@ -264,6 +272,9 @@ export function Inbox() {
     pollMs: INBOX_POLL_MS,
   });
   const [answeredOpen, setAnsweredOpen] = useState(false);
+  // UPDATES ARE CLOSED ON EVERY VISIT, and only the reader opens them (or a
+  // link naming one of their rows): an answer's advance never does.
+  const [updatesOpen, setUpdatesOpen] = useState(false);
   // A TOGGLE OF ANSWERED IS THE ARRIVAL SEEN: opened, the group draws the row
   // that landed in it without a wash of its own, and closed, it has nothing
   // new left to show.
@@ -318,7 +329,7 @@ export function Inbox() {
     earlierOpen && earlier.notices ? noticeRows(earlierOf(earlier.notices)) : null;
   const order: InboxRow[] = [
     ...needs,
-    ...updates,
+    ...(updatesOpen ? updates : []),
     ...(answeredOpen ? answered : []),
     ...(snoozedRows ?? []),
     ...(earlierRows ?? []),
@@ -338,6 +349,10 @@ export function Inbox() {
       setAnsweredOpen(true);
     }
   }, [open, answeredOpen, answered, settled]);
+  // AN UPDATE THE ADDRESS NAMES OPENS ITS GROUP, for the same reason.
+  useEffect(() => {
+    if (open && !updatesOpen && updates.some((r) => r.key === open)) setUpdatesOpen(true);
+  }, [open, updatesOpen, updates]);
 
   // THE OPEN ROW: the one the URL names, or, beside the list (never in one
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
@@ -351,6 +366,7 @@ export function Inbox() {
   const movedHere = settled.get(open);
   const named =
     order.find((r) => r.key === open) ??
+    updates.find((r) => r.key === open) ??
     answered.find((r) => r.key === open) ??
     (movedHere?.moved
       ? answered.find((r) => questionOf(r) === questionOf(movedHere.row))
@@ -577,7 +593,7 @@ export function Inbox() {
         {showList && (
           <InboxColumn
             needs={needs}
-            updates={updates}
+            updates={{ rows: updates, open: updatesOpen, onOpenChange: setUpdatesOpen }}
             snoozed={{
               rows: snoozedRows,
               more: snoozed.more,

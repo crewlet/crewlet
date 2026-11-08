@@ -26,7 +26,7 @@ test("the engine's word decides what runs, and every service runs until it has s
     tracker: "worklet",
     knowledge: "doclet",
     chat: "chatlet",
-    code: "native",
+    code: "gitlet",
   } as const;
   expect(servicesRun(null)).toEqual({ tracker: true, knowledge: true, chat: true, code: true });
   expect(servicesRun(every)).toEqual({ tracker: true, knowledge: true, chat: true, code: true });
@@ -60,7 +60,7 @@ test("the engine's word decides what runs, and every service runs until it has s
   expect(servicesRun(bare)).toBe(
     servicesRun({ ...bare, tracker: "none", knowledge: "confluence" }),
   );
-  expect(servicesRun(bare)).not.toBe(servicesRun({ ...bare, code: "native" }));
+  expect(servicesRun(bare)).not.toBe(servicesRun({ ...bare, code: "gitlet" }));
 });
 
 // HIDDEN, NOT LOCKED, where the engine hosts no code: no Gitlet row, no Gitlet
@@ -149,7 +149,7 @@ test("a company on another chat is offered nothing of Chatlet", () => {
   // being the row's own: Chatlet opens on it.
   expect(places.sort()).toEqual([
     "chatlet",
-    ...["browse", "drafts", "new", "saved", "search", "threads"].map((v) => `chatlet-${v}`),
+    ...["browse", "dms", "drafts", "new", "saved", "search", "threads"].map((v) => `chatlet-${v}`),
   ]);
   expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
   expect(pathShown(["chatlet", "activity"], elsewhere)).toBe(false);

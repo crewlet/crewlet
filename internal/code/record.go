@@ -317,7 +317,7 @@ const (
 
 	// OpChangeLanded records a live change MERGED because its target came to
 	// hold its head — moved past it, by a push that did not set it to exactly
-	// that head — as the repository's home git node found it ([ChangeLanded]),
+	// that head — as the repository's home Gitlet node found it ([ChangeLanded]),
 	// on the repository's own subject, decided by its committer alone against
 	// the change's head and the target row the home read.
 	//
@@ -383,7 +383,7 @@ const (
 	OpFindingResolve OpKind = "finding_resolve"
 
 	// OpRevise records one revision's facts on its change — what its head is
-	// against its target's tip, as the repository's home git node read them,
+	// against its target's tip, as the repository's home Gitlet node read them,
 	// and the path owners whose globs its touched paths match, with the
 	// reviews that asks ([Revise]) — on the change's own subject, written by
 	// the repository's committing data node for the home, which asks it and
@@ -397,7 +397,7 @@ const (
 
 	// OpMergeability records whether a change's head revision merges cleanly
 	// into its target's tip — clean, in conflict naming the paths, or
-	// undecided within its home's deadline — as the repository's home git
+	// undecided within its home's deadline — as the repository's home Gitlet
 	// node merged the two commits in a scratch of its own ([Mergeability]),
 	// on the change's own subject, written by the repository's committing
 	// data node for the home, which asks it and publishes nothing itself.
@@ -629,7 +629,7 @@ func CheckOps() []OpKind {
 
 // ChangeOps are the seven ops of a change's LIFECYCLE, in [OpKinds]' order:
 // what a [ChangeProposal] may be, each decided by the repository's committer
-// as a record of its own — a landing, which the repository's home git node
+// as a record of its own — a landing, which the repository's home Gitlet node
 // asks, among them.
 func ChangeOps() []OpKind {
 	return []OpKind{OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
@@ -640,7 +640,7 @@ func ChangeOps() []OpKind {
 // what a [ConversationWrite] may be, each a record of its own on the change's
 // subject ([KindChange]), written by the repository's committing data node
 // ([ChangeWriter]) — a revision's facts and a change's mergeability, which the
-// repository's home git node asks, among them, the record the writer keeps
+// repository's home Gitlet node asks, among them, the record the writer keeps
 // such a mergeability by where its row holds the outcome already, and its
 // settling of the change's asks with the change's lifecycle.
 func ConversationOps() []OpKind {

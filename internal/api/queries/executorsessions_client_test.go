@@ -50,26 +50,28 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	for i := 1; i <= executor.TranscriptMaxEntries; i++ {
 		texts = append(texts, fmt.Sprintf("message %d", i))
 	}
-	// THE CONVERSATION'S HEAD, the newest of its turns that left a session.
+	// THE CONVERSATION'S HEAD, the newest of its turns that left a session — a
+	// session its turn went on past, stopped once its box was gone.
 	read := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
 	read.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 2}
 	read.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
-		Failure: "the round cap ran out"}
+		Failure: "the round cap ran out", WentOn: true}
 	missing := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
 	missing.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 1}
 	if err := backend.Delete(t.Context(), missing.Object.Key.Name()); err != nil {
 		t.Fatal(err)
 	}
-	// A TURN WHOSE NEWEST CAPTURE WAS NOT KEPT, and whose reply nobody can
-	// say reached the party waiting.
+	// A TURN WHOSE NEWEST CAPTURE, ITS LAST WORD, WAS NOT KEPT, and whose
+	// reply nobody can say reached the party waiting.
 	unkept := sealedSession(t, store, "ana", gzipText(t, openCodeExport("look again")))
 	unkept.Object, unkept.LaunchSeq, unkept.CaptureSeq = objstore.Object{}, 1, 1
 	unkept.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 3}
 	unkept.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, DeliveredTo: "chatlet",
 		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
-			Reason: "refused: past the seat's budget"}, Exhausted: []string{"s-ran-out"}}
+			Reason: "refused: past the seat's budget"}, WentOn: true,
+		LastWord: &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1}, Exhausted: []string{"s-ran-out"}}
 	// A SCHEDULE'S NEWEST FIRE, which the schedule's next fire would continue.
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")

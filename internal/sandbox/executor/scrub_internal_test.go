@@ -167,13 +167,16 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 // GitLab's `PRIVATE-TOKEN`. So are the other names a credential carries: the
 // token that refreshes a login, the authorization a request carries, a
 // client's credentials, an API token, a bearer token, and an OpenID Connect ID
-// token under its own words, however they are joined.
+// token under its own words, however they are joined; and what a Docker config
+// holds for a registry, its `auth` (the user and password, encoded), its
+// identity token and its registry token.
 //
 // A harness counts its tokens and names its sessions under keys of its own,
 // an access key's id names no secret, a cache's key no credential, and a
 // session's expiry is no secret: none of those is one. Nor is a count whose
 // name spells `idtoken` by chance (`paid_tokens`), since an ID token's `id` is
-// a word of its own.
+// a word of its own, nor a commit's author or a server's OAuth settings, since
+// only the whole key is read as `auth`.
 //
 // Mutation: drop any one name from the list — the session's, the refresh
 // token's, the authorization's, the credential's, the API token's, the auth
@@ -182,7 +185,9 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 // headers' and the credentials file's are not; read `token` or `key` anywhere
 // in a key, and every transcript's usage counts, an access key's id and a
 // cache's key are; read an ID token's `id` anywhere, and the paid tokens are,
-// and as no word at all, the ID tokens are not.
+// and as no word at all, the ID tokens are not; drop `auth`, or Docker's
+// identity or registry token, and a Docker config's rows are no credential's,
+// and read `auth` anywhere in a key, and the author and the OAuth settings are.
 func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
 	t.Parallel()
 	for key, want := range map[string]bool{
@@ -207,6 +212,12 @@ func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
 		"OIDC_ID_TOKEN":           true,
 		"Private-Key":             true,
 		"token":                   true,
+		"auth":                    true,
+		"Auth":                    true,
+		"identitytoken":           true,
+		"IdentityToken":           true,
+		"registrytoken":           true,
+		"RegistryToken":           true,
 		"sessionId":               false,
 		"session_id":              false,
 		"input_tokens":            false,
@@ -218,6 +229,10 @@ func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
 		"cache_key":               false,
 		"paid_tokens":             false,
 		"invalid_tokens":          false,
+		"author":                  false,
+		"authors":                 false,
+		"oauth_provider":          false,
+		"auth_method":             false,
 	} {
 		if got := credentialKey(key); got != want {
 			t.Errorf("credentialKey(%q) = %v, want %v", key, got, want)

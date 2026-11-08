@@ -69,7 +69,6 @@ import {
   Button,
   Card,
   EmptyValue,
-  Select,
   Skeleton,
   Tag,
   TableKeyCell,
@@ -101,6 +100,8 @@ import {
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
 import { assisted, authorWords } from "~/lib/attribution.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { ArrangePicker } from "./toolbar/WorkBar.tsx";
 
 /**
  * The window this screen offers.
@@ -330,6 +331,18 @@ export function HistoryView({
     );
   }, [records, state.data, index]);
 
+  // HOW MUCH IS LOADED, and what the pickers' counts are over, said once and
+  // only where a count is: before the first answer the options carry none.
+  const loaded =
+    records.length > 0
+      ? [
+          state.data ? "Counts are over the changes loaded" : "",
+          `Showing the latest ${records.length.toLocaleString()}`,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+
   return (
     <>
       {/* ONLY A SCREEN PUBLISHES TO THE FRAME — the module doc says why, and a
@@ -339,26 +352,30 @@ export function HistoryView({
           clobber under a quieter name. */}
       {!embedded && <PublishCoverage answer={state.data} />}
 
-      <div className="toolbar">
-        <TimeRangePicker {...rangePickerProps(range, "Window")} />
-        {/* THE DIMENSIONS, as pickers in the one bar — see the file's doc. */}
-        <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
-        <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
-        {/* SAID ONCE, and only where a count is: before the first answer the
-            options carry none. */}
-        {state.data && records.length > 0 && (
-          <span className="t-caption">Counts are over the changes loaded</span>
-        )}
-        <span className="spacer" />
-        {/* THE LENS STATES ITS OWN ROWS' COVERAGE and the screen does not:
-            the screen's went to the state bar one element up. */}
-        {embedded && <Coverage answer={state.data} />}
-        {records.length > 0 && (
-          <span className="work-summary">
-            {`Showing the latest ${records.length.toLocaleString()}`}
-            {more && (
-              <>
-                {" · "}
+      {/* THE WORK LIST'S ROW (`toolbar/WorkBar.tsx`): the window, then the
+          dimensions as the kit's quiet pickers with their captions inside, each
+          group one cluster so a narrow row wraps whole groups, and how much is
+          loaded quiet at the far end. */}
+      <PageToolbar className="work-bar">
+        <div className="work-bar-draw">
+          <TimeRangePicker size="sm" {...rangePickerProps(range, "Window")} />
+        </div>
+        <div className="work-chips">
+          <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
+          <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
+        </div>
+        <div className="work-bar-trail">
+          <span className="work-bar-end">
+            <span className="work-summary">
+              {/* THE LENS STATES ITS OWN ROWS' COVERAGE and the screen does not:
+                  the screen's went to the state bar one element up. */}
+              {embedded && <Coverage answer={state.data} />}
+              {loaded && (
+                <span className="truncate" title={loaded}>
+                  {loaded}
+                </span>
+              )}
+              {more && records.length > 0 && (
                 <Button
                   size="small"
                   variant="ghost"
@@ -367,11 +384,11 @@ export function HistoryView({
                 >
                   Load older
                 </Button>
-              </>
-            )}
+              )}
+            </span>
           </span>
-        )}
-      </div>
+        </div>
+      </PageToolbar>
 
       <Card>
         <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />}>
@@ -492,26 +509,23 @@ function FacetPicker({
   onChange: (next: string) => void;
 }) {
   return (
-    <label className="work-arrange-row">
-      <span className="t-caption">{name}</span>
-      <Select
-        size="sm"
-        width="auto"
-        value={value}
-        ariaLabel={name}
-        active={value !== ""}
-        onChange={(next) => onChange(String(next))}
-        options={[
-          { value: "", label: all },
-          ...facets.map((f) => ({
-            value: f.value,
-            label: f.label,
-            text: f.label,
-            description: f.count === null ? undefined : plural(f.count, "change"),
-          })),
-        ]}
-      />
-    </label>
+    <ArrangePicker
+      inline
+      caption={name}
+      value={value}
+      ariaLabel={name}
+      active={value !== ""}
+      onChange={(next) => onChange(String(next))}
+      options={[
+        { value: "", label: all },
+        ...facets.map((f) => ({
+          value: f.value,
+          label: f.label,
+          text: f.label,
+          description: f.count === null ? undefined : plural(f.count, "change"),
+        })),
+      ]}
+    />
   );
 }
 

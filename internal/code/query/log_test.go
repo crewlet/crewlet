@@ -389,7 +389,7 @@ func TestALogUsesTheChangedPathFilters(t *testing.T) {
 	}
 }
 
-// graphed is the i-th git node's copy of repo, brought to the log's head once
+// graphed is the i-th Gitlet node's copy of repo, brought to the log's head once
 // its maintenance has written the copy's commit-graph — its own, or the tip
 // over an installed chain — answering its directory.
 func (x *fixture) graphed(i int, repo string) string {

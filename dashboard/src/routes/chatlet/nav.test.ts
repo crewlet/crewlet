@@ -9,6 +9,7 @@ import { parseHash } from "~/app/router.tsx";
 import { CHAT_VIEWS, ID_SHAPE } from "~/app/routes.ts";
 
 import {
+  openRoomOf,
   paneAfter,
   paneOf,
   paneParam,
@@ -42,6 +43,9 @@ describe("a place and its pane round-trip through the address", () => {
     { kind: "room", id: ROOM },
     { kind: "room", id: ROOM, message: ROOT },
     { kind: "activity" },
+    { kind: "activity", item: "r:m-1:ada:🎉" },
+    { kind: "dms" },
+    { kind: "dms", room: ROOM },
     { kind: "threads" },
     { kind: "drafts" },
     { kind: "saved" },
@@ -119,6 +123,16 @@ describe("which pane survives a move", () => {
     // Mutation: return the pane unconditionally and both go red.
     expect(paneAfter(thread, { kind: "room", id: OTHER })).toBeNull();
     expect(paneAfter(thread, { kind: "threads" })).toBeNull();
+  });
+
+  test("a conversation open in Direct messages is the open room, so its pane stays with it", () => {
+    expect(openRoomOf({ kind: "dms", room: ROOM })).toBe(ROOM);
+    expect(openRoomOf({ kind: "dms" })).toBe("");
+    expect(openRoomOf({ kind: "room", id: ROOM })).toBe(ROOM);
+    expect(openRoomOf({ kind: "activity", item: "m:x" })).toBe("");
+    expect(paneAfter(thread, { kind: "dms", room: ROOM })).toBe(thread);
+    expect(paneAfter(thread, { kind: "dms", room: OTHER })).toBeNull();
+    expect(paneAfter(thread, { kind: "dms" })).toBeNull();
   });
 
   test("a profile is nobody's room, so it stays wherever the reader goes", () => {

@@ -507,16 +507,20 @@ func TestTheSeatsHoldingRowsAreListed(t *testing.T) {
 // live, its row its begin's; at all, once it ended; one whose end took its older
 // capture off because its newest was not kept, saying which capture and why;
 // and one whose session the seat's budget released, whose end named an unkept
-// capture that had landed first and so released nothing itself. A row that
-// names a session says nothing.
+// capture that had landed first and so released nothing itself — or whose end
+// said the turn went on past the session, which kept it beside a newer capture
+// not kept, until the budget took it: said as the budget's, with that newer
+// capture. A row that names a session says nothing.
 //
 // Mutation: read every released row as the budget's, ignore the place the
-// unkept capture names, or tell a live turn's nothing as an ended one's, and a
-// case goes red.
+// unkept capture names, tell a live turn's nothing as an ended one's, or tell
+// the session its end kept as one its unkept capture took off, and a case goes
+// red.
 func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
-	nothing, begun, stale, landed, newest := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
+	nothing, begun, stale, landed, wentOn, newest := newTurn(), newTurn(), newTurn(), newTurn(), newTurn(),
+		newTurn()
 	e.end(ending("ana", "chat:a", nothing, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}))
 	e.begin(beginning(e.head("ana", "chat:b"), "ana", "chat:b", begun, ""))
 	e.capture(capturing("ana", "chat:c", stale, 1, 1, 10, budget))
@@ -532,6 +536,17 @@ func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 	if s, _ := e.session("ana", landed); !s.HasObject() {
 		t.Fatalf("the end released a session whose unkept capture had landed: %+v", s)
 	}
+	// AN END THAT SAYS ITS TURN WENT ON keeps its session beside the newer
+	// capture it names unkept — the capture before it making room by taking
+	// the oldest ended session, the one above — and the next capture past the
+	// budget takes it.
+	e.capture(capturing("ana", "chat:f", wentOn, 1, 1, 60, tight))
+	e.end(ending("ana", "chat:f", wentOn, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+		WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the seat's budget is spent"}}))
+	if s, _ := e.session("ana", wentOn); !s.HasObject() || s.Unkept() == nil {
+		t.Fatalf("the premise: the end that said its turn went on is %+v, want it keeping its session "+
+			"beside the newer capture not kept", s)
+	}
 	e.capture(capturing("ana", "chat:e", newest, 1, 1, 60, tight))
 
 	for name, tc := range map[string]struct {
@@ -545,7 +560,11 @@ func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 		"a turn whose newest capture was not kept": {turn: stale,
 			why: "(launch 2, capture 1) was not kept: the object store's reservation is spent"},
 		"a session the seat's budget released": {turn: landed, why: "the seat's session budget released"},
-		"a turn that names its session":        {turn: newest},
+		"a session its turn went on past that the seat's budget released": {turn: wentOn,
+			why: "the seat's session budget released this session's object to make room for newer ones — its " +
+				"turn had gone on past it, and its newer capture (launch 2, capture 1) was not kept: the " +
+				"seat's budget is spent"},
+		"a turn that names its session": {turn: newest},
 	} {
 		s, found := e.session("ana", tc.turn)
 		switch {

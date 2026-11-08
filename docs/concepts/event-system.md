@@ -616,7 +616,7 @@ code_mirror_pushed         # a repository's home pushed it to its push
                            # waiting_count), so a first push of a large
                            # repository stays one event the queue takes.
                            # Published once a push that
-                           # moved something, by the home git node that
+                           # moved something, by the home Gitlet node that
                            # pushed; a failed push is no event (its home
                            # raises code_mirror_failing). STORED, NOT FED:
                            # the audit of what the company published
@@ -629,7 +629,7 @@ code_imported              # a repository's import ended, whole or short of
                            # ended — refs, live bytes, default branch — the
                            # import's error where it ended short, and the
                            # end's position on the code log. Published ONCE
-                           # an import, by the home git node that proposed
+                           # an import, by the home Gitlet node that proposed
                            # the end and heard it applied; a sync is none.
                            # STORED, NOT FED: where a repository came from;
                            # its row keeps only its latest import

@@ -33,7 +33,7 @@ import (
 // source is a repository at another host: a bare repository served over
 // smart HTTP — git's own http-backend, as a forge serves one — behind TLS,
 // and a work tree its history is made in. The process's SSL_CERT_FILE names
-// the authority that signed the server's certificate, which is how a git
+// the authority that signed the server's certificate, which is how a Gitlet
 // node's git trusts a source (gitproc.ResolveRemote), so no case using one
 // runs in parallel.
 type source struct {
@@ -188,7 +188,7 @@ func (a *announced) all() []types.CodeMirrorPushed {
 	return slices.Clone(a.pushed)
 }
 
-// harness is one data node and its git node, a source at another host, and
+// harness is one data node and its Gitlet node, a source at another host, and
 // the clock its workers read.
 type harness struct {
 	t      *testing.T
@@ -199,9 +199,9 @@ type harness struct {
 	limits code.Limits
 	events announced
 	// dial is what the workers dial a URL with: nil for the source's own
-	// dial, as Tier A's git.import_allow_private lets a node dial loopback.
+	// dial, as Tier A's gitlet.import_allow_private lets a node dial loopback.
 	dial mirror.Dial
-	// git is the git pool the workers run in: nil for the git node's own.
+	// git is the git pool the workers run in: nil for the Gitlet node's own.
 	git mirror.Pool
 
 	mu  sync.Mutex
@@ -234,10 +234,10 @@ func (h *harness) advance(d time.Duration) {
 	h.mu.Unlock()
 }
 
-// mirrors is the git node's worker as the engine builds it — the fleet's
-// one git node's cache and pool, the fleet's object store, the fixture chart
+// mirrors is the Gitlet node's worker as the engine builds it — the fleet's
+// one Gitlet node's cache and pool, the fleet's object store, the fixture chart
 // a push mirror's seat is judged against and the stream its pushes are
-// announced on — dialing the source as Tier A's git.import_allow_private lets
+// announced on — dialing the source as Tier A's gitlet.import_allow_private lets
 // a node dial loopback, or as the case's dial does. Each call is a fresh
 // worker: what it knows of a repository is the rows'.
 func (h *harness) mirrors() *mirror.Mirrors {
@@ -1158,7 +1158,7 @@ func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
 	}
 }
 
-// busyLane is the git node's pool with every refusal of a maintenance slot
+// busyLane is the Gitlet node's pool with every refusal of a maintenance slot
 // told on refused: the moment an attempt's cut finds the lane full.
 type busyLane struct {
 	*gitproc.Pool

@@ -133,7 +133,7 @@ func TestWorkletNoticesNeedWorklet(t *testing.T) {
 // red; floor the card read at the caller's own ask — it is asked with no
 // floor, red; leave the card out of its notice — the page carries the bare
 // change, red.
-func TestTheCodeHostIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
+func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
 	page := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9}

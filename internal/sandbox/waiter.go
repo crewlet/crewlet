@@ -207,6 +207,14 @@ type WaiterOptions struct {
 	// keepalive, to bring up to date what the box holds that expires while
 	// the job runs ([RefreshFunc]). Nil refreshes nothing.
 	Refresh RefreshFunc
+
+	// Record is where a refresh of a box this waiter polls records each
+	// token before it writes it there: the coordinator's
+	// [Coordinator.RecordHanded] in the engine, which adds it to the sealed
+	// set beside the job's row that every capture of the job's session is
+	// scrubbed by. REQUIRED WITH Refresh, since a token the refresh wrote that
+	// nothing recorded would be a live secret no capture is scrubbed of.
+	Record func(ctx context.Context, run PendingRun, value string, expires time.Time) error
 }
 
 // RefreshFunc brings one box's expiring credentials up to date for the job
@@ -227,11 +235,26 @@ type WaiterOptions struct {
 // starts ([CoordinatorOptions.Refresh]). A fresh box needs no refresh; its
 // setup has just written every file.
 //
+// EVERY TOKEN IT WRITES IS RECORDED FIRST, through record: a value the launch
+// never saw is otherwise one no capture of the job's session is scrubbed of,
+// and an AWS session's token is printed bare by a transcript, which no shape
+// names. On the poll, record adds it to the sealed set beside the job's row
+// ([Coordinator.RecordHanded]); at a launch, to the set the job is sealed
+// with. A token record refuses is not written, and the poll after asks again.
+//
 // It decides nothing about the run and reports nothing to it: a refresh that
 // fails is the implementation's to log, and the job carries on with what it
 // holds. manager is the manager the poll, or the launch, reached the box
 // through.
-type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox)
+type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox, record RecordHanded)
+
+// RecordHanded records value — a token a refresh is about to write into the
+// box, which its issuer said lapses at expires (zero for never) — among what
+// the job's box was handed ([HandedSecrets]), for every capture of the job's
+// session to be scrubbed of, whole and by every string it holds. Nil is a
+// token the refresh may write; an error is one it does not write, and never
+// names the value. See [RefreshFunc].
+type RecordHanded func(ctx context.Context, value string, expires time.Time) error
 
 // Waiter is the completion poll and pause reaper for executors' detached jobs.
 //
@@ -280,6 +303,7 @@ type Waiter struct {
 	dutyTTL   time.Duration
 	now       func() time.Time
 	refresh   RefreshFunc
+	record    func(ctx context.Context, run PendingRun, value string, expires time.Time) error
 
 	// pollBound is [pollBound], held on the value so a test can watch a box
 	// at its bound without waiting a minute for it.
@@ -353,6 +377,9 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 	case opts.Drives == DrivesLocal && opts.ClaimDuty != nil:
 		return nil, errors.New("sandbox: a waiter of one node's own boxes claims no duty: no " +
 			"other node can reach those boxes, so none can poll them beside it")
+	case opts.Refresh != nil && opts.Record == nil:
+		return nil, errors.New("sandbox: a waiter that refreshes the boxes it polls records each token " +
+			"before it is written there (WaiterOptions.Record), or no capture of the job is scrubbed of it")
 	}
 	w := &Waiter{
 		queue:     opts.Queue,
@@ -366,6 +393,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		dutyTTL:   opts.DutyTTL,
 		now:       opts.Now,
 		refresh:   opts.Refresh,
+		record:    opts.Record,
 		pollBound: pollBound,
 		slots:     make(chan struct{}, MaxConcurrentPolls),
 		failures:  map[string]connectStreak{},
@@ -1024,7 +1052,11 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 		log.DebugContext(ctx, "sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	if w.refresh != nil {
-		w.refresh(ctx, manager, run, box)
+		// RECORDED BESIDE THE JOB'S ROW before it is written, against the
+		// job this poll listed: a row that has moved on refuses it.
+		w.refresh(ctx, manager, run, box, func(ctx context.Context, value string, expires time.Time) error {
+			return w.record(ctx, run, value, expires)
+		})
 	}
 
 	runner, err := manager.RunnerFor(run.Harness)

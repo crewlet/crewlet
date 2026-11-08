@@ -41,7 +41,7 @@ const importLimit = 1048576
 const importRepo = "    - name: web\n      owner: {seat: founder}\n"
 
 // importNode is a node declaring importRepo under importLimits.
-func importNode(t *testing.T) codeHost {
+func importNode(t *testing.T) gitletHost {
 	t.Helper()
 	return codeNodeWith(t, codeDeclaration{repos: importRepo, settings: importLimits}, nil)
 }
@@ -132,14 +132,14 @@ func noise(seed uint64, n int) string {
 
 // importInto runs `crewlet gitlet import url web -local` against h with the
 // hermetic git, and any more arguments.
-func (h codeHost) importInto(t *testing.T, url string, more ...string) (string, string, error) {
+func (h gitletHost) importInto(t *testing.T, url string, more ...string) (string, string, error) {
 	t.Helper()
 	return cli(t, append([]string{"gitlet", "import", url, "web", h.cfg, "-local", "-git", hermeticGit(t)},
 		more...)...)
 }
 
 // pushes is how many pushes web's history holds, read at the log's head.
-func (h codeHost) pushes(t *testing.T) int {
+func (h gitletHost) pushes(t *testing.T) int {
 	t.Helper()
 	status, body := h.node.get(t, "/gitlet/repos/web/pushes?limit=200&read_level=linearizable")
 	var page struct {
@@ -164,7 +164,7 @@ type importPush struct {
 
 // history is web's pushes, OLDEST FIRST — the order an import made them —
 // read at the log's head.
-func (h codeHost) history(t *testing.T) []importPush {
+func (h gitletHost) history(t *testing.T) []importPush {
 	t.Helper()
 	status, body := h.node.get(t, "/gitlet/repos/web/pushes?limit=200&read_level=linearizable")
 	var page struct {
@@ -178,7 +178,7 @@ func (h codeHost) history(t *testing.T) []importPush {
 }
 
 // liveBytes is what web's packs hold, read at the log's head.
-func (h codeHost) liveBytes(t *testing.T) int64 {
+func (h gitletHost) liveBytes(t *testing.T) int64 {
 	t.Helper()
 	status, body := h.node.get(t, "/gitlet/repos/web?read_level=linearizable")
 	var detail struct {
@@ -195,7 +195,7 @@ func (h codeHost) liveBytes(t *testing.T) int64 {
 // served is every ref web serves — peeled tags included, HEAD left out, which
 // is the repository's default branch rather than anything an import moves —
 // as a person's git lists it.
-func (h codeHost) served(t *testing.T) map[string]string {
+func (h gitletHost) served(t *testing.T) map[string]string {
 	t.Helper()
 	refs := codetest.PersonWithToken(t, h.token).LsRemote(h.base+"/git/web.git", 2)
 	delete(refs, "HEAD")
@@ -217,7 +217,7 @@ func sourceRefs(t *testing.T, git *gittest.Client, bare string) map[string]strin
 }
 
 // wantSameRefs fails t unless web serves exactly the source's refs.
-func wantSameRefs(t *testing.T, h codeHost, git *gittest.Client, bare string) {
+func wantSameRefs(t *testing.T, h gitletHost, git *gittest.Client, bare string) {
 	t.Helper()
 	want, got := sourceRefs(t, git, bare), h.served(t)
 	if !maps.Equal(want, got) {
@@ -1147,7 +1147,7 @@ func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 // AN IMPORT REFUSES, BEFORE CLONING, REFS GITLET CANNOT HOLD: a branch
 // whose name is past the 255 bytes a ref may be is git's to hold and never
 // Gitlet's, so the source's advertisement alone refuses it, naming it.
-func TestImportRefusesRefsTheCodeHostCannotHoldBeforeCloning(t *testing.T) {
+func TestImportRefusesRefsGitletCannotHoldBeforeCloning(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
 	var hist sourceHistory
@@ -1304,7 +1304,7 @@ func TestGitsOutputIsReadALineAtATime(t *testing.T) {
 // token the credential its environment holds, and a case's own say over the
 // run first: tune changes the run its command line prepared — a bound the case scales
 // down to what a test-sized history can reach.
-func (h codeHost) runImport(t *testing.T, url, git string, tune func(*importer)) (string, string, error) {
+func (h gitletHost) runImport(t *testing.T, url, git string, tune func(*importer)) (string, string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	call, err := readImport(tokenEnviron(h.token), []string{url, "web", h.cfg, "-local", "-git", git}, &errOut)
@@ -2020,7 +2020,7 @@ func TestImportReportsARefusedStepWithoutWaitingForTheNextMeasurement(t *testing
 }
 
 // AN IMPORT'S PROBE QUOTES GIT, AND NEVER SAYS WHAT GIT DID NOT. A node that
-// serves no git routes — its roles leave git out — answers the probe's push
+// serves no git routes — its roles leave gitlet out — answers the probe's push
 // with git's own "not found": the import stops before downloading anything
 // and says what it asked and what git answered, never that the token was
 // refused.
@@ -2062,7 +2062,7 @@ func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	_, url, _ := hist.load(t)
 
 	_, _, err := cliIn(t, tokenEnviron(token), "gitlet", "import", url, "web", "-local", "-api", n.base, "-git", hermeticGit(t))
-	if err == nil || !strings.Contains(err.Error(), "code.native is not set") ||
+	if err == nil || !strings.Contains(err.Error(), "code.backend is not gitlet") ||
 		strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an import into a company hosting no code = %v, want the node's not_hosted and no code.repos", err)
 	}
