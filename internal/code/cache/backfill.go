@@ -303,8 +303,8 @@ func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool
 // cache's lifetime, which Stop ends — and answers what it did. A step that
 // fails opens or widens its repository's retry window, and one that succeeds
 // closes it (entry.bfRetryAt); a step its context ended does neither. And
-// whatever it did, its copy is marked once it has (backfillDirty): a step is
-// a change to the copy's work.
+// whatever it did, its copy is marked once it has (backfillDirty), in the
+// hold that moves its window: a step is a change to the copy's work.
 func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	t, next := c.nextBackfill()
 	if t == nil {
@@ -327,9 +327,9 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 		case done.did && sctx.Err() == nil:
 			t.e.bfFailures, t.e.bfRetryAt = 0, time.Time{}
 		}
+		c.backfillDirty(t.e)
 		t.e.mu.Unlock()
 		c.trash(gone)
-		c.backfillDirty(t.e)
 		done.work, done.repo = t.work, t.e.id
 	}()
 	switch t.work {
@@ -605,6 +605,7 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 			c.countCheck(kind, checkSound, triggerFirst)
 			t.e.mu.Lock()
 			vouch(t.inc, rel, id)
+			c.backfillDirty(t.e)
 			t.e.mu.Unlock()
 			continue
 		case err != nil:
@@ -619,6 +620,7 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 			t.inc.repair.found = map[string]checkedFile{}
 		}
 		t.inc.repair.found[rel] = checkedFile{kind: kind, rel: rel, id: id, trigger: triggerFirst}
+		c.backfillDirty(t.e)
 		if t.e.current == t.inc {
 			c.repairRound(t.e)
 		}

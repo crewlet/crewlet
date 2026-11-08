@@ -1062,7 +1062,7 @@ func TestTheExecutorFacadesAskExactlyTheExecutorOperations(t *testing.T) {
 		want   func(*opSpec) bool
 	}{
 		{r.ExecutorReads(), func(s *opSpec) bool { return s.domain == executorDomain && s.class == opRead }},
-		{r.ExecutorWrites(), func(s *opSpec) bool { return s.origin == originEngine }},
+		{r.ExecutorWrites(), func(s *opSpec) bool { return s.origin == originEngine && s.domain == executorDomain }},
 	} {
 		v := reflect.ValueOf(tc.facade)
 		got := map[string]bool{}

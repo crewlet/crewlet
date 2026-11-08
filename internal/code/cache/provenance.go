@@ -875,10 +875,9 @@ func (c *Cache) WantHistory(repoID string) {
 		return
 	}
 	e.mu.Lock()
-	was := e.wantHistory
-	e.wantHistory = true
-	e.mu.Unlock()
-	if !was {
+	defer e.mu.Unlock()
+	if !e.wantHistory {
+		e.wantHistory = true
 		c.backfillDirty(e)
 	}
 }
