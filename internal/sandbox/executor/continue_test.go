@@ -458,6 +458,127 @@ func TestATranscriptCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 	}
 }
 
+// tornThreads are the files a [tornThreadsHarness] leaves under its session's
+// sidecar directory, by their path there: as it left each, and as a harness
+// resuming the session must read it.
+var tornThreads = map[string]struct{ left, resumed string }{
+	"subagents/agent-1.jsonl": {left: tornWhole + `{"type":"assistant","message":{"content":[{"type":"tool_us`,
+		resumed: tornWhole},
+	"subagents/workflow/agent-2.jsonl": {left: tornWhole + `{"type":"user","n":`, resumed: tornWhole},
+	"subagents/agent-3.jsonl":          {left: tornWhole, resumed: tornWhole},
+	"subagents/agent-4.jsonl":          {left: `{"type":"us`, resumed: `{"type":"us`},
+	"tool-results/out.txt": {left: "spilled\nand a last line with no newline",
+		resumed: "spilled\nand a last line with no newline"},
+}
+
+// tornWhole is the whole lines a torn thread holds before its torn one.
+const tornWhole = `{"type":"user","n":1}` + "\n" + `{"type":"assistant","n":2}` + "\n"
+
+// tornThreadsHarness is [sessionHarness] killed, as it were, while its
+// subagents appended to their threads: it leaves [tornThreads] under its
+// session's sidecar directory, each written as it ends.
+func tornThreadsHarness(release string) string {
+	var b strings.Builder
+	for name, thread := range tornThreads {
+		b.WriteString(`mkdir -p "$(dirname "$p/$s/` + name + `")" && printf '%s' ` + shQuote(thread.left) +
+			` > "$p/$s/` + name + `"` + "\n")
+	}
+	return strings.Replace(sessionHarness(release), `printf '{"type":"result"`, b.String()+`printf '{"type":"result"`, 1)
+}
+
+// threadsSeenHarness is [sessionHarness] that first copies the session's
+// sidecar directory, as its box handed it over, to `seen` in the box's home —
+// what a resumed harness reads of its subagents' threads before it writes a
+// line of its own.
+func threadsSeenHarness(release string) string {
+	return strings.Replace(sessionHarness(release), `mkdir -p "$p/$s/subagents"`,
+		`cp -R "$p/$s" "$HOME/seen" 2> /dev/null; mkdir -p "$p/$s/subagents"`, 1)
+}
+
+// A RESTORE CUTS A TORN LAST LINE OF EVERY SUBAGENT THREAD, not only of the
+// session's transcript. A harness cut off while its subagents appended to their
+// threads — or a session packed while they did — ends those threads mid-line,
+// and resumed as they are, the record the harness next writes to such a thread
+// runs into its torn line and is lost with it (measured on Claude Code 2.1.310,
+// whose resume takes a thread cut back to its last whole line). So every
+// resume — of a session carried into a fresh box, and of the copy the box's own
+// last run left — has every `.jsonl` under the session's sidecar directory, at
+// any depth, cut back to its last whole line before its harness resumes it. A
+// thread that ends whole, a thread with no whole line at all — which 2.1.310
+// continues from nothing a restore could make of it (measured: a fragment, an
+// emptied file and a removed one alike are no transcript of the agent to it),
+// so no record is ever written onto its fragment — and a file that is no
+// thread are left as they are, the last line of a spilled result with no
+// newline among them.
+//
+// Mutation: cut the session's own transcript alone, as the restore did, only
+// the threads one level down, or only a session restored from an archive, and
+// a torn thread is resumed as it was; empty a thread with no whole line, or
+// remove it, and its row goes red; cut every file rather than every thread,
+// and the spilled result loses its last line.
+func TestARestoreCutsATornLastLineOfEverySubagentThread(t *testing.T) {
+	t.Parallel()
+	t.Run("carried into a fresh box", func(t *testing.T) {
+		t.Parallel()
+		first, a := realBox(t)
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", tornThreadsHarness("2.1.310"))
+		_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
+		described, body, err := first.OpenCapture(t.Context(), a)
+		if err != nil || body == nil {
+			t.Fatalf("OpenCapture = %v, %v", body, err)
+		}
+		defer func() { _ = body.Close() }()
+
+		second, b := realBox(t)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", threadsSeenHarness("2.1.310"))
+		_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+			Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
+		if !res.Continued {
+			t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		threadsResumed(t, b)
+	})
+	t.Run("resumed in the box that holds it", func(t *testing.T) {
+		t.Parallel()
+		runner, a := realBox(t)
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", tornThreadsHarness("2.1.310"))
+		_, ran := runToEnd(t, runner, a, sandbox.RunRequest{Brief: "begin"})
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", threadsSeenHarness("2.1.310"))
+		_, res := runToEnd(t, runner, a, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
+		if !res.Continued {
+			t.Fatalf("the box's own copy of the session was not continued:\n%s", boxFile(t, a, paths(a).Err()))
+		}
+		threadsResumed(t, a)
+	})
+}
+
+// threadsResumed checks what the harness resumed in b read of the session's
+// sidecar directory against [tornThreads]: each file there, as it must read it.
+func threadsResumed(t *testing.T, b sandbox.Sandbox) {
+	t.Helper()
+	for name, thread := range tornThreads {
+		seen := b.Home() + "/seen/" + name
+		if !boxHas(t, b, seen) {
+			t.Errorf("%s did not reach the resumed harness at all", name)
+			continue
+		}
+		if got := boxFile(t, b, seen); got != thread.resumed {
+			t.Errorf("%s reached the resumed harness as %q, want %q", name, got, thread.resumed)
+		}
+	}
+}
+
+// boxHas reports whether anything is at path in box, a file, a directory or a
+// link.
+func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
+	t.Helper()
+	res, err := box.Exec(t.Context(), "[ -e "+shQuote(path)+" ] || [ -L "+shQuote(path)+" ]", sandbox.ExecOptions{})
+	if err != nil {
+		t.Fatalf("asking the box for %s: %v", path, err)
+	}
+	return res.ExitCode == 0
+}
+
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW AND LEAVES ITS
 // INTERRUPTED TURN AS IT IS. Every run compacts at the window of its model
 // (sandbox.ClaudeCodeWindow), whatever the seat's environment set: a window of
