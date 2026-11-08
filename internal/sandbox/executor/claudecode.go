@@ -617,7 +617,8 @@ type packAt struct {
 
 	// working says the pack is made beside a harness that may still be
 	// working, which may rewrite a file as tar reads it: the pack is held to
-	// [claudeHeldTar]'s rule. False is the run's own end, its harness exited.
+	// [claudeHeldTar]'s rule. False is a pack made once the harness is gone:
+	// the run's own end, and one made on demand of a job that is over.
 	working bool
 }
 
@@ -627,11 +628,13 @@ type packAt struct {
 // a save — so each is the same archive of the same files, and each keeps its
 // digest.
 //
-// A PACK AT THE RUN'S OWN END takes GNU tar's exit 1 with "file changed as we
-// read it" as a whole archive of what it read: its harness has exited, so the
-// only writer left is one it started that outlived it. Every other pack is
-// made where the harness may still be writing, and is held to
-// [claudeHeldTar]'s rule instead, which reads none of tar's words.
+// A PACK MADE ONCE ITS HARNESS IS GONE — the run's own end, and one on demand
+// of a job that is over — takes GNU tar's exit 1 with "file changed as we
+// read it" as a whole archive of what it read: the only writer left is one
+// the harness started that outlived it. A pack of a job that may still be
+// working — one its box would not end, and a save — is made where the harness
+// may still be writing, and is held to [claudeHeldTar]'s rule instead, which
+// reads none of tar's words.
 func claudePack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -1180,15 +1183,17 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // where it did and no archive was made, its error stream saying why
 // ([Runner.PackCapture]).
 //
-// HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]),
-// whatever the job's state: a pack on demand is of a job that never packed —
-// killed before its script could, lost with its engine — or of one its box
-// would not end, whose harness may still be writing, and the engine cannot
-// tell the two from the box. A harness that is gone changes nothing, so the
-// rule costs it the wait for the box's clock and passes.
-func (ClaudeCode) Pack(paths Paths, session string) string {
+// HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
+// working says the job may still be working — one its box would not end, its
+// harness perhaps writing as tar reads — and to the run's own end's where the
+// job is over: killed before its script could pack, lost with its engine, its
+// own pack failed. The take knows which ([sandbox.SessionTake.Pack]); a job
+// that is over has no writer left to hold a pack against, and the working
+// rule would cost it the wait for the box's clock, and refuse a file a box
+// whose clock ran ahead of this one's stamped later than this box's now.
+func (ClaudeCode) Pack(paths Paths, session string, working bool) string {
 	return claudeOnDemand(paths, session,
-		packAt{staged: paths.SessionPackStaging(), dest: paths.SessionCapture(), working: true})
+		packAt{staged: paths.SessionPackStaging(), dest: paths.SessionCapture(), working: working})
 }
 
 // PackSave packs a save of session now, beside a harness that may still be

@@ -250,10 +250,12 @@ type carrier interface {
 	// Pack is the script that packs session NOW, as the run's script packs
 	// it once its harness exits — the same pack, into
 	// [Paths.SessionPackStaging], its digest kept the same way — for a job
-	// that never got to ([Runner.PackCapture]), which may be one its box
-	// would not end, its harness still working. Run in a login shell with
-	// the box's bin directory first on its PATH, as the run's wrapper runs.
-	Pack(paths Paths, session string) string
+	// that never got to ([Runner.PackCapture]): one that is over, or, where
+	// working says so, one its box would not end, its harness still working,
+	// which a harness whose files a pack reads beside it holds to a stricter
+	// rule ([claudeHeldTar]). Run in a login shell with the box's bin
+	// directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session string, working bool) string
 
 	// layout is how the harness's archive is laid out, which is what the
 	// scrub a capture streams it through has to read and write it as

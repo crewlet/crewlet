@@ -210,7 +210,8 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 
 // A SAVE OF A FILE REWRITTEN WHILE IT WAS PACKED FAILS, AND SAYS WHICH CHECK
 // REFUSED IT — and so does every pack made beside a harness that may still
-// work, a job its box would not end packed on demand. Each case is a write the
+// work, a take of a job its box would not end, which packs it on demand
+// (sandbox.SessionTake.Pack). Each case is a write the
 // harness makes as tar reads its session, made at that moment by the case's own
 // writer: a trim's rename over the transcript (its inode), a subagent's thread
 // cut in place (a shrink), a task file touched (a file that is no transcript,
@@ -229,7 +230,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 // archive before the checks, and a case goes red; drop the wait for the box's
 // find to see the clock move past the marker, and the task file touched within
 // the marker's second reads to a whole-second find as written before it; hold
-// the pack on demand to the run's own end's rule and its cases do.
+// the take of a job still working to the run's own end's rule and its cases do.
 func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -330,11 +331,11 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 				return err
 			},
 			dest: func(p executor.Paths) string { return p.SessionSave(takerA) }},
-		{name: "a pack on demand",
+		{name: "a take of a job still working",
 			make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-				_, body, err := runner.PackCapture(t.Context(), b)
-				if body != nil {
-					_ = body.Close()
+				taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+				if taken.Body != nil {
+					_ = taken.Body.Close()
 				}
 				return err
 			},
@@ -434,6 +435,53 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A PACK MADE ONCE ITS HARNESS IS GONE KEEPS THE RULE THE RUN'S OWN END PACKS
+// BY. No harness is left to write under it, so neither the run's own end nor a
+// take of a job that is over whose script left no archive waits on the box's
+// clock or refuses a file written as it packed — here the task file, touched
+// once tar has read the session, as a process the harness started and that
+// outlived it may touch it — and each lands where the job's final archive is
+// read. (The take packs such a job by tar run beside the configuration
+// directory, never in it, so the case's writer names the file whole.)
+//
+// Mutation: hold the run's own end to the rule of a pack beside a working
+// harness, or route a take of a job that is over to it, and that pack is
+// refused.
+func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
+	t.Parallel()
+	t.Run("the run's own end", func(t *testing.T) {
+		t.Parallel()
+		runner, b := sessionBox(t, "2.1.310")
+		p := paths(b)
+		// WHICHEVER SESSION THE RUN FILES: the runner names it as the run starts.
+		writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
+			afterTar(`for f in `+shQuote(p.ClaudeConfigDir()+"/tasks")+`/*/1.json; do touch "$f"; done`)))
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+		if ran.Captured == nil || !boxHas(t, b, p.SessionCapture()) {
+			t.Fatalf("the run's own end packed no session beside a file written as it packed:\n%s",
+				boxFile(t, b, p.Err()))
+		}
+	})
+	t.Run("a take of a job that is over, whose script left no archive", func(t *testing.T) {
+		t.Parallel()
+		runner, b := sessionBox(t, "2.1.310")
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+		p := paths(b)
+		forgetCapture(t, b)
+		writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
+			afterTar(`touch `+shQuote(p.ClaudeConfigDir()+"/"+filesOf(ran.SessionID).task))))
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+		if err != nil || taken.Body == nil {
+			t.Fatalf("the take of a job that is over = %+v, %v; want its session packed as its own end packs it",
+				taken, err)
+		}
+		_ = taken.Body.Close()
+		if taken.Archive.Path != p.SessionCapture() {
+			t.Errorf("the take packed to %s, want the job's capture %s", taken.Archive.Path, p.SessionCapture())
+		}
+	})
 }
 
 // A PACK BESIDE A WORKING HARNESS FAILS WHERE ITS BOX'S CLOCK NEVER MOVES,

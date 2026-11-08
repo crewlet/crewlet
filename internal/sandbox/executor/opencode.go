@@ -305,8 +305,10 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // exports its session through the run's own server on its way out
 // ([openCodeCapture]), so this pack never runs beside a server an end could
 // stop. The cap's take once packed its job as it worked, and so met that busy
-// database beside the run's live server.
-func (OpenCode) Pack(paths Paths, session string) string {
+// database beside the run's live server. Whether the job may still be working
+// changes nothing of the export, which holds only the messages that settled
+// either way, so the pack reads nothing of it.
+func (OpenCode) Pack(paths Paths, session string, _ bool) string {
 	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+

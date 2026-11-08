@@ -62,8 +62,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// A JOB THAT IS OVER IS TAKEN AS ITS SCRIPT LEFT IT where its script
 	// packed it, and packed now where it did not — one that crashed before
 	// its pack, one killed part way through it, one lost with its engine —
-	// by the same pack; a job still working is packed now as it stands. A
-	// SAVE is its taker's own archive and nothing else: never the job's
+	// by the same pack, under the rule its own end packs by, its harness
+	// gone; a job still working is packed now as it stands, held to the rule
+	// of a pack beside a harness that may still write (take.Pack says which).
+	// A SAVE is its taker's own archive and nothing else: never the job's
 	// capture, which every read of a job that is over takes as its last,
 	// and never one packed here, which would move over that capture.
 	var (
@@ -82,7 +84,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			archive, body, err = r.OpenCapture(ctx, box)
 		}
 		if err == nil && body == nil {
-			archive, body, err = r.PackCapture(ctx, box)
+			archive, body, err = r.PackCapture(ctx, box, take.Pack)
 		}
 	}
 	if err != nil || body == nil {
@@ -226,12 +228,13 @@ func (t *takenBody) Close() error {
 // streams it, described, as [Runner.OpenCapture] streams the one the script
 // left. For a job that never reached that pack: one killed before its script
 // could pack, one lost with its engine whose box is still there, one whose own
-// pack failed, one still working where a box would not end it. A job a stop, a
-// loss or its turn's cap ended is taken as its script packed it on its way out
-// (end.go), and packed here only where that pack never landed. A zero
-// description and a nil reader where there is nothing to pack: a harness this
-// runner carries none for, a run whose record names no session, a harness that
-// wrote no transcript.
+// pack failed — each over — and one still WORKING where a box would not end it
+// ([sandbox.SessionTake.Pack]), which working says. A job a stop, a loss or its
+// turn's cap ended is taken as its script packed it on its way out (end.go),
+// and packed here only where that pack never landed. A zero description and a
+// nil reader where there is nothing to pack: a harness this runner carries
+// none for, a run whose record names no session, a harness that wrote no
+// transcript.
 //
 // THE RUNNER'S OWN PACK, NEVER ONE A CALLER SCRIPTS: every pack of a box's
 // session keeps its digest there, or the box later takes its own archive for
@@ -244,24 +247,32 @@ func (t *takenBody) Close() error {
 // the job's session is missing rather than reading an older capture as the
 // job's last. The pack says which it is by its exit ([packNothing]).
 //
-// A JOB STILL RUNNING is packed as it stands, by the rule a pack beside a
+// A JOB STILL WORKING is packed as it stands, by the rule a pack beside a
 // working harness keeps (Claude Code's [claudeHeldTar]): a file its harness
-// rewrote, shrank, replaced or removed while tar read it fails the pack, and
-// one it only appended to is packed as tar first saw it — a transcript's last
-// line perhaps one its harness had not finished writing, which the scrub keeps
-// as the text it is and the restore cuts back. An OpenCode export leaves out
-// the message still being written.
+// rewrote, shrank, replaced or removed while tar read it fails the pack, and so
+// does any file but a transcript written since the pack began; a transcript or
+// a subagent's thread it only appended to is packed as tar first saw it — its
+// last line perhaps one its harness had not finished writing, which the scrub
+// keeps as the text it is and the restore cuts back. A JOB THAT IS OVER is
+// packed as the run's own end packs it: its harness is gone, and a pack that
+// held it to the working rule would only wait on the box's clock and refuse a
+// file whose time a box with a clock ahead of this one's stamped. An OpenCode
+// export leaves out the message still being written, either way.
 //
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the
 // run's environment, which no row keeps; a harness the seat's environment
 // moved somewhere its image's profile does not is a pack that finds nothing.
-func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
+func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
+	working bool) (sandbox.SessionArchive, io.ReadCloser, error) {
+
 	carries, ok := r.harness.(carrier)
 	if !ok {
 		return sandbox.SessionArchive{}, nil, nil
 	}
-	rec, packed, err := r.packNow(ctx, box, carries.Pack)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
+		return carries.Pack(paths, session, working)
+	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, nil, err
 	}

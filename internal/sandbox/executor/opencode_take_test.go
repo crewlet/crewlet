@@ -43,7 +43,7 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	described, body, err := runner.PackCapture(t.Context(), b)
+	described, body, err := runner.PackCapture(t.Context(), b, false)
 	if err != nil || body != nil {
 		t.Fatalf("PackCapture of a session the box does not hold = %+v, %v, %v; want nothing",
 			described, body, err)
@@ -194,7 +194,7 @@ func TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	described, body, err := runner.PackCapture(t.Context(), b)
+	described, body, err := runner.PackCapture(t.Context(), b, false)
 	if err == nil || body != nil {
 		t.Fatalf("PackCapture of a session OpenCode could not be asked about = %+v, %v, %v; want a "+
 			"pack that failed", described, body, err)
