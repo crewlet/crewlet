@@ -20,7 +20,7 @@ import (
 // BenchmarkBuildChain measures what a chain's bounds are read against
 // (chain.go's head; code.MaxChainObjectBytes, code.ChainPackDeadline): one
 // chain of code.MaxChainEntries entries, each a merge commit onto the tip the
-// entry before it made, built by the git node's own BuildChain — its merges,
+// entry before it made, built by the Gitlet node's own BuildChain — its merges,
 // its one pack and that pack's `index-pack --strict`, and its bundle stored
 // in the in-memory store — in three arms:
 //
@@ -132,7 +132,7 @@ const (
 	chainPastLines = 66_700
 )
 
-// chainRig is one arm's fixture: one git node holding a repository whose main
+// chainRig is one arm's fixture: one Gitlet node holding a repository whose main
 // moved by one commit since code.MaxChainEntries branches left it.
 type chainRig struct {
 	f     *codetest.SoloFleet

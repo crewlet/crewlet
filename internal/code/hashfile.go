@@ -14,7 +14,7 @@ import (
 // .rev, a multi-pack-index and its bitmap, a commit-graph and each layer of
 // one — ends in a TRAILER, the hash of every byte before it
 // (finalize_hashfile, CSUM_HASH_IN_STREAM), and git reads none of them when it
-// opens the file. Two packages of a git node hold such files to it: its cache
+// opens the file. Two packages of a Gitlet node hold such files to it: its cache
 // (internal/code/cache: its round's check, its scrub, Verify) and a published
 // layer's check here ([CheckLayer], [LayLayer]). The same files reach both —
 // the installer holds a layer it fetched to its trailers through CheckLayer,
@@ -33,13 +33,13 @@ import (
 // [MaxLayerParts] — four to five seconds of one core from the page cache,
 // about 21 s and 2 min 17 s read cold at a gp3 volume's 125 MB/s — and a
 // pack is up to [MaxPackBytes]. So ctx is checked before every read, and a
-// hold is taken for one piece and given back once it is read: a git node's
+// hold is taken for one piece and given back once it is read: a Gitlet node's
 // read lane (gitproc.Pool.HoldRead, internal/code/cache's CheckPieceBytes),
 // whose slot a hash of a large file holding whole would keep from every read
 // queued behind it for the whole read.
 
 // hashBuffer is the buffer a hash reads a file through when its caller hands
-// none ([Pieces.Buf]): a quarter mebibyte, the piece a git node's download
+// none ([Pieces.Buf]): a quarter mebibyte, the piece a Gitlet node's download
 // copies a stored object through (internal/code/cache's copyBuffer), so a
 // hash reads a file in the pieces its download wrote it — 4 096 reads a
 // gibibyte, whose system calls are a small fraction of the hash itself.
@@ -56,7 +56,7 @@ type Pieces struct {
 	Buf []byte
 	// Hold, when not nil, takes a slot before each piece is read and
 	// answers the function that gives it back, which the hash calls once
-	// the piece is read: a git node's read lane (gitproc.Pool.HoldRead).
+	// the piece is read: a Gitlet node's read lane (gitproc.Pool.HoldRead).
 	// Nil for a caller that holds what it needs across the whole hash — a
 	// maintenance slot it reserved — or needs nothing.
 	Hold func(context.Context) (release func(), err error)

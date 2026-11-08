@@ -102,8 +102,8 @@ func tickApplies(t *testing.T, e *Engine, r *Reconciler, epoch int64) {
 // retainedFor is codeReposDoc hosting its repositories with a deleted one kept
 // restorable for days.
 func retainedFor(days int, repos string) string {
-	return strings.Replace(codeReposDoc(repos, ""), "code:\n  native: true\n",
-		fmt.Sprintf("code:\n  native: true\n  deleted_retention_days: %d\n", days), 1)
+	return strings.Replace(codeReposDoc(repos, ""), "code:\n  backend: gitlet\n",
+		fmt.Sprintf("code:\n  backend: gitlet\n  deleted_retention_days: %d\n", days), 1)
 }
 
 // purgeProbe is the code-retention duty as e builds it, watched: its claims
@@ -594,7 +594,7 @@ func codeNodeStore(t *testing.T) config.Bootstrap {
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
-	brokertest.CodeCacheIn(&b.Git)
+	brokertest.GitletCacheIn(&b.Gitlet)
 	PinGitLanes(&b)
 	SeedStore(t, &b)
 	return b

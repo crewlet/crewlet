@@ -15,7 +15,7 @@ import (
 )
 
 // A CHANGE'S LANDING AND THE HOME'S DUE LISTING, through the committer and the
-// reader on a real embedded broker: the record the repository's home git node
+// reader on a real embedded broker: the record the repository's home Gitlet node
 // asks for a change whose head its target came to hold, and the rows it finds
 // its change work in.
 

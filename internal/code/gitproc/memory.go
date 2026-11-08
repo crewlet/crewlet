@@ -39,13 +39,13 @@ type Memory struct {
 	From  string
 }
 
-// CoreMemory is the memory a git node is taken to have for each core of its
+// CoreMemory is the memory a Gitlet node is taken to have for each core of its
 // git pool (the read lane's slots): the shape every memory figure of the
 // node's git lanes is held inside.
 //
 // TWO GIBIBYTES, the compute-optimised instance shapes' — the least a vCPU is
 // sold with (general-purpose shapes give four, memory-optimised eight) — so
-// lanes sized to fit it fit every shape a git node runs on. A SHAPE, never a
+// lanes sized to fit it fit every shape a Gitlet node runs on. A SHAPE, never a
 // reading: what a node actually has is read at New, and a node with less than
 // this a core runs only as many cores' worth of transfers as its memory backs
 // (TransferShare).
@@ -57,7 +57,7 @@ const CoreMemory int64 = 2 << 30
 const TransferShare = CoreMemory / TransfersPerProcess
 
 // TransferMemory is the most one transfer is taken to hold when nothing about
-// its repository is known: what a git node keeps back of its memory for every
+// its repository is known: what a Gitlet node keeps back of its memory for every
 // transfer the lane admits.
 //
 // 224 MIB, A QUARTER OF 896: the delta window (pack.windowMemory, twice the

@@ -818,8 +818,8 @@ func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 // ServingMemoryPerCore for every core the memory backs at gitproc.CoreMemory a
 // core — never below zero (maintenanceBudget); every pass reads the memory
 // again, and the reserve stays what Open fixed. A transfer lane the pool sized
-// itself — git.max_transfers unset — leaves MaintenanceMemoryPerCore a backed
-// core. An explicit git.max_transfers is kept as written, and it zeroes the
+// itself — gitlet.max_transfers unset — leaves MaintenanceMemoryPerCore a backed
+// core. An explicit gitlet.max_transfers is kept as written, and it zeroes the
 // budget long before its transfers take the whole memory: 42 of them on
 // 16 GiB and eight cores, where 16 GiB holds 73 at 224 MiB each. The remedy
 // called a budget of zero a memory lowered after the node booted, which a
@@ -932,10 +932,10 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 		fmt.Sprintf("once its transfers' %s each reach the memory less the cores' %s each: at as little as "+
 			"%d%% of the transfers the memory holds at %s each, where the node has a core for every %s of it "+
 			"or more", transfer, serving, percent, transfer, core),
-		"clears when git.max_transfers is lowered or unset, or when the node is given memory past what it " +
+		"clears when gitlet.max_transfers is lowered or unset, or when the node is given memory past what it " +
 			"keeps, in place or at a boot",
 		"A restart alone keeps the same lanes over the same memory, and clears it only where " +
-			"git.max_transfers is unset and the memory was lowered after the node booted",
+			"gitlet.max_transfers is unset and the memory was lowered after the node booted",
 	} {
 		if !strings.Contains(remedy, want) {
 			t.Errorf("the %s remedy does not say %q: %s", statelog.KindCodeMaintenanceRefused, want, remedy)
@@ -961,7 +961,7 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 				"every %s or more", transfer, serving, percent, transfer, core),
 			"Lowering or unsetting it, or memory past what the node keeps, gives the budget back; a restart " +
 				"alone does not.",
-			fmt.Sprintf("Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, "+
+			fmt.Sprintf("Give the node more memory, or — where `gitlet.max_transfers` is set — fewer transfers, "+
 				"each of which keeps %s of it.", transfer),
 		}},
 	} {
@@ -1051,8 +1051,8 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	}
 }
 
-// THE CONCEPT PAGE SIZES A GIT NODE BY THE CACHE'S OWN FIGURES: an operator
-// sizes a git node's memory from what docs/concepts/gitlet.md says each
+// THE CONCEPT PAGE SIZES A GITLET NODE BY THE CACHE'S OWN FIGURES: an operator
+// sizes a Gitlet node's memory from what docs/concepts/gitlet.md says each
 // git process holds an object of its repository, what the node keeps back of
 // its memory, and what that leaves its background work on the shapes the page
 // works through — and reads there when the background indexing runs. Every
@@ -1067,7 +1067,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 // MidxPacks, TipGraphBytesPerObject, GraphBaseBytes, GraphLayerBytesPerObject,
 // CompactBytesPerObject, CompactWindowBytes' multiple — and the page no
 // longer says what the cache does.
-func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
+func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "gitlet.md")
 	raw, err := os.ReadFile(path)
@@ -1163,8 +1163,8 @@ func windowBlobs(t *testing.T) int {
 	return int(w / blob)
 }
 
-// THE SCALING PAGE SIZES A GIT NODE BY THE SAME FIGURES: docs/concepts/scaling.md
-// tells an operator that a git node is sized by its memory before its disk,
+// THE SCALING PAGE SIZES A GITLET NODE BY THE SAME FIGURES: docs/concepts/scaling.md
+// tells an operator that a Gitlet node is sized by its memory before its disk,
 // in the bytes an object its bitmap and a clone beside it hold, and what a
 // repository's maintainer is charged beside them for its compaction and its
 // publication, and sends them to the concept page for everything else — so
@@ -1175,7 +1175,7 @@ func windowBlobs(t *testing.T) int {
 // Mutation: change BitmapBytesPerObject, PublishBytesPerObject,
 // gitproc.TransferBytesPerObject, CompactBytesPerObject or CompactWindowBytes'
 // multiple, and the scaling page no longer says what the cache charges.
-func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
+func TestTheScalingPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "scaling.md")
 	raw, err := os.ReadFile(path)

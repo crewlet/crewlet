@@ -1,17 +1,17 @@
 // Package codesearch answers a code search over every repository an asker may
-// read, on the git nodes that hold them (M6-D14).
+// read, on the Gitlet nodes that hold them (M6-D14).
 //
 // # One repository is a read; more are one scatter
 //
 // A search naming ONE repository is a git read of it (code.GitSearch) through
-// the keyed walk every read by object id takes: the repository's git nodes
+// the keyed walk every read by object id takes: the repository's Gitlet nodes
 // asked in their order, the walk moving on from a node that cannot answer,
 // and the answer or the refusal of the node that does is the search's.
 //
 // A search of more — every `search: indexed` repository the asker may read, or
 // those its repo: filters name — is ONE SCATTER, never a walk a repository:
 // a walk each would be a request each, thousands for an unfiltered search of a
-// company. Every git node serves topics.CodeSearch, and the ask carries an
+// company. Every Gitlet node serves topics.CodeSearch, and the ask carries an
 // ASSIGNMENT TABLE — which node answers for which repository — because a
 // scatter divides work by what it names, not by who receives it (every server
 // of a subject sees every request). A repository is assigned to the FIRST node

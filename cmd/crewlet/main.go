@@ -802,7 +802,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 	}
 
 	if res.Tier == TierChecks {
-		// A REPOSITORY'S CHECKS FILE, read as the home git node reads it
+		// A REPOSITORY'S CHECKS FILE, read as the home Gitlet node reads it
 		// from the target branch it governs — one parser, so a file that
 		// passes here is one Gitlet runs, and every fault is
 		// located at its field and its line as a config's is.
@@ -2168,7 +2168,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		CompanyWriters: boot.API.Auth.CompanyWriters,
 		// AND WHAT A COMPANY DOES BESIDE THIS NODE'S TIER A, carried in a
 		// write's answer ([configapi.Options.TierWarnings]): a person
-		// turning code.native on reads the cross-tier consequence where they
+		// turning Gitlet on reads the cross-tier consequence where they
 		// made the change. The explicit budgets only ([config.TierWarnings]),
 		// as `crewlet validate` compares them — what this node RESOLVED is
 		// the apply's log line ([config.NodeTierWarnings]).
@@ -2673,7 +2673,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// GITLET AND THE CODE READS, ASKED PER REQUEST:
 		// Gitlet is built with the native runtime, which a company
 		// applied after boot brings up after this line ran. The git routes
-		// are mounted where this node's roles name git; the reads on every
+		// are mounted where this node's roles name gitlet; the reads on every
 		// node, through the estate router.
 		Code: api.EngineCode(e),
 		// The capacity window. The engine itself refuses the verb when

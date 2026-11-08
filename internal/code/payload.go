@@ -171,7 +171,7 @@ func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 // default branch's tip (indexed), which a search across the company's
 // repositories reads as well as one naming the repository, or with git grep
 // over a copy of it (grep), only when a search names it. An index costs every
-// git node that keeps one its disk and a build at each new tip, and a grep
+// Gitlet node that keeps one its disk and a build at each new tip, and a grep
 // costs nothing until somebody asks — so the mode is a SETTING LIKE EVERY
 // OTHER, carried whole by every create, settings and restore record
 // ([RepoSettings.Search]) and changed by whoever maintains the repository.
@@ -183,10 +183,10 @@ func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 // so — since no index is built for a repository until somebody who maintains
 // it asks for one. A SCRATCH REPOSITORY IS ALWAYS grep ([RepoSettings.Validate]):
 // a seat makes up to code.scratch.max_per_seat of its own and each is deleted
-// once idle, so indexing them would build and keep an index on the git nodes
+// once idle, so indexing them would build and keep an index on the Gitlet nodes
 // for every experiment a seat makes; a search naming one still reads it.
 //
-// THE GIT NODES READ IT. Each one's indexer (internal/code/cache) keeps a code
+// THE GITLET NODES READ IT. Each one's indexer (internal/code/cache) keeps a code
 // index of every indexed repository whose git order it is among the first
 // [IndexHolders] of, built at each new tip of the default branch, and keeps
 // none of a grep one. A search naming one repository is a git read of it
@@ -209,9 +209,9 @@ const (
 // TestEveryDeclaredSearchModeIsOneTheDomainRecords) are read against.
 func SearchModes() []SearchMode { return []SearchMode{SearchIndexed, SearchGrep} }
 
-// IndexHolders is how many git nodes keep a `search: indexed` repository's
+// IndexHolders is how many Gitlet nodes keep a `search: indexed` repository's
 // code index: the first IndexHolders of its rendezvous order over the live
-// git nodes (estate.Router.GitOrder), so a search has a runner-up holding a
+// Gitlet nodes (estate.Router.GitOrder), so a search has a runner-up holding a
 // built index when the first is gone or still building (M6-D12). Two, not
 // one: a single holder's restart would send every search of its
 // repositories to git grep until it rebuilt; not three, because every holder
@@ -525,7 +525,7 @@ func pathOwnersInvalid(owners []PathOwner) string {
 // rule's merge gate, which holds the merges a change makes and nothing a push
 // does. It is the rule as every read of a repository's row answers it
 // ([RepoRef.Protections]): the admission of every git request, every page of
-// a git node's sync, the cache's state file, the push decide's rounds and a
+// a Gitlet node's sync, the cache's state file, the push decide's rounds and a
 // listing of repositories, none of which reads a gate. Typed apart from
 // [Protection], rather than a Protection whose gate a read left nil, so no
 // consumer can take a gate nobody read for a rule that has none.
@@ -1410,7 +1410,7 @@ type Command struct {
 
 // PackRef names ONE push's stored object, its PACK BUNDLE (bundle.go): the
 // pack receive-pack stored, then its .idx, then its .rev, back to back — so a
-// git node installs a push with one GET and three renames and runs no
+// Gitlet node installs a push with one GET and three renames and runs no
 // index-pack. Size, Hash and Object are the WHOLE object's (what the store
 // verifies and the collector audits); the sections are cut by IndexBytes and
 // ReverseBytes from the end.
@@ -1482,7 +1482,7 @@ type Compaction struct {
 	// retry by and what each output's id is derived at
 	// ([DeriveOutputPackID]).
 	CompactionID string `json:"compaction_id"`
-	// Node is the git node that built it, for whoever reads the log.
+	// Node is the Gitlet node that built it, for whoever reads the log.
 	Node string `json:"node"`
 	// Seen is the code log's position the builder planned at — the sync
 	// its cache answered the inputs from. The committer decides at or past
@@ -1523,7 +1523,7 @@ type Compaction struct {
 // LayerRef is ONE published layer of a repository's multi-pack-index chain:
 // git's own incremental multi-pack-index layer, its bitmap, and the
 // commit-graph layer over the same packs, written ONCE by the repository's
-// maintainer and installed by every git node (ADR-0081's Derived standing).
+// maintainer and installed by every Gitlet node (ADR-0081's Derived standing).
 // Its bytes are the three files back to back — the multi-pack-index, its
 // bitmap, the commit-graph layer — cut into Parts, each one stored object.
 //
@@ -1573,11 +1573,11 @@ type LayerRef struct {
 	GraphBytes  int64 `json:"graph_bytes"`
 	// Objects is how many objects the multi-pack-index layer holds (the last
 	// entry of its OIDF fanout), and Commits how many commits the graph
-	// layer holds: what a git node's per-object charges for the layer read.
+	// layer holds: what a Gitlet node's per-object charges for the layer read.
 	Objects int64 `json:"objects"`
 	Commits int64 `json:"commits"`
 	// Git is the release of git that wrote it, as git's own version line
-	// spells its first three numbers ("2.56.0"): a git node whose git is
+	// spells its first three numbers ("2.56.0"): a Gitlet node whose git is
 	// older installs none of it.
 	Git string `json:"git"`
 	// TookMs is how long its build took, in milliseconds — the repack, the
@@ -1687,7 +1687,7 @@ type ExpungeBegin struct {
 	// maintainer's own schedule. PROVENANCE: a commit serves a request by
 	// what each pack holds ([PackRow.Content]), never by this.
 	RequestID string `json:"request_id,omitempty"`
-	// Node is the git node that built it, for whoever reads the log.
+	// Node is the Gitlet node that built it, for whoever reads the log.
 	Node string `json:"node"`
 	// Seen is the code log's position the builder's scan read the
 	// repository's refs and ref drops at — the tips its outputs were cut by.
@@ -1720,7 +1720,7 @@ type ExpungeBegin struct {
 	Dropping []PackRef `json:"dropping,omitempty"`
 	// DropLayers are the published layers the begin removes, in chain order:
 	// the chain's top from the lowest layer naming an input — a layer over a
-	// pack the begin retires is one no git node can load, and a layer above
+	// pack the begin retires is one no Gitlet node can load, and a layer above
 	// it one whose base is gone — and none where no layer names an input.
 	// The repository's maintainer publishes again once the expunge commits.
 	DropLayers []string `json:"drop_layers,omitempty"`
@@ -1761,7 +1761,7 @@ type ExpungeCommit struct {
 	// RequestID is the request the expunge serves, "" for none: provenance,
 	// as on the begin.
 	RequestID string `json:"request_id,omitempty"`
-	// Node is the git node that built it, for whoever reads the log.
+	// Node is the Gitlet node that built it, for whoever reads the log.
 	Node string `json:"node"`
 	// Seen is the code log's position the rescue's tips were read at, at or
 	// past the begin: the committer decides at or past it, so one that has
@@ -1783,12 +1783,12 @@ type ExpungeCommit struct {
 // schedule found NO expunge due: the repository's expunge_scanned_at moves to
 // the record's broker instant, so the `expunge_due` listing's weekly arm
 // leaves it out for [ExpungeInterval] ON EVERY NODE ([ReadQuery.ScannedBefore])
-// — whichever git node maintains it next, after a restart, a rolling upgrade
-// or a git node joining or leaving, reads the verdict from the rows rather
-// than downloading and walking the repository again, and no git node lists it
+// — whichever Gitlet node maintains it next, after a restart, a rolling upgrade
+// or a Gitlet node joining or leaving, reads the verdict from the rows rather
+// than downloading and walking the repository again, and no Gitlet node lists it
 // every minute meanwhile. A verdict kept in the scanning node's memory alone
 // was lost to each of those, so a fleet-wide deploy scanned every repository
-// in the fleet whatever its last scan, and every git node read every
+// in the fleet whatever its last scan, and every Gitlet node read every
 // repository through the estate every minute for the R scans a week of work.
 //
 // Decided by the repository's committer, as every expunge record is, by one
@@ -1806,7 +1806,7 @@ type ExpungeScan struct {
 	// repository's runner-up after a committer went silent is the same
 	// record, collapsed by the operation ledger.
 	ScanID string `json:"scan_id"`
-	// Node is the git node that scanned, for whoever reads the log.
+	// Node is the Gitlet node that scanned, for whoever reads the log.
 	Node string `json:"node"`
 	// Seen is the code log's position the scan read the repository at — its
 	// sync's, or the listing row's version where the repository was judged
@@ -1837,7 +1837,7 @@ type ImportChunk struct {
 	// the id: a chunk built again after a refusal is another attempt, whose
 	// packs are its own.
 	ChunkID string `json:"chunk_id"`
-	// Node is the git node that fetched it, for whoever reads the log.
+	// Node is the Gitlet node that fetched it, for whoever reads the log.
 	Node string `json:"node"`
 	// Seq is the chunk's place in the import, from 1: the repository's
 	// import_seq once it lands.
@@ -1865,7 +1865,7 @@ type ImportChunk struct {
 // states.
 type ImportDone struct {
 	RepoID string `json:"repo_id"`
-	// Node is the git node that ended it.
+	// Node is the Gitlet node that ended it.
 	Node string `json:"node"`
 	// Seq is how many chunks landed — the repository's import_seq — 0 for an
 	// import that landed none.
@@ -1907,7 +1907,7 @@ type MirrorSync struct {
 	// record's operation id, its push row's push id and what each pack's id
 	// is derived from ([DeriveOutputPackID]).
 	SyncID string `json:"sync_id"`
-	// Node is the git node that fetched it.
+	// Node is the Gitlet node that fetched it.
 	Node string `json:"node"`
 	// DropEpoch is the repository's drop epoch as its home's copy held it
 	// when it cut the packs (cache.Synced.DropEpoch).

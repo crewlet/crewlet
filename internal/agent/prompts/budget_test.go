@@ -182,7 +182,7 @@ func sectionText(sections ...[]string) string {
 // names are the ones production's surface carries: `comment_on_work_item`
 // and `create_work_item` from the default work tracker, `delegate` for a
 // seat with workers, the code tools for a seat of a company that hosts code
-// (`code.native`), and `submit_work`, which every executor adds.
+// (`code.backend: gitlet`), and `submit_work`, which every executor adds.
 func referenceExecutor(t *testing.T) ExecutorInput {
 	t.Helper()
 	return ExecutorInput{

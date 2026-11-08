@@ -17,7 +17,7 @@ import (
 // step 2; a merge refused is said beside the opened change as a residue,
 // never as a refusal of the revert that landed.
 //
-// Its branch's deletion is left to the git node that judges the merge, as an
+// Its branch's deletion is left to the Gitlet node that judges the merge, as an
 // unsaid delete_branch is: the merge says no word of it and nothing reads
 // the target's gates for it.
 //
@@ -66,7 +66,7 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 			gated := slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates })
 			if merge.DeleteSource != nil || gated {
 				t.Errorf("the revert's merge sent delete_source %v, the gates read %v: its branch's deletion is "+
-					"the git node's to decide", merge.DeleteSource, gated)
+					"the Gitlet node's to decide", merge.DeleteSource, gated)
 			}
 			out := decoded(t, got)
 			residue, _ := out["residue"].(string)

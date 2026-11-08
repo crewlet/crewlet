@@ -28,11 +28,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE INSTALLED CHAIN. A repository's MAINTAINER — one git node — writes its
+// THE INSTALLED CHAIN. A repository's MAINTAINER — one Gitlet node — writes its
 // multi-pack-index as a CHAIN OF PUBLISHED LAYERS, each git's own incremental
 // layer with its bitmap and the commit-graph layer over the same packs,
 // stores each layer's bytes in the object store and names it on the code log
-// (code.LayerRef, ADR-0081's Derived standing); every git node INSTALLS that
+// (code.LayerRef, ADR-0081's Derived standing); every Gitlet node INSTALLS that
 // chain: each layer fetched, held to its row (code.CheckLayer), and placed
 // byte for byte as the maintainer's git wrote it, both chain files written by
 // this cache from the rows' order. No node writes a multi-pack-index layer of
@@ -77,7 +77,7 @@ import (
 // bitmap at the cost of the layers' bytes overlapped with the packs', never a
 // first byte a layer in series. A DELTA NEVER DOWNLOADS A LAYER: a root layer
 // of the largest repository the defaults admit is some 2.6 GB, and inside a
-// delta it would hold every fetch waiting on that round on every git node; it
+// delta it would hold every fetch waiting on that round on every Gitlet node; it
 // hands the new rows to the INSTALLER, one goroutine a cache started by
 // Start, and answers at once. Correctness never waits on a layer: without one
 // git reads every pack's own index.
@@ -1658,7 +1658,7 @@ func chainOf(inc *incarnation) Chain {
 // round read: what a maintainer REPAIRS by publishing again over the base it
 // holds, whether or not any pack was pushed since (internal/code/compact). An
 // idle repository whose layer the store lost is listed by no due listing,
-// since nothing is left to publish by its rows, so its first git node to be
+// since nothing is left to publish by its rows, so its first Gitlet node to be
 // its maintainer finds it here. Sorted by id.
 func (c *Cache) Damaged() []code.RepoRef {
 	var out []code.RepoRef

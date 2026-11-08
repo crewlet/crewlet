@@ -21,33 +21,33 @@ type KnowledgeBackend = "doclet" | "confluence" | "none";
 type ChatBackend = "chatlet" | "vendor" | "none";
 
 /**
- * Whether the engine hosts the company's git repositories (`native`, the
- * document's `code.native`) or not (`none`). COPIES of `api.CodeHosts`, held by
- * the same gate. No vendor stands in its place: a company's repositories on
- * GitHub or GitLab are integrations its seats call, never a host the dashboard
- * draws instead, so `none` is the answer whatever else the company runs.
+ * The git host a company runs: Gitlet (`gitlet`, the document's
+ * `code.backend: gitlet`) or none, which an unset `code.backend` reads as.
+ * COPIES of `config.CodeBackends`, held by the same gate. No vendor stands in
+ * Gitlet's place: a company's repositories on GitHub or GitLab are
+ * integrations its seats call, never a host the dashboard draws instead, so
+ * `none` is the answer whatever else the company runs.
  */
-type CodeHost = "native" | "none";
+type CodeBackend = "gitlet" | "none";
 
 /**
- * Which tracker, knowledge base and chat the company runs, and whether it
- * hosts its code in the engine, as the ENGINE resolved them: `services` on the
- * org projection (`api.OrgServices` in Go), carried by the socket snapshot's
- * `org`, every `org` push and `GET /org`, to every reader. A backend the
- * document leaves empty is resolved there (the vendor whose block is
- * connected, else the engine's own), so a screen never derives it again.
+ * Which tracker, knowledge base, chat and git host the company runs, as the
+ * ENGINE resolved them: `services` on the org projection (`api.OrgServices`
+ * in Go), carried by the socket snapshot's `org`, every `org` push and
+ * `GET /org`, to every reader. A backend the document leaves empty is
+ * resolved there (the vendor whose block is connected, else the engine's own;
+ * none for the git host), so a screen never derives it again.
  *
  * WHICH OF THE DASHBOARD'S OWN SURFACES EXIST: a tracker other than `worklet`
  * means the company has no Worklet, a knowledge base other than `doclet` that
- * it has no Doclet, a chat other than `chatlet` that it has no Chatlet, a code
- * host other than `native` that the engine hosts none of its code, and every
- * question about the one it lacks is refused. Absent from the projection only
- * on `{}`, a node running no company, which is "not known yet" and never
- * "none".
+ * it has no Doclet, a chat other than `chatlet` that it has no Chatlet, a git
+ * host other than `gitlet` that it has no Gitlet, and every question about the
+ * one it lacks is refused. Absent from the projection only on `{}`, a node
+ * running no company, which is "not known yet" and never "none".
  */
 export interface OrgServices {
   tracker: TrackerBackend;
   knowledge: KnowledgeBackend;
   chat: ChatBackend;
-  code: CodeHost;
+  code: CodeBackend;
 }

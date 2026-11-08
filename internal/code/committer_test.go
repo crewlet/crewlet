@@ -345,7 +345,7 @@ func TestAProposalWhoseSizesLayOutNoBundleIsRefused(t *testing.T) {
 		"a pack under a header and a trailer": {func(k *code.PackRef) { k.Size = k.IndexBytes + k.ReverseBytes + 31 },
 			"pack.size"},
 		"past MaxPackBytes": {func(k *code.PackRef) { k.Size = code.MaxPackBytes + 1 }, "pack.size"},
-		// The one rule a git node holds the row to (PackRef.Check): a
+		// The one rule a Gitlet node holds the row to (PackRef.Check): a
 		// proposal it would refuse to install is refused here.
 		"a trailer of the zero id": {func(k *code.PackRef) { k.GitChecksum = code.ZeroOID }, "pack.git_checksum"},
 		"no objects":               {func(k *code.PackRef) { k.Objects = 0 }, "pack.objects"},

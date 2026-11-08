@@ -34,7 +34,7 @@ func (p cutPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
 		context.Cause(ctx))
 }
 
-// A READ WHOSE ANSWER FALLS DUE SAYS SO WHILE ITS ASKER LISTENS. A git node's
+// A READ WHOSE ANSWER FALLS DUE SAYS SO WHILE ITS ASKER LISTENS. A Gitlet node's
 // read runs under a context that ends a reply's margin before its asker's
 // deadline (code.AnswerBy), and every wait it makes ends there: its copy's
 // sync, its unit of the node's share, a check of what it names and its own

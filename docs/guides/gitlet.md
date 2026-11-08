@@ -14,11 +14,11 @@ company may host some repositories here and keep others on a vendor.
 
 ## Turn it on
 
-Set `code.native` in the company document and declare a repository:
+Set `code.backend: gitlet` in the company document and declare a repository:
 
 ```yaml
 code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: { seat: founder }   # a seat's handle, or { unit: Engineering }
@@ -29,15 +29,15 @@ dashboard). Then:
 
 - **Every data node** commits the repositories' pushes, and every node that
   serves git — one whose Tier A [`node.roles`](../concepts/configuration.md#noderoles)
-  names `git`, or names none, since an undeclared node has every role — builds
-  Gitlet and starts serving `/git/`. A git node needs **git 2.55 or
+  names `gitlet`, or names none, since an undeclared node has every role — builds
+  Gitlet and starts serving `/git/`. A Gitlet node needs **git 2.55 or
   newer** on its host (the engine's image builds the newest release) and a
-  place for its cache, sized by its Tier A [`git` block](../concepts/configuration.md#git); the
+  place for its cache, sized by its Tier A [`gitlet` block](../concepts/configuration.md#gitlet); the
   [deployment guide](deployment.md#gitlet) says how to size both.
 - **On a node that has run no company yet** (one that booted with none), the
-  activation that hands it a company setting `code.native` starts Gitlet
+  activation that hands it a company setting `code.backend: gitlet` starts Gitlet
   with the rest of its native runtime, with no restart.
-- **On every other node**, turning `code.native` on — or off — takes effect at
+- **On every other node**, turning Gitlet on — or off — takes effect at
   **that node's restart**. A node builds its native runtime once, from the
   first company it runs, whatever backends that company names, so this holds
   for a company on a vendor's tracker, knowledge base and chat as much as for
@@ -60,7 +60,7 @@ dashboard). Then:
   is the error code of the API's refusal envelope; on a git route the same
   sentence ends with the code in brackets.
 
-Turning `code.native` off later deletes nothing: the repositories, their rows
+Turning Gitlet off later deletes nothing: the repositories, their rows
 and their packs stay, served again by the revision that turns it back on.
 
 ## Declare repositories
@@ -70,7 +70,7 @@ fleet match the list:
 
 ```yaml
 code:
-  native: true
+  backend: gitlet
   deleted_retention_days: 7          # how long a removed repository stays restorable
   repos:
     - name: web                      # the address: /git/web.git
@@ -274,7 +274,7 @@ status and the node's log keeps the reason. The ones a person meets most:
 | `(pending: durable at <position>, …)` | The push is recorded and was not applied on the node that answered within a minute. Run the same `git push` again: if it landed, git says `Everything up-to-date`. |
 | `(unknown: outcome unknown (op …); …)` | The answer was lost — it may or may not have landed. Fetch, then push again. |
 | `(not_applied: …)` | The push was recorded and every node dropped it: nothing landed. Push again. |
-| `(compaction_behind: <repo> holds <n> live packs, …)` | The repository holds as many packs as one may until its maintainer — the git node that merges its packs and publishes its layers — merges them, which it does every minute: run the same `git push` again in a minute. If it persists, the node's `code_compaction_behind` alarm is up and its log says why ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)). |
+| `(compaction_behind: <repo> holds <n> live packs, …)` | The repository holds as many packs as one may until its maintainer — the Gitlet node that merges its packs and publishes its layers — merges them, which it does every minute: run the same `git push` again in a minute. If it persists, the node's `code_compaction_behind` alarm is up and its log says why ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)). |
 | `… retry in 30 s …` (a `503`) | The node is draining or stopping: retry, and a balancer sends you to another. |
 | `error: RPC failed; HTTP 503 …` then `fatal: could not fetch <id> from promisor remote` (the checkout of a blobless clone) | The checkout's one fetch for the files it lacks found the node's room for large fetch requests in use — it waited 55 s for its turn, or found no place to wait — and git does not retry it: run the checkout again. git prints no reason for a request answered mid-transfer; the node's `code_fetch_spool_unserved` line names the token and what held it back, and if it was the token's own requests, the token is shared by several CI runners — give each its own. |
 
@@ -470,7 +470,7 @@ none.
 
 A ready change is merged with `code_merge_change`, naming the change and the
 head you read (`expected_head`) — by a seat, or by your own assistant or the
-dashboard, as you. Gitlet builds the merge on the repository's home git
+dashboard, as you. Gitlet builds the merge on the repository's home Gitlet
 node onto the target's tip and lands it, the target moved and the change
 merged in **one record** its committer decides against the target's merge
 gate. It answers one of three things:
@@ -622,8 +622,8 @@ new revision at its new head.
   another encoding than UTF-8 (`rejected_object`). Each is a rebase for a
   coding box or your own clone.
 
-The rebase is built on the repository's [home git
-node](../concepts/gitlet.md#the-home-git-node) under forty seconds of git
+The rebase is built on the repository's [home Gitlet
+node](../concepts/gitlet.md#the-home-gitlet-node) under forty seconds of git
 ([How a rebase is built](../concepts/gitlet.md#a-change-rebased)).
 
 ## Reverting a change
@@ -653,8 +653,8 @@ open for you to merge.
   revert branch already there (`exists` — a revert of the change is under
   way: find its change, or delete the branch to revert again).
 
-The revert is built on the repository's [home git
-node](../concepts/gitlet.md#the-home-git-node) as any engine write is
+The revert is built on the repository's [home Gitlet
+node](../concepts/gitlet.md#the-home-gitlet-node) as any engine write is
 ([How a revert is built](../concepts/gitlet.md#a-change-reverted)).
 
 ## Adding checks
@@ -684,7 +684,7 @@ checks:
 Three keys are required — a `name`, the command to `run`, and its
 `timeout_seconds` — and the rest narrow it: `paths` runs a check only for a
 change touching one of its globs, `report` names the JUnit or SARIF file it
-writes, `run_in` picks a container on a git node or a remote `e2b` box,
+writes, `run_in` picks a container on a Gitlet node or a remote `e2b` box,
 `checkout` checks out a cone of directories (or `none`), and `env` names the
 company's check secrets it is given. Every key, its bound and why is in [The
 checks file](../concepts/gitlet.md#the-checks-file).
@@ -723,19 +723,19 @@ checks file](../concepts/gitlet.md#the-checks-file).
    checked by the file it edits, and its edit governs the changes after it
    lands.
 
-Once the file is on a branch, the repository's home git node queues its
+Once the file is on a branch, the repository's home Gitlet node queues its
 checks at the head of every live change into that branch ([How a head's
 checks are dispatched](../concepts/gitlet.md#how-a-heads-checks-are-dispatched))
 and, on a protected branch, the required ones at its newest landing ([Tip
 checks and code_green](../concepts/gitlet.md#tip-checks-and-code_green)),
-and every git node runs a queued check in a box of the company's sandbox
+and every Gitlet node runs a queued check in a box of the company's sandbox
 catalogue ([Who runs a check](../concepts/gitlet.md#who-runs-a-check)). A
 change's readiness counts the checks its branch's gate requires, and a merge
-into that branch puts the change in its merge queue, which the home git node
+into that branch puts the change in its merge queue, which the home Gitlet node
 lands as below.
 
 **A branch whose gate requires a check lands through its merge queue.** The
-home git node tests the waiting
+home Gitlet node tests the waiting
 changes merged on the branch before any of them lands: up to `depth`
 candidates at once, each one change while the queue keeps up and up to
 `batch` changes as it falls behind, every candidate's tip checked under the
@@ -775,7 +775,7 @@ code:
 change a day for every seat that may merge into the branch, priced at a round
 as long as `code.checks.max_timeout_seconds` — the longest a check may run —
 so set that to what your checks actually take. A running queue asked past
-what it lands raises `code_merge_rate_over_capacity` on its home git node,
+what it lands raises `code_merge_rate_over_capacity` on its home Gitlet node,
 priced at the rounds its trains really took over the last hour. Either way,
 raise `depth` or `batch`, make the required checks faster or fewer, or split
 the work over more branches or repositories ([How fast a queue
@@ -947,14 +947,14 @@ repo:billing repo:ledger path:src/**/*.go ref:main  retryBudget
 **Indexed or grep, per repository.** A repository declared in the company
 file is searched by index unless its entry says `search: grep`; one a seat's
 tool makes, and every scratch repository, by grep. An indexed repository's
-default branch is kept as a trigram index on two of your git nodes, so a
+default branch is kept as a trigram index on two of your Gitlet nodes, so a
 search of the whole company reads only the files that can match. A grep
 repository is read with git grep whenever it is searched, which costs a
-large repository a second or two of a git node's CPU, so a search reaches it
+large repository a second or two of a Gitlet node's CPU, so a search reaches it
 only when a `repo:` filter names it — at most eight of them at once.
 
 **A search says what it did not search.** Several repositories are searched
-in one question to every git node at once, each repository answered by the
+in one question to every Gitlet node at once, each repository answered by the
 node first in its order and, where that one does not answer, once more by the
 next. Every answer carries a coverage block naming every repository it could
 not search and why — a node not answering, an index still being built, a node
@@ -990,7 +990,7 @@ and your own assistant's ([The company's
 code](tools-and-mcp.md#the-companys-code)): `query` in the grammar above,
 with the same `mode`, `ignore_case`, `repo`, `path` and `ref` beside it. Each
 line arrives fenced as a file's text that nobody vouches for, a page at a
-time, each page under one tool answer. A page asks the git nodes for at most
+time, each page under one tool answer. A page asks the Gitlet nodes for at most
 315 lines, the most one answer holds, starting after the last line of the
 page before — at the commit that line was read at — so a page costs the
 lines it reads from its place on, never the whole search again, and paging
@@ -1052,14 +1052,14 @@ besides, each a person's alone, as you.
 
 **A commit is built on the server and lands as one push** in the seat's name
 ([Engine-built commits](../concepts/gitlet.md#engine-built-commits)). The
-git node holding the repository builds it over exactly the directories it
+Gitlet node holding the repository builds it over exactly the directories it
 touches — never a checkout, so a commit to a repository of a hundred thousand
 files costs what it changes — checks its objects as it checks a `git push`,
 and lands it through the committer, the protections and the limits a
 person's push meets. A call names the head it read (`expected_head`), so a
 branch that moved meanwhile is refused `stale` rather than overwritten: the
 seat reads it again and decides. And a call asked again — retried after a
-timeout, or made on another git node when the first went silent — is the same
+timeout, or made on another Gitlet node when the first went silent — is the same
 push carrying the same commit, landed once.
 
 **Who a commit names.** Its author is the seat: its role's `name`, and the
@@ -1071,7 +1071,7 @@ clone; unset, they end `@seats.invalid`, a name nobody can own:
 
 ```yaml
 code:
-  native: true
+  backend: gitlet
   identity_domain: example.com   # docs-writer, stating no email, commits as docs-writer@example.com
 ```
 
@@ -1238,7 +1238,7 @@ harness starts
   repository is still given it to look at. The run's credential pushes only
   what the run was given and its seat may push, and ends with the run.
 
-The box reaches the git nodes at `/box/git/`, through the address every node
+The box reaches the Gitlet nodes at `/box/git/`, through the address every node
 that runs seats is given in `CREWLET_BOX_GIT_URL`
 ([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)), and
 every request it makes is admitted by its run's record, never by its token
@@ -1319,7 +1319,7 @@ it](../concepts/gitlet.md#who-read-it).
 ## Moving a repository in
 
 A repository that lives at another forge comes in one of three ways, each a
-person's to start: **imported once** by the repository's home git node, which
+person's to start: **imported once** by the repository's home Gitlet node, which
 then holds it like any other; imported and then kept in step with its source
 for good as a **pull mirror**, which moves only when its source does; or
 **pushed from your machine** into a repository that exists, for a source only
@@ -1331,7 +1331,7 @@ HTTPS alone and only at a public address unless Tier A says otherwise
 ### Import from GitHub or GitLab
 
 There are two imports. **The node's** creates the repository and has its home
-git node fetch the source: nothing runs on your machine, and with `-mirror` the
+Gitlet node fetch the source: nothing runs on your machine, and with `-mirror` the
 repository stays in step with the source for good. **Your machine's**
 (`-local`) has your own git clone the source and push it into a repository that
 exists, for a source only your machine can reach. Either is a person's: run it
@@ -1355,11 +1355,11 @@ crewlet gitlet import https://github.com/acme/api.git api -owner unit:eng -mirro
 ```
 
 The repository is created at once, owned as `-owner` says, and reads
-`importing` until its home git node has fetched every branch and tag of the
+`importing` until its home Gitlet node has fetched every branch and tag of the
 source and landed them, in chunks of packs and refs that no push limit bounds,
 so `code.limits.max_push_bytes` caps none of it; it takes no push meanwhile, and
 `crewlet gitlet status -repo web` shows it `importing` until it is done. The home dials HTTPS alone, and only a public address
-unless Tier A's `git.import_allow_private` lets it reach your own network.
+unless Tier A's `gitlet.import_allow_private` lets it reach your own network.
 `-credential` names the variable holding the source's token — never the token,
 which the repository's settings would carry on every data node and in every
 backup; the node resolves it from the secret store, then its environment, each
@@ -1440,12 +1440,12 @@ nothing.
 files it touches whose earlier versions an earlier step stored, so a history
 pushed in steps takes more room than one pack of it — measured on this
 project's own history, 34 MB as one pack, about twice that in eleven steps. The
-object store keeps the steps' packs as they were pushed, and every git node
-serving the repository caches them, until the repository's home git node
+object store keeps the steps' packs as they were pushed, and every Gitlet node
+serving the repository caches them, until the repository's home Gitlet node
 merges them ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)).
 A merge may store a file a step kept whole as a delta again, but how much that
 saves depends on the history, so leave `code.limits.repo_max_bytes`, the object
-store and the git nodes' caches room for the repository as it was pushed rather
+store and the Gitlet nodes' caches room for the repository as it was pushed rather
 than for the source's own pack size. Run a large import with
 `code.limits.max_push_bytes` at its 1 GiB ceiling, which takes the fewest
 steps.
@@ -1464,13 +1464,13 @@ Every step, flag and message is in
 
 A repository the company keeps here can be published to a repository at
 another forge — GitHub, GitLab, a forge on your own network — as a **push
-mirror**: its home git node pushes it there within a minute of a ref it
+mirror**: its home Gitlet node pushes it there within a minute of a ref it
 covers moving, and reads it there again every 15 minutes, putting back what
 anybody else changed. Declare it on the repository:
 
 ```yaml
 code:
-  native: true
+  backend: gitlet
   remote_credentials:
     GITHUB_MIRROR_TOKEN: {hosts: [github.com]}  # the one host its value may be sent to
   repos:
@@ -1533,13 +1533,13 @@ crewlet gitlet status
 crewlet gitlet status -repo web -pushes 20
 ```
 
-**`crewlet gitlet verify`** checks a git node's **cache** — its disposable copy
+**`crewlet gitlet verify`** checks a Gitlet node's **cache** — its disposable copy
 of each repository — against the repositories' rows: every pack's bytes, the
 refs, and git's own connectivity check. The rows and the object store are the
 record and the cache is derived from them, so a damaged copy is one node's —
 but it is what that node serves, so run it:
 
-- **on a schedule on each git node** (`-api` names the node): it exits non-zero
+- **on a schedule on each Gitlet node** (`-api` names the node): it exits non-zero
   when any copy is not clean, which is the hook for your cron. A repository the
   node holds no copy of is passed over;
 - **when git prints an error about a repository on one node and not on the
@@ -1602,8 +1602,8 @@ while it runs, since it clones a mirror there and bundles it; see
 ## A busy repository's packs are merged
 
 Every push that carries objects stores one pack, and the repository's
-[maintainer](../concepts/gitlet.md#who-maintains-a-repository) — the git
-node that also publishes its bitmapped index for every other git node, its
+[maintainer](../concepts/gitlet.md#who-maintains-a-repository) — the Gitlet
+node that also publishes its bitmapped index for every other Gitlet node, its
 home on a fleet of alike nodes — merges its small packs into a few with no step
 of yours: it looks every minute and merges them once sixteen have gathered, or
 a busy repository's minute of pushes at every look
@@ -1669,7 +1669,7 @@ credential that was ever pushed is in every clone that fetched it, so:
    shows it until the maintainer has served it, then when it committed and
    what it dropped.
 
-The answer also says what still holds the secret after the purge: each git
+The answer also says what still holds the secret after the purge: each Gitlet
 node's cache until it next syncs the repository, the object store for a day,
 every backup taken before the purge (on the `nats` store, before the store
 deletes it — [A purge and the backups before
@@ -1682,12 +1682,12 @@ object](../concepts/gitlet.md#expunge)).
 ## See also
 
 - [Gitlet](../concepts/gitlet.md) — what a repository is, its changes
-  and their reviews, the committer, the cache on a git node, and a push end to
+  and their reviews, the committer, the cache on a Gitlet node, and a push end to
   end
 - [Deployment: Gitlet](deployment.md#gitlet) — git on the host,
   the cache's volume, the balancer in front of `/git/`
-- [Running a Fleet](fleet.md) — which nodes to give the `git` role
-- [Scaling Out: Git nodes](../concepts/scaling.md#git-nodes) — what git nodes
-  and data nodes each scale, and a git node's memory, cores and disk
+- [Running a Fleet](fleet.md) — which nodes to give the `gitlet` role
+- [Scaling Out: Gitlet nodes](../concepts/scaling.md#gitlet-nodes) — what Gitlet nodes
+  and data nodes each scale, and a Gitlet node's memory, cores and disk
 - [Read Consistency](consistency.md) — what level a git answer and a `/gitlet/`
   read are given

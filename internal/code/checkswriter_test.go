@@ -172,7 +172,7 @@ func requireCheckRefused(t *testing.T, what string, res code.ChecksResult, err e
 	}
 }
 
-// A SECOND CLAIM IS REFUSED BEFORE IT APPENDS: two git nodes claiming one
+// A SECOND CLAIM IS REFUSED BEFORE IT APPENDS: two Gitlet nodes claiming one
 // attempt through the repository's one checks writer meet in its single
 // flight — the second decides from the rows the first's record left, and is
 // refused `claimed`, naming the first as the holder, with nothing appended, so

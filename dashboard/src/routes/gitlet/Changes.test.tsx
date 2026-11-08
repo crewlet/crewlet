@@ -40,7 +40,7 @@ const ORG = withDerived({
     { name: "Engineer", handle: "dev" },
   ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** A readiness of `met` of five, its first unmet precondition the approval. */

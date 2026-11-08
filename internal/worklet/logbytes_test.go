@@ -480,7 +480,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"— a purge's, or the weekly schedule's — retiring its dropping packs and adding their rescue, each at " +
 		"most code.MaxExpungeOutputs",
 	// A CLEAN SCAN is its maintainer's record that a repository owes no
-	// expunge, which takes the repository out of every git node's weekly
+	// expunge, which takes the repository out of every Gitlet node's weekly
 	// listing for code.ExpungeInterval: one a repository a week at the most,
 	// and none for one an expunge committed in that week. Held to a bound in
 	// TestTheCodeLogsDayPricesEveryRecordItTakes.
@@ -523,13 +523,13 @@ var codeLogNegligible = map[code.OpKind]string{
 	// with an ask still unanswered — or is reopened holding asks its end
 	// left — takes one, and the reference company's changes are each
 	// reviewed by the reviewer they ask before they merge.
-	code.OpAsks: "a change's asks for review settled by its repository's home git node through the " +
+	code.OpAsks: "a change's asks for review settled by its repository's home Gitlet node through the " +
 		"estate's code.conversation — ended once it closed or merged with asks still waiting, asked again " +
 		"once it is reopened holding asks its end left: at most once a close, a merge or a reopen of a " +
 		"change holding an ask, a few hundred bytes each; the reference company's changes are each " +
 		"reviewed by the reviewer they ask before they merge, so none ends with an ask waiting",
 	code.OpChangeLanded: "a change whose target came to hold its head outside a merge record — a " +
-		"person's own push of it — landed by its repository's home git node: once a change at most, " +
+		"person's own push of it — landed by its repository's home Gitlet node: once a change at most, " +
 		"in place of the merge record such a change never takes, and smaller than it (no pack and no " +
 		"principal); the reference company's changes are merged",
 	code.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
@@ -557,7 +557,7 @@ var codeLogNegligible = map[code.OpKind]string{
 	code.OpDequeue: "an entry taken out of its queue before it lands by code_dequeue_change, a person's or " +
 		"a seat's gesture: at most once an enqueue, a record naming the entry, who asked and its change's " +
 		"routing, smaller than an edit; the reference company's queued changes each land",
-	code.OpEject: "entries put out of their queue by their repository's home git node — a required check " +
+	code.OpEject: "entries put out of their queue by their repository's home Gitlet node — a required check " +
 		"failed on what they were tested in, their merge conflicted, their gate no longer held, their head " +
 		"moved or a fast-forward was none: at most once an enqueue, since an ejected entry has ended and " +
 		"only another enqueue queues its change again, each a record naming the entries, why — the failed " +
@@ -1980,7 +1980,7 @@ func uncommented(page string) string {
 // the log takes and the day leaves out makes it quietly short, and no figure
 // TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: the
 // change, review, merge, queue and check records this build's tools, its home
-// git nodes and its check runners append would come on top of a day that has
+// Gitlet nodes and its check runners append would come on top of a day that has
 // no room for them — as they did until they were priced here.
 //
 // So every op the code domain declares is exactly one of three: priced by the

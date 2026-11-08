@@ -100,7 +100,7 @@ func textCost(b []byte) int {
 // other string of a code tool's answer is (provenance.Neutralise: every
 // marker-shaped `[` lengthened into `[escaped `). The fence's label and closer
 // are read off provenance itself at init, so a fence grown longer is costed
-// longer; only the turn's own boundary, which no git node knows, is not —
+// longer; only the turn's own boundary, which no Gitlet node knows, is not —
 // text spelling it is a turn's own echo, and a page it lengthens past one
 // answer is refused by the tool naming a narrower read, never cut.
 

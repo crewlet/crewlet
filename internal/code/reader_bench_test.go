@@ -189,7 +189,7 @@ func BenchmarkRunPushes(b *testing.B) {
 // price page 1's choice between a full answer and a delta (choose) where it
 // reads the most: a delta from below every row of the interleaved repository,
 // beside MaxFullRetirements retirements — the most a full answer serves, so
-// the choice counts every one. `decide/cache` asks as a git node's cache
+// the choice counts every one. `decide/cache` asks as a Gitlet node's cache
 // does, from one position for both floors, so the full answer would serve
 // the very retirements the delta carries and the refs are counted one row
 // past the full answer's own rows deep; `decide/worst` asks the full answer's
@@ -263,7 +263,7 @@ func BenchmarkServeASnapshotPage(b *testing.B) {
 		// above the delta's floor, beside MaxFullRetirements retirements (at
 		// position 2): the most a full answer serves, so it would serve every
 		// one and the choice counts every one before it answers in full.
-		// Asked as a git node's cache asks it, from one position (1) for
+		// Asked as a Gitlet node's cache asks it, from one position (1) for
 		// both floors, the full answer would serve the very retirements the
 		// delta carries: they cancel, and the refs are counted one row past
 		// the full answer's own rows deep. Asked for the full answer's

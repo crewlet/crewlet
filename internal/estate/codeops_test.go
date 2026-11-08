@@ -372,7 +372,7 @@ func (f *fleet) conversedOn(repo string) []string {
 // change's conversation is asked of the repository's committer — the first of
 // the rendezvous order of the repository over every data node, the node a push
 // to it is proposed on — whichever node asks, so one node's change writer takes
-// a change's writes one at a time and a git node never publishes one; and an
+// a change's writes one at a time and a Gitlet node never publishes one; and an
 // unanswered one is asked of the runner-up under the same operation id.
 //
 // Mutation: key the operation by nothing, and the writes spread over whichever
@@ -448,7 +448,7 @@ func (f *fleet) checkedOn(repo string) []string {
 // A CHECK RECORD IS PUBLISHED BY A DATA NODE — the repository's committing
 // one: a write of a repository's checks is asked of the first of the
 // rendezvous order of the repository over every data node, the node its pushes
-// are proposed on, whichever node asks — a git node running the check among
+// are proposed on, whichever node asks — a Gitlet node running the check among
 // them, which never publishes one — so one node's checks writer takes a
 // repository's check writes one at a time; and an unanswered one is asked of
 // the runner-up under the same operation id.
@@ -704,7 +704,7 @@ func (d *codeDesk) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.L
 	return held.lifecycle, err
 }
 
-// deskGit is a desk as a git node's git half: what it reads by object id,
+// deskGit is a desk as a Gitlet node's git half: what it reads by object id,
 // every engine write and every merge preview it is asked are recorded and
 // answered as the desk's code half is, the desk's err included.
 type deskGit struct{ d *codeDesk }
@@ -726,7 +726,7 @@ func (g deskGit) MergePreview(_ context.Context, q code.MergePreviewQuery) (code
 	return held.previewed, err
 }
 
-// serveDesk serves d as data-d, the one data node — and the one git node — the
+// serveDesk serves d as data-d, the one data node — and the one Gitlet node — the
 // fleet's placements name.
 func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	t.Helper()
@@ -743,11 +743,11 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's —
 // a publication's, its layer whole — and each of an expunge's three records,
 // the admission's resolve, a cache's snapshot page, the receiver's pending
-// wait, the REST routes' listing, a seat's refs listing, a git node's
+// wait, the REST routes' listing, a seat's refs listing, a Gitlet node's
 // introduced pages and its compactor's, publisher's and maintainer's due
 // listings, and a seat's resolve of a ref reach a data node from a node that
 // holds no data —
-// and a read by object id and a merge preview the git node — with their
+// and a read by object id and a merge preview the Gitlet node — with their
 // arguments as they were sent (a seat's reads naming the colleague they are
 // made for, whose grant the answering node judges too), their answers come
 // back as they were given — a snapshot's layers, packs, refs, pushes,
@@ -1382,11 +1382,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A REF RESOLVED, and a READ BY OBJECT ID asked of the git node: each
+	// A REF RESOLVED, and a READ BY OBJECT ID asked of the Gitlet node: each
 	// query whole — the git read's floor, cursor, paths given as bytes and
 	// its sub-query — and each answer whole, the git read's page with its
 	// next cursor and the position its copy was read at. The walk stamps
-	// the git read's attempt itself (home, asked of its one git node first),
+	// the git read's attempt itself (home, asked of its one Gitlet node first),
 	// so that is the one field it adds to what the caller sent.
 	d.mu.Lock()
 	d.resolved = code.RefAnswer{Repo: ref, Refs: []code.ResolvedRef{
@@ -1420,7 +1420,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("git read asked %+v, want %+v", got, stamped)
 	}
 
-	// A MERGE PREVIEW asked of the git node, every field of it — a seat's
+	// A MERGE PREVIEW asked of the Gitlet node, every field of it — a seat's
 	// for the colleague it reads for, at its floor — and of its answer: the
 	// state, the conflicted paths it holds and how many more, and the
 	// position the copy was read at. Stamped home by the walk, as a read is.
@@ -1440,14 +1440,14 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("merge preview asked %+v, want %+v", got, stampedPreview)
 	}
 
-	// AN ENGINE WRITE asked of the git node, every field of it and of its
+	// AN ENGINE WRITE asked of the Gitlet node, every field of it and of its
 	// answer: a seat's commit of every kind of file operation onto a new
 	// branch from a start commit, and a cherry-pick of a commit onto the head
 	// it read — the principal with the run that made it, the operation, the
 	// floor, the message — and an answer carrying its outcome, its command,
 	// its commit, its push and position, a refusal of the change with its
 	// sentence and every conflict's stages. As for a read, the walk stamps
-	// its attempt itself, home where it is asked of its one git node first.
+	// its attempt itself, home where it is asked of its one Gitlet node first.
 	content, target := "hello\n", "docs/guide.md"
 	seatRun := code.Principal{Kind: code.PrincipalAgent, Seat: "dev", Run: code.RunProvenance{
 		TurnID: "019a0c2e-0000-7000-8000-0000000000d2", WorkBackend: "native", WorkKey: "ENG-412",
@@ -1826,7 +1826,7 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// SESSION'S floor to the record where it landed — never where it was
 	// refused or answered unchanged — and never its repository's: a
 	// conversation moves no git content, and the repository's floor is what
-	// a read of its objects has its git node sync to.
+	// a read of its objects has its Gitlet node sync to.
 	conversed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 97}
 	for _, tc := range []struct {
 		answer code.ConversationResult

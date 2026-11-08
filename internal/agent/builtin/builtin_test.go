@@ -1123,14 +1123,14 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// writes only where its writes are wired too: left out, every walk over
 		// this fixture met their authority rows as rules no registered tool
 		// answers.
-		Code: writeDeps(newCodeHost(), &codeWrites{}),
-		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
+		Code: writeDeps(newGitletHost(), &codeWrites{}),
+		// AND THE HEALTH TOOLS, over a lease table and the Gitlet nodes' status
 		// scatter, each with the requester ceiling's halves beside it —
 		// fleet_health's its own, code_status's code half wired as the code
 		// reads are: left out, their two rows read as rules no registered
 		// tool answers.
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(),
-			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newCodeHost())},
+			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newGitletHost())},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

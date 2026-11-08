@@ -23,7 +23,7 @@ import (
 // Estate is Gitlet's rows and its keyed git walk as a search reads
 // them: the asker's repositories (code.ReadRepos and code.ReadRepo, held to
 // the asker's grant by the node that serves them) and ONE repository's search
-// (code.GitSearch through the walk, which asks the repository's git nodes in
+// (code.GitSearch through the walk, which asks the repository's Gitlet nodes in
 // order). Declared here by its consumer; estate.CodeSeam answers both.
 type Estate interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
@@ -37,7 +37,7 @@ type Placement interface {
 	GitOrders(repoIDs []string) (map[string][]string, error)
 }
 
-// AskFunc scatters one sealed request to every git node and hands each reply
+// AskFunc scatters one sealed request to every Gitlet node and hands each reply
 // to each as it arrives, until ctx ends or each answers false
 // (queue.EventQueue.AskEach on topics.CodeSearch, which the engine binds). A
 // node with no broker hands it to its own answerer, its fleet being itself.
@@ -91,27 +91,27 @@ type Coverage struct {
 	// Searched is how many repositories answered their lines.
 	Searched int `json:"searched"`
 	// NotIndexed is the `search: indexed` repositories among them read with
-	// git grep, no index of their git nodes answering for the commit: the
+	// git grep, no index of their Gitlet nodes answering for the commit: the
 	// same lines, read more slowly.
 	NotIndexed RepoSet `json:"not_indexed"`
-	// Building is the repositories left unanswered because the last git node
+	// Building is the repositories left unanswered because the last Gitlet node
 	// asked for them was building their index: the first index holder, where
 	// their order named no runner-up to ask. A runner-up that was asked and
 	// did not answer is named in NotAnswering instead — the coverage names
 	// what the LAST node asked for a repository said of it.
 	Building RepoSet `json:"building"`
-	// NotAnswering is every git node that did not answer for a repository it
+	// NotAnswering is every Gitlet node that did not answer for a repository it
 	// was asked for — silent, busy, failing or holding no key the request is
 	// signed under — with the repositories left unanswered for it.
 	NotAnswering []NodeGap `json:"not_answering"`
-	// NotPermitted is the repositories a git node judged the asker's grant
+	// NotPermitted is the repositories a Gitlet node judged the asker's grant
 	// not to cover: the chart moved since the asker's listing.
 	NotPermitted RepoSet `json:"not_permitted"`
 	// GrepNotNamed is the `search: grep` repositories the asker may read
 	// that an unfiltered search leaves out: each is searched only when a
 	// repo: filter names it, at most MaxGrepRepos at once.
 	GrepNotNamed RepoSet `json:"grep_not_named"`
-	// Stale is the repositories left unanswered because the last git node
+	// Stale is the repositories left unanswered because the last Gitlet node
 	// asked for them was behind — its copy still syncing to the log, or its
 	// chart behind the company's configuration: the runner-up, or the first
 	// node where the order named no runner-up.
@@ -121,7 +121,7 @@ type Coverage struct {
 	NoRef RepoSet `json:"no_ref"`
 	// PastLimit is the repositories none of whose lines can be in the
 	// answer: it holds Limit lines, every one of a repository named before
-	// them. A git node passes over such a repository unread once its own
+	// them. A Gitlet node passes over such a repository unread once its own
 	// first Limit lines are of repositories named before it, so a search for
 	// a common word reads the repositories that fill the limit rather than
 	// the company; whether one was read or passed over turns on how the reads
@@ -154,10 +154,10 @@ type Coverage struct {
 // those searched another way.
 //
 // WHAT THE BUDGET DOES NOT HOLD is the coverage's shape — its fields' names
-// and counts, under 600 bytes — and one entry for each git node that did not
+// and counts, under 600 bytes — and one entry for each Gitlet node that did not
 // answer, its id (at most 64 bytes) and its count, under 140 bytes: every
 // such node is named, which is the point of the entry. A fleet of sixteen
-// silent git nodes so takes a coverage to under 7 KiB. Its own per-set cap of
+// silent Gitlet nodes so takes a coverage to under 7 KiB. Its own per-set cap of
 // 100 names was an eighth of an answer by its arithmetic and three quarters
 // of one by the names' real length, with NotAnswering's sets beside it
 // growing with the fleet.
@@ -176,7 +176,7 @@ type RepoSet struct {
 	Names []string `json:"names"`
 }
 
-// NodeGap is one git node that did not answer, why, and the repositories left
+// NodeGap is one Gitlet node that did not answer, why, and the repositories left
 // unanswered for it.
 type NodeGap struct {
 	Node  string  `json:"node"`
@@ -185,7 +185,7 @@ type NodeGap struct {
 }
 
 // MaxGrepRepos is the most `search: grep` repositories one search reads.
-// JUDGMENT: a monorepo's git grep costs one to two CPU-seconds of a git
+// JUDGMENT: a monorepo's git grep costs one to two CPU-seconds of a Gitlet
 // node's read lane, so eight is a search that can hold a node's seat share
 // for most of its budget — more is a scan of the company, which the index is
 // for.
@@ -201,7 +201,7 @@ const MaxGrepRepos = 8
 // rounds only where a node did not answer the first.
 const RoundBudget = code.GitShareWait + code.SearchBudget + 2*code.ReplyMargin
 
-// Searcher answers code searches over the fleet's git nodes.
+// Searcher answers code searches over the fleet's Gitlet nodes.
 type Searcher struct {
 	estate    Estate
 	placement Placement
@@ -499,7 +499,7 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head s
 		return Answer{}, "", &RepoRefusal{Repo: repo.Name, Err: err}
 	}
 	if got.Search == nil {
-		return Answer{}, "", fmt.Errorf("codesearch: repo:%s: the git node answered a search with no search",
+		return Answer{}, "", fmt.Errorf("codesearch: repo:%s: the Gitlet node answered a search with no search",
 			repo.Name)
 	}
 	ans := got.Search
@@ -547,7 +547,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, he
 	}
 	orders, err := s.placement.GitOrders(ids)
 	if err != nil {
-		return Answer{}, fmt.Errorf("codesearch: place %d repositories on the git nodes: %w", len(ids), err)
+		return Answer{}, fmt.Errorf("codesearch: place %d repositories on the Gitlet nodes: %w", len(ids), err)
 	}
 	all := make([]*asked, len(repos))
 	for i, r := range repos {
@@ -686,7 +686,7 @@ func classify(c *Coverage, a *asked, tips map[string]string) {
 	}
 	switch {
 	case len(a.order) == 0:
-		gap(c, "", "no git node serves the repository", name)
+		gap(c, "", "no Gitlet node serves the repository", name)
 	case a.silent || r.Outcome != OutcomeUnready:
 		gap(c, a.order[a.at-1], whyOf(a), name)
 	case r.Unready == code.UnreadyIndexBuilding:

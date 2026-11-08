@@ -8,7 +8,7 @@ import (
 
 // A GIT READ IS SERVED UNTIL ITS ANSWER IS DUE, AND NOT A MOMENT LONGER.
 //
-// A git node answering a read by object id ([GitQuery]) for an asker that
+// A Gitlet node answering a read by object id ([GitQuery]) for an asker that
 // waits until a deadline must SEND its answer while the asker still listens:
 // one that arrives after the asker's attempt has ended is heard as nothing,
 // and an asker that heard nothing for its whole attempt takes the node for
@@ -30,7 +30,7 @@ import (
 // a process's deadline computed before it queued for its slot runs past the
 // cut by however long it queued.
 //
-// THE SAME CUT HOLDS A READ ANSWERED IN PROCESS: a git node's own seats' reads
+// THE SAME CUT HOLDS A READ ANSWERED IN PROCESS: a Gitlet node's own seats' reads
 // are given the attempt a remote asker's are, ending the same margin before
 // it, so what a read is answered does not depend on which node asked it.
 

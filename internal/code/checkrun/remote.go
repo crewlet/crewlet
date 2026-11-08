@@ -20,7 +20,7 @@ import (
 // there, so what bounds it is the company's, never one node's: at most
 // code.checks.remote.max_running of them at once, and at most
 // code.checks.remote.box_hours_per_day hours of them started in a UTC day,
-// however many git nodes run checks.
+// however many Gitlet nodes run checks.
 //
 // # A slot is a lease
 //
@@ -83,12 +83,12 @@ import (
 // takes each box's slot from what that listing left free, and a node that
 // found max_running full lists them again only once a slot it held is given
 // back, or a walk backstop ([Timing.Backstop]) after it found them full: a
-// capped fleet costs the store a listing a git node a backstop, never one a
+// capped fleet costs the store a listing a Gitlet node a backstop, never one a
 // walk, which the queue's records nudge up to once a second ([WalkGap]). A
 // slot another node frees is seen a backstop late at most, as a nudge the
 // watch lost is. REJECTED: a
 // watch on the class (coord's WatchLive) — every renewal of every slot
-// reaches every git node, 0.8 a second at the default cap and 51 at its
+// reaches every Gitlet node, 0.8 a second at the default cap and 51 at its
 // bound, to learn of a release that the node making it learns for free, while
 // a lapse is no write and still needs the backstop.
 
@@ -157,7 +157,7 @@ func RemoteHolds() []RemoteHold { return []RemoteHold{HoldMaxRunning, HoldBoxHou
 // Valid reports whether h is one of [RemoteHolds].
 func (h RemoteHold) Valid() bool { return slices.Contains(RemoteHolds(), h) }
 
-// RemoteSlots is one git node's side of the company's remote caps: the slots
+// RemoteSlots is one Gitlet node's side of the company's remote caps: the slots
 // it takes and keeps, and the minutes it charges.
 type RemoteSlots struct {
 	nodeID   string

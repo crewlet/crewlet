@@ -83,7 +83,7 @@ import (
 // be run on a lane wide enough for the weights to decide who is granted a
 // release, not the lane's width.
 //
-// THE LANE IS AS WIDE AS THE MACHINE'S CORES (git.max_transfers = cores) —
+// THE LANE IS AS WIDE AS THE MACHINE'S CORES (gitlet.max_transfers = cores) —
 // the runs arms' unless shareSlotsEnv sets theirs — not the production four
 // a core: the stand-in client here reads as fast as the
 // pipe allows, so every upload-pack is bound by its CPU, and at four a core

@@ -26,7 +26,7 @@ tracker:
 knowledge:
   backend: none
 code:
-  native: true
+  backend: gitlet
   remote_credentials:
     WEB_MIRROR_TOKEN: {hosts: [mirror.example.com]}
   repos:
@@ -45,7 +45,7 @@ roles:
 `
 
 // THE MIRROR ALARM FIRES ON ITS HOME (M6-D16, ADR-0015), through the wiring a
-// running node has: a STARTED git node, alone the home of every repository,
+// running node has: a STARTED Gitlet node, alone the home of every repository,
 // whose push mirror's every dial is refused — so its home loop's mirrors
 // worker tries it at its first pass and again once its retry is due, each
 // attempt failing at the dial — raises nothing while the mirror is inside its
@@ -60,7 +60,7 @@ roles:
 // attempt, or at the interval alone, and it fires inside its promise.
 func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	t.Parallel()
-	b := gitNodeBootstrap(t, nil)
+	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, mirrorCompany))
 	var offset atomic.Int64
 	clock := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }

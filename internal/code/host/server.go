@@ -282,7 +282,7 @@ type Options struct {
 	// re-syncs draw on its run's on the same seat's bucket, and a check's
 	// box's on its attempt's (boxlimit.go). ONE, because the census gives a
 	// seat one term on the log: a box's buckets apart from its turns' tools'
-	// were twice that term on every git node.
+	// were twice that term on every Gitlet node.
 	Resyncs *code.Resyncs
 	// Current reports whether this node serves the company's configuration:
 	// false on a node confirmed behind it, which builds no SEAT's write and
@@ -292,7 +292,7 @@ type Options struct {
 	// Boxes admits a box to /box/git/: the run tokens a coding box presents
 	// and the run rows its grants and floor are read from, and the check
 	// tokens a check's box presents. Every part required, as every field the
-	// host needs: a git node serves boxes whatever its company runs, since a
+	// host needs: a Gitlet node serves boxes whatever its company runs, since a
 	// box's run may have been launched, and a check's box made, by any node.
 	Boxes Boxes
 	// NodeID is this node, which a proposal names as the one that received

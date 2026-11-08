@@ -560,7 +560,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		return nil, err
 	}
 	// AND WHAT IT DOES BESIDE THIS NODE'S TIER A ([Options.TierWarnings]),
-	// in the answer that applies it: a person turning code.native on reads
+	// in the answer that applies it: a person turning Gitlet on reads
 	// the cross-tier consequence where they made the change, rather than in
 	// a node's log.
 	warnings := s.warnings(company)

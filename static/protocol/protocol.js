@@ -93,11 +93,11 @@ var QUERY_TIMEOUT_MS = 1e4;
 * half on the other log would be drawn from before the tab's own write there.
 *
 * `code_search` IS DELIBERATELY ABSENT: it answers at the tip it names — each
-* repository searched at the commit its git node holds, named in the answer's
+* repository searched at the commit its Gitlet node holds, named in the answer's
 * `tips`, and a hit's file read at that commit — so it takes no floor, and the
 * engine refuses `read_level=session` and `min_position` on it
 * (`internal/api/queries.TestCodeSearchIsNotASessionQuery`). Listed here, a
-* code write would scatter a search to every git node only to be refused.
+* code write would scatter a search to every Gitlet node only to be refused.
 */
 var SESSION_QUERIES = {
 	tracker: [

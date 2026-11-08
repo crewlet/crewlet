@@ -241,9 +241,9 @@ is unreachable, or at once on a person's purge, which keeps no grace; a
 deleted repository's own purge removes the rest. So a company's repositories
 grow as long as it works in them — on `nats`, on every member's disk beside
 the logs, and against the bucket's reservation (below), so a bucket at its
-reservation refuses a push as it refuses any other upload. And a git node
+reservation refuses a push as it refuses any other upload. And a Gitlet node
 bringing its
-[cache](gitlet.md#the-cache-on-a-git-node) of a repository up from nothing
+[cache](gitlet.md#the-cache-on-a-gitlet-node) of a repository up from nothing
 reads every one of those objects, one a push and sixteen at once.
 
 #### Its byte reservation
@@ -384,7 +384,7 @@ up to the point the provider has no room left, when a write is refused as full
   order, and as many at once as its reader keeps up with — up to four**, so
   a provider that limits what one connection carries (about 80–90 MB/s from
   S3) does not limit a large download, a backup's copy of a large file or a
-  git node's sync of a large push. Each range is asked for a little before
+  Gitlet node's sync of a large push. Each range is asked for a little before
   it is needed, so a bucket's first byte is paid once a read rather than
   once a range. Measured against a bucket that sent each connection at most
   80 MB/s, a 128 MiB file read at 335–353 MB/s, at 284–310 with the bucket
@@ -557,7 +557,7 @@ up to the point the provider has no room left, when a write is refused as full
   nothing holds the node back, and `.gate.waiting`). An operation's retries
   are its attempts less its requests that made one — a request ended before
   its first attempt is counted `unsent`. Throttles rising is the fleet over
-  the bucket's rate for its prefix — more git nodes syncing at once than it
+  the bucket's rate for its prefix — more Gitlet nodes syncing at once than it
   takes, or a bucket shared with other traffic; failures rising is the
   bucket's own fault; requests given up are a bucket that failed every
   attempt of a request for most of a minute. See the
@@ -1022,7 +1022,7 @@ than the longest read a clone of the largest pack a row can name is allowed
 (21 hours 21 minutes) by two hours and thirty-nine minutes, more than the two
 hours the clocks of the node sweeping and the broker that stamped the
 retirement may disagree by while no node raises
-[`clock_skew`](../reference/alarms.md) — so a git node still serving the old
+[`clock_skew`](../reference/alarms.md) — so a Gitlet node still serving the old
 pack list, or a clone that began on it, finishes its read.
 The `code-retention` duty then removes the rows past their day — by a record
 on the code log for each repository holding some, which every data node
@@ -1055,8 +1055,8 @@ and the expunge's — what it keeps, and why it drops in two records — are
 The first derived rows are Gitlet's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index
 layer, its bitmap and the commit-graph layer over the same packs, written once
-for the fleet rather than by every git node over the repository's whole
-history. Any git node can build a layer again from the repository's packs,
+for the fleet rather than by every Gitlet node over the repository's whole
+history. Any Gitlet node can build a layer again from the repository's packs,
 which are live rows, so a lost part costs a rebuild and nothing else: it
 raises no `objects_missing`, and a backup leaves the parts out. A layer's bytes
 are cut into parts of at most **1 GiB**, every part of a layer uploaded at

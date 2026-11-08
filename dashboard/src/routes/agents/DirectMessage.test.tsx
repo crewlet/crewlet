@@ -58,7 +58,7 @@ const CHATLET: OrgServices = {
   tracker: "worklet",
   knowledge: "doclet",
   chat: "chatlet",
-  code: "native",
+  code: "gitlet",
 };
 
 beforeEach(() => {

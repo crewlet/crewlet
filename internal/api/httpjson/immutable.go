@@ -55,7 +55,7 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // The cookie cannot be in it: the guard re-issues a served session's cookie
 // every five minutes of use (session.ReissueAfter), so a key holding its bytes
 // stopped matching minutes after an answer was kept, and every page a person
-// went back to was read again on its repository's home git node.
+// went back to was read again on its repository's home Gitlet node.
 //
 // Nor is the key held apart by emptying the browser's cache whenever who it is
 // signed in as may change (`Clear-Site-Data`): the guard refuses an expired

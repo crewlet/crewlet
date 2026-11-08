@@ -95,7 +95,7 @@ import (
 // have the seat write anything but its own work, a change it owns or one in a
 // repository it owns — else not_permitted, an answer unchanged included.
 //
-// A REVISION'S FACTS ([Revise], revise.go) are the repository's home git
+// A REVISION'S FACTS ([Revise], revise.go) are the repository's home Gitlet
 // node's, which no principal asks: they take a LIVE change (change_closed,
 // change_merged), and are decided only while they are of the change's head
 // revision against its current target, later than the facts it holds of that
@@ -343,11 +343,11 @@ func (w ConversationWrite) validFields() error {
 	case w.Revise != nil || w.Mergeability != nil || w.Asks != nil:
 		// THE HOME'S OWN WRITE: a revision's facts, a change's mergeability
 		// and the settling of its asks with its lifecycle are the
-		// repository's home git node's, asked by no principal, so one naming
+		// repository's home Gitlet node's, asked by no principal, so one naming
 		// a principal would be judged as somebody nobody named.
 		if w.Asker != (Principal{}) {
 			return badField("asker", "a revision's facts, a change's mergeability and the settling of its asks "+
-				"are the repository's home git node's own, which no principal asks")
+				"are the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)

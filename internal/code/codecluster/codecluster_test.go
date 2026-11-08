@@ -19,10 +19,10 @@ import (
 // Not t.Parallel(): two three-member clusters at once on one runner is the
 // contention internal/solo exists to remove.
 
-// TestTheCodeHostPassesTheFleetSuiteOnTheBroker runs every multi-node case
+// TestGitletPassesTheFleetSuiteOnTheBroker runs every multi-node case
 // with the broker's own object store: one bucket, reached by each member
 // through its own broker client, as a fleet's data nodes reach it.
-func TestTheCodeHostPassesTheFleetSuiteOnTheBroker(t *testing.T) {
+func TestGitletPassesTheFleetSuiteOnTheBroker(t *testing.T) {
 	codetest.RunFleet(t, func(t *testing.T) codetest.Cluster { return startCluster(t, "nats") })
 }
 

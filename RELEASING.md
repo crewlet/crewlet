@@ -602,7 +602,7 @@ relies on Debian's reading, the one Debian ships its git under, and on no
 reading of its own. A git whose processes hold no OpenSSL at all would need a
 libcurl built without libssh2 and LDAP, which the image does not build.
 
-**A git security release is an engine release.** Every git node runs the
+**A git security release is an engine release.** Every Gitlet node runs the
 image's git, so a git CVE reaches a deployment only through a bump of the pin
 and an image built from it — Debian's security updates to its own git never do.
 A release cut while the pin is behind a security patch of its series is one to

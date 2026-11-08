@@ -320,7 +320,7 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 }
 
 // A HOLDER BACK WITHIN THE GRACE MOVES NO INDEX. The order is over the live
-// git nodes, and a restarting node leaves it for the length of its restart,
+// Gitlet nodes, and a restarting node leaves it for the length of its restart,
 // which made the next node of each of its repositories' orders a holder that
 // filled a copy and built a whole index — dropped again the moment the node
 // was back. A node that becomes a holder fills and builds nothing until its

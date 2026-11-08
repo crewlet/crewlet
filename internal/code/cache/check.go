@@ -36,7 +36,7 @@ import (
 // .rev also carry their pack's checksum — the pack's name — in the twenty
 // before it, and a .pack's trailer IS its name. The rule has ONE
 // implementation, code.HashTrailer, which a published layer's check
-// (code.CheckLayer) holds the layer's files to as well, so a layer a git node
+// (code.CheckLayer) holds the layer's files to as well, so a layer a Gitlet node
 // fetched and the layer it keeps are judged by one reading (ADR-0008). No git
 // process runs: git's own verifiers cost twenty times a trailer for the graph
 // and are blind to the bitmap.

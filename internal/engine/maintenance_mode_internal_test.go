@@ -122,7 +122,7 @@ func aNodeOf(t *testing.T, doc string, mode statelog.MaintenanceMode) (*Engine, 
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&b.Git)
+	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {

@@ -87,7 +87,7 @@ var (
 	// ([LayerRef.Check]), wrapped with the field and the reason: what every
 	// holder of a layer row refuses before any byte moves — the committer
 	// deciding a publication, where it is the proposal's fault too
-	// ([ErrInvalidProposal] beside it), and a git node about to install one.
+	// ([ErrInvalidProposal] beside it), and a Gitlet node about to install one.
 	ErrInvalidLayer = errors.New("code: a published layer is malformed")
 
 	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
@@ -151,7 +151,7 @@ var (
 	// ([CheckLayer], [LayLayer]): a trailer, a pack it covers, the
 	// multi-pack-index its bitmap belongs to, the bases its commit-graph
 	// layer names, a section's size — wrapped naming the field. A DEFINITE
-	// answer about the bytes, never retried: a git node reads a part
+	// answer about the bytes, never retried: a Gitlet node reads a part
 	// through the store's own hash check ([FetchLayerPart]), so the bytes
 	// are the ones the publisher stored, and what differs is the
 	// publisher's — the node serves from the chain below the layer, and the
@@ -163,7 +163,7 @@ var (
 
 	// ErrObjectNotFound is an object id a read by oid ([GitQuery]) named —
 	// whole, or an abbreviation no object begins with — that the repository
-	// does not hold. Concluded only at the log's head: the git node that
+	// does not hold. Concluded only at the log's head: the Gitlet node that
 	// answers looks again after one linearizable sync, since the asker may
 	// have learned of a push this node had not synced yet, and only then
 	// answers this, naming the id.
@@ -184,7 +184,7 @@ var (
 	// ErrSliceTooLarge is a read by oid too large to answer: one item of its
 	// answer — a line of a patch — longer than a page, or git work past the
 	// read's deadline (gitproc.ReadDeadline, or the walk's bound by the
-	// repository's objects), which another git node would take as long
+	// repository's objects), which another Gitlet node would take as long
 	// over. Wrapped naming the narrowing that would answer it — a line
 	// range, the paths a diff names, a narrower range — and never cut: a
 	// page that ended inside an item would be read as the whole of it.
@@ -192,9 +192,9 @@ var (
 )
 
 // ErrGitUnready is a read by oid ([GitQuery]) or an engine write
-// ([EngineWrite]) that THIS git node could not answer inside its budget, for a
+// ([EngineWrite]) that THIS Gitlet node could not answer inside its budget, for a
 // reason about the node rather than about the repository's content — so
-// another git node may answer it, and a walk asking git nodes in turn moves on
+// another Gitlet node may answer it, and a walk asking Gitlet nodes in turn moves on
 // from this one without holding it against the node: a node that is syncing,
 // at its share, holding no chart or holding no copy now is the right node a
 // moment later. Every other refusal of a read or a write is about the request
@@ -213,10 +213,10 @@ type ErrGitUnready struct {
 }
 
 func (e *ErrGitUnready) Error() string {
-	return fmt.Sprintf("code: this git node cannot answer now (%s): %s", e.Reason, e.Detail)
+	return fmt.Sprintf("code: this Gitlet node cannot answer now (%s): %s", e.Reason, e.Detail)
 }
 
-// UnreadyReason is why a git node answered a read [ErrGitUnready]: a closed
+// UnreadyReason is why a Gitlet node answered a read [ErrGitUnready]: a closed
 // set ([UnreadyReasons]), each a fact about the node that answered.
 type UnreadyReason string
 
@@ -262,7 +262,7 @@ const (
 	// repository failed on nothing the code log, the object store or the
 	// rows said (its disk refusing a write, its cache stopping), or one of
 	// the short checks of what the read names ran its whole bound, which no
-	// healthy node takes over a few ids. Another git node's fill may serve
+	// healthy node takes over a few ids. Another Gitlet node's fill may serve
 	// the read.
 	UnreadyNodeFailed UnreadyReason = "node_failed"
 	// UnreadyIndexBuilding means the read is a search of a `search: indexed`
@@ -308,7 +308,7 @@ func (r UnreadyReason) Valid() bool { return slices.Contains(UnreadyReasons(), r
 // says nothing about the repository the walk asks for — passing the fill for
 // it would answer a fleet busy everywhere with a download of every repository
 // read on each busy node, each evicting a warm one to make the room, and add
-// no capacity anywhere. So one repository's seat reads are served by the git
+// no capacity anywhere. So one repository's seat reads are served by the Gitlet
 // nodes holding a copy of it: its home, and any node a person's fetch, a push
 // or an earlier fill has warmed — a ceiling ADR-0089 states.
 //

@@ -294,7 +294,7 @@ func namedIn(ctx context.Context, tx *sql.Tx, name string, cp statelog.Position)
 
 // repoViewIn reads one repository and its rules as a push is judged by them
 // ([pushRulesIn]: no gate) in tx, at the checkpoint cp — the row every git
-// request's admission ([Reader.Resolve]), every page of a git node's sync
+// request's admission ([Reader.Resolve]), every page of a Gitlet node's sync
 // ([Reader.Snapshot]), every resolution of a ref and of a repository's detail,
 // and the lifecycle decides read. A decide that rewrites the rules reads them
 // whole beside it ([protectionsIn]), as it reads the path owners.
@@ -410,7 +410,7 @@ func (p *page) left() int { return p.maxRows - p.rows }
 // 1's checkpoint], in (position, pack id, part) order. A delta's floor is its
 // own Since. A full answer's is q.RetiredSince, the caller's own position —
 // what the full answer stands in for a delta from — so a cache reading the
-// whole of a repository, as every git node does at its first round after a
+// whole of a repository, as every Gitlet node does at its first round after a
 // restart, can still tell a pack file a compaction retired from one no row
 // accounts for, and keep what a merge leaves whole (its commit-graph) rather
 // than drop it for every repository compacted while the node was down. A
@@ -559,7 +559,7 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 // THEN THE TWO ANSWERS ARE WEIGHED LIKE WITH LIKE ([deltaOutweighs]): the
 // delta's refs, packs and retirements against the full answer's refs, packs
 // and the retirements it would serve. A caller asking from the position it
-// holds — what a full answer stands in for a delta from, and a git node's
+// holds — what a full answer stands in for a delta from, and a Gitlet node's
 // cache's own — has a full answer that would serve the very retirements the
 // delta carries: they sit on both sides and cancel, and the delta is answered
 // full only where its refs and packs outweigh the full answer's. Counted on
@@ -654,7 +654,7 @@ func retiredAbove(ctx context.Context, tx *sql.Tx, repoID string, floor statelog
 // MaxTombstonesPerRepo tombstones beside its live refs, so a cache synced
 // before a clean-up that deleted more refs than the repository keeps — sixty
 // thousand deleted, forty thousand left — would be handed a delta of sixty
-// thousand rows where the full answer is forty, on every git node holding the
+// thousand rows where the full answer is forty, on every Gitlet node holding the
 // repository, and a cache holds a whole snapshot in memory before it writes
 // any of it. Answered here, NO DELTA IS EVER MORE ROWS THAN THE FULL ANSWER,
 // so by rows the largest answer the reader serves is what it was before
@@ -2090,7 +2090,7 @@ func (q ReadQuery) validateRunPushes() error {
 }
 
 // validateCompactionDue is [ReadQuery.validate] for a `compaction_due` read:
-// the engine's own — a git node's compactor polling for the repositories a
+// the engine's own — a Gitlet node's compactor polling for the repositories a
 // compaction may be due in — so it names NO asker, as an `introduced` read
 // does: a principal's read of the duty listing would be held to nothing,
 // and every surface a principal reads Gitlet through names its asker,
@@ -2135,7 +2135,7 @@ func (q ReadQuery) validateCompactionDue() error {
 }
 
 // validatePublicationDue is [ReadQuery.validate] for a `publication_due` read:
-// the engine's own — a git node's publisher polling for the repositories a
+// the engine's own — a Gitlet node's publisher polling for the repositories a
 // publication may be due in — so it names NO asker, for the `compaction_due`
 // read's reason, and nothing else at all: no repository, no filter, no range,
 // no floor and no limit, since its partial index holds exactly the
@@ -2226,7 +2226,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 }
 
 // validateIndexed is [ReadQuery.validate] for an `indexed` read: the
-// engine's own — a git node's indexer listing the repositories it may keep
+// engine's own — a Gitlet node's indexer listing the repositories it may keep
 // an index of — so it names NO asker, for an `introduced` read's reason, and
 // nothing but its cursor: exactly what an `expunge_due` read names, whose
 // rule it is held to.
@@ -2965,7 +2965,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	return rows.Err()
 }
 
-// introduced serves one page of a repository's pushes in LOG ORDER for a git
+// introduced serves one page of a repository's pushes in LOG ORDER for a Gitlet
 // node's index of which push introduced each commit: (After, Through]
 // ascending — Through zero meaning this read's own checkpoint — or below
 // Before descending, newest first, down to the oldest push the rows keep;
@@ -3356,7 +3356,7 @@ func cutDueCursor(s string) (int64, string, bool) {
 // published ones down — and listed again once its commit lands. Listed, it
 // would have its publisher plan and build a layer for the committer to refuse
 // stale, at every poll until the commit: where the begin dropped the chain's
-// root, a whole base layer with its bitmap, the costliest build a git node
+// root, a whole base layer with its bitmap, the costliest build a Gitlet node
 // makes. A residual predicate on the same walk, over the row the listing reads
 // for its columns anyway: the expunges open are a handful in any fleet.
 func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
@@ -3538,7 +3538,7 @@ func cutExpungeCursor(cursor string) (weekly bool, after *expungeAfter, ok bool)
 // indexed serves one page of an `indexed` read ([ReadIndexed]): the active
 // and archived repositories searched by index, by name after the cursor —
 // ONE SEEK of code_repos_search_idx (replicated 0107), its partial predicate
-// repeated verbatim, which holds exactly the repositories a git node's
+// repeated verbatim, which holds exactly the repositories a Gitlet node's
 // indexer may keep an index of. A FULL LISTING, never a delta from the last
 // poll's, for the compaction's listing's reason.
 func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {

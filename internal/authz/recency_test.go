@@ -255,7 +255,7 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		authz.ActionFleetHealth: "a read of the fleet's nodes and their alarms " +
 			"changes nothing, and it is a tool a granted seat holds, which no " +
 			"step-up reaches",
-		authz.ActionCodeStatus: "a read of the git nodes' caches changes nothing, " +
+		authz.ActionCodeStatus: "a read of the Gitlet nodes' caches changes nothing, " +
 			"and it is a tool a granted seat holds, which no step-up reaches",
 		authz.ActionModelsCheck: "a model's checks change no config and no " +
 			"credential: they spend a few tokens on a call the company already makes",

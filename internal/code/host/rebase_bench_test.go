@@ -73,7 +73,7 @@ const (
 	rebaseTreeFilesLarge = 100_000
 )
 
-// rebaseRig is one arm's fixture: one git node holding a repository whose main
+// rebaseRig is one arm's fixture: one Gitlet node holding a repository whose main
 // holds a tree of the arm's files, and a change from feature of the arm's
 // commits on it, opened by pat.
 type rebaseRig struct {

@@ -125,7 +125,7 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	// custody keeper settles a stateless node's rows into this node's days
 	// until it leaves the group. (The memory fill is none of them: it only
 	// embeds, and its order is the memory sync's, below.)
-	for _, writer := range []string{"stopLearning", "stopScheduler", "stopCodeHost",
+	for _, writer := range []string{"stopLearning", "stopScheduler", "stopGitletHost",
 		"stopLedgers", "stopKeeper"} {
 		if at(writer) > at("stopUsage") {
 			t.Errorf("the teardown runs the usage publisher's last flush before %s, "+
@@ -135,7 +135,7 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	// The ledgers' last flush once every producer of their records has
 	// stopped: of auxiliary spend, the learning passes and the sandbox's
 	// condensations; of reads, Gitlet.
-	for _, producer := range []string{"stopLearning", "stopSandbox", "stopCodeHost"} {
+	for _, producer := range []string{"stopLearning", "stopSandbox", "stopGitletHost"} {
 		if at(producer) > at("stopLedgers") {
 			t.Errorf("the teardown flushes the ledgers before %s, whose records then "+
 				"reach no flush", producer)

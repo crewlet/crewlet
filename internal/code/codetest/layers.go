@@ -22,7 +22,7 @@ import (
 // THE PUBLISHED LAYERS AS A CASE READS THEM (ADR-0091): every cache synced at
 // the log's head holds an installed chain that is a PREFIX of the rows' chain,
 // in the rows' order, every installed layer's files passing the check every
-// git node holds a layer to (code.CheckLayer) over packs the copy holds — M2's
+// Gitlet node holds a layer to (code.CheckLayer) over packs the copy holds — M2's
 // rows invariant, extended to the layers, which every case's convergence check
 // asks of every copy (cacheHolds).
 
@@ -242,7 +242,7 @@ func publicationOf(c *Case, n Node) code.PublicationCandidate {
 	return cand
 }
 
-// maintainerOf is the git node that maintains RepoName, as each node's
+// maintainerOf is the Gitlet node that maintains RepoName, as each node's
 // compactor asks: by its maintenance's charge.
 func maintainerOf(c *Case) Node {
 	c.T.Helper()
@@ -255,13 +255,13 @@ func maintainerOf(c *Case) Node {
 			return n
 		}
 	}
-	c.T.Fatalf("no git node maintains %s", RepoName)
+	c.T.Fatalf("no Gitlet node maintains %s", RepoName)
 	return nil
 }
 
 // maintains is whether n's compactor takes itself for cand's maintainer, asked
 // as each of its passes asks: by its maintenance's charge, off one listing of
-// the git nodes for every repository it judges.
+// the Gitlet nodes for every repository it judges.
 func maintains(n Node, cand code.PublicationCandidate) (bool, error) {
 	yes, err := n.Maintainers().MaintainerOf(map[string]int64{cand.ID: n.Compactor().PlacedBy(cand.LiveObjects)})
 	return yes[cand.ID], err
@@ -373,8 +373,8 @@ func spoilLayerPart(c *Case, n Node, i int) code.LayerRef {
 }
 
 // freshNode is node n killed, its cache directory removed and restarted: a
-// git node that joins the fleet with nothing, whose first round of each
-// repository is a full one. A topology that kills and restarts its git nodes
+// Gitlet node that joins the fleet with nothing, whose first round of each
+// repository is a full one. A topology that kills and restarts its Gitlet nodes
 // together (one process's, SoloFleet) restarts every other node too, so a
 // handle to any node taken before it names a node that is gone: a case
 // resolves such a handle again by its id (nodeByID).
@@ -389,7 +389,7 @@ func freshNode(c *Case, n Node) Node {
 	return nodeByID(c, id)
 }
 
-// nodeByID is the running git node called id, as the fleet runs it now.
+// nodeByID is the running Gitlet node called id, as the fleet runs it now.
 func nodeByID(c *Case, id string) Node {
 	c.T.Helper()
 	for _, m := range c.Fleet.Nodes() {
@@ -397,6 +397,6 @@ func nodeByID(c *Case, id string) Node {
 			return m
 		}
 	}
-	c.T.Fatalf("no running git node %s", id)
+	c.T.Fatalf("no running Gitlet node %s", id)
 	return nil
 }

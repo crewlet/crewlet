@@ -111,7 +111,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// Gitlet — read after the runtime this apply starts, as
 	// the native halves are: the same deps the operator catalogue builds
 	// per call, over the router, so a seat on a node without the code log or
-	// the `git` role reads and changes the company's repositories through
+	// the `gitlet` role reads and changes the company's repositories through
 	// the nodes that hold them. Registered for every seat; the code writes
 	// are offered only to a seat whose code tier writes, and left off every
 	// other seat's surfaces ([Company.withheldFrom]).

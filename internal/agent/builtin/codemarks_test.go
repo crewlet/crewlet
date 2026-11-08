@@ -22,7 +22,7 @@ import (
 // it.
 func TestACodeMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	writes := &codeWrites{}
 	wired := codeDeps(host)
 	wired.Writer = writes
@@ -79,7 +79,7 @@ func TestACodeMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 // Worklet's position is asked, red.
 func TestACodeMarkCarriesTheCallersFloor(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	writes := &codeWrites{}
 	wired := codeDeps(host)
 	wired.Writer = writes

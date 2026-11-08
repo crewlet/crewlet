@@ -780,7 +780,7 @@ func TestAnIfMatchHeaderRefinesOnlyAStaleVersion(t *testing.T) {
 //
 // Mutation: drop the `refusal` field from operator.Fail, or set it from a
 // cause that is not the host's, and this fails.
-func TestACodeHostRefusalNamesItsOwnWord(t *testing.T) {
+func TestAGitletRefusalNamesItsOwnWord(t *testing.T) {
 	t.Parallel()
 	answer := func(cause error) map[string]any {
 		t.Helper()

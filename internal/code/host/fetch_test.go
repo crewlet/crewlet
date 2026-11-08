@@ -104,7 +104,7 @@ func TestTheAdvertisementIsLinearizable(t *testing.T) {
 // head, and is served.
 func TestAMissingWantTakesOneLinearizableSync(t *testing.T) {
 	e := &recording{}
-	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2, WrapEstate: e.wrap}},
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2, WrapEstate: e.wrap}},
 		codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
@@ -163,7 +163,7 @@ func TestAWantIsReadAsUploadPackReadsIt(t *testing.T) {
 // — and the head node 1 lacks; every estate call goes through e.
 func behindAMovedHead(t *testing.T, e *recording, o codetest.SoloOptions) (*codetest.Case, string) {
 	t.Helper()
-	o.Shape.GitNodes, o.Shape.WrapEstate = 2, e.wrap
+	o.Shape.GitletNodes, o.Shape.WrapEstate = 2, e.wrap
 	c := newCase(t, o, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
@@ -722,7 +722,7 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 // HINT (gitproc), the host has the cache hash it against its row
 // (cache.Cache.ConfirmHint), and a pack that is not its row's is named to the
 // repair (cache.Failure.Packs): that one pack is fetched again over its files,
-// the same incarnation answering, and the fetch served — on every git a git
+// the same incarnation answering, and the fetch served — on every git a Gitlet
 // node runs, since the node floor is 2.55. What the failing upload-pack
 // reported is the REQUEST'S (cache's report.go, HELD FOR THE REQUEST): its
 // Cmd names the request's reader, so the report is held for the repair the

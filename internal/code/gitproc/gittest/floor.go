@@ -54,7 +54,7 @@ func Require(t testing.TB) string {
 // RequireNode is the git every POOL a test builds runs — the same PATH git,
 // held to gitproc.NodeMinVersion, the node floor gitproc.New refuses below.
 // It FAILS t, never skips, and a test calls it BEFORE it builds a pool or
-// boots an engine with the git role, so a machine below the floor reads what
+// boots an engine with the gitlet role, so a machine below the floor reads what
 // to run rather than the refusal an operator would.
 func RequireNode(t testing.TB) string {
 	t.Helper()

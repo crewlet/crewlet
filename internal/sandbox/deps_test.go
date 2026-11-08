@@ -32,7 +32,7 @@ import (
 // Mutation: import internal/changefeed (which links the log) from a non-test
 // file — red on the link; name statelog.ReadSession in pushed_test.go — red
 // on the names; import internal/config for a default — red.
-func TestTheSandboxLinksNoCodeHostConfigurationOrStateLog(t *testing.T) {
+func TestTheSandboxLinksNoGitletConfigurationOrStateLog(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/internal/"
 	refused := []string{"code", "config", "statelog"}

@@ -38,7 +38,7 @@ import (
 // WHY NO index-pack: the receiving node's receive-pack ran index-pack
 // --strict --fix-thin over exactly these bytes against the repository, and
 // an .idx is a pure function of its pack; re-indexing would spend 0.13–0.18 s
-// of a core a mebibyte, on every git node, recomputing a file the row
+// of a core a mebibyte, on every Gitlet node, recomputing a file the row
 // already names — and make a cold sync bound by CPU rather than by the
 // object store.
 //

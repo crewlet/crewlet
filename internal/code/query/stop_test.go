@@ -33,7 +33,7 @@ func (p *heldListing) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, e
 }
 
 // A STOP CUTS THE READS IN FLIGHT AND REFUSES EVERY LATER ONE, each answered
-// unready about the node, node_failed — so its walk asks the next git node and
+// unready about the node, node_failed — so its walk asks the next Gitlet node and
 // lets it fill a copy — and nothing recorded: a read cut, or refused before it
 // started, sent the repository's contents to nobody. A later read starts
 // nothing at all.

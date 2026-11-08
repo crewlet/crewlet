@@ -347,13 +347,13 @@ Every process declares what it is willing to do. The default is all five
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [data, git, ingress, seats, workers]   # the default; omit the key
+  roles: [data, gitlet, ingress, seats, workers]   # the default; omit the key
 ```
 
 | Role | What it does |
 |---|---|
 | `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores, Ask Crewlet's conversations, the seats' executor sessions and Gitlet's repositories) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
-| `git` | Serves the company's git repositories, where the company sets [`code.native`](../concepts/gitlet.md): a disposable [cache](../concepts/gitlet.md#the-cache-on-a-git-node) of them on this node's disk, sized by its Tier A [`git` block](../concepts/configuration.md#git), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
+| `gitlet` | Serves the company's git repositories, where the company sets [`code.backend: gitlet`](../concepts/gitlet.md): a disposable [cache](../concepts/gitlet.md#the-cache-on-a-gitlet-node) of them on this node's disk, sized by its Tier A [`gitlet` block](../concepts/configuration.md#gitlet), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
 | `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
@@ -381,13 +381,13 @@ runs judged gone. Nothing raises. So the engine checks the
 shape against live node presence and logs `fleet_role_unmanned` when a
 role has nobody doing it, and `fleet_role_manned` when it comes back.
 
-`git` is the one role a company may not need: a company that does not set
-`code.native` hosts nothing for it to serve, so it is reported unmanned only
+`gitlet` is the one role a company may not need: a company that does not set
+`code.backend: gitlet` hosts nothing for it to serve, so it is reported unmanned only
 where the company hosts code, and a role that stops being needed while nobody
 held it — code turned off — is logged once as `fleet_role_unneeded`, never as
-a git node coming back.
+a Gitlet node coming back.
 
-**Which nodes to give `git`.** Every ingress node a load balancer sends `/git/`
+**Which nodes to give `gitlet`.** Every ingress node a load balancer sends `/git/`
 to. A node that **lists** its roles serves git only if the list names it — a
 fleet that wrote `[data, ingress, …]` before it hosted code serves none until
 it does — while a node that declares no roles has every role, so a fleet that
@@ -397,7 +397,7 @@ repository on every node; route `/git/<name>` by repository (a balancer hashing
 the path to a node, with the next one in line when it is down) to keep each
 repository warm on one or two nodes instead — see
 [Deployment](deployment.md#gitlet) and
-[Scaling Out](../concepts/scaling.md#git-nodes).
+[Scaling Out](../concepts/scaling.md#gitlet-nodes).
 
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
@@ -541,7 +541,7 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # seats, so they serve the bridge only with the variable set. A seats
 # node's own direct boxes dial its api.port on loopback instead.
 # The ingress nodes serve git too, where the company hosts code.
-node: {id: "${CREWLET_NODE_ID}", roles: [data, git, ingress]}
+node: {id: "${CREWLET_NODE_ID}", roles: [data, gitlet, ingress]}
 node: {id: "${CREWLET_NODE_ID}", roles: [data, seats, workers]}
 ```
 
@@ -833,7 +833,7 @@ snapshot again before you start restoring, rebuilding or adding nodes.
 ## Watching a fleet
 
 - **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles. For
-  `git`, said only where the company sets `code.native`; `fleet_role_unneeded`
+  `gitlet`, said only where the company sets `code.backend: gitlet`; `fleet_role_unneeded`
   is the role no longer being needed.
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector,
   start a node that matches, or clear what made the only matching node
@@ -912,7 +912,7 @@ Two read-only tools put the same view in front of an assistant or an agent:
 | Tool | What it answers |
 |---|---|
 | `fleet_health` | Every live node as its own heartbeat states it — its roles, how its broker takes part, the turns it is running, whether it is draining, the config posture it concluded, the seats it holds — and every alarm its own table has firing, by kind and since, the longest-standing first. A node with no table it evaluated says `alarms_evaluated: false`, never an empty list. Nodes by id, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer. With `firing`, only the nodes whose own table has an alarm firing, and a count of the nodes that cannot say (`unevaluated`) in place of their rows; with `node`, that one node. |
-| `code_status` | The git nodes, each as it states itself: its cache's bytes against its budget, the repositories it holds a copy of, the copies it evicted and repaired over the last hour and day, and the fleet's hottest repositories — each node's own count of what it served of one and its copy there, the hottest twenty of the hour and of the day. With `repo`, one repository on every git node instead. Git nodes by id, a page at a time, as `fleet_health` pages (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer; the hot list rides the first page alone, and with `node` the answer is that one git node, with its own hot list. A page asks only its own git nodes, read off the presence leases first, and waits only for them: the fleet's first page alone asks every git node, for the hot list, so walking the fleet costs one answer from each git node a page plus that first page, and a git node that does not answer holds up only the pages that list it. A page's `coverage` names each of its git nodes that did not answer inside the fleet read budget, and its `complete` says whether every node it lists answered — on the fleet's first page, whether every git node did, since its hot list is drawn from all of them. A fleet whose presence cannot be read is refused `unavailable`, as `fleet_health` refuses it. Offered where the company hosts code. |
+| `code_status` | The Gitlet nodes, each as it states itself: its cache's bytes against its budget, the repositories it holds a copy of, the copies it evicted and repaired over the last hour and day, and the fleet's hottest repositories — each node's own count of what it served of one and its copy there, the hottest twenty of the hour and of the day. With `repo`, one repository on every Gitlet node instead. Gitlet nodes by id, a page at a time, as `fleet_health` pages (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer; the hot list rides the first page alone, and with `node` the answer is that one Gitlet node, with its own hot list. A page asks only its own Gitlet nodes, read off the presence leases first, and waits only for them: the fleet's first page alone asks every Gitlet node, for the hot list, so walking the fleet costs one answer from each Gitlet node a page plus that first page, and a Gitlet node that does not answer holds up only the pages that list it. A page's `coverage` names each of its Gitlet nodes that did not answer inside the fleet read budget, and its `complete` says whether every node it lists answered — on the fleet's first page, whether every Gitlet node did, since its hot list is drawn from all of them. A fleet whose presence cannot be read is refused `unavailable`, as `fleet_health` refuses it. Offered where the company hosts code. |
 
 **They set no thresholds of their own.** What is wrong is the
 [alarm table's](../reference/alarms.md) to say: `fleet_health` reports each
@@ -946,7 +946,7 @@ the list's cut (`withheld`), and a repository named with `repo` that the seat
 may not read is refused, as the code tools refuse it. Each repository is a
 read of Gitlet's rows, so the list is judged hottest first and only as
 far as its cut: a seat's call reads the twenty of each window it is answered
-and the hotter ones it may not read, however many git nodes the fleet has —
+and the hotter ones it may not read, however many Gitlet nodes the fleet has —
 on the first page, which alone carries the list, so a later page reads none —
 and the first read that fails answers the call `unavailable` at once.
 

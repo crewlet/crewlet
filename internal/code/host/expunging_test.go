@@ -16,7 +16,7 @@ import (
 // A PUSH CARRIES THE DROP EPOCH ITS COPY WAS SYNCED AT — the one its copy's
 // objects/ holds (cache.Synced.DropEpoch), the snapshot's once nothing is
 // leaving the copy — and its committer's refusal of another reaches git
-// whole: while every snapshot the git node's cache syncs by says the
+// whole: while every snapshot the Gitlet node's cache syncs by says the
 // repository is at drop epoch 7 and its rows say 0 — a copy at an epoch the
 // repository is not at — the push's proposal carries 7, its committer refuses
 // it expunging, decided nothing and writing no push row, git prints the

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE NODE'S SEAT GIT-WORK SHARE: how much of a git node's READ LANE the
+// THE NODE'S SEAT GIT-WORK SHARE: how much of a Gitlet node's READ LANE the
 // seats' git work may hold at once — half of it.
 //
 // The read lane (internal/code/gitproc, ClassRead: a core a slot) is where
@@ -48,7 +48,7 @@ import (
 //
 // PAST [GitShareWait] the work is answered [ErrGitUnready]{[UnreadyShare]} —
 // never queued for longer, and never refused as the asker's fault — so the
-// walk that asked it moves to another git node, which answers as well as a
+// walk that asked it moves to another Gitlet node, which answers as well as a
 // saturated node would have.
 
 // SeatWork is which seat git work takes a unit of the share: the `work`
@@ -140,7 +140,7 @@ type GitShare struct {
 
 // NewGitShare is node's share of a read lane readSlots wide: [ShareOf]
 // readSlots units. It records crewlet.code.seatwork.held and .waits to m, nil
-// recording nothing; the gauge starts at zero, so a git node whose seats run
+// recording nothing; the gauge starts at zero, so a Gitlet node whose seats run
 // no git yet shows a share held by nobody rather than no share at all.
 func NewGitShare(node string, readSlots int, m *metrics.Recorder) *GitShare {
 	units := int64(ShareOf(readSlots))
@@ -182,7 +182,7 @@ func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err
 		s.waited(work, shareUnready, time.Since(began))
 		return nil, &ErrGitUnready{Reason: UnreadyShare, Detail: fmt.Sprintf(
 			"%s's seat git work holds its whole share — %d of its read lane's %d slots — and none came free "+
-				"within %s; another git node answers meanwhile", s.node, s.units, s.readSlots, s.wait)}
+				"within %s; another Gitlet node answers meanwhile", s.node, s.units, s.readSlots, s.wait)}
 	}
 	s.waited(work, shareGranted, time.Since(began))
 	s.moved(+1)

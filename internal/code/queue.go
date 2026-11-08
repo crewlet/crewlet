@@ -259,7 +259,7 @@ type QueueProposal struct {
 	// own work spared (an entry it enqueued, its own change's, or one into a
 	// branch of its own namespace or of a repository it owns), a colleague
 	// held to what it may take out itself, nobody refused the rest
-	// ([decideDequeue]). An enqueue carries none: the git node that forms it
+	// ([decideDequeue]). An enqueue carries none: the Gitlet node that forms it
 	// has judged its merge's ceiling already (internal/code/host's merge.go).
 	//
 	// A proposal is no record — the record is what the committer stamps from
@@ -404,7 +404,7 @@ const (
 	// merge's one [MergeBuildDeadline] of git and its write's attempt had
 	// room for: the branch moves faster than a merge is built onto it, and
 	// its queue, or a quieter moment, lands it.
-	// Never a decide's: the git node that built the merge answers it.
+	// Never a decide's: the Gitlet node that built the merge answers it.
 	MergeRefusalTargetMoving MergeRefusal = "target_moving"
 	// MergeRefusalNotPerson is a merge past its target's gate asked by
 	// anybody but a person: only a person overrides a merge gate.
@@ -448,7 +448,7 @@ const (
 	// MergeRefusalNotPermitted is a dequeue by a principal that is neither
 	// the entry's enqueuer, its change's owner, a principal that maintains
 	// the repository, nor a person — or a seat's merge, or enqueue, that
-	// whoever its turn works for may not make (its git node judges the
+	// whoever its turn works for may not make (its Gitlet node judges the
 	// write's ceiling, internal/code/host's merge.go).
 	MergeRefusalNotPermitted MergeRefusal = "not_permitted"
 	// MergeRefusalNotGreen is a landing whose tip, or a green row
@@ -608,7 +608,7 @@ func (p QueueProposal) validFields() error {
 		switch {
 		case p.Dequeue == nil:
 			return badField("ceiling", "only a seat's dequeue carries its requester's ceiling: an enqueue's "+
-				"is judged by the git node that forms it")
+				"is judged by the Gitlet node that forms it")
 		case p.Ceiling.invalid(p.Asker) != "":
 			return fmt.Errorf("%w: %s", ErrInvalidProposal, p.Ceiling.invalid(p.Asker))
 		}

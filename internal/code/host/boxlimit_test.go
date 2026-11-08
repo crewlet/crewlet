@@ -157,7 +157,7 @@ func TestASeatsBoxAndItsTurnShareItsTermOnANode(t *testing.T) {
 	}
 }
 
-// A BARRIER A BOX TAKES RAISES ITS FLOOR: a box fetching, through a git node
+// A BARRIER A BOX TAKES RAISES ITS FLOOR: a box fetching, through a Gitlet node
 // whose copy is behind, a commit a person pushed through another takes one
 // barrier, and its run's floor is raised to the copy it was served from, which
 // every later request of the run, through any node, syncs to at its session.
@@ -167,7 +167,7 @@ func TestASeatsBoxAndItsTurnShareItsTermOnANode(t *testing.T) {
 func TestABoxsBarrierRaisesItsFloor(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
-	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2, WrapEstate: rec.wrap}})
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2, WrapEstate: rec.wrap}})
 	runs := c.Fleet.Runs()
 	ref, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessRead)
 	launched := runs.Floor(ref)

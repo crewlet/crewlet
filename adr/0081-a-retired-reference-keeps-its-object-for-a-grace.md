@@ -134,7 +134,7 @@ project's file rows are `Required` and never retired.
 [ADR-0091](0091-a-derived-object-is-published-kept-and-never-audited.md)
 gives `Derived` its first table, `code_layer_parts`: the parts of a
 repository's published multi-pack-index layer, its bitmap and its commit-graph
-layer, which one git node publishes and every other installs. For it, "the
-engine builds them again" is that record's rule: a git node whose layer is
+layer, which one Gitlet node publishes and every other installs. For it, "the
+engine builds them again" is that record's rule: a Gitlet node whose layer is
 missing or damaged serves from the layers below it, and the repository's
 maintainer publishes a replacement.

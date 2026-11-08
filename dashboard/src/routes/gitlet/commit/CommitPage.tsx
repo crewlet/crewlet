@@ -7,8 +7,8 @@
  * # Whose it is, from the rows; what it is, from git
  *
  * `code_commit` answers the commit as the repository's history lists it,
- * read of the home git node, beside what the ROWS say of it: the push that
- * introduced it — by the git node's index of pushes, and that push's row
+ * read of the home Gitlet node, beside what the ROWS say of it: the push that
+ * introduced it — by the Gitlet node's index of pushes, and that push's row
  * where the history still holds it, which names who pushed, the run behind a
  * seat's push and the refs it moved — and every change it belongs to, read at
  * the caller's freshness: the changes whose merge it is and the revisions it

@@ -728,7 +728,7 @@ func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	}
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "agent-1", Queue: started(), Placement: oneDataNode{}, Git: noGitNodes{},
+		Self: "agent-1", Queue: started(), Placement: oneDataNode{}, Git: noGitletNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: envelopes,
 		Now: func() time.Time { return time.Unix(0, clock.Load()) },
 	})
@@ -750,15 +750,15 @@ type oneDataNode struct{}
 func (oneDataNode) Holders() ([]string, error) { return []string{"data-1"}, nil }
 func (oneDataNode) Unanswered(string)          {}
 
-// noGitNodes is the git placement of a fleet with no node with the git role in
+// noGitletNodes is the git placement of a fleet with no node with the gitlet role in
 // it: what a router built for a case that asks no repository's git reads is
 // handed, since a router requires one and an empty one is how a fleet says it
 // has none — its listing naming nobody, so nobody in it says anything either.
-type noGitNodes struct{}
+type noGitletNodes struct{}
 
-func (noGitNodes) Holders() ([]string, error)          { return nil, nil }
-func (noGitNodes) Unanswered(string)                   {}
-func (noGitNodes) Listing() (estate.GitListing, error) { return estate.GitListing{}, nil }
+func (noGitletNodes) Holders() ([]string, error)          { return nil, nil }
+func (noGitletNodes) Unanswered(string)                   {}
+func (noGitletNodes) Listing() (estate.GitListing, error) { return estate.GitListing{}, nil }
 
 // servedHalves is a data node's copy serving the halves it is told it runs,
 // admitting a seat — what admission's ping reads of it.

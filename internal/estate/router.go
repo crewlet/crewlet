@@ -71,20 +71,20 @@ type RouterOptions struct {
 	Queue     Asker
 	Placement Placement
 
-	// Git is who serves GIT: every live node with the `git` role, the
+	// Git is who serves GIT: every live node with the `gitlet` role, the
 	// engine's from the same watched presence view as Placement, and its
-	// error UNKNOWN, never "no git node". Asked by every operation on a
+	// error UNKNOWN, never "no Gitlet node". Asked by every operation on a
 	// repository's git objects ([op.keyedOnGit], ADR-0089), and — as ONE
-	// listing of the git nodes beside what each advertises it can give its
+	// listing of the Gitlet nodes beside what each advertises it can give its
 	// background work ([GitPlacement.Listing]) — by [Router.Maintainer],
 	// which places a repository's maintenance by it. Required: a router
-	// built without one would answer every git read as a fleet with no git
+	// built without one would answer every git read as a fleet with no Gitlet
 	// node in it, a wiring mistake that reads as a deployment fact.
 	Git GitPlacement
 
 	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]:
 	// Gitlet is built at boot or at the first apply that sets
-	// code.native, after the router) — nil on a node without the `git`
+	// code.backend: gitlet, after the router) — nil on a node without the `gitlet`
 	// role, which serves none.
 	LocalGit LocalGit
 
@@ -117,7 +117,7 @@ type RouterOptions struct {
 
 // Timing is every duration the router waits on that a test must be able to
 // scale: one attempt's budget on one data node for a read and for a write, one
-// git read's and one engine write's on one git node, and the admission
+// git read's and one engine write's on one Gitlet node, and the admission
 // question's whole budget.
 //
 // [Production] is the value every node runs, and nothing in the engine builds
@@ -155,7 +155,7 @@ type RouterOptions struct {
 //   - A read attempt no longer than [minReadAttempt], the reply's margin: the
 //     serving node would have no time left in it to wait for anything or to
 //     run a query, so every read it is asked comes back refused or late. The
-//     same holds for a git read's attempt on a git node.
+//     same holds for a git read's attempt on a Gitlet node.
 //   - A write attempt no longer than [minWriteAttempt]: the serving node's
 //     floor wait at its whole budget, then a whole code.CommitBudget and
 //     code.ReplyMargin. The attempt's end travels to a repository's committer
@@ -168,7 +168,7 @@ type RouterOptions struct {
 //     to expose rather than the router's to assume.
 //   - A git write attempt no longer than [minGitWriteAttempt]: the proposal
 //     the write makes needs a whole [minWriteAttempt] left after its upload,
-//     and the git node is served until a reply's margin before the attempt
+//     and the Gitlet node is served until a reply's margin before the attempt
 //     ends, so under the bound every engine write is answered busy before
 //     its upload — "a git write's attempt must hold the proposal it makes".
 //
@@ -195,10 +195,10 @@ type Timing struct {
 	// AdmissionAsk bounds the remote half of the admission question as a
 	// whole — see admissionAsk. Positive.
 	AdmissionAsk time.Duration
-	// GitReadAttempt bounds one git read's wait on one git node — see
+	// GitReadAttempt bounds one git read's wait on one Gitlet node — see
 	// [GitReadAttempt]. Longer than [minReadAttempt].
 	GitReadAttempt time.Duration
-	// GitWriteAttempt bounds one engine write's wait on one git node, its
+	// GitWriteAttempt bounds one engine write's wait on one Gitlet node, its
 	// caller's deadline only ever shortening it — see [GitWriteAttempt].
 	// Longer than [minGitWriteAttempt].
 	GitWriteAttempt time.Duration
@@ -212,14 +212,14 @@ func Production() Timing {
 		GitReadAttempt: GitReadAttempt, GitWriteAttempt: GitWriteAttempt}
 }
 
-// GitWriteAttemptFor is an engine write's attempt on one git node by its kind:
+// GitWriteAttemptFor is an engine write's attempt on one Gitlet node by its kind:
 // [Timing.GitWriteAttempt] with its build term — code.WriteBuildDeadline, the
 // build of a write landing as one push — replaced by the kind's own
 // (code.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
 // mergeability's (code.MergeBuildDeadline, 30 s), is given 102 s in
 // production, a rebase_change, whose build replays up to
 // code.MaxRebaseCommits commits (code.RebaseBuildDeadline, 40 s), 112 s, and
-// every other kind the 82 s it was: the git node fits every
+// every other kind the 82 s it was: the Gitlet node fits every
 // stage of the write into its attempt (internal/code/host's deadline rule),
 // and a kind given a longer build must be given the time to run it before its
 // upload and proposal, or every such build near its bound is answered busy.
@@ -253,7 +253,7 @@ const minReadAttempt = code.ReplyMargin
 const minWriteAttempt = code.MinProposeAttempt
 
 // minGitWriteAttempt is what every git write attempt must be longer than: the
-// proposal the write makes ([minWriteAttempt]) and the reply's margin. The git
+// proposal the write makes ([minWriteAttempt]) and the reply's margin. The Gitlet
 // node is served until a reply's margin before the attempt ends
 // (code.AnswerBy), and it uploads a write's bundle only while the proposal's
 // whole attempt is still left after the upload (internal/code/host's deadline
@@ -286,12 +286,12 @@ func (t Timing) refusal() error {
 			"withholds every seat's claim; %s", t.AdmissionAsk, production)
 	case t.GitReadAttempt <= minReadAttempt:
 		return fmt.Errorf("estate: a router's Timing.GitReadAttempt is %v, and it must be longer "+
-			"than %v — the answer's trip back (code.ReplyMargin), which a git node leaves between "+
+			"than %v — the answer's trip back (code.ReplyMargin), which a Gitlet node leaves between "+
 			"the end of its waits and its asker's deadline, so an attempt no longer leaves it no "+
 			"time to sync its copy or run the read; %s", t.GitReadAttempt, minReadAttempt, production)
 	case t.GitWriteAttempt <= minGitWriteAttempt:
 		return fmt.Errorf("estate: a router's Timing.GitWriteAttempt is %v, and it must be longer "+
-			"than %v — a git write's attempt must hold the proposal it makes: the git node uploads a "+
+			"than %v — a git write's attempt must hold the proposal it makes: the Gitlet node uploads a "+
 			"write only while the proposal's own attempt (code.MinProposeAttempt, %v) is left after "+
 			"the upload, and answers its asker the reply's trip (code.ReplyMargin, %v) before the "+
 			"attempt ends, so an attempt no longer answers every write busy before its upload; %s",
@@ -346,7 +346,7 @@ func (t Timing) refusal() error {
 // anyway ([Router.markBehindConfig]), for every operation but admission's
 // ungated ping.
 //
-// A GIT operation ([op.keyedOnGit]) is asked of the GIT nodes instead, in the
+// A GIT operation ([op.keyedOnGit]) is asked of the GITLET nodes instead, in the
 // keyed order over [RouterOptions.Git] — the repository's home first, this
 // node at its place where its git half is built — with the keyed order's
 // demotions and none of the data walk's preferences ([Router.routeGit]).
@@ -360,9 +360,9 @@ type Router struct {
 	env       *Envelopes
 	now       func() time.Time
 
-	// gitPlacement is who serves git, and in one listing what each git
+	// gitPlacement is who serves git, and in one listing what each Gitlet
 	// node advertises ([RouterOptions.Git]), and localGit this node's own
-	// git half, nil on a node without the git role
+	// git half, nil on a node without the gitlet role
 	// ([RouterOptions.LocalGit]).
 	gitPlacement GitPlacement
 	localGit     LocalGit
@@ -422,7 +422,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, errors.New("estate: a router needs the placement it routes by")
 	case opts.Git == nil:
 		return nil, errors.New("estate: a router needs the git placement it asks a repository's git " +
-			"reads by — every live node with the git role; one with none to name answers an empty " +
+			"reads by — every live node with the gitlet role; one with none to name answers an empty " +
 			"list, never a missing placement")
 	case opts.Session == nil:
 		return nil, errors.New("estate: a router needs this node's session floors — " +
@@ -733,7 +733,7 @@ func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writte
 // named — this node among them where it holds the estate — answered that its
 // copy of the operation's domain is out of service, could not run it, was
 // behind, or did not answer at all. For a GIT operation ([op.keyedOnGit]) it
-// is the same of the git nodes: none ran it.
+// is the same of the Gitlet nodes: none ran it.
 //
 // AND NEVER A WRITE SOMEBODY MAY HAVE RUN. A write sent to a node that did not
 // answer may have landed there, so a walk that sent one and heard no answer
@@ -756,9 +756,9 @@ type ErrUnserved struct {
 	// says the same of its own walk.
 	NodeSilent bool
 
-	// Git records that the walk asked the GIT nodes ([Router.routeGit]), not
+	// Git records that the walk asked the GITLET nodes ([Router.routeGit]), not
 	// the data nodes, so the refusal names the nodes it asked: worded as
-	// every data walk's, a git read the git nodes could not answer — its
+	// every data walk's, a git read the Gitlet nodes could not answer — its
 	// home filling a copy, the rest holding none — sent whoever read it to
 	// the data nodes, which were serving.
 	Git bool
@@ -781,7 +781,7 @@ func (e *ErrUnserved) Silent() bool { return e.NodeSilent }
 func (e *ErrUnserved) Error() string {
 	what := "estate: no data node serves the estate right now"
 	if e.Git {
-		what = "estate: no git node serves the repository's git work right now"
+		what = "estate: no Gitlet node serves the repository's git work right now"
 	}
 	if e.Detail == "" {
 		return what
@@ -1375,9 +1375,9 @@ func (x exchange) record(rep reply) {
 // minutes must not be abandoned after one.
 //
 // NEVER FOR A GIT WRITE, which keeps the router's own attempt whatever its
-// caller allows ([GitWriteAttempt]): its git node fits every stage of it —
+// caller allows ([GitWriteAttempt]): its Gitlet node fits every stage of it —
 // the sync, the build, the upload and the proposal — into that attempt, so
-// one silent through it is wedged rather than slow, and the walk's next git
+// one silent through it is wedged rather than slow, and the walk's next Gitlet
 // node builds the same push. Given a turn's deadline minutes away, a wedged
 // home was waited on until the turn's tool call gave up, and its runner-up
 // never asked.
@@ -1390,7 +1390,7 @@ func (r *Router) budgetFor(ctx context.Context, spec *opSpec, x exchange) time.D
 
 // wholeAttempt is the router's own attempt on one node for spec's class:
 // [Timing.ReadAttempt] for a read, [Timing.GitReadAttempt] for a git read on a
-// git node, [Timing.GitWriteAttempt] for an engine write on one — or the
+// Gitlet node, [Timing.GitWriteAttempt] for an engine write on one — or the
 // attempt its arguments declare ([op.attemptBy]): an engine write's by its
 // kind, [Timing.GitWriteAttemptFor] — and [Timing.WriteAttempt] for a write on
 // a data node — what a request waits where nothing shorter bounds it, and what
@@ -1567,7 +1567,7 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // configuration keeps its place in the key's order, from which the walk hands
 // it to the last resort unasked, so every asker's last resort meets the nodes
 // behind the configuration in the key's order ([Router.classes]). ONE order
-// for a push's data nodes and a repository's git nodes, so the compactor's
+// for a push's data nodes and a repository's Gitlet nodes, so the compactor's
 // home and the reads' first node can never be computed two ways.
 //
 // NO STICKY NODE: which node answered last says nothing about where a
@@ -1705,7 +1705,7 @@ func (r *Router) markSuspect(node string) {
 	// because a suspicion is the node's and never one placement's — a node
 	// silent to a git read is as likely gone from the data nodes it may be
 	// one of — and a placement that names it lists again only when told: a
-	// git placement never told kept a dead git node in every repository's
+	// git placement never told kept a dead Gitlet node in every repository's
 	// order, asked last of each walk nobody else answered, until its own
 	// view caught up.
 	r.placement.Unanswered(node)

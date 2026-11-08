@@ -625,7 +625,7 @@ func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// THE VOCABULARY, not a copy of it: a role added to it — git, the fifth —
+	// THE VOCABULARY, not a copy of it: a role added to it — gitlet, the fifth —
 	// is one an undeclared node runs too.
 	for _, role := range placement.Vocabulary() {
 		if !roles.Has(role) {

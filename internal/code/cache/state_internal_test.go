@@ -51,7 +51,7 @@ func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
 // state at its bound. A state past maxStateBytes is refused as unreadable,
 // and its repository would start cold at every boot. And what a state weighs
 // is written and made durable at every round that changes anything — every
-// push, on every git node — which is why the row it keeps carries each rule
+// push, on every Gitlet node — which is why the row it keeps carries each rule
 // as a push is judged by it (code.PushRule) and never a rule's merge gate,
 // which at its bound on every rule would make the state five times as wide.
 //
@@ -115,7 +115,7 @@ func TestTheWidestStateFitsItsRead(t *testing.T) {
 	t.Logf("the widest state is %d bytes, of a maxStateBytes of %d", len(raw), maxStateBytes)
 	if 4*len(raw) > maxStateBytes {
 		t.Errorf("the widest state is %d bytes, past a quarter of maxStateBytes (%d): a state every push "+
-			"rewrites on every git node has outgrown what it is bounded for", len(raw), maxStateBytes)
+			"rewrites on every Gitlet node has outgrown what it is bounded for", len(raw), maxStateBytes)
 	}
 }
 

@@ -141,7 +141,7 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // clones a second as arrival order's) — a flat per-credential cap would
 // throttle the CI system that checks out through one token on an idle node.
 // The box class's cap is a bound of its own ([ShareClass.Cap]), never a
-// weight. A constant of the class rather than an option, because two git
+// weight. A constant of the class rather than an option, because two Gitlet
 // nodes weighing the classes differently would make which node a balancer
 // picked decide who waits.
 func (c ShareClass) Weight() int {
@@ -247,7 +247,7 @@ const shareForget = 0.001
 // thread (pack.threads=1 in the base; a receive-pack's lent threads are the
 // READ lane's cores, and charged as the CPU they spend): a lane narrower than
 // the cores can use no more cores than it has slots. On such a lane — 32 cores
-// whose 8 GiB back 16 slots, or a git.max_transfers below the cores — a held
+// whose 8 GiB back 16 slots, or a gitlet.max_transfers below the cores — a held
 // slot is charged a whole core a second, which the CPU a transfer spends on
 // its one thread does not pass, so two principals holding the same slots as
 // long are charged alike however fast their clients read: slots are what that

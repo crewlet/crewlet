@@ -403,7 +403,7 @@ func (w *syncWorld) rebuiltChain(t testing.TB, repo string) (string, cache.Chain
 }
 
 // fresh is a cache of its own directory and pool over the world's log and
-// store — a git node that joins with nothing, recording nothing in the
+// store — a Gitlet node that joins with nothing, recording nothing in the
 // world's log, metrics or logs — and what stops it and removes its
 // directory.
 func (w *syncWorld) fresh(t testing.TB) (*cache.Cache, func()) {

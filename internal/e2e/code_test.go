@@ -102,7 +102,7 @@ func codeCompany(repo string, archived bool) func(doc string) string {
 `
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+seat, 1)
 		return doc + fmt.Sprintf(`code:
-  native: true
+  backend: gitlet
   repos:
     - name: %s
       owner: {unit: Engineering}

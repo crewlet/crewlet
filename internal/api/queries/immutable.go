@@ -17,14 +17,14 @@ import "encoding/json"
 // # Nothing the answering read stamps
 //
 // IT WRAPS WHAT THE REQUEST NAMED, NEVER WHAT THE READ THAT ANSWERED IT ADDED.
-// A git node's answer to a read by object id (code.GitAnswer) is not one as it
+// A Gitlet node's answer to a read by object id (code.GitAnswer) is not one as it
 // stands. The read stamps it with the repository the name resolved to, the
 // answering copy's position, whether the page was recalled from the memo or
 // cut, and the push the node's index says introduced each commit with what
 // that index covers so far — and each of those moves between two reads of one
 // request: from one node to the next, from the read that cut a page to the one
 // that recalled it, and as the index fills. The page's EXTENT follows them
-// too: a git node cuts each page against the room its stamps leave
+// too: a Gitlet node cuts each page against the room its stamps leave
 // (code/query's room), so the same page cut where the index holds more of its
 // commits holds fewer items. Wrapped, any of them makes every read a new
 // entity tag, so the `304` that saves the transfer never comes, and a browser

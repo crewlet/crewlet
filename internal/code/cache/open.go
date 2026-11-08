@@ -244,7 +244,7 @@ const hookProbe = "--crewlet-probe"
 //  1. o is validated ([ErrOptions]); o.Layout must be one Prepare returned
 //     ([ErrNotACache] otherwise), and is opened once.
 //  2. The claim passes from the Layout to the cache, which holds it until
-//     [Cache.Stop]: two engines pointed at one git.cache_dir would empty
+//     [Cache.Stop]: two engines pointed at one gitlet.cache_dir would empty
 //     each other's tmp/ and scratch/ at boot and race on every repository's
 //     files, so the second is refused at its Prepare ([ErrCacheInUse]).
 //     Any failure from here gives the claim back. What its background work

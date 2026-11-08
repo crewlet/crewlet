@@ -15,14 +15,14 @@ import (
 
 // THE REBASE: code_rebase_change replays a change's commits its target does
 // not hold onto the target's tip and moves the change's source branch to the
-// last of them, as ONE ENGINE WRITE the repository's git node builds and
+// last of them, as ONE ENGINE WRITE the repository's Gitlet node builds and
 // lands as one forced push (code.WriteRebaseChange) — each commit keeping its
 // author and its author date (U43 a), the first that conflicts stopping it
 // with nothing stored. The push is the caller's, held to the grant's ref rule
 // and the protections of the source branch as a force-push of it is, and its
 // apply records the change's new revision. In a turn somebody woke, the write
 // carries whom it is made for (code.EngineWrite.Ceiling, [CodeDeps.writeCaller])
-// and the git node holds the push to that requester's grant too, the seat's own
+// and the Gitlet node holds the push to that requester's grant too, the seat's own
 // work spared — as every branch write is, since a rebase is one.
 
 // CodeRebaseChangeTool is the tool's name: its authority row's action.

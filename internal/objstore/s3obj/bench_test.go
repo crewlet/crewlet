@@ -201,7 +201,7 @@ func BenchmarkUploadBesideSlowReads(b *testing.B) {
 }
 
 // BenchmarkAThrottledBurst measures what one throttle costs a burst: five
-// hundred heads sent by thirty-two loops — a git node's sync of five hundred
+// hundred heads sent by thirty-two loops — a Gitlet node's sync of five hundred
 // packs, near enough — to a bucket answering each 150 ms after it arrives, the
 // middle of S3's own first byte, from a FRESH client, as at boot and as after
 // its gate was lifted for a quiet minute.

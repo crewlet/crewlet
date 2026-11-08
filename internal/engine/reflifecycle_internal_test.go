@@ -66,7 +66,7 @@ units:
         llm: zulu
         code: {access: full_access}
 code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {unit: Engineering}

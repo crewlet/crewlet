@@ -133,10 +133,10 @@ func (a *attempt) ended(state code.CheckState, reason code.CheckReason, exit *in
 }
 
 // stopped is the ending of an attempt whose runner is stopping: its runner
-// left, which the home queues again on a git node still running.
+// left, which the home queues again on a Gitlet node still running.
 func (a *attempt) stopped() *code.CheckFinished {
 	return a.ended(code.CheckStateErrored, code.CheckReasonRunnerLost, nil,
-		"its runner stopped before the check ended: queued again on a git node still running")
+		"its runner stopped before the check ended: queued again on a Gitlet node still running")
 }
 
 // run makes the box, runs the command and answers the ending to record, with
@@ -148,12 +148,12 @@ func (a *attempt) run(ctx context.Context) (*code.CheckFinished, string) {
 	company, ok := r.o.Company()
 	if !ok || company.Config == nil {
 		return a.ended(code.CheckStateErrored, code.CheckReasonSetupFailed, nil,
-			"the git node that claimed the check serves no company now"), opID
+			"the Gitlet node that claimed the check serves no company now"), opID
 	}
 	boxes, ok := r.o.Boxes()
 	if !ok || boxes == nil {
 		return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
-			"the git node that claimed the check has no sandbox catalogue now (providers.sandbox)"), opID
+			"the Gitlet node that claimed the check has no sandbox catalogue now (providers.sandbox)"), opID
 	}
 	a.timeout = min(a.c.Def.Timeout(), company.Config.Code.Checks.MaxTimeout())
 	spec, setup, refused := a.spec(company)
@@ -211,7 +211,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *cod
 		if len(missing) > 0 {
 			return sandbox.Spec{}, nil, a.ended(code.CheckStateErrored, code.CheckReasonSetupFailed, nil,
 				fmt.Sprintf("the check's secret %s (code.checks.env) references %s, which resolves to nothing "+
-					"on the git node that claimed it", name, strings.Join(missing, ", ")))
+					"on the Gitlet node that claimed it", name, strings.Join(missing, ", ")))
 		}
 		env[name] = value
 	}

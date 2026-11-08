@@ -563,7 +563,7 @@ the company has, so treat it exactly as you treat the secret store; and the
 A backup is never rewritten. When a person purges a repository's
 unreachable objects — the commit a leaked secret was force-pushed away from,
 the history a deleted branch left ([Expunge](../concepts/gitlet.md#expunge))
-— the purge takes them out of the repository, every git node's cache and,
+— the purge takes them out of the repository, every Gitlet node's cache and,
 a day later, the object store, but not out of a backup that already holds
 them:
 
@@ -697,7 +697,7 @@ derived object again.
 The derived objects are Gitlet's
 [published layers](../concepts/gitlet.md#when-a-layer-is-missing). On
 `s3` a restore brings none back, and on `nats` the bucket's snapshot brings
-back whatever parts it held, uncounted: every git node installs a part the
+back whatever parts it held, uncounted: every Gitlet node installs a part the
 store holds once it passes the checks any layer is held to, and refuses a
 layer with a part it lacks as `missing`, serving from the layers below it — or
 from its own index, slower and never wrong — until the repository's

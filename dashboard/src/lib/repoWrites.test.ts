@@ -106,7 +106,7 @@ test("each control is held with its own reason", () => {
 });
 
 // THE CONFIRMATION NAMES EVERY KEEPER gitlet.md's "What still holds a
-// purged object" lists — the git nodes' caches, the backups, the object store
+// purged object" lists — the Gitlet nodes' caches, the backups, the object store
 // and every clone and fetch that already took the object — each by what it
 // is, so a keeper dropped from the list, or the list dropped from the
 // sentence, fails here rather than reading as a purge that leaves nothing
@@ -114,7 +114,7 @@ test("each control is held with its own reason", () => {
 test("the purge's confirmation names every keeper of a copy gitlet.md lists", () => {
   const message = purgeMessage(repo());
   for (const keeper of PURGE_KEEPERS) expect(message).toContain(keeper);
-  expect(message).toMatch(/every git node's copy/);
+  expect(message).toMatch(/every Gitlet node's copy/);
   expect(message).toMatch(/every backup taken before the purge/);
   expect(message).toMatch(/the object store, for a day/);
   expect(message).toMatch(/every clone and fetch that already took it/);

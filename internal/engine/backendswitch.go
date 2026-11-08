@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -50,9 +49,7 @@ type builtWith struct {
 	tracker   config.TrackerBackend
 	knowledge config.KnowledgeBackend
 	chat      config.ChatBackend
-	// code is `code.native`, which is already whether the half is the
-	// engine's own: Gitlet has no vendor to name.
-	code bool
+	code      config.CodeBackend
 }
 
 // builtFrom is what a runtime started for c is built with — the one reading
@@ -61,7 +58,7 @@ type builtWith struct {
 func builtFrom(c *config.Company) builtWith {
 	return builtWith{
 		tracker: c.TrackerBackendFor(), knowledge: c.KnowledgeBackendFor(),
-		chat: c.ChatBackendFor(), code: c.Code.Native,
+		chat: c.ChatBackendFor(), code: c.CodeBackendFor(),
 	}
 }
 
@@ -70,13 +67,13 @@ func builtFrom(c *config.Company) builtWith {
 func (b builtWith) runsTracker() bool { return b.tracker == config.TrackerWorklet }
 func (b builtWith) runsWiki() bool    { return b.knowledge == config.KnowledgeDoclet }
 func (b builtWith) runsChat() bool    { return b.chat == config.ChatChatlet }
-func (b builtWith) runsCode() bool    { return b.code }
+func (b builtWith) runsCode() bool    { return b.code == config.CodeGitlet }
 
 // backendSwitch is one native-backend choice an activated revision makes that
 // the running runtime was not built with.
 type backendSwitch struct {
 	// Field is the configuration path the revision moved: tracker.backend,
-	// knowledge.backend, chat.backend or code.native.
+	// knowledge.backend, chat.backend or code.backend.
 	Field string
 	// Half is what the runtime builds natively for that field, as a person
 	// reads it: "Worklet", "Doclet", "Chatlet", "Gitlet".
@@ -111,8 +108,7 @@ func (s backendSwitch) detail() string {
 // was built around. Moving between two vendors (jira to none) is not one — a
 // vendor's parser is rebuilt live by its reconciler — and neither is any other
 // field. In a fixed order: tracker, then knowledge, then chat, then
-// Gitlet — whose one field is already whether the half is native, so any change
-// of it is one.
+// Gitlet — whose axis names no vendor, so any change of it is one.
 //
 // PURE, so the rule is tested without an engine; [Engine.sayBackendSwitches]
 // says each one.
@@ -136,11 +132,10 @@ func backendSwitches(b builtWith, c *config.Company) []backendSwitch {
 			Running: string(b.chat), Activated: string(chat), Holds: b.runsChat(),
 		})
 	}
-	if b.runsCode() != c.Code.Native {
+	if code := c.CodeBackendFor(); b.runsCode() != (code == config.CodeGitlet) {
 		out = append(out, backendSwitch{
-			Field: "code.native", Half: "Gitlet",
-			Running: strconv.FormatBool(b.code), Activated: strconv.FormatBool(c.Code.Native),
-			Holds: b.runsCode(),
+			Field: "code.backend", Half: "Gitlet",
+			Running: string(b.code), Activated: string(code), Holds: b.runsCode(),
 		})
 	}
 	return out

@@ -376,7 +376,7 @@ func TestAPathNoReadCouldNameTouchesAll(t *testing.T) {
 
 // commitStaged writes files into the work tree, runs stage for what a
 // written file cannot say — a mode, a deletion, a link — stages every change,
-// then commits and pushes main through the first git node, answering the
+// then commits and pushes main through the first Gitlet node, answering the
 // commit.
 func (x *fixture) commitStaged(files map[string]string, stage func(), message string) string {
 	x.t.Helper()
@@ -632,7 +632,7 @@ func TestANodeSpoolsSoManyPatchesAtOnce(t *testing.T) {
 // them, so one its check finds none of is the copy's damage: a node holding a
 // whole copy lexes it, and facts this node left it out of would be no
 // function of the two commits. The read is refused unready, node_failed, for
-// the walk to ask another git node — never answered with the classes cut.
+// the walk to ask another Gitlet node — never answered with the classes cut.
 //
 // Mutation: leave the blob unread and the classes incomplete, as before — the
 // facts are answered, red.

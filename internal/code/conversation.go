@@ -31,7 +31,7 @@ import (
 // reviewers (code_reviewers), its comments (code_comments), who takes part in
 // it and each reviewer's standing verdict (code_participants), its reviews
 // (code_reviews), their findings (code_findings, code_finding_texts), its
-// counters (code_conversations), the facts the repository's home git node
+// counters (code_conversations), the facts the repository's home Gitlet node
 // recorded of its revisions (code_revision_facts, [Revise]) and whether its
 // head revision merges into its target (code_mergeability, [Mergeability]).
 // Only a repository's purge removes them,
@@ -545,7 +545,7 @@ type FindingResolve struct {
 // owes the review of a change that will not merge — and every ask its end left
 // waiting is ASKED AGAIN once the change is reopened. The change's lifecycle is
 // its repository's records, which write nothing of its conversation (a table
-// is written by the records of one subject), so its home git node finds a
+// is written by the records of one subject), so its home Gitlet node finds a
 // change whose asks no longer match its state from the rows (the
 // `changes_due` read's [ReadAnswer.AskSettles]) and asks the change's writer
 // for this record on the change's own subject. The home's own write, which no

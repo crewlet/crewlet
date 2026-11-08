@@ -261,7 +261,7 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 
 // EVERY PUSH THE NODE ADMITS IS ONE RECORD, HOWEVER IT ENDS — and one push in
 // its repository's heat, counted at that record. A push answered 503 at its
-// sync, as a git node in a minority of the code log answers every push, at
+// sync, as a Gitlet node in a minority of the code log answers every push, at
 // its advertisement or at its POST; one a fault stopped on its way to its
 // run; one whose body this node cannot decode: each is recorded failed, as
 // the person who pushed it. And one declaring more than a push may send is
@@ -1691,7 +1691,7 @@ func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
 	})
 
 	// A previous process's copy: its graph says the tip's parent is side.
-	node := c.Fleet.(*codetest.SoloFleet).GitNode(0)
+	node := c.Fleet.(*codetest.SoloFleet).GitletNode(0)
 	node.Stop(t.Context())
 	gittest.Damage(t, dir, gittest.GraphParentOther, tip, side)
 	node.Restart(t)

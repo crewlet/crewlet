@@ -197,7 +197,7 @@ func TestAColdNodeRunsAtMostItsFullRoundsAtOnce(t *testing.T) {
 // A DELTA NEVER WAITS FOR A FULL ROUND'S SLOT: with every slot held by cold
 // repositories' full reads and another in line behind them, the sync after a
 // push to a repository the node has read whole reads its delta and is
-// answered — the round every git node runs after every push is never put
+// answered — the round every Gitlet node runs after every push is never put
 // behind a joining node's full reads.
 //
 // Mutation: hold a slot for every read, a delta's too, and the delta waits in

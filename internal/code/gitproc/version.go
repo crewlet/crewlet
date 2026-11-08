@@ -19,12 +19,12 @@ import (
 // to what the distributions people run still ship (ADR-0087).
 var ClientMinVersion = Version{2, 40, 0}
 
-// NodeMinVersion is the oldest git a GIT NODE runs — every pool [New] builds:
+// NodeMinVersion is the oldest git a GITLET NODE runs — every pool [New] builds:
 // an incremental multi-pack-index layer with its bitmap (2.50) written over a
 // NAMED base with no chain file (`multi-pack-index write --incremental
 // --base=<checksum> --no-write-chain-file`, 2.55: `write` offers neither
 // option in v2.54.0's documentation and both in v2.55.0's), which is how a
-// repository's maintainer publishes the layers every git node installs.
+// repository's maintainer publishes the layers every Gitlet node installs.
 // Every git at the floor also sends a cache's overlapping packs whole under
 // either pack.allowPackReuse value
 // (TestEveryPackReuseModeSendsOverlappingPacksWhole, on the node pin and on
@@ -39,7 +39,7 @@ var ClientMinVersion = Version{2, 40, 0}
 // the client's index-pack refused the whole pack ("REF_DELTA … already
 // resolved", "pack has N unresolved deltas") and every full clone of a
 // repository the maintainer had written a bitmap for failed on 2.47.3,
-// Debian trixie's git. Everything else a git node runs is older:
+// Debian trixie's git. Everything else a Gitlet node runs is older:
 // proc-receive (2.29), index-pack --rev-index (2.31), object-type filters
 // (2.32), multi-pack-index bitmaps (2.34) and merge-tree --write-tree
 // --merge-base (2.40).
@@ -129,7 +129,7 @@ func ParseVersion(out string) (Version, error) {
 // ParseRelease reads a release as [Version.String] writes it — "2.56.0", its
 // exact inverse — where [ParseVersion] reads what `git version` prints: three
 // decimal numbers joined by dots, each with no sign and no leading zero, nine
-// digits at most. It is how a git node reads the release a published layer's
+// digits at most. It is how a Gitlet node reads the release a published layer's
 // row names (code.LayerRef.Git, which the domain holds to the same spelling
 // without importing this package), so a node knows a layer written by a newer
 // git before it fetches a byte of it. Anything else — "2.56", "v2.56.0", a
@@ -184,7 +184,7 @@ func (e *ErrTooOld) Want() Version { return e.Floor.Min() }
 func (e *ErrTooOld) Error() string {
 	switch e.Floor {
 	case FloorNode:
-		return fmt.Sprintf("gitproc: %s is git %s, and a git node needs git %s or newer "+
+		return fmt.Sprintf("gitproc: %s is git %s, and a Gitlet node needs git %s or newer "+
 			"(gitproc.NodeMinVersion, the node floor): install a newer git on this node's PATH — "+
 			"the engine image builds the newest git release — or on macOS Homebrew's",
 			e.Path, e.Found, NodeMinVersion)

@@ -47,7 +47,7 @@ type repo struct {
 	stopAt int
 }
 
-// answerOf is r's search as a git node answers sq: its lines after sq's
+// answerOf is r's search as a Gitlet node answers sq: its lines after sq's
 // place, the first sq.Hits() of them, Truncated where it left lines out.
 func answerOf(r repo, sq *code.SearchQuery) *code.SearchAnswer {
 	var lines []code.SearchHit
@@ -143,7 +143,7 @@ func (e *estate) GitOrders(ids []string) (map[string][]string, error) {
 
 func tip(r repo) string { return strings.Repeat("a", 39) + r.ref.Name[:1] }
 
-// node is one git node's reads: it answers every repository it is asked for
+// node is one Gitlet node's reads: it answers every repository it is asked for
 // with its lines, or with the error its fault names.
 type node struct {
 	e     *estate
@@ -203,7 +203,7 @@ func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool)
 	return nil
 }
 
-// shareUnits is every fake node's seat git-work share: four units, a git
+// shareUnits is every fake node's seat git-work share: four units, a Gitlet
 // node of eight cores (code.ShareOf).
 const shareUnits = 4
 
@@ -463,7 +463,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 }
 
 // refusingWalk is the fake company whose keyed walk refuses every read as
-// not permitted: its listing answers, its git nodes do not.
+// not permitted: its listing answers, its Gitlet nodes do not.
 type refusingWalk struct{ *estate }
 
 func (refusingWalk) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
@@ -713,7 +713,7 @@ func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 	}
 }
 
-// sharedReads is a git node's reads as query's take the node's share: each
+// sharedReads is a Gitlet node's reads as query's take the node's share: each
 // read's search holds a unit of it until the test lets it go, and how many
 // reads have begun is counted.
 type sharedReads struct {
@@ -883,7 +883,7 @@ func TestEveryRepositoryLooksAtTheHeadItsListingRead(t *testing.T) {
 	}
 }
 
-// A SEAT'S READ FINDS A UNIT WHILE A SEARCH RUNS: a git node answering a
+// A SEAT'S READ FINDS A UNIT WHILE A SEARCH RUNS: a Gitlet node answering a
 // search of many repositories, each of whose reads holds a unit of the node's
 // seat git-work share while it searches, starts no more of them at once than
 // all but one of the share's units — so a seat's ordinary read, taking its

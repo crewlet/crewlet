@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Cluster is a topology of at least three data nodes, each also a git node,
+// Cluster is a topology of at least three data nodes, each also a Gitlet node,
 // routing to one another through the production estate router — the shape
 // every claim about MORE THAN ONE data node needs: a push decided by another
 // node's committer, a committer that dies, an evicted writer, a stopping one.
@@ -41,8 +41,8 @@ type Cluster interface {
 	// one.
 	Committer(repoID string) string
 	// Stop is a GRACEFUL stop in the engine's order: the member's presence
-	// given back (the engine's drain), its git node drained and stopped
-	// (the API's listener, then the teardown's first step, stopCodeHost —
+	// given back (the engine's drain), its Gitlet node drained and stopped
+	// (the API's listener, then the teardown's first step, stopGitletHost —
 	// so it takes no push or sync once its committer refuses), then its
 	// committer refusing, then its estate subject no longer answering, then
 	// its applier, its store and its broker member. Restart brings it back.
@@ -65,12 +65,12 @@ type Cluster interface {
 	WriteAttempt() time.Duration
 	// GitReadThrough is a read of a repository by object id asked through
 	// member node's own router, as a seat's tool on that member asks it —
-	// the repository's home git node first, the member's own git half at its
+	// the repository's home Gitlet node first, the member's own git half at its
 	// place in the order (ADR-0089).
 	GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error)
 	// GitWriteThrough is an engine write asked through member node's own
 	// router, as a seat's or a person's tool on that member asks it — of the
-	// repository's home git node first, the member's own git half at its
+	// repository's home Gitlet node first, the member's own git half at its
 	// place in the order, and of the next with the same write where one ran
 	// nothing or went silent (code.git_write).
 	GitWriteThrough(ctx context.Context, node string, w code.EngineWrite) (code.EngineWriteResult, error)
@@ -80,7 +80,7 @@ type Cluster interface {
 	// company's configuration (shed), as every reader of a node's posture on
 	// it reads it — its estate service (estate.Backend.Current), its committer
 	// (code.CommitterOptions.Current), its change writer
-	// (code.ChangeWriterOptions.Current) and its git node's reads and engine
+	// (code.ChangeWriterOptions.Current) and its Gitlet node's reads and engine
 	// writes. restore is the fleet back on the fixture chart with every member
 	// current, which a case runs before it returns.
 	Revoke(t testing.TB, seat, behind string) (restore func())
@@ -104,7 +104,7 @@ type Cluster interface {
 	// repository its member maintains).
 	ConfineMaintenance(t testing.TB)
 	// Advertise has member node say its git cache gives its background work
-	// budget bytes (GitNode.Advertise) until the case ends — git nodes of
+	// budget bytes (GitletNode.Advertise) until the case ends — Gitlet nodes of
 	// different sizes, which a repository's maintainer is placed by
 	// (ADR-0091), on one machine.
 	Advertise(t testing.TB, node string, budget int64)
@@ -668,7 +668,7 @@ func aGateDroppedPushIsNotApplied(t *testing.T, c Cluster) {
 
 // stopSettle is how long F20 lets a graceful stop run before it lets the held
 // record go: long enough that the stop's steps up to the committer's refusal
-// have happened — the presence given back, the member's git node stopped with
+// have happened — the presence given back, the member's Gitlet node stopped with
 // nothing running on it, the refusal itself a lock taken and a flag set — and
 // a tenth of the stop's own bound on the batch it waits for
 // (statelog.DefaultResolveBudget), which a later release would run into. Only

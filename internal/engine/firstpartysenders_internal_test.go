@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -61,7 +62,7 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	o := firstPartyChart(t)
 	e := &Engine{}
 	e.remote.Store(&remoteNative{tracker: true, wiki: true, chat: true,
-		built: builtWith{code: true}})
+		built: builtWith{code: config.CodeGitlet}})
 	registered, _ := e.nativeParsers(&Company{Org: o})
 	// THE ALARMS' PARSER IS NO HALF, and names no sender at all: a node's
 	// alarm transition is routed by the health grant alone, with no actor

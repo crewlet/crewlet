@@ -307,7 +307,7 @@ func callWrite(ctx context.Context, t *testing.T, reg *tools.Registry, turn *tur
 // Mutation: the delivery switch giving a code write worklet.Source → red.
 func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{}))
 	for _, name := range builtin.CodeWrites() {
 		entry, ok := reg.Lookup(name)
 		if !ok {
@@ -343,7 +343,7 @@ func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 // red.
 func TestNoWorkerIsGivenACodeWrite(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{}))
 	snap := reg.Snapshot()
 	requested := slices.Concat(builtin.CodeWrites(), builtin.CodeToolNames())
 	grant := subagent.Permit(snap, snap.Names(), requested)
@@ -480,7 +480,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 // surfaces list them, red.
 func TestTheCodeWritesAreInBothCatalogues(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
 	deps := writeDeps(host, &codeWrites{})
 	deps.Actor = builtin.PrincipalActor
@@ -521,7 +521,7 @@ func TestTheCodeWritesAreInBothCatalogues(t *testing.T) {
 // floor taken from this node's writes alone → red.
 func TestACodeWriteNamesItsTurn(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
 	turn.WorkItem = &types.WorkItem{Backend: "native", ID: "t-7", Key: "ENG-7"}
@@ -551,7 +551,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 	}
 
 	// A PERSON, through one of their own tokens.
-	opHost, opWriter := newCodeHost(), &codeWrites{}
+	opHost, opWriter := newGitletHost(), &codeWrites{}
 	deps := writeDeps(opHost, opWriter)
 	deps.Actor = builtin.PrincipalActor
 	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
@@ -575,7 +575,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // open, its ask for review, an edit, a comment, a suggestions apply and its
 // findings' answer, a rebase, a merge, a dequeue and a revert — a seat's call
 // sends carry
-// whom its turn works for, for the git node and the data node that decide them
+// whom its turn works for, for the Gitlet node and the data node that decide them
 // to judge beside the seat's own grant — none for a turn nobody woke, the
 // outcome of its own act or a person (who maintains every repository); the
 // colleague seat whose ask woke it, which every read the call makes is held
@@ -687,7 +687,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 		})
 	}
 
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
 	turn.Requester = "agent-gone"
@@ -706,7 +706,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 // commit by a ref is floored at where that ref last moved, as a read by object
 // id is; and a write onto a head the turn read with code_resolve — a branch
 // that moved after the turn first read the repository — at where the head
-// moved. So the git node judges it on a copy that holds the commit and the
+// moved. So the Gitlet node judges it on a copy that holds the commit and the
 // head, in one sync, rather than on one synced only to the turn's first read,
 // which lacks both and is judged again at the log's head: a barrier and a
 // second sync, and for the head a data node's read of the write's own outcome
@@ -722,7 +722,7 @@ func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 	// A REVERT OF A COMMIT NAMED BY ITS BRANCH: feature last moved at 11,
 	// past the turn's read of the repository at 7 and this node's own writes
 	// at 3.
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 	if got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{
 		"repo": "site", "branch": "seats/agent-cto/fix", "expected_head": mainOID, "commit": "feature",
@@ -738,7 +738,7 @@ func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 	// A COMMIT ONTO A HEAD THE TURN READ: the seat's branch moved at 9, after
 	// the turn's read of the repository at 7, and the turn reads its head
 	// before it writes onto it.
-	host, writer = newCodeHost(), &codeWrites{}
+	host, writer = newGitletHost(), &codeWrites{}
 	host.refs["refs/heads/seats/agent-cto/fix"] = featureOID
 	host.moved["refs/heads/seats/agent-cto/fix"] = codeAt(9)
 	reg = codeRegistry(t, writeDeps(host, writer))
@@ -771,7 +771,7 @@ func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
 	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
@@ -804,7 +804,7 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 
 	// THE LONGEST OPERATION: the operator's assistant's step of its longest
 	// tool's call, which names the repository by its id.
-	deps := writeDeps(newCodeHost(), writer)
+	deps := writeDeps(newGitletHost(), writer)
 	deps.Actor = builtin.PrincipalActor
 	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
 		builtin.CodeProtectBranchTool)
@@ -833,7 +833,7 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	none, persons, on, off := code.DirectNone, code.DirectPersons, true, false
 	for _, c := range []struct {
@@ -902,7 +902,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 		}
 		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
 	}}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	// call makes one call and answers it with the requests it sent.
 	call := func(tool string, args map[string]any) (tools.Result, []code.LifecycleRequest) {
@@ -965,7 +965,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	call := func(args map[string]any) (tools.Result, []code.LifecycleRequest) {
 		_, before := writer.asked()
@@ -1044,7 +1044,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Rule: &rule,
 			Position: codeAt(14)}, nil
 	}}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	entry, ok := reg.Lookup(builtin.CodeProtectBranchTool)
 	if !ok {
@@ -1135,7 +1135,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 // red.
 func TestAnUnboundTokenWritesNothing(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	deps := writeDeps(host, writer)
 	deps.Actor = builtin.PrincipalActor
 	for _, name := range builtin.CodeWrites() {
@@ -1161,7 +1161,7 @@ func TestAnUnboundTokenWritesNothing(t *testing.T) {
 // still redirecting writes to the repository it names, and says so.
 func TestTheWriteToolsFollowARename(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	until := time.Date(2031, 5, 1, 0, 0, 0, 0, time.UTC)
 	host.detail.Name = "site-old"
 	host.detail.Redirect, host.detail.RedirectUntil = "site", until
@@ -1224,7 +1224,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 			return code.EngineWriteResult{Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID,
 				Result: code.ResultNG, Reason: refusal, Detail: "the " + string(refusal) + " sentence"}}, nil
 		}}
-		reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+		reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 		got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommitFilesTool, commitArgs("x"))
 		class := tools.RefusalOf(got)
 		switch {
@@ -1249,7 +1249,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
 			return code.EngineWriteResult{Refusal: refusal, Detail: "the change's sentence"}, nil
 		}}
-		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 			t.Errorf("a change refused %s answered %q as %s, want invalid", refusal, got.Output, tools.RefusalOf(got))
@@ -1265,7 +1265,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{life: func(code.LifecycleRequest) (code.LifecycleResult, error) {
 			return code.LifecycleResult{Refusal: refusal, Detail: "the request's sentence"}, nil
 		}}
-		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeDeleteRepoTool, map[string]any{"repo": "site"})
 		if !got.Failed || tools.RefusalOf(got) != lifeWant[refusal] {
 			t.Errorf("a request refused %s answered %q as %s, want %s", refusal, got.Output, tools.RefusalOf(got),
@@ -1274,7 +1274,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 	}
 }
 
-// A WRITE WHOSE OUTCOME NOBODY CAN TELL IS AN UNKNOWN, never a fault: a git
+// A WRITE WHOSE OUTCOME NOBODY CAN TELL IS AN UNKNOWN, never a fault: a Gitlet
 // node that went silent mid-write may have landed it, and the same call made
 // again is the same push — so the answer says the outcome is unknown and how
 // to make the call again, never that nothing was written. A walk in which no
@@ -1296,7 +1296,7 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
 			return code.EngineWriteResult{}, c.err
 		}}
-		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable || tools.UnknownOf(got) != c.unknown {
 			t.Errorf("%s: answered %q (unknown %v), want an unavailable answer with unknown %v", c.name,
@@ -1307,7 +1307,7 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Command: code.Command{Ref: w.Ref,
 			Result: code.ResultNG, Reason: code.RefusalUnknown}}, nil
 	}}
-	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 		builtin.CodeCommitFilesTool, commitArgs("x"))
 	if !got.Failed || !errors.Is(got.Cause, tools.ErrOutcomeUnknown) {
 		t.Errorf("a push whose outcome is unknown answered %q, %v", got.Output, got.Cause)
@@ -1323,8 +1323,8 @@ const scratchID = siteID
 // repository, last active lastActive ago, holding the change !7 site!7 is, in
 // its target's queue — so every change write a case calls has its change to
 // act on, a dequeue among them.
-func scratchHost(lastActive time.Duration) *codeHost {
-	host := newCodeHost()
+func scratchHost(lastActive time.Duration) *gitletHost {
+	host := newGitletHost()
 	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
 	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
 	host.detail.LastActivityAt = time.Now().Add(-lastActive)
@@ -1407,7 +1407,7 @@ func holdingCall(name string) (map[string]any, bool) {
 // create → red.
 func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 	t.Parallel()
-	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+	for _, tool := range builtin.CodeTools(writeDeps(newGitletHost(), &codeWrites{})) {
 		name := tool.Name()
 		args, ok := holdingCall(name)
 		if !ok {
@@ -1471,7 +1471,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 	// ItNamesBeforeItsRequest), never by the repository's id — and an
 	// operator holds nothing.
 	turn := writerTurn(t)
-	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})), turn,
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{})), turn,
 		builtin.CodeCommitFilesTool, commitArgs("x"))
 	if held := turn.Holds.IDs(); slices.Contains(held, siteID) {
 		t.Errorf("a write to a project repository held the repository: %v", held)
@@ -1704,7 +1704,7 @@ func takesTurn(fn *ast.FuncDecl) bool {
 
 // ---- the conflict's fence ------------------------------------------------- //
 
-// conflictFenced calls tool on site with a git node answering a conflict whose
+// conflictFenced calls tool on site with a Gitlet node answering a conflict whose
 // marked text is written to break out of its fence, and reads the answer's
 // fences.
 func conflictFenced(t *testing.T, tool string) ([]fenceSeen, map[string]any, tools.Result) {
@@ -1718,7 +1718,7 @@ func conflictFenced(t *testing.T, tool string) ([]fenceSeen, map[string]any, too
 				Kind: "CONFLICT (contents)", Base: blobOID, Ours: mainOID, Theirs: featureOID,
 				Marked: attack(b, "repo-conflict")}}}, nil
 	}}
-	got, err := mustSeat(t, codeRegistry(t, writeDeps(newCodeHost(), writer)), tool).CallForTurn(everyGrant(),
+	got, err := mustSeat(t, codeRegistry(t, writeDeps(newGitletHost(), writer)), tool).CallForTurn(everyGrant(),
 		turn, map[string]any{"repo": "site", "branch": "main", "expected_head": mainOID, "commit": featureOID})
 	if err != nil {
 		t.Fatalf("%s: %v", tool, err)

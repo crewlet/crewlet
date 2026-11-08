@@ -26,7 +26,7 @@
  * with the facts its home recorded. A part is asked again, quietly, when what
  * it reads moves, and not otherwise.
  * The `files` and `diff` parts above all: each is a git read on the
- * repository's home git node, holding a share of its read lane that pushes and
+ * repository's home Gitlet node, holding a share of its read lane that pushes and
  * clones need too, and its answer is a function of the revision's head and the
  * base its facts record ({@link revisionInputs}) — facts its home records
  * again in a record of its own (`code/revise.go`: a retarget's new facts of

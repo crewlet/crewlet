@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// oneSlot is a read lane of one slot, as a git node's read lane is to a hash
+// oneSlot is a read lane of one slot, as a Gitlet node's read lane is to a hash
 // (gitproc.Pool.HoldRead): hold takes the slot, and the function it answers
 // gives it back. It keeps the bytes read in each hold (a reader through it
 // counts them, read), counts a hold asked while the slot is still held — a
@@ -106,7 +106,7 @@ func sealed(body []byte, h hash.Hash) []byte {
 }
 
 // A HASH OF GIT'S TRAILER READS A PIECE A SLOT AND STOPS WITH ITS CALLER — the
-// one rule every hashfile a git node holds is checked by, a layer's and the
+// one rule every hashfile a Gitlet node holds is checked by, a layer's and the
 // cache's alike. A file of a thousand bytes and its trailer, hashed through a
 // buffer of seven in pieces of 64 under a lane of one slot, is sound by the
 // trailer it holds, every byte before the trailer read inside a slot and no

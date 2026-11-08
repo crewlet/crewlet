@@ -17,7 +17,7 @@ import (
 )
 
 // THE REVERT: code_revert_change undoes a MERGED change by a change of its own
-// (M5-D25) — ONE ENGINE WRITE (code.WriteRevertChange) the repository's git
+// (M5-D25) — ONE ENGINE WRITE (code.WriteRevertChange) the repository's Gitlet
 // node builds: what the change's merge brought into its target undone onto
 // the target's tip, as one commit on a new branch — the seat's own
 // (refs/heads/seats/<handle>/revert-<n>) or, for a person, revert-<n> —
@@ -173,7 +173,7 @@ func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.C
 // mergeStep is the revert's step two: the change it opened merged — at the
 // commit the revert made, into the reverted change's target — as the caller,
 // under the operation's [stepTwo], its source deleted as a merge's default
-// deletes a seat's, decided by the git node that builds the merge
+// deletes a seat's, decided by the Gitlet node that builds the merge
 // ([deleteSource]); what became of it said on out, a merge that did not
 // happen as a residue beside the opened change, never as a refusal.
 func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv conversing, op string,
@@ -195,7 +195,7 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 			CodeMergeChangeTool, CodeGetChangeTool))
 		return
 	}
-	// ITS BRANCH'S DELETION IS THE DEFAULT, the git node's to decide as it
+	// ITS BRANCH'S DELETION IS THE DEFAULT, the Gitlet node's to decide as it
 	// judges the merge (code.EngineWrite.DeleteSource): a seat's revert
 	// branch is deleted unless a gate over the target keeps it, a person's
 	// kept.
@@ -243,7 +243,7 @@ func revertBranch(asker code.Principal, number int64) string {
 
 // revertFresh is a revert's freshness: the caller's write floor raised to at,
 // the position its change was read merged at (or the revert's push landed
-// at, for its merge), so the git node's copy holds the commit it builds from
+// at, for its merge), so the Gitlet node's copy holds the commit it builds from
 // — a person's write is linearizable already.
 func revertFresh(f statelog.Freshness, at statelog.Position) statelog.Freshness {
 	if f.Level == statelog.ReadLinearizable {

@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// behindQueue is a git node's home change work's code seam and chain builder
+// behindQueue is a Gitlet node's home change work's code seam and chain builder
 // with one merge queue in it — repository rateRepo's main, at depth
 // rateDepth and batch rateBatch, one change waiting — asked MergeRateScan
 // enqueues within the window: the queue worker builds its train through the
@@ -108,7 +108,7 @@ func (q *behindQueue) trainRecorded() (string, int) {
 }
 
 // THE MERGE-RATE ALARM BORROWS THE QUEUE'S CAPACITY (M5-D28, ADR-0015), through
-// the wiring a running node has: a STARTED git node, alone the home of every
+// the wiring a running node has: a STARTED Gitlet node, alone the home of every
 // repository, whose queue worker builds a train onto a merge queue at depth
 // rateDepth and batch rateBatch and times it standing — so its reading prices
 // the queue at exactly config.LandingCapacity of those figures at the round it
@@ -123,7 +123,7 @@ func (q *behindQueue) trainRecorded() (string, int) {
 // reading's capacity is not LandingCapacity's.
 func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 	t.Parallel()
-	b := gitNodeBootstrap(t, nil)
+	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
 	queue := &behindQueue{}
 	e, err := engine.New(t.Context(), engine.WithHomeSeams(engine.Options{

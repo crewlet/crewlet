@@ -14,7 +14,7 @@ import (
 
 // THE BACKGROUND WORK A REPOSITORY'S MAINTAINER ASKS OF THE CACHE. Three
 // pieces of whole-repository work run between the maintainer's passes, each on
-// the git node a repository's maintenance is placed on (internal/code/compact):
+// the Gitlet node a repository's maintenance is placed on (internal/code/compact):
 // a COMPACTION's build, which merges the repository's small packs; a
 // PUBLICATION's, which writes its next published multi-pack-index layer, the
 // layer's bitmap and its commit-graph layer, repacking the non-full packs the
@@ -116,7 +116,7 @@ var (
 // A refusal for memory is logged once an incarnation as
 // code_cache_compaction_refused and counted
 // (crewlet.code.cache.maintenance.refusals, reason memory, step compact). A
-// git node with more memory compacts it if it becomes the repository's
+// Gitlet node with more memory compacts it if it becomes the repository's
 // maintainer, and this one once its memory is raised.
 func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Admission, error) {
 	if inputs < 0 {
@@ -147,7 +147,7 @@ func compactionCharge(inputs int64, limits code.Limits) int64 {
 // it sorts nothing and searches no delta, so it takes the walk's room and
 // the indexes it holds alone ([Cache.AdmitExpungeScan]). A node whose budget
 // cannot hold the charge is refused it (ErrNoMemory); the expunge is asked again at
-// every pass, and a git node with more memory serves it once it becomes the
+// every pass, and a Gitlet node with more memory serves it once it becomes the
 // repository's maintainer. Its refusal refuses no push at once, as a
 // compaction's does at the pack bound, but it is no publication's mere
 // "slower" either: until it is served, what no ref reaches keeps counting
@@ -200,7 +200,7 @@ func expungeCharge(inputs, objects int64, limits code.Limits) int64 {
 }
 
 // MaintenanceCharge is the charge a repository of n live objects is PLACED by
-// on the git node that maintains it (internal/estate's Router.Maintainer,
+// on the Gitlet node that maintains it (internal/estate's Router.Maintainer,
 // internal/code/compact's three loops): the LARGEST charge any step its
 // maintainer runs may be admitted at under limits — a publication's root,
 // its multi-pack-index layer and bitmap over the whole history; its commit-
@@ -213,7 +213,7 @@ func expungeCharge(inputs, objects int64, limits code.Limits) int64 {
 // delta window (CompactWindowBytes, 300 MiB at the default max_blob_bytes)
 // beside its objects, which no figure an object holds — so a repository
 // placed by its bitmap's 840 bytes an object alone, under some six million
-// objects, was kept on a git node that would refuse its whole-repository
+// objects, was kept on a Gitlet node that would refuse its whole-repository
 // compaction or expunge for memory while a larger node of the fleet could
 // have run it, and a compaction refused there costs the repository its
 // pushes once code.MaxPacksPerRepo gathers. The window follows the epoch's
@@ -509,7 +509,7 @@ func (a *Admission) Run(ctx context.Context, cmd gitproc.Cmd) (gitproc.Result, e
 
 // GitVersion is the git every process of the work runs as
 // (gitproc.Reserved.Version): what a published layer names as the release that
-// wrote it, since a git node installs no layer of a git newer than its own.
+// wrote it, since a Gitlet node installs no layer of a git newer than its own.
 func (a *Admission) GitVersion() gitproc.Version { return a.slot.Version() }
 
 // Release gives the slot and the charge back, once however often it is

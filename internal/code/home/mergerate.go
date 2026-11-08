@@ -219,7 +219,7 @@ func (r *mergeRate) seen(repoID string, met []string) {
 // the window: one whose repository's queue work this node no longer turns —
 // its home moved to another node, or the repository was deleted — which
 // [mergeRate.seen] never reaches, since only a turn of the repository calls
-// it. Without that, a long-lived git node would keep an entry for every
+// it. Without that, a long-lived Gitlet node would keep an entry for every
 // target it was ever home to.
 func (r *mergeRate) reading(now time.Time, out *statelog.Reading) {
 	r.mu.Lock()

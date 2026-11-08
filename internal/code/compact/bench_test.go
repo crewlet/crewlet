@@ -38,7 +38,7 @@ import (
 )
 
 // BenchmarkCompact is what a repository's maintainer's compaction of its packs
-// costs — on a fleet of alike git nodes, its home — and the figures the
+// costs — on a fleet of alike Gitlet nodes, its home — and the figures the
 // compactor's constants and the cache's charge of a build are decided by.
 // Every figure lands in the doc of what it decides with the arm's name, the
 // machine, the date and the object store it ran over (CONTRIBUTING's
@@ -77,7 +77,7 @@ import (
 //   - steady/pushes=6000/rate=300/min/min-merge={4,8,16} (LARGE): 6 000
 //     one-commit pushes of 20 KB through the data node's committer, 300 to a
 //     simulated minute, and a pass of the home's compactor merging at that
-//     many packs at every minute, while the other git node syncs after every
+//     many packs at every minute, while the other Gitlet node syncs after every
 //     push and every pass, as a node serving the repository's fetches does —
 //     a BUSY repository, whose every pass finds the minute's three hundred
 //     packs whatever its floor. min-merge=16, the production floor, is the
@@ -94,12 +94,12 @@ import (
 //     simulated time, its clock code.RetireGrace past the instant that
 //     quarter hour's last pass ended, one retire_sweep record for each
 //     repository holding a row past the grace, as the duty sweeps them; and
-//     got-B/pushed-B what the other git node downloads over what was pushed,
+//     got-B/pushed-B what the other Gitlet node downloads over what was pushed,
 //     about 1 + log₂(the largest merged pack ÷ a push's) — stated in
 //     scaling.md (M3-decisions M3-O63). Every arm states, per 1 000 pushes,
 //     the GETs a cold sync of the result makes (cold-gets/kpush,
 //     cold-MB/kpush), the compactions' PUTs (puts/kpush, put-MB/kpush) and
-//     the GETs every git node but the builder makes of their outputs on a
+//     the GETs every Gitlet node but the builder makes of their outputs on a
 //     fleet of eight (fleet-gets/kpush, fleet-MB/kpush: the measured node's
 //     times seven, since each runs the same rounds over the same rows) —
 //     requests, S3's billing unit, and bytes, which a node's disk writes.
@@ -141,7 +141,7 @@ import (
 //   - poll/repos={1000,10000}/op=page: the serving data node's read of ONE
 //     page of the listing of that many repositories (code_repos_packs_idx,
 //     at stale, as every pass reads it). Past 100 ms at 10 000 — two listings
-//     a minute from each of sixteen git nodes would hold over a twentieth of
+//     a minute from each of sixteen Gitlet nodes would hold over a twentieth of
 //     one reader — the listing is re-decided (M3-decisions M3-O26).
 func BenchmarkCompact(b *testing.B) {
 	quiet(b)
@@ -178,7 +178,7 @@ const (
 	steadyPushBytes = 20_000
 
 	// eightNodes is the fleet the min-merge figures are stated for: one
-	// builder and seven git nodes downloading each output once.
+	// builder and seven Gitlet nodes downloading each output once.
 	eightNodes = 8
 
 	// retentionTick is the code-retention duty's tick in the steady arms'
@@ -198,7 +198,7 @@ const (
 	// so what its figure follows is the pack count and never the bytes.
 	swapPushBytes = 1 << 10
 
-	// benchProcesses is every benchmark git node's read lane, as the
+	// benchProcesses is every benchmark Gitlet node's read lane, as the
 	// package's cases run (fixtureProcesses): the maintenance lane two
 	// slots, the maintainer keeping one, so a compaction never builds beside
 	// a maintainer's run and its peak is its own.
@@ -217,7 +217,7 @@ type traffic struct{ requests, bytes atomic.Int64 }
 // figures are t's counts now.
 func (t *traffic) figures() (requests, bytes int64) { return t.requests.Load(), t.bytes.Load() }
 
-// countingGets is a git node's backend with every GET it makes counted — each
+// countingGets is a Gitlet node's backend with every GET it makes counted — each
 // request, and every byte read through the streams it answers: what the node
 // downloads, apart from what any other node downloads from the same store.
 type countingGets struct {
@@ -264,28 +264,28 @@ func (c countingPuts) Put(ctx context.Context, r io.Reader, limit int64, m objst
 }
 
 // benchFleet is Gitlet for one arm: a solo fleet over the in-memory store,
-// its data node's committer taking every push the arm proposes, its first git
+// its data node's committer taking every push the arm proposes, its first Gitlet
 // node the HOME — the maintainer, on alike nodes — whose compactor the arm
-// builds and drives itself (never started), and every git node's downloads
+// builds and drives itself (never started), and every Gitlet node's downloads
 // counted apart.
 type benchFleet struct {
 	fleet *codetest.SoloFleet
 	store *objstore.Store
-	// gets is what each git node downloaded, by its id.
+	// gets is what each Gitlet node downloaded, by its id.
 	gets map[string]*traffic
 	// repos counts the repositories the arm declared, each named apart.
 	repos int
 }
 
-// newBenchFleet is a fleet of gitNodes git nodes, its broker syncing every
+// newBenchFleet is a fleet of gitletNodes Gitlet nodes, its broker syncing every
 // write as a deployment's does (SyncAlways).
-func newBenchFleet(b *testing.B, gitNodes int) *benchFleet {
+func newBenchFleet(b *testing.B, gitletNodes int) *benchFleet {
 	b.Helper()
 	gittest.RequireNode(b)
 	objects := memobj.New()
 	f := &benchFleet{gets: map[string]*traffic{}}
 	f.fleet = codetest.SoloNode(b, codetest.SoloOptions{
-		Shape: codetest.Shape{GitNodes: gitNodes}, Objects: objects, MaxProcesses: benchProcesses,
+		Shape: codetest.Shape{GitletNodes: gitletNodes}, Objects: objects, MaxProcesses: benchProcesses,
 		SyncAlways: true, LogBytes: benchLogBytes,
 		WrapObjects: func(id string, backend objstore.Backend) objstore.Backend {
 			t := &traffic{}
@@ -301,7 +301,7 @@ func newBenchFleet(b *testing.B, gitNodes int) *benchFleet {
 	return f
 }
 
-// home is the git node every arm's compactor builds on.
+// home is the Gitlet node every arm's compactor builds on.
 func (f *benchFleet) home() codetest.Node { return f.fleet.Nodes()[0] }
 
 // declare is a fresh repository of the arm's own: its name and its id.
@@ -749,7 +749,7 @@ type steadyFigures struct {
 
 // steadyRun lands pushes into a fresh repository on a fleet of its own, the
 // home's compactor merging at minMerge passing every perMinute pushes, the
-// other git node syncing after every push and every pass, and the
+// other Gitlet node syncing after every push and every pass, and the
 // code-retention duty sweeping, a day on, what each quarter hour of passes
 // retired; its figures.
 func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFigures {
@@ -1216,7 +1216,7 @@ func benchPoll(b *testing.B, n int) {
 	slices.SortFunc(listed, func(x, y code.CompactionCandidate) int {
 		return cmp.Or(cmp.Compare(y.LivePacks, x.LivePacks), strings.Compare(y.ID, x.ID))
 	})
-	// THE PASS, on the maintainer of every listed repository and on a git
+	// THE PASS, on the maintainer of every listed repository and on a Gitlet
 	// node maintaining an eighth of them, as each node of a fleet of eight
 	// alike nodes is: only a repository's maintainer ever plans it, so only
 	// its maintainer remembers it as not due, and every other listed

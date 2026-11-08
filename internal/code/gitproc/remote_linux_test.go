@@ -26,7 +26,7 @@ import (
 // holds the header — so the header the remote received reached it through the
 // environment alone. And the remote, which echoes what it was sent in the error
 // it answers with, has every one of them taken out of the lines the run hands
-// back, on every git a git node may run.
+// back, on every git a Gitlet node may run.
 //
 // Mutation: hand git the header as a `-c http.extraHeader=…` before its
 // subcommand, and the command line of the git the pool starts holds it.

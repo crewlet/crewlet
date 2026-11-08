@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GIT NODE (merge.go): a
+// A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GITLET NODE (merge.go): a
 // merge_change judged, built onto the target's tip in a scratch and landed as
 // one merge record through the one landing — its commit authored as U43 (a)
 // says, built again onto a target that moved under it, and enqueued where its
@@ -301,12 +301,12 @@ func TestAnUnreadyMergeBuildsNothing(t *testing.T) {
 // repository made a pull mirror is refused repo_importing while the mirror's
 // import runs, and repo_mirrored once it is done, each in the domain's one
 // sentence for the state (code.ImportingDetail, code.MirroredDetail), by the
-// git node from the row it synced, BEFORE anything is built: no object is
+// Gitlet node from the row it synced, BEFORE anything is built: no object is
 // stored, and the change stays open. The decide refuses either from the same
 // row, but only once a scratch, a share unit and a stored pack were spent on
 // a merge it could never take.
 //
-// Mutation: drop the importing arm, or the mirror arm, of the git node's
+// Mutation: drop the importing arm, or the mirror arm, of the Gitlet node's
 // status mapping — that merge is built and its pack stored before its decide
 // refuses it, red.
 func TestAMergeIntoAPullMirrorBuildsNothing(t *testing.T) {
@@ -345,7 +345,7 @@ func TestAMergeIntoAPullMirrorBuildsNothing(t *testing.T) {
 	}
 }
 
-// A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
+// A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the Gitlet node that
 // judges it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who may
 // merge into main, merges a ready change for the unit's lead, who may too,
 // and not for bob, who only reads the repository, nor for nobody — a
@@ -391,14 +391,14 @@ func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	c.requireMerged(n, res, err)
 }
 
-// AN UNSAID SOURCE DELETION IS THE TARGET'S GATE'S, decided on the git node
+// AN UNSAID SOURCE DELETION IS THE TARGET'S GATE'S, decided on the Gitlet node
 // that judges the merge: a change from a seat's branch merged with nothing
 // said of its branch deletes it where no gate over the target keeps it, and
 // keeps it where one does (delete_source: none) — each answered as decided
 // and done by the merge's own record — while a branch outside every seat's
 // namespace is kept, and a caller's own word wins over the gate's.
 //
-// Mutations: the git node ignoring the gate's KeepsSource → the kept seat
+// Mutations: the Gitlet node ignoring the gate's KeepsSource → the kept seat
 // branch is deleted, red; defaulting to keep → the seat branch outlives its
 // merge, red; ignoring the caller's word → red.
 func TestAnUnsaidSourceDeletionIsTheTargetGates(t *testing.T) {
@@ -486,7 +486,7 @@ func (r *changeReads) since(from int) ([]code.ReadQuery, int) {
 // A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for
 // the colleague whose ask woke its turn is held to the colleague's merge
 // authority by the one rule of that term (code.MergeAuthority), judged on the
-// git node from its own chart, the synced row and the target's gate — so the
+// Gitlet node from its own chart, the synced row and the target's gate — so the
 // node reads the change once, as the merger, and never again as the
 // colleague; and the merge the colleague may make lands.
 //
@@ -507,14 +507,14 @@ func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
 	read := reads.of(n) - before
 	c.requireMerged(n, res, err)
 	if read != 1 {
-		t.Errorf("the git node read change %d %d times to merge it for the lead, want once: the lead's merge "+
+		t.Errorf("the Gitlet node read change %d %d times to merge it for the lead, want once: the lead's merge "+
 			"authority is judged from what the node holds", n, read)
 	}
 }
 
 // A CHANGE'S WRITES READ NO REVISION THEY DROP: a change rebased by pat onto
 // a main that moved, merged by the seat alice for the unit's lead — its change
-// read as alice alone, the lead's merge authority judged from what the git
+// read as alice alone, the lead's merge authority judged from what the Gitlet
 // node holds (TestAColleagueSteeredMergeReadsItsChangeOnce) — and reverted
 // by pat. The
 // rebase and the merge read the change as its detail alone
@@ -522,7 +522,7 @@ func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
 // neither reads a revision, a merge reads its change again at the log's head
 // before a refusal and on every rebuild, and a first page of revisions is up
 // to 200 of them, each carrying its facts' touched paths, shipped from a data
-// node to the git node to be dropped. The revert reads its detail and its
+// node to the Gitlet node to be dropped. The revert reads its detail and its
 // HEAD REVISION alone — a first page one revision long — whose facts place a
 // fast-forward's range.
 //
@@ -651,7 +651,7 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 			w := merge(c.repo, pat(), n, head, code.MergeMethodMerge)
 			w.Override = "chasing a moving main"
 			res, err := c.write(w)
-			// THE REBUILDS ARE OBSERVED ONCE, as the merge ends, on the git
+			// THE REBUILDS ARE OBSERVED ONCE, as the merge ends, on the Gitlet
 			// node that built it: the count its answer carries, under how it
 			// ended — never once a round, nor left unrecorded. (A node that
 			// answered unready and handed the walk on records its own, which
@@ -707,7 +707,7 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 // after the second do not. And where what its caller's deadline leaves cannot
 // hold another round's waits, its git and the upload and proposal its first
 // landing was held to, it is built once. Never a round started to end unready
-// during its build, which sends the walk's runner-up git node to merge it
+// during its build, which sends the walk's runner-up Gitlet node to merge it
 // from scratch, or busy at its landing. The change stays open.
 //
 // Mutations: give every round the whole budget again → four rebuilds, five

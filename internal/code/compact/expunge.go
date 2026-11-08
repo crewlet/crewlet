@@ -27,7 +27,7 @@ import (
 )
 
 // ExpungePoll is the interval between two passes of the EXPUNGE loop: one
-// listing a git node a minute, so a person's purge is taken up within a minute
+// listing a Gitlet node a minute, so a person's purge is taken up within a minute
 // of its request by the repository's maintainer, and an expunge a crash left
 // open is finished from its rows within a minute of the node's return. The
 // listing is two arms. Its OPEN arm walks the partial index that holds only
@@ -38,8 +38,8 @@ import (
 // that finds one not due being a record of its own (code.ExpungeScan) — so a
 // steady fleet's listing holds only the repositories owed a scan, about one
 // in every ExpungeInterval's worth of minutes of them (config.CodeMaxRepos
-// projects and the seats' scratch repositories), on every git node, after a
-// restart, a rolling upgrade or a git node joining or leaving as much as
+// projects and the seats' scratch repositories), on every Gitlet node, after a
+// restart, a rolling upgrade or a Gitlet node joining or leaving as much as
 // before it: a repository's history is walked at most once an ExpungeInterval
 // whichever node maintains it ([Compactor.judgedClean]).
 const ExpungePoll = time.Minute
@@ -96,7 +96,7 @@ var errNothingKept = errors.New("compact: the expunge's inputs hold no object to
 //     listing's reason (the router carries this node's own writes as a floor
 //     on every code read it sends), each with its live objects;
 //  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     git node advertises, by its MAINTENANCE'S charge ([Compactor.PlacedBy])
+//     Gitlet node advertises, by its MAINTENANCE'S charge ([Compactor.PlacedBy])
 //     — the charge the other two loops are placed by, so every writer of a repository's packs runs
 //     on one node — a placement this node cannot read expunging nothing that
 //     pass, logged once;
@@ -207,7 +207,7 @@ func (c *Compactor) forgetExpunges(listed []code.ExpungeCandidate) {
 // SHARED FLEET STATE, NEVER THIS PROCESS'S MEMORY: a verdict kept here was
 // lost to every restart, rolling upgrade and maintainer reshuffle, so a
 // fleet-wide deploy downloaded and walked every repository again whatever its
-// last scan; and since a clean scan wrote nothing, every git node listed
+// last scan; and since a clean scan wrote nothing, every Gitlet node listed
 // nearly every repository through the estate every minute for the few scans
 // a week of work. BY THE RECORD'S INSTANT, NEVER BY THE ROW'S VERSION: a
 // version that moved — a push — would rescan a hot repository at every pass,
@@ -554,7 +554,7 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	// sync finds every pack the begin added installed and downloads none: up
 	// to ExpungeInputByteCap of GETs a cycle otherwise, of the cruft this
 	// node's disk held a moment before, which the commit retires minutes
-	// later. Every other git node installs both from the store by its next
+	// later. Every other Gitlet node installs both from the store by its next
 	// round. An adoption that fails costs that round the GETs, never the
 	// cycle.
 	if len(b.kept) > 0 {
@@ -1469,7 +1469,7 @@ func scheduled(live []code.PackRow, by time.Time) []pack {
 // date is not known is rewritten rather than passed over), oldest content
 // first. THE SCHEDULE'S: every file the schedule may take ([file.ripe]) that
 // frees a byte (o.freed), DENSEST FIRST — the most it frees for each byte it
-// rewrites, which every git node holding the repository downloads again —
+// rewrites, which every Gitlet node holding the repository downloads again —
 // then earliest arrival: a file that frees nothing is never rewritten,
 // however old. The lowest row id breaks a tie.
 func planExpunge(live []code.PackRow, o owed, byteCap int64) planned {

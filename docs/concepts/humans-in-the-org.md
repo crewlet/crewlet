@@ -301,7 +301,7 @@ What the binding buys:
   each speaker by seat and its members are seats. Your messages carry the
   seat's handle with author kind `human`, like every other write.
 - **Your git pushes are yours.** A company that hosts its repositories in the
-  engine ([`code.native`](gitlet.md)) is cloned, fetched and pushed to over
+  engine ([`code.backend: gitlet`](gitlet.md)) is cloned, fetched and pushed to over
   HTTPS with a token as git's password — your own machine token (`crewlet iam
   token -login` mints one for you), or a Tier A token the directory binds to a
   seat. git is one more way a person acts, beside the dashboard's act route,

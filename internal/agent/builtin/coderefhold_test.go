@@ -39,7 +39,7 @@ const (
 var seatBranchOID = strings.Repeat("e", 40)
 
 // withSeatBranch is host holding seatBranch, set by seat qa unset ago.
-func withSeatBranch(host *codeHost, seat string, unset time.Duration) *codeHost {
+func withSeatBranch(host *gitletHost, seat string, unset time.Duration) *gitletHost {
 	host.refs[seatBranch] = seatBranchOID
 	host.seats = map[string]string{seatBranch: seat}
 	host.ats = map[string]time.Time{seatBranch: time.Now().Add(-unset)}
@@ -72,7 +72,7 @@ func (e *refEvents) list() []string {
 
 // watch records every question host and writer are asked, in order, and calls
 // also, where set, with each as it arrives.
-func watch(host *codeHost, writer *codeWrites, also func(what string)) *refEvents {
+func watch(host *gitletHost, writer *codeWrites, also func(what string)) *refEvents {
 	ev := &refEvents{}
 	host.before = func(what string) {
 		ev.add(what)
@@ -240,7 +240,7 @@ func refArgDefault(arg string) any {
 // classifying it → red.
 func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 	t.Parallel()
-	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+	for _, tool := range builtin.CodeTools(writeDeps(newGitletHost(), &codeWrites{})) {
 		name := tool.Name()
 		props, _ := tool.Parameters()["properties"].(map[string]any)
 		var named []string
@@ -265,7 +265,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 			for _, scratch := range []bool{false, true} {
 				t.Run(name+"/"+arg+map[bool]string{false: "/project", true: "/scratch"}[scratch], func(t *testing.T) {
 					t.Parallel()
-					host := newCodeHost()
+					host := newGitletHost()
 					host.changes = suggestedChange().read
 					if scratch {
 						host = scratchHost(time.Hour)
@@ -321,7 +321,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 
 	// AN ID, MAIN, A TAG: nothing held.
 	for _, rev := range []string{mainOID, "main", "v1"} {
-		host, writer := withSeatBranch(newCodeHost(), "qa", time.Hour), &codeWrites{}
+		host, writer := withSeatBranch(newGitletHost(), "qa", time.Hour), &codeWrites{}
 		turn := writerTurn(t)
 		callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
 			map[string]any{"repo": "site", "rev": rev, "path": "README.md"})
@@ -332,7 +332,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 
 	// AN OPERATOR'S CALL: no turn, nothing held and nothing recorded, however
 	// long the branch has gone unset.
-	host, writer := withSeatBranch(newCodeHost(), "qa", code.RefHoldRecordAfter+time.Hour), &codeWrites{}
+	host, writer := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour), &codeWrites{}
 	deps := writeDeps(host, writer)
 	deps.Actor = builtin.PrincipalActor
 	read := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
@@ -570,7 +570,7 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host, writer := withSeatBranch(newCodeHost(), c.seat, c.unset), &codeWrites{life: c.answer}
+			host, writer := withSeatBranch(newGitletHost(), c.seat, c.unset), &codeWrites{life: c.answer}
 			ev := watch(host, writer, nil)
 			turn := writerTurn(t)
 			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
@@ -611,7 +611,7 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 
 	// THE WRITE ARM: a revert that conflicts sends the resolve and the hold
 	// before its write; a create sends neither.
-	host := withSeatBranch(newCodeHost(), "qa", code.RefHoldRecordAfter+time.Hour)
+	host := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour)
 	writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
 		return code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.txt conflicts"}, nil
 	}}
@@ -664,8 +664,8 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 		}
 		return out
 	}
-	newCase := func() (*codeHost, *codeWrites, *refEvents, *turnctx.Turn) {
-		host, writer := withSeatBranch(newCodeHost(), "qa", time.Hour), &codeWrites{}
+	newCase := func() (*gitletHost, *codeWrites, *refEvents, *turnctx.Turn) {
+		host, writer := withSeatBranch(newGitletHost(), "qa", time.Hour), &codeWrites{}
 		return host, writer, watch(host, writer, nil), writerTurn(t)
 	}
 
@@ -741,7 +741,7 @@ func TestAFailedHoldRecordLeavesTheBranchUnconfirmed(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := withSeatBranch(newCodeHost(), "qa", code.RefHoldRecordAfter+time.Hour)
+			host := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour)
 			writer := &codeWrites{life: c.answer}
 			ev := watch(host, writer, nil)
 			reg := codeRegistry(t, writeDeps(host, writer))

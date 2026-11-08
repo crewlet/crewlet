@@ -1339,7 +1339,7 @@ func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, e
 // decide, which reads them in the snapshot that holds a reader connection —
 // so none reads what it decides nothing by: a repository's gates are up to
 // [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, which every git
-// request's admission and every page of a git node's sync would decode, ship
+// request's admission and every page of a Gitlet node's sync would decode, ship
 // and keep for nothing, and every round would decode while every other
 // replicated read on the node waited for the connection — the cost
 // [verdicts.formBefore] keeps out of the snapshot.

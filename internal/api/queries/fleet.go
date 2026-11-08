@@ -452,7 +452,7 @@ func placementFits(p placement.SeatPlacement, nodes []placement.NodeProfile) boo
 // no error anywhere. That silence is the whole reason this is a field.
 //
 // ONLY A ROLE THE COMPANY NEEDS ([config.Company.NeedsRole], the rule each
-// node's own unmanned-role warning reads): git serves nothing for a company
+// node's own unmanned-role warning reads): gitlet serves nothing for a company
 // that hosts no code, and listing it named a role missing on every fleet that
 // declares its nodes' roles without it.
 func unmannedRoles(nodes []map[string]any, company *config.Company) []string {

@@ -9,7 +9,7 @@
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath]),
 // the publication's ([PublishPath]) and the expunge's ([ExpungePath]) the
 // repository's maintainer running one, and an engine write's ([WritePath])
-// the git node building it, a check's run's ([CheckPath]) the git node
+// the Gitlet node building it, a check's run's ([CheckPath]) the Gitlet node
 // running it, and an import's ([ImportPath]) and a pull mirror's sync's
 // ([MirrorPath]) the repository's home: a step with no point is a step nobody ever crashed at. So a new step of the receive pipeline, of a compaction, of a
 // publication, of an engine write or of an expunge, that can leave state
@@ -40,7 +40,7 @@
 // for each one whatever its context. And the teardown releases the crashes
 // BEFORE it stops or waits for ANY node, killed or not: a crash can fire on a
 // node no case killed — a case that fails between Reached and its kill, a
-// sync point on another git node of the fleet — and would hold that node's
+// sync point on another Gitlet node of the fleet — and would hold that node's
 // teardown for ever, where a Block would have ended with the node's context.
 // A crash hit after the release, the teardown's own included, answers at
 // once.
@@ -207,7 +207,7 @@ const (
 	// next boot empties.
 	ChainAfterBuild Point = "chain.after_build"
 
-	// CheckAfterClaim: a git node's runner holds a queued check — its claim
+	// CheckAfterClaim: a Gitlet node's runner holds a queued check — its claim
 	// applied, the row naming it the attempt's runner — and has made no box
 	// (internal/code/checkrun): a runner that dies here leaves a running row
 	// nothing will end but the repository's home, which sweeps a runner gone
@@ -343,7 +343,7 @@ func PublishPath() []Point { return slices.Clone(publishPath) }
 
 // WritePath is an engine write's points in the order it reaches them: its own
 // ([WriteAfterBuild]), then the landing's of the push path, in their order —
-// every point an engine write's crash matrix kills the git node at. A fresh
+// every point an engine write's crash matrix kills the Gitlet node at. A fresh
 // copy at every call, for [PushPath]'s reason. The landing's points are the
 // push path's own, hit once each by the one landing (land.go), so the write
 // adds a point to the closed set for its build alone.

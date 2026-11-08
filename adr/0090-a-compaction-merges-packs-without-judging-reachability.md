@@ -8,8 +8,8 @@
 
 ## The decision
 
-A repository's small packs are merged by its HOME git node — the first of its
-rendezvous order over the live git nodes
+A repository's small packs are merged by its HOME Gitlet node — the first of its
+rendezvous order over the live Gitlet nodes
 ([ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)), in
 `internal/code/compact` — into one or a few pack bundles, each stored as one
 object, and the merge is decided by the repository's committer as a push is:
@@ -39,7 +39,7 @@ safe with no fence:
    keeps its object from the collector for `RetireGrace` — 24 h, past
    `objstore.ReadBudget(MaxPackBytes)` plus the clock skew the references gate
    assumes — and only then does a `retire_sweep` record of the code-retention
-   duty remove it. On every git node the pack leaves a copy by a SWAP: the next
+   duty remove it. On every Gitlet node the pack leaves a copy by a SWAP: the next
    directory is built from hard links of every file kept, and a reader holding
    the old one keeps every file it may open until its last release. git opens
    a pack lazily, part way through a request, so no pin of single files could
@@ -51,7 +51,7 @@ undecided, and the home raises `code_compaction_behind` for as long as it is.
 
 ## Why the obvious alternatives are wrong
 
-**Compact in place on each git node** (`git repack -d` in the cache). Every node
+**Compact in place on each Gitlet node** (`git repack -d` in the cache). Every node
 would hold different packs, so no row could name what a node holds, a cold node
 would download the uncompacted history, and a cache would stop being a function
 of the rows ([ADR-0084](0084-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
@@ -71,7 +71,7 @@ will open, and git does not say.
 
 ## What this does not decide
 
-Which git node is a repository's home
+Which Gitlet node is a repository's home
 ([ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)). How a
 layer is published over full packs. Expunge. How long a person may wait on a
 refused push: `MaxPacksPerRepo` is derived from a cold sync's share of
@@ -80,7 +80,7 @@ refused push: `MaxPacksPerRepo` is derived from a cold sync's share of
 ## Amendment — the maintainer merges, and a published pack is no input
 
 [ADR-0091](0091-a-derived-object-is-published-kept-and-never-audited.md)
-moves the merge from the home to the repository's MAINTAINER — the first git
+moves the merge from the home to the repository's MAINTAINER — the first Gitlet
 node of its order
 ([ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md))
 whose advertised background budget holds its publication, the home on a fleet

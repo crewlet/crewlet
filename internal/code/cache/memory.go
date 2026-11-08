@@ -170,7 +170,7 @@ func memoryReserve(transfers, cores int, memory int64) int64 {
 
 // maintenanceBudget is what a node of mem keeps for its background work once
 // it has kept reserve for the rest: never below zero. Zero is a node whose
-// lanes keep all its memory — an operator's git.max_transfers whose
+// lanes keep all its memory — an operator's gitlet.max_transfers whose
 // transfers' TransferMemory each reach the memory less what its backed cores
 // keep (memoryReserve), which is well short of what the memory holds at
 // TransferMemory each, or a memory lowered in place below what its lanes were
@@ -233,7 +233,7 @@ func (c *Cache) rereadMemory() {
 // it.
 //
 // It is what the node ADVERTISES on its presence heartbeat, on every beat
-// beside its status (coord.GitBackgroundKey), so the git node a repository's
+// beside its status (coord.GitBackgroundKey), so the Gitlet node a repository's
 // maintenance is placed on is one whose own admissions would hold the work:
 // the figure, never a second estimate of it beside the one the admissions
 // read. A locked read of a figure in memory, which the beat takes unbounded.
@@ -406,7 +406,7 @@ const refusedForMemory = "memory"
 //
 // It is the cache's whole part of a node's reading: the fields stay zero, and
 // the alarm silent, on a reading nothing filled from a cache — a node that
-// serves no git has none. The engine fills every evaluation of a git node's
+// serves no git has none. The engine fills every evaluation of a Gitlet node's
 // alarm table from it, so a refusal is raised on the node whose cache made it;
 // nothing but a reading reaches the alarm, so a cache whose node never asked
 // would log, count and gauge every refusal while its alarm stayed silent.

@@ -134,7 +134,7 @@ const (
 	ActionCodeGetChange   Action = "code_get_change"
 	// ActionCodeSearch is the tool `code_search`: the lines matching a
 	// search across every repository the asker may read, each repository
-	// judged by the grant its answering git node derives. The question of
+	// judged by the grant its answering Gitlet node derives. The question of
 	// the same name, on REST and the socket, is decided by ActionCodeRead,
 	// the dotted verb every code question is decided by.
 	ActionCodeSearch Action = "code_search"
@@ -154,7 +154,7 @@ const (
 	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
 	// the tools and decided as the git transport's push is: admitted for
 	// every principal, and judged per repository where it is decided — an
-	// engine write by the grant's ref rule and the protections on the git
+	// engine write by the grant's ref rule and the protections on the Gitlet
 	// node that builds it and again at the repository's committer, a
 	// repository's lifecycle by the one lifecycle rule on the data node that
 	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0088). Five
@@ -191,7 +191,7 @@ const (
 	ActionCodeResolveFinding  Action = "code_resolve_finding"
 	// And its findings' suggestions applied: an engine write onto the
 	// change's branch, judged as every engine write is — the grant's ref rule
-	// and the protections, on the git node and at the committer.
+	// and the protections, on the Gitlet node and at the committer.
 	ActionCodeApplySuggestions Action = "code_apply_suggestions"
 	// And its commits rebased onto its target: an engine write of its source,
 	// a forced push of it, judged as every engine write is.
@@ -417,7 +417,7 @@ const (
 	ActionSetupAccessRaise Action = "setup.access.raise"
 	// ActionFleetOperate is the deployment's own controls: a backup, the
 	// retention gestures, the capacity window, the fleet broker's
-	// membership — and a verify of a git node's cache of one repository,
+	// membership — and a verify of a Gitlet node's cache of one repository,
 	// which reads every byte of THIS NODE's copy, holds a maintenance slot
 	// and the memory its check needs, and with a repair rewrites the copy
 	// every fetch on the node is served from: an operation on the node, as
@@ -481,7 +481,7 @@ const (
 	ActionAuditRead Action = "audit.read"
 	// ActionFleetHealth is the tool `fleet_health`: every live node as its
 	// own heartbeat states it, with the alarms its own table has firing.
-	// ActionCodeStatus is the tool `code_status`: the git nodes' caches and
+	// ActionCodeStatus is the tool `code_status`: the Gitlet nodes' caches and
 	// the repositories they served most, or one repository's state on each.
 	// READS OF THE DEPLOYMENT, admin's as the `fleet` question is — and a
 	// SEAT'S only where its role carries the health grant

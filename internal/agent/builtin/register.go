@@ -129,7 +129,7 @@ type Deps struct {
 	Code CodeDeps
 
 	// Health is the health tools' — the fleet's nodes and their alarms, and
-	// the git nodes' status. The zero value omits both. Registered for every
+	// the Gitlet nodes' status. The zero value omits both. Registered for every
 	// seat with the rest of the epoch's builtins, and offered only to a seat
 	// whose role carries the health grant: the table refuses every other seat
 	// before any object is named, which is what withholds them from its

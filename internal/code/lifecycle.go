@@ -1620,7 +1620,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		if c.Search != nil {
 			// A SCRATCH REPOSITORY IS SEARCHED WITH GREP, whoever asks — a
 			// person included: an index of a seat's experiment would be built
-			// and kept on every git node holding one for a repository that is
+			// and kept on every Gitlet node holding one for a repository that is
 			// deleted once idle. Refused here, naming why, before the
 			// settings' own validation would refuse the record as invalid.
 			if v.Kind == RepoScratch && *c.Search == SearchIndexed {

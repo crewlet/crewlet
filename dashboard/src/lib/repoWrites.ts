@@ -145,7 +145,7 @@ export function importHeld(viewer: Reader): string | undefined {
  * to be rotated rather than promising it gone.
  */
 export const PURGE_KEEPERS: readonly string[] = [
-  "every git node's copy of the repository, until it syncs past the purge",
+  "every Gitlet node's copy of the repository, until it syncs past the purge",
   "every backup taken before the purge, for as long as that backup is kept",
   "the object store, for a day after the purge commits (and a versioned S3 bucket for as long as its own rules keep a deleted object)",
   "every clone and fetch that already took it (a person's clone, a coding box's, a CI runner's checkout), which nothing on the server reaches",

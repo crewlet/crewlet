@@ -14,11 +14,11 @@
 // Each member is a member of one three-member broker cluster
 // (jetstreamtest.StartCluster, every stream at three replicas, so a record one
 // member acknowledged is one every member will see), a data node composed as
-// the engine composes the code domain (codetest.StartDataNode) and a git node
-// over it (codetest.StartGitNode) — the same two blocks the one-data-node
+// the engine composes the code domain (codetest.StartDataNode) and a Gitlet node
+// over it (codetest.StartGitletNode) — the same two blocks the one-data-node
 // topology is built from, so the two topologies certify one composition. What
 // is between the members is the production estate.Router and estate.Serve:
-// every git node's host and cache reach the estate through its own member's
+// every Gitlet node's host and cache reach the estate through its own member's
 // router, which answers in-process where its member's copy serves and asks a
 // peer otherwise, and asks a push of its repository's committer — the first
 // of rendezvous.Order over the running members, which is also what the

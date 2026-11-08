@@ -69,7 +69,7 @@ func searchFixture(t *testing.T) (*fixture, string, string) {
 	return x, x.repo(codetest.RepoName), tip
 }
 
-// codeIndexed builds the first git node's code index of repo at its default
+// codeIndexed builds the first Gitlet node's code index of repo at its default
 // branch's tip.
 func (x *fixture) codeIndexed(repo string) {
 	x.t.Helper()
@@ -320,7 +320,7 @@ func TestAnUnheldIndexSendsTheWalkOn(t *testing.T) {
 }
 
 // A SEARCH'S REFUSAL IS JUDGED AT THE LOG'S HEAD, as every read's is
-// (objects): a git node whose copy predates the activation that made a
+// (objects): a Gitlet node whose copy predates the activation that made a
 // repository `visibility: company` would refuse a seat outside its unit from
 // the row it holds, so it syncs once at the log's head and searches from the
 // row that admits the seat. A search the head refuses too is refused after
@@ -333,7 +333,7 @@ func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
 	settings.Visibility = code.VisibilityUnit
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, settings)
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}}, settings)
 	x.commit(map[string]string{"f.txt": "the status line\n"}, "one")
 	repo := x.repo(codetest.RepoName)
 	counting := &countingCache{Cache: grepOnly{x.f.Nodes()[1].Cache()}}
@@ -364,7 +364,7 @@ func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 }
 
 // A SECOND LOOK SYNCS TO THE HEAD ITS ASKER READ: a person's search naming a
-// commit a git node's copy predates, and one naming a ref nobody pushed, each
+// commit a Gitlet node's copy predates, and one naming a ref nobody pushed, each
 // carrying the head its asker read after the push, look once more at that
 // head — at session, a floor, with no barrier of the node's own — and the
 // first finds its commit's line there while the second is answered not found;
@@ -376,7 +376,7 @@ func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 // whatever it names) — each look takes a barrier of its own, red.
 func TestASecondLookSyncsToTheHeadItsAskerRead(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, codetest.Settings())
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}}, codetest.Settings())
 	x.commit(map[string]string{"f.txt": "the status line\n"}, "one")
 	repo := x.repo(codetest.RepoName)
 	counting := &countingCache{Cache: grepOnly{x.f.Nodes()[1].Cache()}}

@@ -178,7 +178,7 @@ func TestStoppedByIsWhoAskedTheSeatsWorkToStop(t *testing.T) {
 func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
 	t.Parallel()
 	// The two edges as the engine builds them: what Gitlet is
-	// handed (codehost.go) and the fence LaunchExecutor gives the session.
+	// handed (gitlethost.go) and the fence LaunchExecutor gives the session.
 	edges := func(t *testing.T, e *Engine) (box, bridge func(context.Context, string) (string, error)) {
 		t.Helper()
 		fence := e.seatFence("ceo")

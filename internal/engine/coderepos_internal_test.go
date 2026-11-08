@@ -34,7 +34,7 @@ func codeReposDoc(repos, units string) string {
         handle: swe
         llm: zulu
 ` + units + `code:
-  native: true
+  backend: gitlet
 `
 	if repos != "" {
 		doc += "  repos:\n" + repos
@@ -231,8 +231,8 @@ func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 	t.Parallel()
 	const days = 30
 	retained := func(doc string) string {
-		return strings.Replace(doc, "code:\n  native: true\n",
-			fmt.Sprintf("code:\n  native: true\n  deleted_retention_days: %d\n", days), 1)
+		return strings.Replace(doc, "code:\n  backend: gitlet\n",
+			fmt.Sprintf("code:\n  backend: gitlet\n  deleted_retention_days: %d\n", days), 1)
 	}
 	e := newSandboxNode(t, parseCompany(t, retained(codeReposDoc(webRepo("")+apiRepo, ""))))
 	servesCodeReads(t, e)
@@ -392,7 +392,7 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 	})
 	t.Run("a maintenance mode", func(t *testing.T) {
 		t.Parallel()
-		if e, _ := aNodeOf(t, codeHostCompany, statelog.ModeMaintenance); e.codeRetention != nil {
+		if e, _ := aNodeOf(t, gitletHostCompany, statelog.ModeMaintenance); e.codeRetention != nil {
 			t.Error("a node in a maintenance mode armed a code-retention duty, whose every " +
 				"purge step is a publish the mode exists to rule out")
 		}

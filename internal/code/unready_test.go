@@ -7,7 +7,7 @@ import (
 )
 
 // A WALK LETS ANOTHER NODE FILL ONLY PAST ONE BRINGING NO COPY UP (ADR-0089).
-// Every reason a git node gives for not answering a read is held to whether it
+// Every reason a Gitlet node gives for not answering a read is held to whether it
 // passes the walk's one fill on: a node behind its configuration (which judges
 // no seat until its apply succeeds) and one that failed on its own pass it, so
 // the next node fills the copy the read needs; a node syncing — filling,

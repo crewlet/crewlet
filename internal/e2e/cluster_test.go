@@ -392,7 +392,7 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	boot.Stream.Cluster.Name = relays.ClusterName()
 	boot.Stream.Cluster.Port = port
 	// THE OTHER MEMBERS, which is what Tier A says the field holds and what

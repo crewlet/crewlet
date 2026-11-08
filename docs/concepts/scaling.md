@@ -25,7 +25,7 @@ configured per node.
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
-  roles: [data, git, ingress, seats, workers]   # the default; omit the key
+  roles: [data, gitlet, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
   max_concurrent: 32                 # turn segments this process runs at once; a run in its box holds none
 ```
@@ -33,7 +33,7 @@ node:
 | Role | What it does |
 |---|---|
 | `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker, knowledge-base and chat routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
-| `git` | Serves the company's git repositories where it sets [`code.native`](gitlet.md), from a [cache](gitlet.md#the-cache-on-a-git-node) on its own disk — see [Git nodes](#git-nodes). Requires `ingress`, whose listener git is served on |
+| `gitlet` | Serves the company's git repositories where it sets [`code.backend: gitlet`](gitlet.md), from a [cache](gitlet.md#the-cache-on-a-gitlet-node) on its own disk — see [Gitlet nodes](#gitlet-nodes). Requires `ingress`, whose listener git is served on |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface, and the tool bridge every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too ([Running a Fleet](../guides/fleet.md#what-a-fleet-needs)) |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and answers their executor runs' tool calls: a box off the node's host is relayed to it from an `ingress` node through the fleet's `CREWLET_MCP_BRIDGE_URL`, and a `direct` box dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion), the state logs' trim, the embedding duty, the identity sweep, the object store's collector, the trash reaper, Chatlet's message horizon and the code-retention duty. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
@@ -105,21 +105,21 @@ This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
 and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
 
-### Git nodes
+### Gitlet nodes
 
-A node with the `git` role serves the company's repositories from a cache of
-its own, and git nodes scale **reads**: each keeps its own copy of every
+A node with the `gitlet` role serves the company's repositories from a cache of
+its own, and Gitlet nodes scale **reads**: each keeps its own copy of every
 repository it is asked for, synced from the code log's rows and the object
 store, so a clone or a fetch is answered by the node that received it, and a
 burst of clones of one repository costs that node one sync however many there
-are. Nothing ties a person to one git node: every answer that names a ref is
+are. Nothing ties a person to one Gitlet node: every answer that names a ref is
 read at the code log's head, so a push answered `ok` on one node is what every
 other node advertises next
 ([A push, end to end](gitlet.md#a-push-end-to-end)).
 
-**Pushes** do not scale with git nodes: a push to one repository is decided by
+**Pushes** do not scale with Gitlet nodes: a push to one repository is decided by
 that repository's one [committer](#how-a-request-reaches-the-estate), a data
-node, whichever git node received it — so a repository's pushes meet in one
+node, whichever Gitlet node received it — so a repository's pushes meet in one
 place and are committed a batch at a time, the repositories spread across the
 data nodes, and a data node that leaves hands each of its repositories to that
 repository's runner-up.
@@ -162,7 +162,7 @@ to one repository are 2 050–2 090 a second proposed at the committer itself,
 because group commit puts them in two records, and 1 270–1 390 a second
 proposed through another node's router (a push's median 38–41 ms, its p99
 94–97 ms, sixty-four proposals crossing the wire at once). That second path is
-every push whose git node is not its repository's committer, so in a fleet
+every push whose Gitlet node is not its repository's committer, so in a fleet
 that spreads `/git/` evenly it is the burst figure to size by. Pushes to
 different repositories share no record, so what bounds a company whose pushes
 spread across many repositories is the code log's **record rate** — 201–225
@@ -179,7 +179,7 @@ every node serves git, with a balancer spreading `/git/` evenly, warms every
 repository on every node — one cold sync each, one download for every push the
 repository ever took, and each node's disk and background indexing for it. A
 fleet that never wrote `node.roles` is that fleet: every node has every role,
-`git` included, the moment its company sets `code.native`. Routing
+`gitlet` included, the moment its company sets `code.backend: gitlet`. Routing
 `/git/<name>` by repository keeps each warm on one or two nodes instead, a
 node's cache a share of the company's repositories rather than all of them,
 and a push's own sync adopting the pack its node received rather than
@@ -187,32 +187,32 @@ downloading the packs other nodes did; it is a cost decision, never a
 correctness one ([Deployment](../guides/deployment.md#gitlet)).
 
 **A read of a repository's content goes to its home.** A server-side read by
-object id — a tree's listing, a file's lines, a diff — is asked of the git
+object id — a tree's listing, a file's lines, a diff — is asked of the Gitlet
 nodes rather than of whichever node asks it: the repository's home first, the
-first of its rendezvous order over the live git nodes, then its runner-up
-([The home git node](gitlet.md#the-home-git-node)). So the reads of one
-repository meet on one git node's cache wherever they come from, with no
+first of its rendezvous order over the live Gitlet nodes, then its runner-up
+([The home Gitlet node](gitlet.md#the-home-gitlet-node)). So the reads of one
+repository meet on one Gitlet node's cache wherever they come from, with no
 balancer to configure, and one node a walk at a time starts a download of a
 repository it holds no copy of — the home, or its runner-up where the home
 says no copy is coming there (behind the company's configuration for a seat,
 or failing on its own): a home's death, or a home stuck behind a revision,
 costs the fleet one download of each repository read meanwhile, by its
-runner-up, rather than one on every git node a read reached — or a repository
-nobody can read until the home recovers. On each git node those reads' own
+runner-up, rather than one on every Gitlet node a read reached — or a repository
+nobody can read until the home recovers. On each Gitlet node those reads' own
 git holds at most half its read lane — the short checks of what a read names
 wait in the lane's queue like any short read — so the other half stays the
 one a person's push scans in ([Server-side reads](gitlet.md#server-side-reads)).
-And one repository's seat reads are served by the git nodes that hold a copy
+And one repository's seat reads are served by the Gitlet nodes that hold a copy
 of it, which bounds them by those nodes' shares: a home at its share sends the
 rest on to them rather than starting another copy, because the share is the
 node's, spent by every repository it serves, and a fleet busy everywhere would
 answer every such read with a download
-([The home git node](gitlet.md#the-home-git-node)).
+([The home Gitlet node](gitlet.md#the-home-gitlet-node)).
 
 **What a request on a cold node costs.** A request on a node that holds no copy
 of its repository — one that just joined, or whose budget evicted it — waits for
 a cold sync before its first byte, since git's protocol has nothing to send
-earlier: measured end to end, the git nodes on the node pin, git 2.56.0, on
+earlier: measured end to end, the Gitlet nodes on the node pin, git 2.56.0, on
 two E-cores of a Core Ultra 7 265U, against an S3-shaped fake answering every
 request 100 ms after it arrives, the first clone of a repository of two
 hundred pushes begins with a 1.4–2.4 s sync and of two thousand with a
@@ -223,12 +223,12 @@ node's git wrote, so the node downloads, verifies and renames, and runs no
 
 **A node coming up with many repositories** asked of it — joining, or
 restarted — reads at most eight of them whole at once from the data nodes
-([many repositories at once](gitlet.md#the-cache-on-a-git-node)). Every
+([many repositories at once](gitlet.md#the-cache-on-a-gitlet-node)). Every
 page of such a read is one read on a data node: one of the 64 answers its lane
 gives the whole fleet's reads at once — a seat's tracker read, a page write,
 the check every git request is admitted by — and one of the connections its
 database scans each of those reads on, eight on the smallest data node (where
-the git node holds the data itself, its own database's); so a node coming up
+the Gitlet node holds the data itself, its own database's); so a node coming up
 asks no more of a data node than the smallest scans at once, rather than every
 page while the fleet's reads wait behind its pages — and a request that waits
 a whole read attempt there, ten seconds, takes the data node for gone. Its
@@ -245,14 +245,14 @@ seconds with no limit. In those 16 seconds a node downloads five to nine packs
 for each of its repositories from S3, so for repositories of more history the
 downloads, not the reads, set how long a join takes.
 
-The object store sees the same multiplication. A git node reads at most 32
+The object store sees the same multiplication. A Gitlet node reads at most 32
 bundles at once — sixteen for any one repository — and S3 answers each in
 about 100 to 200 ms, so a node syncing repositories it has never served reads
 about 150 to 290 small ones a second (about 75 to 150 for one repository,
 measured on git 2.56.0 against a fake answering 100 and 200 ms late, on two
 cores of a Core Ultra 7 265U — the GETs alone bound it, not the machine).
 Every bundle is named under the one `files/` prefix, so
-about 19 to 37 git nodes cold-syncing at once at their full 32 — twice as many
+about 19 to 37 Gitlet nodes cold-syncing at once at their full 32 — twice as many
 syncing one repository each — reach the 5 500 reads a second S3 serves one
 prefix (a fresh fleet, or a repository imported and then fetched through every
 node), past which it answers `SlowDown` until it has partitioned the prefix.
@@ -266,7 +266,7 @@ fifty or so a compacted repository holds come up in under a second, the
 14 to 27 seconds, and the 10 000 of a history nothing merged — one pack a
 push — in about 70 to 130 seconds.
 
-**A git node is sized by its memory before its disk.** Every git process a
+**A Gitlet node is sized by its memory before its disk.** Every git process a
 node runs over a whole repository holds memory in proportion to the
 repository's objects, measured over a source repository's history — the
 bitmap on the node pin, git 2.56.0, and a clone on git 2.43:
@@ -275,18 +275,18 @@ and a clone beside it about 240 more — about 840 an object. At about three
 million objects a gigabyte of a source repository's packs, that is about 2.5 GB
 of memory for each gigabyte of packs on disk; memory follows the objects rather
 than the bytes, so a repository of large binaries, far fewer objects to the
-gigabyte, needs far less. [The cache's Memory paragraph](gitlet.md#the-cache-on-a-git-node)
+gigabyte, needs far less. [The cache's Memory paragraph](gitlet.md#the-cache-on-a-gitlet-node)
 has every figure, and what the node keeps back for the store, the broker and
 the engine. A repository whose bitmap the node's memory cannot hold is still
 served — without one, so each of its clones walks its history — and raises
 [`code_maintenance_refused`](../reference/alarms.md). A single repository of
-50 to 100 GB of history is past what a git node is sized for.
+50 to 100 GB of history is past what a Gitlet node is sized for.
 
-**One git node writes a repository's bitmap for the fleet.** A repository's
-[maintainer](gitlet.md#who-maintains-a-repository) — the first git node of
+**One Gitlet node writes a repository's bitmap for the fleet.** A repository's
+[maintainer](gitlet.md#who-maintains-a-repository) — the first Gitlet node of
 its order whose advertised background budget holds the work, its home on a
 fleet of alike nodes — MERGES its packs ([Compaction](gitlet.md#compaction))
-and PUBLISHES its bitmapped index as layers every other git node installs
+and PUBLISHES its bitmapped index as layers every other Gitlet node installs
 ([When a repository is published](gitlet.md#when-a-repository-is-published)).
 A repository's maintenance is placed by the largest charge any of its steps
 is admitted at: for its publication, its bitmap at 600 bytes an object of the
@@ -294,11 +294,11 @@ whole repository and a clone's 240 beside it, 840 bytes an object; for a merge
 of every object, 790 bytes an object beside the build's delta window — six of
 the largest blob `code.limits.max_blob_bytes` admits, 300 MiB by default —
 which is the larger under some six million objects. So a repository of N
-objects needs ONE git node whose background budget holds the larger of
+objects needs ONE Gitlet node whose background budget holds the larger of
 840 × N bytes and 790 × N bytes plus that window for it to be served with a
-bitmap anywhere, for the whole fleet, and every other git node installs the
+bitmap anywhere, for the whole fleet, and every other Gitlet node installs the
 layers in a few MiB of memory and serves through them
-([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)). That is the
+([Sizing Gitlet nodes](../guides/deployment.md#sizing-gitlet-nodes)). That is the
 charge of a ROOT, which the maintainer must be able to write; every
 publication after a repository's first is a layer over a base, whose bitmap
 holds a fraction of a root's and is charged 350 bytes an object rather than
@@ -306,10 +306,10 @@ holds a fraction of a root's and is charged 350 bytes an object rather than
 its budget room for the rest of its work while they build.
 Measured on the node pin over a source repository's history of a gigabyte,
 three million objects, from the in-memory store (one run of each, on two
-E-cores of a Core Ultra 7 265U): a git node writing the whole bitmap of its own took 13.5 seconds and
+E-cores of a Core Ultra 7 265U): a Gitlet node writing the whole bitmap of its own took 13.5 seconds and
 812 MiB; the maintainer's root publication of it held the same 812 MiB for
 its layer and bitmap (13.8 seconds) and 262 MiB for its commit-graph layer
-(13.5 seconds), once for the fleet; and a git node installing what it
+(13.5 seconds), once for the fleet; and a Gitlet node installing what it
 published synced the repository cold — its 64 packs and the layer's one
 part — in 1.4 seconds, its own code allocating 7.4 MiB beside the bytes it
 fetched, and counted every object through the bitmap 6 ms after its answer.
@@ -345,7 +345,7 @@ whichever is longer — counting a build that failed as well, from when it
 began. A maintainer publishes one repository at a time, so it
 keeps up with about ten large repositories at that duty cycle; past that, each
 waits for the others and its tail grows meanwhile, the signal to give a second
-git node the memory for them — the repositories then spread over both, each in
+Gitlet node the memory for them — the repositories then spread over both, each in
 its own order. A maintainer also holds every repository it maintains in its
 cache: give it the cache budget to keep them, or each of its publications
 begins with a whole download.
@@ -368,7 +368,7 @@ indexed it, against the same fake, the two cold clones cost about ten times as
 much: 27 s of CPU for the full one and 2.6 s for the narrow one.
 Identical clones share nothing: thirty-two at once cost the node thirty-two
 clones of CPU. A warm fetch of one new commit, over the in-memory store, is
-6–8 ms of it. So size a git
+6–8 ms of it. So size a Gitlet
 node's cores by the clones and fetches it serves, and point CI at a blobless
 clone with a cone wherever a tree is large — shallow too, where the job reads
 no history:
@@ -383,44 +383,44 @@ the filters a bitmap answers — `blob:none`, `blob:limit=<n>`, `tree:0`,
 `object:type=<type>` and a `combine:` of them; `sparse:oid` and `tree:<n>` past
 0 are refused ([the filters served](gitlet.md#a-push-end-to-end)).
 
-**A git node's disk.** Its cache holds the repositories it serves whole — the
+**A Gitlet node's disk.** Its cache holds the repositories it serves whole — the
 sum of their `SIZE` in
 [`crewlet gitlet status`](../reference/cli.md#crewlet-gitlet-status), each at most
-`code.limits.repo_max_bytes` — kept under `git.cache_max_bytes` by evicting the
+`code.limits.repo_max_bytes` — kept under `gitlet.cache_max_bytes` by evicting the
 least recently used, and only once the budget is reached: a repository nobody
 fetched over a weekend is still there on Monday and is brought forward by a
 delta, and one a request is reading is never evicted. Unset, the budget is
 derived from the cache's volume at every boot — half of what a shared volume
-leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
+leaves it, seven eighths of a volume of its own ([`gitlet`](configuration.md#gitlet))
 — so give the cache a volume of its own. The object store holds one object a
 push until the repository's maintainer merges its packs into a few
 ([Compaction](gitlet.md#compaction)); the packs a merge replaces keep their
 objects a day, then the collector deletes them.
 
-**What a compaction costs every other git node.** Each output of a merge is
-downloaded once by every git node holding the repository but the one that
+**What a compaction costs every other Gitlet node.** Each output of a merge is
+downloaded once by every Gitlet node holding the repository but the one that
 built it, which links its own, and git's geometric roll merges a history again
 each time it doubles, until its packs are full. So over a repository's life a
-git node downloads, and writes to its disk, at most about (1 + log₂(0.9 GB ÷
+Gitlet node downloads, and writes to its disk, at most about (1 + log₂(0.9 GB ÷
 the mean push's pack)) times the bytes pushed to the repositories it holds:
 about 16 times at pushes of 20 KB, and fewer the more pushes a merge takes at
 once. Measured (`BenchmarkCompact`, git 2.56.0 over the in-memory store, on
 two E-cores of a Core Ultra 7 265U, requests and bytes counted), a quiet repository — 1 200 pushes of 24 KB, one
-a minute, merged sixteen at a time — had the other git node download 4.7
-times what was pushed, the git node that built the merges having uploaded
+a minute, merged sixteen at a time — had the other Gitlet node download 4.7
+times what was pushed, the Gitlet node that built the merges having uploaded
 3.7 times it, and twenty minutes of a busy one — 6 000 pushes at three
 hundred a minute — 3.4 and 2.4 times, both still far from full packs: a
 longer history is merged more times, up to the multiple above. On S3 inside the
 bucket's region the bytes are not billed and the requests are: a merge is one
-PUT an output and one GET of it on every other git node holding the
-repository — 64 PUTs and 449 GETs a thousand pushes on a fleet of eight git
+PUT an output and one GET of it on every other Gitlet node holding the
+repository — 64 PUTs and 449 GETs a thousand pushes on a fleet of eight Gitlet
 nodes for the quiet repository, 3 and 23 for the busy one, beside the 7 000
 GETs of the pushes' own packs. An object store that bills its egress —
 another provider's, or a bucket in another region — bills those bytes too,
-once for every git node but the builder, so size a git node's download and
+once for every Gitlet node but the builder, so size a Gitlet node's download and
 disk-write rates, and that bill, by the multiple above.
 
-**What the index of pushes costs a git node.** Beside each copy a git node
+**What the index of pushes costs a Gitlet node.** Beside each copy a Gitlet node
 keeps the index of which push introduced each commit
 ([Which push landed a commit](gitlet.md#which-push-landed-a-commit)): about
 64 bytes a commit introduced, about 190 bytes for a push of three, inside the
@@ -438,14 +438,14 @@ each is read. A repository's history before a node's first full read of it is
 read back only by its home, and only once a seat has asked about it, a page of
 the data node's push rows at a time — measured on four cores of a Core Ultra 7
 265U, pages of about 7 500 pushes and 4 MB, about 150 ms each — and after each
-page the backfill waits twice that page's time for each git node the fleet has
+page the backfill waits twice that page's time for each Gitlet node the fleet has
 to a data node, rounded up. So that monorepo's 2 400 pages are read back in
-about 18 minutes on a fleet of one git node to each data node, and in about 77
-minutes at sixteen git nodes over three data nodes, where each page waits
-twelve times its own time; the worst case is one cold git node that is the home
+about 18 minutes on a fleet of one Gitlet node to each data node, and in about 77
+minutes at sixteen Gitlet nodes over three data nodes, where each page waits
+twelve times its own time; the worst case is one cold Gitlet node that is the home
 of every repository it caches, every one of them asked about, reading the whole
 181 days of a company pushing 250 000 a day: about 6 000 pages and 24 GB over
-the router, about 45 minutes at one git node to each data node, beside that
+the router, about 45 minutes at one Gitlet node to each data node, beside that
 node's cold syncs of the same repositories. Choosing each of those steps costs
 the node microseconds however many repositories it holds — 2.5 µs among 10 000
 with a step due for every one of them, after a restart, and 0.7 µs where one
@@ -454,7 +454,7 @@ its copy never waits on the choice. These are figures, not promises: until a
 node's index is complete, an answer about an older commit says which range it
 does not hold rather than naming a push.
 
-**What the memo of answers costs a git node.** Beside each copy a git node
+**What the memo of answers costs a Gitlet node.** Beside each copy a Gitlet node
 keeps every page its seats' server-side reads cut ([The memo](gitlet.md#the-memo)),
 at most a sixteenth of the cache's budget across every copy it holds — some
 450 000 pages of 56 KiB at a 400 GB budget — and it is trimmed to that before
@@ -464,7 +464,7 @@ repositories it exists for. A page from the memo is answered with no git run
 process, 4.6 to 262 ms warm and up to the read's ten seconds; and the read that
 misses cuts every page after the one asked too, so a seat paging through a
 large listing, a long file or a wide diff pays for one git run, not one a
-page. What the memo holds of a git node's MEMORY is nothing an answer: each
+page. What the memo holds of a Gitlet node's MEMORY is nothing an answer: each
 copy's cohorts of answers and what each holds, 16 bytes a cohort and some
 seventeen at the most a copy, so 10 000 copies hold under 3 MB however many
 answers their memos keep — where an index of every answer would have held
@@ -474,10 +474,10 @@ recently in one rename a copy that holds it, whatever it holds — about 0.7 s o
 the janitor's at 10 000 copies, measured — and is due again only once a
 sixteenth more has been kept.
 
-**What code search costs a git node.** A repository searched by index keeps
-a trigram index of its default branch's tip on the first two git nodes of its
+**What code search costs a Gitlet node.** A repository searched by index keeps
+a trigram index of its default branch's tip on the first two Gitlet nodes of its
 order ([Code search](gitlet.md#code-search)), and a search of many
-repositories is one question every git node answers its share of. Measured on
+repositories is one question every Gitlet node answers its share of. Measured on
 two E-cores of a Core Ultra 7 265U, over a tip of 120 000 files — 1.96 GiB of
 real source, this repository's own tree in rotated copies:
 
@@ -488,27 +488,27 @@ real source, this repository's own tree in rotated copies:
 | A build's memory | 107 MiB at its peak for the whole build, in segments of 512 MiB of source — each segment's postings and its writing, and every merge — and the tip's listing beside it, 31 MiB for those 120 000 files; every segment it has written is read back through a mapping of its file, never held |
 | A search | 16 ms at the median and 432 ms at the 99th percentile, its lookups and the confirmation of its candidates' lines up to its 500 hits |
 
-So a git node's indexes take at most a third of its cache's budget — what a
+So a Gitlet node's indexes take at most a third of its cache's budget — what a
 cache full of indexed copies with no history holds of them, 31% — and past
 that they are dropped, least recently used first, before any repository is
 evicted, since a dropped index is built again from the blobs the copy already
 holds. Segments are merged as each is written, each kept more than twice the
 next, so an index keeps a handful of them (two for that tip) and each blob is
-written a logarithmic number of times. Every search a git node is answering
+written a logarithmic number of times. Every search a Gitlet node is answering
 reads, together, at most all but one of the units of its share of git work for
 seats' reads, which each read's search takes — one where the node has only
 one — so a seat's read of a file, a log or a diff always finds a unit no
 search can hold, however many company-wide searches are running. A search
 costs its node a lookup of a few lists and a read of the candidates' lines,
-never a walk of the tree: the repositories it names are divided among the git
+never a walk of the tree: the repositories it names are divided among the Gitlet
 nodes that hold their indexes, each searching its own share at once, so adding
-git nodes divides a company-wide search's reading rather than repeating it.
-Its REQUEST is not divided: it is one signed question every git node hears,
+Gitlet nodes divides a company-wide search's reading rather than repeating it.
+Its REQUEST is not divided: it is one signed question every Gitlet node hears,
 carrying the whole table of which node answers for which repository, so each
-git node receives, verifies and reads the whole table — a line for every
+Gitlet node receives, verifies and reads the whole table — a line for every
 repository the search names — before it finds its own part, nodes assigned
 nothing included. What a search costs the broker and the nodes' reading of
-requests grows with the git nodes times the repositories it names.
+requests grows with the Gitlet nodes times the repositories it names.
 
 **What every data node holds for Gitlet.** Every data node holds the
 whole estate, and Gitlet's rows with it. A seat's push of one commit
@@ -602,7 +602,7 @@ and a push's bytes are never on the log — they are the object store's.
 
 **What this release does not scale yet**, stated as the product's shape: a
 compaction of a repository drops its multi-pack index and that index's bitmap
-on every git node — the commit-graph is kept, since a merge drops no commit —
+on every Gitlet node — the commit-graph is kept, since a merge drops no commit —
 and the background indexing writes them again at its own pace, so a clone
 between the two counts its objects by walking
 ([Compaction](gitlet.md#compaction)) — and a seat pushes through its code tools, each change one push the
@@ -1254,4 +1254,4 @@ theoretical one:
 - [Seat Ownership](seat-ownership.md) — leases, epoch fencing, admission, the completion ledger, singleton duties
 - [Control Plane](control-plane.md) — how a config revision reaches every node, and the posture a lagging one takes
 - [Deployment](../guides/deployment.md) — processes, database, broker settings, probes
-- [Gitlet](gitlet.md) — a repository as rows on the code log, its committer, and the cache a git node keeps of it
+- [Gitlet](gitlet.md) — a repository as rows on the code log, its committer, and the cache a Gitlet node keeps of it

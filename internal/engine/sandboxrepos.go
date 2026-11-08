@@ -39,7 +39,7 @@ type launchRepos struct {
 // reads, naming the repository and the reason — anything the seat may not be
 // given:
 //
-//   - the company hosts no code (code.native unset), or this node does not
+//   - the company hosts no code (code.backend is not gitlet), or this node does not
 //     serve it now — named by why, a restart owed, an apply in flight;
 //   - this node has no CREWLET_BOX_GIT_URL: the box would be given a
 //     repository and no address to clone it from, so the request is refused
@@ -76,8 +76,8 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 				"Gitlet now (%v); nothing was checked out: check it out again once Gitlet "+
 				"is served here", err))
 		}
-		return launchRepos{}, builtin.CheckoutUnavailable("this company hosts no repositories (code.native is " +
-			"not set); clone a repository on another host with that host's own credentials")
+		return launchRepos{}, builtin.CheckoutUnavailable("this company hosts no repositories (code.backend is not " +
+			"gitlet); clone a repository on another host with that host's own credentials")
 	}
 	if e.boxGitURL == "" {
 		node := "this node"
@@ -86,9 +86,9 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 		}
 		log.WarnContext(ctx, "sandbox_git_url_unset", "turn_id", t.RunID, "node", node,
 			"detail", "an executor checked out a repository on Gitlet and this node cannot give its "+
-				"box git access: set "+sandbox.BoxGitURLVar+" to a git node's public listener and /box/git")
+				"box git access: set "+sandbox.BoxGitURLVar+" to a Gitlet node's public listener and /box/git")
 		return launchRepos{}, builtin.CheckoutUnavailable(fmt.Sprintf("this node cannot give a box git "+
-			"access: %s is not set on %s (the base a box dials for /box/git/, a git node's public listener); "+
+			"access: %s is not set on %s (the base a box dials for /box/git/, a Gitlet node's public listener); "+
 			"nothing was checked out", sandbox.BoxGitURLVar, node))
 	}
 	resolved, err := deps.ResolveRunRepos(ctx, t, reqs, func(asker code.Principal, repo code.RepoRef) code.Grant {

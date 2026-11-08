@@ -75,7 +75,7 @@ type PreviewPool interface {
 	Version() gitproc.Version
 }
 
-// Previews answers a git node's MERGE PREVIEWS — what merging one commit into
+// Previews answers a Gitlet node's MERGE PREVIEWS — what merging one commit into
 // another would do, a comparison's preview ([code.MergePreviewQuery]) — by
 // THE SAME MERGE the home loop records a change's mergeability by
 // ([mergeIn]), so a preview and the change it would open say one thing: the
@@ -84,9 +84,9 @@ type PreviewPool interface {
 // A SERVER OF READS BESIDE THE LOOP, NEVER PART OF IT: a preview is a READ a
 // principal makes, served from exactly what a read by object id is served
 // from — the cache, the pool, the node's one seat git-work share, the chart
-// and the reads ledger (internal/code/query) — on every git node a walk asks,
+// and the reads ledger (internal/code/query) — on every Gitlet node a walk asks,
 // whether or not the node runs home work. The loop's estate, placement and
-// nudges answer nothing a preview asks, so every git node's composition
+// nudges answer nothing a preview asks, so every Gitlet node's composition
 // builds a Previews beside its query server, and the loop and the previews
 // share the merge alone.
 //
@@ -210,11 +210,11 @@ func (p *Previews) Stop(ctx context.Context) {
 }
 
 // stopping is what a preview the stop refused or cut is answered: unready
-// about this node, node_failed, so the walk asks the next git node and lets
+// about this node, node_failed, so the walk asks the next Gitlet node and lets
 // it fill a copy (code.UnreadyReason.PassesFill).
 func (p *Previews) stopping() error {
 	return &code.ErrGitUnready{Reason: code.UnreadyNodeFailed, Detail: fmt.Sprintf("%s is stopping its merge "+
-		"previews; another git node answers, and fills a copy where none holds one", p.o.NodeID)}
+		"previews; another Gitlet node answers, and fills a copy where none holds one", p.o.NodeID)}
 }
 
 // MergePreview answers what merging q.Head into q.Base would do — see
@@ -266,7 +266,7 @@ func (p *Previews) preview(ctx context.Context, q code.MergePreviewQuery) (code.
 	if !q.Home && !p.o.Cache.Holds(q.RepoID) {
 		return code.MergePreviewAnswer{}, pv.unready(code.UnreadyNotHeld, fmt.Sprintf("%s holds no copy of "+
 			"repository %s and the preview is not its walk's home's, which is the one node that fills a copy; "+
-			"a git node holding one answers meanwhile", p.o.NodeID, q.RepoID))
+			"a Gitlet node holding one answers meanwhile", p.o.NodeID, q.RepoID))
 	}
 	// THE PIN IS THE PREVIEW'S, released whatever it answers: every Synced a
 	// sync or a re-sync handed out goes back through pv.synced.
@@ -295,11 +295,11 @@ func (pv *previewing) judgeable() error {
 	p := pv.p
 	if cur := p.o.Current; cur != nil && !cur() {
 		return pv.unready(code.UnreadyBehindConfig, fmt.Sprintf("%s is behind the company's configuration and "+
-			"judges no seat's grant from the chart the fleet replaced; a current git node answers", p.o.NodeID))
+			"judges no seat's grant from the chart the fleet replaced; a current Gitlet node answers", p.o.NodeID))
 	}
 	if pv.roster = p.o.Roster(); pv.roster == nil {
 		return pv.unready(code.UnreadyNoChart, fmt.Sprintf("%s holds no chart yet to judge seat %q's grant by; "+
-			"a git node holding one answers", p.o.NodeID, pv.q.Asker.Seat))
+			"a Gitlet node holding one answers", p.o.NodeID, pv.q.Asker.Seat))
 	}
 	return nil
 }
@@ -338,21 +338,21 @@ func (pv *previewing) sync(ctx context.Context, fresh statelog.Freshness) error 
 		return fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return pv.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
-			"the preview's need before its answer fell due; the sync goes on, and another git node answers "+
+			"the preview's need before its answer fell due; the sync goes on, and another Gitlet node answers "+
 			"meanwhile", p.o.NodeID, pv.q.RepoID))
 	case ctx.Err() != nil:
 		return context.Cause(ctx)
 	case sctx.Err() != nil:
 		return pv.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
-			"the preview's need within %s; the sync goes on, and another git node answers meanwhile",
+			"the preview's need within %s; the sync goes on, and another Gitlet node answers meanwhile",
 			p.o.NodeID, pv.q.RepoID, p.syncWait))
 	case cache.EveryFillMeets(err):
 		return pv.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v — what every "+
-			"git node's copy is filled from, so a git node holding a copy answers meanwhile", p.o.NodeID,
+			"Gitlet node's copy is filled from, so a Gitlet node holding a copy answers meanwhile", p.o.NodeID,
 			pv.q.RepoID, err))
 	default:
 		return pv.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not sync repository %s: %v; another "+
-			"git node answers, and fills a copy where none holds one", p.o.NodeID, pv.q.RepoID, err))
+			"Gitlet node answers, and fills a copy where none holds one", p.o.NodeID, pv.q.RepoID, err))
 	}
 	pv.synced.Release()
 	pv.synced, pv.linear = s, fresh.Level == statelog.ReadLinearizable
@@ -401,7 +401,7 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 	sc, err := p.o.Cache.NewScratch(ctx, pv.synced, statelog.NewOpID(p.now(), ""))
 	if err != nil {
 		return merged{}, true, pv.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not make a scratch to "+
-			"merge in: %v; another git node answers", p.o.NodeID, err))
+			"merge in: %v; another Gitlet node answers", p.o.NodeID, err))
 	}
 	defer sc.Remove()
 	if absent, err := pv.commits(ctx, sc); err != nil || absent != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -414,7 +414,7 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return merged{}, true, pv.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
-				"share until the preview's answer fell due, its asker's attempt spent; another git node answers "+
+				"share until the preview's answer fell due, its asker's attempt spent; another Gitlet node answers "+
 				"meanwhile", p.o.NodeID))
 		}
 		return merged{}, true, err
@@ -423,7 +423,7 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 	m, err := pv.mergeTimed(ctx, sc)
 	if err != nil && code.AnswerDue(ctx) {
 		return merged{}, true, pv.unready(code.UnreadyShare, fmt.Sprintf("%s could not merge before the "+
-			"preview's answer fell due, its asker's attempt spent; another git node answers meanwhile",
+			"preview's answer fell due, its asker's attempt spent; another Gitlet node answers meanwhile",
 			p.o.NodeID))
 	}
 	if err == nil {
@@ -539,10 +539,10 @@ func (pv *previewing) commits(ctx context.Context, sc *cache.Scratch) (string, e
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return "", pv.unready(code.UnreadyShare, fmt.Sprintf("%s could not look up the preview's commits "+
-				"before its answer fell due; another git node answers meanwhile", p.o.NodeID))
+				"before its answer fell due; another Gitlet node answers meanwhile", p.o.NodeID))
 		}
 		return "", pv.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not look up the preview's commits: "+
-			"%v; another git node answers", p.o.NodeID, err))
+			"%v; another Gitlet node answers", p.o.NodeID, err))
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	for i, id := range []struct{ field, id string }{{"base", q.Base}, {"head", q.Head}} {
@@ -590,7 +590,7 @@ func (pv *previewing) audit(ctx context.Context, a code.MergePreviewAnswer) erro
 // beside the git reads' own kinds.
 const PreviewReadKind = "merge_preview"
 
-// unready is a refusal about this node, which another git node may answer.
+// unready is a refusal about this node, which another Gitlet node may answer.
 func (pv *previewing) unready(why code.UnreadyReason, detail string) error {
 	return &code.ErrGitUnready{Reason: why, Detail: detail}
 }

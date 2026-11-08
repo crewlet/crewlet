@@ -69,6 +69,6 @@ failure modes, guarding what one arbitrated record already makes atomic.
 - CODEOWNERS files: path owners are rows on the repository's subject (M4's
   `path_owners`), matched by its home, never a file in the tree.
 - How a merge is built — the merge commit, the squash, the rebase — and who
-  builds it: the repository's home git node's, under ADR-0089 and ADR-0092.
+  builds it: the repository's home Gitlet node's, under ADR-0089 and ADR-0092.
 - The merge queue's landings: its candidates and its `land` record prove each
   entry's gate again from their own snapshot, as this record does.

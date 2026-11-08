@@ -540,7 +540,7 @@ type Status struct {
 	// and retiring, the downloads in flight and the pushes' scratch
 	// repositories.
 	Bytes int64 `json:"bytes"`
-	// Budget is what it is held to: git.cache_max_bytes, as the node resolved
+	// Budget is what it is held to: gitlet.cache_max_bytes, as the node resolved
 	// it.
 	Budget int64 `json:"budget"`
 	// Warm is how many repositories it holds a copy of in service — each

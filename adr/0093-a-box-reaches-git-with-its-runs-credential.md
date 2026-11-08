@@ -11,7 +11,7 @@
 
 A coding box reaches Gitlet on `/box/git/` with HTTP Basic `run:<token>`: a `runtoken` in key domain
 `crewlet.git.v1` naming the run's turn and its current launch, signed from Tier A `secrets.keys` (required on every
-node) so the node that launched the run and the git node the box dials derive one key. The RUN ROW is the
+node) so the node that launched the run and the Gitlet node the box dials derive one key. The RUN ROW is the
 authority, read on every request and three-valued: an ended, superseded or unknown run is 403, a store that cannot
 be read 503, a bad token 401. The run token is the ONLY credential `/box/git/` takes, and `/git/` never takes it:
 neither transport admits the other's. The row carries the run's grants — empty at the launch, and one more with each

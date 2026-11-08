@@ -24,7 +24,7 @@ import (
 
 // THE PUBLISHED CHAIN in an interleaving (ADR-0091): a repository's
 // publication by this node — its maintainer, which adopts what it built — and
-// by another git node, whose layer this node's installer fetches; the
+// by another Gitlet node, whose layer this node's installer fetches; the
 // installer's passes; a store that lost or spoiled a layer's part; and the
 // node's tip commit-graph over a chained copy's tail. Every publication is the
 // PRODUCTION COMPACTOR's (internal/code/compact) over a cache and the world's
@@ -48,7 +48,7 @@ var errStoreDown = errors.New("the store did not answer")
 // is proposed and, decided, applied there as one record
 // (fakeLog.publication) — its repack's outputs kept as bundles too, for a
 // later merge of them (syncWorld.merged). newerGit, when set, is the git the
-// record names the layer as written by: another git node's, newer than this
+// record names the layer as written by: another Gitlet node's, newer than this
 // node's, whose layer this node will not read.
 type fakeCommitter struct {
 	w        *syncWorld
@@ -254,7 +254,7 @@ func (o *countingObjects) setFail(fail func(objstore.Key) error) {
 }
 
 // maintainsAll is a node that maintains every repository: an interleaving's
-// cache, and the git node that publishes beside it, are each a repository's
+// cache, and the Gitlet node that publishes beside it, are each a repository's
 // maintainer when it publishes.
 type maintainsAll struct{}
 
@@ -372,7 +372,7 @@ func (in *interleaving) publish(repo string) string {
 	return burst + detail
 }
 
-// publishElsewhere is another git node's publication of the published
+// publishElsewhere is another Gitlet node's publication of the published
 // repository: a node of its own over the same log and store, which syncs the
 // repository from nothing — installing the chain as every cold round does,
 // its installer settling whatever the round left it (a missing part is asked
@@ -398,7 +398,7 @@ func (in *interleaving) publishElsewhere(repo string) string {
 	if out != compact.OutcomeApplied {
 		return detail
 	}
-	in.saw("a publication by another git node")
+	in.saw("a publication by another Gitlet node")
 	switch draw {
 	case 0:
 		in.saw("a publication by a newer git")

@@ -20,7 +20,7 @@ import (
 // stand up boots with NO company: a data node runs its native runtime for any
 // company it holds, whatever its backends, so the runtime that builds
 // Gitlet on this node is the one its FIRST company brings up at that company's
-// apply — and a revision that turns code.native on under a runtime already
+// apply — and a revision that turns Gitlet on under a runtime already
 // running only says it needs a restart (native_backend_needs_restart).
 const logless = `
 name: Acme
@@ -51,9 +51,9 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	logs := &logBuffer{}
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
+		b.Gitlet.CacheMaxBytes = config.GitletCacheMaxBytesFloor
 	})
-	stray := filepath.Join(b.Git.CacheDirFor(b.Store.Path), "not-the-caches")
+	stray := filepath.Join(b.Gitlet.CacheDirFor(b.Store.Path), "not-the-caches")
 	if err := os.MkdirAll(filepath.Dir(stray), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	})
 
-	epoch := p.activate(t.Context(), t, logless+"code:\n  native: true\n")
+	epoch := p.activate(t.Context(), t, logless+"code:\n  backend: gitlet\n")
 	for range 2 {
 		if err := p.recon.Tick(t.Context()); err == nil {
 			t.Fatal("the premise: the apply built Gitlet over a directory holding another's file")
@@ -83,7 +83,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 			t.Fatalf("the apply, its directory cleared: %v", err)
 		}
 	}
-	if _, ok := e.CodeHost(); !ok {
+	if _, ok := e.GitletHost(); !ok {
 		t.Fatal("the apply that brought the runtime up did not build Gitlet")
 	}
 	got := logs.records(t, "config_tier_warning")
@@ -91,14 +91,14 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 		t.Fatalf("%d cross-tier warnings for one applied epoch and a second tick, want 1: %v",
 			len(got), got)
 	}
-	if got[0]["path"] != "git.cache_max_bytes" || got[0]["epoch"] != float64(epoch) ||
+	if got[0]["path"] != "gitlet.cache_max_bytes" || got[0]["epoch"] != float64(epoch) ||
 		!strings.Contains(got[0]["detail"].(string), "repo_max_bytes") {
 		t.Fatalf("the warning is %v, want the cache budget's, on epoch %d", got[0], epoch)
 	}
 }
 
-// A GIT NODE COMPARES THE BUDGET IT DERIVED WITH THE REPOSITORY LIMIT. An unset
-// git.cache_max_bytes is the default on every git node, and the budget it
+// A GITLET NODE COMPARES THE BUDGET IT DERIVED WITH THE REPOSITORY LIMIT. An unset
+// gitlet.cache_max_bytes is the default on every Gitlet node, and the budget it
 // derives from the cache's volume is the one a repository at its size limit
 // must fit in; the documents alone cannot know it, so the node that sized its
 // cache says so at the apply. Here the cache's volume has 64 GiB free and the
@@ -110,7 +110,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 //
 // Mutation: hand the warning the documents' budget rather than the one the
 // node derived, and nothing is said.
-func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
+func TestAGitletNodeComparesItsDerivedBudget(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t) // an activation hosts code on this node
 	const gib = int64(1) << 30
@@ -120,17 +120,17 @@ func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	})
-	p.activate(t.Context(), t, logless+"code:\n  native: true\n  limits:\n"+
+	p.activate(t.Context(), t, logless+"code:\n  backend: gitlet\n  limits:\n"+
 		"    repo_max_bytes: 1099511627776\n")
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("the apply: %v", err)
 	}
-	if _, ok := e.CodeHost(); !ok {
+	if _, ok := e.GitletHost(); !ok {
 		t.Fatal("the apply that brought the runtime up did not build Gitlet")
 	}
 	got := logs.records(t, "config_tier_warning")
-	if len(got) != 1 || got[0]["path"] != "git.cache_max_bytes" ||
-		!strings.Contains(got[0]["detail"].(string), "derived from git.cache_dir's volume") {
+	if len(got) != 1 || got[0]["path"] != "gitlet.cache_max_bytes" ||
+		!strings.Contains(got[0]["detail"].(string), "derived from gitlet.cache_dir's volume") {
 		t.Fatalf("warnings %v, want one saying the derived budget cannot hold a repository "+
 			"at its limit", got)
 	}
@@ -154,10 +154,10 @@ func TestABootedCompanysTierWarningsAreSaidOnce(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	hosting := logless + "code:\n  native: true\n"
+	hosting := logless + "code:\n  backend: gitlet\n"
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
+		b.Gitlet.CacheMaxBytes = config.GitletCacheMaxBytesFloor
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b, Company: parsedCompany(t, hosting),
 		GitHook: codetest.HookCommand(t)})

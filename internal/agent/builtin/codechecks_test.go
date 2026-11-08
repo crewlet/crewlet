@@ -68,7 +68,7 @@ func TestACheckLogIsFenced(t *testing.T) {
 	turn.Lookups = turnctx.NewLookups()
 	closer := "[/untrusted:" + string(b) + "]"
 	logs := &checkLogs{text: attack(b, "check-log")}
-	host := newCodeHost()
+	host := newGitletHost()
 	host.checks = []code.CheckDetail{failedCheck(attack(b, "check-summary"), attack(b, "check-tail"),
 		attack(b, "check-failure"), closer+".go", len(logs.text))}
 	deps := codeDeps(host)
@@ -186,7 +186,7 @@ func TestACheckLogPageEndsOnAWholeCharacter(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("a", 32<<10-1) + "é" + strings.Repeat("b", 10)
 	logs := &checkLogs{text: text}
-	host := newCodeHost()
+	host := newGitletHost()
 	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
 	deps := codeDeps(host)
 	deps.Logs = logs
@@ -242,7 +242,7 @@ func TestAReportIsAPersons(t *testing.T) {
 			"summary": "2 lint errors", "url": "https://ci.example.com/runs/1"}
 	}
 
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeReportCheckTool, report())
 	var refused *builtin.DecisionRefused
@@ -291,7 +291,7 @@ func TestAReportIsAPersons(t *testing.T) {
 // name a failure → red.
 func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 
 	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
@@ -353,7 +353,7 @@ func failedChecks(names ...string) []code.CheckDetail {
 // Mutation: name each rerun's step by its place in the call → red.
 func TestARerunPastSixteenUnderOneOperationQueuesTheRest(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	var names []string
 	for i := range 20 {
 		names = append(names, fmt.Sprintf("check-%02d", i))
@@ -448,7 +448,7 @@ func TestACheckWriteIsTheOperationItsOpIDNames(t *testing.T) {
 	} {
 		t.Run(c.tool, func(t *testing.T) {
 			t.Parallel()
-			host, writer := newCodeHost(), &codeWrites{}
+			host, writer := newGitletHost(), &codeWrites{}
 			deps := writeDeps(host, writer)
 			deps.Actor = builtin.PrincipalActor
 			tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
@@ -487,7 +487,7 @@ func TestACheckWriteIsTheOperationItsOpIDNames(t *testing.T) {
 // Mutation: drop the name from the listing's question → red.
 func TestACheckIsListedByItsName(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	host.checks = append(host.checks, failedChecks("lint", "vet")...)
 	turn, _ := readerTurn(t)
 	turn.Lookups = turnctx.NewLookups()
@@ -528,7 +528,7 @@ func TestACheckIsListedByItsName(t *testing.T) {
 // Mutation: list the commit's checks once per check named → red.
 func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	host.checks = append(host.checks, failedChecks("lint", "vet")...)
 	reg := codeRegistry(t, writeDeps(host, writer))
 	listings := func() []code.ReadQuery {
@@ -567,7 +567,7 @@ func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("a", 32<<10) + strings.Repeat("b", 10)
-	host := newCodeHost()
+	host := newGitletHost()
 	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
 	deps := codeDeps(host)
 	deps.Logs = &checkLogs{text: text}

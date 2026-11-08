@@ -24,10 +24,10 @@ import (
 
 // THE CHECKS WRITER: a repository's check records, published on the
 // repository's checks subject ([KindChecks]) by the repository's COMMITTING
-// DATA NODE, and by no git node.
+// DATA NODE, and by no Gitlet node.
 //
 // A check's records — an attempt queued by the repository's home, claimed and
-// ended by the git node that runs it — are each asked of the node the estate
+// ended by the Gitlet node that runs it — are each asked of the node the estate
 // keys the repository's writes to (internal/estate's code.checks, keyed by the
 // repository as a push is), and decided there by this writer, the committer's
 // sibling: it shares none of the committer's queue, budget or batches, since a

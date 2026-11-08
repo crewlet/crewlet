@@ -38,7 +38,7 @@ import (
 // records, and the ones a change to the boot or to the write path is compared
 // by (make bench, six counts on each tree, benchstat).
 
-// BenchmarkBoot is a warm git node's boot of its cache: Prepare — its reading
+// BenchmarkBoot is a warm Gitlet node's boot of its cache: Prepare — its reading
 // of repos/ and Layout.Held — then Open and Stop, over repos repositories of
 // packs packs each (a pack is three files; one push stores one until its
 // repository's home merges them, which holds a busy repository near
@@ -752,7 +752,7 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64, []co
 	return repo, total, rows, commits
 }
 
-// BenchmarkColdSync is a git node's FIRST sync of a repository it has never
+// BenchmarkColdSync is a Gitlet node's FIRST sync of a repository it has never
 // served — a clone on a node that just joined, a rebuild, a repository the
 // budget evicted — from linearizable rows to an answer: every push's bundle
 // read from the object store, verified, split and renamed in, the round's
@@ -995,7 +995,7 @@ func processCPU(b *testing.B) time.Duration {
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
-// BenchmarkColdJoin is git nodes BRINGING UP MANY REPOSITORIES AT ONCE, every
+// BenchmarkColdJoin is Gitlet nodes BRINGING UP MANY REPOSITORIES AT ONCE, every
 // repository asked of each at the same moment — a balancer moving traffic
 // onto them, CI fetching through them — against ONE data node (coldLane):
 // the queue.ConcurrentAnswers answers its shared lane gives code.repo_state
@@ -1017,7 +1017,7 @@ func processCPU(b *testing.B) time.Duration {
 //     rounds is MaxFullRounds' candidates 4 to 32, and 500, a cap no node
 //     asked for 500 repositories meets: the node without one.
 //   - cache=kept, ONE NODE RESTARTED over the cache it kept — a rolling
-//     restart of a git node whose git.cache_dir is on a volume the restart
+//     restart of a Gitlet node whose gitlet.cache_dir is on a volume the restart
 //     keeps (keptCache): every repository's first round in the new process
 //     is a full read, and it has nothing to download, so the reads ARE how
 //     long the node takes to come up. rounds is 4 to 32, 64 — the lane's
@@ -1334,7 +1334,7 @@ func (w *syncWorld) nextPush(b *testing.B, src, branch, repo, tip string, n int,
 	return next
 }
 
-// BenchmarkDeltaSync is the sync every git node runs after every push, on a
+// BenchmarkDeltaSync is the sync every Gitlet node runs after every push, on a
 // WARM cache: one new pack (a commit adding medianPush bytes) and main moved,
 // read as a delta, downloaded and renamed in, packed-refs rewritten with the
 // move and the state after it — on a repository already holding packs packs
@@ -1469,7 +1469,7 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 // BenchmarkMidx is what indexing a repository's packs costs, and what the
 // maintainer's index stops saving as pushes land outside it — in OWN mode,
 // the node's own index, and in CHAIN mode, the layers a repository's
-// maintainer publishes for every git node (layers_bench_test.go).
+// maintainer publishes for every Gitlet node (layers_bench_test.go).
 //
 //   - index=round is the multi-pack-index a full round writes before it
 //     answers once it leaves MidxRoundPacks packs or more: no bitmap, a

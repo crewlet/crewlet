@@ -360,7 +360,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	withServingTierA(t, &boot)
 	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so
 	// an amendment can override a path or the credential as well as add to

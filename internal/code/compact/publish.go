@@ -29,7 +29,7 @@ import (
 )
 
 // PublishPoll is the interval between two passes of the PUBLICATION loop: one
-// indexed listing a git node a minute, as [Poll] is the compaction loop's.
+// indexed listing a Gitlet node a minute, as [Poll] is the compaction loop's.
 const PublishPoll = time.Minute
 
 // The publication's cadence — when a repository's tail is worth a layer
@@ -193,7 +193,7 @@ type PublishReport struct {
 //     (cache.Cache.Damaged), which only its maintainer's REPAIR replaces: an
 //     idle repository whose layer the store lost is in no due listing.
 //  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     git node advertises ([Compactor.maintainedOfPublications]), for every
+//     Gitlet node advertises ([Compactor.maintainedOfPublications]), for every
 //     repository the pass may publish, by its maintenance's charge
 //     ([Compactor.PlacedBy]), as the compaction loop judges its own: a
 //     placement this node cannot read publishes nothing that pass, logged
@@ -292,7 +292,7 @@ func (c *Compactor) PublishPass(ctx context.Context) (PublishReport, error) {
 }
 
 // maintainedOfPublications is which repositories of the pass's listing this
-// node maintains, off ONE LISTING of who serves git and what each git node
+// node maintains, off ONE LISTING of who serves git and what each Gitlet node
 // advertises, as the compaction loop judges its own ([Compactor.maintainedOf]):
 // asked of every repository the pass may publish — each but one a plan found
 // nothing to publish in at its version, which is no repair — each by the
@@ -704,7 +704,7 @@ func (c *Compactor) admissionRefused(cand code.PublicationCandidate, err error) 
 	case errors.Is(err, cache.ErrNoMemory):
 		// NEVER REMEMBERED (M3-decisions M3-O26): the node's budget is read
 		// again at every pass, and the next pass asks whether this node is
-		// still the maintainer — how a larger git node takes the repository
+		// still the maintainer — how a larger Gitlet node takes the repository
 		// over. The cache logged it once for the incarnation.
 		c.publishRefusal(reasonMemory)
 		return OutcomeRefused, err
@@ -718,7 +718,7 @@ func (c *Compactor) admissionRefused(cand code.PublicationCandidate, err error) 
 // gives, the first part the store lacks or holds at another size ending it at
 // that part's layer, and the first it could not read failing it.
 //
-// WHY THE MAINTAINER ASKS: every other git node fetches a layer's parts and
+// WHY THE MAINTAINER ASKS: every other Gitlet node fetches a layer's parts and
 // refuses one the store lost (`missing`), but the maintainer installs its own
 // layer from the files it wrote (cache.Cache.AdoptLayer), so its copy holds a
 // layer the store may have lost since — a restore, which carries no layer, or

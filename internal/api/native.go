@@ -616,7 +616,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		halves.Readers = engine.CodeReaderDeps(e)
 		// AND THE HEALTH TOOLS, read per call on the deps a seat's registry
 		// takes: the fleet's presence and, where Gitlet is served, the
-		// git nodes' status.
+		// Gitlet nodes' status.
 		halves.Health = engine.HealthToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name

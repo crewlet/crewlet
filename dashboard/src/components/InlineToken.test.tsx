@@ -557,7 +557,7 @@ describe("rooms", () => {
       viewer: CHATTER,
       rooms: ROOMS,
       asked,
-      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "gitlet" },
     });
     expect(asked).not.toContain("chat_room_names");
     expect(el.querySelector("a")).toBeNull();

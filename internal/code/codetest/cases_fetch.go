@@ -120,7 +120,7 @@ func aMissingPackIs503NamingIt(t *testing.T, newFleet NewFleet) {
 
 // F12: a push is visible through every node at once, under both protocols.
 func aPushIsVisibleThroughEveryNodeAtOnce(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
@@ -141,7 +141,7 @@ func aPushIsVisibleThroughEveryNodeAtOnce(t *testing.T, newFleet NewFleet) {
 // of elsewhere finds it: the node behind reads the log's head before it
 // answers.
 func aFetchFromABehindNodeFindsItsWants(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
@@ -182,11 +182,11 @@ func aDeletedRepositoryIsRestoredByDeclaringItAgain(t *testing.T, newFleet NewFl
 }
 
 // F22: a blobless clone is served under protocol v2, and so is the ONE lazy
-// fetch its checkout makes for every blob it lacks — through the other git
+// fetch its checkout makes for every blob it lacks — through the other Gitlet
 // node, as a balancer may send it, whose cache has never read the repository —
 // and the files checked out are the files pushed.
 func aBloblessCloneChecksOut(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	bloblessCloneChecksOut(t, c.Fleet, c.URL(0), c.URL(1))
 	assertConverged(t, c.Fleet)
 }

@@ -5,7 +5,7 @@
  *
  * # A hit is read at the commit its repository was searched at
  *
- * The engine answers each repository at the commit its git node's copy held
+ * The engine answers each repository at the commit its Gitlet node's copy held
  * for the ref the search named (`tips`), never at the branch, which may have
  * moved since. So a hit links to its file AT THAT COMMIT, by its whole id,
  * with the line picked (`lines=`): an address that says tomorrow what the
@@ -13,7 +13,7 @@
  *
  * # The coverage is never hidden
  *
- * A search across the company's repositories is a scatter over its git nodes,
+ * A search across the company's repositories is a scatter over its Gitlet nodes,
  * and every answer names what it left out: a node that did not answer, an
  * index still being built, a copy behind the log, a repository searched only
  * when a `repo:` filter names it. "No match" over half the company is not "no
@@ -139,16 +139,16 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
     missing = true;
     notes.push(`Not searched: ${counted(set)}, ${why}.`);
   };
-  unanswered(coverage.building, "the git node asked was still building its index");
-  unanswered(coverage.stale, "the git node asked was behind the code log or the configuration");
+  unanswered(coverage.building, "the Gitlet node asked was still building its index");
+  unanswered(coverage.stale, "the Gitlet node asked was behind the code log or the configuration");
   for (const gap of coverage.not_answering ?? []) {
     if (gap.repos.count <= 0) continue;
     missing = true;
     notes.push(
-      `Not searched: ${counted(gap.repos)}, git node ${gap.node} did not answer${gap.why ? ` (${gap.why})` : ""}.`,
+      `Not searched: ${counted(gap.repos)}, Gitlet node ${gap.node} did not answer${gap.why ? ` (${gap.why})` : ""}.`,
     );
   }
-  unanswered(coverage.not_permitted, "a git node judged you may not read them now");
+  unanswered(coverage.not_permitted, "a Gitlet node judged you may not read them now");
   if (coverage.truncated) {
     missing = true;
     notes.push(

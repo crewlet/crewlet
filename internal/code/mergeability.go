@@ -22,12 +22,12 @@ import (
 
 // A CHANGE'S MERGEABILITY, RECORDED: whether one revision of a live change
 // merges cleanly into the tip of the branch it targets — read by the
-// repository's HOME git node, which merges the two commits in a scratch of its
+// repository's HOME Gitlet node, which merges the two commits in a scratch of its
 // own (internal/code/home: `git merge-tree --write-tree`, whose answer is a
 // function of the two commits alone) — and recorded on the change as a
 // [Mergeability]: a record on the change's own subject ([KindChange]), which
 // the repository's committing data node decides and publishes for the home,
-// as it does a revision's facts ([Revise]). A git node never publishes it.
+// as it does a revision's facts ([Revise]). A Gitlet node never publishes it.
 // Every reader of a change's mergeability after that — its page, its
 // readiness — reads the row (code_mergeability), never git.
 //
@@ -212,7 +212,7 @@ func (h *ConflictsHeld) Add(p string) {
 }
 
 // Mergeability records whether one revision of a change merges cleanly into
-// its target's tip, as the repository's home git node merged the two commits.
+// its target's tip, as the repository's home Gitlet node merged the two commits.
 //
 // Every field is in the base format, under the condition [OpMergeability]
 // states.
@@ -235,7 +235,7 @@ type Mergeability struct {
 	State            MergeState `json:"state"`
 	Conflicts        []string   `json:"conflicts,omitempty"`
 	ConflictsOmitted int64      `json:"conflicts_omitted,omitempty"`
-	// Node is the git node that merged: the repository's home as it took
+	// Node is the Gitlet node that merged: the repository's home as it took
 	// itself to be — a refresh's, the home that asked it, whose apply leaves
 	// the row naming the node that merged.
 	Node string `json:"node"`
@@ -700,7 +700,7 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 // (code_mergeability, [Mergeability]): the revision and the target's tip it
 // merged — the branch, the tip and the position that moved it there — what
 // the merge did, the conflicted paths it names and how many more there were,
-// the git node that merged, and the record that merged with its broker
+// the Gitlet node that merged, and the record that merged with its broker
 // instant; and the readiness the last record judged with it — whether it was
 // ready and whether it waited on a person, and the versions of the change's
 // row and its conversation's readiness inputs and the position of its head's
@@ -756,7 +756,7 @@ func mergeabilityRowIn(ctx context.Context, tx *sql.Tx, changeID string) (*Merge
 	return &m, nil
 }
 
-// MergePreviewQuery asks a repository's git nodes what merging one commit into
+// MergePreviewQuery asks a repository's Gitlet nodes what merging one commit into
 // another would do — a comparison's merge preview — answered by the same merge
 // a change's home records its mergeability by (internal/code/home), in a
 // scratch of the answering node's, never a cache. A read a principal makes:
@@ -786,7 +786,7 @@ type MergePreviewQuery struct {
 	Home bool `json:"home,omitempty"`
 }
 
-// Validate refuses a preview no git node could answer ([ErrInvalid], naming
+// Validate refuses a preview no Gitlet node could answer ([ErrInvalid], naming
 // the field): a repository id that is not one, an asker that is no principal
 // or a ceiling its rule refuses, two ids that are not whole object ids, and a
 // floor on another log than the code log.
@@ -811,7 +811,7 @@ func (q MergePreviewQuery) Validate() error {
 	return nil
 }
 
-// MergePreviewAnswer is what merging Head into Base would do, as one git node
+// MergePreviewAnswer is what merging Head into Base would do, as one Gitlet node
 // merged them: what a change's mergeability records ([Mergeability]) — its
 // state, the conflicted paths it holds and how many more there were — and the
 // position the node's copy was read at.

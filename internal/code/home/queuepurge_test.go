@@ -15,11 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's git node is
+// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's Gitlet node is
 // home to codetest.RepoName, whose main is a queue target, and the
 // home's three workers — its change work, its check work and its queue — are
 // turned one at a time over the fleet's own estate, its cache and its pool,
-// the train built by the git node's own chain builder: every record but a
+// the train built by the Gitlet node's own chain builder: every record but a
 // runner's claim and ending of a check — the case's, as no runner runs here —
 // is the one production asks for, decided by the data node's committer.
 
@@ -101,7 +101,7 @@ func (h *gitHome) passCheck(key code.CheckKey) {
 	}
 }
 
-// purged asks the repository's purge as queuePat and serves it with the git
+// purged asks the repository's purge as queuePat and serves it with the Gitlet
 // node's compactor, the maintainer of every repository of a solo fleet, until
 // the expunge listing names the repository no more.
 func (h *gitHome) purged() {

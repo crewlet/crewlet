@@ -97,8 +97,8 @@ func (f *changeFixture) queued() *changeFixture {
 }
 
 // newChangeHost is Gitlet holding site and its change site!7.
-func newChangeHost(f *changeFixture) *codeHost {
-	h := newCodeHost()
+func newChangeHost(f *changeFixture) *gitletHost {
+	h := newGitletHost()
 	h.changes = f.read
 	return h
 }
@@ -209,7 +209,7 @@ func pageAfter[T any](rows []T, cursor func(T) string, after string, limit int) 
 
 // changeCall calls one of a seat's change tools in turn, and decodes its
 // answer.
-func changeCall(t *testing.T, host *codeHost, turn *turnctx.Turn, name string,
+func changeCall(t *testing.T, host *gitletHost, turn *turnctx.Turn, name string,
 	args map[string]any) (tools.Result, map[string]any) {
 
 	t.Helper()
@@ -284,7 +284,7 @@ func TestTheChangeToolsJoinTheOneList(t *testing.T) {
 
 // everyChangeQuestion makes, in turn, a call of each change tool and each part
 // of a change: every question they ask Gitlet.
-func everyChangeQuestion(t *testing.T, host *codeHost, turn *turnctx.Turn) {
+func everyChangeQuestion(t *testing.T, host *gitletHost, turn *turnctx.Turn) {
 	t.Helper()
 	reg := codeRegistry(t, codeDeps(host))
 	callCode(t, reg, turn, builtin.CodeListChangesTool, map[string]any{"repo": "site"})
@@ -300,7 +300,7 @@ func everyChangeQuestion(t *testing.T, host *codeHost, turn *turnctx.Turn) {
 
 // changeQuestionsFor holds every question host was asked to name ceiling as
 // the seat it is made for — "" for none.
-func changeQuestionsFor(t *testing.T, host *codeHost, ceiling string) {
+func changeQuestionsFor(t *testing.T, host *gitletHost, ceiling string) {
 	t.Helper()
 	reads, _, gits := host.asked()
 	if readsOf(reads, code.ReadChange) == 0 || readsOf(reads, code.ReadChanges) == 0 || len(gits) == 0 {
@@ -576,7 +576,7 @@ func TestAChangeIsNamedByItsNumberOrItsReference(t *testing.T) {
 }
 
 // A REVISION'S FILES ARE READ FROM ITS RECORDED BASE: `files` and `diff` read
-// the git node's diff from the revision's base to its head — the head
+// the Gitlet node's diff from the revision's base to its head — the head
 // revision's, or the one `revision` names, read in a second read at session
 // floored at the call's first — and with `since_revision` the interdiff of
 // the two, from each revision's facts; every one at the floor of the records
@@ -657,7 +657,7 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 				c.says)
 		}
 		if _, _, gits := host.asked(); len(gits) != 0 {
-			t.Errorf("%s asked the git node %d reads", name, len(gits))
+			t.Errorf("%s asked the Gitlet node %d reads", name, len(gits))
 		}
 	}
 
@@ -725,8 +725,8 @@ func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
 // push, the latest any finding was raised on; a finding raised on the asked
 // revision is where it was raised, with nothing asked; and one on the old side
 // of a revision that shares no history with its target is gone. Each finding's
-// `at` is where its lines are, outdated or gone as the git node placed them;
-// and a re-anchoring the git node refuses is answered as that refusal, never
+// `at` is where its lines are, outdated or gone as the Gitlet node placed them;
+// and a re-anchoring the Gitlet node refuses is answered as that refusal, never
 // as this node's fault.
 //
 // Mutations: every finding placed where it was raised (no re-anchoring); the
@@ -752,7 +752,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 		}
 		return f
 	}
-	placedBy := func(host *codeHost) func(q code.GitQuery) code.GitAnswer {
+	placedBy := func(host *gitletHost) func(q code.GitQuery) code.GitAnswer {
 		return func(q code.GitQuery) code.GitAnswer {
 			out := code.GitAnswer{Kind: code.GitReanchor, RepoID: q.RepoID, Reanchor: &code.ReanchorAnswer{}}
 			for i, a := range q.Reanchor.Anchors {
@@ -802,7 +802,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 			t.Errorf("the finding raised on the head is at %v, want where it was raised", got)
 		}
 		if got := placed[ids[0]].(map[string]any); got["start"] != float64(110) || got["outdated"] != true {
-			t.Errorf("the finding raised on revision 1 is at %v, want where the git node placed it", got)
+			t.Errorf("the finding raised on revision 1 is at %v, want where the Gitlet node placed it", got)
 		}
 	})
 
@@ -855,7 +855,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 		got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeGetChangeTool,
 			map[string]any{"change": "site!7", "part": "findings"})
 		if tools.RefusalOf(got) != tools.RefusalUnavailable {
-			t.Errorf("a re-anchoring the git node could not answer was told %+v, want its refusal, unavailable",
+			t.Errorf("a re-anchoring the Gitlet node could not answer was told %+v, want its refusal, unavailable",
 				got)
 		}
 	})
@@ -881,7 +881,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 // encoder writes as two bytes (`"`, which the answers' plain encoding escapes as
 // any encoder must, where `<` it writes as itself); a page of findings with their longest bodies and
 // suggestions; reviews with their longest summaries; comments with their
-// longest bodies; a git node's page cut at its bound; a readiness with a
+// longest bodies; a Gitlet node's page cut at its bound; a readiness with a
 // merge of many long conflicting paths — is answered within one tool answer,
 // a page cut whole-row where its rows outgrow it, and the pages that follow
 // read every row once, in order. A row that alone outgrows an answer is
@@ -981,10 +981,10 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 		}
 	})
 
-	// A GIT NODE'S PAGE, cut at its bound, wrapped as the tool wraps it: the
+	// A GITLET NODE'S PAGE, cut at its bound, wrapped as the tool wraps it: the
 	// longest repository name and the longest change number, the patch's
 	// fence and the answer's envelope.
-	t.Run("a git node's page", func(t *testing.T) {
+	t.Run("a Gitlet node's page", func(t *testing.T) {
 		t.Parallel()
 		name := strings.Repeat("r", gitref.MaxRepoNameBytes)
 		g := siteChange()
@@ -1006,7 +1006,7 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 		if len(got.Output) > builtin.ToolAnswerBytes {
 			t.Fatalf("the answer is %d bytes, past %d", len(got.Output), builtin.ToolAnswerBytes)
 		}
-		t.Logf("a git node's page at its widest: %d bytes of %d", len(got.Output), builtin.ToolAnswerBytes)
+		t.Logf("a Gitlet node's page at its widest: %d bytes of %d", len(got.Output), builtin.ToolAnswerBytes)
 	})
 
 	t.Run("a row past one answer", func(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 // work, its targets due a reading of their checks file and its protected
 // targets owing tip work, as the `checks_due` listing answers them
 // (checkEstate.due, .targets, .tips) — each head with what its recorded facts
-// say it touches — the checks file each commit holds, as a git node answers
+// say it touches — the checks file each commit holds, as a Gitlet node answers
 // it, and no other git read: the work reads none — and every write the
 // worker asks of the repository's checks writer and of its committer, in the
 // order it asks them.

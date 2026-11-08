@@ -18,7 +18,7 @@ import (
 // act transport and assistant reach it.
 func importTool(t *testing.T, writer *codeWrites) tools.SeatCallable {
 	t.Helper()
-	deps := writeDeps(newCodeHost(), writer)
+	deps := writeDeps(newGitletHost(), writer)
 	deps.Actor = builtin.PrincipalActor
 	return operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
 		builtin.CodeImportRepoTool)
@@ -57,7 +57,7 @@ func TestOnlyAPersonImports(t *testing.T) {
 	}
 
 	writer := &codeWrites{}
-	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 		builtin.CodeImportRepoTool, args(nil))
 	var refused *builtin.DecisionRefused
 	if !got.Failed || !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonSeatRefused {

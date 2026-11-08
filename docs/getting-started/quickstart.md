@@ -1036,7 +1036,7 @@ each), then wire them in:
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
 - Or host the repositories in Gitlet — add
-  `code: {native: true, repos: [...]}` to the company file and push to
+  `code: {backend: gitlet, repos: [...]}` to the company file and push to
   `<the API's address>/git/<name>.git` with a token of your own (`crewlet iam
   token -login` mints one) as git's password. [Hosting Code on Gitlet](../guides/gitlet.md)
   walks through it, and it runs beside a GitLab or GitHub connection rather

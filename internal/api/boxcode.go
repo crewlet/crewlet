@@ -31,7 +31,7 @@ import (
 // nothing more, whatever its token's expiry — and the repository its token
 // names, under the name its box was given. A refusal there is the one line of
 // text the box's git is answered in, since it is the one admission. Then the
-// read is asked of the code domain's git reads — the repository's home git
+// read is asked of the code domain's git reads — the repository's home Gitlet
 // node first — as THE ENGINE'S OWN, made for the check (code.GitQuery.Check):
 // held to no grant, recorded as nobody's read, and answered at the check's
 // session, the position its attempt was queued at, so the node answering
@@ -40,7 +40,7 @@ import (
 // AND ONLY THAT COMMIT. No read takes a revision: a tree and a file are read
 // at the attempt's commit, and a diff from the attempt's base to it, so a box
 // cannot name another commit of the repository — a later head of its change,
-// a branch's tip, an object it learnt the id of — and the git node holds the
+// a branch's tip, an object it learnt the id of — and the Gitlet node holds the
 // read to that commit again as it validates it, whatever asked. A parameter no
 // read takes is REFUSED, never ignored: a box that asked for `rev=` and was
 // answered its own commit would read the wrong code with nothing saying so.
@@ -48,7 +48,7 @@ import (
 // # What it answers
 //
 // The read's page in the read surface's JSON — a tree's listing, a file's
-// lines, a diff's stat or one file's patch, each the git node's own — with the
+// lines, a diff's stat or one file's patch, each the Gitlet node's own — with the
 // repository's name, the commit, the base a diff was read from and the next
 // page's cursor: the commit's content alone, and none of the push provenance
 // a seat's read carries (code.GitAnswer.PushedBy), since a check measuring a
@@ -212,8 +212,8 @@ func boxCodeQuery(kind code.GitReadKind, adm host.CheckAdmitted, params url.Valu
 // boxCodeRefusal is a check's box's read the code domain's git reads did not
 // answer, in the read surface's vocabulary: an object, a path or a repository
 // the commit's copy does not hold is [queries.NotFound] in the domain's own
-// words; a read the git node refused as asked is [queries.ErrBadParams]; a
-// git node that could not answer now — unready, not serving, none of the
+// words; a read the Gitlet node refused as asked is [queries.ErrBadParams]; a
+// Gitlet node that could not answer now — unready, not serving, none of the
 // repository's answering in time — is [queries.ErrUnavailable], as a seat's
 // read of the same names it (builtin's code tools); anything else is
 // classified as every question's failure is ([queries.ClassifyFailure]).

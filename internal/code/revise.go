@@ -23,11 +23,11 @@ import (
 // A REVISION'S FACTS, RECORDED: what one revision of a live change is against
 // the branch it would merge into — the base it is measured from, the id of the
 // change it makes, the files it touches — read once by the repository's HOME
-// git node (internal/code/query's revision_facts, a function of two commits
+// Gitlet node (internal/code/query's revision_facts, a function of two commits
 // alone) and recorded on the change as a [Revise]: a record on the change's own
 // subject ([KindChange]), which the repository's committing data node decides
 // and publishes for the home, as it does every write of a change's
-// conversation ([ChangeWriter]). A git node never publishes it. Every reader of
+// conversation ([ChangeWriter]). A Gitlet node never publishes it. Every reader of
 // a revision's facts after that reads the rows (code_revision_facts), never
 // git.
 //
@@ -163,7 +163,7 @@ type SkippedOwner struct {
 }
 
 // Revise records one revision's facts on its change: what the revision's head
-// is against its target's tip, as the repository's home git node read them,
+// is against its target's tip, as the repository's home Gitlet node read them,
 // and the path owners whose globs its touched paths match.
 //
 // Every field is in the base format, under the condition [OpRevise] states.
@@ -220,7 +220,7 @@ type Revise struct {
 	// it is the zero value — nothing classed, the classification incomplete
 	// — which an older build's facts mean already.
 	Classes RevisionClasses `json:"classes,omitzero"`
-	// Node is the git node that recorded the facts: the repository's home as
+	// Node is the Gitlet node that recorded the facts: the repository's home as
 	// it took itself to be, which asked for them.
 	Node string `json:"node"`
 	// RequestedOwners is the path owners one of whose globs matched a touched
@@ -308,7 +308,7 @@ func (c RevisionClasses) IsZero() bool {
 // them: each list ascending, each place once and of a touched path, no path
 // in both lists, and neither a list nor completeness for a revision that
 // touches all, which lists no path to name. Which paths a class may hold of
-// is the lexer's, on the git node, and no rule here: a build that lexes
+// is the lexer's, on the Gitlet node, and no rule here: a build that lexes
 // another language classes its paths, and an older writer deciding its
 // record must not refuse them.
 func classesProblem(c RevisionClasses, touched []string, all bool) error {

@@ -20,7 +20,7 @@ import (
 // .idx and its .rev into the push's scratch — the bundle the host stored — so
 // once the push's row has applied, the node that took the push links those
 // files into the cache rather than download them back: Adopt. A compaction's
-// outputs are adopted the same way by the git node that built them
+// outputs are adopted the same way by the Gitlet node that built them
 // (internal/code/compact), every output of one scratch in one call: what the
 // one node that built them would otherwise download back, a GET an output. So
 // are an expunge's begin's (AdoptDropping for its dropping packs, into the
@@ -155,7 +155,7 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, packs ...
 // begin's record has applied, so the node that built them downloads none of
 // them back — up to internal/code/compact's ExpungeInputByteCap of GETs a
 // cycle, of bytes its own disk held a moment before, for packs the cycle's
-// commit retires minutes later. Every other git node installs them by its
+// commit retires minutes later. Every other Gitlet node installs them by its
 // next round, from the store, as their rows place them.
 //
 // INTO THE DROPPING VIEW, NEVER objects/pack: each pack's files are linked

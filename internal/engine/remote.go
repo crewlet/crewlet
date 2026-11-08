@@ -199,45 +199,45 @@ func dataNodesOf(held []coord.Lease) []string {
 	return out
 }
 
-// gitNodesOf is the nodes with the git role among a listing of presence
-// leases: the git nodes a repository's git work is asked of (ADR-0089). Read
+// gitletNodesOf is the nodes with the gitlet role among a listing of presence
+// leases: the Gitlet nodes a repository's git work is asked of (ADR-0089). Read
 // as every role reads off a peer's row — one this build cannot read is every
-// role — so a peer whose row is unreadable is asked as a git node too, and
+// role — so a peer whose row is unreadable is asked as a Gitlet node too, and
 // answers `no_backend` where it is none, which the walk asks last for half a
 // minute.
-func gitNodesOf(held []coord.Lease) []string {
+func gitletNodesOf(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
-		if node, ok := gitNodeOf(lease); ok {
+		if node, ok := gitletNodeOf(lease); ok {
 			out = append(out, node)
 		}
 	}
 	return out
 }
 
-// gitNodeOf is the node a presence lease names where it has the git role, by
-// the rule [gitNodesOf] states — the ONE rule a git listing
-// ([presenceRoster.GitListing]) reads a peer's row by too, so the git nodes a
+// gitletNodeOf is the node a presence lease names where it has the gitlet role, by
+// the rule [gitletNodesOf] states — the ONE rule a git listing
+// ([presenceRoster.GitListing]) reads a peer's row by too, so the Gitlet nodes a
 // repository's reads are asked of and those its maintenance is weighed among
 // are one set.
-func gitNodeOf(lease coord.Lease) (string, bool) {
+func gitletNodeOf(lease coord.Lease) (string, bool) {
 	profile, ok := placement.FromLease(lease)
-	if !ok || !profile.Roles.Has(placement.RoleGit) {
+	if !ok || !profile.Roles.Has(placement.RoleGitlet) {
 		return "", false
 	}
 	return profile.ID, true
 }
 
 // serveEstate makes this data node answer the fleet from its copy of the
-// estate — and, where it has the git role, from its git half on the two git
+// estate — and, where it has the gitlet role, from its git half on the two git
 // lanes, the reads' and the engine writes' (estate's gitLanes).
 //
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
 // is up: the backend is resolved per request, so a request arriving first is
 // answered "not here" rather than refused. So is the git half ([engineGit]),
-// and every git node holds data in this release (git needs ingress, and
-// ingress needs data), so every git node serves here: each of its git lanes
+// and every Gitlet node holds data in this release (gitlet needs ingress, and
+// ingress needs data), so every Gitlet node serves here: each of its git lanes
 // answers `no_backend` until Gitlet is built there, a git read and an engine
 // write alike.
 func (e *Engine) serveEstate(ctx context.Context) error {
@@ -247,7 +247,7 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	opts := estate.ServerOptions{
 		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
 	}
-	if e.profile.Roles.Has(placement.RoleGit) {
+	if e.profile.Roles.Has(placement.RoleGitlet) {
 		opts.Git = e.localGit()
 	}
 	stop, err := estate.Serve(ctx, e.backends.Queue, opts)

@@ -27,7 +27,7 @@ import (
 )
 
 // AN EXPUNGE ON THE WHOLE PATH: a solo fleet's committer deciding and applying
-// a person's purge request, the maintainer's begin and its commit, the git
+// a person's purge request, the maintainer's begin and its commit, the Gitlet
 // node's cache sorting the repository's packs and serving the dropping ones
 // between the two, and the store holding every pack — the compactor driven
 // one cycle at a time, as a pass runs it.
@@ -122,9 +122,9 @@ func (x *fixture) served(c *compact.Compactor) {
 	x.t.Fatalf("a dozen expunges left %s's purge unserved", codetest.RepoName)
 }
 
-// fresh rebuilds the git node's cache from the rows alone — the node killed,
+// fresh rebuilds the Gitlet node's cache from the rows alone — the node killed,
 // its cache's directory removed, the node restarted over the rest — and
-// answers the copy's directory, synced linearizable: what any git node the
+// answers the copy's directory, synced linearizable: what any Gitlet node the
 // store serves would build of the repository. It runs `git fsck
 // --connectivity-only --no-dangling` over it first, failing the case where a
 // ref reaches an object the copy lacks.
@@ -281,7 +281,7 @@ func TestTheMaintainerDownloadsNothingItsExpungeBuilt(t *testing.T) {
 	}
 }
 
-// gotten is every object name a git node's backend was asked to GET, and how
+// gotten is every object name a Gitlet node's backend was asked to GET, and how
 // many times.
 type gotten struct {
 	mu  sync.Mutex
@@ -295,7 +295,7 @@ func (g *gotten) names() map[string]int {
 	return maps.Clone(g.got)
 }
 
-// gettingFrom is a git node's backend with every GET it makes counted, by
+// gettingFrom is a Gitlet node's backend with every GET it makes counted, by
 // name, in gets.
 type gettingFrom struct {
 	objstore.Backend
@@ -930,7 +930,7 @@ func TestAnOpenChangesOldRevisionSurvivesAPurge(t *testing.T) {
 // committer refuses `expunging` a merge whose builder's copy held another
 // epoch. The builder proposes the epoch of the copy its landing pinned, so a
 // change merged after the expunge lands on its first build, with no rebuild —
-// on the whole path: a person's merge through Gitlet on the git node, built
+// on the whole path: a person's merge through Gitlet on the Gitlet node, built
 // in the cache the expunge left, its record decided by the data node's
 // committer.
 //

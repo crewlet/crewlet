@@ -217,9 +217,9 @@ var alarmMeaning = map[Kind]string{
 		"without a bitmap and served more slowly: a clone walks their history. " +
 		"A repository this node maintains whose next published layer it cannot " +
 		"write counts too — its layer's bitmap is 600 bytes an object of the " +
-		"repository — since no git node then publishes it, and every git node " +
+		"repository — since no Gitlet node then publishes it, and every Gitlet node " +
 		"serves the packs pushed since its last publication outside every bitmap.",
-	KindCodeCompactionBehind: "Repositories this node maintains — the git node " +
+	KindCodeCompactionBehind: "Repositories this node maintains — the Gitlet node " +
 		"that merges their packs and publishes their layers, the first in each " +
 		"repository's order whose background budget holds its publication — " +
 		"hold the most live packs a repository may, so every push carrying " +
@@ -244,7 +244,7 @@ var alarmMeaning = map[Kind]string{
 		"to run — so a change whose head they check waits on them past anything " +
 		"its checks file planned for. Measured from the code log's rows by every " +
 		"data node, in the order the attempts fell overdue, so it stands even " +
-		"where no git node runs checks at all; past a thousand it says there " +
+		"where no Gitlet node runs checks at all; past a thousand it says there " +
 		"are more rather than how many. A deleted repository's queued attempts " +
 		"are not counted: no runner may claim them, and its purge removes them.",
 	KindCodeMergeRateOver: "Merge queues this node is home to — " +
@@ -254,7 +254,7 @@ var alarmMeaning = map[Kind]string{
 		"changes a round at the mean round their trains took, the round " +
 		"timed by this node from a train's build to its landing (a train " +
 		"still testing counts at its age once it outlasts the mean). " +
-		"Raised by the repository's home git node alone, for as long as " +
+		"Raised by the repository's home Gitlet node alone, for as long as " +
 		"the hour's enqueues stay past the capacity; a node that has timed " +
 		"no round of a queue yet — a home new to it — judges it from its " +
 		"first train.",
@@ -276,7 +276,7 @@ var alarmMeaning = map[Kind]string{
 		"the company published that long ago, or less (a protected branch " +
 		"there no newer than the last green commit the mirror pushed); a " +
 		"pull mirror holds what its source held that long ago. Raised by " +
-		"the home git node alone, from its own memory of its attempts: a " +
+		"the home Gitlet node alone, from its own memory of its attempts: a " +
 		"node that stops being a repository's home stops counting its " +
 		"mirrors, and a node that restarts counts from the first pass that " +
 		"asks it for each mirror. A mirror whose attempt waits behind " +

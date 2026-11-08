@@ -26,7 +26,7 @@ import (
 // the layout is what the seal is held to, and the seal is what every
 // installing cache holds a bundle to, so a second writer that laid a bundle
 // out or sealed it by its own reading would be judged by a rule it did not
-// write against — and the first difference would be a row no git node can
+// write against — and the first difference would be a row no Gitlet node can
 // install, fleet-wide. The id a rewrite's output is laid out under — a
 // compaction's, an expunge's — is one derivation for the same reason
 // ([DeriveOutputPackID]): the build that names the output and the check of the
@@ -117,7 +117,7 @@ func LayBundle(packID, packPath, checksum string) (*PackRef, error) {
 // and n, at the instant that id was minted ([statelog.OpMintedAt]).
 //
 // ONE FUNCTION, because two packages must agree on every byte of it without
-// asking each other (ADR-0008): the git node that builds a rewrite names each
+// asking each other (ADR-0008): the Gitlet node that builds a rewrite names each
 // output by it before the output is stored, and a proposal of the rewrite is
 // held to it output by output before any committer decides it. A copy that
 // disagreed in one byte would have every rewrite's outputs refused, and a

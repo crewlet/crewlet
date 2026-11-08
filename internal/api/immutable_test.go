@@ -140,7 +140,7 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 // header the answer's `Vary` names is the same in both (RFC 9111 §4.1), so an
 // answer keyed on `Cookie` stopped matching at the first re-issue, and every
 // page a person went back to was asked of the node again — a read on the
-// repository's home git node per page, per person, every five minutes: the
+// repository's home Gitlet node per page, per person, every five minutes: the
 // read a year-long cache exists to save. So the key holds who the answer is
 // for, the bearer a client sets (`Authorization`) and the reader a dashboard
 // tab names (httpjson.ReaderHeader), and never the cookie; the re-issue that

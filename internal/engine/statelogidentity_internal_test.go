@@ -693,7 +693,7 @@ func aRunningNodeOver(t *testing.T, company string, opts Options,
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&b.Git)
+	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {

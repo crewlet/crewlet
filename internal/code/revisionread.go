@@ -38,7 +38,7 @@ import (
 // its head and its target's tip as the home read it — never the target's tip
 // now, which moves under the change and would show another change's work as
 // this one's. What changed BETWEEN two revisions is their INTERDIFF, the two
-// heads' diff kept to the paths either revision touches (git node's
+// heads' diff kept to the paths either revision touches (Gitlet node's
 // `interdiff`), since a rebase onto a moved target changes every file the
 // target's own commits touched and the change none of them.
 //
@@ -107,7 +107,7 @@ func (r RevisionRow) FilesGap(state ChangeState, based bool) FilesGap {
 // It reads only facts the rows hold — every revision it names has them, and
 // rev a base where since is nil ([RevisionRow.FilesGap] "" for each) — and is
 // refused [ErrInvalid] otherwise, naming the revision, rather than sent with
-// an empty id that every git node would refuse alike: a caller judges the gap
+// an empty id that every Gitlet node would refuse alike: a caller judges the gap
 // first, in its own words.
 func RevisionDiff(repoID string, rev RevisionRow, since *RevisionRow, file, fileB64 string) (GitQuery, error) {
 	switch {
@@ -143,13 +143,13 @@ func RevisionDiff(repoID string, rev RevisionRow, since *RevisionRow, file, file
 // the furthest of own — the asking node's own writes to the repository
 // (estate.CodeSeam.FloorOf) — the record that moved each revision's head and,
 // where its facts are recorded, the record that moved its target to the tip
-// its base was read from; or none, which reads the git node's copy as it
+// its base was read from; or none, which reads the Gitlet node's copy as it
 // stands. So the copy that answers holds every object the revisions' rows
 // name.
 //
 // NEVER A ROW READ'S CHECKPOINT, which a linearizable read takes past its own
 // barrier: a copy current to every push still sits below it, and a floor
-// there would make the git node sync for nothing.
+// there would make the Gitlet node sync for nothing.
 func ObjectFloor(own statelog.Position, revs ...RevisionRow) statelog.Freshness {
 	floors := []statelog.Position{own}
 	for _, r := range revs {
@@ -170,7 +170,7 @@ func ObjectFloor(own statelog.Position, revs ...RevisionRow) statelog.Freshness 
 // change's rows: the furthest of own (the asking node's own writes to the
 // repository, and any floor of its caller's) and the record that last moved
 // each ref ([ResolvedRef.Moved]), where the commit it names had landed at the
-// latest; or none, which reads the git node's copy as it stands. A code tool's
+// latest; or none, which reads the Gitlet node's copy as it stands. A code tool's
 // read and a question's read their revisions by it alike.
 //
 // NEVER THE RESOLVE'S CHECKPOINT ([RefAnswer.Position]), for ObjectFloor's
@@ -203,13 +203,13 @@ type FindingPlace struct {
 // where it was raised; one on the OLD side of a revision whose facts record no
 // base gone, since its old side is the empty tree, which holds no file — and
 // the re-anchorings that place every other, none where none is left, which a
-// caller asks of the repository's home git node at the floor of rev and of
+// caller asks of the repository's home Gitlet node at the floor of rev and of
 // the change's head revision ([ObjectFloor]) and folds in with
 // [PlaceAnchors] — [Place] does both. A finding on the old side of a revision
 // whose facts are not recorded yet has no base to place it in: it is in
 // neither, and stays unplaced.
 //
-// EACH RE-ANCHORING PLACES AT MOST [MaxReanchors] ANCHORS, the most one git
+// EACH RE-ANCHORING PLACES AT MOST [MaxReanchors] ANCHORS, the most one Gitlet
 // node's read takes ([ReanchorQuery]). A finding is at most one anchor, so a
 // page of up to MaxReanchors findings is one read in the page's order, and a
 // larger one — the reader serves up to [MaxFindingsPerPage], four reads'
@@ -347,7 +347,7 @@ func AtOnce(reads ...func() error) error {
 }
 
 // ErrMisplaced is a re-anchoring's answer that placed another set than the
-// anchors asked ([PlaceAnchors]): no git node of this build gives one, so the
+// anchors asked ([PlaceAnchors]): no Gitlet node of this build gives one, so the
 // caller treats it as its own fault rather than a finding with no place.
 var ErrMisplaced = errors.New("code: a re-anchoring's answer is not the anchors asked")
 

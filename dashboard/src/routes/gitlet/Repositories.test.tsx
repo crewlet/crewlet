@@ -37,7 +37,7 @@ const ORG = withDerived({
   name: "Acme",
   roles: [{ name: "CTO", handle: "cto" }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** A repository as the listing answers it, with what a case overrides. */

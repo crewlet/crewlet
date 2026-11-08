@@ -240,7 +240,7 @@ func engineBuilt(p code.Proposal, packBytes int64) code.Proposal {
 // commit on one ref: a proposal naming no way, or one this build does not know,
 // is the proposer's bug and refused naming via — by ValidateCommands too, whose
 // measure would otherwise be short of the entry; a push the engine built moving
-// two refs, or --atomic, or storing a pack past what a git node's build stores
+// two refs, or --atomic, or storing a pack past what a Gitlet node's build stores
 // (code.MaxWritePackBytes, which only an engine-built push is held to), is
 // refused naming what it broke; and a person's push the engine built of one
 // command is a proposal. So is a seat's, whichever way it was built, since the

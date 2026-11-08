@@ -12,7 +12,7 @@
 // code.MaxGitAnswerBytes of JSON with a cursor where the next begins, but a
 // checks file's, which is the engine's alone and one answer of at most
 // code.MaxChecksFileBytes of the file.
-// It runs on git nodes, holds no goroutine of its own, and writes nothing
+// It runs on Gitlet nodes, holds no goroutine of its own, and writes nothing
 // itself — the memo its reads fill is the cache's write, as is the spool a
 // revision's facts write a patch into: a read's processes run on its caller's
 // goroutine and end with its context, or with the server's stop.
@@ -140,7 +140,7 @@
 // # What this node cannot answer, another may
 //
 // A read this node cannot answer for a reason about THE NODE is
-// code.ErrGitUnready, which the asker may take to another git node: its copy
+// code.ErrGitUnready, which the asker may take to another Gitlet node: its copy
 // not brought to the read's need within statelog.ReadBudget or before its
 // answer fell due (a cold copy, whose download goes on after the read stops
 // waiting), or a sync that failed on what every node's copy is filled from —

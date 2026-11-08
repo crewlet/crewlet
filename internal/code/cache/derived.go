@@ -142,7 +142,7 @@ const (
 	// DerivedCodeIndex is the trigram index of the repository's default
 	// branch's tip (codeindex.go, internal/codeindex): the SEGMENTS, each the
 	// trigrams of a batch of blobs keyed by blob id, and the TIP MAP naming
-	// the tip's every file and its blob, kept by the git nodes a
+	// the tip's every file and its blob, kept by the Gitlet nodes a
 	// `search: indexed` repository's search is placed on (code.IndexHolders)
 	// under the incarnation's crewlet/codeindex — the cache's own write,
 	// which no git process reads.
@@ -220,7 +220,7 @@ const (
 	// before it answers, and otherwise by the cache's installer, behind the
 	// serving, once a delta has named a layer the copy does not hold.
 	TriggerInstall Trigger = "install"
-	// TriggerIndexer is the cache's indexer (codeindex.go): on a git node a
+	// TriggerIndexer is the cache's indexer (codeindex.go): on a Gitlet node a
 	// `search: indexed` repository's search is placed on, behind the
 	// serving, once the repository's default branch has moved past the tip
 	// its index was read at.
@@ -630,7 +630,7 @@ const (
 	// a hot repository would cost a stat and a link an answer inside the
 	// round that holds the repository, which a request's repair waits on, and
 	// carried by a compaction's swap the same way it would cost that on
-	// every git node that holds the repository. Moved at the PROMOTION
+	// every Gitlet node that holds the repository. Moved at the PROMOTION
 	// rather than at the seeding, so the replaced incarnation serves it
 	// until the new one does and a rebuild that fails leaves it where it
 	// was; a reader still holding the replaced incarnation misses from then

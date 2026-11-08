@@ -650,7 +650,7 @@ knowledge:
 # ``<handle>@example.com``.  Unset is ``seats.invalid``, a name nobody owns.
 # See docs/concepts/gitlet.md.
 code:
-  native: true
+  backend: gitlet
   identity_domain: example.com
   repos:
     - name: nimbus-web

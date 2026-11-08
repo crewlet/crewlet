@@ -296,7 +296,7 @@ var namedRoutes = []struct {
 	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
 	// history, a file's blame, a diff, a comparison with its merge preview
 	// and one commit with the changes it belongs to — each read by object id
-	// of the repository's home git node, and decided per repository as the
+	// of the repository's home Gitlet node, and decided per repository as the
 	// rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
@@ -318,7 +318,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
-	// by the git node that answers it.
+	// by the Gitlet node that answers it.
 	{method: "GET", pattern: "/gitlet/search", what: "code_search"},
 }
 

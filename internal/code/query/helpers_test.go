@@ -37,10 +37,10 @@ func newFixture(t *testing.T, o codetest.SoloOptions, settings code.RepoSettings
 	return x
 }
 
-// url is name's URL through the i-th git node.
+// url is name's URL through the i-th Gitlet node.
 func (x *fixture) url(i int, name string) string { return x.f.Nodes()[i].URL() + "/git/" + name }
 
-// commit commits files in the work tree and pushes main through the first git
+// commit commits files in the work tree and pushes main through the first Gitlet
 // node, answering the commit.
 func (x *fixture) commit(files map[string]string, message string) string {
 	x.t.Helper()
@@ -49,7 +49,7 @@ func (x *fixture) commit(files map[string]string, message string) string {
 	return id
 }
 
-// push pushes refspecs of the work tree to name through the first git node.
+// push pushes refspecs of the work tree to name through the first Gitlet node.
 func (x *fixture) push(name string, refspecs ...string) {
 	x.t.Helper()
 	if res := x.p.PushArgs(x.t.Context(), x.work, []string{"--force"}, x.url(0, name), refspecs...); res.Err != nil {
@@ -73,7 +73,7 @@ func (x *fixture) repo(name string) string {
 	return rows.Repo.ID
 }
 
-// server is a query server over the i-th git node's cache and pool, o's
+// server is a query server over the i-th Gitlet node's cache and pool, o's
 // unset fields filled: the node's own id, cache and pool, a share of its read
 // lane, and no chart.
 func (x *fixture) server(i int, o query.Options) *query.Server {
@@ -129,7 +129,7 @@ func (f *fetches) all() []types.CodeFetched {
 	return slices.Clone(f.seen)
 }
 
-// synced brings the i-th git node's copy of repo to the log's head, folding
+// synced brings the i-th Gitlet node's copy of repo to the log's head, folding
 // every push its rows hold into the node's index.
 func (x *fixture) synced(i int, repo string) {
 	x.t.Helper()
@@ -141,7 +141,7 @@ func (x *fixture) synced(i int, repo string) {
 }
 
 // decoration is what q's provenance adds to every page of its answer on the
-// first git node — the push that introduced each commit it names, and what
+// first Gitlet node — the push that introduced each commit it names, and what
 // the node's index holds (code.GitAnswer.PushedBy, Coverage) — read whole once
 // the copy is level with the log, so every page read after it carries the
 // same: the room a case scaling the page bound leaves for it, beside the
@@ -208,7 +208,7 @@ func (x *fixture) branch(name, at string) {
 	x.git("checkout", "-q", "-b", name, at)
 }
 
-// facts is the first git node's facts of head against target.
+// facts is the first Gitlet node's facts of head against target.
 func (x *fixture) facts(s *query.Server, repo, head, target string) *code.RevisionFactsAnswer {
 	x.t.Helper()
 	a := mustRead(x.t, s, factsQ(repo, head, target))

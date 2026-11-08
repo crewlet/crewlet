@@ -45,14 +45,14 @@ func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
 func BoxGitURLOf(e *Engine) string { return e.boxGitURL }
 
 // GitReadForTest is a read of a repository by object id through e's own estate
-// router — the repository's home git node first, this node at its place — for
+// router — the repository's home Gitlet node first, this node at its place — for
 // a test outside the package that drives the git walk through a running engine.
 func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAnswer, error) {
 	return e.router.Code().GitRead(ctx, q)
 }
 
 // GitWriteForTest is an engine write through e's own estate router — the
-// repository's home git node first, this node at its place — for a test
+// repository's home Gitlet node first, this node at its place — for a test
 // outside the package that drives the git write's walk through a running
 // engine.
 func GitWriteForTest(ctx context.Context, e *Engine, w code.EngineWrite) (code.EngineWriteResult, error) {
@@ -187,7 +187,7 @@ func WithGitMemory(opts Options, memory int64) Options {
 	return opts
 }
 
-// WithCompactorEstate is opts with wrap standing between a git node's
+// WithCompactorEstate is opts with wrap standing between a Gitlet node's
 // compactor and the router's code seam it lists and proposes through
 // ([codecompact.Options.Estate]), for a case outside the package whose subject
 // is what a running node's compactor raises — a repository shown at the pack
@@ -197,7 +197,7 @@ func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact
 	return opts
 }
 
-// WithHomeSeams is opts with wrap standing between a git node's home change
+// WithHomeSeams is opts with wrap standing between a Gitlet node's home change
 // work and the router's code seam and Gitlet's chain builder it works
 // through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
 // outside the package whose subject is what a running node's queue worker
@@ -209,7 +209,7 @@ func WithHomeSeams(opts Options,
 	return opts
 }
 
-// WithMirrorSeams is opts with wrap standing between a git node's mirrors and
+// WithMirrorSeams is opts with wrap standing between a Gitlet node's mirrors and
 // the options they are built with ([mirror.Options]), for a case outside the
 // package whose subject is the mirror alarm a running node raises — a push
 // mirror's every dial refused, on a clock the case moves past the mirror's
@@ -223,7 +223,7 @@ func WithMirrorSeams(opts Options, wrap func(mirror.Options) mirror.Options) Opt
 // [brokertest.GitTransfers], the one figure every node fixture's lane is.
 const TestGitTransfers = brokertest.GitTransfers
 
-// PinGitLanes sets b's git.max_transfers to [TestGitTransfers], for every
+// PinGitLanes sets b's gitlet.max_transfers to [TestGitTransfers], for every
 // case booting a node that may build Gitlet beside a broker that derives
 // its own limit. The transfer lane sizes the request spools the cache's room is
 // taken out of (host.SpoolAllowance), and unset it follows the machine's cores
@@ -236,21 +236,21 @@ const TestGitTransfers = brokertest.GitTransfers
 // (query.PatchSpoolAllowance) — which every volume a node boots on has.
 //
 // A node whose broker [brokertest.StoreIn] sized declares its cache with
-// [brokertest.CodeCacheIn] instead, which pins this lane and a budget: its
+// [brokertest.GitletCacheIn] instead, which pins this lane and a budget: its
 // broker's declared limit claims a fixed sixteen gibibytes of the room, not a
 // share of the free space, and leaves nothing on a smaller disk.
-func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
+func PinGitLanes(b *config.Bootstrap) { b.Gitlet.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor
 // ([gittest.RequireNode]) where a boot over b for company builds Gitlet —
-// the company hosts code and b's node has the git role, which is
+// the company hosts code and b's node has the gitlet role, which is
 // [Engine.hostsGit] read off the two documents — so a machine below the floor
 // reads the contributor's sentence rather than the node's refusal, and a boot
 // that builds no pool asks nothing of the machine's git. A case whose company
 // hosts code only from a later activation calls [gittest.RequireNode] itself.
 func RequireNodeGit(t testing.TB, b *config.Bootstrap, company *config.Company) {
 	t.Helper()
-	if company.NeedsRole(placement.RoleGit) && b.Profile("").Roles.Has(placement.RoleGit) {
+	if company.NeedsRole(placement.RoleGitlet) && b.Profile("").Roles.Has(placement.RoleGitlet) {
 		gittest.RequireNode(t)
 	}
 }

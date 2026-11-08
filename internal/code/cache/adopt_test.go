@@ -173,7 +173,7 @@ func TestAnAdoptedPackLearnsWhenItArrivedFromItsRow(t *testing.T) {
 }
 
 // ONE ADOPTION, EVERY PACK IT NAMES: a compaction's scratch holds a pack an
-// output, and the git node that built them adopts them all in one call once
+// output, and the Gitlet node that built them adopts them all in one call once
 // their rows have applied — each linked by the scratch's own files, each
 // counted, the directory synced ONCE for the call — so its next sync
 // downloads none of them, and the cache it leaves is the one a cache built

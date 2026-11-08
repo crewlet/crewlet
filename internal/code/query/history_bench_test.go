@@ -24,7 +24,7 @@ import (
 // code_log of a path, git run exactly as the query server runs it (blame.go,
 // log.go: the same arguments, a log page of code.MaxLogLimit commits, the
 // serve configuration's version-2 filters), over a history whose commit-graph
-// is shaped as a git node holds one:
+// is shaped as a Gitlet node holds one:
 //
 //   - filters=on/tail=0 is every commit in a graph with every changed-path
 //     filter — a chain whose publication covers the whole history;

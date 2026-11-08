@@ -80,11 +80,11 @@ import (
 //
 // EVERY ROUND DRAWS ON ONE BUDGET, AND FITS ONE ATTEMPT. The merge's git is
 // code.MergeBuildDeadline across its first build and every rebuild together,
-// never that much a round: the router sizes the write's attempt on a git node
+// never that much a round: the router sizes the write's attempt on a Gitlet node
 // for ONE build of it (internal/estate's Timing.GitWriteAttemptFor), so five
 // rounds of thirty seconds each would run past the attempt on exactly the
 // busy target rebuilds exist for — answered unready during a build, which
-// sends the walk's runner-up git node to start the whole merge again, or busy
+// sends the walk's runner-up Gitlet node to start the whole merge again, or busy
 // at the landing, either after builds and stored bundles nobody proposes. So
 // a rebuild is started only where it fits — the round before it as the
 // measure of it, since it merges the same change onto a tip moved by a push
@@ -149,7 +149,7 @@ const (
 // onto a target that moved under it (code.MergeAnswer.Recomputes) on
 // crewlet.code.merge.recomputes, by how it ended: merged, queued, a refusal's
 // own code — target_moving where code.MergeRecomputes rebuilds, or the merge's
-// one budget, ran out — unknown, unready (another git node is asked, and
+// one budget, ran out — unknown, unready (another Gitlet node is asked, and
 // records its own), refused (an argument the build found invalid, or an
 // object it named missing) or failed. ONCE A MERGE, from the count its answer
 // carries, so the distribution is merges rather than rounds: a branch moving
@@ -488,7 +488,7 @@ func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named stri
 	roster := s.o.Roster()
 	if roster == nil {
 		return mergeVerdict{}, wr.unready(code.UnreadyNoChart, fmt.Sprintf("%s holds no chart yet to judge "+
-			"whom seat %q's merge is made for; a git node holding one builds it", s.o.NodeID, w.Principal.Seat))
+			"whom seat %q's merge is made for; a Gitlet node holding one builds it", s.o.NodeID, w.Principal.Seat))
 	}
 	if code.GrantOf(w.Principal, repo, roster).OwnWork(code.Command{Ref: w.Ref}) {
 		return mergeVerdict{}, nil
@@ -721,7 +721,7 @@ func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j me
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			err = wr.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole share until the "+
-				"merge's answer fell due, its asker's attempt spent; another git node builds it", s.o.NodeID))
+				"merge's answer fell due, its asker's attempt spent; another Gitlet node builds it", s.o.NodeID))
 		}
 		return "", code.EngineWriteResult{}, true, err
 	}

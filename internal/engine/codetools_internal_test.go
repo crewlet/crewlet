@@ -28,11 +28,11 @@ import (
 // none, red; CodeToolDeps leaving out the search → no code_search, red;
 // CodeToolDeps leaving out the mentions' resolver → a change write's mentions
 // resolve to nobody, red.
-func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
+func TestTheCodeToolsAreOfferedWhereGitletIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
 		t.Parallel()
-		e := newSandboxNode(t, parseCompany(t, codeHostCompany))
+		e := newSandboxNode(t, parseCompany(t, gitletHostCompany))
 		if deps := CodeToolDeps(e); deps.Code == nil || deps.CloneURL == nil || deps.Requesters == nil ||
 			deps.Chart == nil || deps.Searcher == nil {
 			t.Fatalf("a node serving Gitlet offers no code tools, none decided again for whoever "+

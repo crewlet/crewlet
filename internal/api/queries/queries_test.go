@@ -365,7 +365,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_change_routing": "decided_by:" + string(authz.ActionCodeRead),
 		"code_reviews":        "decided_by:" + string(authz.ActionCodeRead),
 		// AND A REPOSITORY'S CONTENT, decided per repository alike — and
-		// again by the git node that answers a read by object id.
+		// again by the Gitlet node that answers a read by object id.
 		"code_refs":    "decided_by:" + string(authz.ActionCodeRead),
 		"code_tree":    "decided_by:" + string(authz.ActionCodeRead),
 		"code_blob":    "decided_by:" + string(authz.ActionCodeRead),
@@ -384,7 +384,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_check_log": "decided_by:" + string(authz.ActionCodeRead),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
-		// repo: naming one is refused — by every git node that answers it.
+		// repo: naming one is refused — by every Gitlet node that answers it.
 		"code_search": "decided_by:" + string(authz.ActionCodeRead),
 		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
 		// anything is read: an admin's, since the answer names the people

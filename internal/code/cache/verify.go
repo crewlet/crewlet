@@ -46,7 +46,7 @@ import (
 // with no incarnation here would sync it from nothing — a GET for every push
 // the repository ever took — into a cache that then keeps it and evicts warm
 // repositories to do so, undoing the routing that keeps each repository warm
-// on one or two git nodes. Verifying every git node of a fleet would cost a
+// on one or two Gitlet nodes. Verifying every Gitlet node of a fleet would cost a
 // whole download a node. The node that holds no copy has nothing to check, and
 // says so for free.
 

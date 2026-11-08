@@ -55,7 +55,7 @@ func siteChangeFiles() []code.DiffFile {
 }
 
 // reviewHost is Gitlet holding site!7, answering its diffs with siteChangeFiles.
-func reviewHost() *codeHost {
+func reviewHost() *gitletHost {
 	host := newChangeHost(siteChange())
 	host.git = diffOf(siteChangeFiles()...)
 	return host
@@ -361,7 +361,7 @@ func TestAMentionIsResolvedAtWrite(t *testing.T) {
 	opened := &codeWrites{}
 	open := openArgs()
 	open["body"] = "For @agent-ceo's launch."
-	if got := callWrite(everyGrant(), t, codeRegistry(t, with(writeDeps(newCodeHost(), opened))), writerTurn(t),
+	if got := callWrite(everyGrant(), t, codeRegistry(t, with(writeDeps(newGitletHost(), opened))), writerTurn(t),
 		builtin.CodeOpenChangeTool, open); got.Failed {
 		t.Fatalf("the open answered %q", got.Output)
 	}

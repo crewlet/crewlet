@@ -29,8 +29,8 @@ type BoxURLs struct {
 	// its seat's tools ([mcpbridge.BaseURLVar]).
 	Bridge BoxURL
 	// Git is Gitlet's base a coding box clones and pushes through
-	// ([sandbox.BoxGitURLVar]): a git node's public listener and /box/git,
-	// or a balancer over every git node's — any git node admits a box, by
+	// ([sandbox.BoxGitURLVar]): a Gitlet node's public listener and /box/git,
+	// or a balancer over every Gitlet node's — any Gitlet node admits a box, by
 	// its run's row (ADR-0093). Unset, no run is given a repository.
 	Git BoxURL
 }

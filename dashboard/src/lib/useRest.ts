@@ -77,7 +77,7 @@ export interface RestOptions {
    * `"unreached"` re-reads only a read that never reached the engine
    * (status 0, which says nothing about the answer): for a read whose answer
    * names what it was read at and is costly to ask, such as a code search —
-   * a scatter to every git node, answered at the commits it names — where a
+   * a scatter to every Gitlet node, answered at the commits it names — where a
    * reconnect re-asking every open tab's search at once, as a rolling
    * restart reconnects every socket, would only repeat the work.
    */

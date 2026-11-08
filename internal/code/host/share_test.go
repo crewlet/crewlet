@@ -118,7 +118,7 @@ func transferring(sub string) func(gitproc.Cmd) bool {
 	}
 }
 
-// A PUSH IS SERVED BESIDE A FULL READ SHARE. A git node's read lane is also
+// A PUSH IS SERVED BESIDE A FULL READ SHARE. A Gitlet node's read lane is also
 // where a person's push scans and its sync round's peel wait, FIFO, for at
 // most gitproc.SlotWait — so the seats' reads of the node hold at most half
 // of it (code.ShareOf). On a node of four read slots, two seat reads hold the

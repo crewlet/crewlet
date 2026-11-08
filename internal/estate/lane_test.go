@@ -135,7 +135,7 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 		want map[string]int
 	}{
 		{"a node serving no git", nil, shared},
-		{"a git node", gitHalf{node: &fakeGit{name: "data.a"}}, withGit},
+		{"a Gitlet node", gitHalf{node: &fakeGit{name: "data.a"}}, withGit},
 	} {
 		srv := newLaneServer(t, "", nil)
 		stop, err := Serve(t.Context(), srv, ServerOptions{Self: "data.a",
@@ -306,7 +306,7 @@ func TestALaneAnswersOnlyItsOwnOperations(t *testing.T) {
 
 // EVERY LANE OR NONE: a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for and cost each
-// a whole write attempt — and a git node that answered no git read, or no git
+// a whole write attempt — and a Gitlet node that answered no git read, or no git
 // write, would be a silent home to every repository it is first for — so a
 // lane that cannot be registered withdraws the ones registered before it.
 func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
@@ -321,13 +321,13 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 		t.Errorf("after a lane was refused the node withdrew %v, want the shared lane it had "+
 			"registered", got)
 	}
-	gitNode := newLaneServer(t, laneGitReads.subject("data-a"), refused)
-	if _, err := Serve(t.Context(), gitNode, ServerOptions{Self: "data-a",
+	gitletNode := newLaneServer(t, laneGitReads.subject("data-a"), refused)
+	if _, err := Serve(t.Context(), gitletNode, ServerOptions{Self: "data-a",
 		Local: &fakeNode{name: "data-a"}, Git: gitHalf{node: &fakeGit{name: "data-a"}},
 		Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
 		t.Fatalf("serve with a git lane the broker refuses = %v, want the refusal", err)
 	}
-	if got := gitNode.withdrawals(); !slices.Equal(got, []string{ProposalSubject("data-a"), Subject("data-a")}) {
+	if got := gitletNode.withdrawals(); !slices.Equal(got, []string{ProposalSubject("data-a"), Subject("data-a")}) {
 		t.Errorf("after the git lane was refused the node withdrew %v, want the proposals' and the "+
 			"shared lanes it had registered", got)
 	}

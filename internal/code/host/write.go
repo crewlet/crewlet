@@ -20,7 +20,7 @@ import (
 
 // AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0092). A seat's or a
 // person's change made through a tool — files committed, a commit reverted or
-// picked, a branch created or deleted — is built on the repository's git node,
+// picked, a branch created or deleted — is built on the repository's Gitlet node,
 // in a scratch beside its cache, by git's own plumbing over exactly the trees
 // the change touches (build.go), and handed to the SAME landing every push
 // takes (land.go): its status check, its protections, its blob limit, its size,
@@ -194,7 +194,7 @@ func (s *Server) Write(ctx context.Context, w code.EngineWrite) (code.EngineWrit
 	if w.Principal.Kind == code.PrincipalAgent && s.o.Current != nil && !s.o.Current() {
 		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyBehindConfig, Detail: fmt.Sprintf(
 			"%s is behind the company's configuration and judges no seat's write from the chart the fleet "+
-				"replaced; a current git node builds it", s.o.NodeID)}
+				"replaced; a current Gitlet node builds it", s.o.NodeID)}
 	}
 	for {
 		f, leads := s.joinWrite(pushID)
@@ -245,7 +245,7 @@ func (s *Server) enter(parent context.Context) (context.Context, func(), bool) {
 // writesStopping is what a write the stopping host started nothing for is
 // answered: about this node, so the walk asks the runner-up.
 func (s *Server) writesStopping() error {
-	return fmt.Errorf("%w: %s's Gitlet is stopping; another git node builds the write", code.ErrNotServing,
+	return fmt.Errorf("%w: %s's Gitlet is stopping; another Gitlet node builds the write", code.ErrNotServing,
 		s.o.NodeID)
 }
 
@@ -258,7 +258,7 @@ func (s *Server) cutOrGone(ctx context.Context) error {
 		return s.writesStopping()
 	case code.AnswerDue(ctx):
 		return &code.ErrGitUnready{Reason: code.UnreadyShare, Detail: fmt.Sprintf("%s could not build the write "+
-			"before its answer fell due, its asker's attempt spent; another git node builds it", s.o.NodeID)}
+			"before its answer fell due, its asker's attempt spent; another Gitlet node builds it", s.o.NodeID)}
 	}
 	return context.Cause(ctx)
 }
@@ -351,7 +351,7 @@ func (wr *writing) run(ctx context.Context) (code.EngineWriteResult, error) {
 	if !w.Home && !s.o.Cache.Holds(w.RepoID) {
 		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: fmt.Sprintf(
 			"%s holds no copy of repository %s and the write is not its walk's home's, which is the one node "+
-				"that fills a copy; a git node holding one builds it meanwhile", s.o.NodeID, w.RepoID)}
+				"that fills a copy; a Gitlet node holding one builds it meanwhile", s.o.NodeID, w.RepoID)}
 	}
 	if w.Kind == code.WriteMergeChange {
 		// A MERGE IS ITS OWN PIPELINE from here (merge.go): judged by its
@@ -429,30 +429,30 @@ func (wr *writing) sync(ctx context.Context, fresh statelog.Freshness) (gone boo
 		return false, fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return false, wr.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not "+
-			"reach the write's need before its answer fell due; the sync goes on, and another git node builds "+
+			"reach the write's need before its answer fell due; the sync goes on, and another Gitlet node builds "+
 			"it meanwhile", s.o.NodeID, wr.w.RepoID))
 	case ctx.Err() != nil:
 		return false, ctx.Err()
 	case sctx.Err() != nil:
 		return false, wr.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not "+
-			"reach the write's need within %s; the sync goes on, and another git node builds it meanwhile",
+			"reach the write's need within %s; the sync goes on, and another Gitlet node builds it meanwhile",
 			s.o.NodeID, wr.w.RepoID, s.syncWait))
 	case errors.Is(err, cache.ErrStopped):
 		return false, s.writesStopping()
 	case cache.EveryFillMeets(err):
 		return false, wr.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v — what "+
-			"every git node's copy is filled from, so a git node holding a copy builds it meanwhile",
+			"every Gitlet node's copy is filled from, so a Gitlet node holding a copy builds it meanwhile",
 			s.o.NodeID, wr.w.RepoID, err))
 	default:
 		return false, wr.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not sync repository %s: %v; "+
-			"another git node builds it, and fills a copy where none holds one", s.o.NodeID, wr.w.RepoID, err))
+			"another Gitlet node builds it, and fills a copy where none holds one", s.o.NodeID, wr.w.RepoID, err))
 	}
 	wr.synced.Release()
 	wr.synced, wr.linear = got, fresh.Level == statelog.ReadLinearizable
 	return false, nil
 }
 
-// unready is a refusal about this node, which another git node may answer.
+// unready is a refusal about this node, which another Gitlet node may answer.
 func (wr *writing) unready(why code.UnreadyReason, detail string) error {
 	return &code.ErrGitUnready{Reason: why, Detail: detail}
 }
@@ -558,7 +558,7 @@ func (wr *writing) rules() (writeVerdict, error) {
 	if w.Principal.Kind == code.PrincipalAgent {
 		if roster = s.o.Roster(); roster == nil {
 			return writeVerdict{}, wr.unready(code.UnreadyNoChart, fmt.Sprintf("%s holds no chart yet to judge seat "+
-				"%q's grant by; a git node holding one builds the write", s.o.NodeID, w.Principal.Seat))
+				"%q's grant by; a Gitlet node holding one builds the write", s.o.NodeID, w.Principal.Seat))
 		}
 	}
 	// THE SEAT'S GRANT, HELD TO WHOEVER ITS TURN WORKS FOR (code.WriteCeiling):
@@ -660,7 +660,7 @@ func (wr *writing) outcome(ctx context.Context) (code.EngineWriteResult, []code.
 		return code.EngineWriteResult{}, nil, false, nil
 	case code.AnswerDue(ctx):
 		return code.EngineWriteResult{}, nil, true, wr.unready(code.UnreadyShare, fmt.Sprintf("%s could not "+
-			"learn whether this write already landed before its answer fell due; another git node is asked",
+			"learn whether this write already landed before its answer fell due; another Gitlet node is asked",
 			s.o.NodeID))
 	case ctx.Err() != nil:
 		return code.EngineWriteResult{}, nil, true, ctx.Err()
@@ -708,7 +708,7 @@ func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgeme
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			err = wr.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole share until the "+
-				"write's answer fell due, its asker's attempt spent; another git node builds it", s.o.NodeID))
+				"write's answer fell due, its asker's attempt spent; another Gitlet node builds it", s.o.NodeID))
 		}
 		return built{}, code.EngineWriteResult{}, true, err
 	}

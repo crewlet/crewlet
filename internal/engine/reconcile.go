@@ -381,7 +381,7 @@ type applyProgress struct {
 	attemptStarted time.Time
 
 	// targetRead is whether this node has read target's revision, and
-	// targetCode whether that revision sets code.native: what tells a node
+	// targetCode whether that revision sets code.backend: gitlet: what tells a node
 	// that does not serve Gitlet because the company does not host code from
 	// one that does not serve Gitlet yet, which the fleet just turned on
 	// ([Engine.CodeUnserved]). Reset with target, set once an attempt at it
@@ -438,7 +438,7 @@ func (r *Reconciler) snapshot() applyProgress {
 func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
 
 // noteTargetCode records whether the revision of epoch — the target the tick
-// is applying — sets code.native. The tick alone calls it, like every
+// is applying — sets code.backend: gitlet. The tick alone calls it, like every
 // writer of the progress; an epoch the progress has moved past is not
 // recorded.
 func (r *Reconciler) noteTargetCode(epoch int64, hosts bool) {
@@ -996,10 +996,10 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 			fmt.Errorf("engine: parse revision %s: %w", target.RevisionID, err)
 	}
 	// WHAT THE TARGET SAYS OF GITLET, noted before anything below can
-	// refuse it: a node whose apply of a revision that turns code.native on
+	// refuse it: a node whose apply of a revision that turns Gitlet on
 	// fails serves no part of Gitlet, and must say so rather than tell
 	// a person the company hosts no code ([Engine.CodeUnserved]).
-	r.noteTargetCode(target.Epoch, cfg.Code.Native)
+	r.noteTargetCode(target.Epoch, cfg.CodeBackendFor() == config.CodeGitlet)
 	if invalid := cfg.ValidateRunnable(); invalid != nil {
 		return configplane.StatusError, store.Revision{}, nil,
 			fmt.Errorf("engine: revision %s is not a runnable company; activate a "+

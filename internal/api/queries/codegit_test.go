@@ -52,7 +52,7 @@ var gitQuestions = []struct {
 	}},
 }
 
-// stamping is a git node that stamps every answer whatever it was asked —
+// stamping is a Gitlet node that stamps every answer whatever it was asked —
 // the copy's position, the push behind its rev, what its index covers — so a
 // case sees that a question never carries a stamp into an answer it calls
 // immutable, whoever answered it.
@@ -71,7 +71,7 @@ func stamping(q code.GitQuery) (code.GitAnswer, error) {
 
 // AN OID QUESTION IS IMMUTABLE. A question every revision of which is a
 // whole object id is answered queries.Immutable — sent with a strong entity
-// tag and `Cache-Control: immutable` — and asks its git node for the page
+// tag and `Cache-Control: immutable` — and asks its Gitlet node for the page
 // alone (code.GitQuery.Unstamped), so the page is a function of what it names;
 // and what it carries is the page and nothing a node stamped — no position,
 // no push, no coverage, no repository id, no resolved ref — even from a node
@@ -148,7 +148,7 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 
 // A REF IS RESOLVED ONCE A QUESTION, and the read by object id is floored at
 // its move. A diff naming two refs reads both in ONE resolve at the caller's
-// freshness, and asks its git node at the furthest of the node's own write to
+// freshness, and asks its Gitlet node at the furthest of the node's own write to
 // the repository, the caller's floor on the code log and where each ref last
 // moved — never at the resolve's own checkpoint. `HEAD` is the default branch,
 // which the resolve answers from the repository's row in its own transaction
@@ -216,7 +216,7 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 }
 
 // A MERGE PREVIEW IS ASKED OF THE HOME. A comparison asks what merging head
-// into base would do of the repository's home git node — the estate's
+// into base would do of the repository's home Gitlet node — the estate's
 // code.merge_preview, through the code reads (estate.CodeSeam.MergePreview,
 // keyed on the repository's git home as a read by object id is) — once, by
 // the WHOLE ids the comparison answered, so the preview merges exactly the
@@ -389,8 +389,8 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 
 // A READ BY OBJECT ID REFUSES IN THIS SURFACE'S VOCABULARY: an object the
 // repository does not hold, or a path its revision holds no such directory
-// or file at, is not_found (`no_object`) in the git node's own sentence; a
-// read too large to answer whole is the request's to narrow; and no git node
+// or file at, is not_found (`no_object`) in the Gitlet node's own sentence; a
+// read too large to answer whole is the request's to narrow; and no Gitlet node
 // able to answer now is unavailable — never a 500, never an answer about the
 // repository.
 //
@@ -415,7 +415,7 @@ func TestAReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 		{"too large", fmt.Errorf("%w: past its budget", code.ErrSliceTooLarge), func(err error) bool {
 			return errors.Is(err, queries.ErrBadParams)
 		}},
-		{"no git node", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling"}, func(err error) bool {
+		{"no Gitlet node", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling"}, func(err error) bool {
 			return errors.Is(err, queries.ErrUnavailable)
 		}},
 	} {

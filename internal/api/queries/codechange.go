@@ -25,7 +25,7 @@ import (
 // # A revision's code is read by object id, by the code domain's one rule
 //
 // A change's files, a file's patch and where a finding sits now are reads of
-// the repository's CONTENT, answered by its home git node, never by the rows.
+// the repository's CONTENT, answered by its home Gitlet node, never by the rows.
 // What they read between — the base a revision's facts record, the interdiff
 // of two revisions, the re-anchoring of a page of findings — and the floor
 // they are asked at are the code domain's rule (code.RevisionDiff,
@@ -46,11 +46,11 @@ import (
 //     revision's files cannot be read from its facts, which no wait clears;
 //   - ReasonNoObject — a read by object id names an object the repository
 //     holds no object of, or a path its revision holds no such directory or
-//     file at, in the git node's own sentence.
+//     file at, in the Gitlet node's own sentence.
 //
 // A revision whose facts its home has not recorded YET (code.FilesPending)
 // is no absence: it is [ErrUnavailable], which a wait clears — and so is a
-// read by object id no git node could answer in time.
+// read by object id no Gitlet node could answer in time.
 const (
 	ReasonNoChange   = "no_change"
 	ReasonNoRevision = "no_revision"
@@ -80,7 +80,7 @@ func codeChangeParts() []string {
 
 // CodeChangeFiles is the `files` and `diff` parts' answer: a revision's files
 // or one file's patch — from the base its facts record, or since an earlier
-// revision the interdiff of the two — as the repository's home git node read
+// revision the interdiff of the two — as the repository's home Gitlet node read
 // it, beside the change and the revisions it names.
 type CodeChangeFiles struct {
 	Repo          string `json:"repo"`
@@ -258,7 +258,7 @@ func (g changeAsk) revisionAt(ctx context.Context, latest int64, after statelog.
 func (g changeAsk) gap(d *code.ChangeDetail, r code.RevisionRow, based bool) error {
 	switch gap := r.FilesGap(d.State, based); gap {
 	case code.FilesPending:
-		return fmt.Errorf("%w: revision %d of %s has no recorded base yet: the repository's home git node "+
+		return fmt.Errorf("%w: revision %d of %s has no recorded base yet: the repository's home Gitlet node "+
 			"records each revision's facts against its target within a minute of its push", ErrUnavailable, r.N,
 			g.ref())
 	case code.FilesUnrecorded:
@@ -274,7 +274,7 @@ func (g changeAsk) gap(d *code.ChangeDetail, r code.RevisionRow, based bool) err
 
 // files answers the `files` and `diff` parts: a revision's files or one file's
 // patch from the base its facts record, or since an earlier revision the
-// interdiff of the two (code.RevisionDiff), asked of the home git node at the
+// interdiff of the two (code.RevisionDiff), asked of the home Gitlet node at the
 // floor of the records that moved the revisions (code.ObjectFloor) — the two
 // revisions read at once once the head is (code.ChangeRevisions), as the code
 // tools read them.
@@ -362,7 +362,7 @@ func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	})
 	switch {
 	case errors.Is(err, code.ErrMisplaced):
-		// AN ANSWER PLACING ANOTHER SET THAN THE ANCHORS ASKED is no git
+		// AN ANSWER PLACING ANOTHER SET THAN THE ANCHORS ASKED is no Gitlet
 		// node's of this build: this node's fault, never a finding with no
 		// place.
 		return nil, fmt.Errorf("queries: %s: %w", g.ref(), err)
@@ -372,8 +372,8 @@ func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	return CodeChangeFindings{ReadAnswer: page, Revision: rev.N, Placed: placed}, nil
 }
 
-// gitRead asks q of the repository's home git node, refused here first where
-// it is one no git node would take — the request's own mistake, in this
+// gitRead asks q of the repository's home Gitlet node, refused here first where
+// it is one no Gitlet node would take — the request's own mistake, in this
 // surface's vocabulary — and answered in it ([codeRefusal]).
 func (g changeAsk) gitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if err := q.Validate(); err != nil {

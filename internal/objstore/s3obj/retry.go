@@ -271,7 +271,7 @@ const throttleShare = 0.7
 // thirty-two cut to twenty-two are back past thirty-two in ten rounds, under
 // two seconds at S3's 100 to 200 ms. What lifting it frees is a node that
 // went QUIET after a throttle: it gets too few answers to climb, and without
-// the lift its next burst — a git node's sync of thirty-two packs — would be
+// the lift its next burst — a Gitlet node's sync of thirty-two packs — would be
 // held to the limit the last throttle left it, the bucket long since ready
 // for it.
 //

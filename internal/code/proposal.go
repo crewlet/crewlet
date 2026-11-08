@@ -472,7 +472,7 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: atomic: a push the engine built moves one ref, which --atomic has nothing "+
 			"to hold together with", ErrInvalidProposal)
 	case p.Via == ViaEngine && p.Pack != nil && p.Pack.PackBytes() > MaxWritePackBytes:
-		// THE BUILD'S OWN BOUND: a git node answers a write whose pack is
+		// THE BUILD'S OWN BOUND: a Gitlet node answers a write whose pack is
 		// past it too_large before anything is uploaded, so a proposal
 		// carrying one is no build of this engine's.
 		return fmt.Errorf("%w: pack: %d bytes of pack, past the %d an engine-built push may store "+
@@ -595,7 +595,7 @@ func validCommands(cmds []Command) error {
 
 // validPack holds a pack to a bundle its row can describe — [PackRef.Check],
 // the one rule every holder of the row applies, so a proposal is refused here
-// for exactly what a git node would refuse to install — and to the push it
+// for exactly what a Gitlet node would refuse to install — and to the push it
 // travels with: it carries the push's own id, and the push moves some ref to
 // a commit, since a pack carries the objects a new value needs.
 func (p Proposal) validPack() error {
@@ -699,7 +699,7 @@ func entryBound(p Proposal) (int, error) {
 // leave of MaxRecordRows, and a record whose new tombstones that room cannot
 // match writes its deletions as REMOVALS and raises the repository's mark to
 // its own position (apply_push.go) — which sends every cache synced before the
-// record, on every git node holding the repository, to read it whole, and
+// record, on every Gitlet node holding the repository, to read it whole, and
 // stops each such node's maintenance on it for the full round. Counted as its
 // ref alone, a deletion left the sweep less room than the record's own
 // deletions need: three pushes of a thousand deletions shared one record whose

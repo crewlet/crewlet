@@ -23,7 +23,7 @@
  *
  * # Asked when the reader presses Search, never per keystroke
  *
- * A search across the company is a scatter over every git node that holds a
+ * A search across the company is a scatter over every Gitlet node that holds a
  * repository the reader reads: one signed request each, and a second round
  * for what the first left unanswered. So the phrase is asked when it is
  * submitted, as Work's search is, and never as it is typed — and a reconnect

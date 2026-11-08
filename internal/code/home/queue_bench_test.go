@@ -51,8 +51,8 @@ import (
 // target moved by a landing, a new train recorded — when every run it queued
 // has ended, so a cancellation ends no run the model charges and
 // `checks/landed` is what the worker spends with every cell it asks for free.
-// What cancelling saves is CELL TIME UNDER CONTENTION — a git node's
-// `git.max_checks` containers, the company's e2b box time — that a dead
+// What cancelling saves is CELL TIME UNDER CONTENTION — a Gitlet node's
+// `gitlet.max_checks` containers, the company's e2b box time — that a dead
 // train's runs would hold ahead of the live train's and its probes', which
 // claim oldest first: a model of unbounded cells prices none of it, so the
 // cancellation moves no figure here and no default.

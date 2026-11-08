@@ -52,14 +52,14 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-// A GIT NODE REFUSES A GIT BELOW ITS FLOOR: New over a git one patch short of
+// A GITLET NODE REFUSES A GIT BELOW ITS FLOOR: New over a git one patch short of
 // gitproc.NodeMinVersion answers an *ErrTooOld held to the NODE floor, naming
 // the binary, what it is, the floor and its version — the client floor's 2.40
 // is no longer enough for a pool — and the boundary itself builds a pool. A
 // version git did not print is refused naming the text.
 //
 // Mutation: check ClientMinVersion in New, and 2.54.9 builds a pool — red.
-func TestAGitNodeRefusesAGitBelowItsFloor(t *testing.T) {
+func TestAGitletNodeRefusesAGitBelowItsFloor(t *testing.T) {
 	t.Parallel()
 	old := gittest.Fake(t, "git version 2.54.9", "")
 	_, err := gitproc.New(t.Context(), gitproc.Options{Path: old, Home: filepath.Join(t.TempDir(), "home")})
@@ -71,7 +71,7 @@ func TestAGitNodeRefusesAGitBelowItsFloor(t *testing.T) {
 		tooOld.Floor != gitproc.FloorNode || tooOld.Want() != (gitproc.Version{Major: 2, Minor: 55}) {
 		t.Fatalf("ErrTooOld = %+v (Want %v), want git 2.54.9 at %s held to the node floor, 2.55.0", tooOld, tooOld.Want(), old)
 	}
-	for _, want := range []string{old, "2.54.9", "2.55.0", "a git node", "gitproc.NodeMinVersion"} {
+	for _, want := range []string{old, "2.54.9", "2.55.0", "a Gitlet node", "gitproc.NodeMinVersion"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}
@@ -85,7 +85,7 @@ func TestAGitNodeRefusesAGitBelowItsFloor(t *testing.T) {
 	}
 }
 
-// AN ErrTooOld NAMES ITS FLOOR, in the words its reader acts on: a git node's
+// AN ErrTooOld NAMES ITS FLOOR, in the words its reader acts on: a Gitlet node's
 // operator is told the node floor and where a newer git comes from; a
 // client's person the client floor and that Apple's git is too old for it.
 // Neither names the engine image's own git version, which moves with the pin.
@@ -102,7 +102,7 @@ func TestErrTooOldNamesItsFloor(t *testing.T) {
 		want  string
 	}{
 		{gitproc.FloorNode, gitproc.Version{Major: 2, Minor: 55},
-			"gitproc: /usr/bin/git is git 2.30.0, and a git node needs git 2.55.0 or newer " +
+			"gitproc: /usr/bin/git is git 2.30.0, and a Gitlet node needs git 2.55.0 or newer " +
 				"(gitproc.NodeMinVersion, the node floor): install a newer git on this node's PATH — " +
 				"the engine image builds the newest git release — or on macOS Homebrew's"},
 		{gitproc.FloorClient, gitproc.Version{Major: 2, Minor: 40},
@@ -212,7 +212,7 @@ func readPins(t *testing.T, path string) map[string]string {
 // chain on disk, so the first layer's chain is written before the second is
 // asked for); the whole chain verifies, and a walk over every object loads
 // its bitmap. That is how a repository's maintainer publishes the layers
-// every git node installs. If a later part's commands fail on the floor, the
+// every Gitlet node installs. If a later part's commands fail on the floor, the
 // FLOOR moves to the oldest release they pass on; the commands never bend to
 // the floor.
 //
@@ -535,8 +535,8 @@ func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 		o    gitproc.Options
 		name string
 	}{
-		{gitproc.Options{MaxProcesses: -1}, "git.max_processes"},
-		{gitproc.Options{MaxTransfers: -1}, "git.max_transfers"},
+		{gitproc.Options{MaxProcesses: -1}, "gitlet.max_processes"},
+		{gitproc.Options{MaxTransfers: -1}, "gitlet.max_transfers"},
 		{gitproc.Options{Memory: -1}, "Memory"},
 	} {
 		tc.o.Path, tc.o.Home = fake, filepath.Join(t.TempDir(), "home")

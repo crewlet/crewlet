@@ -18,7 +18,7 @@ import (
 )
 
 // A CHAIN OF MERGES, BUILT IN ONE SCRATCH (M5-D12, M5-D13; code.ChainBuild):
-// the queue's candidates, asked of the repository's home git node by the
+// the queue's candidates, asked of the repository's home Gitlet node by the
 // home's own worker — one scratch named by the chain's id, each
 // entry merged onto the commit the entry before it made by the very build a
 // merge_change runs (merge.go's mergeOnto: its ancestry, its one merge-tree,
@@ -60,7 +60,7 @@ import (
 // An entry's author date is its ENTRY's
 // instant — its enqueue's own (code.QueueEntryID keeps it) — and its
 // committer date that or its later parent's (commitDates), so a chain built
-// again from the same rows, on any git node, is the same commits byte for
+// again from the same rows, on any Gitlet node, is the same commits byte for
 // byte.
 //
 // # A skipped entry leaves nothing

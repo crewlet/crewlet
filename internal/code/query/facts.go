@@ -20,7 +20,7 @@ import (
 
 // A REVISION'S FACTS are what one revision of a change IS against its target,
 // a function of two whole commit ids alone — its head, and its target's tip
-// as the asker read it — so any git node answers them alike, and whoever
+// as the asker read it — so any Gitlet node answers them alike, and whoever
 // records them reads them once a revision and target. Up to six processes of
 // the read lane, one after another:
 //
@@ -66,7 +66,7 @@ import (
 // Makefile's tab, a string literal's spaces — so a change to it alone must not
 // read as the change a reviewer approved. --verbatim hashes the lines as they
 // are, and orders files as --stable does (each file's hash summed), where git
-// 2.39 and later carry it: every git node's floor.
+// 2.39 and later carry it: every Gitlet node's floor.
 //
 // --FULL-INDEX because patch-id hashes a binary file by the two blob ids its
 // `index` line names, and git abbreviates them to however many digits make
@@ -128,7 +128,7 @@ import (
 // the same base and head trees (code.ChangeClassNoCodeChange).
 const MaxPatchIDDiffBytes = 256 << 20
 
-// MaxPatchSpools is how many revisions' patches one git node spools at once:
+// MaxPatchSpools is how many revisions' patches one Gitlet node spools at once:
 // TWO, the facts reads one home asks at once — its loop works
 // internal/code/home's Concurrency repositories at a time, each turn's facts
 // read one after another, and the router's walk asks a repository's home
@@ -141,13 +141,13 @@ const MaxPatchIDDiffBytes = 256 << 20
 // THE BOUND IS THE NODE'S, NOT THE READ'S, because the volume is: a read's
 // spool is held to MaxPatchIDDiffBytes, but the reads at once were bounded
 // only by the share (half the read lane — 8 × 256 MiB = 2 GiB on a 16-core
-// git node, 8 GiB on 64 cores) and none of it was in the room the cache is
+// Gitlet node, 8 GiB on 64 cores) and none of it was in the room the cache is
 // sized against, which on the shared layout is the store's headroom.
 // PatchSpoolAllowance is what these spools may hold, which the engine takes
 // out of the cache's room beside the host's request spools.
 const MaxPatchSpools = 2
 
-// PatchSpoolAllowance is the most every revision's patch spooled on a git
+// PatchSpoolAllowance is the most every revision's patch spooled on a Gitlet
 // node's cache volume at once holds: MaxPatchSpools of MaxPatchIDDiffBytes,
 // 512 MiB.
 const PatchSpoolAllowance = MaxPatchSpools * MaxPatchIDDiffBytes
@@ -392,7 +392,7 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code
 		before, after := sizes[2*i], sizes[2*i+1]
 		if before.kind != "blob" || after.kind != "blob" {
 			return code.RevisionClasses{}, "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s holds no blob "+
-				"%s or %s of %s, which the trees of its copy name; another git node answers", r.s.o.NodeID, l.old,
+				"%s or %s of %s, which the trees of its copy name; another Gitlet node answers", r.s.o.NodeID, l.old,
 				l.new, w.paths[l.at]))
 		}
 		if before.size > r.s.classedBlob || after.size > r.s.classedBlob {
@@ -575,7 +575,7 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, code.Fac
 	spool, err := r.s.o.Cache.Spool()
 	if err != nil {
 		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not make a spool for the "+
-			"patch of %s: %v; another git node answers", r.s.o.NodeID, head, err))
+			"patch of %s: %v; another Gitlet node answers", r.s.o.NodeID, head, err))
 	}
 	defer func() { _ = spool.Close() }()
 	w := &spooled{f: spool, limit: r.s.patchBytes}
@@ -589,7 +589,7 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, code.Fac
 	if w.failed != nil && res.Damage == nil {
 		r.charge(res)
 		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not write the patch of %s to "+
-			"its spool: %v; another git node answers", r.s.o.NodeID, head, w.failed))
+			"its spool: %v; another Gitlet node answers", r.s.o.NodeID, head, w.failed))
 	}
 	if o := r.omission(ctx, res, err); o != "" {
 		return "", o, nil
@@ -604,7 +604,7 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, code.Fac
 	}
 	if _, err = spool.Seek(0, io.SeekStart); err != nil {
 		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not read back the spool of "+
-			"the patch of %s: %v; another git node answers", r.s.o.NodeID, head, err))
+			"the patch of %s: %v; another Gitlet node answers", r.s.o.NodeID, head, err))
 	}
 	if deadline, err = r.budget(); err != nil {
 		// THE PATCH SPENT the read's whole budget.
@@ -650,7 +650,7 @@ func (r *read) takePatchSpool(ctx context.Context, head string) (release func(),
 	case <-wait.C:
 	}
 	return nil, r.unready(code.UnreadyShare, fmt.Sprintf("%s spools the patches of %d revisions' facts, all it "+
-		"spools at once, and none came free for the patch of %s within %s; another git node answers meanwhile",
+		"spools at once, and none came free for the patch of %s within %s; another Gitlet node answers meanwhile",
 		r.s.o.NodeID, MaxPatchSpools, head, r.s.patchSpoolWait))
 }
 

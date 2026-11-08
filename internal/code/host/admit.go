@@ -280,8 +280,8 @@ func (a admission) refs() statelog.Freshness { return a.fresh }
 // at the log's head is for. A CHECK'S BOX's at its admission's freshness, its
 // check's SESSION: the position its attempt was queued at, which the push of
 // its commit precedes, so the copy it is served from holds the commit and
-// every blob of its tree. Synced stale instead, a git node whose cache had
-// not converged since that push — most of them, on a fleet of several git
+// every blob of its tree. Synced stale instead, a Gitlet node whose cache had
+// not converged since that push — most of them, on a fleet of several Gitlet
 // nodes, since a cache syncs on demand and a balancer spreads boxes — lacked
 // the commit, and every check's box it served paid a barrier on the code log
 // that its session would have spared — and that the code log's day does not

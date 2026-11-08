@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
-// Reads is a git node's reads by object id as the serving half asks them:
+// Reads is a Gitlet node's reads by object id as the serving half asks them:
 // internal/code/query's Server, which syncs the copy, JUDGES THE ASKER'S GRANT
 // from this node's own chart and reads the commit through the index or with
 // git grep. Declared here by its consumer; the engine hands it this node's
@@ -25,7 +25,7 @@ type Reads interface {
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
-// ScatterReads is how many of a git node's repositories its scatter reads at
+// ScatterReads is how many of a Gitlet node's repositories its scatter reads at
 // once, ACROSS EVERY REQUEST it is answering, where its seat git-work share
 // (code.GitShare) holds units units: ALL BUT ONE of them, and one where the
 // share holds only one.
@@ -34,7 +34,7 @@ type Reads interface {
 // each one's search takes a unit of it (code.GitShare.Take), FIFO behind
 // every seat's read of a file, a log or a diff. Bounded by the requests'
 // answer slots instead (queue.ConcurrentAnswers, 64 a request, 64 requests a
-// node), one unfiltered search queued 64 waiters on every git node's share at
+// node), one unfiltered search queued 64 waiters on every Gitlet node's share at
 // once and a few at once thousands, so every seat's ordinary read waited
 // behind them past code.GitShareWait and was answered unready on every node
 // alike. Bounded here, a node's scatter holds at most units-1 units and waits
@@ -54,11 +54,11 @@ type Reads interface {
 func ScatterReads(units int) int { return max(1, units-1) }
 
 // errNotAsked is a request that assigns this node nothing: answered with
-// nothing, since a scatter is served by every git node and only the nodes it
+// nothing, since a scatter is served by every Gitlet node and only the nodes it
 // names answer it.
 var errNotAsked = errors.New("codesearch: the request assigns this node no repository")
 
-// Server is one git node's answerer of the scatter.
+// Server is one Gitlet node's answerer of the scatter.
 type Server struct {
 	wire  *Wire
 	taken *signedask.Guard
@@ -150,7 +150,7 @@ func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Repl
 			// free: unready for this node's share, so its runner-up is asked.
 			results[i] = RepoResult{RepoID: a.RepoID, Outcome: OutcomeUnready, Unready: code.UnreadyShare,
 				Detail: fmt.Sprintf("%s's code searches held their part of its seat git-work share — %d of its "+
-					"%d units — until the search's answer fell due; another git node answers meanwhile", s.node,
+					"%d units — until the search's answer fell due; another Gitlet node answers meanwhile", s.node,
 					ScatterReads(s.units), s.units)}
 			continue
 		}

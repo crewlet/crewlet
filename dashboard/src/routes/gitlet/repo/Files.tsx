@@ -14,7 +14,7 @@
  * # One read for a directory or a file
  *
  * The root is a directory's listing (`code_tree`); any other path is asked as a
- * file (`code_blob`), which the git node answers with the directory's listing
+ * file (`code_blob`), which the Gitlet node answers with the directory's listing
  * where the path names one, so a path is one read whatever it turns out to be.
  * A listing and a file are read a page at a time, each page joined to the one
  * before it (`lib/usePaged.ts`), and a file's pages

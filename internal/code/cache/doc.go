@@ -1,5 +1,5 @@
 // Package cache is THE NODE'S DISPOSABLE BARE REPOSITORIES: one per repository
-// a git node has been asked to serve, from which real git upload-pack answers
+// a Gitlet node has been asked to serve, from which real git upload-pack answers
 // clones and fetches.
 //
 // # A cache is a function of rows
@@ -185,7 +185,7 @@
 // reads at once (a seat's tracker read, a page write, the code.resolve every
 // git request is admitted by), and scanned on one of the reader connections
 // every one of those reads takes too, eight on the smallest data node — or,
-// on a git node that holds the data, on its own store's. So a node has at
+// on a Gitlet node that holds the data, on its own store's. So a node has at
 // most [MaxFullRounds] full reads in flight, the smallest data node's readers,
 // each holding its slot from its first page to its last and the rest in line,
 // first come, first served: a node coming up with hundreds of repositories
@@ -201,7 +201,7 @@
 //
 // # Kept while there is room
 //
-// A cache is evicted to its budget (git.cache_max_bytes) and for no other
+// A cache is evicted to its budget (gitlet.cache_max_bytes) and for no other
 // reason: over it, the repositories used least recently go first, each a
 // directory renamed into trash/ for the janitor; under it, nothing goes,
 // however long a repository has been idle. An idle repository costs disk the
@@ -365,7 +365,7 @@
 // server's read answered as the repository's home — each page read at a
 // session floor the index has already seen, so a data node behind the log
 // never answers a range in part, and paced by BackfillIdle times the fleet's
-// git nodes for each data node ([Options.Fleet]); its next step is picked
+// Gitlet nodes for each data node ([Options.Fleet]); its next step is picked
 // from a SCHEDULE every change to a copy's work keeps (schedule.go), never
 // found by a walk of every copy under the lock every sync takes. Runs never
 // overlap, and one record — the state's — names them, changed only by a
@@ -910,11 +910,11 @@
 // and a refused tip are each kept on a gauge while they stay refused, and a
 // refused bitmap — never a tip, whose copy is still served through its
 // chain's bitmap — is raised as code_maintenance_refused
-// ([Cache.AlarmReading]), at the budget's own threshold: a git node's largest
+// ([Cache.AlarmReading]), at the budget's own threshold: a Gitlet node's largest
 // repository with a bitmap is bound by its memory before its disk. The budget
 // itself is ADVERTISED as it stands ([Cache.BackgroundBudget], which the
-// engine's presence row carries to every git node on every beat, beside its
-// status and never in it), so the git node a repository's maintenance is
+// engine's presence row carries to every Gitlet node on every beat, beside its
+// status and never in it), so the Gitlet node a repository's maintenance is
 // placed on is one whose own admissions would hold the work — the figure
 // itself, never a second estimate of it. A check a
 // person asks for whose charge is past the budget is refused
@@ -925,7 +925,7 @@
 //
 // # The directory
 //
-//	<git.cache_dir>/
+//	<gitlet.cache_dir>/
 //	  CACHEDIR.TAG                  the Cache Directory Tagging standard's tag
 //	  lock                          this process's claim (internal/flock)
 //	  memo-cohorts                  the newest cohort of the memo any process may have placed in,
@@ -948,7 +948,7 @@
 // [Prepare] makes a directory a cache and [Open] opens it, in that order
 // around gitproc.New, whose HOME the layout names. Prepare REFUSES a
 // non-empty directory that does not carry this cache's tag, because Open
-// empties tmp/ and scratch/ at every boot: git.cache_dir pointed at /var
+// empties tmp/ and scratch/ at every boot: gitlet.cache_dir pointed at /var
 // would otherwise empty /var/tmp. A directory holding nothing but mkfs's
 // lost+found is empty — it is the root of a volume of the cache's own, the
 // home the refusal recommends. And Prepare CLAIMS the directory for its
@@ -1164,11 +1164,11 @@
 //
 // # The installed chain
 //
-// A repository's MAINTAINER, one git node, writes its multi-pack-index as a
+// A repository's MAINTAINER, one Gitlet node, writes its multi-pack-index as a
 // chain of PUBLISHED LAYERS — git's own incremental layer, its bitmap and the
 // commit-graph layer over the same packs — stored in the object store and
 // named on the code log (code.LayerRef; derived, so no backup carries one and
-// no audit asks after one); every git node INSTALLS the chain the rows name
+// no audit asks after one); every Gitlet node INSTALLS the chain the rows name
 // (layers.go): each layer fetched, held to its row (code.CheckLayer) and
 // placed byte for byte, both chain files written by the cache from the rows'
 // order, since a layer's files never name its base. The maintainer's

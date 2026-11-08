@@ -21,7 +21,7 @@ import (
 // PER CALL, never once, as the native halves are read (native.go): Gitlet
 // is built
 // with the native runtime, at boot or at the first apply whose company sets
-// code.native — after the API was assembled on a node that booted with no
+// code.backend: gitlet — after the API was assembled on a node that booted with no
 // company. A host captured at assembly served such a node's people no git for
 // the life of the process. Each call costs what the engine's accessors cost:
 // an atomic load, no lock and no I/O.
@@ -40,7 +40,7 @@ type engineCode struct{ e *engine.Engine }
 // handed over inside the interface, where it would pass the route's check
 // and panic on the first request.
 func (c engineCode) GitRoutes() (GitRoutes, error) {
-	if h, ok := c.e.CodeHost(); ok && h != nil {
+	if h, ok := c.e.GitletHost(); ok && h != nil {
 		return h, nil
 	}
 	why := c.e.CodeUnserved()
@@ -48,7 +48,7 @@ func (c engineCode) GitRoutes() (GitRoutes, error) {
 	// before its epoch: a host that came up between the two reads would
 	// otherwise be answered with the reason the new epoch now gives — a
 	// restart this node does not need.
-	if h, ok := c.e.CodeHost(); ok && h != nil {
+	if h, ok := c.e.GitletHost(); ok && h != nil {
 		return h, nil
 	}
 	return nil, why
@@ -107,7 +107,7 @@ func (c engineCode) CheckLogs() (queries.CheckLogs, error) {
 var errNoObjectStore = errors.New("api: this node serves Gitlet with no object store to read a " +
 	"check's log from")
 
-// CodeSearcher is the engine's code search over the fleet's git nodes
+// CodeSearcher is the engine's code search over the fleet's Gitlet nodes
 // ([engine.Engine.CodeSearch]) on CodeReads' terms ([engine.OperatorCode]):
 // where this node's running runtime does not serve Gitlet, why, asked again
 // after the reason for GitRoutes' reason. The engine itself is the searcher,
@@ -124,7 +124,7 @@ func (c engineCode) CodeSearcher() (queries.CodeSearcher, error) {
 }
 
 // GitReads is the code domain's reads by object id through this node's estate
-// router — the repository's home git node first — on CodeReads' terms
+// router — the repository's home Gitlet node first — on CodeReads' terms
 // ([engine.OperatorCode]): where this node's running runtime does not serve
 // Gitlet, why, asked again after the reason for GitRoutes' reason.
 func (c engineCode) GitReads() (GitReader, error) {

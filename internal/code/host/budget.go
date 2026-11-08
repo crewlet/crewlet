@@ -211,7 +211,7 @@ func SpoolRequestBytes(transfers int) int64 {
 // RequestMemoryBytes — so the room is a memory bound, 4 MiB a transfer slot,
 // beside RequestMemoryAllowance and never in it: 64 MiB on a four-core node's
 // sixteen slots and 256 MiB on sixteen cores' sixty-four, out of the 896 MiB
-// a core a git node keeps for serving (cache.ServingMemoryPerCore). Past it a
+// a core a Gitlet node keeps for serving (cache.ServingMemoryPerCore). Past it a
 // request that must wait is answered 503 at once; one that need not wait
 // never takes a place (spool.go).
 func SpoolWaiters(transfers int) int {

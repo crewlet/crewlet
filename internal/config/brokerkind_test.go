@@ -93,7 +93,7 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 		leafDataNode     = refusal{"stream.leaf.urls", "conflict", `"data"`}
 		datalessMember   = refusal{"stream.leaf.urls", "missing", `"data"`}
 		statelessIngress = refusal{"node.roles", "conflict", `needs "data"`}
-		gitWithout       = refusal{"node.roles", "conflict", `"git" needs "ingress"`}
+		gitWithout       = refusal{"node.roles", "conflict", `"gitlet" needs "ingress"`}
 	)
 	for _, kind := range placement.BrokerKinds() {
 		for _, tc := range []struct {
@@ -111,12 +111,12 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 			{"[data, ingress, workers]", map[placement.BrokerKind][]refusal{
 				placement.BrokerLeaf: {leafDataNode},
 			}},
-			{"[data, git, ingress]", map[placement.BrokerKind][]refusal{
+			{"[data, gitlet, ingress]", map[placement.BrokerKind][]refusal{
 				placement.BrokerLeaf: {leafDataNode},
 			}},
 			// GIT WITHOUT INGRESS, on a data node too: the rule is asked
 			// before the data rules return.
-			{"[data, git]", map[placement.BrokerKind][]refusal{
+			{"[data, gitlet]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {gitWithout},
 				placement.BrokerLeaf:   {gitWithout, leafDataNode},
 				placement.BrokerClient: {gitWithout},
@@ -130,14 +130,14 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				placement.BrokerClient: {statelessIngress},
 			}},
 			// A NODE WITHOUT DATA NAMING GIT AND INGRESS is refused once,
-			// by the ingress rule: the git rule is about ingress, which it
+			// by the ingress rule: the gitlet rule is about ingress, which it
 			// names.
-			{"[git, ingress]", map[placement.BrokerKind][]refusal{
+			{"[gitlet, ingress]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {datalessMember, statelessIngress},
 				placement.BrokerLeaf:   {statelessIngress},
 				placement.BrokerClient: {statelessIngress},
 			}},
-			{"[git, seats]", map[placement.BrokerKind][]refusal{
+			{"[gitlet, seats]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {gitWithout, datalessMember},
 				placement.BrokerLeaf:   {gitWithout},
 				placement.BrokerClient: {gitWithout},

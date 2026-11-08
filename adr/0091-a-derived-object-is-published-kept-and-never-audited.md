@@ -4,12 +4,12 @@
 - **Authority:** `internal/objstore`
 - **Enforced-by:** `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/code/cache.TestALayerIsInstalledOnlyOverItsOwnPacks`, `internal/code/cache.TestTheCanaryRefusesAChainOverTheWrongBase`, `internal/code/compact.TestAPublicationIsBuiltInAScratchNamingExactlyItsBase`, `internal/code/compact.TestAPublicationIsNeverBuiltOverABaseTheStoreLost`, `internal/code/host.TestTheHostPassesTheSuite` (its `LY1_ALayerIsInstalled`, `LY2_ALayerTheStoreLostFallsBack` and `LY3_ACorruptLayerFallsBack`), `internal/code/codetest.TestTheSuiteCatchesALayerOverAPackTheNodeLacks`
 - **Measured:** on git 2.56.0, 219 679 objects in 64 packs, four vCPUs: a whole multi-pack-index and bitmap 1.43 s and 167.8 MiB; a bitmapped incremental tip over one sixty-fourth of the objects 1.89 s and 127.5 MiB, over an eighth 1.52 s and 131.6 MiB — a tip costs the history, not its new objects; a tip without a bitmap 0.042 s, and no bitmap read beneath it afterwards; a layer over the full packs of a cut refused for closure; an installed layer read with its bitmap in 0.158 s on a node that never wrote it; a layer written over a chain file naming only its base 1.03 s, against 196–200 s with layers above that base still named, and for `multi-pack-index compact` of two non-root layers with one above them
-- **Cost-when-tried:** M2 gave every git node its own whole multi-pack-index and bitmap of every repository it serves: O(history) memory and minutes on every node at every duty cycle, refused outright on any node whose memory could not hold the largest repository's bitmap — so the default repo_max_bytes was served without a bitmap on every node of ordinary size. The first replacement designed, node-local bitmapped tips over a published base of full packs, was measured unbuildable on the pin before a line of it was written: the tips cost the history and the full-pack base fails git's closure check
+- **Cost-when-tried:** M2 gave every Gitlet node its own whole multi-pack-index and bitmap of every repository it serves: O(history) memory and minutes on every node at every duty cycle, refused outright on any node whose memory could not hold the largest repository's bitmap — so the default repo_max_bytes was served without a bitmap on every node of ordinary size. The first replacement designed, node-local bitmapped tips over a published base of full packs, was measured unbuildable on the pin before a line of it was written: the tips cost the history and the full-pack base fails git's closure check
 - **Tag-status:** unreleased
 
 ## The decision
 
-**A derived object any git node can build again — a repository's published
+**A derived object any Gitlet node can build again — a repository's published
 multi-pack-index layer, its bitmap and its commit-graph layer — is built ONCE,
 stored in the object store, and named by rows of the `objstore.Derived`
 standing** ([ADR-0081](0081-a-retired-reference-keeps-its-object-for-a-grace.md)):
@@ -17,7 +17,7 @@ kept from collection while a row names it, never asked after by the audit,
 never carried by a backup, its rows removed with no grace when a publication
 replaces them. Gitlet's first derived table is `code_layer_parts`.
 
-**One node a repository publishes: its MAINTAINER**, the first git node of the
+**One node a repository publishes: its MAINTAINER**, the first Gitlet node of the
 repository's rendezvous order whose advertised background budget holds the
 publication — the bitmap over the whole history — and the home where none
 does (`internal/estate`'s `Router.Maintainer`). On a fleet of alike nodes it
@@ -36,7 +36,7 @@ layer, decided by the repository's committer:
 - its parts and its repack's outputs are uploaded at once, so every key is
   named within `objstore.RecordWithin`.
 
-**Every git node installs the published chain, and checks it first.** A layer
+**Every Gitlet node installs the published chain, and checks it first.** A layer
 is installed only:
 
 - over packs the node holds byte for byte;
@@ -88,7 +88,7 @@ each repository's maintainer publishes again.
   it does re-opens node-local tips.
 - Expunge: the one rewrite that drops objects, and with them every layer naming
   its packs.
-- Data-less git nodes, which would install layers over packs they stream rather
+- Data-less Gitlet nodes, which would install layers over packs they stream rather
   than hold.
 
 ## Amendments to earlier records
@@ -100,7 +100,7 @@ missing or damaged serves without it, and the repository's maintainer
 publishes a replacement.
 
 [ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md): who
-compacts a repository and publishes its layers is its MAINTAINER, the first git
+compacts a repository and publishes its layers is its MAINTAINER, the first Gitlet
 node of the same rendezvous order whose advertised background budget holds the
 publication — the home on a fleet of alike nodes. Reads and engine writes stay
 with the home.

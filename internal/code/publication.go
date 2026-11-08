@@ -45,7 +45,7 @@ import (
 //     named by NO layer of the chain unless the record replaces that layer —
 //     else stale. A layer names its packs by checksum, and a node's chain is
 //     loadable only over every pack it names, so retiring one under a layer
-//     that stays would break the chain on every git node;
+//     that stays would break the chain on every Gitlet node;
 //   - 6a, THE CHAIN IT BUILDS ON: the layers it replaces are the chain's top,
 //     in order, and the one below them is its base — else stale: another
 //     publication landed first, and the next pass plans again;
@@ -87,7 +87,7 @@ import (
 // one (decide_expunge.go), and 6c names none that is not live.
 
 // Check is what every layer row must be before any byte moves — the
-// committer's decide and a git node's install alike — each refusal
+// committer's decide and a Gitlet node's install alike — each refusal
 // [ErrInvalidLayer] naming the field: LayerID 40 lowercase hex digits and not
 // git's zero id; BaseID "" or such an id, and not the layer's own; Replaces
 // distinct such ids; GraphID such an id, or "" exactly when GraphBytes is 0;
@@ -196,7 +196,7 @@ func layerName(s string) bool { return gitref.ValidOID(s) && s != ZeroOID }
 // first three numbers and gitproc.Version.String writes them back: three
 // decimal numbers, each with no sign and no leading zero, joined by dots
 // ("2.56.0"). The domain reads no git, so it holds the spelling rather than
-// parsing a version line, and a git node reads the field back with gitproc.
+// parsing a version line, and a Gitlet node reads the field back with gitproc.
 func validRelease(s string) bool {
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {

@@ -524,7 +524,7 @@ func (f *fakeNode) seams() ServerSeams {
 }
 
 // fakePlacement is the nodes a case names, or an error where it says the
-// placement cannot tell — and, as a git placement, what each git node it names
+// placement cannot tell — and, as a git placement, what each Gitlet node it names
 // says it can give its background work: a node said names says its budget
 // (zero for one that says it has nothing to give), and every other node it
 // names is NOT SAYING, so a router over a placement that says none places
@@ -596,7 +596,7 @@ type fleet struct {
 	placement *fakePlacement
 
 	// git is who serves git as the routers ask a git read of: no node,
-	// unless a case names some — and what each git node advertises it can
+	// unless a case names some — and what each Gitlet node advertises it can
 	// give its background work, as the routers weigh a repository's
 	// maintainer by: nobody says anything, unless a case writes it.
 	git *fakePlacement

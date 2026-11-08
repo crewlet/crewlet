@@ -24,7 +24,7 @@ import (
 //     syncs at its repository's own version and its committer holds every
 //     input to the rows.
 //  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     git node advertises ([Compactor.maintainedOf]) for every listed
+//     Gitlet node advertises ([Compactor.maintainedOf]) for every listed
 //     repository the pass must judge — each it may plan, and each at the
 //     bound — so a repository this node does not maintain costs the pass its
 //     share of one listing, and one its maintainer remembers as not due a
@@ -168,7 +168,7 @@ func (c *Compactor) forget(listed []code.CompactionCandidate) {
 }
 
 // maintainedOf is which listed repositories this node maintains, off ONE
-// LISTING of who serves git and what each git node advertises: asked of every
+// LISTING of who serves git and what each Gitlet node advertises: asked of every
 // repository the pass must judge — each at the pack bound, whose alarm it
 // raises whatever its plan, and each it may plan — each by the charge it is
 // placed by ([Compactor.PlacedBy]), and of no other, so a repository its
@@ -177,9 +177,9 @@ func (c *Compactor) forget(listed []code.CompactionCandidate) {
 //
 // ONE LISTING, NEVER ONE A REPOSITORY: only a repository's maintainer ever
 // plans it, so only its maintainer remembers it as not due, and on every other
-// git node every listed repository is judged at every pass — a pass asking who
+// Gitlet node every listed repository is judged at every pass — a pass asking who
 // maintains a repository once a repository read the presence view, decoded
-// every node's lease and sorted the git nodes ten thousand times a minute on a
+// every node's lease and sorted the Gitlet nodes ten thousand times a minute on a
 // node maintaining an eighth of ten thousand repositories, to learn it
 // maintained none of the rest.
 func (c *Compactor) maintainedOf(listed []code.CompactionCandidate) (map[string]bool, error) {

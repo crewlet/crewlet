@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// codeSearches is the code search over the fleet's git nodes as a fake: it
+// codeSearches is the code search over the fleet's Gitlet nodes as a fake: it
 // keeps every search it is asked, in order, and answers each with answer — or,
 // left nil, with nothing found and nothing left out.
 type codeSearches struct {
@@ -55,7 +55,7 @@ func withSearch(deps builtin.CodeDeps, s *codeSearches) builtin.CodeDeps {
 }
 
 // searchHit is one line of repository repo's file path, its path named as a
-// git node names it (code.WirePath): its text, and its bytes where they are
+// Gitlet node names it (code.WirePath): its text, and its bytes where they are
 // not UTF-8.
 func searchHit(repo, path string, line int, text string) codesearch.Hit {
 	name, b64 := code.WirePath(path)
@@ -85,7 +85,7 @@ func TestCodeSearchHitsAreFenced(t *testing.T) {
 			Tips: map[string]string{"site": mainOID},
 		}, nil
 	}}
-	reg := codeRegistry(t, withSearch(codeDeps(newCodeHost()), search))
+	reg := codeRegistry(t, withSearch(codeDeps(newGitletHost()), search))
 	got := callIn(t, reg, turn, builtin.CodeSearchTool, map[string]any{"query": "needle"})
 	seen, answer := fencesIn(t, b, got.Output)
 	assertFences(t, seen, []wantFence{
@@ -104,7 +104,7 @@ func TestCodeSearchHitsAreFenced(t *testing.T) {
 // A SEARCH IS JUDGED AS ITS CALLER, for whoever woke the turn too, and reads
 // the repositories at a seat's level: the search the tool asks names the seat
 // as its asker, the turn it is searched in and the rows' linearizable level —
-// the one asker a git node judges the grant of, never an argument's.
+// the one asker a Gitlet node judges the grant of, never an argument's.
 //
 // Mutation: the asker taken from anything but the caller, or the rows read at
 // the question's stale default → red.
@@ -112,7 +112,7 @@ func TestCodeSearchIsAskedAsItsCaller(t *testing.T) {
 	t.Parallel()
 	turn := writerTurn(t)
 	search := &codeSearches{}
-	reg := codeRegistry(t, withSearch(codeDeps(newCodeHost()), search))
+	reg := codeRegistry(t, withSearch(codeDeps(newGitletHost()), search))
 	callIn(t, reg, turn, builtin.CodeSearchTool, map[string]any{"query": "needle"})
 	asks := search.asked()
 	if len(asks) != 1 {
@@ -139,7 +139,7 @@ func TestCodeSearchIsAskedAsItsCaller(t *testing.T) {
 func TestCodeSearchReadsOneGrammar(t *testing.T) {
 	t.Parallel()
 	search := &codeSearches{}
-	deps := withSearch(codeDeps(newCodeHost()), search)
+	deps := withSearch(codeDeps(newGitletHost()), search)
 	deps.Actor = builtin.PrincipalActor
 	tool := codeTool(t, deps, builtin.CodeSearchTool)
 	got, err := tool.Call(asBoundPerson(), map[string]any{"query": "repo:web path:cmd ref:main needle in it",
@@ -245,7 +245,7 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 			"web": tipOf("web")}, Coverage: codesearch.Coverage{Searched: 2, Truncated: cut}}, nil
 	}}
 	turn, _ := readerTurn(t)
-	reg := codeRegistry(t, withSearch(codeDeps(newCodeHost()), search))
+	reg := codeRegistry(t, withSearch(codeDeps(newGitletHost()), search))
 	var (
 		read     []string
 		lastSent []codesearch.Hit
@@ -319,7 +319,7 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 		if c.what == "no cursor at all" {
 			args["query"] = "needle"
 		}
-		got, err := codeTool(t, withSearch(codeDeps(newCodeHost()), search), builtin.CodeSearchTool).
+		got, err := codeTool(t, withSearch(codeDeps(newGitletHost()), search), builtin.CodeSearchTool).
 			Call(asBoundPerson(), args)
 		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 			t.Errorf("%s answered %v %+v, want an invalid refusal", c.what, err, got)
@@ -341,7 +341,7 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 // Mutations: the floor dropped → red; the seat's branch searched unnamed → red.
 func TestCodeSearchHoldsAndFloorsWhatItNames(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	search := &codeSearches{}
 	reg := codeRegistry(t, withSearch(codeDeps(host), search))
 	turn := writerTurn(t)
@@ -386,7 +386,7 @@ func TestCodeSearchHoldsAndFloorsWhatItNames(t *testing.T) {
 // second search resolves it again, red.
 func TestCodeSearchResolvesARefOnceATurn(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	search := &codeSearches{answer: func(n int, _ codesearch.Query) (codesearch.Answer, error) {
 		if n > 1 {
 			return codesearch.Answer{Hits: []codesearch.Hit{}}, nil
@@ -440,7 +440,7 @@ func TestCodeSearchRefusalsNameTheirRepository(t *testing.T) {
 			Err: fmt.Errorf("%w: only the security unit reads vault", code.ErrNotPermitted)}
 	}}
 	tool := codeTool(t, func() builtin.CodeDeps {
-		d := withSearch(codeDeps(newCodeHost()), search)
+		d := withSearch(codeDeps(newGitletHost()), search)
 		d.Actor = builtin.PrincipalActor
 		return d
 	}(), builtin.CodeSearchTool)
@@ -471,20 +471,20 @@ func TestTheCodeSearchGuidanceNamesTheSearchTool(t *testing.T) {
 // writes → red.
 func TestCodeSearchJoinsTheCodeToolsWhereASearchIsWired(t *testing.T) {
 	t.Parallel()
-	if slices.ContainsFunc(builtin.CodeTools(codeDeps(newCodeHost())), func(tool tools.Callable) bool {
+	if slices.ContainsFunc(builtin.CodeTools(codeDeps(newGitletHost())), func(tool tools.Callable) bool {
 		return tool.Name() == builtin.CodeSearchTool
 	}) {
 		t.Error("CodeTools offered code_search with no search wired")
 	}
 	var listed []string
-	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+	for _, tool := range builtin.CodeTools(writeDeps(newGitletHost(), &codeWrites{})) {
 		listed = append(listed, tool.Name())
 	}
 	reads := len(builtin.CodeToolNames())
 	if len(listed) <= reads || listed[reads] != builtin.CodeSearchTool {
 		t.Fatalf("CodeTools lists %v, want code_search right after the twelve reads", listed)
 	}
-	entry, ok := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})).Lookup(builtin.CodeSearchTool)
+	entry, ok := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{})).Lookup(builtin.CodeSearchTool)
 	if !ok {
 		t.Fatal("a seat's registry holds no code_search")
 	}

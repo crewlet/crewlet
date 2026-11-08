@@ -289,11 +289,11 @@ A company can run **both** hosts: they are two hosts with different
 repositories on them, which is what a migration and an open-source presence
 both look like.
 
-### Option C: Gitlet — `code.native`
+### Option C: Gitlet — `code.backend: gitlet`
 
 Gitlet, the engine's own git host, keeps the company's repositories on its own
 state log, with each push's bytes in the [object store](../concepts/object-store.md):
-set `code.native` and declare the repositories in `code.repos`, and every
+set `code.backend: gitlet` and declare the repositories in `code.repos`, and every
 activation creates, settles and retires them (see
 [Gitlet](../concepts/gitlet.md)). It is **not exclusive** — the GitLab
 and GitHub integrations keep working beside it, so a company may host some
@@ -308,7 +308,7 @@ push from a coding box's clone with their run's own credential ([Coding
 boxes](../concepts/gitlet.md#coding-boxes)). A **change** proposes one
 branch into another, and people and agents review it, raising findings, a
 blocker among them holding it back until it is cleared ([Review a
-change](../guides/gitlet.md#review-a-change)), while the repository's home git
+change](../guides/gitlet.md#review-a-change)), while the repository's home Gitlet
 node queues its checks, and a change is merged as its branch's gate allows —
 through the branch's merge queue where its gate requires a check ([The merge
 queue](../concepts/gitlet.md#the-merge-queue)). Read [What it does not do

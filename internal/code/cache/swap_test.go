@@ -613,7 +613,7 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 // answers of the next incarnation too, and the memo MOVES into it as it is
 // promoted: one rename of the tree, whatever it holds, never a link an answer,
 // which would cost the round that holds the repository a stat and a link an
-// answer on every git node holding it, at every compaction. Every answer is
+// answer on every Gitlet node holding it, at every compaction. Every answer is
 // served there as it was and counted once, the node's memo bytes unchanged;
 // the copy the swap left, which a reader still holds, answers none from then
 // on; and the move is logged as a rebuild's is.

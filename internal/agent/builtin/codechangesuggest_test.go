@@ -70,7 +70,7 @@ func TestAnApplyReadsOnlyTheFindingsItNames(t *testing.T) {
 	if writes, _ := writer.asked(); got.Failed || len(writes) != 1 || len(writes[0].Suggestions) != 2 {
 		t.Fatalf("the apply answered %q, sending %d writes", got.Output, len(writes))
 	}
-	findingReads := func(host *codeHost) []code.ReadQuery {
+	findingReads := func(host *gitletHost) []code.ReadQuery {
 		reads, _, _ := host.asked()
 		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Part != code.PartFindings })
 	}
@@ -119,7 +119,7 @@ func applyArgs(findings ...string) map[string]any {
 // decided at or past the push's record, where the applier is an author. A
 // finding no apply takes — gone, standing no longer, suggesting nothing, on
 // its revision's old side — refuses the call with nothing written; an apply
-// the git node refuses as outdated resolves nothing.
+// the Gitlet node refuses as outdated resolves nothing.
 //
 // Mutations: resolve the findings before the push lands, or under an
 // operation of their own → red; take a finding that suggests nothing → red.

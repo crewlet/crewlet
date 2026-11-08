@@ -91,7 +91,7 @@ import (
 // answers instead: a check of it the due instant ends, or a lane busy past
 // gitproc.SlotWait refuses, ends it with how far it reached, as the bound and
 // the budget do (landing.stopped) — never the read refused unready, which
-// would throw away the moves already read and send the next git node to run
+// would throw away the moves already read and send the next Gitlet node to run
 // the same checks under the same kind of queue.
 //
 // It was 64, kept as a judgment while each check had a walk bound of its own,
@@ -125,7 +125,7 @@ func (r *read) landedRead(ctx context.Context, objs found) (code.GitAnswer, erro
 	}
 	if !r.prov.Indexed() {
 		ans.Detail = fmt.Sprintf("%s keeps no index of pushes it can read for repository %s yet, so which push "+
-			"landed the commit is not answered; ask again, or ask another git node", r.s.o.NodeID,
+			"landed the commit is not answered; ask again, or ask another Gitlet node", r.s.o.NodeID,
 			r.synced.Repo.Name)
 		return a, nil
 	}
@@ -251,7 +251,7 @@ func (l *landing) search() (int, string, error) {
 // which has nothing to answer until its walks finish: the search has already
 // found a move that keeps the commit, and refusing the read would throw that
 // away and ask for a narrowing no landed-in read can make. NOR IS THE DUE
-// INSTANT OR A BUSY LANE THE READ UNREADY, for the same reason: the next git
+// INSTANT OR A BUSY LANE THE READ UNREADY, for the same reason: the next Gitlet
 // node would begin the same search from its first check, under the same kind
 // of queue. Only the check
 // against the tip, which comes before the search and decides whether the

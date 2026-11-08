@@ -24,7 +24,7 @@ import (
 // in a YOUNG pack — one a compaction merged with a later push, whose output
 // arrives when its newest input did — made the repository due while every
 // pack the cycle could take held none of it, and the cycle rewrote, stored
-// and had every git node download the old, garbage-free packs to free
+// and had every Gitlet node download the old, garbage-free packs to free
 // nothing, every week.
 //
 // ONE WALK, every file at once: `rev-list --objects --no-object-names` from

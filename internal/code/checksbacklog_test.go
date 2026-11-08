@@ -81,7 +81,7 @@ func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 // checks is refused repo_deleted, the home's cancel and a runner's claim
 // alike, so the attempt stays queued until the purge removes it, and counted
 // it raised the alarm on every data node for the retention's days, sending an
-// operator to git nodes that were healthy. Restored, it counts again.
+// operator to Gitlet nodes that were healthy. Restored, it counts again.
 //
 // Mutation: drop the walk's test of the repository's state, and the deleted
 // repository's attempt is counted — red.

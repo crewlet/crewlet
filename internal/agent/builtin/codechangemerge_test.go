@@ -68,21 +68,21 @@ func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 		w.Change != 7 || w.Method != code.MergeMethodSquash || w.DeleteSource != nil || w.CloseTask ||
 		w.Validate() != nil {
 		t.Errorf("the merge is %+v, want site!7 squashed into main at revision 3's head, its branch's "+
-			"deletion left to the git node", w)
+			"deletion left to the Gitlet node", w)
 	}
 }
 
-// AN UNSAID DELETE_BRANCH IS THE GIT NODE'S: a merge of a seat's branch whose
-// caller says nothing of the branch sends no word of it — the git node that
+// AN UNSAID DELETE_BRANCH IS THE GITLET NODE'S: a merge of a seat's branch whose
+// caller says nothing of the branch sends no word of it — the Gitlet node that
 // judges the merge decides the default on that snapshot, from the gate it
 // reads for the merge anyway — reads no merge gate for it, and answers the
-// deletion the git node decided; a caller that says keep sends keep, and is
-// answered what the git node did.
+// deletion the Gitlet node decided; a caller that says keep sends keep, and is
+// answered what the Gitlet node did.
 //
 // Mutations: the tool deciding the default itself — sending false, or
-// reading the target's gates first — red; the answer ignoring the git node's
+// reading the target's gates first — red; the answer ignoring the Gitlet node's
 // word, red.
-func TestAnUnsaidDeleteBranchIsTheGitNodes(t *testing.T) {
+func TestAnUnsaidDeleteBranchIsTheGitletNodes(t *testing.T) {
 	t.Parallel()
 	keep := false
 	for name, c := range map[string]struct {
@@ -120,10 +120,10 @@ func TestAnUnsaidDeleteBranchIsTheGitNodes(t *testing.T) {
 			}
 			reads, _, _ := host.asked()
 			if slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates }) {
-				t.Error("the merge read the target's gates: the default is the git node's to decide")
+				t.Error("the merge read the target's gates: the default is the Gitlet node's to decide")
 			}
 			if out := decoded(t, got); (out["deleted_branch"] == true) != c.deleted {
-				t.Errorf("answered %q, want deleted_branch %v as the git node answered it", got.Output, c.deleted)
+				t.Errorf("answered %q, want deleted_branch %v as the Gitlet node answered it", got.Output, c.deleted)
 			}
 		})
 	}

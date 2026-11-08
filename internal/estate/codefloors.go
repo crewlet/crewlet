@@ -18,7 +18,7 @@ import (
 // BOUNDED at [maxRepoFloors] repositories: past it the entry at the LOWEST
 // position goes, the write likeliest to be held by every copy already. A
 // repository with no entry floors nothing, which costs a read whose copy
-// lacks a commit this node pushed there one sync at the log's head — the git
+// lacks a commit this node pushed there one sync at the log's head — the Gitlet
 // node's second look for an id its copy lacks (internal/code/query) — and
 // never a wrong answer. Unbounded, the map would hold every repository the
 // node ever wrote, purged ones and a seat's scratch repositories included,

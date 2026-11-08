@@ -53,7 +53,7 @@ const ORG = withDerived({
     { name: "CTO", handle: "cto" },
     { name: "Jane Founder", handle: "jane", kind: "human" },
   ],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 /** A push as the history answers it, with what a case overrides. */

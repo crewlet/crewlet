@@ -61,7 +61,7 @@ type CheckTokens struct{ signer *runtoken.Signer }
 
 // NewCheckTokens builds them over the fleet's keyring, under BoxKeyDomain,
 // refusing one that cannot sign for the fleet (runtoken.ErrNoKeyring): the
-// git node whose runner mints one and the node its box dials derive one key
+// Gitlet node whose runner mints one and the node its box dials derive one key
 // from it, as a run's token's. now nil is the wall clock.
 func NewCheckTokens(m runtoken.Material, now func() time.Time) (*CheckTokens, error) {
 	signer, err := runtoken.New(runtoken.Options{Domain: BoxKeyDomain, Material: m, Now: now})
@@ -81,7 +81,7 @@ func NewCheckTokens(m runtoken.Material, now func() time.Time) (*CheckTokens, er
 // A ref no attempt has — a key code.CheckKey.Validate refuses, a name no
 // repository takes — or a timeout no check runs for (none, or past
 // code.CheckTimeoutCeiling) is the caller's bug, and is answered "", which no
-// git node admits and the runner ends the attempt over — in a test binary as
+// Gitlet node admits and the runner ends the attempt over — in a test binary as
 // in production, for [BoxTokens.Mint]'s reason.
 func (t *CheckTokens) Mint(ref CheckRunRef, timeout time.Duration) string {
 	if !validCheckRef(ref) || timeout <= 0 || timeout > code.CheckTimeoutCeiling {

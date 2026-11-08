@@ -75,7 +75,7 @@
 // bytes ride a `nats` backup's stream snapshot uncounted, like anything else
 // the bucket holds — while a store move copies a Required table's objects and
 // a Derived one's. The first Derived objects are a repository's published
-// layers, which one git node builds and every other installs only once it has
+// layers, which one Gitlet node builds and every other installs only once it has
 // checked them, and which a restore leaves to be published again (ADR-0091).
 // The collector (internal/objstore/collect) deletes what
 // nothing names once it is past a grace measured both from when the backend

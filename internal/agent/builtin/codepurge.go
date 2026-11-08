@@ -44,9 +44,9 @@ import (
 //
 // A request is answered once its record lands, long before its maintainer
 // serves it, so the answer says what a person needs to know about a purge
-// that is not done: the request, where its record landed, the git node that
+// that is not done: the request, where its record landed, the Gitlet node that
 // will serve it ([CodePlacement]), and what still holds the objects after it
-// is served — every git node's cache until it syncs past the commit, every
+// is served — every Gitlet node's cache until it syncs past the commit, every
 // backup taken before the commit for as long as it is kept (and, on the nats
 // object store, every backup taken before the store deletes them: a nats
 // backup is a snapshot of the bucket's stream, which carries every byte the
@@ -69,12 +69,12 @@ const purgeVerb = "code-purge"
 
 // CodePlacement is where a repository's work is placed, as the purge's answer
 // names it — estate.Router through the engine, declared here by its consumer:
-// the git node that maintains a repository of liveObjects live objects, and
-// every live git node in the repository's order, each of which may hold a
+// the Gitlet node that maintains a repository of liveObjects live objects, and
+// every live Gitlet node in the repository's order, each of which may hold a
 // copy. Each error is UNKNOWN, never "nobody".
 type CodePlacement interface {
 	Maintainer(repoID string, liveObjects int64) (string, error)
-	GitNodes(repoID string) ([]string, error)
+	GitletNodes(repoID string) ([]string, error)
 }
 
 // purgeAnswer is a purge's answer.
@@ -86,8 +86,8 @@ type purgeAnswer struct {
 	Request  string           `json:"request"`
 	Outcome  statelog.Outcome `json:"outcome"`
 	Position string           `json:"position,omitempty"`
-	// Maintainer is the git node that serves the request, as this node's
-	// view of the git nodes places the repository's maintenance now; "" with
+	// Maintainer is the Gitlet node that serves the request, as this node's
+	// view of the Gitlet nodes places the repository's maintenance now; "" with
 	// Unplaced saying why where that view could not be read.
 	Maintainer string     `json:"maintainer,omitempty"`
 	Unplaced   string     `json:"unplaced,omitempty"`
@@ -97,9 +97,9 @@ type purgeAnswer struct {
 
 // purgeHolds is what still holds a purged object once the purge is served.
 type purgeHolds struct {
-	// GitNodes are the live git nodes, each of which may hold a copy of the
+	// GitletNodes are the live Gitlet nodes, each of which may hold a copy of the
 	// repository: a cache keeps the objects until it syncs past the commit.
-	GitNodes []string `json:"git_nodes"`
+	GitletNodes []string `json:"gitlet_nodes"`
 	// BackupsBefore and StoreUntil are each the sentence of what holds them:
 	// the backups taken before the commit, and the object store until a
 	// grace after it.
@@ -209,8 +209,8 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// place names, in out, the git node that serves the purge and the git nodes
-// that may hold a copy, from this node's view of the git nodes — a view that
+// place names, in out, the Gitlet node that serves the purge and the Gitlet nodes
+// that may hold a copy, from this node's view of the Gitlet nodes — a view that
 // could not be read is said, never answered as nobody: the request is
 // recorded either way.
 func (t *codePurgeUnreachable) place(repo code.RepoRef, out *purgeAnswer) {
@@ -223,11 +223,11 @@ func (t *codePurgeUnreachable) place(repo code.RepoRef, out *purgeAnswer) {
 	if err != nil {
 		unread = append(unread, "the maintainer: "+err.Error())
 	}
-	nodes, err := t.deps.Placement.GitNodes(repo.ID)
+	nodes, err := t.deps.Placement.GitletNodes(repo.ID)
 	if err != nil {
-		unread = append(unread, "the git nodes: "+err.Error())
+		unread = append(unread, "the Gitlet nodes: "+err.Error())
 	}
-	out.Maintainer, out.Holds.GitNodes = maintainer, nodes
+	out.Maintainer, out.Holds.GitletNodes = maintainer, nodes
 	if len(unread) > 0 {
 		out.Unplaced = "could not read " + strings.Join(unread, "; ")
 	}

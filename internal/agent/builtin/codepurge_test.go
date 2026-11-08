@@ -23,7 +23,7 @@ import (
 type purgePlacement struct{}
 
 func (purgePlacement) Maintainer(string, int64) (string, error) { return "git-2", nil }
-func (purgePlacement) GitNodes(string) ([]string, error)        { return []string{"git-2", "git-1"}, nil }
+func (purgePlacement) GitletNodes(string) ([]string, error)     { return []string{"git-2", "git-1"}, nil }
 
 // asProvenPerson is asBoundPerson inside their step-up window: a proof of who
 // they are recent enough for a gesture that asks a fresh one.
@@ -37,7 +37,7 @@ func asProvenPerson() context.Context {
 
 // purgeTool is the operator catalogue's purge over host and writer, as a
 // person's act transport and assistant reach it.
-func purgeTool(t *testing.T, host *codeHost, writer *codeWrites) tools.SeatCallable {
+func purgeTool(t *testing.T, host *gitletHost, writer *codeWrites) tools.SeatCallable {
 	t.Helper()
 	deps := writeDeps(host, writer)
 	deps.Actor, deps.Placement = builtin.PrincipalActor, purgePlacement{}
@@ -52,7 +52,7 @@ func purgeTool(t *testing.T, host *codeHost, writer *codeWrites) tools.SeatCalla
 // proof is older than their step-up window is told to prove it again; nothing
 // is sent for any of them. A person bound to a seat, proved, records one
 // request of the repository, as themselves, and is answered with it: where
-// its record landed, the git node that serves it, and what still holds the
+// its record landed, the Gitlet node that serves it, and what still holds the
 // objects after it is served.
 //
 // Mutation: drop humanOnly from code_purge_unreachable's row, or let the tool
@@ -67,7 +67,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 	}
 	args := func() map[string]any { return map[string]any{"repo": "site"} }
 
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	deps := writeDeps(host, writer)
 	deps.Placement = purgePlacement{}
 	got := callWrite(everyGrant(), t, codeRegistry(t, deps), writerTurn(t), builtin.CodePurgeUnreachableTool,
@@ -109,7 +109,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 		Position   string `json:"position"`
 		Maintainer string `json:"maintainer"`
 		Holds      struct {
-			GitNodes      []string `json:"git_nodes"`
+			GitletNodes   []string `json:"gitlet_nodes"`
 			BackupsBefore string   `json:"backups_before"`
 			StoreUntil    string   `json:"store_until"`
 		} `json:"holds"`
@@ -118,7 +118,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 		t.Fatalf("the answer %q: %v", got.Output, err)
 	}
 	if answer.Request != r.RequestID || answer.Position == "" || answer.Maintainer != "git-2" ||
-		strings.Join(answer.Holds.GitNodes, ",") != "git-2,git-1" ||
+		strings.Join(answer.Holds.GitletNodes, ",") != "git-2,git-1" ||
 		!strings.Contains(answer.Holds.BackupsBefore, "every backup taken before the purge commits") ||
 		!strings.Contains(answer.Holds.BackupsBefore, "nats object store every backup taken before the store deletes them") ||
 		!strings.Contains(answer.Holds.StoreUntil, "24 hours") ||
@@ -138,7 +138,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 // place of opIDFor) → red.
 func TestTwoPurgeRequestsAreOne(t *testing.T) {
 	t.Parallel()
-	host, writer := newCodeHost(), &codeWrites{}
+	host, writer := newGitletHost(), &codeWrites{}
 	tool := purgeTool(t, host, writer)
 	answerOf := func(got tools.Result) (request, position, op string) {
 		var a struct {

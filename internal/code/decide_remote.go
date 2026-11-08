@@ -94,7 +94,7 @@ import (
 // (mirror_synced_at). Without it a quiet source's mirror would keep the
 // instant of its last move for good, and sit at the head of `mirrors_due`,
 // least recently synced first, for ever: the listing's stop at the first
-// mirror synced within MirrorInterval would never bound it, and every git
+// mirror synced within MirrorInterval would never bound it, and every Gitlet
 // node would page every quiet mirror on every backstop, fetching each from
 // its source again wherever its memory of the last attempt was lost.
 //

@@ -62,6 +62,6 @@ export const MERGE_REFUSALS = [
 /**
  * The word a merge's BUILD answers when the change does not merge cleanly
  * onto its target's tip (`code.WriteConflict`): not a decide's refusal but
- * the git node's, naming the conflicting paths. Held with [MERGE_REFUSALS].
+ * the Gitlet node's, naming the conflicting paths. Held with [MERGE_REFUSALS].
  */
 export const MERGE_CONFLICT = "conflict";

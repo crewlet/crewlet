@@ -21,7 +21,7 @@ import (
 // A WRITE's row is the access the deciding node holds the colleague its turn
 // works for to (code.ChangeProposal.CeilingNeeds,
 // code.ConversationWrite.CeilingNeeds), the two one rule — but for a write
-// that is a branch move alone, a rebase, which the git node holds the
+// that is a branch move alone, a rebase, which the Gitlet node holds the
 // colleague to as every branch write (code.EngineWrite.Ceiling, Grant.Under on
 // the one ref it moves, the seat's own work spared): a rule of the push and
 // no access its decide reads, so its row is read, the least that admits it.
@@ -77,7 +77,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		CodeResolveFindingTool:   code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
 		CodeApplySuggestionsTool: code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
 	}
-	// The change writes a git node decides as a branch move, and nothing else.
+	// The change writes a Gitlet node decides as a branch move, and nothing else.
 	pushes := []string{CodeRebaseChangeTool, CodeRevertChangeTool}
 	// And the writes whose deciding node judges its asker's merge authority
 	// from its own chart (M5-D2) — and a requester's by the same relation,
@@ -93,7 +93,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 			}
 		case slices.Contains(pushes, name):
 			if ok || changeToolNeeds[name] != code.AccessRead {
-				t.Errorf("%s is a branch move the git node holds a colleague to by the push's rule, so its row is "+
+				t.Errorf("%s is a branch move the Gitlet node holds a colleague to by the push's rule, so its row is "+
 					"read and no decide's access names it: row %s", name, changeToolNeeds[name])
 			}
 		case !ok:

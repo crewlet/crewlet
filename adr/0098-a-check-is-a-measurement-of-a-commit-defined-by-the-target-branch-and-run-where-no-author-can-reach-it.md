@@ -30,8 +30,8 @@ the base of the first landing above the green — and never from the commit it
 measures or a tip a landing has since moved. A file that does not run, or that defines no check the gate requires,
 errors that check at its dispatch saying so, and nobody runs it.
 
-A check runs in a box on a git node, or in a remote cell, created for the
-attempt after a git node CLAIMS its row: never on the engine host (`direct`,
+A check runs in a box on a Gitlet node, or in a remote cell, created for the
+attempt after a Gitlet node CLAIMS its row: never on the engine host (`direct`,
 `self`), never with a model's credential or a token budget — its results are
 durations and exit codes — and fetching only the one commit through a token
 its own row admits (`chk~…`, key domain `crewlet.git.v1`).

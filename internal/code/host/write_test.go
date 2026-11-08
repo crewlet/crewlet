@@ -23,7 +23,7 @@ import (
 )
 
 // THE ENGINE WRITE'S OWN CASES, beside the suite's (internal/code/codetest's
-// F32–F38): what Gitlet on one git node does with a write it is asked.
+// F32–F38): what Gitlet on one Gitlet node does with a write it is asked.
 
 // linear is the freshness a write is judged at where a case does not say.
 var linear = statelog.Freshness{Level: statelog.ReadLinearizable}
@@ -77,10 +77,10 @@ func newWriteCase(t *testing.T, o codetest.SoloOptions, seed map[string]string) 
 	return &writeCase{Case: c, p: p, work: work, head: head, repo: c.Rows().Repo.ID}
 }
 
-// server is Gitlet on the case's one git node.
+// server is Gitlet on the case's one Gitlet node.
 func (c *writeCase) server() *host.Server { return c.Fleet.Nodes()[0].Host() }
 
-// write asks w of Gitlet on the git node.
+// write asks w of Gitlet on the Gitlet node.
 func (c *writeCase) write(w code.EngineWrite) (code.EngineWriteResult, error) {
 	return c.server().Write(c.Ctx, w)
 }
@@ -126,7 +126,7 @@ func (c *writeCase) objects() []string {
 // `Crewlet <engine@seats.invalid>` with code.identity_domain unset; its author
 // date the operation's own second, and its committer date the same while the
 // parent is older. And it is a pure function of the write and its parent: the
-// same write built on two git nodes' scratches is one commit, byte for byte.
+// same write built on two Gitlet nodes' scratches is one commit, byte for byte.
 //
 // Mutations: the committer named from the author — the committer line is
 // alice's, red; the author date read from the node's clock — the operation
@@ -190,7 +190,7 @@ func TestACommitIsNeverDatedBeforeItsParent(t *testing.T) {
 }
 
 // A RETRIED ENGINE WRITE IS ONE PUSH (ADR-0092's first Enforced-by): one write
-// asked twice at once on one git node is built once — the second joins the
+// asked twice at once on one Gitlet node is built once — the second joins the
 // first, which holds the write's one scratch, and is answered its result — and
 // asked again once it landed is answered from its push's row with nothing
 // built; every answer names WritePushID of its operation, a canonical UUIDv7.
@@ -280,7 +280,7 @@ func TestARetriedEngineWriteIsOnePush(t *testing.T) {
 }
 
 // A SEAT'S WRITE ON A NODE BEHIND THE CONFIGURATION IS UNREADY, behind_config,
-// with nothing synced, built or proposed — so the walk asks a current git node
+// with nothing synced, built or proposed — so the walk asks a current Gitlet node
 // — while a person's write, which reads no chart, lands there.
 //
 // Mutation: drop the check — the seat's write lands, red.
@@ -376,7 +376,7 @@ func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 	}
 }
 
-// A SEAT'S WRITE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
+// A SEAT'S WRITE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the Gitlet node that
 // builds it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who
 // writes the fixture repository, moves main for the unit's lead, who writes it
 // too, and not for bob, who only reads it, nor for nobody — a stranger, or a

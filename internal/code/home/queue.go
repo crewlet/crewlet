@@ -846,7 +846,7 @@ func (w *queue) count(name string, n uint64, attrs metrics.Attrs) {
 // reason, abandoned or dequeued, one check write an attempt, as the check work
 // ends a head's its change moved on from (checks.go's cancel): the commit it
 // measures is one nothing will land, and a runner claims oldest first, so
-// left alone it holds a cell — a git node's container or the company's e2b
+// left alone it holds a cell — a Gitlet node's container or the company's e2b
 // box time — ahead of the live train's and its bisect's. A box running one
 // stops once its row has ended. A refusal is the rows answering — the attempt
 // ended meanwhile — and only a write that decided nothing fails the turn, the

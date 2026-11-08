@@ -442,7 +442,7 @@ var contract = []Entry{
 	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"ChatBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
-	{"CodeHost", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"CodeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},

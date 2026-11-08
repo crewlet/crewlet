@@ -35,11 +35,11 @@ type Fetcher interface {
 // backfill paces its reads of the estate by (BackfillIdle). A node with no
 // fleet — no coordination, nobody else to ask — answers none of either,
 // which the pace reads as one of each.
-type Fleet func() (gitNodes, dataNodes int, err error)
+type Fleet func() (gitletNodes, dataNodes int, err error)
 
 // Placement is where a `search: indexed` repository's code index is kept
 // (M6-D12): the first code.IndexHolders of Order — its rendezvous order over
-// the live git nodes, estate.Router.GitOrder — keep one, and Node is this
+// the live Gitlet nodes, estate.Router.GitOrder — keep one, and Node is this
 // node's id as that order names it. An Order that fails decides nothing: the
 // indexer keeps what it holds and asks again at its next look.
 type Placement struct {
@@ -63,7 +63,7 @@ type Options struct {
 	Layout Layout
 
 	// MaxBytes is the budget the cache is held to: Tier A
-	// git.cache_max_bytes, resolved by the engine. Above zero.
+	// gitlet.cache_max_bytes, resolved by the engine. Above zero.
 	MaxBytes int64
 
 	// Git runs every git process in a cache. Built over Layout.Home.
@@ -75,13 +75,13 @@ type Options struct {
 	// Fetch reads a repository's rows.
 	Fetch Fetcher
 
-	// Fleet counts the live git nodes and data nodes the backfill paces its
+	// Fleet counts the live Gitlet nodes and data nodes the backfill paces its
 	// reads by: the engine's placements, read again after every page.
 	Fleet Fleet
 
 	// Placement is where this node keeps code indexes: nil keeps none — a
 	// harness with no fleet, which never searches by index — and the engine
-	// sets it on every git node over its estate router.
+	// sets it on every Gitlet node over its estate router.
 	Placement *Placement
 
 	// Limits is the current epoch's code.limits.
@@ -333,7 +333,7 @@ func (o Options) validate() error {
 		return refuse("Layout.Dir %q is not the directory cache.Prepare claimed (%s): open the Layout as Prepare returned it",
 			o.Layout.Dir, o.Layout.boot.dir)
 	case o.MaxBytes <= 0:
-		return refuse("MaxBytes %d is not a budget: git.cache_max_bytes is resolved by the engine and is above zero", o.MaxBytes)
+		return refuse("MaxBytes %d is not a budget: gitlet.cache_max_bytes is resolved by the engine and is above zero", o.MaxBytes)
 	case o.Git == nil:
 		return refuse("Git is nil: a cache runs its git through a gitproc.Pool built over Layout.Home")
 	case o.Objects == nil:

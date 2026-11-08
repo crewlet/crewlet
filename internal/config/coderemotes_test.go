@@ -28,7 +28,7 @@ func TestARemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
 		"    FORGE_TOKEN: {hosts: [forge.example.com]}\n" +
 		"    SELF_TOKEN: {hosts: ['git.example.com:8443']}\n"
 	doc := func(remote string) string {
-		return codeChart + "code:\n  native: true\n" + table + "  repos:\n" +
+		return codeChart + "code:\n  backend: gitlet\n" + table + "  repos:\n" +
 			"    - name: web\n      owner: {unit: Engineering}\n      protect: [{branch: main}]\n" + remote
 	}
 	for name, tc := range map[string]struct {
@@ -102,7 +102,7 @@ func TestARemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
 func TestTheRemoteCredentialsAreRefusedByField(t *testing.T) {
 	t.Parallel()
 	native := func(table string) string {
-		return codeChart + "code:\n  native: true\n  remote_credentials:\n" + table
+		return codeChart + "code:\n  backend: gitlet\n  remote_credentials:\n" + table
 	}
 	for name, tc := range map[string]struct {
 		doc, path, kind, says string
@@ -136,7 +136,7 @@ func TestTheRemoteCredentialsAreRefusedByField(t *testing.T) {
 		},
 		"a table with nothing hosting code": {
 			doc:  codeChart + "code:\n  remote_credentials:\n    FORGE_TOKEN: {hosts: [forge.example.com]}\n",
-			path: "code.remote_credentials", kind: "conflict", says: "code.native",
+			path: "code.remote_credentials", kind: "conflict", says: "code.backend: gitlet",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -166,7 +166,7 @@ func TestTheRemoteCredentialsAreRefusedByField(t *testing.T) {
 func TestTheRemoteCredentialsBoundsAreAdmissionRules(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
-	b.WriteString(codeChart + "code:\n  native: true\n  remote_credentials:\n")
+	b.WriteString(codeChart + "code:\n  backend: gitlet\n  remote_credentials:\n")
 	hosts := make([]string, config.CodeMaxRemoteCredentialHosts+1)
 	for i := range hosts {
 		hosts[i] = fmt.Sprintf("h%d.example.com", i)

@@ -805,7 +805,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 				// git asks its credential helper only once a 401 carrying
 				// a challenge arrives, so every clone and push begins
 				// here. Logged as the challenge it is answered with, at
-				// debug, so an operator reading a git node's log tells
+				// debug, so an operator reading a Gitlet node's log tells
 				// the protocol's first step from a browser signed out.
 				log.Debug("api_auth_challenge", "route", path,
 					"remote", g.Client(r))

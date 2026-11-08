@@ -413,7 +413,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	// code, whose every hit is a file's line — the sweep's words — and a
 	// check's kept log, which is what the commit's tests printed; and the
 	// fleet's placement a purge's answer names.
-	host := sweepCodeHost(t, words)
+	host := sweepGitletHost(t, words)
 	codeWire := writeDeps(host, sweepCodeWrites(words))
 	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
 		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
@@ -616,16 +616,16 @@ func codeSweepArgs() map[string]map[string]any {
 // is the sweep's words ([sweepCodeWrites]).
 const sweepConflicted = "conflicted"
 
-// sweepCodeHost is the scratch repository [scratchHost] holds, its change !7
+// sweepGitletHost is the scratch repository [scratchHost] holds, its change !7
 // with suggestions besides a review and a comment, in its target's queue as
 // scratchHost's is — so a dequeue takes it out and reaches its answer — and a
-// git node answering by object id. poison fills every field the code records
+// Gitlet node answering by object id. poison fills every field the code records
 // declare; and the bodies the code tools read as somebody's words — a
 // change's description, a finding's body, a review's summary, a comment, and
 // the file's lines, a patch, a history's subjects and a blame's lines git
 // answers — hold the words whether or not a record declares them, as every
 // body a store holds outside a record does.
-func sweepCodeHost(t *testing.T, words string) *codeHost {
+func sweepGitletHost(t *testing.T, words string) *gitletHost {
 	t.Helper()
 	host := scratchHost(time.Hour)
 	poison(t, reflect.ValueOf(&host.detail).Elem(), words)

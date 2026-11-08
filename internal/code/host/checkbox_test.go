@@ -394,9 +394,9 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	}
 }
 
-// A CHECK'S BOX FETCHES AT ITS CHECK'S SESSION: through a git node whose cache
+// A CHECK'S BOX FETCHES AT ITS CHECK'S SESSION: through a Gitlet node whose cache
 // last synced before the push of the commit its attempt measures — most of a
-// fleet's git nodes, since a cache syncs on demand and a balancer spreads
+// fleet's Gitlet nodes, since a cache syncs on demand and a balancer spreads
 // boxes — the box's fetch of its commit and its blobless checkout's lazy
 // fetches are served from a sync at the position its attempt was queued at,
 // which holds the commit, and read the code log through no barrier.
@@ -407,7 +407,7 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 func TestACheckBoxFetchesAtItsChecksSession(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
-	c, f, _ := unitCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2, WrapEstate: rec.wrap}})
+	c, f, _ := unitCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2, WrapEstate: rec.wrap}})
 	rows := c.Rows()
 	// NODE 1 CONVERGED, then left behind: a clone through it syncs its cache,
 	// and the push of the checked commit goes through node 0.

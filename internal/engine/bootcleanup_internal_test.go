@@ -221,16 +221,16 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 // behind would tell every asker of a cache that is gone. The same company
 // hosting code, on a node whose roles are every role.
 //
-// Mutation: withdraw nothing in native.stopCodeHost, and the answerer is left
+// Mutation: withdraw nothing in native.stopGitletHost, and the answerer is left
 // registered.
-func TestAFailedBootWithdrawsItsCodeHostsStatus(t *testing.T) {
+func TestAFailedBootWithdrawsItsGitletStatus(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&b.Git)
+	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
-	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  native: true\n"))
+	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  backend: gitlet\n"))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A MERGED CHANGE REVERTED ON ITS REPOSITORY'S GIT NODE (revert.go): what its
+// A MERGED CHANGE REVERTED ON ITS REPOSITORY'S GITLET NODE (revert.go): what its
 // merge brought into its target undone onto the target's tip, on a new
 // branch whose push opens "Revert <repo>!<n>" in its own record.
 

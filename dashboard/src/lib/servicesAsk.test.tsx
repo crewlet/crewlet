@@ -36,7 +36,7 @@ test("nothing is asked until the projection arrives, and then only what the comp
       withDerived({
         name: "Acme",
         roles: [],
-        services: { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "native" },
+        services: { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       }),
     ),
   );

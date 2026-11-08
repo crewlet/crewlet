@@ -17,7 +17,7 @@ import (
 // enqueue made (queue.go), each a record on the REPOSITORY's own subject that
 // its committer decides alone ([Committer.ProposeQueue]) from one snapshot,
 // as an enqueue is — the queue's work is the repository's home's (M4's home
-// git node builds what they record), its decisions the committer's:
+// Gitlet node builds what they record), its decisions the committer's:
 //
 //   - a CANDIDATE ([Candidate]) records a queue's TRAIN: the
 //     candidates its home built of the target's live entries onto the
@@ -338,7 +338,7 @@ type Land struct {
 	// Entries are what lands, in the order the target moves through them,
 	// the first onto BaseOID.
 	Entries []LandEntry `json:"entries"`
-	// Node is the git node that built the landing and ReceivedAt when it was
+	// Node is the Gitlet node that built the landing and ReceivedAt when it was
 	// asked to — each push row's node and received_at.
 	Node       string    `json:"node"`
 	ReceivedAt time.Time `json:"received_at"`

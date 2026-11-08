@@ -7,7 +7,7 @@
  *
  * THE HISTORY is git's (`code_log`): the commits that changed the path, or any
  * path, newest first from the revision, a page at a time, each with the push
- * that introduced it where the answering git node's index holds it — who
+ * that introduced it where the answering Gitlet node's index holds it — who
  * pushed it, which the commit's own author line is not — each opening the
  * commit's own page, and each branch but the default offering a comparison
  * with it. A page is what the

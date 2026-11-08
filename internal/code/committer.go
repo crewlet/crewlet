@@ -149,7 +149,7 @@ import (
 //
 // # A compaction waits in the same queue, and is decided alone
 //
-// A repository's COMPACTION — proposed by the git node that built one
+// A repository's COMPACTION — proposed by the Gitlet node that built one
 // ([Committer.ProposeCompaction]) — waits in the repository's ONE queue beside
 // its pushes, in the order they arrived, held to its bounds and the node's like
 // any proposal and to the same deadline rules, and is decided as a batch of its

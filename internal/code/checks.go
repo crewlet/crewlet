@@ -325,7 +325,7 @@ func (r QueueReason) Valid() bool { return slices.Contains(QueueReasons(), r) }
 type CheckPlacement string
 
 const (
-	// PlacementContainer is a container on a git node.
+	// PlacementContainer is a container on a Gitlet node.
 	PlacementContainer CheckPlacement = CheckPlacement(CellContainer)
 	// PlacementE2B is a remote E2B box.
 	PlacementE2B CheckPlacement = CheckPlacement(CellE2B)

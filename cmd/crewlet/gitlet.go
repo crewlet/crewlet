@@ -46,7 +46,7 @@ import (
 //
 // status and verify ASK A RUNNING NODE, through the API's /gitlet/ routes, as
 // the person the token is bound to: the repositories are rows on the code
-// log, which the data nodes keep, and a git node's cache is files that one
+// log, which the data nodes keep, and a Gitlet node's cache is files that one
 // process claims, so nothing here opens either. They are node clients in
 // `objects status`'s idiom, and their views of an answer are this command's
 // own (codeRepoView, codePushView, codeVerificationView) for its reason: a
@@ -58,7 +58,7 @@ import (
 // (`POST /operator/act/{tool}`) as the person the token is bound to: the
 // tools a person's assistant calls, code_import_repo and
 // code_purge_unreachable, so a request from a shell is the same request with
-// the same record. An import creates the repository, and its home git node
+// the same record. An import creates the repository, and its home Gitlet node
 // fetches the source (codeimportnode.go).
 //
 // export and `import -local` are CLIENT-SIDE: the operator's own git, run
@@ -78,7 +78,7 @@ const gitletUsage = `usage: crewlet gitlet <command>
   status [<config.yaml>] [-api URL] [-repo NAME] [-pushes N] [-json]
       the repositories and their history, as the node reads them
   verify [<config.yaml>] [-api URL] [-repo NAME]... [-repair] [-json]
-      check THIS node's cache against the repositories' rows; every git
+      check THIS node's cache against the repositories' rows; every Gitlet
       node keeps its own cache, so verify each
   export <name> <file.bundle> [<config.yaml>] [-api URL] [-git PATH]
       write a repository's every ref and object to one git bundle
@@ -651,7 +651,7 @@ func codePages(ctx context.Context, client *nodeClient, path string, query url.V
 // codeReadRefused is a code read's refusal in an operator's words: a node
 // serving no /gitlet/ routes is told apart from a node's own answer, which is
 // passed on as it came — its detail says what it is (a repository not
-// declared names code.repos, a company hosting no code names code.native).
+// declared names code.repos, a company hosting no code names code.backend: gitlet).
 func codeReadRefused(client *nodeClient, err error) error {
 	var refusal *nodeRefusal
 	if errors.As(err, &refusal) && refusal.Code == "no_route" {
@@ -1009,7 +1009,7 @@ func productionVerifyWaits() codeVerifyWaits {
 // repository against its rows, and with -repair a repair of what it finds —
 // in place where only the copy's own directory is out of place, by a rebuild
 // otherwise. Every repository is verified before the command answers, and it
-// exits non-zero when any is not clean — the hook a cron runs on each git
+// exits non-zero when any is not clean — the hook a cron runs on each Gitlet
 // node. A repository the node holds no copy of is passed over: nothing there
 // can be damaged.
 func gitletVerify(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -1150,7 +1150,7 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 			if asJSON {
 				said = stderr
 			}
-			fmt.Fprintf(said, "%s: not held on this node, so nothing here to check: verify the git nodes "+
+			fmt.Fprintf(said, "%s: not held on this node, so nothing here to check: verify the Gitlet nodes "+
 				"that serve it\n", name)
 			return true, nil
 		case errors.As(err, &refusal) && refusal.Code == "no_route":
@@ -1500,7 +1500,7 @@ const maxBundleHeader = maxGitOutput
 // byte before it (SHA-1, or SHA-256 where the bundle names that object
 // format). A pack cut short or with a byte changed is caught by that one
 // hash, at hashing speed — git's hashfile rule, held by its one
-// implementation (code.HashTrailer, which a git node holds its own files to),
+// implementation (code.HashTrailer, which a Gitlet node holds its own files to),
 // so the bytes are judged here exactly as the node that serves them judges
 // its packs.
 //
@@ -1745,7 +1745,7 @@ func (g operatorGit) targetEnv() []string {
 }
 
 // atClientFloor refuses a git below the client floor (gitproc.ClientMinVersion)
-// — the operator's git TALKS to a git node and runs none of its own, so the
+// — the operator's git TALKS to a Gitlet node and runs none of its own, so the
 // node floor is not its business — as gitproc's own *ErrTooOld, naming the
 // git, its version and the floor, with the one remedy only this command has.
 func (g operatorGit) atClientFloor(ctx context.Context) error {

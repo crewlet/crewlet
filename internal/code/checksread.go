@@ -55,7 +55,7 @@ import (
 //     attempt its token names, by its key (code_checks' own), as its row
 //     stands — the engine's own read, held to no grant, since the box is no
 //     principal and the row is what admits it.
-//   - `checks_queued` ([ReadChecksQueued]) is a git node's claim walk: the
+//   - `checks_queued` ([ReadChecksQueued]) is a Gitlet node's claim walk: the
 //     attempts waiting for a runner whose definitions name one cell, oldest
 //     queued first, each with its definition and its repository's name —
 //     the engine's own, as `check_box` is (queuedChecks' doc).
@@ -489,7 +489,7 @@ func (q ReadQuery) validateChecksRunning() error {
 // has room in (internal/code/checkrun's walk), each one seek, so one cell's
 // backlog never costs a node's walk in another (replicated 0131). OLDEST
 // FIRST within it, because that is the order a fleet's runners take the queue
-// in: every git node walks it from its head, and the one a repository's git
+// in: every Gitlet node walks it from its head, and the one a repository's git
 // order ranks first claims each attempt first, so the attempts waiting longest
 // are the ones claimed first wherever they fall in the order. A page is a
 // limit's rows at most and the page's byte budget — a definition is the widest
@@ -559,7 +559,7 @@ func queuedCursor(row CheckRow) string {
 // running index's leading column, grouped, so a page is one range of a
 // partial index holding only what runs now; with one, that repository's
 // running attempts, every one in ONE page: they are bounded by the boxes the
-// fleet's runners hold at once — git.max_checks on each git node and the
+// fleet's runners hold at once — gitlet.max_checks on each Gitlet node and the
 // remote cells — far under a page's MaxSnapshotItems, and the home that
 // sweeps them ends what it finds and reads the rest again at its next pass.
 func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
@@ -1089,7 +1089,7 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 }
 
 // THE HOME'S DUE CHECK WORK, READ FROM THE ROWS: a `checks_due` read
-// ([ReadChecksDue]) is what a repository's home git node polls for, and is
+// ([ReadChecksDue]) is what a repository's home Gitlet node polls for, and is
 // nudged into reading, to learn what it owes the checks of the changes it is
 // home to. A LIVE change on an ACTIVE repository, its target a live branch,
 // owes its home a DISPATCH of its head's checks where no dispatch of its head
@@ -1301,7 +1301,7 @@ type ChecksBacklog struct {
 // home's cancel alike — so its queued attempts stay queued until the purge
 // removes them, up to code.deleted_retention_days later; counted, they raised
 // the alarm on every data node for that long, its remedy sending an operator
-// to git nodes that were healthy. Each is tested by its repository's key as
+// to Gitlet nodes that were healthy. Each is tested by its repository's key as
 // the walk reads it, so it takes no place in the count.
 //
 // A STALE read of this node's rows, as every alarm's reading is: the alarm

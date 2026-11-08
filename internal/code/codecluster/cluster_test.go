@@ -58,13 +58,13 @@ const members = 3
 // THE ADMISSION BUDGET is the read attempt's: no case asks it.
 //
 // THE GIT READ ATTEMPT is production's (estate.GitReadAttempt): no case wedges
-// a git node for a read, and a member that is killed or stopped costs a git
+// a Gitlet node for a read, and a member that is killed or stopped costs a git
 // read no wait at all — nothing serves its subjects, and the broker's ask ends
 // at once.
 //
 // THE GIT WRITE ATTEMPT is production's (estate.GitWriteAttempt) too, though
 // it is what F41's home — killed after its write's proposal, its answer never
-// sent — costs before the runner-up is asked, on each backend: a git node
+// sent — costs before the runner-up is asked, on each backend: a Gitlet node
 // uploads a write's bundle only while the upload's allowance and the
 // proposal's own attempt are still left (code.WriteUploadAllowance and
 // code.MinProposeAttempt, 63 s together, internal/code/host's deadline rule),
@@ -101,7 +101,7 @@ const codeLogBytes = 256 << 20
 // the bucket filling.
 const bucketBytes = 1 << 30
 
-// transfers is each git node's transfer lane: F19's sixteen pushes through
+// transfers is each Gitlet node's transfer lane: F19's sixteen pushes through
 // one member each hold a slot until they are answered, so a narrower lane
 // would hold some of them waiting for a slot rather than queued at their
 // committer — and eight more, for the reads a case makes beside them.
@@ -114,7 +114,7 @@ const transfers = 16 + 8
 const lapse = time.Hour
 
 // cluster is the topology: three members of one broker cluster, each a data
-// node and a git node, the production router between them.
+// node and a Gitlet node, the production router between them.
 type cluster struct {
 	// life is the test that started the cluster: every member, however
 	// often a case restarts it, stops with it.
@@ -122,7 +122,7 @@ type cluster struct {
 	brokers *jetstreamtest.Cluster
 	members []*member
 	creds   *codetest.Credentials
-	// runs is the cluster's one run store, every member's git node's.
+	// runs is the cluster's one run store, every member's Gitlet node's.
 	runs      *codetest.FixtureRuns
 	faults    *codefault.Script
 	placement *placement
@@ -163,10 +163,10 @@ type member struct {
 	dir string
 
 	data *codetest.DataNode
-	git  *codetest.GitNode
+	git  *codetest.GitletNode
 
 	// router is this member's estate router; the incarnation's, replaced at
-	// every restart, and read by every request its git node serves.
+	// every restart, and read by every request its Gitlet node serves.
 	router atomic.Pointer[estate.Router]
 
 	// gitAnswered is how many reads by object id this member's git half has
@@ -234,14 +234,14 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 		m.running = true
 	}
 	for _, m := range c.members {
-		g := codetest.StartGitNode(t, codetest.GitOptions{
+		g := codetest.StartGitletNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
 			Compactions: m.compact, Expunges: m.expunge, Maintainers: memberMaintainers{m},
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Runs: c.runs, Audit: c.record,
 			MaxTransfers: transfers, Roster: m.roster, Current: m.current,
 		})
 		// UNDER THE MEMBER'S LOCK, since its serving registration — made
-		// before its git node — reads it from the broker's goroutines
+		// before its Gitlet node — reads it from the broker's goroutines
 		// (memberGit).
 		m.mu.Lock()
 		m.git = g
@@ -294,13 +294,13 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 
 // route builds the member's router and makes it answer the fleet on its
 // subjects — the engine's estate wiring, over this incarnation's client: every
-// member is a git node too, so its router asks a repository's git reads of
+// member is a Gitlet node too, so its router asks a repository's git reads of
 // the members (the same placement) with its own git half in process, and its
 // registration serves the git lane over that half.
 func (m *member) route(t testing.TB) {
 	t.Helper()
 	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Git: codetest.GitPlacement{Placement: m.c.placement, Node: m.c.gitNodeOf}, LocalGit: memberGit{m},
+		Git: codetest.GitPlacement{Placement: m.c.placement, Node: m.c.gitletNodeOf}, LocalGit: memberGit{m},
 		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming, Envelopes: clusterEnvelopes,
 		Now: m.c.now})
 	if err != nil {
@@ -317,38 +317,38 @@ func (m *member) route(t testing.TB) {
 	m.withdraw = withdraw
 }
 
-// gitNodeOf is the git node of the member id names — nil for an id the
-// cluster holds no member for, and for a member whose git node is not started
+// gitletNodeOf is the Gitlet node of the member id names — nil for an id the
+// cluster holds no member for, and for a member whose Gitlet node is not started
 // yet — whose presence row the routers' git placement reads what it says its
 // cache gives its background work off (codetest.GitPlacement), as the
 // engine's presence row carries it beside its status: a member not started
 // yet is not saying, a stopped one is not listed (placement), and a killed
 // one says what its last beat did, as its presence lease runs on.
-func (c *cluster) gitNodeOf(id string) *codetest.GitNode {
+func (c *cluster) gitletNodeOf(id string) *codetest.GitletNode {
 	for _, m := range c.members {
 		if m.id == id {
-			return m.gitNode()
+			return m.gitletNode()
 		}
 	}
 	return nil
 }
 
-// gitNode is the member's git node, nil before it is started.
-func (m *member) gitNode() *codetest.GitNode {
+// gitletNode is the member's Gitlet node, nil before it is started.
+func (m *member) gitletNode() *codetest.GitletNode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.git
 }
 
 // memberGit is the member's git half as its router and its serving
-// registration ask for it (estate.LocalGit): its git node's query server and
-// host, read again at every request — the git node is started after the
+// registration ask for it (estate.LocalGit): its Gitlet node's query server and
+// host, read again at every request — the Gitlet node is started after the
 // registration, and a restart builds new ones — its reads counted, so a case
 // can tell which member answered a read (member.gitAnswered).
 type memberGit struct{ m *member }
 
 func (g memberGit) Git() (estate.GitServer, bool) {
-	n := g.m.gitNode()
+	n := g.m.gitletNode()
 	if n == nil {
 		return nil, false
 	}
@@ -373,14 +373,14 @@ func (c countedGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, 
 	return a, err
 }
 
-// Write is the member's engine write, as its git node's host builds it: which
+// Write is the member's engine write, as its Gitlet node's host builds it: which
 // member built a write is its push row's (code.PushRow.Node), so nothing is
 // counted here.
 func (c countedGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
 	return c.inner.Write(ctx, w)
 }
 
-// MergePreview is the member's merge preview, as its git node's previews
+// MergePreview is the member's merge preview, as its Gitlet node's previews
 // answer it — a read, and counted as one.
 func (c countedGit) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
 	a, err := c.inner.MergePreview(ctx, q)
@@ -448,7 +448,7 @@ func (h memberMaintainers) MaintainerOf(charges map[string]int64) (map[string]bo
 	return out, nil
 }
 
-// Listed is whether the member is listed among the git nodes, by its own
+// Listed is whether the member is listed among the Gitlet nodes, by its own
 // router.
 func (h memberMaintainers) Listed() (bool, error) { return h.m.router.Load().Listed() }
 
@@ -459,7 +459,7 @@ func (m *member) backend() objstore.Backend {
 	return m.objects
 }
 
-// memberEstate is what a member's git node asks: its member's router's code
+// memberEstate is what a member's Gitlet node asks: its member's router's code
 // seam — the incarnation's, read again at every call.
 type memberEstate struct{ m *member }
 
@@ -523,7 +523,7 @@ func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
 // it, which is every member but behind.
 type revocation struct{ seat, behind string }
 
-// roster is the chart the member judges a seat's grant by — its git node's
+// roster is the chart the member judges a seat's grant by — its Gitlet node's
 // reads and engine writes, its committer's decide and its change writer's: the
 // fixture chart, less the seat a revision revoked where the member applied
 // that revision.
@@ -1018,7 +1018,7 @@ func (c *cluster) confinedOut(repoID string) bool {
 
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }
 
-// Runs is the cluster's executors' rows, which every member's git node
+// Runs is the cluster's executors' rows, which every member's Gitlet node
 // admits a coding box by.
 func (c *cluster) Runs() *codetest.FixtureRuns { return c.runs }
 
@@ -1099,14 +1099,14 @@ func (c *cluster) ProposeCompactionAgain(ctx context.Context, node, repoID strin
 	return c.member(c.life, node).router.Load().Code().Compact(ctx, p)
 }
 
-// StopGit stops member node's git node alone, gracefully, its data node and
+// StopGit stops member node's Gitlet node alone, gracefully, its data node and
 // its router running on.
 func (c *cluster) StopGit(t testing.TB, node string) {
 	t.Helper()
 	c.member(t, node).git.Stop(t.Context())
 }
 
-// StartGit starts member node's git node again over its directory.
+// StartGit starts member node's Gitlet node again over its directory.
 func (c *cluster) StartGit(t testing.TB, node string) {
 	t.Helper()
 	c.member(t, node).git.Restart(t)
@@ -1169,7 +1169,7 @@ func (c *cluster) Level(ctx context.Context, node string) error {
 	return fmt.Errorf("codecluster: no member called %q (%v)", node, c.Members())
 }
 
-// Kill is the member's process dying: its git node killed, its broker client
+// Kill is the member's process dying: its Gitlet node killed, its broker client
 // closed FIRST — a process that dies sends nothing more, so no answer it was
 // in the middle of reaches its asker, which hears silence — its estate
 // subjects withdrawn, its data node killed, its broker member stopped. It
@@ -1210,9 +1210,9 @@ func (c *cluster) down(m *member) {
 //
 //  1. Its presence given back, which the engine's drain begins with: its
 //     peers' routers stop listing it.
-//  2. Its git node drained and stopped — the API's listener, which the engine
+//  2. Its Gitlet node drained and stopped — the API's listener, which the engine
 //     closes before its teardown, finishing what it let through, then the
-//     teardown's first step, stopCodeHost — so the member takes no push and
+//     teardown's first step, stopGitletHost — so the member takes no push and
 //     appends no sync's barrier once its committer refuses: every push in
 //     flight there proposes, and every sync appends, through the estate.
 //  3. Its committer refusing — every proposal queued at it answered "not
@@ -1251,7 +1251,7 @@ func (c *cluster) Stop(t testing.TB, node string) {
 
 // Restart is what the member's process comes back as: its broker member over
 // its own store and route port, its data node over its own files and the new
-// client, a new router and serving registration, and its git node over its own
+// client, a new router and serving registration, and its Gitlet node over its own
 // cache directory, on a new listener — and its presence, live again (a killed
 // member's never lapsed).
 func (c *cluster) Restart(t testing.TB, node string) {

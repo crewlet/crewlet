@@ -155,7 +155,7 @@ func (s *Sweeper) lost(row code.CheckRow, order []string) string {
 	case row.State != code.CheckStateRunning || row.Placement == code.PlacementExternal || row.Runner == "":
 		return ""
 	case !slices.Contains(order, row.Runner):
-		return fmt.Sprintf("its runner %s left the repository's git nodes while it ran", row.Runner)
+		return fmt.Sprintf("its runner %s left the repository's Gitlet nodes while it ran", row.Runner)
 	}
 	budget := time.Duration(row.TimeoutSeconds)*time.Second + code.CheckBoxGrace + SweepPolls*s.o.Poll
 	if s.now().Sub(row.StartedAt) > budget {

@@ -59,7 +59,7 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			tracker: true, wiki: true, code: true, walk: "walkDocletSkills"},
 		{name: "a data node hosting code alone", native: codeRuntime(own(false, false)), code: true},
 		{name: "a node without data hosting code alone",
-			remote: &remoteNative{built: builtWith{code: true}}, code: true},
+			remote: &remoteNative{built: builtWith{code: config.CodeGitlet}}, code: true},
 		{name: "a node running no native runtime"},
 		{name: "a data node running both halves", native: own(true, true),
 			tracker: true, wiki: true, walk: "walkDocletSkills"},
@@ -166,7 +166,7 @@ func halvesRouter(t *testing.T) *estate.Router {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitNodes{},
+		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitletNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: routerEnvelopes(t),
 	})
 	if err != nil {
@@ -199,9 +199,9 @@ func chatRuntime(n *native) *native {
 }
 
 // codeRuntime is n built for a company that hosts its repositories in the
-// engine (`code.native`).
+// engine (`code.backend: gitlet`).
 func codeRuntime(n *native) *native {
-	n.built.code = true
+	n.built.code = config.CodeGitlet
 	return n
 }
 

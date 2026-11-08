@@ -142,7 +142,7 @@ type GateRules struct {
 	// KeepsSource is whether any gate matching Target keeps a seat's source
 	// branch when a change merges (delete_source: none): a merge whose caller
 	// said nothing deletes a source in a seat's namespace unless it is so,
-	// and keeps every other source (Q4), decided by the git node that judges
+	// and keeps every other source (Q4), decided by the Gitlet node that judges
 	// the merge (internal/code/host's deletesSource) — a gate that keeps it
 	// wins over one that deletes it, since a deleted branch is the one of the
 	// two no later write undoes.
@@ -1150,7 +1150,7 @@ func (g gateJudge) mergeAuthority() Precondition {
 // makes names nobody, since any person may.
 //
 // PURE OVER VALUES, AND THE ONE RULE OF THE TERM: a readiness judges it for
-// its merger, and the git node judges it for the colleague a seat's merge is
+// its merger, and the Gitlet node judges it for the colleague a seat's merge is
 // made for (internal/code/host's mergeCeiling) from the chart, the row and
 // the gate it already holds, with no read of the change made again as that
 // colleague. Neither restates it.

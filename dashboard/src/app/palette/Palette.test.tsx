@@ -1668,7 +1668,7 @@ describe("a screen found by what it holds", () => {
 });
 
 // CODE IS ASKED IN ITS OWN SCOPE ONLY, once the term has rested: a code
-// search is a signed request to every git node holding a repository the
+// search is a signed request to every Gitlet node holding a repository the
 // reader reads, so All's every pause sends none. A line opens its file AT THE
 // COMMIT ITS REPOSITORY WAS SEARCHED AT, with the line picked, as Gitlet ›
 // Search's lines do. Mutations: ask in every scope, and All's pause sends a

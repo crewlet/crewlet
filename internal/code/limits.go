@@ -64,7 +64,7 @@ func LimitsOf(c config.Code) Limits {
 // removed what it pushed.
 //
 // TWO — HALF — is the engine's rule for an untrusted class beside a trusted
-// one (a git node's seat git work holds half its read lane, [GitShare]): the
+// one (a Gitlet node's seat git work holds half its read lane, [GitShare]): the
 // owners always keep half, and the outside seats share the other half among
 // themselves. A JUDGMENT CALL, taken as the product's: a quarter would keep
 // owners more and turn cross-unit pushes away sooner.
@@ -147,11 +147,11 @@ const GitReadsShare = 10
 // its coding boxes', none of which is a git client's here. Those a seat's
 // work can repeat at will — a box's read past its run's floor, a tool's
 // second look at the head, an engine write's re-judgement — are HELD to the
-// seats' term on each git node by a bucket of the run or the turn and the
+// seats' term on each Gitlet node by a bucket of the run or the turn and the
 // seat's ONE bucket there, which its boxes and its tools both pay
 // ([NewResyncs]), so no seat can push its own barriers into this term's
 // allowance. A check's box's are not this term's either: they are held by its
-// repository's checks' bucket on each git node ([CheckKey.Resyncs]). At the 1 GiB
+// repository's checks' bucket on each Gitlet node ([CheckKey.Resyncs]). At the 1 GiB
 // floor and the default seven days it is 87 154 a day — about 60 a minute
 // fleet-wide: that CI, thirty developers fetching every three minutes and
 // 3 000 pushes a day, three times over.
@@ -473,9 +473,9 @@ const (
 	// due once what no ref, no drop within the grace and no row in flight
 	// reaches is MORE than 1/ExpungeShare of them — a quarter.
 	//
-	// FOUR, A JUDGMENT: an expunge rewrites the packs it takes, and every git
+	// FOUR, A JUDGMENT: an expunge rewrites the packs it takes, and every Gitlet
 	// node holding the repository downloads the kept packs again, so below a
-	// quarter each git node downloads more than three kept bytes for every
+	// quarter each Gitlet node downloads more than three kept bytes for every
 	// byte freed — a fleet-wide re-download to win back less than the
 	// repository grows by in a busy week. Unreachable bytes count against
 	// code.limits.repo_max_bytes (a push is refused repo_size on live bytes),
@@ -925,8 +925,8 @@ const (
 	// the largest answer the reader serves is a full snapshot of a full
 	// repository and one page.
 	//
-	// ONE PAGE OF ROWS, MaxSnapshotItems, because it weighs what a git node's
-	// cache holds for its round against what serving none costs every git
+	// ONE PAGE OF ROWS, MaxSnapshotItems, because it weighs what a Gitlet node's
+	// cache holds for its round against what serving none costs every Gitlet
 	// node holding the repository:
 	//   - served, they are at most a page more of the answer — some 2.4 MB of
 	//     JSON at a retirement's 240 bytes or so, under MaxPageBytes — read
@@ -958,7 +958,7 @@ const (
 	// them a full answer served nothing to a cache a few dozen pushes behind
 	// on a repository of a few refs, nor to any cache after a compaction that
 	// retired more packs than the repository has refs and packs left, each
-	// such answer costing every git node its commit-graph to save a few dozen
+	// such answer costing every Gitlet node its commit-graph to save a few dozen
 	// rows.
 	MaxFullRetirements = MaxSnapshotItems
 
@@ -1223,7 +1223,7 @@ const (
 	// GitShareWait is the longest a seat's git work waits for a unit of its
 	// node's share ([GitShare]) before the node answers it
 	// [ErrGitUnready]{[UnreadyShare]} and the asker's walk moves to another
-	// git node — a node whose seats' git work already holds half its read
+	// Gitlet node — a node whose seats' git work already holds half its read
 	// lane sends its askers on rather than queueing them behind work that
 	// may take a whole read deadline.
 	//
@@ -1278,7 +1278,7 @@ const (
 // THE COMPACTION'S BOUNDS: how many packs a repository may hold, which of them
 // a compaction merges, and how large one compaction's record may be. A
 // compaction is a record of its own on the repository's subject (OpCompact,
-// [Compaction]); its committer is the one its pushes meet, and the git node
+// [Compaction]); its committer is the one its pushes meet, and the Gitlet node
 // that builds it is the repository's home.
 const (
 	// MaxPacksPerRepo is the most LIVE packs a repository holds: a push that
@@ -1318,7 +1318,7 @@ const (
 
 	// CompactMinMerge is the fewest packs a compaction merges while the
 	// repository holds no more than CompactTargetPacks. A merge costs one PUT
-	// of its output and one GET of it on every other git node that holds the
+	// of its output and one GET of it on every other Gitlet node that holds the
 	// repository, and saves each later cold sync k−1 GETs and each request
 	// k−1 pack lookups — so what the floor decides is how many merges a QUIET
 	// repository's pushes cost, one whose home's poll finds a few new packs
@@ -1327,7 +1327,7 @@ const (
 	// SIXTEEN, MEASURED by internal/code/compact's BenchmarkCompact, its
 	// steady/pushes=1200/rate=1/min arms: a repository pushed once a minute
 	// for twenty simulated hours, a pass every minute, its requests counted
-	// on a fleet of eight git nodes (git 2.56.0 over the in-memory store, Go
+	// on a fleet of eight Gitlet nodes (git 2.56.0 over the in-memory store, Go
 	// 1.27.2; one bounded run, -benchtime 1x and one count, on two E-cores of
 	// an Intel Core Ultra 7 265U, which has SHA instructions, 2026-10-28).
 	// Merging from 16 packs cost 527 GETs and PUTs a thousand pushes — 64
@@ -1338,7 +1338,7 @@ const (
 	// outputs stored and downloaded a thousand pushes, against 873), fewer
 	// rows (1.05 packs retired a push, against 1.13) and fewer records (108
 	// bytes a push on the code log, against 184); and every merge drops every
-	// git node's bitmap of the repository, so half the merges are half that
+	// Gitlet node's bitmap of the repository, so half the merges are half that
 	// churn. The 8 this replaced was a judgement, kept unless an arm saved a
 	// tenth of the requests.
 	//
@@ -1445,7 +1445,7 @@ const (
 	// twenty-one were each publication as small as thirty-two objects —
 	// under thirty-two either way. What the bound costs is a lookup's: an
 	// object is looked for in every layer above the one that holds it, so a
-	// deeper chain is a slower answer on every git node; past the bound a
+	// deeper chain is a slower answer on every Gitlet node; past the bound a
 	// publisher merges the top layers whatever their sizes.
 	//
 	// CONFIRMED by what a chain's depth costs (internal/code/cache's
@@ -1489,7 +1489,7 @@ const (
 
 	// MaxLayerParts is the most parts one layer is cut into: 16 GiB of
 	// layer, some 300 million objects at those two figures — five times the
-	// largest repository the defaults admit — whose publication no git
+	// largest repository the defaults admit — whose publication no Gitlet
 	// node this release sizes has the memory to build. Sixteen bounds the
 	// uploads' transient memory too: sixteen PUTs at once, each holding one
 	// first buffer of an S3 part (8 MiB), 128 MiB, as MaxCompactOutputs

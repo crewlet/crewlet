@@ -193,7 +193,7 @@ type Landing struct {
 // one repository's detail answers its rules' gates to a read that asks for
 // them ([ReadQuery.Gates], [RepoDetail.Gates]), beside the rules as a push is
 // judged by them, which the repository's row answers ([RepoRef.Protections]).
-// Never on that row: every git request's admission, every page of a git node's
+// Never on that row: every git request's admission, every page of a Gitlet node's
 // sync and the cache's state file read it, and no gate changes a thing about
 // any of them.
 type RuleGate struct {

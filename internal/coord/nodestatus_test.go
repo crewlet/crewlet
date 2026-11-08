@@ -221,8 +221,8 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	}
 }
 
-// A GIT NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE, and saying zero is
-// a claim: a git node with nothing to give its background work writes 0, and a
+// A GITLET NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE, and saying zero is
+// a claim: a Gitlet node with nothing to give its background work writes 0, and a
 // row with no figure — or one no build writes — is a node NOT SAYING, which a
 // reader placing maintenance must never take for either a zero or a figure. It
 // sits beside the status and never in it, so a beat whose status was dropped
@@ -244,8 +244,8 @@ func TestAGitBudgetIsReadOnlyWhereARowSaysOne(t *testing.T) {
 		"a figure, as written":   {map[string]any{coord.GitBackgroundKey: budget}, budget, true},
 		"zero, which is a claim": {map[string]any{coord.GitBackgroundKey: int64(0)}, 0, true},
 		"a figure beside a dropped status": {
-			map[string]any{"roles": []string{"git"}, coord.GitBackgroundKey: budget}, budget, true},
-		"no figure at all": {map[string]any{"roles": []string{"git"}}, 0, false},
+			map[string]any{"roles": []string{"gitlet"}, coord.GitBackgroundKey: budget}, budget, true},
+		"no figure at all": {map[string]any{"roles": []string{"gitlet"}}, 0, false},
 		"no meta at all":   {nil, 0, false},
 		"a figure inside the status, not beside": {
 			map[string]any{coord.StatusKey: map[string]any{coord.GitBackgroundKey: budget}}, 0, false},

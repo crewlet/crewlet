@@ -32,7 +32,7 @@
 // amount, with a broker that reserves nothing and a case that reserves only
 // what the broker reports it has left exempt; but declaring costs nothing,
 // and the fixtures that left it unset were not the exempt ones — an engine's
-// git node and the CLI's restart cases both boot several gibibytes of logs,
+// Gitlet node and the CLI's restart cases both boot several gibibytes of logs,
 // and both were refused on a runner short of disk (CI run 41729197183). One
 // rule is one a refusal can hold.
 //
@@ -72,7 +72,7 @@
 // engine.New with that refusal.
 //
 // So a node fixture that declares its broker here declares its code cache
-// beside it ([CodeCacheIn]). The budget is the smallest a node is ever given
+// beside it ([GitletCacheIn]). The budget is the smallest a node is ever given
 // explicitly. The transfer lane is a fixed one, since an unset lane follows the
 // machine's cores and sizes the request spools taken out of the same room. An
 // explicit budget is never refused for room. On a runner with less free space
@@ -126,10 +126,10 @@ func StoreIn(s *config.Stream, dir string) {
 }
 
 // CodeCacheMaxBytes is the code cache budget a node fixture declares beside a
-// broker [StoreIn] sized: `git.cache_max_bytes`'s floor, the smallest budget a
+// broker [StoreIn] sized: `gitlet.cache_max_bytes`'s floor, the smallest budget a
 // node is ever given explicitly. A case's repositories hold kilobytes, so the
 // floor holds every one of them with three orders of magnitude to spare.
-const CodeCacheMaxBytes = config.GitCacheMaxBytesFloor
+const CodeCacheMaxBytes = config.GitletCacheMaxBytesFloor
 
 // GitTransfers is the transfer lane a node fixture declares: four transfers,
 // 256 MiB of request spool. Unset, the lane follows the machine's cores, four a
@@ -138,11 +138,11 @@ const CodeCacheMaxBytes = config.GitCacheMaxBytesFloor
 // property of the machine running the suite, never of the case.
 const GitTransfers = 4
 
-// CodeCacheIn declares g's code cache budget and transfer lane, for a node
+// GitletCacheIn declares g's code cache budget and transfer lane, for a node
 // fixture whose broker [StoreIn] sized on the same volume — see the package
 // doc. A fixture that never hosts code keeps both unread, and one whose subject
 // is the derived budget, or the lane, boots under engine.SizedByTheMachine.
-func CodeCacheIn(g *config.Git) {
+func GitletCacheIn(g *config.Gitlet) {
 	g.CacheMaxBytes = CodeCacheMaxBytes
 	g.MaxTransfers = GitTransfers
 }

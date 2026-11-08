@@ -1373,7 +1373,7 @@ export interface CompanyDocument {
   units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
-  /** Gitlet's block; `native: true` is a company hosting code. */
+  /** The code block; `backend: gitlet` is a company on Gitlet. */
   code?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -8287,7 +8287,7 @@ export interface CodeConversationRow {
 
 /**
  * Whether a change's latest merged revision merges into its target, as its
- * home git node recorded it (`code.MergeabilityRow`).
+ * home Gitlet node recorded it (`code.MergeabilityRow`).
  */
 export interface CodeMergeabilityRow {
   revision: number;
@@ -8310,7 +8310,7 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   mergeability?: CodeMergeabilityRow;
 }
 
-/** A revision's facts, as its home git node recorded them (`code.RevisionFactsRow`). */
+/** A revision's facts, as its home Gitlet node recorded them (`code.RevisionFactsRow`). */
 export interface CodeRevisionFacts {
   target_ref: string;
   target_oid: string;
@@ -8492,7 +8492,7 @@ export interface CodeDiffAnswer {
  * own page beside the change — its reviewers, comments, reviews or findings,
  * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
- * object id on its home git node; and `findings` placed in the revision asked
+ * object id on its home Gitlet node; and `findings` placed in the revision asked
  * about (`placed`, by the finding's id).
  */
 export interface CodeChangeAnswer extends CodePage {
@@ -8674,7 +8674,7 @@ export interface CodePrincipal {
   run?: CodePushRun;
 }
 
-/** The push that INTRODUCED a commit, as its git node's index holds it (`code.PushedBy`). */
+/** The push that INTRODUCED a commit, as its Gitlet node's index holds it (`code.PushedBy`). */
 export interface CodePushedBy {
   push_id: string;
   position: LogPosition;
@@ -8683,7 +8683,7 @@ export interface CodePushedBy {
   via: string;
 }
 
-/** What a git node's index of pushes covers (`code.Coverage`). */
+/** What a Gitlet node's index of pushes covers (`code.Coverage`). */
 export interface CodeCoverage {
   from: LogPosition;
   through: LogPosition;
@@ -8865,7 +8865,7 @@ export interface CodeChangeName {
 
 /**
  * `code_commit`: one commit by its whole id (`queries.CodeCommit`) — as the
- * history lists it, the push that introduced it (by the git node's index, and
+ * history lists it, the push that introduced it (by the Gitlet node's index, and
  * that push's row where the history still holds it) and the changes it
  * belongs to: those whose merge it is and the revisions it heads.
  */

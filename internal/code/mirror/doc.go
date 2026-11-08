@@ -1,9 +1,9 @@
-// Package mirror is a repository's HOME git node filling it from another host
+// Package mirror is a repository's HOME Gitlet node filling it from another host
 // and publishing it to one: an IMPORT ([code.CreateRepo.Import], a pull
 // mirror's first fill), a PULL MIRROR's syncs ([code.RepoSettings.MirrorFrom])
 // and a PUSH MIRROR's pushes ([code.RepoSettings.MirrorTo]) — M6-D16 and
-// M6-D19. The home is the first git node of the repository's rendezvous order
-// over the live git nodes (ADR-0089), and [Mirrors] is a worker of its loop
+// M6-D19. The home is the first Gitlet node of the repository's rendezvous order
+// over the live Gitlet nodes (ADR-0089), and [Mirrors] is a worker of its loop
 // (internal/code/home's Loop, through that package's Worker interface, which
 // this package satisfies without importing it): its listing is the
 // `imports_due` and `mirrors_due` reads (internal/code's ReadImportsDue and

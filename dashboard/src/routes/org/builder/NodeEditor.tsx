@@ -27,7 +27,7 @@
  * repositories, Mattermost channel and GitLab access level mean something only
  * when the company has connected that tool, so each says "<Tool> is not
  * connected" instead of offering a setting that does nothing. A seat's code
- * access is drawn only where Gitlet reads it (`code.native`): GitHub never
+ * access is drawn only where Gitlet reads it (`code.backend: gitlet`): GitHub never
  * reads it, since a seat's app is registered with the seat's own
  * `integrations.github.permissions`, which GitHub's Agents tab on the
  * Integrations screen sets and which no field here edits. A project and a

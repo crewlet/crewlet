@@ -28,11 +28,11 @@ import (
 // # Read by object id, of the repository's home
 //
 // A tree, a file, a history, a blame and a diff are the repository's CONTENT,
-// answered by its home git node (estate.CodeSeam.GitRead, ADR-0089) and never
+// answered by its home Gitlet node (estate.CodeSeam.GitRead, ADR-0089) and never
 // by the rows — the code tools' own reads, one implementation. A revision a
 // request names by a ref — a branch, a tag, a whole ref, or `HEAD` for the
 // default branch — is resolved first, at the caller's freshness, in ONE read
-// however many it names (code.resolve_ref), and the git node is asked at the
+// however many it names (code.resolve_ref), and the Gitlet node is asked at the
 // floor of the records that last moved those refs (code.RefsFloor), so the
 // copy that answers holds what the rows named. An object id passes with no
 // read of a ref.
@@ -43,7 +43,7 @@ import (
 // [Immutable] — a strong entity tag and `Cache-Control: immutable` over REST
 // — so a screen paging back through a file or a diff costs the node nothing
 // to send twice. That holds only of a page that is a function of what the
-// request named, so such a read asks its git node for the page alone
+// request named, so such a read asks its Gitlet node for the page alone
 // (code.GitQuery.Unstamped): cut against a room no stamp of the answering
 // node takes, and answered with none — no repository id, no copy position, no
 // push behind each commit — which would each move between two reads of one
@@ -117,7 +117,7 @@ type CodeMergePreview struct {
 }
 
 // CodeCommit is `code_commit`'s answer: one commit as the repository's history
-// lists it, the push that introduced it — by the git node's index, and its row
+// lists it, the push that introduced it — by the Gitlet node's index, and its row
 // whole where the push history still holds it — and the changes it belongs to,
 // read from the rows at the caller's freshness.
 type CodeCommit struct {
@@ -269,9 +269,9 @@ func (g gitAsk) floor(repo code.RepoRef, revs ...*gitRev) statelog.Freshness {
 	return code.RefsFloor(own, refs...)
 }
 
-// read asks q of repo's home git node as the caller, at the floor of revs —
+// read asks q of repo's home Gitlet node as the caller, at the floor of revs —
 // UNSTAMPED where every revision is a whole object id, and then answered
-// [Immutable] — refused here first where q is one no git node would take
+// [Immutable] — refused here first where q is one no Gitlet node would take
 // ([ErrBadParams] in the domain's own words), and answered in this surface's
 // vocabulary ([codeRefusal]).
 func (g gitAsk) read(ctx context.Context, repo code.RepoRef, q code.GitQuery, cursor string,
@@ -317,7 +317,7 @@ func answered(page any, immutable bool) any {
 }
 
 // pathParams is the path a request names — `path`, or `path_b64` for one that
-// is not valid UTF-8 — refused where it names both, as the git node would.
+// is not valid UTF-8 — refused where it names both, as the Gitlet node would.
 func pathParams(p Params) (path, b64 string, err error) {
 	path, b64 = p.String("path"), p.String("path_b64")
 	if path != "" && b64 != "" {
@@ -545,7 +545,7 @@ func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 // codeCompare answers `code_compare`: how `base` and `head` relate — their
 // merge base, which contains which, the commits each has that the other
 // lacks, and the first page of what head changed since the merge base — and
-// what merging head into base would do, asked of the repository's home git
+// what merging head into base would do, asked of the repository's home Gitlet
 // node by the two commits' whole ids the comparison answered
 // (code.merge_preview), so the preview merges exactly the commits compared.
 // Immutable only where both are whole ids and the merge was decided: a merge
@@ -609,7 +609,7 @@ func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 // lists it, the push that introduced it, and every change it belongs to. The
 // rows first, at the caller's freshness — the repository and the commit's
 // changes, in one snapshot (the reader's `commit`) — then the commit, asked of
-// the repository's home git node, and the push the node's index names,
+// the repository's home Gitlet node, and the push the node's index names,
 // read whole at `session` floored at the later of the rows' read and the
 // push's own record.
 func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {

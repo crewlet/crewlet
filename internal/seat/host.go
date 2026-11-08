@@ -147,11 +147,11 @@ type Config struct {
 	// GitBackground is what this node's git cache gives its background
 	// work NOW — its maintenance budget — which the host writes on EVERY
 	// beat beside the profile, under [coord.GitBackgroundKey], before the
-	// status hook runs and never through it. Nil on a node without the git
+	// status hook runs and never through it. Nil on a node without the gitlet
 	// role, whose row then carries no such key.
 	//
 	// NOT A STATUS FIELD, because a status the beat gave up on is dropped
-	// whole, and this is no display column: it is what every git node
+	// whole, and this is no display column: it is what every Gitlet node
 	// places a repository's maintenance by (internal/estate,
 	// Router.Maintainer), and a figure that went with its status for a beat
 	// would leave the node weighed as one that says nothing of what it can
@@ -161,7 +161,7 @@ type Config struct {
 
 	// RoleNeeded reports whether the COMPANY needs a role at all right now —
 	// false for git where the company hosts no code. Nil: every role is
-	// needed (every role but git always is).
+	// needed (every role but gitlet always is).
 	//
 	// Asked by the unmanned-role check on every sweep, so it must not block:
 	// read the current epoch, never a store. Without it, adding git to the
@@ -262,7 +262,7 @@ type Host struct {
 	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
 	status      func(context.Context) (coord.NodeStatus, error)
-	// gitBackground is Config.GitBackground; nil on a node without the git
+	// gitBackground is Config.GitBackground; nil on a node without the gitlet
 	// role.
 	gitBackground func() int64
 	// roleNeeded is Config.RoleNeeded; nil needs every role.

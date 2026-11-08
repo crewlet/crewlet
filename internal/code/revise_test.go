@@ -20,7 +20,7 @@ import (
 )
 
 // A REVISION'S FACTS THROUGH THE CHANGE WRITER: what the repository's home
-// git node read of a revision against its target, handed to the change writer
+// Gitlet node read of a revision against its target, handed to the change writer
 // as the home's own write (no asker), decided in one snapshot on a real
 // embedded broker as a record on the change's own subject — its guard, the
 // path owners it asks and skips, whom it wakes — and applied by the shipped

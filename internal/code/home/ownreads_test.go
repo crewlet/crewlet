@@ -51,7 +51,7 @@ func (h *heldReads) peak() int {
 // A HOME LEAVES ITS SEATS A UNIT: its own git reads — a revision's facts —
 // run at most all but one of the node's seat git-work share at once, at least
 // one, because each holds a unit of the share a seat's read waits for at most
-// two seconds before it is sent to a git node that holds no copy. On a node
+// two seconds before it is sent to a Gitlet node that holds no copy. On a node
 // whose share is one unit, two repositories' turns at once — Concurrency is
 // two — read ONE AT A TIME, the second turn waiting in the home rather than
 // ahead of the seats in the share's own queue; and OwnReads is all but one of

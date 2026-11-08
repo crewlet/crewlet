@@ -32,7 +32,7 @@
 #     optional extra.
 #   - stdio MCP servers are child processes too, launched by whatever command
 #     the config names.
-#   - Gitlet (code.native, on a node with the git role) runs git
+#   - Gitlet (code.backend: gitlet, on a node with the gitlet role) runs git
 #     itself, as a subprocess per request — the git the `git` stage below
 #     builds, not Debian's.
 #
@@ -54,7 +54,7 @@
 # new base arrives as a `build(deps)` pull request, which release.yml's
 # snapshot job builds.
 
-# THE GIT A GIT NODE RUNS, built here rather than installed: Debian trixie
+# THE GIT A GITLET NODE RUNS, built here rather than installed: Debian trixie
 # ships 2.47, and the git every pool runs is the one scripts/git-pin.env pins —
 # the newest release, built from its checksummed tarball by scripts/git.sh,
 # the recipe CI and a contributor's `make git` run too, so the image, the

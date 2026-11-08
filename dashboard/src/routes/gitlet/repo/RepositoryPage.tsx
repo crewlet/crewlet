@@ -8,7 +8,7 @@
  * default branch and where that stands, its counts and its rules, read at the
  * tab's floor on the code log and again every minute, since the code log has
  * no push to the dashboard. Everything under it is its CONTENT — a directory,
- * a file, a blame, a history — which the repository's home git node answers
+ * a file, a blame, a history — which the repository's home Gitlet node answers
  * (`code_tree`, `code_blob`, `code_blame`, `code_log`), every revision a
  * request names by a ref resolved once, at the caller's freshness. A revision
  * named by a whole commit id is answered immutably, and the tab keeps the

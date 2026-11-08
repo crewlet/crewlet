@@ -16,7 +16,7 @@ import (
 // suites do not import.
 const benchRechecks = 64
 
-// BenchmarkChangesDue times the `changes_due` listing a git node's home loop
+// BenchmarkChangesDue times the `changes_due` listing a Gitlet node's home loop
 // reads, over the scale this file's figures are stated at
 // (internal/code/changesdue.go's head): 1 000 repositories of 10 live changes
 // each, every one's facts and merge held and nothing due — the steady state a
@@ -35,8 +35,8 @@ const benchRechecks = 64
 //     makes, of every change behind the moved target.
 //
 // What a node pays a pass is repos once and, for each repository it is home
-// to with work, changes or rechecks; the fleet pays repos once a git node a
-// Backstop (internal/code/home), since every git node lists every repository.
+// to with work, changes or rechecks; the fleet pays repos once a Gitlet node a
+// Backstop (internal/code/home), since every Gitlet node lists every repository.
 func BenchmarkChangesDue(b *testing.B) {
 	n := newNode(b)
 	ctx := context.Background()

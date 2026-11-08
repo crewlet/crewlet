@@ -453,7 +453,7 @@ func (j readinessJudge) facts() Precondition {
 			Detail: fmt.Sprintf("revision %d's facts against %s are recorded", n, target)}
 	}
 	return Precondition{Kind: PreconditionFacts, State: PreconditionComputing,
-		Detail: fmt.Sprintf("revision %d's facts against %s are being read by the repository's home git node", n,
+		Detail: fmt.Sprintf("revision %d's facts against %s are being read by the repository's home Gitlet node", n,
 			target)}
 }
 
@@ -620,7 +620,7 @@ func (j readinessJudge) mergeable() Precondition {
 	switch m := j.rows.Merge; {
 	case m == nil || m.Revision != n || m.TargetRef != target:
 		p.State = PreconditionComputing
-		p.Detail = fmt.Sprintf("revision %d's merge into %s is being read by the repository's home git node", n,
+		p.Detail = fmt.Sprintf("revision %d's merge into %s is being read by the repository's home Gitlet node", n,
 			target)
 	case m.State == MergeClean:
 		p.State = PreconditionMet
@@ -635,7 +635,7 @@ func (j readinessJudge) mergeable() Precondition {
 		// can read as decided, so it is the home's to merge again.
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("revision %d's merge into %s as of %s decided nothing within its deadline: the "+
-			"repository's home git node merges it again", n, target, abbrev(m.TargetOID))
+			"repository's home Gitlet node merges it again", n, target, abbrev(m.TargetOID))
 	}
 	return p
 }

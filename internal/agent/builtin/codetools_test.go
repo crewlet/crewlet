@@ -67,10 +67,10 @@ func siteDetail() code.RepoDetail {
 	}
 }
 
-// codeHost is Gitlet as the code tools see it, routed: one repository,
-// its refs, and a git node answering by object id — recording every question
+// gitletHost is Gitlet as the code tools see it, routed: one repository,
+// its refs, and a Gitlet node answering by object id — recording every question
 // it is asked, at the level it was asked.
-type codeHost struct {
+type gitletHost struct {
 	mu sync.Mutex
 
 	detail  code.RepoDetail
@@ -97,7 +97,7 @@ type codeHost struct {
 	// whole: a `checks` read answers their rows — a commit's, or every one
 	// for a change's, narrowed to the check its question names as the data
 	// node narrows them — and a `check` read the one its question names
-	// (codechecks_test.go). newCodeHost holds one: attempt 1 of `unit` at
+	// (codechecks_test.go). newGitletHost holds one: attempt 1 of `unit` at
 	// main, for main, ended errored.
 	checks []code.CheckDetail
 	// before, set, is called with each question's kind before it is
@@ -115,13 +115,13 @@ type codeHost struct {
 	gits     []code.GitQuery
 }
 
-var _ builtin.CodeReader = (*codeHost)(nil)
+var _ builtin.CodeReader = (*gitletHost)(nil)
 
-// newCodeHost is Gitlet holding site: its refs each last moved at a
+// newGitletHost is Gitlet holding site: its refs each last moved at a
 // position of its own, between this node's own floor and the checkpoint every
 // read answers at, so a read's floor says which of the three it was given.
-func newCodeHost() *codeHost {
-	return &codeHost{
+func newGitletHost() *gitletHost {
+	return &gitletHost{
 		detail: siteDetail(),
 		refs: map[string]string{
 			"refs/heads/main": mainOID, "refs/heads/feature": featureOID, "refs/tags/v1": mainOID,
@@ -138,14 +138,14 @@ func newCodeHost() *codeHost {
 
 // movedAt is where ref last moved: its own position, or the log's first for a
 // ref a case added without one.
-func (h *codeHost) movedAt(ref string) statelog.Position {
+func (h *gitletHost) movedAt(ref string) statelog.Position {
 	if at, ok := h.moved[ref]; ok {
 		return at
 	}
 	return codeAt(1)
 }
 
-func (h *codeHost) named(name string) (code.RepoRef, error) {
+func (h *gitletHost) named(name string) (code.RepoRef, error) {
 	if name != h.detail.Name {
 		return code.RepoRef{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, name)
 	}
@@ -155,7 +155,7 @@ func (h *codeHost) named(name string) (code.RepoRef, error) {
 	return h.detail.RepoRef, nil
 }
 
-func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *gitletHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	if h.before != nil {
 		h.before("read:" + string(q.Kind))
 	}
@@ -265,7 +265,7 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 	return code.ReadAnswer{}, fmt.Errorf("%w: a code tool read kind %s", code.ErrInvalid, q.Kind)
 }
 
-func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (h *gitletHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
 	if h.before != nil {
 		h.before("resolve_ref")
 	}
@@ -299,7 +299,7 @@ func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	return out, nil
 }
 
-func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (h *gitletHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if h.before != nil {
 		h.before("git_read:" + string(q.Kind))
 	}
@@ -310,7 +310,7 @@ func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, 
 		return code.GitAnswer{}, h.gitErr
 	}
 	if h.replaced != nil && q.RepoID != h.replaced.ID {
-		// THE ID THE NAME NAMED BEFORE, purged: what a git node answers a
+		// THE ID THE NAME NAMED BEFORE, purged: what a Gitlet node answers a
 		// read of it.
 		return code.GitAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound,
 			code.RepoGone{ID: q.RepoID, Name: h.detail.Name, Purged: true}.Detail())
@@ -341,7 +341,7 @@ func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, 
 // FloorOf is this node's floor on the one repository it wrote to, site's id,
 // and none on any other: what a read of the repository a name names now — a
 // name declared again — carries.
-func (h *codeHost) FloorOf(repoID string) statelog.Position {
+func (h *gitletHost) FloorOf(repoID string) statelog.Position {
 	if repoID != siteID {
 		return statelog.Position{}
 	}
@@ -349,7 +349,7 @@ func (h *codeHost) FloorOf(repoID string) statelog.Position {
 }
 
 // asked is what the host was asked, copied under its lock.
-func (h *codeHost) asked() (reads []code.ReadQuery, resolves []code.RefQuery, gits []code.GitQuery) {
+func (h *gitletHost) asked() (reads []code.ReadQuery, resolves []code.RefQuery, gits []code.GitQuery) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.reads), slices.Clone(h.resolves), slices.Clone(h.gits)
@@ -493,7 +493,7 @@ func asUnboundToken() context.Context {
 // writes' op_id offered to a seat → red.
 func TestTheCodeToolsAreOneList(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
 	operator := operatorCode(t, host, nil)
 	every := slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool}, builtin.CodeWrites())
@@ -569,9 +569,9 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 // codeAnnotations (the default arm's shared write) → red.
 func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{}))
 	var reads []string
-	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+	for _, tool := range builtin.CodeTools(writeDeps(newGitletHost(), &codeWrites{})) {
 		if !slices.Contains(builtin.CodeWrites(), tool.Name()) {
 			reads = append(reads, tool.Name())
 		}
@@ -606,7 +606,7 @@ func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 // their seat with no credential → red.
 func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	t.Parallel()
-	seatHost := newCodeHost()
+	seatHost := newGitletHost()
 	reg := codeRegistry(t, codeDeps(seatHost))
 	turn := codeTurn(t)
 	turn.Requester = "founder"
@@ -642,7 +642,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 		"an unbound token": {asUnboundToken(), code.Principal{Kind: code.PrincipalOperator,
 			OperatorID: "token:ci"}},
 	} {
-		host := newCodeHost()
+		host := newGitletHost()
 		tools := operatorCode(t, host, nil)
 		if got, err := tools[builtin.CodeListReposTool].Call(c.ctx, map[string]any{}); err != nil || got.Failed {
 			t.Fatalf("%s's listing: %v %s", name, err, got.Output)
@@ -658,7 +658,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 
 	// NO ARGUMENT NAMES WHO READS: one that tries is refused before
 	// Gitlet is asked anything.
-	host := newCodeHost()
+	host := newGitletHost()
 	got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 		builtin.CodeListReposTool, map[string]any{"seat": "founder"})
 	if !errors.Is(got.Cause, builtin.ErrUndeclaredArgument) {
@@ -695,7 +695,7 @@ func everyCodeQuestion(t *testing.T, reg *tools.Registry, turn *turnctx.Turn) {
 
 // readsFor holds every question host was asked to name ceiling as the seat it
 // is made for — "" for none — and to have asked each kind at least once.
-func readsFor(t *testing.T, host *codeHost, ceiling string) {
+func readsFor(t *testing.T, host *gitletHost, ceiling string) {
 	t.Helper()
 	reads, resolves, gits := host.asked()
 	if len(reads) == 0 || len(resolves) == 0 || len(gits) == 0 {
@@ -766,7 +766,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			turn := codeTurn(t)
 			turn.Requester = c.requester
 			turn.Senders = c.senders
@@ -796,7 +796,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			reg := codeRegistry(t, codeDeps(host))
 			turn := codeTurn(t)
 			turn.Requester = c.requester
@@ -831,7 +831,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 
 	t.Run("the operator surface", func(t *testing.T) {
 		t.Parallel()
-		host := newCodeHost()
+		host := newGitletHost()
 		op := operatorCode(t, host, nil)
 		for _, call := range []struct {
 			tool string
@@ -879,7 +879,7 @@ func TestAReadRefusedForWhomTheTurnReadsIsTheCeilings(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			host.readErr, host.gitErr = c.readErr, c.gitErr
 			turn := codeTurn(t)
 			turn.Requester = "agent-ceo"
@@ -921,7 +921,7 @@ func TestAReadRefusedForWhomTheTurnReadsIsTheCeilings(t *testing.T) {
 // ref was read (the resolve's checkpoint) → red.
 func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	reg := codeRegistry(t, codeDeps(host))
 	turn := codeTurn(t)
 	floorOf := func(q code.GitQuery) []statelog.Position { return q.Fresh.Floors }
@@ -1003,7 +1003,7 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 
 	// THE OPERATOR SURFACE: no turn, so once a call.
-	opHost := newCodeHost()
+	opHost := newGitletHost()
 	tools := operatorCode(t, opHost, nil)
 	for range 2 {
 		if got, err := tools[builtin.CodeReadTool].Call(asBoundPerson(), map[string]any{"repo": "site",
@@ -1027,7 +1027,7 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 // Mutation: leave Expunge out of code_get_repo's detail, or Remotes → red.
 func TestCodeGetRepoAnswersWhereAPurgeAndAnImportStand(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	host.detail.Expunge = code.ExpungeState{Request: "purge-7", Requested: codeAt(9),
 		ExpungedAt: time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC), DroppedObjects: 12, DroppedBytes: 4096}
 	host.detail.Remotes = code.RemoteState{
@@ -1084,7 +1084,7 @@ func TestCodeGetRepoAnswersWhereAPurgeAndAnImportStand(t *testing.T) {
 // the page) → red.
 func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	reg := codeRegistry(t, codeDeps(host))
 	turn := codeTurn(t)
 	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
@@ -1100,7 +1100,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 	}
 
 	// A LATER PAGE FIRST: the repository is resolved by a read of its own.
-	later := newCodeHost()
+	later := newGitletHost()
 	callCode(t, codeRegistry(t, codeDeps(later)), codeTurn(t), builtin.CodeGetRepoTool,
 		map[string]any{"repo": "site", "branches_cursor": "refs/heads/feature"})
 	if reads, _, _ := later.asked(); len(reads) != 2 || reads[0].Kind != code.ReadRepo ||
@@ -1109,7 +1109,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 	}
 
 	// THE OPERATOR SURFACE: no turn, one read a call.
-	opHost := newCodeHost()
+	opHost := newGitletHost()
 	op := operatorCode(t, opHost, nil)
 	for range 2 {
 		if got, err := op[builtin.CodeGetRepoTool].Call(asBoundPerson(), map[string]any{"repo": "site"}); err != nil ||
@@ -1126,7 +1126,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 // read finds it out — the name deleted and declared again since the turn
 // resolved it. A ref read by NAME that answers another repository reads nothing
 // and is refused stale; a read by COMMIT ID of the repository the turn resolved,
-// which its git node answers gone, is refused not found. Either way the turn
+// which its Gitlet node answers gone, is refused not found. Either way the turn
 // forgets its resolution, so the same call made again reads the repository the
 // name names now, rather than asking again about an id nothing serves.
 //
@@ -1149,7 +1149,7 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			reborn := host.detail.RepoRef
 			reborn.ID = "0192f6c1-6a7e-7c1b-9d4e-000000000002"
 			reg := codeRegistry(t, codeDeps(host))
@@ -1165,7 +1165,7 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 			}
 			reads, _, gits := host.asked()
 			if len(gits) != c.asked || (c.asked > 0 && gits[0].RepoID != siteID) {
-				t.Fatalf("the refused read asked the git nodes %+v, want %d reads of %s", gits, c.asked, siteID)
+				t.Fatalf("the refused read asked the Gitlet nodes %+v, want %d reads of %s", gits, c.asked, siteID)
 			}
 			resolved := readsOf(reads, code.ReadRepo)
 			callCode(t, reg, turn, builtin.CodeReadTool, c.args)
@@ -1182,7 +1182,7 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 // ---- refusals ------------------------------------------------------------ //
 
 // A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER (M3-O82): a data
-// node with no chart answers a seat's read about itself, a git node unready,
+// node with no chart answers a seat's read about itself, a Gitlet node unready,
 // and a walk nobody served the fleet's condition — each told unavailable, which
 // a retry clears, and never `not_permitted`, which only the grant answers.
 //
@@ -1195,9 +1195,9 @@ func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
 	}{
 		"a reader with no chart": {readErr: fmt.Errorf("%w: this node holds no chart",
 			code.ErrNotServing), want: tools.RefusalUnavailable},
-		"a git node with no chart": {gitErr: &code.ErrGitUnready{Reason: code.UnreadyNoChart,
+		"a Gitlet node with no chart": {gitErr: &code.ErrGitUnready{Reason: code.UnreadyNoChart,
 			Detail: "n1 holds no chart yet"}, want: tools.RefusalUnavailable},
-		"no git node answering": {gitErr: &estate.ErrUnserved{Git: true, Detail: "n1 syncing"},
+		"no Gitlet node answering": {gitErr: &estate.ErrUnserved{Git: true, Detail: "n1 syncing"},
 			want: tools.RefusalUnavailable},
 		"no data node answering": {readErr: &estate.ErrUnserved{Detail: "n1 out of service"},
 			want: tools.RefusalUnavailable},
@@ -1206,7 +1206,7 @@ func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			host.readErr, host.gitErr = c.readErr, c.gitErr
 			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 				builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
@@ -1260,7 +1260,7 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			host.readErr, host.gitErr = c.readErr, c.gitErr
 			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), c.tool, c.args)
 			if tools.RefusalOf(got) != c.want || !strings.Contains(got.Output, c.says) {
@@ -1281,7 +1281,7 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
 	t.Parallel()
 	clone := func(name string) string { return "https://crewlet.example.com/git/" + name + ".git" }
-	deps := codeDeps(newCodeHost())
+	deps := codeDeps(newGitletHost())
 	deps.CloneURL = clone
 	reg := codeRegistry(t, deps)
 	_, seat := callCode(t, reg, codeTurn(t), builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
@@ -1289,7 +1289,7 @@ func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
 		t.Errorf("a seat was handed a clone URL: %v", seat["clone_url"])
 	}
 	for name, ctx := range map[string]context.Context{"a person": asBoundPerson(), "a token": asUnboundToken()} {
-		got, err := operatorCode(t, newCodeHost(), clone)[builtin.CodeGetRepoTool].Call(ctx,
+		got, err := operatorCode(t, newGitletHost(), clone)[builtin.CodeGetRepoTool].Call(ctx,
 			map[string]any{"repo": "site"})
 		if err != nil || got.Failed {
 			t.Fatalf("%s's detail: %v %s", name, err, got.Output)
@@ -1318,9 +1318,9 @@ var widest = statelog.Position{Stream: topics.CodeLogStream, Generation: math.Ma
 	Seq: math.MaxUint64}
 
 // atTheBound is the fullest page fill makes — fill(a, n) the page holding n
-// units of its filler, a byte of text or an entry of a list — whose JSON a git
+// units of its filler, a byte of text or an entry of a list — whose JSON a Gitlet
 // node still sends: at most code.MaxGitAnswerBytes, with one unit more past
-// it, so the page is cut where the git node cuts one. Every other field is at
+// it, so the page is cut where the Gitlet node cuts one. Every other field is at
 // its widest.
 func atTheBound(t *testing.T, a code.GitAnswer, fill func(a code.GitAnswer, n int) code.GitAnswer) code.GitAnswer {
 	t.Helper()
@@ -1350,7 +1350,7 @@ func atTheBound(t *testing.T, a code.GitAnswer, fill func(a code.GitAnswer, n in
 	return fill(a, fits)
 }
 
-// A GIT ANSWER FITS ONE TOOL ANSWER: a page the git node cut at its bound,
+// A GIT ANSWER FITS ONE TOOL ANSWER: a page the Gitlet node cut at its bound,
 // wrapped as each code tool wraps it — the longest repository name, every ref
 // its call names at the longest a ref may be and spelled in the characters JSON
 // writes six bytes for, the fence's label and closer and the answer's
@@ -1363,8 +1363,8 @@ func atTheBound(t *testing.T, a code.GitAnswer, fill func(a code.GitAnswer, n in
 func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 	t.Parallel()
 	name := strings.Repeat("r", gitref.MaxRepoNameBytes)
-	repoWith := func() *codeHost {
-		h := newCodeHost()
+	repoWith := func() *gitletHost {
+		h := newGitletHost()
 		h.detail.Name = name
 		h.refs = map[string]string{longRef: mainOID}
 		return h
@@ -1469,7 +1469,7 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 
 	// AND A HISTORY'S AND A BLAME'S PAGES, which fence a field per commit and
 	// per line — a hundred subjects of 4 KiB, five hundred lines of 8 KiB —
-	// cut by a git node's own query server (historyNode) and sent through the
+	// cut by a Gitlet node's own query server (historyNode) and sent through the
 	// tool's fences: every page whole, and within one tool answer.
 	//
 	// Mutation: the log's page bounded by its limit alone (a hundred fenced
@@ -1542,7 +1542,7 @@ func closerSpelled(bound int) string {
 }
 
 // A FENCED PAGE THAT OVERFLOWS IS REFUSED WITH ITS NARROWING, never cut: a page
-// of a file's lines the git node cut at its bound, whose every line spells a
+// of a file's lines the Gitlet node cut at its bound, whose every line spells a
 // fence marker — each longer once the fence escapes it — is past one tool
 // answer once fenced, and the read is refused naming a narrower line range; a
 // patch that does the same is refused naming the file's lines to read instead.
@@ -1576,14 +1576,14 @@ func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := newCodeHost()
+			host := newGitletHost()
 			host.git = c.answer
 			args := map[string]any{"repo": "site"}
 			for k, v := range c.args {
 				args[k] = v
 			}
 			if page, _ := json.Marshal(c.answer(code.GitQuery{RepoID: siteID})); len(page) > code.MaxGitAnswerBytes {
-				t.Fatalf("the fixture page is %d bytes, past what a git node sends", len(page))
+				t.Fatalf("the fixture page is %d bytes, past what a Gitlet node sends", len(page))
 			}
 			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), c.tool, args)
 			if tools.RefusalOf(got) != tools.RefusalInvalid {
@@ -1611,7 +1611,7 @@ const branchesPastAnAnswer = 200
 // left as the reader's → red.
 func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	for i := range 100 {
 		s := siteDetail().RepoSummary
 		s.Name, s.Description = fmt.Sprintf("repo-%03d", i), strings.Repeat(`"`, code.MaxDescriptionBytes)
@@ -1712,7 +1712,7 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat(`"`, n) }
 	gate := widestGate(t)
-	host := newCodeHost()
+	host := newGitletHost()
 	d := siteDetail()
 	d.Description = wide(code.MaxDescriptionBytes)
 	for i := range code.MaxProtectionsPerRepo {
@@ -1815,7 +1815,7 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	for len(past.Protections)*2*gitref.MaxRefNameBytes <= builtin.ToolAnswerBytes {
 		past.Protections = append(slices.Clone(past.Protections), d.Protections...)
 	}
-	overHost := newCodeHost()
+	overHost := newGitletHost()
 	overHost.listing = []code.RepoSummary{alpha, past, zed}
 	listed, big = list(codeRegistry(t, codeDeps(overHost)))
 	if want := []string{"alpha", "big", "zed"}; !slices.Equal(listed, want) {
@@ -1903,7 +1903,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 	t.Helper()
 	turn, b := readerTurn(t)
 	turn.Lookups = turnctx.NewLookups()
-	host := newCodeHost()
+	host := newGitletHost()
 	host.git = func(q code.GitQuery) code.GitAnswer { return answer(b, q) }
 	args["repo"] = "site"
 	got := callIn(t, codeRegistry(t, codeDeps(host)), turn, tool, args)
@@ -2058,13 +2058,13 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the thirteen code reads (every seat's)",
-			listedBytes(t, builtin.CodeTools(withSearch(codeDeps(newCodeHost()), &codeSearches{}))),
+			listedBytes(t, builtin.CodeTools(withSearch(codeDeps(newGitletHost()), &codeSearches{}))),
 			codeReadsCatalogueBudget},
 		{"a review seat's thirteen reads and four conversation writes",
-			listedBytes(t, offeredAt(code.TierReview, builtin.CodeTools(withSearch(writeDeps(newCodeHost(),
+			listedBytes(t, offeredAt(code.TierReview, builtin.CodeTools(withSearch(writeDeps(newGitletHost(),
 				&codeWrites{}), &codeSearches{})))), codeReviewCatalogueBudget},
 		{"all thirty-nine code tools (a full_access seat's and the operator's)",
-			listedBytes(t, builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{}))), codeCatalogueBudget},
+			listedBytes(t, builtin.CodeTools(writeDeps(newGitletHost(), &codeWrites{}))), codeCatalogueBudget},
 	} {
 		tokens := harness.EstimateTokens(strings.Repeat(" ", c.got))
 		if c.got > c.budget {

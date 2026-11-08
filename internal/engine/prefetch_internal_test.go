@@ -200,10 +200,10 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 
 	onChat := notification("chat", "Tech Lead",
 		map[string]string{notify.ActorField: "U-lead"}, false)
-	onCodeHost := notification("gitlab", "lead-bot",
+	onGitletHost := notification("gitlab", "lead-bot",
 		map[string]string{notify.ActorField: "lead-bot"}, false)
 
-	for _, ev := range []*events.Event{onChat, onCodeHost} {
+	for _, ev := range []*events.Event{onChat, onGitletHost} {
 		got := sendersOf(reg, []*events.Event{ev})
 		if len(got) != 1 {
 			t.Fatalf("senders = %v", got)

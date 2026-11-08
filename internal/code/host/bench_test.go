@@ -83,7 +83,7 @@ func benchObjects(b *testing.B, objects string) objstore.Backend {
 	return nil
 }
 
-// benchCacheBytes is every benchmark git node's cache budget: room for the
+// benchCacheBytes is every benchmark Gitlet node's cache budget: room for the
 // largest repository an arm builds, the gigabyte history twice over, so no
 // figure is of a repository the budget evicted between iterations.
 const benchCacheBytes = 4 << 30
@@ -104,18 +104,18 @@ const coldCloners = 8
 // cloner is the i-th of the people a cold node's clones come from.
 func cloner(i int) string { return fmt.Sprintf("cloner%d", i) }
 
-// benchFleet is a solo fleet of gitNodes over objects, its pools running the
+// benchFleet is a solo fleet of gitletNodes over objects, its pools running the
 // git on PATH and its broker fsyncing every write as a deployment's does
 // (stream.sync's default), its code log benchLogBytes, with RepoName
 // declared, and the person who pushes to it; the coldCloners people beside
 // them have a token each.
-func benchFleet(b *testing.B, objects objstore.Backend, gitNodes int) (*codetest.SoloFleet, *codetest.Person) {
+func benchFleet(b *testing.B, objects objstore.Backend, gitletNodes int) (*codetest.SoloFleet, *codetest.Person) {
 	b.Helper()
 	people := []string{"ceo"}
 	for i := range coldCloners {
 		people = append(people, cloner(i))
 	}
-	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: gitNodes}, Objects: objects,
+	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: gitletNodes}, Objects: objects,
 		CacheMaxBytes: benchCacheBytes, LogBytes: benchLogBytes, People: people, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	b.Logf("the pools run git %s", f.Nodes()[0].Pool().Version())
@@ -286,7 +286,7 @@ func firstByteMillis(b *testing.B, backend objstore.Backend, rows codetest.Rows)
 //     a megabyte or a gigabyte — built ONCE for every arm under it (1GB
 //     only under CREWLET_BENCH_LARGE), each arm taking it as the one before
 //     left it:
-//   - graph=no|yes/clock=normal|skewed: pushes to the fleet's SECOND git
+//   - graph=no|yes/clock=normal|skewed: pushes to the fleet's SECOND Gitlet
 //     node, emptied and synced whole first: graph=no with every slot of its
 //     maintenance lane held, so it has no commit-graph and no index — a copy
 //     a node just read whole, before its maintainer reached it — and
@@ -309,7 +309,7 @@ func firstByteMillis(b *testing.B, backend objstore.Backend, rows codetest.Rows)
 //     them, created beforehand by pushes of code.MaxCommandsPerPush proposed
 //     to the committer (addRefs) — the refs only grow, so each arm adds what
 //     the one before left short; 100000 only under CREWLET_BENCH_LARGE. Each
-//     pushes to the second git node EMPTIED, synced whole and indexed whole
+//     pushes to the second Gitlet node EMPTIED, synced whole and indexed whole
 //     again first (coldNode, warmIndex), so it measures the refs and never
 //     the packs the arms before it left outside an index: a repository the
 //     maintainer cannot index again for MidxMinInterval gathers every push
@@ -322,7 +322,7 @@ func firstByteMillis(b *testing.B, backend objstore.Backend, rows codetest.Rows)
 // Each push arm reports, a push: server-ms, the receiving node's own
 // crewlet.code.push.duration for the push applied; adv-ms, the push's
 // advertisement (`info/refs?service=git-receive-pack`) timed alone after it;
-// sync-ms, the OTHER git node's delta sync of the push
+// sync-ms, the OTHER Gitlet node's delta sync of the push
 // (crewlet.code.cache.sync.duration), which is the packed-refs merge every
 // node pays; and transfer-cpu-ms and read-cpu-ms, the CPU of the receiving
 // node's git processes by lane (crewlet.code.git.cpu) — receive-pack and its
@@ -394,7 +394,7 @@ func BenchmarkPushSmall(b *testing.B) {
 	}
 }
 
-// pushRig is BenchmarkPushSmall's fixture: a fleet of two git nodes holding
+// pushRig is BenchmarkPushSmall's fixture: a fleet of two Gitlet nodes holding
 // a repository of one history, and the person whose clone of it every timed
 // push is made from.
 type pushRig struct {
@@ -626,7 +626,7 @@ func (r *pushRig) walks(b *testing.B, node codetest.Node, graph string) {
 	})
 }
 
-// coldHeld empties the fleet's second git node (coldNode) and holds every
+// coldHeld empties the fleet's second Gitlet node (coldNode) and holds every
 // slot of its maintenance lane, so its maintainer writes nothing — no
 // commit-graph, no index — until the release it answers.
 func coldHeld(b *testing.B, f *codetest.SoloFleet) (codetest.Node, func()) {
@@ -649,7 +649,7 @@ func coldHeld(b *testing.B, f *codetest.SoloFleet) (codetest.Node, func()) {
 	return node, release
 }
 
-// BenchmarkFetchWarm is what a CI fleet polling a repository costs a git
+// BenchmarkFetchWarm is what a CI fleet polling a repository costs a Gitlet
 // node: every one of clients clients fetches main into a clone of its own, at
 // once, under protocol v2 — ls-refs (a linearizable advertisement, a barrier
 // on the code log) and a fetch of the one commit a writer pushed since — from
@@ -760,7 +760,7 @@ func BenchmarkFetchWarm(b *testing.B) {
 // BenchmarkCloneWarm's mode): modeOwn, the node's own whole multi-pack-index
 // and bitmap, as a node serves a repository nobody has published; modeChain,
 // the repository's published chain (internal/code/cache's layers.go), as
-// every git node serves one whose maintainer publishes it.
+// every Gitlet node serves one whose maintainer publishes it.
 const (
 	modeOwn   = "own"
 	modeChain = "chain"
@@ -771,7 +771,7 @@ const (
 var modes = []string{modeOwn, modeChain}
 
 // publishChain is one publication of the repository by node, its
-// maintainer as the only git node of f — the unit of the maintainer's pass,
+// maintainer as the only Gitlet node of f — the unit of the maintainer's pass,
 // driven here because a fleet's compactors are never started (Node.Compactor)
 // — asked again while it answers busy or waiting, for two minutes at the
 // most. The candidate is the one the publication due listing names, or the
@@ -1062,7 +1062,7 @@ func packBytes(b *testing.B, dir string) int64 {
 	return total
 }
 
-// requestCounter is a reverse proxy in front of a git node that counts what
+// requestCounter is a reverse proxy in front of a Gitlet node that counts what
 // every upload-pack request it forwards carried, decoded — the bytes a
 // request is held to on the node (the spool's threshold and the repository's
 // bound are on decoded bytes), whatever compression git sent them under —
@@ -1128,12 +1128,12 @@ func countRequests(b *testing.B, node codetest.Node) *requestCounter {
 	return c
 }
 
-// coldNode empties the fleet's second git node — stopped, its directory
+// coldNode empties the fleet's second Gitlet node — stopped, its directory
 // removed, started again — so its cache has never served the repository, and
 // answers it.
 func coldNode(b *testing.B, f *codetest.SoloFleet) codetest.Node {
 	b.Helper()
-	g := f.GitNode(1)
+	g := f.GitletNode(1)
 	dir := g.Node().CacheDir()
 	g.Stop(b.Context())
 	if err := os.RemoveAll(dir); err != nil {
@@ -1143,12 +1143,12 @@ func coldNode(b *testing.B, f *codetest.SoloFleet) codetest.Node {
 	return g.Node()
 }
 
-// BenchmarkCloneCold is the FIRST CLONE ON A GIT NODE THAT HAS NEVER SERVED
+// BenchmarkCloneCold is the FIRST CLONE ON A GITLET NODE THAT HAS NEVER SERVED
 // THE REPOSITORY — one that just joined, or whose budget evicted it: the cold
 // sync (a GET a push, FetchConcurrency at once), the round's index past
 // MidxRoundPacks packs and the first upload-pack, in series before the
 // clone's first byte, and then the transfer. The repository is a tree
-// fixture (treeFixture) of packs pushes through the fleet's first git node;
+// fixture (treeFixture) of packs pushes through the fleet's first Gitlet node;
 // every iteration clones from its second, emptied first (coldNode).
 //
 //   - packs=200|2000 is 10 000 or 100 000 files; 2000 runs only under
@@ -1459,7 +1459,7 @@ func blameHistory(b *testing.B, p *codetest.Person) string {
 // BenchmarkLazyBlame is ONE `git blame` IN A BLOBLESS CLONE of a file
 // blameCommits commits rewrote, by a token bound to nobody — a CI job's, or a
 // box's answering a history question with its own git — and what it costs
-// the git node it lazily fetches from: each fetch is an advertisement and an
+// the Gitlet node it lazily fetches from: each fetch is an advertisement and an
 // upload-pack, both runs of the transfer lane charged to the token's share
 // (gitproc's fair share), and the figures are what the share bounds in place
 // of a lazy-fetch limiter of the host's own (gitlet.md, "Fair share"):

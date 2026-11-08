@@ -79,7 +79,7 @@ func gitletPurge(environ config.Source, args []string, stdout, stderr io.Writer)
 			Maintainer string `json:"maintainer"`
 			Unplaced   string `json:"unplaced"`
 			Holds      struct {
-				GitNodes      []string `json:"git_nodes"`
+				GitletNodes   []string `json:"gitlet_nodes"`
 				BackupsBefore string   `json:"backups_before"`
 				StoreUntil    string   `json:"store_until"`
 			} `json:"holds"`
@@ -131,9 +131,9 @@ func gitletPurge(environ config.Source, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stdout, "  its maintainer could not be named: %s\n", r.Unplaced)
 	}
 	fmt.Fprintln(stdout, "  until it is served and after, the purged objects are still held by:")
-	if len(r.Holds.GitNodes) > 0 {
+	if len(r.Holds.GitletNodes) > 0 {
 		fmt.Fprintf(stdout, "    the caches of %s, until each syncs past the purge\n",
-			strings.Join(r.Holds.GitNodes, ", "))
+			strings.Join(r.Holds.GitletNodes, ", "))
 	}
 	fmt.Fprintf(stdout, "    %s\n    %s\n", r.Holds.BackupsBefore, r.Holds.StoreUntil)
 	fmt.Fprintf(stdout, "  `crewlet gitlet status -repo %s` shows the request until it is served\n", name)

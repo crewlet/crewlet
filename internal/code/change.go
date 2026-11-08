@@ -59,7 +59,7 @@ const (
 	// MergedViaPush is a change whose target came to hold its head by a
 	// push: one that set the target to exactly the change's head, which the
 	// push's own apply records, or one that moved the target past it, which
-	// the repository's home git node finds and records ([ChangeLanded]).
+	// the repository's home Gitlet node finds and records ([ChangeLanded]).
 	MergedViaPush MergedVia = "push"
 	// MergedViaDirect is a change a MERGE RECORD merged ([Merge]): its
 	// target moved onto the commit its merge built, by a record whose
@@ -353,7 +353,7 @@ type ChangeReopen struct {
 // ChangeLanded records a live change MERGED because its target came to hold
 // its head: a push moved the target past the head rather than onto it, which
 // no push's own apply can see (it would need git), so the repository's home
-// git node finds it — the head inside the target's tip — and asks this
+// Gitlet node finds it — the head inside the target's tip — and asks this
 // record of the committer. The home's own write, naming no asker, guarded by
 // what the home read: the change's revision and head, its target branch, and
 // the tip that branch was at. A head that moved since, a retarget, or a target
@@ -374,7 +374,7 @@ type ChangeLanded struct {
 	// at, holding the head: the commit the change merged at (merge_oid).
 	TargetRef string `json:"target_ref"`
 	TargetOID string `json:"target_oid"`
-	// Node is the git node that found it: the repository's home as it took
+	// Node is the Gitlet node that found it: the repository's home as it took
 	// itself to be.
 	Node string `json:"node"`
 	// PushID and PushPosition name the push that MERGED the change, as the

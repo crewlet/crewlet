@@ -194,14 +194,14 @@ var floorless = map[string]string{
 		"bodies it has read, which no log position describes",
 	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
 		"gate, not whether it has reached the asker's writes",
-	"code.git_read": "reads a git node's cache, not a domain's copy (GitCopy): the asker's " +
+	"code.git_read": "reads a Gitlet node's cache, not a domain's copy (GitCopy): the asker's " +
 		"floor travels in the query, as the cache's sync level, and an object id names " +
 		"the same object at every position",
-	"code.git_write": "builds over a git node's cache, not a domain's copy (GitCopy): the " +
+	"code.git_write": "builds over a Gitlet node's cache, not a domain's copy (GitCopy): the " +
 		"asker's floor travels in the write, as the cache's sync level, and the push it " +
 		"lands is decided by the repository's committer, whose proposal carries the floor " +
 		"its builder read",
-	"code.merge_preview": "merges two commits in a scratch beside a git node's cache, not a " +
+	"code.merge_preview": "merges two commits in a scratch beside a Gitlet node's cache, not a " +
 		"domain's copy (GitCopy): the asker's floor travels in the query, as the cache's sync " +
 		"level, and two object ids name the same two commits at every position",
 
@@ -282,8 +282,8 @@ var seatCopyOps = map[string]string{
 // (ADR-0079). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read. The one copy that
-// is no domain's is a git node's git half ([GitCopy]), which a git operation
-// alone names — one keyed on the git nodes and answered on a git lane — and no
+// is no domain's is a Gitlet node's git half ([GitCopy]), which a git operation
+// alone names — one keyed on the Gitlet nodes and answered on a git lane — and no
 // data operation may.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
@@ -421,7 +421,7 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			value: reply{Node: "data-a", Request: "r-1", Unserved: unservedOutOfService, Detail: "wrong"},
 			want:  `{"node":"data-a","request":"r-1","unserved":"out_of_service","detail":"wrong"}`,
 		},
-		"a git node that cannot answer": {
+		"a Gitlet node that cannot answer": {
 			value: reply{Node: "git-a", Request: "r-5", Unserved: unservedBehind, Detail: "syncing",
 				Unready: code.UnreadySyncing},
 			want: `{"node":"git-a","request":"r-5","unserved":"behind","detail":"syncing","unready":"syncing"}`,

@@ -19,13 +19,13 @@ import (
 )
 
 // THE LAYER CASES (LY1–LY7): a repository's bitmapped index published ONCE,
-// by its maintainer, as a layer of a chain every git node installs only over
+// by its maintainer, as a layer of a chain every Gitlet node installs only over
 // its own packs, matching its row and in the rows' order — and a node that
 // cannot install one serving from the layers below it, never an error
-// (ADR-0091) — through the production compactor every git node of a topology
+// (ADR-0091) — through the production compactor every Gitlet node of a topology
 // is built with, never started, so each case drives its publications itself.
 
-// otherThan is the first running git node that is not n.
+// otherThan is the first running Gitlet node that is not n.
 func otherThan(c *Case, n Node) Node {
 	c.T.Helper()
 	for _, m := range c.Fleet.Nodes() {
@@ -33,7 +33,7 @@ func otherThan(c *Case, n Node) Node {
 			return m
 		}
 	}
-	c.T.Fatalf("no git node but %s", n.ID())
+	c.T.Fatalf("no Gitlet node but %s", n.ID())
 	return nil
 }
 
@@ -92,13 +92,13 @@ func cloneHead(c *Case, p *Person, n Node, head string) {
 }
 
 // LY1: ten pushes, then ONE publication by the repository's maintainer: every
-// git node installs the chain — the maintainer by linking the files it wrote,
-// with no GET of its own layer, every other git node by its installer — a
+// Gitlet node installs the chain — the maintainer by linking the files it wrote,
+// with no GET of its own layer, every other Gitlet node by its installer — a
 // clone through each checks out the head, and git loads the chain's bitmap
-// over each copy. A git node that joins after the publication installs it in
+// over each copy. A Gitlet node that joins after the publication installs it in
 // its first, full, round, before that round answers.
 func aLayerIsInstalled(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := pushEach(c, p, work, 10, 2<<10)
@@ -130,14 +130,14 @@ func aLayerIsInstalled(t *testing.T, newFleet NewFleet) {
 	ch := fresh.Cache().Chain(s)
 	s.Release()
 	if ch.Installed != len(ch.Rows) || len(ch.Rows) != 1 {
-		t.Errorf("a git node that joined after the publication answered its first sync holding %d of %d layers, "+
+		t.Errorf("a Gitlet node that joined after the publication answered its first sync holding %d of %d layers, "+
 			"want the chain installed before it answers", ch.Installed, len(ch.Rows))
 	}
 	bitmapLoads(c, fresh, head)
 	assertConverged(t, c.Fleet)
 }
 
-// LY2: a part of the published layer the object store lost. A git node that
+// LY2: a part of the published layer the object store lost. A Gitlet node that
 // joins afterwards refuses the layer `missing` — once a read of the log's head
 // made after the store's answer still names it — and serves from its own
 // index, a clone through it correct; the audit reports nothing missing, since
@@ -145,7 +145,7 @@ func aLayerIsInstalled(t *testing.T, newFleet NewFleet) {
 // builds on to the store, finds the part gone, and replaces the lost layer —
 // which the joined node then installs.
 func aLayerTheStoreLostFallsBack(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := pushEach(c, p, work, 3, 1<<10)
@@ -155,7 +155,7 @@ func aLayerTheStoreLostFallsBack(t *testing.T, newFleet NewFleet) {
 	fresh := freshNode(c, otherThan(c, maintainer))
 	ch := chainOn(c, fresh)
 	if ch.Installed != 0 || ch.Refused[lost.LayerID] != "missing" {
-		t.Fatalf("a git node that joined after the store lost layer %s holds %d of its chain installed, the layer "+
+		t.Fatalf("a Gitlet node that joined after the store lost layer %s holds %d of its chain installed, the layer "+
 			"refused %q; want it refused missing and nothing installed", lost.LayerID, ch.Installed,
 			ch.Refused[lost.LayerID])
 	}
@@ -182,7 +182,7 @@ func aLayerTheStoreLostFallsBack(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// lyingPublisher answers a git node's compactions with every publication's
+// lyingPublisher answers a Gitlet node's compactions with every publication's
 // layer row claiming one object more than its files hold, while armed: a
 // publisher whose row is not what it wrote, which every node's check refuses.
 type lyingPublisher struct {
@@ -213,7 +213,7 @@ func (l *lyingPublisher) arm(on bool) {
 // LY3: a layer every node refuses `corrupt`, in two arms — one byte of a part
 // spoiled in the store, which its hash check refuses, and a LYING PUBLISHER
 // whose row claims an object its files do not hold, which code.CheckLayer
-// refuses. In both a git node that joins afterwards serves from the layers
+// refuses. In both a Gitlet node that joins afterwards serves from the layers
 // below — its own index here, the chain having one layer — and a publication
 // by a maintainer whose own copy refused the layer too REPAIRS it, replacing
 // it whether or not anything was pushed since, which every node installs.
@@ -225,7 +225,7 @@ func aCorruptLayerFallsBack(t *testing.T, newFleet NewFleet) {
 				s.WrapCompactions = liar.wrap
 				return newFleet(t, s)
 			}
-			c := newCase(t, fleet, Shape{GitNodes: 2}, Settings())
+			c := newCase(t, fleet, Shape{GitletNodes: 2}, Settings())
 			p := NewPerson(t, c.Fleet, "ceo")
 			work := p.Init()
 			head := pushEach(c, p, work, 3, 1<<10)
@@ -285,7 +285,7 @@ func aCorruptLayerFallsBack(t *testing.T, newFleet NewFleet) {
 // over the packs live at its plan's position — the pushed pack is outside the
 // chain on every node, and a clone of its commit through each succeeds.
 func aPushRacingAPublicationStaysInTheTail(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	pushEach(c, p, work, 3, 1<<10)
@@ -339,7 +339,7 @@ func aPushRacingAPublicationStaysInTheTail(t *testing.T, newFleet NewFleet) {
 // InstallAfterFetch — the old chain still serves, since the chain holds its
 // packs; once the replacement is placed, the packs it retired are gone.
 func aRepackingPublicationKeepsTheBitmap(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	// A ROOT LAYER OVER MANY OBJECTS, then a small one above it: the second
@@ -444,7 +444,7 @@ func aRepackingPublicationKeepsTheBitmap(t *testing.T, newFleet NewFleet) {
 // copy swaps to a directory of links carrying every layer — and the node's
 // tip — and no layer is fetched again.
 func aCompactionKeepsTheChainWhole(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	first := pushEach(c, p, work, 2, 1<<10)
@@ -481,7 +481,7 @@ func aCompactionKeepsTheChainWhole(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// newerGit answers a git node's compactions with every publication's layer
+// newerGit answers a Gitlet node's compactions with every publication's layer
 // row stamped by a git release no node runs.
 func newerGit(next Compactions) Compactions {
 	return func(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
@@ -501,7 +501,7 @@ func aLayerFromANewerGitIsNotInstalled(t *testing.T, newFleet NewFleet) {
 		s.WrapCompactions = newerGit
 		return newFleet(t, s)
 	}
-	c := newCase(t, fleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, fleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := pushEach(c, p, work, 3, 1<<10)
@@ -544,7 +544,7 @@ func aMaintainerKilledAtEveryPublishPoint(t *testing.T, newFleet NewFleet) {
 
 // publishCrashAt is LY10 at one point.
 func publishCrashAt(t *testing.T, newFleet NewFleet, point codefault.Point) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := pushEach(c, p, work, 3, 1<<10)

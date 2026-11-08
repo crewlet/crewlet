@@ -47,7 +47,7 @@ func launchTurn(t *testing.T) *turnctx.Turn {
 // the reads carry no ceiling and the stranger's turn reads, red.
 func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	turn := launchTurn(t)
 	turn.Requester = "agent-ceo"
 	got, err := codeDeps(host).ResolveRunRepos(t.Context(), turn,
@@ -73,7 +73,7 @@ func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 		}
 	}
 
-	stranger := newCodeHost()
+	stranger := newGitletHost()
 	woken := launchTurn(t)
 	woken.Senders = []types.CanonicalIdentity{{}}
 	_, err = codeDeps(stranger).ResolveRunRepos(t.Context(), woken,
@@ -131,7 +131,7 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 		t.Helper()
 		turn := launchTurn(t)
 		turn.Requester = requester
-		return codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), turn, []builtin.RepoRequest{req}, charted)
+		return codeDeps(newGitletHost()).ResolveRunRepos(t.Context(), turn, []builtin.RepoRequest{req}, charted)
 	}
 
 	_, err := resolve(t, "agent-ceo", builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"})
@@ -177,7 +177,7 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 // Mutation: a query a ref → two resolves for one repository, red.
 func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	turn := launchTurn(t)
 	if _, err := codeDeps(host).ResolveRunRepos(t.Context(), turn,
 		[]builtin.RepoRequest{{Repo: "site", Base: "v1", Access: "read"}}, maintains); err != nil {
@@ -189,7 +189,7 @@ func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
 			"naming the tag", len(resolves), resolves, len(gits))
 	}
 
-	byID := newCodeHost()
+	byID := newGitletHost()
 	if _, err := codeDeps(byID).ResolveRunRepos(t.Context(), launchTurn(t),
 		[]builtin.RepoRequest{{Repo: "site", Base: mainOID[:9], Access: "read"}}, maintains); err != nil {
 		t.Fatalf("ResolveRunRepos: %v", err)
@@ -223,7 +223,7 @@ func TestACheckoutSaysWhereTheRunsBranchStands(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), launchTurn(t),
+			got, err := codeDeps(newGitletHost()).ResolveRunRepos(t.Context(), launchTurn(t),
 				[]builtin.RepoRequest{c.req}, maintains)
 			if err != nil {
 				t.Fatalf("ResolveRunRepos: %v", err)
@@ -249,8 +249,8 @@ func changeAt(state code.ChangeState) *code.ChangeDetail {
 // hostWithChange is Gitlet holding site and its change number 3 in
 // state — its row to a read in brief, its detail to any other — answering a
 // read of any other number not found.
-func hostWithChange(state code.ChangeState) *codeHost {
-	host := newCodeHost()
+func hostWithChange(state code.ChangeState) *gitletHost {
+	host := newGitletHost()
 	host.changes = func(q code.ReadQuery) (code.ReadAnswer, error) {
 		if q.Kind != code.ReadChange || q.Change != 3 {
 			return code.ReadAnswer{}, fmt.Errorf("%w: site!%d", code.ErrChangeNotFound, q.Change)
@@ -313,7 +313,7 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct {
-		host    *codeHost
+		host    *gitletHost
 		req     builtin.RepoRequest
 		refusal tools.Refusal
 		says    string
@@ -354,7 +354,7 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 // target is empty, red.
 func TestALaunchResolvesARunsAskToOpenAChange(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	got, err := codeDeps(host).ResolveRunRepos(t.Context(), launchTurn(t), []builtin.RepoRequest{
 		{Repo: "site", Branch: "feature", OpenChange: &builtin.OpenChangeRequest{Title: "Retry the upload",
 			Draft: true}}}, maintains)
@@ -386,7 +386,7 @@ func TestALaunchResolvesARunsAskToOpenAChange(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), launchTurn(t),
+			_, err := codeDeps(newGitletHost()).ResolveRunRepos(t.Context(), launchTurn(t),
 				[]builtin.RepoRequest{tc.req}, tc.grant)
 			var refused *builtin.RefusedCheckout
 			if !errors.As(err, &refused) || !strings.Contains(refused.Result.Output, tc.says) {

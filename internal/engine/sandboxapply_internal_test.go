@@ -391,7 +391,7 @@ func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
-	brokertest.CodeCacheIn(&b.Git)
+	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
 	RequireNodeGit(t, &b, company)
 	// ACTIVATED, as the revision `crewlet run` boots on always is: a company

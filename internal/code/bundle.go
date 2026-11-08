@@ -14,11 +14,11 @@ import (
 //
 // A push stores its pack, then the .idx (version 2) and the .rev (version 1)
 // the receiving node's receive-pack wrote for it, back to back, under one key.
-// One PUT a push, one GET a push on every git node, and NO index-pack anywhere
+// One PUT a push, one GET a push on every Gitlet node, and NO index-pack anywhere
 // but inside the receiving receive-pack: re-indexing a downloaded pack costs a
 // core 0.13–0.18 s a MiB, against verified object-store reads at about
 // 250 MB/s, so a cache that re-indexed every pack it fetched would make every
-// cold sync CPU-bound on every git node — while the receiver already HOLDS the
+// cold sync CPU-bound on every Gitlet node — while the receiver already HOLDS the
 // two indexes. One object rather than three because a cold sync on S3 is
 // bound by how many GETs it makes, not by bytes.
 //
@@ -181,8 +181,8 @@ var (
 //
 // ONE RULE FOR EVERY HOLDER OF A ROW (ADR-0008): the receiver's proposal is
 // held to it before it is published, [CheckBundle] before a seal is compared,
-// and a git node's cache before it downloads anything. A copy the domain
-// admitted a row past and a cache refused would leave a repository no git
+// and a Gitlet node's cache before it downloads anything. A copy the domain
+// admitted a row past and a cache refused would leave a repository no Gitlet
 // node can sync, fleet-wide, for good — the rows say it, and asking again
 // reads the same rows.
 //
@@ -217,7 +217,7 @@ func (p PackRef) Check() error {
 }
 
 // CheckBundle holds a bundle's seal to the [PackRef] that names it — the ONE
-// rule (ADR-0008) the receiver applies before it proposes a push and every git
+// rule (ADR-0008) the receiver applies before it proposes a push and every Gitlet
 // node applies before it installs one. Every disagreement is [ErrBadBundle],
 // naming the first one found and both of its values: the row's own fields
 // first ([PackRef.Check]), then the seal against them.

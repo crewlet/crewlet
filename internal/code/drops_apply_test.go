@@ -205,7 +205,7 @@ func TestARefDropOutlivesItsGraceAndNoMore(t *testing.T) {
 // with fewer tombstones due than its budget, sweeps them and forgets drops
 // with the rest — every row of the budget touched by the first, and never one
 // past it by either. A drop forgotten late costs a row; a tombstone's room
-// taken costs every git node a full read.
+// taken costs every Gitlet node a full read.
 //
 // Mutation: forget the drops before the sweep, and the first record forgets
 // them all and leaves the tombstones a thousand rows short.

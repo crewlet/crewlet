@@ -178,6 +178,10 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"CodeProtection", "approvals", strs(CodeApprovalCounts)},
 		{"CodeProtection", "delete_source", strs(CodeDeleteSources)},
 		{"Code", "merge_by_floor", strs(CodeMergeBys)},
+		// The git host, which the org projection also hands every reader as
+		// `services.code`: a value the schema offered and the validator
+		// refused would be a company an editor passed and no node would run.
+		{"Code", "backend", strs(CodeBackends)},
 		// The three tiers, each in its one spelling: the validator reads
 		// exactly these, so an editor underlines exactly what the engine
 		// refuses.
@@ -1124,7 +1128,7 @@ units:
 		// every field of its gate: neither layer may refuse it.
 		{
 			name: "a merge gate on a protected branch", tier: TierCompany,
-			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  merge_by_floor: maintainers\n" +
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  backend: gitlet\n  merge_by_floor: maintainers\n" +
 				"  repos:\n    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, " +
 				"merge_by: persons, approvals: one, approvals_unless: [comment_only], human_paths: [{glob: " +
 				"'deploy/**', unless: [whitespace_only]}], checks: [unit, e2e.linux], landing: {depth: 8, " +
@@ -1134,19 +1138,19 @@ units:
 		// while the author is still typing.
 		{
 			name: "no_code_change exempting approvals", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  backend: gitlet\n  repos:\n" +
 				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, approvals: one, " +
 				"approvals_unless: [no_code_change]}\n",
 		},
 		{
 			name: "a required check with a capital", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  backend: gitlet\n  repos:\n" +
 				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [Unit]}\n",
 		},
 		// A CHECK REQUIRED TWICE: a list's uniqueness is the validator's.
 		{
 			name: "a required check listed twice", tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  backend: gitlet\n  repos:\n" +
 				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [unit, unit]}\n",
 		},
 		// The Atlassian tracker, which IS served: a Cloud site named by its

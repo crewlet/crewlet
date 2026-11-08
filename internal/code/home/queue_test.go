@@ -29,7 +29,7 @@ import (
 // that commit's latest attempt, and the checks file every commit holds, and
 // every attempt the worker cancels ended cancelled — the read answering, as
 // given up, each attempt the worker queued that has not ended on a commit no
-// train tests or landed; the chains a git node builds (queueChains), each entry's merge a commit derived
+// train tests or landed; the chains a Gitlet node builds (queueChains), each entry's merge a commit derived
 // from the commit it was built onto; and the work items closed (queueTasks).
 
 const queueMain = "refs/heads/main"
@@ -377,7 +377,7 @@ func (r *queueRows) Change(context.Context, code.ChangeProposal) (code.ChangeRes
 	return code.ChangeResult{}, errors.New("the queue asked a write of a change's lifecycle")
 }
 
-// queueChains is a git node's chain builds: each entry's merge a commit
+// queueChains is a Gitlet node's chain builds: each entry's merge a commit
 // derived from the commit before it, an entry in conflicts skipped as a
 // conflict on the path it names, one in rejected skipped rejected_object, the
 // chain answering its first reach entries alone where reach is set — the

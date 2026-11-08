@@ -46,7 +46,7 @@ type world struct {
 	// one process.
 	processes int
 	// transfers is every boot's pool's MaxTransfers, an operator's
-	// git.max_transfers; 0 is the pool's own default, sized to its
+	// gitlet.max_transfers; 0 is the pool's own default, sized to its
 	// processes and its memory.
 	transfers int
 	// memory is every boot's pool's node memory; 0 is a tebibyte, so every
@@ -254,7 +254,7 @@ func (n noRows) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error) {
 	return code.ReadAnswer{}, io.ErrUnexpectedEOF
 }
 
-// soloFleet is a node with no fleet: one git node and one data node, itself,
+// soloFleet is a node with no fleet: one Gitlet node and one data node, itself,
 // which a backfill paces its pages by.
 func soloFleet() (int, int, error) { return 1, 1, nil }
 

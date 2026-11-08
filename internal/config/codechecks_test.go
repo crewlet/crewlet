@@ -36,7 +36,7 @@ func checksDoc(cat cells, checks ...string) string {
 			doc += "    default_run_in: " + cat.defaultRunIn + "\n"
 		}
 	}
-	doc += "code:\n  native: true\n"
+	doc += "code:\n  backend: gitlet\n"
 	if len(checks) > 0 {
 		doc += "  checks:\n"
 		for _, line := range checks {
@@ -115,7 +115,7 @@ func mustParse(t *testing.T, doc string) *config.Company {
 // wrote, one mistake one line: its timeout within a minute and six hours, a
 // secret's name one a check can name, each cell one a check runs in and
 // allowed once, every cell it names served by a backend the catalogue
-// configures — a check's box is made from it, on a git node — the cells it
+// configures — a check's box is made from it, on a Gitlet node — the cells it
 // allows holding the one a check naming none runs in, and the image a check's
 // container needs where only a check reaches one. And nothing of it on a
 // company hosting no code.
@@ -152,7 +152,7 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 			path: "code.checks.remote.box_hours_per_day", kind: "out_of_range"},
 		"remote caps with nothing hosting code": {
 			doc:  "name: Acme\ncode:\n  checks:\n    remote: {max_running: 4}\n",
-			path: "code.checks", kind: "conflict", says: []string{"code.native"}},
+			path: "code.checks", kind: "conflict", says: []string{"code.backend: gitlet"}},
 		"the timeout at its floor": {doc: checksDoc(direct, "max_timeout_seconds: 60")},
 		"a catalogue only a check reaches": {doc: checksDoc(cells{local: true, image: true},
 			"run_in: container")},
@@ -173,7 +173,7 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 		"a cell allowed twice": {doc: checksDoc(both, "allow_run_in: [container, container]"),
 			path: "code.checks.allow_run_in[1]", kind: "conflict", says: []string{"allow_run_in[0]"}},
 		"checks with nothing hosting code": {doc: "name: Acme\ncode:\n  checks:\n    max_timeout_seconds: 600\n",
-			path: "code.checks", kind: "conflict", says: []string{"code.native"}},
+			path: "code.checks", kind: "conflict", says: []string{"code.backend: gitlet"}},
 		"a cell no backend serves": {doc: checksDoc(direct, "run_in: e2b"),
 			path: "code.checks.run_in", kind: "conflict", says: []string{"`e2b:`", `"direct" or "container"`}},
 		"an allowed cell no backend serves": {

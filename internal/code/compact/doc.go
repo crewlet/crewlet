@@ -6,10 +6,10 @@
 //
 // Every push stores one pack, so a busy repository's pack count grows with
 // its pushes, and every cold sync then pays a GET a pack and every request a
-// lookup a pack. And every git node used to write its own whole
+// lookup a pack. And every Gitlet node used to write its own whole
 // multi-pack-index and bitmap of every repository it serves — O(history) in
 // memory and minutes on every node at every duty cycle, refused outright on a
-// node whose memory could not hold the largest repository's bitmap. One git
+// node whose memory could not hold the largest repository's bitmap. One Gitlet
 // node a repository, its maintainer, now does both for the fleet:
 //
 //   - THE COMPACTION LOOP ([Compactor.Poll]): on every [Poll] it lists the
@@ -20,7 +20,7 @@
 //     that are not FULL, into one or a few pack bundles in the stored format,
 //     stores each as one object, and proposes ONE compaction to the
 //     repository's committer, which decides it in one snapshot and retires
-//     the inputs into code_packs_retired for code.RetireGrace. Every git
+//     the inputs into code_packs_retired for code.RetireGrace. Every Gitlet
 //     node's cache drops a retired pack by an incarnation swap over hard
 //     links, so a reader holding the old directory keeps every file it may
 //     open (internal/code/cache's swap.go).
@@ -34,7 +34,7 @@
 //     commit-graph layer with every changed-path filter, over every live pack
 //     the chain beneath it does not cover. It stores the layer's bytes as
 //     parts (code.StoreLayer) and proposes it as one compaction carrying the
-//     layer, which every git node then installs (internal/code/cache's
+//     layer, which every Gitlet node then installs (internal/code/cache's
 //     layers.go).
 //   - THE EXPUNGE LOOP ([Compactor.ExpungePass]): on every [ExpungePoll] it
 //     lists the repositories with an expunge open or a person's purge
@@ -48,13 +48,13 @@
 //
 // # Who maintains, and why one node does all three
 //
-// The MAINTAINER is the first git node of the repository's rendezvous order
+// The MAINTAINER is the first Gitlet node of the repository's rendezvous order
 // whose ADVERTISED background budget holds its maintenance's charge — the
 // largest any of its steps may be admitted at, the publication's bitmap over
 // the whole history or a merge of every object with its delta window,
 // cache.Cache.MaintenanceCharge — and the home where none can
 // (internal/estate's Router.Maintainer): on a fleet of alike nodes it is the
-// home, and on a fleet with one large git node every repository only that
+// home, and on a fleet with one large Gitlet node every repository only that
 // node can maintain is maintained there. All three loops
 // ask by the same charge, so the three writers of a repository's packs run on
 // ONE node, and on that node a compaction NEVER MERGES A PACK A PUBLICATION IN
@@ -85,9 +85,9 @@
 // two nodes whose presence views disagree for a moment may both build, and the
 // committer refuses the second `stale`, one wasted build. Each pass judges
 // every listed repository it must against ONE LISTING of who serves git and
-// what each git node advertises (Maintainers), and a node that cannot read it
+// what each Gitlet node advertises (Maintainers), and a node that cannot read it
 // does nothing that pass rather than guess (Maintainers is three-valued); a
-// node no listing of the git nodes carries maintains
+// node no listing of the Gitlet nodes carries maintains
 // nothing — a booting one until its host beats — so every loop waits for this
 // node to be listed before its first pass ([Compactor.awaitListed]). THREE
 // LOOPS, because a publication of a large repository takes minutes and a hot
@@ -107,7 +107,7 @@
 // heads every pass of the loop. A repository a plan found NOT DUE
 // (nothing to merge, nothing to publish) is remembered at its row's version —
 // and a compaction's at its byte cap — so an idle repository costs its
-// maintainer's pass a map lookup, never a sync, and every other git node's —
+// maintainer's pass a map lookup, never a sync, and every other Gitlet node's —
 // where no plan of it is ever made to remember — its rendezvous order over the
 // pass's one listing; an admission the node's memory refused is never
 // remembered, since the node's budget is read again at every pass, and the
@@ -246,7 +246,7 @@
 // # Self-healing
 //
 // A layer part the store lost, or one whose bytes are damaged, is refused
-// `missing` or `corrupt` on every git node, its maintainer included, and the
+// `missing` or `corrupt` on every Gitlet node, its maintainer included, and the
 // node serves from the prefix below it. The maintainer's next pass finds the
 // refusal in its own cache (cache.Cache.Damaged) whether or not the repository
 // has a tail, and REPAIRS it: the plan replaces the refused layer and every
@@ -278,7 +278,7 @@
 // compaction's output, which arrives when its newest input did, merging an
 // old leak with a later push — made the repository due while every pack a
 // cycle could take held none of it, and the cycle rewrote the old,
-// garbage-free packs, which every git node then downloaded again, to free
+// garbage-free packs, which every Gitlet node then downloaded again, to free
 // nothing, every week. The weighing is ONE `rev-list --objects
 // --no-object-names --use-bitmap-index` from what is kept, each object it
 // prints looked up in each such pack's own version-2 index, and what none
@@ -291,9 +291,9 @@
 // found NOT DUE either way is RECORDED so (code.ExpungeScan, one record on its
 // subject), which takes it out of the weekly arm for code.ExpungeInterval on
 // EVERY NODE — never a memo in the scanning process, which a restart, a
-// rolling upgrade or a git node joining or leaving lost, so a fleet-wide
+// rolling upgrade or a Gitlet node joining or leaving lost, so a fleet-wide
 // deploy downloaded and walked every repository again, and with which every
-// git node went on listing nearly every repository every minute. By the
+// Gitlet node went on listing nearly every repository every minute. By the
 // record's instant and never by the row's version — a push moves the version,
 // which would rescan a hot repository at every pass, and a drop's grace or a
 // pack's runs out by the clock with no record moving it — so a clean
@@ -318,7 +318,7 @@
 // asked about and nothing pushed since. ON THE SCHEDULE the inputs are the
 // live packs whose newest content ARRIVED code.PruneGrace or longer ago
 // (code.PackRow.Arrived) and that the scan found would drop a byte, DENSEST
-// FIRST — the most each frees for every byte it rewrites, which every git
+// FIRST — the most each frees for every byte it rewrites, which every Gitlet
 // node downloads again — under the same caps, so EVERY PACK ADDED WITHIN THE
 // GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects that no ref
 // reaches yet among them — a pack that frees nothing is never rewritten, and
@@ -358,7 +358,7 @@
 // into the copy's dropping view (cache.Cache.AdoptDropping) — so the
 // maintainer downloads none of what it built, the cruft above all, up to
 // [ExpungeInputByteCap] of GETs a cycle for packs its commit retires minutes
-// later; every other git node installs both from the store at its next round.
+// later; every other Gitlet node installs both from the store at its next round.
 //
 // THE RESCUE IS VALID AT ANY POSITION AT OR AFTER THE BEGIN, which is what
 // makes a crash resumable from the rows alone. A push checked after the begin
@@ -454,16 +454,16 @@
 //
 // A BUSY REPOSITORY (steady/pushes=6000/rate=300/min: 6 000 one-commit
 // pushes of 24.6 KB — a 20 KB file, its commit and its two trees — three
-// hundred to a simulated minute, a pass every minute, the other git node
+// hundred to a simulated minute, a pass every minute, the other Gitlet node
 // syncing after every push and every pass; counts and bytes, none a time):
 // at most 304 live packs, under code.CompactTargetPacks and a minute's
 // pushes, which confirms [Poll]; twenty compactions, one a pass, each taking
 // the minute's three hundred, so 1.003 packs retired a push; outputs weighing
-// 2.38 times what was pushed, and the other git node downloading 3.38 times
+// 2.38 times what was pushed, and the other Gitlet node downloading 3.38 times
 // it — every push once, and every output once more; 42.6 bytes a push of
 // compaction records on the code log, their signed frames included. A
 // thousand pushes cost 3.3 PUTs of outputs (58.5 MB) and 23.3 GETs of them on
-// a fleet of eight git nodes (410 MB), and a cold sync of what the 6 000 left
+// a fleet of eight Gitlet nodes (410 MB), and a cold sync of what the 6 000 left
 // reads two packs, 125 MB — the same at min-merge 4, 8 and 16, since every
 // pass found three hundred packs whatever the floor.
 //
@@ -471,7 +471,7 @@
 // minute, a pass every minute, so a merge waits for the floor's packs to
 // gather), merged from code.CompactMinMerge's sixteen: 77 compactions, at
 // most 20 live packs, 1.05 packs retired a push, outputs weighing 3.73 times
-// what was pushed and the other git node downloading 4.73 times it, and
+// what was pushed and the other Gitlet node downloading 4.73 times it, and
 // 108 bytes a push of records; a thousand pushes cost 64 PUTs and 449 GETs of
 // the outputs on a fleet of eight, and 13 GETs a cold sync of what was left —
 // 527 requests, where merging from eight cost 1 081 (161 compactions, at most
@@ -497,15 +497,15 @@
 // 66.6 ms on the data node serving it (op=page, an in-process estate at stale,
 // no statistics gathered; two E-cores of an Intel Core Ultra 7 265U,
 // 2026-10-27, five reads), under the 100 ms past which two listings a minute
-// from each of sixteen git nodes would hold over a twentieth of one reader and
+// from each of sixteen Gitlet nodes would hold over a twentieth of one reader and
 // a listing of what changed since the last poll would have to be priced. And a
 // pass over those 10 000, none of them due here, cost 326 ns a repository on
 // their maintainer (op=pass/maintains=all: a lookup in the memory of plans
-// found not due, 3.3 ms the pass) and 383 ns of its own on a git node
+// found not due, 3.3 ms the pass) and 383 ns of its own on a Gitlet node
 // maintaining an eighth of them (op=pass/maintains=1of8: the rest judged
-// against the pass's one listing of the git nodes, each by its publication's
+// against the pass's one listing of the Gitlet nodes, each by its publication's
 // charge), beside which the router's judging of every one of those costs
-// 569 ns a repository over eight git nodes and 1.11 µs over sixteen
+// 569 ns a repository over eight Gitlet nodes and 1.11 µs over sixteen
 // (internal/estate's BenchmarkMaintainerOf) — under a microsecond a
 // repository, some 9 ms a pass, on each of a fleet of eight (the poll arms and
 // BenchmarkMaintainerOf at -benchtime 20x, one count, on the same machine,

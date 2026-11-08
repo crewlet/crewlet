@@ -155,7 +155,7 @@ func rosterOf(c *Company) func() codeRoster {
 // refuse a seat's read on nil as a refusal about THIS NODE — the code reader
 // [code.ErrNotServing] ([code.ReaderOptions.Roster]), so the estate's walk
 // asks a data node that holds a chart, and the git reads [code.ErrGitUnready]
-// with [code.UnreadyNoChart], so another git node is asked — and never answer
+// with [code.UnreadyNoChart], so another Gitlet node is asked — and never answer
 // that the seat stands nowhere, which only a chart that denies it may answer,
 // nor that every seat reads. [code.GrantOf] itself still holds an agent to
 // none on a nil roster, for a judge that asks it with no chart.
