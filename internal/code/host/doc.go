@@ -73,7 +73,7 @@
 //
 // A seat's or a person's change made through a tool — files committed, a
 // commit reverted or picked, a branch created or deleted — is BUILT on the
-// git node (Server.Write, write.go; the build, build.go) and LANDED as a push
+// Gitlet node (Server.Write, write.go; the build, build.go) and LANDED as a push
 // (ADR-0092): judged on the copy synced to its caller's floor, and every
 // refusal judged again once at the log's head before it is answered; built in
 // a scratch named by its push id, by git's own plumbing over exactly the
@@ -474,7 +474,7 @@
 // On the node pin, git 2.56.0, in every pool and every client, Go 1.27.2,
 // on two E-cores of an Intel Core Ultra 7 265U (SHA instructions; the
 // machine shared with other work), all on one machine: one data node and two
-// git nodes (codetest.SoloNode), the broker fsyncing every write as
+// Gitlet nodes (codetest.SoloNode), the broker fsyncing every write as
 // stream.sync's default does (SoloOptions.SyncAlways), the S3 fake answering
 // each request 100 ms after it arrives at 80 MB/s a connection. ONE BOUNDED
 // RUN of every arm, 2026-10-31 — -benchtime 1x and one count unless a
@@ -494,7 +494,7 @@
 // for its row. Its advertisement, a request of its own, is 11 ms, and the
 // rest is git's client. Put to the S3 fake the request is 182 ms and the push
 // 232 ms: the one request on a push's path that waits on the object store is
-// its put, a first byte's worth. The OTHER git node's delta sync of the push
+// its put, a first byte's worth. The OTHER Gitlet node's delta sync of the push
 // — the packed-refs merge and one GET of the bundle — is 8.4 ms from memory
 // and 146 ms from the fake.
 //
@@ -603,7 +603,7 @@
 // largest share of the smallest requests, and the clone shows it vanish in a
 // large one.
 //
-// A COLD CLONE (BenchmarkCloneCold) — the first on a git node that never
+// A COLD CLONE (BenchmarkCloneCold) — the first on a Gitlet node that never
 // served the repository, its cold sync, round and first upload-pack in series
 // before git's first byte — of two hundred pushes of fifty 3 000-byte files
 // (a tree of 10 000 files in a hundred directories, a 31.5 MB pack), from the
@@ -662,7 +662,7 @@
 // node's own whole index and its bitmap, as a node serves a repository
 // nobody has published, and mode=chain from the repository's published
 // chain, installed after one publication of the same pushes, written over
-// the maintainer's repack of them, as every git node serves a repository its
+// the maintainer's repack of them, as every Gitlet node serves a repository its
 // maintainer publishes.
 //
 //   - mode=own: the tree history's full clone is sent 40.5 MB and takes
@@ -762,7 +762,7 @@
 // borrowed copy costs a box several times the clone it saves the node.
 //
 // AN ENGINE WRITE (BenchmarkEngineWrite), from the call of a code write tool
-// a seat's turn makes — the real tool, over the production router, on one git
+// a seat's turn makes — the real tool, over the production router, on one Gitlet
 // node whose broker fsyncs every write — to the tool's answer, which follows
 // the push's applied row and its pack adopted into the copy. Taken in two
 // runs of ten writes an arm (sixty-four a round where sixty-four are asked

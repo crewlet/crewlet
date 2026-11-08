@@ -483,7 +483,7 @@ func (c *countingCache) take() []statelog.ReadLevel {
 	return out
 }
 
-// AN ID THE COPY LACKS IS LOOKED FOR ONCE AT THE LOG'S HEAD. A git node whose
+// AN ID THE COPY LACKS IS LOOKED FOR ONCE AT THE LOG'S HEAD. A Gitlet node whose
 // copy predates a push is asked, at the asker's floor (which it has reached),
 // for the push's commit: it syncs ONCE at the log's head — the asker may know
 // of a push this node has not synced — and answers. An id nobody pushed, whole
@@ -491,7 +491,7 @@ func (c *countingCache) take() []statelog.ReadLevel {
 // ErrObjectNotFound naming it, never synced for again.
 func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, codetest.Settings())
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}}, codetest.Settings())
 	first := x.commit(map[string]string{"f": "1\n"}, "one")
 	repo := x.repo(codetest.RepoName)
 	counting := &countingCache{Cache: x.f.Nodes()[1].Cache()}
@@ -593,7 +593,7 @@ func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 }
 
 // A READ MADE FOR A CHECK IS ITS ATTEMPT'S TO PAY: a check's box reading, at
-// /box/gitlet/, a commit the git node's copy does not hold looks once at the
+// /box/gitlet/, a commit the Gitlet node's copy does not hold looks once at the
 // log's head a read until its attempt's sixteen on the node are spent; then
 // it is answered at the check's session, with no sync at the head, naming
 // the check's re-syncs.
@@ -671,7 +671,7 @@ func (g *gatedObjects) open() {
 	g.gate = nil
 }
 
-// A COLD REPOSITORY ANSWERS UNREADY AND KEEPS SYNCING. A git node that has
+// A COLD REPOSITORY ANSWERS UNREADY AND KEEPS SYNCING. A Gitlet node that has
 // never held a repository is asked for it while its download waits on the
 // object store: past the read's sync wait (50 ms here) it answers
 // ErrGitUnready{syncing} — about itself, so the asker may ask another node —
@@ -681,7 +681,7 @@ func (g *gatedObjects) open() {
 func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
 	t.Parallel()
 	objects := &gatedObjects{Backend: memobj.New()}
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects},
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}, Objects: objects},
 		codetest.Settings())
 	head := x.commit(map[string]string{"f": "1\n"}, "one")
 	repo := x.repo(codetest.RepoName)
@@ -744,12 +744,12 @@ func (p wedgedPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, err
 }
 
 // ONLY A FAILURE OF THE NODE'S OWN LETS ANOTHER NODE FILL. A sync that failed
-// on what every git node's copy is filled from — the code log, the object
+// on what every Gitlet node's copy is filled from — the code log, the object
 // store, a pack the store lacks or holds damaged, a bundle that is not its
 // row's, rows this build cannot install, a repair the cache refuses to repeat
 // because a whole read of them did not end the damage — is answered
 // `syncing`, which keeps the walk's one fill where it is: another node's fill
-// would meet the same failure, a download for nothing, and every git node's at
+// would meet the same failure, a download for nothing, and every Gitlet node's at
 // once against a store that throttles. A sync that failed for a reason of the
 // node's own — its cache stopping, its disk refusing a write — and a short
 // check over its copy that ran its whole bound are answered `node_failed`,
@@ -789,13 +789,13 @@ func TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill(t *testing.T) {
 	}
 }
 
-// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0089). A git node that has
+// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0089). A Gitlet node that has
 // never held a repository, asked a read that is NOT its walk's effective
 // home's, answers ErrGitUnready{not_held} at once and starts nothing — no
 // round, no GET of the object store — because a round, once begun, runs on
 // under the cache's own lifetime after its read stops waiting: with every node
 // free to fill, one read of a repository nobody held downloaded it on every
-// git node the walk reached. Asked as the home, the same node fills: the cold
+// Gitlet node the walk reached. Asked as the home, the same node fills: the cold
 // round starts, the read is answered syncing while the download waits, and
 // once it lands the copy serves. And a copy the node HOLDS answers whatever
 // the stamp says — behind the asker's floor, brought there by a delta.
@@ -805,7 +805,7 @@ func TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill(t *testing.T) {
 func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 	t.Parallel()
 	objects := &gatedObjects{Backend: memobj.New()}
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects},
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}, Objects: objects},
 		codetest.Settings())
 	head := x.commit(map[string]string{"f": "1\n"}, "one")
 	repo := x.repo(codetest.RepoName)
@@ -911,7 +911,7 @@ func TestAUnitRepositoryRefusesASeatOutsideIt(t *testing.T) {
 	}
 }
 
-// A READ MADE FOR A SEAT IS HELD TO THAT SEAT'S GRANT, on the git node that
+// A READ MADE FOR A SEAT IS HELD TO THAT SEAT'S GRANT, on the Gitlet node that
 // answers it, from the chart and the row it judges the asker by
 // (code.JudgeRead, the data node's judgment too): eng-dev reads a
 // `visibility: unit` repository of its own unit, and read for sales-rep — the
@@ -963,7 +963,7 @@ func TestAReadMadeForASeatIsHeldToThatSeatsGrant(t *testing.T) {
 	}
 }
 
-// A REFUSAL IS JUDGED AT THE LOG'S HEAD. A git node whose copy of a
+// A REFUSAL IS JUDGED AT THE LOG'S HEAD. A Gitlet node whose copy of a
 // repository predates the activation that made it `visibility: company` would
 // refuse a seat outside the owning unit from the row it holds; it syncs once at
 // the log's head instead — Gitlet never refuses on a stale read — and
@@ -975,7 +975,7 @@ func TestARefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
 	settings.Visibility = code.VisibilityUnit
-	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, settings)
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}}, settings)
 	head := x.commit(map[string]string{"f": "1\n"}, "one")
 	repo := x.repo(codetest.RepoName)
 	counting := &countingCache{Cache: x.f.Nodes()[1].Cache()}
@@ -1003,7 +1003,7 @@ func TestARefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	}
 }
 
-// A READ WITH NO CHART IS UNREADY HERE, NEVER REFUSED. A git node holding no
+// A READ WITH NO CHART IS UNREADY HERE, NEVER REFUSED. A Gitlet node holding no
 // chart yet — no epoch installed, at boot or before a first apply — cannot
 // judge a seat, which is not "this seat may not read it": the seat's read is
 // ErrGitUnready{no_chart}, about this node, so the asker asks another, and no
@@ -1032,14 +1032,14 @@ func TestAReadWithNoChartIsUnreadyHere(t *testing.T) {
 	}
 }
 
-// A GIT NODE BEHIND ITS CONFIGURATION SERVES NO SEAT. Confirmed behind the
+// A GITLET NODE BEHIND ITS CONFIGURATION SERVES NO SEAT. Confirmed behind the
 // company's configuration (shed or stuck), a node judges no seat's grant from
 // the chart the fleet replaced — the revision it failed may be the one that
 // revoked it — so a seat's read is ErrGitUnready{behind_config} and starts no
 // sync, while a person's, which reads no chart, is served.
 //
 // Mutation: drop the arm — the seat is served, red.
-func TestAGitNodeBehindItsConfigurationServesNoSeat(t *testing.T) {
+func TestAGitletNodeBehindItsConfigurationServesNoSeat(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
 	head := x.commit(map[string]string{"f": "1\n"}, "one")

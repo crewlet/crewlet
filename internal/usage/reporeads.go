@@ -17,7 +17,7 @@ import (
 // repo_read records summed, one row per reader.
 //
 // EVERY NODE'S ROWS, which is why this is the domain's and not the event log's:
-// a repository's reads are recorded where they were served — the git node a
+// a repository's reads are recorded where they were served — the Gitlet node a
 // fetch reached, the home a code tool's read was asked of — and its readers are
 // the union, a node that has since left the fleet included.
 

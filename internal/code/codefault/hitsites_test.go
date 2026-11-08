@@ -132,7 +132,7 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 
 // A fault point is ONE step, named once: F21 kills the node at every point
 // of PushPath(), C6 the maintainer at every point of CompactPath(), LY10 at
-// every point of PublishPath(), F38 the git node at every point of WritePath()
+// every point of PublishPath(), F38 the Gitlet node at every point of WritePath()
 // — the write's own and the one landing's — the expunge's own suite its
 // maintainer at every point of ExpungePath(), and a cache case holds a sync —
 // or crashes it — at each of the sync's, so a point hit at two sites fires at

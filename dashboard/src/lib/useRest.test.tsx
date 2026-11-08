@@ -261,7 +261,7 @@ describe("what makes it read again", () => {
 });
 
 // A READ THAT ASKS AGAIN ONLY WHAT NEVER ARRIVED: a code search, whose answer
-// names what it was read at and whose every ask is a scatter to the git
+// names what it was read at and whose every ask is a scatter to the Gitlet
 // nodes, is not repeated on a reconnect — but one the dropped connection cut
 // off is the reader's search, never asked, and the socket's return asks it.
 describe("a read that re-reads only what never reached the engine", () => {

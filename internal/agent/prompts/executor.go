@@ -92,7 +92,7 @@ func CodeHistoryTools() []string {
 // passed on — so none of that is repeated here; what is left is the choice a
 // seat makes BEFORE it picks a tool, between a server-side read by commit id,
 // which costs milliseconds, and a clone in the executor's box, which costs
-// minutes and the company's git nodes their transfer lane.
+// minutes and the company's Gitlet nodes their transfer lane.
 //
 // The tools by their family's name rather than one by one, so the sentence
 // stays true as later reads join the family — but for the one read a review
@@ -121,7 +121,7 @@ func CodeSearchTools() []string { return []string{toolname.CodeSearch} }
 
 // codeSearchSection is the one rule about SEARCHING the company's code that no
 // tool's description reaches a seat early enough to make: the choice between
-// one search across the repositories it reads, which the git nodes answer from
+// one search across the repositories it reads, which the Gitlet nodes answer from
 // an index where a repository keeps one, and walking trees file by file with
 // code_read to find where something lives, a round each and the turn's context
 // spent on files that do not hold it. How a search is written — its filters,

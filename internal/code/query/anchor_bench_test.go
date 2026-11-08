@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/query"
 )
 
-// BenchmarkReanchor is a re-anchoring timed whole through a git node's query
+// BenchmarkReanchor is a re-anchoring timed whole through a Gitlet node's query
 // server — the check of what it names, its unit of the share and its one
 // diff-pairs — of one anchor on the LAST line of a file whose next version
 // changes every other line above it: the PATHOLOGICAL pair, whose diff is a
@@ -42,7 +42,7 @@ func BenchmarkReanchor(b *testing.B) {
 	}
 }
 
-// reanchorRig is BenchmarkReanchor's fixture: a fleet of one git node holding
+// reanchorRig is BenchmarkReanchor's fixture: a fleet of one Gitlet node holding
 // the two versions, its query server, the re-anchoring asked and its answer.
 type reanchorRig struct {
 	s    *query.Server

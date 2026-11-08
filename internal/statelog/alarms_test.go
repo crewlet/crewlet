@@ -206,7 +206,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsMissing: 2},
 			"2 file(s) are missing from the object store, damaged in it, or not answered for by it",
 		},
-		"repositories a git node's memory cannot index": {
+		"repositories a Gitlet node's memory cannot index": {
 			statelog.KindCodeMaintenanceRefused,
 			statelog.Reading{CodeMaintenanceRefused: 2, CodeMaintenanceLargest: 19 << 30,
 				CodeMaintenanceBudget: 1 << 30},

@@ -46,14 +46,14 @@ import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
  * SEVEN, because seven questions do not fit one ranked list: the company's
  * WORK, its PAGES and its ARTIFACTS are server searches ranked by the engine
  * and cannot be ranked against a list of screens; its CODE is a scatter over
- * the git nodes that answers lines, not records, in the repositories' order; finding a PERSON wants the
+ * the Gitlet nodes that answers lines, not records, in the repositories' order; finding a PERSON wants the
  * roster and the engine's own name tiers and nothing else, so a colleague is
  * not buried under four tools whose names happen to match; and running a
  * COMMAND has no name to search for at all. ALL is the launcher over the lot.
  *
  * ARTIFACTS AND CODE ARE ASKED IN THEIR OWN SCOPES ONLY. All already asks
  * three server questions, and a fourth would take the slot the screen under
- * the palette keeps — and a code search is a request to every git node, which
+ * the palette keeps — and a code search is a request to every Gitlet node, which
  * a launcher's every pause must not send; All offers a row that carries the
  * term to Artifacts instead, and Gitlet › Search is one Enter away in Code's.
  *

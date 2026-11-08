@@ -402,11 +402,11 @@ type Census struct {
 	// append at will are HELD to the seats' term, not merely counted in it: a
 	// box's, a turn's code tools' second look and an engine write's
 	// re-judgement each draw on a bucket of its run or its turn and on its
-	// seat's ONE bucket of the git node that answers, which all three pay —
+	// seat's ONE bucket of the Gitlet node that answers, which all three pay —
 	// LinearizableReadsPerSeatDay a day, after a burst of code.ResyncBurst
 	// (internal/code's NewResyncs) — and past it are answered at the seat's
 	// floor with no barrier. A check's box's re-syncs are no seat's and no
-	// client's: bounded alike by its repository's checks on each git node,
+	// client's: bounded alike by its repository's checks on each Gitlet node,
 	// and counted in no term here.
 	Clients int
 }
@@ -489,7 +489,7 @@ const (
 	KindObjectiveBurn            Kind = "objective_burn"
 	KindClockSkew                Kind = "clock_skew"
 
-	// Gitlet's: a git node's own work, beside the logs', and the
+	// Gitlet's: a Gitlet node's own work, beside the logs', and the
 	// committer's on the data node that decides a repository's pushes.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
@@ -880,7 +880,7 @@ type Reading struct {
 	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 
 	// CodeCompactionBehind is how many of the repositories this node
-	// maintains — as their MAINTAINER, the git node that merges their packs
+	// maintains — as their MAINTAINER, the Gitlet node that merges their packs
 	// and publishes their layers — its compactor found at the most live packs
 	// a repository may hold on its last pass, so every push carrying a pack
 	// into them is refused `compaction_behind` until a compaction lands;
@@ -937,7 +937,7 @@ type Reading struct {
 	// commit, the branch it is checked for, its check and its attempt.
 	//
 	// MEASURED FROM THE ROWS by every data node, never by a runner: a fleet
-	// whose every git node is gone runs no check at all, and is the case the
+	// whose every Gitlet node is gone runs no check at all, and is the case the
 	// alarm must not miss. EACH ATTEMPT WAS JUDGED AT ITS OWN TIMEOUT, which
 	// this framework does not import, so the alarm borrows it (ADR-0015) and
 	// fires at any count. All zero on a node holding no code log's rows — no
@@ -966,8 +966,8 @@ type Reading struct {
 	// depth and the batch its gate lands under and the rounds its home
 	// timed, judged by the home's queue worker, so the alarm fires at any
 	// count and never at a rate of its own. Raised by the repository's HOME
-	// git node, the one node that builds and times its trains. All zero on
-	// a node that is home to no queue — no git role, or a company that hosts
+	// Gitlet node, the one node that builds and times its trains. All zero on
+	// a node that is home to no queue — no gitlet role, or a company that hosts
 	// no code — and on one whose every queue keeps up.
 	CodeMergeRateOver         int
 	CodeMergeRateOverTarget   string
@@ -993,7 +993,7 @@ type Reading struct {
 	//
 	// EACH REPOSITORY WAS ALREADY JUDGED AT THOSE TWO DECISIONS, so the alarm
 	// borrows them whole (ADR-0015) and fires at any count. Measured from the
-	// rows by every data node on the trim's quarter-hour tick, never by a git
+	// rows by every data node on the trim's quarter-hour tick, never by a Gitlet
 	// node: every data node holds the rows and reports the same repositories.
 	// All zero on a node holding no code log's rows — no data role, or a
 	// company that hosts no code — on one whose trim has not ticked or whose
@@ -1007,7 +1007,7 @@ type Reading struct {
 
 	// CodeMirrorFailing is how many mirrors of repositories this node is
 	// home to — a pull mirror's syncs from its source, a push mirror's
-	// pushes to its target, each the git node that runs them — have not been
+	// pushes to its target, each the Gitlet node that runs them — have not been
 	// brought level for longer than their own refresh promise:
 	// code.MirrorInterval, how often a home brings a mirror level, plus
 	// internal/code/mirror's AttemptDeadline, the grace an attempt in flight
@@ -2101,29 +2101,29 @@ var table = []rule{
 			"is a repository served from its packs' own indexes; a step " +
 			"`publish` is a repository this node maintains whose next published " +
 			"layer it cannot write, at 600 bytes an object of the repository, " +
-			"which falls to this node because no git node advertises a budget " +
-			"that holds it — give one git node that memory, and it becomes the " +
-			"repository's maintainer: docs/guides/deployment.md, Sizing git " +
+			"which falls to this node because no Gitlet node advertises a budget " +
+			"that holds it — give one Gitlet node that memory, and it becomes the " +
+			"repository's maintainer: docs/guides/deployment.md, Sizing Gitlet " +
 			"nodes). The budget is " +
 			"the node's memory (its cgroup's limit where one is set, read again " +
 			"every ten seconds) less what it keeps for its git lanes, the " +
 			"store, the broker and the engine, on the `code_cache_opened` line. " +
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
-			"git.max_transfers is set, give it fewer transfers. What the node " +
+			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
 			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
-			"memory backs at 2 GiB a core. An unset git.max_transfers is sized " +
+			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
 			"to the memory, no more than one for every 512 MiB, and leaves the " +
 			"background work 256 MiB for each backed core; a figure set by hand " +
 			"is kept as written, and leaves it nothing once its transfers' " +
 			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
 			"little as 56% of the transfers the memory holds at 224 MiB each, " +
 			"where the node has a core for every 2 GiB of it or more. A budget " +
-			"of zero clears when git.max_transfers is lowered or unset, or when " +
+			"of zero clears when gitlet.max_transfers is lowered or unset, or when " +
 			"the node is given memory past what it keeps, in place or at a " +
 			"boot. A restart alone keeps the same lanes over the same memory, " +
-			"and clears it only where git.max_transfers is unset and the memory " +
+			"and clears it only where gitlet.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
 			"to what it has. See docs/concepts/gitlet.md.",
 	},
@@ -2232,7 +2232,7 @@ var table = []rule{
 		// on a one-minute lint stuck for an hour. This framework imports no
 		// Gitlet package, so the reader judges each attempt at its own
 		// timeout and the rule fires at any count. Raised by every data node
-		// from its rows, never by a runner: a fleet with no live git node
+		// from its rows, never by a runner: a fleet with no live Gitlet node
 		// runs no check, and still raises it.
 		kind: KindCodeChecksBacklog,
 		fires: func(r Reading) (string, bool) {
@@ -2247,18 +2247,18 @@ var table = []rule{
 					count, r.CodeChecksBacklogCheck, spoken(r.CodeChecksBacklogOldest)),
 				r.CodeChecksBacklog > 0
 		},
-		remedy: "A queued attempt waits for a git node that runs checks to " +
-			"claim it, so the backlog is no git node claiming — the fleet's git " +
+		remedy: "A queued attempt waits for a Gitlet node that runs checks to " +
+			"claim it, so the backlog is no Gitlet node claiming — the fleet's Gitlet " +
 			"nodes gone, stopped or failing their checks' boxes, or none setting " +
 			"CREWLET_BOX_GIT_URL (`code_checks_not_run`) — or every cell a check " +
-			"may run in busy: a git node's own container cells, `git.max_checks` " +
+			"may run in busy: a Gitlet node's own container cells, `gitlet.max_checks` " +
 			"of them (`crewlet.code.checks.running` pinned there), and the remote " +
 			"cells, as many at once and for as long a day as the company allows. " +
-			"Read the git nodes' logs and " +
+			"Read the Gitlet nodes' logs and " +
 			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
 			"racing for the same attempts, which is no backlog. Against the " +
 			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +
-			"wait is capacity: more git nodes, or more cells allowed to run at " +
+			"wait is capacity: more Gitlet nodes, or more cells allowed to run at " +
 			"once. Nothing is lost while it waits: a change whose required " +
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
@@ -2272,7 +2272,7 @@ var table = []rule{
 		// worker judges each queue against its own capacity and the rule
 		// fires at any count — never at a rate of its own, which would fire
 		// on every deep queue's ordinary day and never on a depth-one queue
-		// with hour-long checks. Raised by each queue's home git node, the
+		// with hour-long checks. Raised by each queue's home Gitlet node, the
 		// one node that builds its trains and so the one that times them.
 		kind: KindCodeMergeRateOver,
 		fires: func(r Reading) (string, bool) {
@@ -2437,7 +2437,7 @@ var table = []rule{
 			"mirror's source, `push` to a push mirror's target) and why it " +
 			"failed. A host that " +
 			"cannot be reached, or whose address is private while Tier A's " +
-			"git.import_allow_private is off, is the network's or the " +
+			"gitlet.import_allow_private is off, is the network's or the " +
 			"configuration's to mend; a credential the other host refuses is " +
 			"the variable the mirror's `credential` names, set with `crewlet " +
 			"secrets set`; a ref the other host rejects is a protection or a " +
@@ -2450,7 +2450,7 @@ var table = []rule{
 			"line has waited behind the node's other attempts: a node runs " +
 			"two at once and queues the rest, so one home to more mirrors " +
 			"than two attempts at a time bring level within the interval " +
-			"falls behind, and more git nodes spread the repositories' homes. " +
+			"falls behind, and more Gitlet nodes spread the repositories' homes. " +
 			"See docs/concepts/gitlet.md, " +
 			"\"Mirrors and imports\".",
 	},

@@ -17,7 +17,7 @@ import (
 // the operator catalogue — the fleet's presence leases, which every node reads,
 // with whoever a turn is acting for and the chart that decides them (the
 // requester ceiling's halves, the code and artifacts tools' own:
-// [turnRequesters] and [ChartAuthorityOf]), and the git nodes' status scatter
+// [turnRequesters] and [ChartAuthorityOf]), and the Gitlet nodes' status scatter
 // ([Engine.CodeStatus]), with the code tools' own deps beside it where this
 // node's running runtime serves Gitlet.
 
@@ -28,7 +28,7 @@ import (
 // turn somebody woke only for somebody of the company who may act; code_status
 // ON [CodeToolDeps]' TERMS, so a seat's and a person's code_status is offered
 // exactly where the code tools are — none for a company that hosts no code,
-// whose fleet has no git node to ask.
+// whose fleet has no Gitlet node to ask.
 //
 // EXPORTED for the operator surface, which builds its catalogue for every
 // call; a seat's registry takes the value at every apply ([Engine.equip]).

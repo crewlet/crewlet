@@ -13,15 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REPOSITORY'S GIT WORK IS ASKED OF ITS HOME GIT NODE (ADR-0089).
+// A REPOSITORY'S GIT WORK IS ASKED OF ITS HOME GITLET NODE (ADR-0089).
 //
 // An operation on a repository's git objects — a server-side read by object
 // id, and an engine write built beside a copy of them (ADR-0092) — is answered
-// by a node with the `git` role from its own cache, never by a data node's
+// by a node with the `gitlet` role from its own cache, never by a data node's
 // copy. Asked of whichever node the ordinary walk picked, a seat on a node
-// without the git role would have every git node warm every repository it ever
+// without the gitlet role would have every Gitlet node warm every repository it ever
 // read or wrote, a cold sync paid per node per repository; so it is asked of
-// the GIT nodes in rendezvous.Order(repository, every live git node) — the
+// the GITLET nodes in rendezvous.Order(repository, every live Gitlet node) — the
 // repository's HOME first, its runner-up next — the order every node computes
 // alike from the same set, so the reads and the writes of one repository meet
 // on one cache. The home is a PREFERENCE, never ownership: no lease and no
@@ -34,14 +34,14 @@ import (
 // router like any reader's. So no copy verdict holds it back, no floor is
 // waited for at dispatch (its floor travels in its arguments, as
 // code.GitQuery.Fresh, and is the cache's sync level), and no lag gate
-// applies: a git node whose own copy of the code log is out of service still
+// applies: a Gitlet node whose own copy of the code log is out of service still
 // serves git reads, from a cache it syncs from a peer. Like [SeatCopy], no
 // data operation may name it (TestEveryOperationNamesTheCopyItReads).
 const GitCopy = "git"
 
 // LocalGit is this node's git half, as the router and the server ask for it —
 // resolved PER REQUEST, because Gitlet (and with it the git half) is
-// built at boot or at the first apply that sets code.native, after the router
+// built at boot or at the first apply that sets code.backend: gitlet, after the router
 // and the server exist; one captured at either's construction would answer
 // "Gitlet not built" for the life of a node that applied its company later.
 type LocalGit interface {
@@ -51,7 +51,7 @@ type LocalGit interface {
 	Git() (GitServer, bool)
 }
 
-// GitServer is the git half a git node serves, declared here by its consumer
+// GitServer is the git half a Gitlet node serves, declared here by its consumer
 // with exactly the methods the git operations call: its reads by object id,
 // which internal/code/query's *Server answers, its engine writes, which
 // internal/code/host's *Server builds and lands, and its merge previews, which
@@ -71,7 +71,7 @@ type GitServer interface {
 	// push (ADR-0092). ctx ends when the answer is due, as a read's does: a
 	// write that ctx ends before its landing ran nothing and answers
 	// code.ErrGitUnready while the asker still listens, so the walk asks the
-	// next git node, which builds the same push; one ended inside its
+	// next Gitlet node, which builds the same push; one ended inside its
 	// landing answers what the landing came to, its outcome read from the
 	// push's row — never ctx's own error, which the walk would take for the
 	// write's answer.
@@ -86,8 +86,8 @@ type GitServer interface {
 }
 
 // GitPlacement is who serves GIT as the router reads it ([RouterOptions.Git]):
-// every live node with the `git` role, as [Placement] names them — what the
-// git walk and [Router.Home] order — and, for the question that weighs the git
+// every live node with the `gitlet` role, as [Placement] names them — what the
+// git walk and [Router.Home] order — and, for the question that weighs the Gitlet
 // nodes against each other, ONE LISTING of them with what each ADVERTISES it
 // can give its background work ([GitPlacement.Listing]), which
 // [Router.Maintainer] places a repository's maintenance by. Declared here by
@@ -95,39 +95,39 @@ type GitServer interface {
 type GitPlacement interface {
 	Placement
 
-	// Listing is the git nodes and what each advertises, off ONE listing of
+	// Listing is the Gitlet nodes and what each advertises, off ONE listing of
 	// the fleet: the nodes Holders would name at that listing, and what each
 	// one's row says beside them ([GitListing]). One read for the whole
 	// question, so a node is weighed by the very listing that names it —
 	// never ordered off one listing and weighed off the next a refresh put
 	// in its place, where a node the first named and the second did not
 	// would read as one that said nothing. An error is UNKNOWN: the view
-	// could not be read, never "no git node".
+	// could not be read, never "no Gitlet node".
 	Listing() (GitListing, error)
 }
 
-// GitListing is one listing of the fleet's git nodes, as
+// GitListing is one listing of the fleet's Gitlet nodes, as
 // [GitPlacement.Listing] answers it.
 type GitListing struct {
-	// Nodes is every git node the listing carries.
+	// Nodes is every Gitlet node the listing carries.
 	Nodes []string
 
 	// Budgets is what each node's presence row says it can give its
-	// background work — its maintenance budget, which a git node's row
+	// background work — its maintenance budget, which a Gitlet node's row
 	// carries on every beat beside its status and never in it
 	// (coord.GitBackgroundKey) — where the row says one: zero included, a
 	// node saying it has nothing to give (Gitlet not built yet, or
 	// transfers that keep all of its memory). A node of Nodes with no entry
 	// is NOT SAYING: its row carries no figure (a build or a host that
-	// writes none), never one with nothing to give. A git node of this build
+	// writes none), never one with nothing to give. A Gitlet node of this build
 	// always says it, a beat whose status read overran included.
 	Budgets map[string]int64
 }
 
-// GitReadAttempt bounds one git read's wait on one git node: [Production]'s
+// GitReadAttempt bounds one git read's wait on one Gitlet node: [Production]'s
 // [Timing.GitReadAttempt].
 //
-// SEVENTEEN SECONDS: the git node's waits at their WHOLE budgets and the
+// SEVENTEEN SECONDS: the Gitlet node's waits at their WHOLE budgets and the
 // reply's margin, a sum of budgets as every attempt here is, never of p99s —
 //
 //	code.GitShareWait          2 s  a free unit of the node's seat git-work share
@@ -138,10 +138,10 @@ type GitListing struct {
 //	                                comparison's three
 //	+ code.ReplyMargin         1 s  the answer's trip back
 //
-// The git node is served under a context that ends a reply's margin before
+// The Gitlet node is served under a context that ends a reply's margin before
 // the attempt does (code.AnswerBy), and EVERY wait it makes takes that
 // context, so a node that cannot fit a wait answers `behind` while its asker
-// still listens: a shorter attempt only hears a slow git node give up sooner;
+// still listens: a shorter attempt only hears a slow Gitlet node give up sooner;
 // a longer one would leave a node that is gone to be waited out longer.
 //
 // WHAT THE SUM LEAVES OUT, on purpose: the read lane's queue before each of
@@ -152,7 +152,7 @@ type GitListing struct {
 // at their whole bounds they would make the attempt minutes long, and a dead
 // node would be waited out that long. Left out, they come out of the attempt:
 // a read they hold up past its answer's due instant is answered unready — the
-// node's capacity, `share` — and the walk asks the next git node; never late,
+// node's capacity, `share` — and the walk asks the next Gitlet node; never late,
 // and never refused as too large, which only a read whose own git ran the
 // whole of its budget is (internal/code/query).
 //
@@ -168,10 +168,10 @@ type GitListing struct {
 // TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
 const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
 
-// GitWriteAttempt bounds one engine write's wait on one git node:
+// GitWriteAttempt bounds one engine write's wait on one Gitlet node:
 // [Production]'s [Timing.GitWriteAttempt].
 //
-// EIGHTY-TWO SECONDS: the git node's waits for one write at their WHOLE
+// EIGHTY-TWO SECONDS: the Gitlet node's waits for one write at their WHOLE
 // budgets, a sum of budgets as every attempt here is, never of p99s —
 //
 //	code.GitShareWait             2 s  a free unit of the node's seat git-work
@@ -191,14 +191,14 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 //	                                   (code.MinProposeAttempt)
 //	+ code.ReplyMargin            1 s  the answer's trip back
 //
-// THE GIT NODE FITS EVERY STAGE INTO IT. It is served under a context that
+// THE GITLET NODE FITS EVERY STAGE INTO IT. It is served under a context that
 // ends a reply's margin before the attempt does (code.AnswerBy), and uploads a
 // write's bundle only while the upload's allowance and the proposal's attempt
 // are both still left — answering busy, nothing uploaded, where they are not
 // (internal/code/host's deadline rule) — so a write's median bundle of a few
 // kilobytes is never uploaded late, and a large one on a bucket at the floor
 // is refused before its upload rather than landed after its asker gave up.
-// So a healthy git node always answers inside the attempt, and only a WEDGED
+// So a healthy Gitlet node always answers inside the attempt, and only a WEDGED
 // one costs it whole: a node that is GONE costs none, nothing serving its
 // subject, and the broker's ask ends at once. The walk then asks the runner-up
 // the same write, which lands the same push, or is answered from the row the
@@ -233,13 +233,13 @@ const GitWriteAttempt = code.GitShareWait + 3*statelog.ReadBudget + code.WriteBu
 // inside its budget for a reason about THE NODE (code.ErrGitUnready: its copy
 // still syncing, its share full, no chart or no configuration to judge a seat
 // by, a failure of its own, or no copy held and no fill asked of it): it ran
-// nothing about the repository's content, and another git node may answer.
+// nothing about the repository's content, and another Gitlet node may answer.
 // The server and the router's own in-process run answer it `behind` —
 // `behind_config` for that reason, the node's posture — with the reason beside
 // it ([reply.Unready]), which the walk moves on from WITHOUT demoting the node
 // — a node syncing a repository is the right node to ask a moment later — and
 // reads to know whether the one node it lets fill a copy is still that one.
-var errGitUnready = errors.New("estate: this git node cannot answer now")
+var errGitUnready = errors.New("estate: this Gitlet node cannot answer now")
 
 // unreadyGit is a git half's code.ErrGitUnready as the walk reads it: errGitUnready,
 // its cause kept for the walk's account.
@@ -251,7 +251,7 @@ func (u unreadyGit) Unwrap() []error { return []error{errGitUnready, u.cause} }
 // gitUnready is a git half's error as the walk reads it: code.ErrGitUnready
 // becomes [errGitUnready], and every other error is the answer — a refusal
 // about the read, the write or the repository (code.ErrNotPermitted,
-// code.ErrObjectNotFound, code.ErrInvalid, …), which every git node would give
+// code.ErrObjectNotFound, code.ErrInvalid, …), which every Gitlet node would give
 // alike.
 func gitUnready(err error) error {
 	var unready *code.ErrGitUnready
@@ -282,7 +282,7 @@ func unreadyReason(err error) code.UnreadyReason {
 	return ""
 }
 
-// passesFill reports whether a git node's reply — it ran nothing — says that
+// passesFill reports whether a Gitlet node's reply — it ran nothing — says that
 // no copy serving the read is coming on that node, so a walk that let it fill
 // lets the next node fill in its place: a node that ran nothing for the
 // operation at all (Gitlet not built, a key it does not hold, a request it
@@ -302,7 +302,7 @@ func passesFill(rep reply) bool {
 }
 
 // routeGit runs one GIT operation ([op.keyedOnGit]) — a read by object id or
-// an engine write: the git nodes in the repository's rendezvous order, the ONE
+// an engine write: the Gitlet nodes in the repository's rendezvous order, the ONE
 // node the walk lets FILL a copy asked with its arguments stamped home
 // ([exchange.home]) and every other node with them stamped not.
 //
@@ -320,7 +320,7 @@ func passesFill(rep reply) bool {
 // past a node that may be FILLING —
 // syncing, its chart moments away, a reason this build does not know, a node
 // gone silent — so one walk still starts one download at a time, and a home's
-// death costs the fleet one fill rather than one a git node; nor past one at
+// death costs the fleet one fill rather than one a Gitlet node; nor past one at
 // its SHARE, which holds its copy and is only busy, since the share is the
 // node's and not the repository's (code.UnreadyReason.PassesFill). The home
 // itself is not demoted for it: a person's read, which judges no chart, and
@@ -332,8 +332,8 @@ func passesFill(rep reply) bool {
 // memory every keyed order reads ([Router.classes]); but no copy verdict, no
 // floor and no lag gate applies to a git operation ([GitCopy]), so the walk
 // never consults [Router.remembersBehind] and never hands a node to
-// [Router.lastResort]. A git node behind the company's configuration is no
-// worse a git node: its git half answers a seat's read or write
+// [Router.lastResort]. A Gitlet node behind the company's configuration is no
+// worse a Gitlet node: its git half answers a seat's read or write
 // `behind_config` itself (code.UnreadyBehindConfig), which the walk reads as
 // it reads any node that ran nothing — move on, no demotion, the fill passed
 // on.
@@ -352,7 +352,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 	nodes, err := r.gitPlacement.Holders()
 	if err != nil {
 		// A PLACEMENT THAT CANNOT SAY WHO SERVES GIT names no peer to ask
-		// — UNKNOWN, never "no git node" — and takes nothing from this
+		// — UNKNOWN, never "no Gitlet node" — and takes nothing from this
 		// node's own git half, which needs no view to answer: with no node
 		// named to order, it is the one node left to ask, as its home.
 		if ownHalf {
@@ -371,7 +371,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 	}
 	order := r.keyedOrder(spec, x.key, nodes, ownHalf)
 	if len(order) == 0 {
-		w.note("no node with the git role is live")
+		w.note("no node with the gitlet role is live")
 	}
 	// fill is the place in the order of the one node the walk lets fill a
 	// copy: the EFFECTIVE HOME first — the order after its demotions, so a
@@ -424,7 +424,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 }
 
 // ownGit is this node's git half for one walk ([Router.gitHalf]), noted on the
-// walk where this node is a git node with none, so a walk nobody served says
+// walk where this node is a Gitlet node with none, so a walk nobody served says
 // why its own node ran nothing. A node with no git half is left out of its own
 // order rather than stamped home: it would fill nothing, and the runner-up
 // behind it would be told it may not either.
@@ -440,7 +440,7 @@ func (r *Router) ownGit(w *walk) (GitServer, bool) {
 }
 
 // gitHalf is this node's git half, read ONCE A REQUEST ([LocalGit]): the
-// server and true where this node is a git node that has built Gitlet, and
+// server and true where this node is a Gitlet node that has built Gitlet, and
 // false otherwise.
 func (r *Router) gitHalf() (GitServer, bool) {
 	if r.localGit == nil {
@@ -453,13 +453,13 @@ func (r *Router) gitHalf() (GitServer, bool) {
 	return g, true
 }
 
-// ErrNoGitNode is a fleet with no live git node, as [Router.Home] and
+// ErrNoGitletNode is a fleet with no live Gitlet node, as [Router.Home] and
 // [Router.Maintainer] answer it: no node serves a repository's git, so it has
 // no home and nobody to maintain it.
-var ErrNoGitNode = errors.New("estate: no live git node")
+var ErrNoGitletNode = errors.New("estate: no live Gitlet node")
 
-// Home is a repository's HOME: the git node rendezvous ranks first for it over
-// every live git node — this one among them where its git half is built — WITH
+// Home is a repository's HOME: the Gitlet node rendezvous ranks first for it over
+// every live Gitlet node — this one among them where its git half is built — WITH
 // NO DEMOTION. It is the first node of the git walk's own order
 // ([Router.keyed], one function for both) before the router's memory reorders
 // it, so on a quiet fleet the node a repository's git reads and engine writes
@@ -478,7 +478,7 @@ var ErrNoGitNode = errors.New("estate: no live git node")
 // node" and never "nobody" — where the git walk asks this node's own half as
 // the one node left: a read of an object id is the same read from any node,
 // and a home's work done by a node that could not tell is work two nodes may
-// do. A fleet that lists no git node answers [ErrNoGitNode].
+// do. A fleet that lists no Gitlet node answers [ErrNoGitletNode].
 func (r *Router) Home(repoID string) (string, error) {
 	h, err := r.readHomes()
 	if err != nil {
@@ -490,20 +490,20 @@ func (r *Router) Home(repoID string) (string, error) {
 // HomeOf answers which of repoIDs this node is the HOME of ([Router.Home]),
 // every one judged against ONE READING of who serves git: the set holds
 // exactly the ids this node is home for. An error is UNKNOWN for every one of
-// them — who serves git could not be read, or it names no git node
-// ([ErrNoGitNode]) — never "home to none", so a node that cannot tell does
+// them — who serves git could not be read, or it names no Gitlet node
+// ([ErrNoGitletNode]) — never "home to none", so a node that cannot tell does
 // none of a home's work rather than guess. No ids read nothing.
 //
 // ONE READING FOR MANY REPOSITORIES, because what reads it — the backstop pass
 // of the home's change work (internal/code/home), over every repository its
-// workers' listings name, every minute on every git node — is a question about
+// workers' listings name, every minute on every Gitlet node — is a question about
 // the whole listing: asked a repository at a time, each answer read the
 // presence view again (its leases cloned under its lock, every node's profile
-// decoded, the git nodes copied and sorted) before the one rendezvous order
-// that is the answer, so a git node home to an eighth of ten thousand
+// decoded, the Gitlet nodes copied and sorted) before the one rendezvous order
+// that is the answer, so a Gitlet node home to an eighth of ten thousand
 // repositories paid all of that every minute for each of the rest, to find out
 // that it is not their home. Read once, a repository costs its rendezvous
-// order alone — 575 ns over eight git nodes and 1.28 µs over sixteen, 5.8 ms
+// order alone — 575 ns over eight Gitlet nodes and 1.28 µs over sixteen, 5.8 ms
 // and 12.8 ms for ten thousand, the one read of the placement included
 // (BenchmarkHomeOf, -benchtime 20x and one count, two E-cores of an Intel Core
 // Ultra 7 265U, 2026-10-28) — and a pass judges every repository against one
@@ -513,11 +513,11 @@ func (r *Router) Home(repoID string) (string, error) {
 // which take it once (ADR-0089).
 //
 // THE HOME'S, NOT THE MAINTAINER'S ([Router.MaintainerOf]): the change work
-// reads two commits' facts on a git node's read lane and asks for records —
+// reads two commits' facts on a Gitlet node's read lane and asks for records —
 // nothing charged to the background budget a node advertises, the one figure
 // the maintainer's placement weighs — so nothing places it past the home,
 // whose copy a repository's reads keep warm; and a node not yet listed among
-// the git nodes is in this order by its own built half, as it is in Home's,
+// the Gitlet nodes is in this order by its own built half, as it is in Home's,
 // rather than gone as it is from the maintainer's listing.
 func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
 	if len(repoIDs) == 0 {
@@ -536,20 +536,20 @@ func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
 	return out, nil
 }
 
-// GitOrder is a repository's WHOLE git order: every live git node — this one
+// GitOrder is a repository's WHOLE git order: every live Gitlet node — this one
 // among them where its git half is built — in the repository's rendezvous
 // order, WITH NO DEMOTION, the home first ([Router.Home] is its first node).
 // The order a repository's own git work is ranked by on every node alike:
-// which git node claims one of its queued checks first, and how long each
+// which Gitlet node claims one of its queued checks first, and how long each
 // one after it waits (internal/code/checkrun), and which nodes hold its index
-// (internal/codeindex). A node absent from it is no live git node, as the
+// (internal/codeindex). A node absent from it is no live Gitlet node, as the
 // presence view reads it now — what a check's running row whose runner has
 // left it is judged by.
 //
 // NO DEMOTION, for [Router.Home]'s reason: a slow node keeps its place, so
 // every node computes the same order from the same set. A read of who serves
-// git that fails answers its error, UNKNOWN; a fleet that lists no git node
-// answers [ErrNoGitNode]. A fresh slice at every call.
+// git that fails answers its error, UNKNOWN; a fleet that lists no Gitlet node
+// answers [ErrNoGitletNode]. A fresh slice at every call.
 func (r *Router) GitOrder(repoID string) ([]string, error) {
 	h, err := r.readHomes()
 	if err != nil {
@@ -583,7 +583,7 @@ func (r *Router) GitOrders(repoIDs []string) (map[string][]string, error) {
 }
 
 // homeReading is one reading of who serves git, as [Router.Home] and
-// [Router.HomeOf] order a repository's git nodes over it: every live git node
+// [Router.HomeOf] order a repository's Gitlet nodes over it: every live Gitlet node
 // the placement names, and whether this node's own git half is built — which
 // places it in the order where the placement does not yet name it, so its
 // reads are answered in process.
@@ -592,10 +592,10 @@ type homeReading struct {
 	own   bool
 }
 
-// readHomes reads who serves git once: the placement's live git nodes and this
+// readHomes reads who serves git once: the placement's live Gitlet nodes and this
 // node's own half. An error is the placement's, UNKNOWN; a reading that names
-// no git node at all — none listed, and no half of this node's — is
-// [ErrNoGitNode].
+// no Gitlet node at all — none listed, and no half of this node's — is
+// [ErrNoGitletNode].
 func (r *Router) readHomes() (homeReading, error) {
 	nodes, err := r.gitPlacement.Holders()
 	if err != nil {
@@ -603,25 +603,25 @@ func (r *Router) readHomes() (homeReading, error) {
 	}
 	_, own := r.gitHalf()
 	if !own && !slices.ContainsFunc(nodes, func(n string) bool { return n != "" && n != r.self }) {
-		return homeReading{}, ErrNoGitNode
+		return homeReading{}, ErrNoGitletNode
 	}
 	return homeReading{nodes: nodes, own: own}, nil
 }
 
 // home is repoID's home under h: the first node of the git walk's own order
 // ([Router.keyed]) before the router's memory reorders it — never empty, since
-// readHomes refuses a reading that names no git node.
+// readHomes refuses a reading that names no Gitlet node.
 func (h homeReading) home(r *Router, repoID string) string {
 	return r.keyed(repoID, h.nodes, h.own)[0]
 }
 
-// Maintainer is the git node a repository's MAINTENANCE is placed on — the
+// Maintainer is the Gitlet node a repository's MAINTENANCE is placed on — the
 // compaction of its packs, the publication of its layers — for work charged at
 // charge bytes of a node's background budget: the FIRST node of the
 // repository's git order that can hold it, and the HOME where none can.
 //
 // ONE LISTING ANSWERS THE WHOLE QUESTION ([GitPlacement.Listing]): the order
-// is the home's — rendezvous over the git nodes, [Router.keyed], the function
+// is the home's — rendezvous over the Gitlet nodes, [Router.keyed], the function
 // [Router.Home] orders by — over the nodes that one listing carries, and every
 // node of it is weighed by what that same listing says of it, its leases read
 // once. So a node is never ordered off one listing and weighed off the next a
@@ -637,7 +637,7 @@ func (h homeReading) home(r *Router, repoID string) string {
 //
 // A NODE CAN HOLD IT where its ADVERTISED background budget is at least
 // charge — the figure its own admissions hold the work to, so the node chosen
-// is one that would run it. A git node says that figure on every beat, from
+// is one that would run it. A Gitlet node says that figure on every beat, from
 // memory and beside its status rather than in it (coord.GitBackgroundKey), so a
 // beat whose status read overran — which drops the status whole — still says
 // it.
@@ -657,9 +657,9 @@ func (h homeReading) home(r *Router, repoID string) string {
 // synced, while one passed over would send every repository it is home to —
 // the light work every home maintains — to a runner-up's cold sync.
 //
-// ONE ORDER, THE HOME'S: every git node computes the same answer from the same
+// ONE ORDER, THE HOME'S: every Gitlet node computes the same answer from the same
 // listing, so on a fleet of alike nodes the maintainer IS the home and nothing
-// moves, and on a fleet with one large git node every repository only it can
+// moves, and on a fleet with one large Gitlet node every repository only it can
 // hold is maintained there while every other stays with its home. NO
 // DEMOTION, as in Home: maintenance is a node's own work, not a read the walk
 // routes to it, so nothing the router remembers of a node's answers moves it.
@@ -669,13 +669,13 @@ func (h homeReading) home(r *Router, repoID string) string {
 // repository's committer takes it once.
 //
 // A LISTING THAT CANNOT BE READ ANSWERS ITS ERROR — UNKNOWN, never "this node"
-// and never "nobody". A listing that carries no git node answers
-// [ErrNoGitNode].
+// and never "nobody". A listing that carries no Gitlet node answers
+// [ErrNoGitletNode].
 func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 	listing, err := r.gitPlacement.Listing()
 	if err != nil {
 		return "", fmt.Errorf("estate: the maintainer of repository %s: read who serves git and what each "+
-			"git node can give its background work: %w", repoID, err)
+			"Gitlet node can give its background work: %w", repoID, err)
 	}
 	maintainer, err := r.maintainerOver(listing, repoID, charge)
 	if err != nil {
@@ -687,25 +687,25 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 // MaintainerOf answers which of the repositories charges names — each id
 // mapped to the charge its work is placed by ([Router.Maintainer]) — this node
 // MAINTAINS, every one judged against ONE LISTING of who serves git and what
-// each git node advertises: the set holds exactly the ids this node maintains.
+// each Gitlet node advertises: the set holds exactly the ids this node maintains.
 // An error is UNKNOWN for every one of them — the listing could not be read,
-// or it carries no git node ([ErrNoGitNode]) — never "maintains none", so a
+// or it carries no Gitlet node ([ErrNoGitletNode]) — never "maintains none", so a
 // node that cannot tell does none of a maintainer's work rather than guess. No
 // ids read nothing.
 //
 // ONE LISTING FOR MANY REPOSITORIES, because what asks it — a maintainer's
 // passes (internal/code/compact), the compaction's and the publication's, over
-// every repository their due listings name, every minute on every git node — is
+// every repository their due listings name, every minute on every Gitlet node — is
 // a question about the whole listing: asked a repository at a time, each answer
 // read the presence view again (its leases cloned under its lock, every node's
-// profile decoded, the git nodes copied and sorted) before the one rendezvous
-// order that is the answer, so a git node maintaining an eighth of ten
+// profile decoded, the Gitlet nodes copied and sorted) before the one rendezvous
+// order that is the answer, so a Gitlet node maintaining an eighth of ten
 // thousand repositories paid all of that every minute for each of the rest, to
 // find out that it does not maintain them — only a repository's maintainer ever
 // plans it, so only its maintainer remembers a plan of it found not due, and
-// every other git node judges every listed repository at every pass. Read
+// every other Gitlet node judges every listed repository at every pass. Read
 // once, a repository costs its rendezvous order and its nodes' budgets alone —
-// 569 ns over eight git nodes and 1.11 µs over sixteen, 5.7 ms and 11.1 ms for
+// 569 ns over eight Gitlet nodes and 1.11 µs over sixteen, 5.7 ms and 11.1 ms for
 // ten thousand, the one read of the listing included (BenchmarkMaintainerOf,
 // -benchtime 20x and one count, two E-cores of an Intel Core Ultra 7 265U,
 // 2026-10-29) — and a pass judges every repository against one fleet rather
@@ -719,7 +719,7 @@ func (r *Router) MaintainerOf(charges map[string]int64) (map[string]bool, error)
 	listing, err := r.gitPlacement.Listing()
 	if err != nil {
 		return nil, fmt.Errorf("estate: the maintainers of %d repositories: read who serves git and what each "+
-			"git node can give its background work: %w", len(charges), err)
+			"Gitlet node can give its background work: %w", len(charges), err)
 	}
 	out := map[string]bool{}
 	for id, charge := range charges {
@@ -737,11 +737,11 @@ func (r *Router) MaintainerOf(charges map[string]int64) (map[string]bool, error)
 // maintainerOver is repoID's maintainer for work charged at charge under ONE
 // listing ([Router.Maintainer]'s rule): [Router.Maintainer] and
 // [Router.MaintainerOf] both judge through it, so the two can never be
-// computed two ways. A listing that carries no git node is [ErrNoGitNode].
+// computed two ways. A listing that carries no Gitlet node is [ErrNoGitletNode].
 func (r *Router) maintainerOver(listing GitListing, repoID string, charge int64) (string, error) {
 	order := r.keyed(repoID, listing.Nodes, slices.Contains(listing.Nodes, r.self))
 	if len(order) == 0 {
-		return "", ErrNoGitNode
+		return "", ErrNoGitletNode
 	}
 	for i, node := range order {
 		budget, said := listing.Budgets[node]
@@ -758,7 +758,7 @@ func (r *Router) maintainerOver(listing GitListing, repoID string, charge int64)
 	return order[0], nil
 }
 
-// Listed reports whether this node is among the git nodes its git listing
+// Listed reports whether this node is among the Gitlet nodes its git listing
 // carries ([GitPlacement.Listing]) — the only nodes [Router.Maintainer] ever
 // answers, so a node it does not carry maintains no repository, whatever it
 // would rank: (true, nil), (false, nil), or (false, err) where the listing
@@ -773,7 +773,7 @@ func (r *Router) maintainerOver(listing GitListing, repoID string, charge int64)
 func (r *Router) Listed() (bool, error) {
 	listing, err := r.gitPlacement.Listing()
 	if err != nil {
-		return false, fmt.Errorf("estate: whether this node is listed among the git nodes: %w", err)
+		return false, fmt.Errorf("estate: whether this node is listed among the Gitlet nodes: %w", err)
 	}
 	return slices.Contains(listing.Nodes, r.self), nil
 }
@@ -781,7 +781,7 @@ func (r *Router) Listed() (bool, error) {
 // runLocalGit runs one git operation in-process on this node's own git half,
 // x already stamped for this node's place in the walk. final is set when that
 // is the answer; otherwise the walk says why not and moves on — as a remote
-// git node's `no_backend` and `behind` are read, with nothing remembered,
+// Gitlet node's `no_backend` and `behind` are read, with nothing remembered,
 // since asking this node's own half again costs no round trip — and passes
 // says whether no copy serving the operation is coming here, so the walk lets
 // the next node fill in this one's place ([passesFill]'s rule).

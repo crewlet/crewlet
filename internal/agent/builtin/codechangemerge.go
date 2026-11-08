@@ -21,7 +21,7 @@ import (
 
 // THE MERGE: code_merge_change merges a live change into its target by its
 // method, from the head its caller read, as ONE ENGINE WRITE
-// (code.WriteMergeChange) the repository's git node builds and lands as one
+// (code.WriteMergeChange) the repository's Gitlet node builds and lands as one
 // merge record its committer decides (M5-D10, M5-D11) — or, on a target whose
 // gate requires a check, puts in that target's queue (M5-D9). It answers one
 // of three things:
@@ -35,7 +35,7 @@ import (
 //     between the change and its merge, and a ready_to_merge wake follows
 //     once the last is met (M5-D31). Nothing is merged or queued.
 //
-// Every other refusal of the merge is the committer's or the git node's, in
+// Every other refusal of the merge is the committer's or the Gitlet node's, in
 // its class ([mergeRefusalClass]).
 //
 // # Close the work item as step two
@@ -56,7 +56,7 @@ import (
 // (refs/heads/seats/…) is deleted with the merge unless a gate over the
 // target keeps it (delete_source: none, code.GateRules.KeepsSource), and every
 // other source is kept (Q4): a seat's branch is the engine's working copy,
-// and a person's is theirs. The default is the git node's to decide, on the
+// and a person's is theirs. The default is the Gitlet node's to decide, on the
 // snapshot it judges the merge on ([deleteSource]), and its answer says what
 // it decided (`deleted_branch`).
 //
@@ -238,7 +238,7 @@ type codeMergeAnswer struct {
 
 // deleteSource is the caller's `delete_branch`, nil where it said none: the
 // default — a seat's branch deleted unless a gate over the target keeps it,
-// and no other ([codeMergeChange]'s doc) — is the git node's to decide, on
+// and no other ([codeMergeChange]'s doc) — is the Gitlet node's to decide, on
 // the snapshot it judges the merge on, reading the gate it reads for the
 // merge anyway (code.EngineWrite.DeleteSource), so the call reads nothing
 // for it.
@@ -302,7 +302,7 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 }
 
 // mergeRefused answers a merge, an enqueue or a dequeue its committer or its
-// git node refused, in the refusal's class ([mergeRefusalClass]): a gate the
+// Gitlet node refused, in the refusal's class ([mergeRefusalClass]): a gate the
 // change does not meet yet as not_ready, naming every unmet precondition and
 // whom it waits on. A person's words ride beside the sentence for a model
 // wherever the catalog has them ([mergeRefusalWords], [caveat.MergeGateUnmet]).
@@ -409,7 +409,7 @@ func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
 //     target asked directly, a target with no queue asked to queue, a source
 //     branch the merger may not delete — and the queue's own records'
 //     refusals (not_green, not_red, no_landing, record_full), which its home
-//     git node answers and no tool's call is ever refused.
+//     Gitlet node answers and no tool's call is ever refused.
 //
 // NEVER INVALID OR FORBIDDEN FOR A STATE: a merge of a closed change or into
 // an archived repository asks nothing wrong of a caller who may ask it, so

@@ -14,7 +14,7 @@ import (
 )
 
 // THE HOME'S DUE CHANGE WORK, READ FROM THE ROWS: a `changes_due` read
-// ([ReadChangesDue]) is what a repository's home git node polls for, and is
+// ([ReadChangesDue]) is what a repository's home Gitlet node polls for, and is
 // nudged into reading, to learn which changes it owes work. A LIVE change, on
 // an ACTIVE repository, its target a live branch, owes its home:
 //
@@ -120,8 +120,8 @@ import (
 // key, its mergeability's and its conversation's; that repository's due
 // changes, every page, 168 ms; and its first page asking 64 rechecks, the
 // oldest merge first, 226 ms — the one sort, of every change behind the moved
-// target, some 58 ms of it. EVERY GIT NODE LISTS EVERY REPOSITORY once a
-// Backstop (internal/code/home), so a fleet of G git nodes asks its data nodes
+// target, some 58 ms of it. EVERY GITLET NODE LISTS EVERY REPOSITORY once a
+// Backstop (internal/code/home), so a fleet of G Gitlet nodes asks its data nodes
 // G × 215 ms of reads a minute at this size — about 1 % of one core for three
 // — and a busy repository's home pays its 226 ms once a turn, a nudge's or a
 // pass's. Both grow with the live changes, the walk being

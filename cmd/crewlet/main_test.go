@@ -1850,14 +1850,14 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fleet := "node:\n  roles: [data, git, ingress, seats, workers]\n" +
+	fleet := "node:\n  roles: [data, gitlet, ingress, seats, workers]\n" +
 		"store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
 		"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n  replicas: 3\n" +
 		"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n" +
 		"coordination:\n  type: embedded-kv\n" + fixtureKeyring
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"},
-		configPair(t, fleet, companyYAML+"code:\n  native: true\n")...)
+		configPair(t, fleet, companyYAML+"code:\n  backend: gitlet\n")...)
 	if err := run(args, &out, &errOut); err != nil {
 		t.Fatalf("validate: %v\n%s", err, out.String())
 	}

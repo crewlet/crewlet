@@ -111,8 +111,8 @@ describe("what a search covered", () => {
     });
     expect(notes.variant).toBe("warning");
     expect(notes.notes).toEqual([
-      "Not searched: 1 repository (web), the git node asked was still building its index.",
-      "Not searched: 5 repositories (api, ops and 3 more), git node git-2 did not answer (timeout).",
+      "Not searched: 1 repository (web), the Gitlet node asked was still building its index.",
+      "Not searched: 5 repositories (api, ops and 3 more), Gitlet node git-2 did not answer (timeout).",
     ]);
   });
 

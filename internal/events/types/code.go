@@ -675,7 +675,7 @@ func (CodeTargetBroken) EventType() string { return "code_target_broken" }
 // MIRROR (internal/code/mirror, M6-D16): which refs it set at the other host
 // and onto what, which it deleted there, and which protected branches it held
 // back, each still waiting for a commit its required checks passed
-// (code_green). Published once a push that moved something, by the home git
+// (code_green). Published once a push that moved something, by the home Gitlet
 // node that pushed — the code log records no push to another host, so this is
 // the one durable account of what the company published, and when.
 //
@@ -757,7 +757,7 @@ func (e CodeMirrorPushed) SummaryFor(actor string) string {
 // M6-D19): its home filled it from another host — a person's import
 // (code_import_repo, `crewlet gitlet import`), a declared `code.repos[].import`,
 // or a pull mirror's first fill — and its end (code.ImportDone) applied,
-// whole or short of its source. Published ONCE an import, by the home git
+// whole or short of its source. Published ONCE an import, by the home Gitlet
 // node that proposed the end and heard it applied. The repository's row keeps
 // only its LATEST import state, and the push rows its chunks wrote (`via
 // import`) name neither the source nor the end, so this is the one durable

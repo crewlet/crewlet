@@ -128,7 +128,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 // is built with the native runtime, which a node booted with no company builds
 // at its first apply — after the API was assembled — so the git routes and
 // the /gitlet/ reads are asked of the engine per request. Before the company,
-// both say it hosts no code; after the apply that sets code.native, a person
+// both say it hosts no code; after the apply that sets code.backend: gitlet, a person
 // clones and pushes with their own token through the API `crewlet run` serves,
 // and the push is read back as theirs.
 //
@@ -144,14 +144,14 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	const token = "a-test-token-long-enough-for-tier-a"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget and
-		// a pinned transfer lane ([brokertest.CodeCacheIn]), so the room this
+		// a pinned transfer lane ([brokertest.GitletCacheIn]), so the room this
 		// node's disk has beside the declared broker and the cores it runs on
 		// decide nothing about whether it hosts code.
-		brokertest.CodeCacheIn(&b.Git)
+		brokertest.GitletCacheIn(&b.Gitlet)
 	})
 	n.reconcile()
 	repo := n.base + "/git/web.git"
-	const notHosted = "this company does not host code (code.native is not set)"
+	const notHosted = "this company does not host code (code.backend is not gitlet)"
 
 	// BEFORE THE COMPANY: Gitlet is not built, and neither half has anything to serve.
 	status, body := n.get(t, "/gitlet/repos")
@@ -164,7 +164,7 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	// one line the bare clause it prints as `remote:` text.
 	if status != http.StatusNotFound || refusal.Error != "not_found" ||
 		refusal.Detail != httpjson.Sentence(notHosted) {
-		t.Fatalf("GET /gitlet/repos before any company = %d %s, want 404 not_found naming code.native",
+		t.Fatalf("GET /gitlet/repos before any company = %d %s, want 404 not_found naming code.backend: gitlet",
 			status, body)
 	}
 	status, kind, text := gitGet(t, n, repo+"/info/refs?service=git-upload-pack", token)
@@ -177,7 +177,7 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
     handle: founder
     kind: human
 code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {seat: founder}
@@ -240,10 +240,10 @@ code:
 
 // A NODE WHERE GITLET COULD NOT START SAYS SO, and never that the company
 // hosts no code. An apply builds Gitlet before it publishes its epoch,
-// so a node whose apply of the configuration that turns code.native on fails —
+// so a node whose apply of the configuration that turns Gitlet on fails —
 // here a cache directory somebody else's files already fill, which the cache
 // refuses to take — still serves the previous epoch, one that hosts no code;
-// read off that epoch, the person who had just turned code.native on was told
+// read off that epoch, the person who had just turned Gitlet on was told
 // "this company does not host code". The answer is read off what the fleet
 // activated instead: 503 config_apply_failed, with no Retry-After — waiting
 // clears nothing, another node serves it — as the envelope's code on a /gitlet/
@@ -251,7 +251,7 @@ code:
 //
 // Mutation: answer from the published epoch alone (engine.CodeUnserved), and
 // the read says the company hosts no code.
-func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
+func TestANodeWhoseGitletCannotStartSaysSo(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
 	const token = "a-test-token-long-enough-for-tier-a"
@@ -260,15 +260,15 @@ func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
-		b.Git.CacheDir = occupied
-		brokertest.CodeCacheIn(&b.Git)
+		b.Gitlet.CacheDir = occupied
+		brokertest.GitletCacheIn(&b.Gitlet)
 	})
 	n.reconcile()
 	n.put(companyYAML + `  - name: Founder
     handle: founder
     kind: human
 code:
-  native: true
+  backend: gitlet
 `)
 
 	var refusal struct {

@@ -26,7 +26,7 @@ import (
 // company's own repositories, made through a tool rather than a clone — five
 // that change a branch (code_commit_files, code_revert, code_cherry_pick,
 // code_create_branch, code_delete_branch), each an ENGINE WRITE Gitlet
-// builds on the repository's git node and lands as one push (ADR-0092), and
+// builds on the repository's Gitlet node and lands as one push (ADR-0092), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
 // LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
@@ -39,7 +39,7 @@ import (
 // The gate admits every principal (`authz.ClassEverybody`), as it admits a
 // push at the git transport: whether a caller may move a branch or change a
 // repository is its GRANT on that repository (ADR-0088), which the node that
-// decides judges from its own chart — the git node and the repository's
+// decides judges from its own chart — the Gitlet node and the repository's
 // committer for an engine write, the data node for a lifecycle request — and
 // which no row keyed on the verb can answer before the repository is read. A
 // person writes as the human seat they hold, through their own credential; a
@@ -200,7 +200,7 @@ var belowWriteNeeds = map[string]code.Access{
 
 // CodeWriter is Gitlet's writes as these tools ask them —
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
-// the repository's home git node, a lifecycle request asked of a data node,
+// the repository's home Gitlet node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
 // committer, its conversation of the change writer beside it — and a person's
 // marks over their own code notices, asked of any data node — and a write of
@@ -264,7 +264,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
 // request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a
 // change's [code.ChangeProposal.Ceiling] and [code.ConversationWrite.Ceiling])
-// to the git node and the data node that judge the seat's own grant, from the
+// to the Gitlet node and the data node that judge the seat's own grant, from the
 // same chart and row (code.WriteCeiling), so an activation that takes a
 // colleague out of the owning unit stops the next write made for it. A
 // change's write holds a colleague at the access [changeToolNeeds] names for
@@ -337,9 +337,9 @@ func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) code.Principa
 // turn's own read of it (the resolution's position), and where every ref the
 // turn has resolved on it last moved ([refsRead]) — this call's own revisions
 // among them, resolved before the floor is read, as [CodeDeps.gitFresh] floors
-// a read at them — so the git node's copy holds what the turn has seen: the
+// a read at them — so the Gitlet node's copy holds what the turn has seen: the
 // head it writes onto, read by code_resolve after the head moved, and every
-// commit it names by a ref. Floored short of them, the git node answers a
+// commit it names by a ref. Floored short of them, the Gitlet node answers a
 // session sync from a copy that lacks them, finds the head stale or the commit
 // absent, and pays the write's re-judgement at the log's head — a barrier and
 // a second sync, and before it, for a stale head, a data node's read of the
@@ -528,7 +528,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return t.answer(ctx, turn, c, repo, w, res)
 }
 
-// revArgs are a write's revision arguments the git node takes by whole id: a
+// revArgs are a write's revision arguments the Gitlet node takes by whole id: a
 // commit_files create's base, a revert's or a cherry-pick's commit, and a
 // create_branch's target — each resolved where it names a ref.
 type revArgs struct{ base, commit string }
@@ -654,7 +654,7 @@ type codeBranchAnswer struct {
 	Detail        string           `json:"detail,omitempty"`
 	Conflicts     []code.Conflict  `json:"conflicts,omitempty"`
 	// ConflictsOmitted counts the conflicted paths this answer leaves out:
-	// those past the git node's page and those past one tool answer.
+	// those past the Gitlet node's page and those past one tool answer.
 	ConflictsOmitted int    `json:"conflicts_omitted,omitempty"`
 	OpID             string `json:"op_id,omitempty"`
 }

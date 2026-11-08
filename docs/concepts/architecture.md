@@ -105,7 +105,7 @@ act through, and every other one still routes end to end.
 ## 2. Inside one node
 
 `crewlet run` is *the* node, and what it does is a config value:
-`node.roles` picks from `data`, `git`, `ingress`, `seats` and `workers`.
+`node.roles` picks from `data`, `gitlet`, `ingress`, `seats` and `workers`.
 Declaring none means all five, which is the single-process company — one
 process holding the company's records, serving the API and the dashboard,
 serving its git repositories where it hosts them, running every agent, and
@@ -138,16 +138,16 @@ flowchart TB
     GIT -->|"code log reads · pushes to a committer"| STREAM
 ```
 
-That is one `crewlet run` process. `node.roles` picks from `data`, `git`,
+That is one `crewlet run` process. `node.roles` picks from `data`, `gitlet`,
 `ingress`, `seats` and `workers` — declare none and you get all five — and the
-always-on set runs on every node whatever it says. `git` serves anything only
-for a company that sets [`code.native`](gitlet.md), and only beside
+always-on set runs on every node whatever it says. `gitlet` serves anything only
+for a company that sets [`code.backend: gitlet`](gitlet.md), and only beside
 `ingress`, whose listener its routes are on. The three backends are opened together
 and closed together; on a node without `data` the store is scratch and holds
 the node estate alone.
 
 Four of those five groups are **inventories, not pipelines**: no box inside
-`ingress`, `git`, `workers` or the always-on set hands work to another box in
+`ingress`, `gitlet`, `workers` or the always-on set hands work to another box in
 the same group. They are named here rather than drawn.
 
 **What a node holds before it serves anything.** The boot order is not a detail
@@ -191,7 +191,7 @@ back what it wrote.
 | `/` · `/dashboard` · `/static/` · `/favicon.ico` | The dashboard's page and the assets it loads, served without a credential: the page that asks for one cannot itself require one, and it ships no data, since everything it shows comes from an authenticated fetch over the REST plane or the socket. `/` redirects to `/dashboard`. |
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
 | `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge and chat tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login, and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
-| `/git/{repo}` | A person's git over HTTPS on [Gitlet](gitlet.md): a fetch or a push, authenticated by the token bound to them ([Persons and their tokens](gitlet.md#persons-and-their-tokens)). Answered from a git node's cache, which the node a request reaches relays to. |
+| `/git/{repo}` | A person's git over HTTPS on [Gitlet](gitlet.md): a fetch or a push, authenticated by the token bound to them ([Persons and their tokens](gitlet.md#persons-and-their-tokens)). Answered from a Gitlet node's cache, which the node a request reaches relays to. |
 | `/box/git/{repo}` · `/box/gitlet/{repo}` | An executor's git and its code reads, from inside its box: the run's own token, minted per launch and held to the repositories its run was granted. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
@@ -967,7 +967,7 @@ here.
 | Models, each a harness, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Gitlet](gitlet.md) |
-| A git node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a git node](gitlet.md#the-cache-on-a-git-node) |
+| A Gitlet node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a Gitlet node](gitlet.md#the-cache-on-a-gitlet-node) |
 | A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/code/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/gitlet/` routes) | [Persons and their tokens](gitlet.md#persons-and-their-tokens) · [Hosting Code on Gitlet](../guides/gitlet.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |

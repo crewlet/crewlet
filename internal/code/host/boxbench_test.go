@@ -32,7 +32,7 @@ import (
 )
 
 // A CODING BOX'S GIT, MEASURED (ADR-0093): what the two clone recipes cost
-// a box and the git node it clones from (BenchmarkBoxClone), what
+// a box and the Gitlet node it clones from (BenchmarkBoxClone), what
 // the box's own git costs once its checkout is made and which of git's
 // box-side settings earn a place in the engine's box git environment
 // (BenchmarkBoxWorktree), and what a box borrowing a node's copy would save
@@ -207,7 +207,7 @@ func boxSeatArms(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, src st
 // pushSeatBranches makes the seats' branches numbered from to to (excluded)
 // in src — each boxSeatCommits commits off the history's tip, every commit
 // adding a file to the history's first directory — and pushes them to f's
-// git node as p, code.MaxCommandsPerPush branches a push, so the node holds
+// Gitlet node as p, code.MaxCommandsPerPush branches a push, so the node holds
 // a pack of their commits, trees and blobs a push, as seats' pushes leave it
 // packs until compaction merges them. Each refspec names its branch's tip by
 // its id, which git's push takes as it is rather than matching it against
@@ -256,7 +256,7 @@ func pushSeatBranches(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, s
 	}
 }
 
-// syncedRows is the fleet's repository's rows once its git node holds every
+// syncedRows is the fleet's repository's rows once its Gitlet node holds every
 // pack they name — synced, and no more: the history's packs stay in the
 // node's bitmapped index as warmRows left them, and the seats' packs stand
 // beside it, as a repository's newest pushes do until code/cache's MidxPacks
@@ -1135,7 +1135,7 @@ func boxBorrows(b *testing.B, f *codetest.SoloFleet, box *benchBox, repo sandbox
 	b.ReportMetric(own/n, "box-cpu-ms")
 }
 
-// benchBox is a coding box on a fleet's git node: its environment, as the
+// benchBox is a coding box on a fleet's Gitlet node: its environment, as the
 // engine's launch makes it, and the proxy that records what the node
 // answered it.
 type benchBox struct {
@@ -1225,7 +1225,7 @@ func boxRepoFor(rows codetest.Rows, tip string, cone []string, purpose sandbox.C
 	return repo
 }
 
-// boxHistory is a gittest.History of size bytes on f's git node, pushed by p a
+// boxHistory is a gittest.History of size bytes on f's Gitlet node, pushed by p a
 // session at a time as a team's pushes would have built it, the node warm
 // (warmBox): the repository's rows and its tip.
 func boxHistory(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, size int64) (codetest.Rows, string) {
@@ -1249,7 +1249,7 @@ func boxSource(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, size int
 	return warmRows(b, f), commits, src
 }
 
-// boxTree is a gittest.Tree of files files on f's git node, pushed by p a
+// boxTree is a gittest.Tree of files files on f's Gitlet node, pushed by p a
 // commit at a time, the node warm: the repository's rows and its tip.
 func boxTree(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, files int) (codetest.Rows, string) {
 	b.Helper()
@@ -1263,7 +1263,7 @@ func boxTree(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, files int)
 	return warmRows(b, f), commits[len(commits)-1]
 }
 
-// warmRows is the fleet's repository's rows once its git node holds it warm.
+// warmRows is the fleet's repository's rows once its Gitlet node holds it warm.
 func warmRows(b *testing.B, f *codetest.SoloFleet) codetest.Rows {
 	b.Helper()
 	rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
@@ -1417,7 +1417,7 @@ func reportSpread(b *testing.B, took []time.Duration) {
 	b.ReportMetric(quantile(took, 0.9), "p90-ms")
 }
 
-// boxProxy is a reverse proxy in front of a git node that records, in the
+// boxProxy is a reverse proxy in front of a Gitlet node that records, in the
 // order they end, the git requests the node answered 200: whether each was a
 // FETCH — protocol v2's command=fetch, what a clone, a fetch by id and a lazy
 // fetch each send for objects, never ls-refs or an advertisement — and the

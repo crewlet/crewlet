@@ -802,7 +802,7 @@ them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
-| **Gitlet** | `#/gitlet` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Gitlet workspace](#the-gitlet-workspace) |
+| **Gitlet** | `#/gitlet` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.backend: gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
 | **Chatlet** | `#/chatlet/activity` (and `#/chatlet`) | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
@@ -999,7 +999,7 @@ outage.
 runs Worklet, or Jira in its place, or no tracker; Doclet, or Confluence in
 its place, or no knowledge base; Crewlet's own chat (Chatlet), or the
 Mattermost or Slack it declares, or none; and hosts its git repositories in the
-engine (`code.native`) or does not. The engine decides which from the company
+engine (`code.backend: gitlet`) or does not. The engine decides which from the company
 document and publishes it to every signed-in reader as `services` on the org
 projection, which the frame already reads (`lib/services.ts`). Where the
 company does not run one, the places that read
@@ -8108,7 +8108,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   revisions, and each tab asks the part it draws, every one a code question at
   the tab's floor. The detail is the one read on a clock, every minute; a part
   is asked again only when the detail says what it reads moved — for a
-  revision's files and a file's patch, git reads on the repository's home git
+  revision's files and a file's patch, git reads on the repository's home Gitlet
   node, the change's version and the revision's head and the base its facts
   record (which a retarget's new facts move after the version), and the
   change's and its conversation's versions for every other part.
@@ -8197,12 +8197,12 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (**Keep following it**). It is drawn for every reader and held, with the
   sentence, for one holding no human seat; the dialog's Import is held until
   the form is one the engine takes. The new repository reads `importing`
-  until its home git node has landed the source.
+  until its home Gitlet node has landed the source.
 - **A repository's page**, `#/gitlet/repos/{name}`, is its row (`code_repo`,
   read at the tab's floor and again every minute, the row alone: its path
   owners and its rules' merge gates are its Settings tab's own ask,
   `path_owners=true` and `gates=true`, read as the tab opens) and its CONTENT, which its
-  home git node answers: a directory's listing (`code_tree`, and `code_blob`
+  home Gitlet node answers: a directory's listing (`code_tree`, and `code_blob`
   for a path under the root, which answers a directory's listing where the
   path names one, so a path is one read), a file's lines (`code_blob`, a page
   at a time, the pages concatenating to the file's bytes), its blame
@@ -8223,7 +8223,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   drawn picked and scrolled to the middle of the screen, and **Load earlier
   lines** reads back towards line 1 fifteen hundred lines a press, a page's
   worth (`start_line` and `end_line`, each step followed through its pages, so
-  it meets the lines after it; every step costs the git node one stream of
+  it meets the lines after it; every step costs the Gitlet node one stream of
   the whole file, however wide). The blame does the same through its own
   `start_line`, its first range the one that holds the line, and reads a
   range of at most `code.MaxBlameLines` (500) lines at a time, forward and
@@ -8268,7 +8268,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   refused every seat by the deciding data node); and **Unreachable
   history**, where **Purge unreachable history** (`code_purge_unreachable`, a
   person's alone, on a repository they maintain) opens a confirmation that
-  names, BEFORE the press, who keeps copies of what it drops — every git
+  names, BEFORE the press, who keeps copies of what it drops — every Gitlet
   node's copy until it syncs past the purge, every backup taken before it,
   the object store for a day (a versioned S3 bucket for as long as its own
   rules keep a deleted object), and every clone and fetch that already took
@@ -8290,7 +8290,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   by its WHOLE id — the one spelling no push can move; an abbreviation is no
   page, as `code_commit` takes none. It is the commit as the history lists it
   beside what the ROWS say of it (`code_commit`): the push that introduced it,
-  by the answering git node's index of pushes and that push's row — who
+  by the answering Gitlet node's index of pushes and that push's row — who
   pushed it, when and how, and the turn, the executor and the work item
   behind a seat's push, as the engine recorded them, which a commit's own
   author line is not — or, where the index names none, why; and the changes
@@ -8311,7 +8311,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   repository's page; with no head it asks for one. `code_compare` resolves
   both in one read and answers how the two commits relate — their merge base,
   which contains which, how many commits each has that the other lacks — and
-  the merge preview, asked of the repository's home git node by the two whole
+  the merge preview, asked of the repository's home Gitlet node by the two whole
   ids the comparison answered, the one merge a change's mergeability is
   recorded by (where one commit contains the other that merge is clean, and
   is answered so with nothing asked of the home): **Merges cleanly**, or
@@ -8335,14 +8335,14 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
   filters said as controls, every one in the address, so a search is a link.
   It is asked when the reader presses Search, never as they type: a search
-  across the company is a request to every git node. A press is a step Back
+  across the company is a request to every Gitlet node. A press is a step Back
   takes, its phrase, path and ref pushed onto the history (the mode and the
   repository narrow the search on screen and replace), and the boxes follow
   the address whenever it moves, so they never show one search over the
   lines of another. A reconnect asks again only a search that never reached
   the engine, as ⌘K's Code tab does: a rolling restart reconnects every
   socket, and each open search asked again would be one more request to
-  every git node for an answer that already names its commits. And it takes
+  every Gitlet node for an answer that already names its commits. And it takes
   no floor: it answers at the commit each repository was searched at (`tips`). The
   lines are grouped by repository and then by file in the engine's order —
   repository, path, line — never re-sorted; each line's number opens its file
@@ -8351,7 +8351,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   search said today; a path that is not UTF-8 is drawn with no link, since no
   address names it. **What was not searched is a Callout above the lines on
   every answer, never hidden**: how many repositories were searched, then
-  each set the engine names — an index being built, a git node behind or not
+  each set the engine names — an index being built, a Gitlet node behind or not
   answering, a grant a node refused, the lines cut — in the warning tone,
   since lines may be missing, and in the quiet one what the search's own
   terms left out: a repository read with git grep, the grep repositories a

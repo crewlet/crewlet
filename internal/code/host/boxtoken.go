@@ -65,7 +65,7 @@ type BoxTokens struct{ signer *runtoken.Signer }
 
 // NewBoxTokens builds them over the fleet's keyring, under BoxKeyDomain,
 // refusing one that cannot sign for the fleet (runtoken.ErrNoKeyring): a node
-// that launched a run and the git node its box dials derive one key from it,
+// that launched a run and the Gitlet node its box dials derive one key from it,
 // so a token minted on one verifies on every other — and a rotation in flight
 // verifies by every key the ring still holds. now nil is the wall clock.
 func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error) {
@@ -82,7 +82,7 @@ func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error)
 // A ref no run has — a launch id that is not a UUID, a turn id empty, longer
 // than maxBoxTurnBytes or holding `.`, `~` or whitespace — is the caller's bug
 // (every launch id is a UUID the store mints, every turn id a UUIDv7), and is
-// answered "", which no git node admits and every caller refuses its launch
+// answered "", which no Gitlet node admits and every caller refuses its launch
 // over, rather than a token another run's parse could read. Never a panic in a
 // test binary alone: telling one apart takes the `testing` package, which the
 // binary must not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding), and

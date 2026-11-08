@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// CODING BOXES ON A FLEET: every git node of one fleet admits a box by the
+// CODING BOXES ON A FLEET: every Gitlet node of one fleet admits a box by the
 // fleet's ONE run store (FixtureRuns), as every node of a deployment reads
 // the one pending store on the fleet's coordination store, and verifies its
 // token under the fleet's keyring — a ring holding a RETIRED key beside the
@@ -35,7 +35,7 @@ var boxKeyring = runtoken.Material{ActiveID: "k2", Keys: []runtoken.KeyMaterial{
 	{ID: "k2", Material: "the codetest fleet's active run-token key"},
 }}
 
-// NewBoxTokens is a box token signer over the fleet's keyring, as each git
+// NewBoxTokens is a box token signer over the fleet's keyring, as each Gitlet
 // node builds its own over the keyring every node is configured with.
 func NewBoxTokens(t testing.TB) *host.BoxTokens {
 	t.Helper()
@@ -47,7 +47,7 @@ func NewBoxTokens(t testing.TB) *host.BoxTokens {
 }
 
 // NewCheckTokens is a check's box's token signer over the fleet's keyring, as
-// each git node builds its own over the keyring every node is configured
+// each Gitlet node builds its own over the keyring every node is configured
 // with: a check token one mints, every node of the fleet verifies.
 func NewCheckTokens(t testing.TB) *host.CheckTokens {
 	t.Helper()
@@ -59,7 +59,7 @@ func NewCheckTokens(t testing.TB) *host.CheckTokens {
 }
 
 // FixtureRuns is the fleet's executors' rows, in memory: the [host.Runs]
-// every git node of a fleet admits a box by. A case launches a run on it
+// every Gitlet node of a fleet admits a box by. A case launches a run on it
 // (Launch), ends, relaunches or removes it, stops its seat, and makes the
 // store fail — and reads back every floor raise the hosts made (Raises) and
 // every hold of the seat branches a box pushed (Holds, Held).
@@ -380,7 +380,7 @@ func NewCheckBox(t testing.TB, f Fleet, token string) *Person {
 // BoxURL is repo's URL under /box/git/ through n.
 func BoxURL(n Node, repo string) string { return n.URL() + "/box/git/" + repo }
 
-// BoxURL is RepoName's box URL through the i-th git node.
+// BoxURL is RepoName's box URL through the i-th Gitlet node.
 func (c *Case) BoxURL(i int) string { return BoxURL(c.Fleet.Nodes()[i], RepoName) }
 
 // LaunchBox launches a run of seat given RepoName at access, its floor the

@@ -24,7 +24,7 @@ import (
 // expunge's begin and its commit, a ref may reach an object only a dropping
 // pack holds — a push decided after the expunge read its tip set and before
 // its begin landed — and a client may already hold such an object's id. So
-// the git node serves one by its id: a fetch of the commit alone, from a
+// the Gitlet node serves one by its id: a fetch of the commit alone, from a
 // client that holds nothing of it, gets it, through the copy's dropping view.
 // And no push may rely on one, since the commit takes it out of every copy:
 // a push of a commit on top of it — its client sending that commit alone,
@@ -33,7 +33,7 @@ import (
 // never the view, and lands nothing. The copy holds the pack in its view and
 // nowhere a push's scratch reads.
 //
-// Here every snapshot the git node syncs by answers the pack holding the
+// Here every snapshot the Gitlet node syncs by answers the pack holding the
 // commit DROPPING from its first, as an expunge's begin leaves a pack (the
 // code domain's own expunge records are internal/code's to hold).
 //
@@ -111,7 +111,7 @@ func TestADroppingObjectIsServedAndNeverReceived(t *testing.T) {
 	}
 	view, live := heldPacks(t, c, pack.checksum)
 	if !view || live {
-		t.Errorf("the git node's copy holds the dropping pack in its dropping view %t and in objects/pack %t, "+
+		t.Errorf("the Gitlet node's copy holds the dropping pack in its dropping view %t and in objects/pack %t, "+
 			"want the view alone", view, live)
 	}
 
@@ -154,14 +154,14 @@ func packOf(t *testing.T, p *codetest.Person, work string, revs ...string) packe
 	return packed{path: filepath.Join(dir, "pack-"+checksum+".pack"), checksum: checksum}
 }
 
-// heldPacks reports whether the git node's copy of the repository holds the
+// heldPacks reports whether the Gitlet node's copy of the repository holds the
 // pack checksum's files in its dropping view, and in objects/pack — every
 // incarnation of the copy read, the current one among them.
 func heldPacks(t *testing.T, c *codetest.Case, checksum string) (view, live bool) {
 	t.Helper()
 	dirs, err := filepath.Glob(filepath.Join(c.Fleet.Nodes()[0].CacheDir(), "repos", c.Rows().Repo.ID+".*.git"))
 	if err != nil || len(dirs) == 0 {
-		t.Fatalf("the git node holds no copy of the repository: %v %v", dirs, err)
+		t.Fatalf("the Gitlet node holds no copy of the repository: %v %v", dirs, err)
 	}
 	for _, dir := range dirs {
 		name := "pack-" + checksum + ".idx"
