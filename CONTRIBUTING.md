@@ -435,10 +435,14 @@ What follows are the prerequisites that legitimately vary by machine.
   bytes through the dashboard's own protocol module under plain `node`. That
   gate asks "does the client understand what the server sent" rather than "did
   the server send something", and it is the only place both halves of the wire
-  protocol are checked against each other. Without node it SKIPS, so the
-  `make` targets that run it refuse to start without one, CI installs it, and
-  the skip has no entry in `internal/skipgate/allowed.go` — a run that got past
-  `require-node` fails on it rather than reporting a pass.
+  protocol are checked against each other. Without node it FAILS under the
+  `make` targets that run the suite and skips only in a bare `go test` outside
+  make — `internal/prereqtest`'s one rule for a program the suite needs, which
+  the make targets switch on with `CREWLET_REQUIRE_PREREQUISITES=1` (the
+  Makefile's `REQUIRED`) — so the skip has no entry in
+  `internal/skipgate/allowed.go`. The targets that run it also refuse to start
+  without node (`require-node`), so a machine without one is told before the
+  suite rather than after it, and CI installs it.
 
   It needs no npm and no build: `static/protocol/protocol.js` is committed
   along with the rest of the built tree, beside the embedded `static/dashboard`

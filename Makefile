@@ -781,11 +781,10 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 	done; \
 	exit $$status
 
-# internal/e2e replays a real company's socket frames through the dashboard's
-# own protocol module under plain `node`, and it SKIPS without one — so a green
-# run with no node has left the client's half of the wire protocol unchecked.
-# ci.yml installs node rather than tolerating that; here, saying so is the best
-# we can do.
+# Every dashboard target builds or tests the dashboard with npm, so each fails
+# here, naming what to install, rather than part way through. node alone is
+# require-node's, below: internal/e2e's client replay and the OpenCode plugin
+# probes run under plain `node` and need no npm.
 require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
 	@command -v npm >/dev/null 2>&1 || { \
 	  echo "npm is not on PATH, and the dashboard is built with it."; \
