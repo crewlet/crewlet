@@ -114,7 +114,7 @@ func startOnAFreeRoutePort(ctx context.Context, t *testing.T, cfg Config) error 
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		if cfg.ClusterName != "" {
-			cfg.ClusterPort = freePort(t)
+			cfg.ClusterPort = freePort(ctx, t)
 		}
 		srv, err := StartServer(ctx, cfg)
 		if err == nil {
@@ -128,11 +128,12 @@ func startOnAFreeRoutePort(ctx context.Context, t *testing.T, cfg Config) error 
 	}
 }
 
-// freePort is a loopback port nothing held a moment ago.
-func freePort(t *testing.T) int {
+// freePort is a loopback port nothing held a moment ago, reserved under its
+// caller's ctx.
+func freePort(ctx context.Context, t *testing.T) int {
 	t.Helper()
 	var lc net.ListenConfig
-	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve a port: %v", err)
 	}
