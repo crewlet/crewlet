@@ -116,12 +116,14 @@ func clock() func() time.Time {
 	}
 }
 
-// seamsOf are e's review seams with the work, publisher and clock a case states.
+// seamsOf are e's review seams with the work, publisher and clock a case states,
+// and every told turn still running.
 func seamsOf(e *Engine, work func(context.Context, *Company, string) (accessreview.Work, error),
 	pub *captured) reviewSeams {
 
 	s := e.reviewSeams()
 	s.work, s.publish, s.now = work, pub.publish, clock()
+	s.ended = func(context.Context, string, string) (bool, error) { return false, nil }
 	return s
 }
 
@@ -490,5 +492,42 @@ func TestASeatWithNothingOpenIsAskedForNoReview(t *testing.T) {
 	}
 	if got := pub.got(); len(got) != 1 {
 		t.Errorf("the seat with open work was asked for %d reviews, want 1", len(got))
+	}
+}
+
+// A TOLD RECORD WHOSE TURN ENDED IS CLEARED BY THE NEXT CHECK, where the turn's
+// own end could not drop it: while the told turn runs the record stays, and once
+// it has ended a check drops it, so the Inbox note ends with the turn.
+//
+// Mutation: keep every told record at a check and the note outlives its turn.
+func TestAToldRecordIsClearedOnceItsTurnEnded(t *testing.T) {
+	t.Parallel()
+	e, after, _ := changedSeat(t)
+	seams := seamsOf(e, someWork, &captured{})
+	if err := e.reviewSeat(t.Context(), after, "ceo", seams); err != nil {
+		t.Fatalf("reviewSeat: %v", err)
+	}
+	review, reviewTurn := dispatchTurn(t, e, after)
+	launchTurn(t, e, review, reviewTurn)
+	if pending, found, err := e.PendingAccessReview(t.Context(), "ceo"); err != nil || !found ||
+		pending.ToldTurn != reviewTurn {
+		t.Fatalf("the premise: the record is %+v (%v, %v), want it told to %s", pending, found, err, reviewTurn)
+	}
+	running := true
+	seams.ended = func(_ context.Context, handle, turn string) (bool, error) {
+		return handle == "ceo" && turn == reviewTurn && !running, nil
+	}
+	if err := e.reviewSeat(t.Context(), after, "ceo", seams); err != nil {
+		t.Fatalf("reviewSeat: %v", err)
+	}
+	if _, found, _ := e.PendingAccessReview(t.Context(), "ceo"); !found {
+		t.Fatal("a check while the told turn runs dropped its record")
+	}
+	running = false
+	if err := e.reviewSeat(t.Context(), after, "ceo", seams); err != nil {
+		t.Fatalf("reviewSeat: %v", err)
+	}
+	if pending, found, err := e.PendingAccessReview(t.Context(), "ceo"); err != nil || found {
+		t.Errorf("a check after the told turn ended kept %+v (%v)", pending, err)
 	}
 }

@@ -231,8 +231,9 @@ type pendingStore interface {
 	DeleteAccessReview(ctx context.Context, handle string, revision uint64) (bool, error)
 }
 
-// pendingAttempts bounds re-reading a record another node moved under a write:
-// two nodes measuring one seat converge in one retry, and three bounds a flap.
+// pendingAttempts bounds re-reading a record another node moved under a write.
+// No backoff, unlike kv's shared CAS lines: a seat's record has two or three
+// writers (its holder, a ledger write, a turn's end), which converge in one retry.
 const pendingAttempts = 3
 
 // errPendingMoved is a record that kept moving under every attempt.
@@ -245,12 +246,13 @@ type reviewSeams struct {
 	publish func(ctx context.Context, req accessreview.Request) error
 	pending pendingStore
 	now     func() time.Time
+	ended   func(ctx context.Context, handle, turn string) (bool, error)
 }
 
 // reviewSeams are the engine's own.
 func (e *Engine) reviewSeams() reviewSeams {
 	s := reviewSeams{work: e.openWork, publish: e.publishAccessReview,
-		now: func() time.Time { return time.Now().UTC() }}
+		now: func() time.Time { return time.Now().UTC() }, ended: e.turnEnded}
 	if e.backends != nil && e.backends.Fleet != nil {
 		s.pending = e.backends.Fleet
 	}
@@ -291,9 +293,14 @@ func (e *Engine) recordReview(ctx context.Context, company *Company, handle stri
 	if err != nil {
 		return pending, m, false, false, err
 	}
+	ended, err := toldTurnEnded(ctx, seams, handle, pending, m, owed, found)
+	if err != nil {
+		return pending, m, false, false, err
+	}
 	switch {
-	case !owed && found && pending.ToldTurn == "":
-		// A CHANGE UNDONE BEFORE ANY TURN WAS TOLD IT drops its record.
+	case !owed && found && (pending.ToldTurn == "" || ended):
+		// A CHANGE UNDONE BEFORE ANY TURN WAS TOLD IT drops its record, and so
+		// does one whose told turn ended without dropping it.
 		settled, err = seams.pending.DeleteAccessReview(ctx, handle, revision)
 		return pending, m, false, settled, err
 	case !owed, pending.Same(m.base.Turn, m.digest) && found:
@@ -303,6 +310,40 @@ func (e *Engine) recordReview(ctx context.Context, company *Company, handle stri
 		Digest: m.digest, ChangedAt: seams.now(), Lines: m.personLines}
 	settled, err = writePending(ctx, seams.pending, handle, pending, revision, found)
 	return pending, m, true, settled, err
+}
+
+// toldTurnEnded reports a told record whose turn has ended: the seat told as it
+// stands, from that turn's told record or a later one, and the turn no longer
+// running anywhere ([Engine.turnEnded]).
+func toldTurnEnded(ctx context.Context, seams reviewSeams, handle string, p accessreview.Pending,
+	m accessMeasure, owed, found bool) (bool, error) {
+
+	if owed || !found || p.ToldTurn == "" || m.base == nil || seams.ended == nil ||
+		(m.base.Turn != p.ToldTurn && m.base.At.Before(p.ToldAt)) {
+		return false, nil
+	}
+	return seams.ended(ctx, handle, p.ToldTurn)
+}
+
+// turnEnded reports that seat handle's turn has ended: this node holds the
+// seat, no delivery of it is dispatched here, and no executor run of the turn
+// is active, so a review turn parked on a person has not.
+func (e *Engine) turnEnded(ctx context.Context, handle, turn string) (bool, error) {
+	if e.node == nil {
+		return false, nil
+	}
+	if _, owned := e.node.Host().MayStart(handle); !owned || e.seatBusy(handle) {
+		return false, nil
+	}
+	rt := e.sandbox.Load()
+	if rt == nil || rt.pending == nil {
+		return true, nil
+	}
+	runs, err := rt.pending.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return false, fmt.Errorf("engine: read %s's executor runs: %w", handle, err)
+	}
+	return !slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool { return run.TurnID == turn }), nil
 }
 
 // askForReview publishes seat handle's review of pending where it has open work.
@@ -355,24 +396,26 @@ func (e *Engine) measureAccess(ctx context.Context, company *Company, handle str
 	return m, owed, nil
 }
 
-// measured is snap against recent's baseline, false where nothing is owed.
+// measured is snap against recent's baseline, false where nothing is owed; the
+// baseline is kept wherever the log read is complete, owed or not.
 func measured(snap capability.Snapshot, recent accessdomain.Recent) (accessMeasure, bool) {
 	base := recent.Baseline
-	switch {
-	case !recent.Complete, base == nil, base.Digest == snap.Digest(),
-		bytes.Equal(base.Snapshot, toldWithheld):
+	if !recent.Complete || base == nil {
 		return accessMeasure{}, false
+	}
+	m := accessMeasure{base: base, digest: snap.Digest()}
+	if base.Digest == m.digest || bytes.Equal(base.Snapshot, toldWithheld) {
+		return m, false
 	}
 	old, err := capability.Parse(base.Snapshot)
 	if err != nil {
-		return accessMeasure{}, false
+		return m, false
 	}
-	seat := linesOf(capability.DiffFor(old, snap, capability.ForSeat))
-	if len(seat) == 0 {
-		return accessMeasure{}, false
+	if m.seatLines = linesOf(capability.DiffFor(old, snap, capability.ForSeat)); len(m.seatLines) == 0 {
+		return m, false
 	}
-	return accessMeasure{base: base, digest: snap.Digest(), seatLines: seat,
-		personLines: linesOf(capability.DiffFor(old, snap, capability.ForPerson))}, true
+	m.personLines = linesOf(capability.DiffFor(old, snap, capability.ForPerson))
+	return m, true
 }
 
 // linesOf is changes' lines.
@@ -474,10 +517,15 @@ func (e *Engine) endReviewOnTurnEnd(ctx context.Context, handle, turn string) {
 	if store == nil || handle == "" {
 		return
 	}
-	logReviewErr(ctx, handle, changePending(ctx, store, handle,
+	err := changePending(ctx, store, handle,
 		func(p accessreview.Pending, found bool) (accessreview.Pending, bool, bool) {
 			return p, !found || p.ToldTurn != turn, true
-		}))
+		})
+	if err != nil {
+		// A CHECK CLEARS IT INSTEAD, once the turn is seen ended.
+		logReviewErr(ctx, handle, err)
+		e.accessReviews.Load().kick(handle)
+	}
 }
 
 // dropUntoldReview drops seat handle's pending review where no turn was told it:
@@ -741,7 +789,7 @@ func waitingRun(run sandbox.PendingRun) accessreview.Run {
 // tracker's writer resolving a question as its author, and the answer desk a
 // run's withdrawal is delivered by.
 func (e *Engine) withdrawDeps() builtin.WithdrawDeps {
-	var out builtin.WithdrawDeps
+	out := builtin.WithdrawDeps{Chart: ChartAuthorityOf(e)}
 	if halves, ok := e.trackerHalves(); ok {
 		out.Resolver = func(actor builtin.Actor) builtin.AskResolver { return halves.as(actor) }
 	}
