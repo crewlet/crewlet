@@ -846,10 +846,13 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		ending.BlockedOn = redact.Secrets(ending.BlockedOn)
 		ending.StopReason = redact.Secrets(ending.StopReason)
 		ending.Failure = redact.Secrets(ending.Failure)
-		if u := ending.Unkept; u != nil {
-			unkept := *u
-			unkept.Reason = redact.Secrets(unkept.Reason)
-			ending.Unkept = &unkept
+		// THE UNKEPT CAPTURE AS IT STANDS ON THE ROW ([executordomain.Session.Unkept]),
+		// never as the end named it: a capture of that very attempt whose record
+		// the log took before the end is the row's own and kept, and sent as
+		// unkept the screen would say the session it shows kept was not.
+		ending.Unkept = s.Unkept()
+		if ending.Unkept != nil {
+			ending.Unkept.Reason = redact.Secrets(ending.Unkept.Reason)
 		}
 		row.Ending = &ending
 	}

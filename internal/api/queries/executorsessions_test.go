@@ -615,6 +615,63 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	}
 }
 
+// AN ENDING SENDS AN UNKEPT CAPTURE ONLY WHERE THE ROW KEEPS AN OLDER ONE. The
+// end names the turn's newest capture as not kept where the run's record says
+// so, and the log decides on the row's own place: a capture of that very
+// attempt whose record the log took before the end — one its taker handed on
+// before its lease's window closed, settled refused by the node that waited on
+// it — is the row's own, and kept. So a row keeping the capture its end named
+// unkept is sent with none, in both questions; sent it, the screen would say
+// the session it shows kept was not. A row whose end took an older capture off
+// is sent the unkept one, and why.
+//
+// Mutation: send the ending's unkept capture as the row holds it, and the row
+// that kept it says its session was not kept.
+func TestAnEndingSendsAnUnkeptCaptureOnlyWhereTheRowKeepsAnOlderOne(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionObjectStore(t)
+	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
+	landed := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
+	landed.LaunchSeq, landed.CaptureSeq = unkept.LaunchSeq, unkept.CaptureSeq
+	landedUnkept := unkept
+	landed.Ending.Unkept = &landedUnkept
+	released := sealedSession(t, store, "ana", gzipText(t, openCodeExport("look again")))
+	released.Object, released.LaunchSeq, released.CaptureSeq = objstore.Object{}, 1, 1
+	releasedUnkept := unkept
+	released.Ending.Unkept = &releasedUnkept
+	s := sessionSources(t, &stubSessions{rows: []executordomain.Session{landed, released}}, store)
+
+	sent := map[string]queries.SessionRow{}
+	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	for _, row := range listed.(queries.SessionsAnswer).Sessions {
+		sent["executor_sessions' row of "+row.Turn] = row
+	}
+	for _, turn := range []string{landed.Turn, released.Turn} {
+		read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": turn})
+		if err != nil {
+			t.Fatalf("executor_session of %s: %v", turn, err)
+		}
+		sent["executor_session of "+turn] = read.(queries.SessionAnswer).Session
+	}
+	if len(sent) != 4 {
+		t.Fatalf("the two questions answered %d rows, want each row twice", len(sent))
+	}
+	for question, row := range sent {
+		switch {
+		case row.Ending == nil:
+			t.Errorf("%s carries no ending", question)
+		case row.Turn == landed.Turn && row.Ending.Unkept != nil:
+			t.Errorf("%s sends %+v unkept, the capture the row keeps", question, *row.Ending.Unkept)
+		case row.Turn == released.Turn && (row.Ending.Unkept == nil || *row.Ending.Unkept != unkept):
+			t.Errorf("%s sends %+v unkept, want %+v: the capture newer than the one its end took off",
+				question, row.Ending.Unkept, unkept)
+		}
+	}
+}
+
 // A TURN ID THAT IS NONE IS THE CALLER'S TO CHANGE, told in the domain's own
 // sentence without its package's name: a work item's key, or a run id spelt
 // in capitals, is no run id in its canonical spelling, which the reader refuses
