@@ -1454,8 +1454,8 @@ func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, e
 			// THE HOLDER'S GRANTS, from the document their row carries: an
 			// unreadable document is no answer, never a person holding
 			// nothing, which the asker would read as one who uses no app.
-			p, err := DecodePerson(document)
-			if err != nil {
+			var p Person
+			if p, err = DecodePerson(document); err != nil {
 				return fmt.Errorf("iamdomain: open seat %s's holder %s: %w", seat, out.Person, err)
 			}
 			out.Grants = p.Grants
