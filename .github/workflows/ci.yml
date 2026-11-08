@@ -80,17 +80,18 @@ concurrency:
 #     compile, and a cold lint took 370-610 s against 110-150 s warm;
 #   - `test plan` (13 MB), which `test weights` restores for the one tool the
 #     two run, and `git recipe (macOS)` (56 MB);
-#   - the linter's own analysis cache (6 MB), kept by its job in the same way.
+#   - the linter's own analysis cache (6 MB), kept by its job and saved whole.
 # The cross-compile legs keep NONE: 1.78 GB between the four, for a leg that
 # built in 19-24 s warm and in 110-167 s with no cache at all (run
 # 42423731626, the first without), beside shards that run ten minutes.
-# So a push saves about 4.04 GB. The entries keyed on what they hold rather
-# than on the commit are saved only when that changes: the modules (0.27 GB),
-# the pinned gits (0.06 GB) and npm's cache (0.04 GB). `caches`, at the end of
-# the run, then deletes every entry a newer one of its kind supersedes. So the
-# repository holds one set, about 4.4 GB, and a push's saves take it to about
-# 8.5 GB until that job runs. Each entry is also pruned to exactly what its
-# job used (THE EPOCH, below), which only shrinks these figures.
+# By those figures a push saves about 4.04 GB. With each build cache pruned to
+# exactly what its job used (THE EPOCH, below), the first push under this
+# budget saved 2.98 GB (run 42427469948). The entries keyed on what they hold
+# rather than on the commit are saved only when that changes: the modules
+# (0.27 GB), the pinned gits (0.06 GB) and npm's cache (0.04 GB). `caches`, at
+# the end of the run, then deletes every entry a newer one of its kind
+# supersedes. So the repository holds one set, 3.36 GB in 15 entries after
+# that run, and a push's saves take it to about 6.3 GB until that job runs.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -997,15 +998,20 @@ jobs:
           key: gobuild-${{ runner.os }}-build-0-${{ github.sha }}
           restore-keys: |
             gobuild-${{ runner.os }}-build-0-
-      # THE LINTER'S ANALYSIS CACHE is kept like a build cache, not by the
-      # action. The action keys its own on the runner, a 7-day interval and
-      # go.mod's hash, and saves only when that key misses. So for a week the
-      # entry stays the first one saved (main saved it in 2 of 16 pushes), and
-      # a pull request that misses saves one that only it can read (#753).
-      # Here it is restored from main's newest entry, dated before the job,
-      # pruned to what the lint used and saved only by a push to main, as the
-      # build caches are. golangci-lint's cache is a fork of the go command's,
-      # with the same layout and the same hourly re-stamp.
+      # THE LINTER'S ANALYSIS CACHE is kept here, not by the action. The
+      # action keys its own on the runner, a 7-day interval and go.mod's hash,
+      # and saves only when that key misses. So for a week the entry stays the
+      # first one saved (main saved it in 2 of 16 pushes), and a pull request
+      # that misses saves one that only it can read (#753). Here it is
+      # restored from main's newest entry and saved only by a push to main,
+      # and saved WHOLE. Unlike a build cache it is not dated and pruned by the
+      # epoch, because the entries a lint reads do not come out newer than it.
+      # On 2026-11-08 a lint that restored the entry ran in 118 s, against
+      # 204 s without it, yet left only 5.6 MB of the 91 MB it restored newer
+      # than its epoch (run 42428775684). So that prune threw away the cache
+      # the lint had just used. The entry is small (6 MB as stored), and
+      # golangci-lint's own trim removes entries stamped more than five days
+      # ago.
       - name: locate the linter's analysis cache
         run: echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
       - name: restore the linter's analysis cache
@@ -1015,12 +1021,6 @@ jobs:
           key: golangci-lint-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             golangci-lint-${{ runner.os }}-
-      - name: date the restored analysis cache before this job
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          [ -d "$GOLANGCI_LINT_CACHE" ] || exit 0
-          TZ=UTC0 find "$GOLANGCI_LINT_CACHE" -mindepth 2 -maxdepth 2 \( -name '*-a' -o -name '*-d' \) \
-            -exec touch -h -t "$GOCACHE_AGED" {} +
       # `latest` is deliberate, and it is one of the five floating versions
       # in this repository: the others are the `node-version: latest` in the
       # `dashboard` and `end-to-end gates` jobs above and in
@@ -1047,12 +1047,6 @@ jobs:
           version: latest
           skip-cache: true
           # No working-directory: the module is the repository.
-      - name: keep only what the lint used of the analysis cache
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          find "$GOLANGCI_LINT_CACHE" -mindepth 2 -maxdepth 2 \( -name '*-a' -o -name '*-d' \) \
-            ! -newer "$RUNNER_TEMP/gocache-epoch" -exec rm -rf {} +
-          du -sh "$GOLANGCI_LINT_CACHE"
       - name: save the linter's analysis cache
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v6
