@@ -32,11 +32,42 @@ Open **Company › Integrations › SSH** and press **Save**.
 
 Each server is an entry in `integrations.ssh.hosts`, with its pinned host keys:
 
-1. **Read the server's host keys** on the server itself: `cat /etc/ssh/ssh_host_ed25519_key.pub`, and the ECDSA or RSA key beside it if the server uses one.
-2. **Compare each fingerprint** with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server console, so the key you pin is the server's and not a key presented on the way.
-3. **Write the entry** with an id, the address, the two login users and the key lines.
+1. **Read the server's host keys.** Crewlet can read what the server presents (`POST /setup/integrations/ssh/hosts/scan`), without signing in, one connection per key type. Or read them on the server itself: `cat /etc/ssh/ssh_host_ed25519_key.pub`, and the ECDSA or RSA key beside it.
+2. **Compare each fingerprint** with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server's console, so the key you pin is the server's and not a key presented on the way.
+3. **Save the server** with an id, the address, the two login users and the key lines (`PUT /setup/integrations/ssh/hosts/{id}`). It is a revision of the company document like any other.
+4. **Run the server setup** Crewlet renders for it (`GET /setup/integrations/ssh/hosts/{id}/setup`) as root on the server.
 
 A host id is part of every certificate principal for the server (`crewlet.<host id>.read` and `crewlet.<host id>.operate`), so changing it means running the server's setup again. A server shared by two companies takes a distinct host id in each.
+
+## The server setup
+
+The setup is one POSIX shell script, safe to run again: after a rotation, an allowlist change or a new operate user, run it again and it rewrites the same files. It:
+
+- trusts Crewlet's authority line (and a staged one during a rotation) in `/etc/ssh/crewlet/user_ca.pub`;
+- creates the read and operate users with no password, and adds the read user to `systemd-journal` where the group exists;
+- writes the one principal each user accepts;
+- installs the gate, `/usr/local/sbin/crewlet-gate`, the only program a Crewlet certificate runs, and the read allowlist, `/etc/ssh/crewlet/read-allowlist`;
+- gives the operate user full sudo (edit `/etc/sudoers.d/crewlet-ops` to narrow it) and, with `containers`, gives the read user `sudo -n` for `docker ps` and `docker logs --tail` alone;
+- adds `/etc/ssh/sshd_config.d/60-crewlet.conf`, which applies to the two Crewlet users only: certificates from Crewlet's authority, no `authorized_keys`, no password, no PTY, no forwarding of any kind, `LogLevel VERBOSE`, and the read user's every command forced through the gate;
+- checks the result with `sshd -t` and reloads sshd. It changes nothing for any other user.
+
+The gate refuses an empty command (an interactive shell), any quote or shell character, an option where a rule takes a word, and anything off the allowlist, each with exit status 126, and logs each command it runs or refuses with the certificate's key ID. sshd's own log names the key ID and serial of every certificate it accepts.
+
+The default read allowlist:
+
+```
+/usr/bin/uptime
+/usr/bin/free -m
+/bin/df -h
+/usr/bin/systemctl status *
+/usr/bin/systemctl is-active *
+/usr/bin/systemctl list-units --type=service --state=failed --no-pager
+/usr/bin/journalctl --no-pager -u * -n *
+/usr/bin/journalctl --no-pager -u * --since=*
+/usr/bin/ss -tln
+```
+
+With `containers`, it adds `/usr/bin/sudo -n /usr/bin/docker ps` and `/usr/bin/sudo -n /usr/bin/docker logs --tail * *`. A server's own `read_allowlist` replaces the list. In a rule, `*` is any one word that does not start with `-`, a word ending in `=*` is that option with any value, and a final `...` allows any further words. Never put `*` where a file path goes.
 
 ## Configuration
 
@@ -87,6 +118,8 @@ roles:
 | `hosts[].users.read` | The login user for read access, whose every command the server forces through its allowlist. |
 | `hosts[].users.operate` | The login user for approved commands. It must differ from the read user. Absent leaves the server read-only. |
 | `hosts[].description` | One line of up to 200 characters, shown to agents and approvers. |
+| `hosts[].containers` | Lets the read user list containers and read their logs through `sudo -n`. Off by default. |
+| `hosts[].read_allowlist` | Up to 100 rules replacing the default read allowlist, each an absolute path, then words of the gate's own characters. |
 | `roles[].integrations.ssh.level` | `read` or `operate`, one level for every server the agent names. |
 | `roles[].integrations.ssh.hosts` | The servers the agent may reach, each a host id above. Required when the agent is on. |
 
@@ -98,6 +131,6 @@ Turning `integrations.ssh` off, turning an agent off, or removing a server from 
 
 ## What is not supported yet
 
-- The server setup Crewlet renders for each server, **Test connection**, and the certificate authority's rotation routes.
+- **Test connection**, and the certificate authority's rotation routes.
 - The agents' `ssh_read` and `ssh_operate` tools, and the audit of every certificate and command.
 - Receiving events from a server.

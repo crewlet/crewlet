@@ -76,11 +76,55 @@ export interface SetupRequirement {
 }
 
 /** One app's setup: its requirements and the words its form says around them. */
+/** One step of an SSH server's latest Test connection. */
+export interface SetupSSHTestStep {
+  id: string;
+  ok: boolean;
+  detail: string;
+}
+
+/** An SSH server's latest Test connection with the current authority. */
+export interface SetupSSHTest {
+  host: string;
+  /** The authority's SHA-256 fingerprint. */
+  authority: string;
+  at: string;
+  by: string;
+  by_kind: string;
+  operator_id?: string;
+  ok: boolean;
+  steps: SetupSSHTestStep[];
+}
+
+/** One registered SSH server, its keys as fingerprints. */
+export interface SetupSSHServer {
+  id: string;
+  address: string;
+  port: number;
+  fingerprints: string[];
+  users: { read: string; operate?: string };
+  description?: string;
+  containers?: boolean;
+  /** Every agent naming it, on or off: it is not removed while one does. */
+  granted_to: string[];
+  last_test?: SetupSSHTest;
+}
+
+/** The SSH integration's servers and the authority lines servers trust. */
+export interface SetupSSHServers {
+  ca_public_key?: string;
+  next_ca_public_key?: string;
+  setup_version: number;
+  hosts: SetupSSHServer[];
+}
+
 export interface SetupToolState {
   key: string;
   configured: boolean;
   enabled: boolean;
   requirements: SetupRequirement[];
+  /** The SSH integration's servers, on its own answer alone. */
+  ssh?: SetupSSHServers;
   /** What connecting does; Atlassian's organization says it for Jira and Confluence. */
   summary?: string;
   /** What to do at the app, in order. */
