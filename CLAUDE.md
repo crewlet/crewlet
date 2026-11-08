@@ -184,7 +184,7 @@ Before committing, ALWAYS run **`make check`** and fix what it reports. It is ev
 - `go vet ./...` — the only vet: both test targets run `go test -vet=off`
 - `golangci-lint run` — use a prebuilt release; one built with a Go older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target
-- the three dashboard gates: `dashboard-lint` (`npm run format:check`), `dashboard-check` (rebuild and diff the committed bundle) and `dashboard-test` (`npm run typecheck && npm test`)
+- the three dashboard gates: `dashboard-lint` (`npm run format:check`), `dashboard-check` (rebuild and diff the committed bundle) and `dashboard-test` (`npm run typecheck && npm test && npm run test:layout`, the last in a headless browser)
 - `make git` — the pinned gits, built once a machine; both test targets depend on it, so no gate runs the machine's own git
 - `make test`, then `make test-solo`
 

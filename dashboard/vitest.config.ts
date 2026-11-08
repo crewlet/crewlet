@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { CASE_BOUND_MS, HOOK_BOUND_MS } from "./src/test/bounds.ts";
@@ -12,6 +12,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: false,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // A layout suite lays its panes out in a real browser (`vitest.layout.config.ts`).
+    exclude: [...configDefaults.exclude, "src/**/*.layout.test.tsx"],
     setupFiles: ["./src/test/setup.ts"],
     // ONE PROCESS PER WORKER (Vitest's default, pinned): the cost cases time a
     // pass by its process's CPU (`src/test/growth.ts`), which in the `threads`
