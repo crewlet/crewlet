@@ -216,9 +216,9 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 	}
 }
 
-// CLOSE TASK IS DECIDED AS WORKLET'S WRITE: a merge's row admits
-// everybody, but the close its step two makes is update_work_item's, the
-// Worklet app's — so a person who does not use Worklet merges the change
+// CLOSE TASK IS DECIDED AS WORKLET'S WRITE: a merge's row takes Gitlet,
+// but the close its step two makes is update_work_item's, the Worklet
+// app's — so a person who uses Gitlet and not Worklet merges the change
 // and is told the item was not closed and why, the item untouched, while one
 // who does closes it.
 //
@@ -229,8 +229,9 @@ func TestCloseTaskIsDecidedAsWorkletsWrite(t *testing.T) {
 		grants []iam.Grant
 		closed bool
 	}{
-		"a person using Worklet":     {grants: iam.Apps, closed: true},
-		"a person not using Worklet": {grants: []iam.Grant{iam.GrantDoclet, iam.GrantArtifacts, iam.GrantChatlet}},
+		"a person using Worklet": {grants: iam.Apps, closed: true},
+		"a person not using Worklet": {grants: []iam.Grant{iam.GrantDoclet, iam.GrantArtifacts, iam.GrantChatlet,
+			iam.GrantGitlet}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

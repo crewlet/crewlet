@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`
+- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
 - **Cost-when-tried:** with only `allow` and `blocked`, an operator who wanted a person to look at each call to a destructive tool had one choice, blocking it, and the agent then could not do the work at all; and the executor's harness runs fully permissioned in its box, so its own permission prompts were never an option to fall back on.
 - **Tag-status:** unreleased
 
@@ -89,3 +89,26 @@ configuration write it is.
 How the dashboard draws a held call (the dashboard design's: it composes the
 Inbox's decision row), and what a changed tool definition does to an allowed
 tool (a later decision holds it at Needs approval until accepted).
+
+## Amendment: a reply in the conversation answers only somebody the question was put to
+
+A chat reply still never answers a held call. Since
+[ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s amendment, one turn works for
+one writer, and a reply in the conversation answers any other parked question only when its writer
+is somebody the question was put to: a seat of the question's audience, resolved once at the park,
+or the run's requester, who owns an executor's question on the dashboard's route too. Whoever holds
+that seat must also be able to act when the reply arrives, read then and never at the park, so a
+person suspended or removed since, or a human seat nobody holds, answers nothing.
+
+The writer is the seat the engine's party registry resolves the reply to, never the reply's words. A
+registry withholds a suspended or removed holder's identities, so a vendor's chat from them names
+nobody. Anybody else's reply (a stranger, a person or seat outside the audience, a credential, which
+holds no seat) is not the answer. It runs as the ordinary message it is, its own turn bounded by its
+own writer, and the run stays parked. A question whose park named neither an audience nor a
+requester admits nobody from the conversation, never anybody; the dashboard's route, decided by
+authority, still answers it. A directory that cannot say whether the holder may act keeps the
+reply's place rather than spending it either way.
+
+The answer is what the run carries on with, inside a turn worked for its requester and held to their
+apps. A reply from somebody the question was never put to would steer a run working for somebody
+else, with that somebody's apps.

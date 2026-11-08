@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -575,26 +576,26 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // (a)): the engine writes, the lifecycle request and a change's writes — an
 // open, its ask for review, an edit, a comment, a suggestions apply and its
 // findings' answer, a rebase, a merge, a dequeue and a revert — a seat's call
-// sends carry
-// whom its turn works for, for the Gitlet node and the data node that decide them
-// to judge beside the seat's own grant — none for a turn nobody woke, the
-// outcome of its own act or a person (who maintains every repository); the
-// colleague seat whose ask woke it, which every read the call makes is held
-// to as well; and NOBODY for a stranger, a person who may not act in the
-// company now, or a credential acting as no seat, which writes no repository
-// itself — whose turn is still sent, since the seat's own work stays
-// theirs to steer and only the deciding node reads whether that is what it
-// is. A requester this node cannot compose is answered unavailable with
-// nothing sent, never as a turn nobody woke. A person's own write carries
-// none.
+// sends carry whom its turn works for, for the Gitlet node and the data node
+// that decide them to judge beside the seat's own grant — none for a turn
+// nobody woke, the outcome of its own act or a person holding Gitlet (who
+// maintains every repository); the colleague seat whose ask woke it, which
+// every read the call makes is held to as well; and NOBODY for a credential
+// acting as no seat that holds Gitlet, which pushes to no repository itself,
+// so only the seat's own work is steered for it. A stranger and a person who
+// may not act in the company now use no app, so their turn's write is refused
+// at the gate before anything is sent, the seat's own work included: the app
+// holds before the steerable spare (ADR-0109, ADR-0110). A requester this
+// node cannot compose is answered unavailable with nothing sent, never as a
+// turn nobody woke. A person's own write carries none.
 //
 // Mutations: writeCaller composing no ceiling → the colleague's and the
-// stranger's writes carry none, red; a credential's turn read as a person's →
-// the token's writes carry none, red; the ceiling's refusal answered as a
-// refusal rather than nobody's ceiling → the stranger's write is refused
-// before it is sent, red; the colleague left off the call's reads → red; the
-// lifecycle request, a change proposal, a conversation write, a rebase's,
-// a merge's or a revert's engine write or a dequeue left unstamped → red.
+// credential's writes carry none, red; a credential's turn read as a person's
+// → the token's writes carry none, red; the gate deciding no app for the
+// requester → the stranger's write is sent, red; the colleague left off the
+// call's reads → red; the lifecycle request, a change proposal, a
+// conversation write, a rebase's, a merge's or a revert's engine write or a
+// dequeue left unstamped → red.
 func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
@@ -618,8 +619,6 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 		{"a turn the outcome of the seat's own act woke", "agent-cto", speaker("agent-cto"), nil, "", ""},
 		{"a turn a person woke", "founder", speaker("founder"), nil, "", ""},
 		{"a turn a colleague seat woke", "agent-ceo", speaker("agent-ceo"), seat, "agent-ceo", ""},
-		{"a turn a stranger woke", "", unknown, nobody, "", ""},
-		{"a turn a departed person woke", "departed", speaker("departed"), nobody, "", ""},
 		{"a turn a credential acting as no seat woke", "", token, nobody, "", "token:ci"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -698,13 +697,43 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 		})
 	}
 
+	// A STRANGER AND A PERSON WHO MAY NOT ACT use no app, so the gate refuses
+	// their turn's write for them and nothing is sent: not even the seat's own
+	// work is steered by somebody who could reach no repository themselves.
+	for _, c := range []struct {
+		name, requester string
+		senders         []types.CanonicalIdentity
+		says            string
+	}{
+		{"a turn a stranger woke", "", unknown, "woken by somebody the company does not know"},
+		{"a turn a departed person woke", "departed", speaker("departed"), "may not act in the company now"},
+	} {
+		host, writer := newChangeHost(suggestedChange().queued()), &codeWrites{}
+		reg := codeRegistry(t, writeDeps(host, writer))
+		turn := writerTurn(t)
+		turn.Requester, turn.Senders = c.requester, c.senders
+		got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("hello"))
+		var refused *builtin.DecisionRefused
+		if !got.Failed || !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling ||
+			!strings.Contains(got.Output, c.says) {
+			t.Errorf("%s: the write answered %q (%v), want refused for whoever woke the turn, saying %q",
+				c.name, got.Output, got.Cause, c.says)
+		}
+		writes, requests := writer.asked()
+		changes, converses := writer.changesAsked()
+		if len(writes)+len(requests)+len(changes)+len(converses) != 0 {
+			t.Errorf("%s: the refused write sent %d writes, %d requests, %d proposals and %d conversation "+
+				"writes, want nothing", c.name, len(writes), len(requests), len(changes), len(converses))
+		}
+	}
+
 	host, writer := newGitletHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
 	turn.Requester = "agent-gone"
 	got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("hello"))
 	if tools.RefusalOf(got) != tools.RefusalUnavailable || !errors.Is(got.Cause, builtin.ErrUndecidable) ||
-		!strings.Contains(got.Output, "could not establish who this turn's work is for") {
+		!strings.Contains(got.Output, "can't tell who this turn's work is for") {
 		t.Errorf("a write whose requester this node cannot compose answered %s %q (%v), want unavailable",
 			tools.RefusalOf(got), got.Output, got.Cause)
 	}

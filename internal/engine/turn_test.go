@@ -2519,6 +2519,10 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
 
+// MayAnswer lets every seat's holder answer: these coordinators are about the
+// answer route, not whether its writer may act.
+func (noAudience) MayAnswer(context.Context, string) (bool, error) { return true, nil }
+
 // noPushes reads every run as having pushed nothing: these coordinators run no
 // repository on Gitlet (runpushes_internal_test.go reads the record).
 type noPushes struct{}

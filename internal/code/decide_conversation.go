@@ -48,11 +48,14 @@ import (
 // repository ([AccessReview]; a person maintains every repository) — else
 // not_permitted. Each reviewer it asks is judged on the deciding node's chart
 // whoever asks: a handle no seat holds is no_reviewer; a person — a human seat —
-// may always be asked; a seat must review the repository and must not be an
-// author of the change, whose review of their own change would count for
-// nothing — else not_permitted, naming what the seat holds. An ask that would
-// leave more than [MaxReviewersPerChange] reviewers asked at once is
-// too_many_reviewers.
+// is asked only where the identity directory says its holder uses Gitlet
+// (ADR-0110): reading a change is reading its repository's code, so a seat
+// nobody holds, a person who may not act and one not given the gitlet app are
+// not_permitted, read before the decide ([People]) and handed to it; a seat
+// must review the repository and must not be an author of the change, whose
+// review of their own change would count for nothing — else not_permitted,
+// naming what the seat holds. An ask that would leave more than
+// [MaxReviewersPerChange] reviewers asked at once is too_many_reviewers.
 //
 // A COMMENT takes a change in any state — a change is discussed after it
 // merges — and an asker who reads the repository (not_permitted, in the
@@ -682,12 +685,15 @@ func (d conversationDecision) refuse(code ConversationRefusal, detail string) (c
 
 // decideConversation is one round's decision of w over the rows tx holds — see
 // this file's head for the rules, in their order. Pure over (the rows, w,
-// seats, retention): seats is the deciding epoch's chart, which a write that
-// [ConversationWrite.JudgesChart] is judged by and any other may leave unset;
-// retention is code.deleted_retention_days on the deciding epoch, which a
-// repo_deleted refusal names the purge's earliest instant by.
+// seats, retention, noGitlet): seats is the deciding epoch's chart, which a
+// write that [ConversationWrite.JudgesChart] is judged by and any other may
+// leave unset; retention is code.deleted_retention_days on the deciding epoch,
+// which a repo_deleted refusal names the purge's earliest instant by; noGitlet
+// is the persons an ask for review names whose holder the identity directory
+// says cannot use Gitlet, read before the publish ([ChangeWriter.withoutGitlet])
+// so that no round of the decide reads anything but its snapshot.
 func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, seats SeatRules,
-	retention time.Duration) (conversationDecision, error) {
+	retention time.Duration, noGitlet map[string]bool) (conversationDecision, error) {
 
 	repoID, changeID := w.RepoID(), w.ChangeID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
@@ -769,7 +775,7 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	}
 	switch {
 	case w.Reviewers != nil:
-		d, err = decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, d)
+		d, err = decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, noGitlet, d)
 	case w.Comment != nil:
 		d, err = decideComment(ctx, tx, w, row, named, d)
 	case w.Review != nil:
@@ -1083,7 +1089,8 @@ func findingIn(ctx context.Context, tx *sql.Tx, id string) (findingRow, bool, er
 
 // decideReviewers is an ask for review's rules over row — see this file's head.
 func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repo RepoRef,
-	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
+	row changeRow, named string, grant Grant, noGitlet map[string]bool,
+	d conversationDecision) (conversationDecision, error) {
 
 	switch row.state {
 	case ChangeStateClosed:
@@ -1116,6 +1123,15 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 				"is a seat by its handle, or a person by the human seat they hold", rv.Handle))
 		}
 		if seat.Human {
+			// A PERSON READS A CHANGE ONLY THROUGH GITLET, so one without
+			// it is asked to review none: an ask is how a change discloses
+			// its whole diff to somebody, and the company withheld code
+			// from them (ADR-0110).
+			if noGitlet[rv.Handle] {
+				return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%q has no Gitlet permission, so "+
+					"they cannot read %s and are asked to review none of it: an administrator gives them Gitlet "+
+					"first", rv.Handle, named))
+			}
 			stamped = append(stamped, Reviewer{Handle: rv.Handle, Kind: PartyPerson})
 			continue
 		}

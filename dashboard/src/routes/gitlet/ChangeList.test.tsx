@@ -7,9 +7,9 @@
  * The invariants worth breaking a build over: a work item's listing names no
  * state (every state of the item, which the work item lets the engine walk);
  * a review row names the change it judged and opens that change's page; the
- * Home card asks the reader's own review only of a reader bound to a seat;
- * and a seat's Code tab draws the usage counters for an agent and none for a
- * person.
+ * Home card asks the reader's own review only of a reader bound to a seat,
+ * and nothing of a reader without Gitlet; and a seat's Code tab draws the
+ * usage counters for an agent and none for a person.
  */
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
@@ -23,6 +23,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { SeatCode } from "~/routes/agents/seat/Code.tsx";
 import { CodeWaiting } from "~/routes/home/CodeWaiting.tsx";
@@ -225,6 +226,31 @@ test("Home's card asks a reader bound to no seat no review of its own, and says 
   expect(screen.getByText(/A review is asked of a seat/)).toBeTruthy();
   const needs = codeAsks(asked, "code_changes").map((u) => u.searchParams.get("needs"));
   expect(needs).not.toContain("review");
+});
+
+// HOME'S CARD IS GITLET'S (ADR-0110): a reader without the app is asked
+// neither listing — the engine refuses both — and the card says what would
+// open it, in the words every lock uses, in place of both halves. Mutation:
+// ask the listings whatever the reader holds, and a `code_changes` goes out;
+// drop the note, and the card draws its halves over nothing asked.
+test("Home's card asks a reader without Gitlet nothing, and says what would open it", async () => {
+  const asked = stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? { changes: [change("web", 42)], position: POSITION, level: "session" }
+      : undefined,
+  );
+  mount(<CodeWaiting />, { ...ADMIN_VIEWER, grants: ["worklet", "doclet", "chatlet"] });
+
+  expect(
+    await screen.findByText(
+      "Seeing Gitlet's changes needs Gitlet access. An admin can give it to you.",
+    ),
+  ).toBeTruthy();
+  await settled(() => asked.length);
+  expect(codeAsks(asked, "code_changes")).toEqual([]);
+  expect(screen.queryByRole("region", { name: "Asking your review" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Waiting on a person" })).toBeNull();
+  expect(screen.queryByText("web!42")).toBeNull();
 });
 
 // HOME'S CARD LISTS THE CHANGES A LISTING KEEPS, NOT THE ROWS ONE PAGE READ:

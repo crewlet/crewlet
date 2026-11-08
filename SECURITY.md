@@ -190,14 +190,17 @@ A few things worth knowing when deploying Crewlet:
   read, but that matches known credential shapes, not values: a secret of no
   recognisable shape that a run read or printed is in it as it was. Nor does
   the overview carry a credential, a login of anybody else's, an external
-  contact id or the company-wide trail, which are `admin`'s. If the existence of
+  contact id or the company-wide trail, which are `admin`'s, nor the company's
+  code, which takes `gitlet` through every door — the dashboard, git and the
+  code tools — so a person handed no app reads no repository, and an agent
+  works on code in a turn they woke only if they hold it. If the existence of
   a seat, an agent's current status or the company's spend must not reach
   somebody, do not give them a credential
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it (everybody, one of
   the [permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app),
-  `admin`, `worklet`, `doclet`, `artifacts` or `chatlet`, or a verb the answer
+  `admin`, `worklet`, `doclet`, `artifacts`, `chatlet` or `gitlet`, or a verb the answer
   decides record by record), and both transports are decided by the same
   registry, so a question cannot be reached by choosing a channel. A route
   registered without saying so is a build failure rather than a route that
@@ -294,7 +297,7 @@ A few things worth knowing when deploying Crewlet:
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` (required and non-empty, naming only `admin`,
-  `worklet`, `doclet`, `artifacts` and `chatlet`, and refused for `admin` on a node that refuses it),
+  `worklet`, `doclet`, `artifacts`, `chatlet` and `gitlet`, and refused for `admin` on a node that refuses it),
   and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node

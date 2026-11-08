@@ -27,11 +27,12 @@
  *    write filed under `null` raises no floor, so the screen's next read may
  *    come from before the press;
  *  - `apps` — the apps ANY ONE of which the change needs, in the order its
- *    authority row names them: its app for an app's change, the row's own set
- *    for one that draws on whichever of several the caller holds
- *    (`answer_knowledge`, the tracker and the knowledge base it answers
- *    from), and none for a change no app holds (pausing a seat, answering an
- *    executor). What a control the engine does not offer is held with —
+ *    authority row names them: its app for an app's change (Gitlet for every
+ *    change on the code log, ADR-0110), the row's own set for one that draws
+ *    on whichever of several the caller holds (`answer_knowledge`, the
+ *    tracker and the knowledge base it answers from), and none for a change
+ *    no app holds (pausing a seat, answering an executor). What a control
+ *    the engine does not offer is held with —
  *    "needs Worklet access" — so a reader is told what to ask an admin for
  *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
  *    rather than guessed from the domain: a change can need an app and land
@@ -472,11 +473,13 @@ export const ACTIONS = {
   },
   // GITLET'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
   // its own notices on its own log, so a code notice is marked here and
-  // "Mark all read" sends both, each with its own `seen`.
+  // "Mark all read" sends both, each with its own `seen`. The person's own
+  // record, and the Gitlet app's as every code change is (ADR-0110): a reader
+  // without it is listed no code notice to mark.
   code_mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -489,7 +492,7 @@ export const ACTIONS = {
   code_update_repo: {
     args: ["repo", "search", "mirror_from", "mirror_to"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -498,7 +501,7 @@ export const ACTIONS = {
   code_purge_unreachable: {
     args: ["repo"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -507,7 +510,7 @@ export const ACTIONS = {
   code_import_repo: {
     args: ["name", "url", "credential", "owner", "visibility", "default_branch", "mirror"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -524,7 +527,7 @@ export const ACTIONS = {
     // the reader's own standing findings it keeps standing.
     args: ["repo", "change", "revision", "verdict", "summary", "findings", "carries"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -533,7 +536,7 @@ export const ACTIONS = {
     // or a finding; one on a line (`anchor`); and Resolve on a thread.
     args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -541,7 +544,7 @@ export const ACTIONS = {
     // REQUEST REVIEW: ask reviewers, or take an ask back.
     args: ["repo", "change", "reviewers", "withdraw", "note"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -551,7 +554,7 @@ export const ACTIONS = {
     // readying what the reader did not see.
     args: ["repo", "change", "expected_version", "draft"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -561,7 +564,7 @@ export const ACTIONS = {
     // reader did not see.
     args: ["repo", "change", "expected_version", "reason", "reopen"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -574,7 +577,7 @@ export const ACTIONS = {
     // one.
     args: ["repo", "branch", "target", "title", "body", "draft", "reviewers", "work_item"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -584,7 +587,7 @@ export const ACTIONS = {
     // (`expected_head`), its finding resolved as a step.
     args: ["repo", "change", "findings", "expected_head", "message"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -605,7 +608,7 @@ export const ACTIONS = {
       "override_reason",
     ],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },
@@ -615,7 +618,7 @@ export const ACTIONS = {
     // log the change's checks tab reads.
     args: ["repo", "change", "all_failed"],
     domain: "code",
-    apps: [],
+    apps: ["gitlet"],
     refreshes: [],
     scope: "person",
   },

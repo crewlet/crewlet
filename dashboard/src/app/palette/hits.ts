@@ -406,7 +406,7 @@ export function destinationGroups(
  * (`workspaceOpen`): the workspace's own grants, else nothing where any
  * section the company runs is open to every reader, else any grant that opens
  * one of those — so My work needs Worklet where its Reviews is not offered,
- * and nothing where it is.
+ * and Worklet or Gitlet where it is.
  */
 function workspaceNeeds(row: WorkspaceRow, runs: ServicesRun): readonly Grant[] | undefined {
   if (row.grants && row.grants.length > 0) return row.grants;

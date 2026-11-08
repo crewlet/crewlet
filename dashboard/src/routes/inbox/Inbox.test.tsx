@@ -1960,6 +1960,44 @@ describe("the pane", () => {
     ]);
   });
 
+  // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine
+  // lists them no code notice and does not offer them `code_mark_inbox`, so a
+  // code notice still on a page read before their access changed is held —
+  // its own mark with the access that would open it — and never sent.
+  // Mutations: declare the code mark no app's, and its hold names no access;
+  // send whichever half has a notice, whatever the engine offers, and
+  // `code_mark_inbox` goes out.
+  test("a reader without Gitlet marks only Worklet's half, and a code notice's mark says why", async () => {
+    const reader = {
+      ...JANE,
+      grants: ["worklet", "doclet"],
+      acts: EVERY_TOOL.filter((tool) => tool !== "code_mark_inbox"),
+    };
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      viewer: reader,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+      answers: {
+        viewer: reader,
+        inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 })] }),
+      },
+    });
+    await settle();
+    const read = screen.getByRole("button", { name: "Mark as read" });
+    expect(read.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(read)).toContain(
+      "This change needs Gitlet access. An admin can give it to you.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
+    ]);
+  });
+
   test("Mark all read reads through the newest update loaded, not past it", async () => {
     mount({
       answers: {

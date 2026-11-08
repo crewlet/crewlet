@@ -467,14 +467,16 @@ func asBoundPerson() context.Context {
 }
 
 // asUnboundToken is a machine token bound to nobody, as CI holds one —
+// carrying the gitlet permission a CI token is given to fetch (ADR-0110), and
 // stepped up, as the node composes every machine token
 // (iam.Principal.MachineToken), so a gesture asking a fresh proof reaches the
-// tool and is refused there for the binding it lacks, never for the proof.
+// tool and is refused there for the binding it lacks, never for the app or
+// the proof.
 func asUnboundToken() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
 		Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
-		ReauthAt: time.Now().Add(time.Hour).UTC(),
+		Grants: []iam.Grant{iam.GrantGitlet}, ReauthAt: time.Now().Add(time.Hour).UTC(),
 	})
 }
 
@@ -795,7 +797,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 		{"a turn a departed person woke", "departed", speaker("departed"), tools.RefusalForbidden,
 			"may not act in the company now", true},
 		{"a turn whose requester this node cannot compose", "agent-gone", nil, tools.RefusalUnavailable,
-			"could not establish who this turn's work is for", false},
+			"can't tell who this turn's work is for", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -2194,4 +2196,74 @@ func TestThePagesNameEveryCodeTool(t *testing.T) {
 			t.Errorf("docs/reference/api-endpoints.md's account of what /operator/mcp serves does not name %s", name)
 		}
 	}
+}
+
+// A CODE READ IN A TURN A PERSON WITHOUT GITLET WOKE IS REFUSED (ADR-0110).
+//
+// Reaching a repository takes the gitlet app, and inside a turn somebody woke
+// a seat uses only the apps they use (ADR-0109), so a turn woken by a person
+// who holds every app but Gitlet reads no repository for them: each code read
+// is refused for whoever woke the turn, the refusal naming Gitlet and who can
+// give it, and Gitlet is asked nothing — no listing, no file, no count says
+// what a repository holds. The CONTROL is the founder, who holds Gitlet, whose
+// turn reads as ever. A CREDENTIAL acting as no seat without Gitlet — a
+// pipeline's `[worklet]` token — is refused the same way, the refusal naming
+// the credential rather than a person.
+//
+// Mutation: put the code rows back on ClassEverybody, and the contractor's
+// turn and the token's list the repositories.
+func TestACodeReadInATurnAPersonWithoutGitletWokeIsRefused(t *testing.T) {
+	t.Parallel()
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	people := codeRequesters()
+	people["contractor"] = iam.Principal{Kind: iam.KindPerson, Login: "contractor@example.com",
+		Seat: "contractor", Stage: iam.StageActive, Grants: others}
+	people["login:token:worklet"] = iam.Principal{Kind: iam.KindMachine, Login: "token:worklet",
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
+	host := newGitletHost()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host, Requesters: people, Chart: chartLeads})
+	turn := codeTurn(t)
+	turn.Requester, turn.Senders = "contractor", []types.CanonicalIdentity{{Handle: "contractor"}}
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.CodeListReposTool, map[string]any{}},
+		{builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID}},
+		{builtin.CodeGetRepoTool, map[string]any{"repo": "site"}},
+	} {
+		got := refusedCode(t, reg, turn, call.tool, call.args)
+		var refused *builtin.DecisionRefused
+		if tools.RefusalOf(got) != tools.RefusalForbidden || !errors.As(got.Cause, &refused) ||
+			refused.Decision.Reason != authz.ReasonCeiling ||
+			!strings.Contains(got.Output, "does not use Gitlet") ||
+			!strings.Contains(got.Output, "an administrator can give them Gitlet") {
+			t.Errorf("%s in a turn a person without Gitlet woke answered %s %q (%v), want refused for them, "+
+				"naming Gitlet", call.tool, tools.RefusalOf(got), got.Output, got.Cause)
+		}
+	}
+	token := codeTurn(t)
+	token.RequesterLogin, token.RequesterApps = "token:worklet", []iam.Grant{iam.GrantWorklet}
+	token.Senders = []types.CanonicalIdentity{{ExternalID: "token:worklet", Platform: "worklet",
+		Login: "token:worklet"}}
+	got := refusedCode(t, reg, token, builtin.CodeListReposTool, map[string]any{})
+	var refused *builtin.DecisionRefused
+	if tools.RefusalOf(got) != tools.RefusalForbidden || !errors.As(got.Cause, &refused) ||
+		refused.Decision.Reason != authz.ReasonCeiling ||
+		!strings.Contains(got.Output, "the credential this turn is working for does not use Gitlet") {
+		t.Errorf("a listing in a turn a [worklet] token woke answered %s %q (%v), want refused for the "+
+			"credential, naming Gitlet", tools.RefusalOf(got), got.Output, got.Cause)
+	}
+	if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
+		t.Errorf("the refused reads asked Gitlet %d reads, %d resolves and %d git reads, want nothing",
+			len(reads), len(resolves), len(gits))
+	}
+	control := codeTurn(t)
+	control.Requester, control.Senders = "founder", []types.CanonicalIdentity{{Handle: "founder"}}
+	callCode(t, reg, control, builtin.CodeListReposTool, map[string]any{})
 }

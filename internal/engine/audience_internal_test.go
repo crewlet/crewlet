@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"sync"
@@ -23,6 +24,10 @@ type noAudience struct{}
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
+
+// MayAnswer lets every seat's holder answer: these coordinators are about the
+// answer route, not whether its writer may act.
+func (noAudience) MayAnswer(context.Context, string) (bool, error) { return true, nil }
 
 // testAnswers is the seal a coordinator a case builds by hand seals and opens
 // answers under ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for

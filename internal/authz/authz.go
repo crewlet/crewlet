@@ -40,6 +40,16 @@
 // spare. A refusal names the requester's missing app in
 // [Decision.RequesterGrants], never in the caller's Grants.
 //
+// REACHING A REPOSITORY TAKES THE GITLET PERMISSION: ADR-0110, whose authority
+// this package is too. Every code verb of the table names [iam.GrantGitlet] —
+// the routes, the git transport, the read and write tools, the review and
+// merge verbs, a check's report, an import, a purge and the inbox's code
+// marks — so a principal without it is refused here before any repository is
+// read, and the repository's grant (code.GrantOf, ADR-0088) decides among the
+// holders; who read a repository and the Gitlet nodes' caches stay admin's.
+// A repository and a change are Gitlet's kinds ([AppFor]), so a cross-app
+// answer shows neither to a reader without the app.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -343,12 +353,25 @@ const (
 	// KindMessage is one chat message; its [Object.Author] is the seat that
 	// said it.
 	KindMessage ObjectKind = "message"
+	// KindRepository is one of the company's repositories on Gitlet, and
+	// everything read as it: its refs, its files and history, its pushes, its
+	// merge queues and its checks. WHICH repository is the grant the serving
+	// node derives (code.GrantOf, ADR-0088), never this table's; the kind is
+	// here so an answer that mixes apps holds a repository's rows to Gitlet
+	// ([AppFor]).
+	KindRepository ObjectKind = "repository"
+	// KindChange is one change on Gitlet — one branch proposed into another —
+	// and its conversation: its reviews, findings and comments. Gitlet's, as
+	// its repository is: a turn a change woke names it as its origin, and a
+	// reader without the app is shown no such origin.
+	KindChange ObjectKind = "change"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
 	KindView, KindCompany, KindArtifact, KindArtifactFolder, KindChannel, KindMessage,
+	KindRepository, KindChange,
 }
 
 // Valid reports whether a kind is one this build knows.

@@ -757,6 +757,33 @@ type InboxChange struct {
 	// re-reads the inbox, and the frame names what moved and nothing about
 	// when.
 	Stored time.Time `json:"-"`
+
+	// App is the app whose half of the inbox moved — the tracker's is
+	// Worklet's, the code log's Gitlet's — which the producer names from
+	// [InboxChange.Source], and which decides who of the seat's watchers is
+	// told ([InboxChange.ForReader]). NEVER ON THE FRAME: [InboxChange.Source]
+	// already says whose half it is.
+	App iam.Grant `json:"-"`
+}
+
+// ForReader is the movement as one watcher of the seat may receive it: whole
+// to a reader [InboxChange.App] admits, and nothing to anybody else.
+//
+// EACH HALF UNDER ITS OWN APP, as the inbox question reads each half: a
+// watcher without Gitlet is listed no code notice (ADR-0110), and without
+// Worklet no work notice, so a frame naming a change, a task or a count of
+// either would tell them what the list withholds. The watch itself was
+// decided as a read of the person's inbox ([watching]), which no app decides,
+// since the halves are several apps' news.
+//
+// A MOVEMENT NAMING NO APP REACHES NOBODY. Every domain that keeps an inbox
+// names its app where its movements are pushed, so one naming none is a
+// producer's mistake, and delivered to every watcher it would be a leak.
+func (c InboxChange) ForReader(r Reader) (string, any, bool) {
+	if !c.App.IsApp() || !r.Audience.Has(c.App) {
+		return "", nil, false
+	}
+	return "", c, true
 }
 
 // InboxChanged pushes one seat's inbox movement to the clients watching that
@@ -791,11 +818,11 @@ func (s *Service) InboxChanged(change InboxChange) {
 // socket would have rebuilt every tab's whole snapshot to refresh one list.
 //
 // NEVER BLOCKS, for [Service.InboxChanged]'s reason.
-func (s *Service) InboxReread(source string) {
+func (s *Service) InboxReread(source string, app iam.Grant) {
 	now := s.now()
 	for _, seat := range s.hub.WatchedSeats() {
 		s.hub.Broadcast(PushSeat(KindInboxChanged, seat,
-			InboxChange{Source: source, Handle: seat}, now))
+			InboxChange{Source: source, Handle: seat, App: app}, now))
 	}
 }
 

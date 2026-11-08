@@ -59,9 +59,10 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 			append([]Grant{GrantAdmin}, Apps...)},
 		{"admin beside an app it already includes",
 			[]Grant{GrantDoclet, GrantAdmin},
-			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet}},
+			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet, GrantGitlet}},
 		{"an unknown name is carried through", []Grant{future, GrantAdmin},
-			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}},
+			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet,
+				GrantGitlet}},
 		{"duplicates in the row stay as given", []Grant{GrantWorklet, GrantWorklet},
 			[]Grant{GrantWorklet, GrantWorklet}},
 		// THE CONTROL: no admin, nothing added.
@@ -88,6 +89,30 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// GITLET IS THE LAST APP, AND EVERY APP BEFORE IT KEEPS ITS PLACE.
+//
+// The order of [Apps] is what [Expand] stores in a row and what every list of
+// an administrator's permissions reads in, so an app is appended and never
+// inserted (ADR-0110 appended gitlet after chatlet, as ADR-0033's amendment
+// appended chatlet after artifacts). The prefix is pinned by value rather than
+// read off the list, because a list compared with itself cannot move.
+// Mutation: insert gitlet before chatlet and the order goes red; drop it from
+// AllGrants and the vocabulary does.
+func TestGitletIsTheLastApp(t *testing.T) {
+	t.Parallel()
+	want := []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+	if !slices.Equal(Apps, want) {
+		t.Fatalf("Apps = %v, want %v: an app moved, so every row Expand stored reads in "+
+			"another order", Apps, want)
+	}
+	if GrantGitlet != "gitlet" || !GrantGitlet.Valid() || !GrantGitlet.IsApp() {
+		t.Errorf("gitlet is not a valid app: %q", GrantGitlet)
+	}
+	if got := AllGrants[len(AllGrants)-1]; got != GrantGitlet {
+		t.Errorf("the vocabulary ends with %q, want gitlet appended last", got)
 	}
 }
 
@@ -126,7 +151,8 @@ func TestAppsOfIsEveryAppAdminIncludesAndNeverAdmin(t *testing.T) {
 		{nil, []Grant{}},
 		{[]Grant{GrantAdmin}, Apps},
 		{[]Grant{GrantDoclet, "teleport", GrantWorklet}, []Grant{GrantDoclet, GrantWorklet}},
-		{[]Grant{GrantChatlet, GrantAdmin}, []Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts}},
+		{[]Grant{GrantChatlet, GrantAdmin},
+			[]Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts, GrantGitlet}},
 	} {
 		held := slices.Clone(c.held)
 		got := AppsOf(held)

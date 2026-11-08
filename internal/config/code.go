@@ -1797,7 +1797,10 @@ func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *
 
 // mirrorSeatReads reports whether seat reads the repository r, as the code
 // domain grants a read (internal/code's GrantOf, ADR-0088): a PERSON'S seat
-// reads every repository, and an agent's every one visible to the company —
+// reads every repository as far as the chart goes — whether the person holding
+// it uses Gitlet (ADR-0110) is the identity directory's to say, which no
+// configuration reads, so a push mirror asks it at a person's create and
+// settings change and before every push — and an agent's every one visible to the company —
 // every tier this document can spell reads, so no tier narrows it — and one
 // visible to its owner's unit alone where the chart relates the seat to the
 // owner: a seat in the owning unit or a unit below it, a lead over it (the

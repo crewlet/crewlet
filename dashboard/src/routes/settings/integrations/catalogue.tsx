@@ -267,9 +267,9 @@ export const CATALOG: Entry[] = [
     key: "ssh",
     name: "SSH",
     description: "Your servers, through certificates Crewlet signs for minutes at a time.",
-    // NO THIRD PARTY: the engine is the certificate authority, so the tile
-    // carries Crewlet's own mark, as the built-in services do.
-    vendor: "crewlet",
+    // NO THIRD PARTY: SSH is a protocol, so the kit draws Crewlet's own key for
+    // it, never the brand mark the built-in services carry.
+    vendor: "ssh",
     surfaces: surfacesOf("ssh"),
     doc: "ssh",
   },

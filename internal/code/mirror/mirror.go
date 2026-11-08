@@ -175,6 +175,12 @@ type Options struct {
 	// (code.MirrorSeatRefusal), since a later revision of the chart may take
 	// the seat's read away.
 	Roster func() code.Roster
+	// People answers who holds a human seat and with which apps
+	// (code.People), read at every push of a push mirror pushing as a
+	// person's seat: the mirror publishes only what that seat reads, and a
+	// person reads only through Gitlet (ADR-0110), which an administrator may
+	// take away after the mirror was set.
+	People code.People
 	// Events is this node's event stream, which a push's account
 	// (code_mirror_pushed) and an import's end (code_imported) are published
 	// on; nil publishes none.
@@ -303,6 +309,7 @@ func New(o Options) (*Mirrors, error) {
 	for name, absent := range map[string]bool{
 		"Estate": o.Estate == nil, "Cache": o.Cache == nil, "Git": o.Git == nil, "Objects": o.Objects == nil,
 		"Dial": o.Dial == nil, "NodeID": o.NodeID == "", "Limits": o.Limits == nil, "Roster": o.Roster == nil,
+		"People": o.People == nil,
 	} {
 		if absent {
 			missing = append(missing, name)

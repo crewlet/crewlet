@@ -17,7 +17,7 @@
  * runs the company and includes every app, then one per app. The wire field is
  * still `grants`; the dashboard calls the concept "Access".
  */
-export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet"] as const;
+export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet", "gitlet"] as const;
 
 /**
  * The apps (`iam.Apps`), the one place the engine declares one. Admin
@@ -27,8 +27,12 @@ export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet"] as 
  * `artifacts` GATES AUTHORING ONLY: creating, publishing and reshaping an
  * artifact. Somebody without it still opens, comments on and fills in every
  * artifact shared with them, because a share is a relation, not a permission.
+ *
+ * `gitlet` IS EVERY DOOR TO THE COMPANY'S CODE: the Gitlet workspace, git
+ * itself, the code tools a person's assistant calls and the code half of the
+ * inbox. Somebody without it reaches no repository at all (ADR-0110).
  */
-export const APPS = ["worklet", "doclet", "artifacts", "chatlet"] as const;
+export const APPS = ["worklet", "doclet", "artifacts", "chatlet", "gitlet"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):
