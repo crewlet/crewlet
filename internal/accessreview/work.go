@@ -31,6 +31,12 @@ type Work struct {
 	// or blocked, and MoreItems how many more there are.
 	Items     []Item
 	MoreItems int
+
+	// Open is how many distinct open items the seat holds across all three,
+	// a work item counted once however it is open, and OpenAtLeast that the
+	// tracker stopped counting at its ceiling, so Open is a floor.
+	Open        int
+	OpenAtLeast bool
 }
 
 // Run is one executor run of the seat waiting on a person.
@@ -53,36 +59,8 @@ type Item struct {
 	Blocked bool
 }
 
-// Count is how many distinct open items the work holds: a work item counts
-// once whether it carries a question, is assigned or has a run waiting on it,
-// and the counted rest is added.
-func (w Work) Count() int {
-	seen := map[string]bool{}
-	n := 0
-	add := func(key string) {
-		if key == "" {
-			n++
-			return
-		}
-		if !seen[key] {
-			seen[key] = true
-			n++
-		}
-	}
-	for _, key := range w.Asks {
-		add(key)
-	}
-	for _, it := range w.Items {
-		add(it.Key)
-	}
-	for _, r := range w.Runs {
-		add(r.Task)
-	}
-	return n + w.MoreAsks + w.MoreItems + w.MoreRuns
-}
-
 // Empty reports work holding nothing to review.
-func (w Work) Empty() bool { return w.Count() == 0 }
+func (w Work) Empty() bool { return w.Open == 0 }
 
 // Section is the open work under [SectionTitle], with what to do about each
 // item, for every turn that tells a change; empty for no work.

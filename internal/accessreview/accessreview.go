@@ -99,7 +99,7 @@ type Request struct {
 	// turn is told the change at its dispatch, from the access log.
 	Lines []string `json:"lines"`
 
-	// Open is how many distinct open items the node counted.
+	// Open is how many distinct open items the node counted ([Work.Open]).
 	Open int `json:"open"`
 }
 

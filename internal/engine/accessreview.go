@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -221,12 +222,21 @@ func (e *Engine) checkAccessReviews(ctx context.Context, handles []string, all b
 	return unchecked
 }
 
-// pendingStore is where each seat's pending review is kept.
+// pendingStore is where each seat's pending review is kept, every write
+// conditional on the revision it read.
 type pendingStore interface {
-	AccessReview(ctx context.Context, handle string) ([]byte, bool, error)
-	PutAccessReview(ctx context.Context, handle string, value []byte) error
-	DeleteAccessReview(ctx context.Context, handle string) error
+	AccessReview(ctx context.Context, handle string) ([]byte, uint64, bool, error)
+	CreateAccessReview(ctx context.Context, handle string, value []byte) (bool, error)
+	UpdateAccessReview(ctx context.Context, handle string, value []byte, revision uint64) (bool, error)
+	DeleteAccessReview(ctx context.Context, handle string, revision uint64) (bool, error)
 }
+
+// pendingAttempts bounds re-reading a record another node moved under a write:
+// two nodes measuring one seat converge in one retry, and three bounds a flap.
+const pendingAttempts = 3
+
+// errPendingMoved is a record that kept moving under every attempt.
+var errPendingMoved = errors.New("engine: the seat's pending access review kept moving under its write")
 
 // reviewSeams are what a review check reads and writes through: the engine's
 // own, and a case's.
@@ -254,32 +264,56 @@ func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string
 	if seams.pending == nil {
 		return errors.New("engine: this node holds no coordination store to keep access reviews in")
 	}
-	m, owed, err := e.measureAccess(ctx, company, handle)
-	if err != nil {
-		return err
-	}
-	pending, found, err := readPending(ctx, seams.pending, handle)
-	if err != nil {
-		return err
-	}
-	if !owed {
-		if found && pending.ToldTurn == "" {
-			return seams.pending.DeleteAccessReview(ctx, handle)
-		}
-		return nil
-	}
-	if !found || !pending.Same(m.base.Turn, m.digest) {
-		pending = accessreview.Pending{Baseline: m.base.Turn, BaselineAt: m.base.At,
-			Digest: m.digest, ChangedAt: seams.now(), Lines: m.personLines}
-		if err = writePending(ctx, seams.pending, handle, pending); err != nil {
+	for range pendingAttempts {
+		pending, m, owed, settled, err := e.recordReview(ctx, company, handle, seams)
+		switch {
+		case err != nil:
 			return err
+		case !settled:
+			continue
+		case !owed:
+			return nil
 		}
+		return e.askForReview(ctx, company, handle, pending, m, seams)
 	}
+	return errPendingMoved
+}
+
+// recordReview measures seat handle and brings its pending record in line with
+// one conditional write; settled is false where another node moved the record.
+func (e *Engine) recordReview(ctx context.Context, company *Company, handle string, seams reviewSeams) (
+	pending accessreview.Pending, m accessMeasure, owed, settled bool, err error) {
+
+	if m, owed, err = e.measureAccess(ctx, company, handle); err != nil {
+		return pending, m, false, false, err
+	}
+	pending, revision, found, err := readPending(ctx, seams.pending, handle)
+	if err != nil {
+		return pending, m, false, false, err
+	}
+	switch {
+	case !owed && found && pending.ToldTurn == "":
+		// A CHANGE UNDONE BEFORE ANY TURN WAS TOLD IT drops its record.
+		settled, err = seams.pending.DeleteAccessReview(ctx, handle, revision)
+		return pending, m, false, settled, err
+	case !owed, pending.Same(m.base.Turn, m.digest) && found:
+		return pending, m, owed, true, nil
+	}
+	pending = accessreview.Pending{Baseline: m.base.Turn, BaselineAt: m.base.At,
+		Digest: m.digest, ChangedAt: seams.now(), Lines: m.personLines}
+	settled, err = writePending(ctx, seams.pending, handle, pending, revision, found)
+	return pending, m, true, settled, err
+}
+
+// askForReview publishes seat handle's review of pending where it has open work.
+func (e *Engine) askForReview(ctx context.Context, company *Company, handle string,
+	pending accessreview.Pending, m accessMeasure, seams reviewSeams) error {
+
 	work, err := seams.work(ctx, company, handle)
 	if err != nil || work.Empty() {
 		return err
 	}
-	req := accessreview.RequestFor(handle, pending, m.seatLines, work.Count())
+	req := accessreview.RequestFor(handle, pending, m.seatLines, work.Open)
 	reviews, key := e.accessReviews.Load(), accessreview.WakeID(req).String()
 	if reviews.seen(handle, key) {
 		return nil
@@ -350,23 +384,60 @@ func linesOf(changes []capability.Change) []string {
 	return out
 }
 
-// readPending is seat handle's pending review, false where it has none.
-func readPending(ctx context.Context, store pendingStore, handle string) (accessreview.Pending, bool, error) {
-	raw, found, err := store.AccessReview(ctx, handle)
+// readPending is seat handle's pending review and its revision, false where it
+// has none.
+func readPending(ctx context.Context, store pendingStore, handle string) (
+	accessreview.Pending, uint64, bool, error) {
+
+	raw, revision, found, err := store.AccessReview(ctx, handle)
 	if err != nil || !found {
-		return accessreview.Pending{}, false, err
+		return accessreview.Pending{}, 0, false, err
 	}
 	p, err := accessreview.DecodePending(raw)
-	return p, err == nil, err
+	return p, revision, err == nil, err
 }
 
-// writePending records seat handle's pending review.
-func writePending(ctx context.Context, store pendingStore, handle string, p accessreview.Pending) error {
+// writePending writes p over the record read at revision, or as the first
+// record where none was found; false where another node moved it.
+func writePending(ctx context.Context, store pendingStore, handle string, p accessreview.Pending,
+	revision uint64, found bool) (bool, error) {
+
 	raw, err := accessreview.EncodePending(p)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return store.PutAccessReview(ctx, handle, raw)
+	if !found {
+		return store.CreateAccessReview(ctx, handle, raw)
+	}
+	return store.UpdateAccessReview(ctx, handle, raw, revision)
+}
+
+// changePending re-reads seat handle's record and applies change to it until
+// one conditional write lands; change answers the record to write, keep to
+// leave it, or drop to delete it.
+func changePending(ctx context.Context, store pendingStore, handle string,
+	change func(p accessreview.Pending, found bool) (next accessreview.Pending, keep, drop bool)) error {
+
+	for range pendingAttempts {
+		p, revision, found, err := readPending(ctx, store, handle)
+		if err != nil {
+			return err
+		}
+		next, keep, drop := change(p, found)
+		var landed bool
+		switch {
+		case keep:
+			return nil
+		case drop:
+			landed, err = store.DeleteAccessReview(ctx, handle, revision)
+		default:
+			landed, err = writePending(ctx, store, handle, next, revision, found)
+		}
+		if err != nil || landed {
+			return err
+		}
+	}
+	return errPendingMoved
 }
 
 // PendingAccessReview is seat handle's access change waiting on its review, the
@@ -375,7 +446,8 @@ func (e *Engine) PendingAccessReview(ctx context.Context, handle string) (access
 	if e.backends == nil || e.backends.Fleet == nil {
 		return accessreview.Pending{}, false, nil
 	}
-	return readPending(ctx, e.backends.Fleet, handle)
+	p, _, found, err := readPending(ctx, e.backends.Fleet, handle)
+	return p, found, err
 }
 
 // noteReviewTold marks seat handle's pending review as told to turn, once its
@@ -385,13 +457,14 @@ func (e *Engine) noteReviewTold(ctx context.Context, handle, turn, digest string
 	if store == nil {
 		return
 	}
-	p, found, err := readPending(ctx, store, handle)
-	if err != nil || !found || p.Digest != digest || p.ToldTurn != "" {
-		logReviewErr(ctx, handle, err)
-		return
-	}
-	p.ToldTurn, p.ToldAt = turn, time.Now().UTC()
-	logReviewErr(ctx, handle, writePending(ctx, store, handle, p))
+	logReviewErr(ctx, handle, changePending(ctx, store, handle,
+		func(p accessreview.Pending, found bool) (accessreview.Pending, bool, bool) {
+			if !found || p.Digest != digest || p.ToldTurn != "" {
+				return p, true, false
+			}
+			p.ToldTurn, p.ToldAt = turn, time.Now().UTC()
+			return p, false, false
+		}))
 }
 
 // endReviewOnTurnEnd drops seat handle's pending review once the turn told it
@@ -401,12 +474,50 @@ func (e *Engine) endReviewOnTurnEnd(ctx context.Context, handle, turn string) {
 	if store == nil || handle == "" {
 		return
 	}
-	p, found, err := readPending(ctx, store, handle)
-	if err != nil || !found || p.ToldTurn != turn {
-		logReviewErr(ctx, handle, err)
+	logReviewErr(ctx, handle, changePending(ctx, store, handle,
+		func(p accessreview.Pending, found bool) (accessreview.Pending, bool, bool) {
+			return p, !found || p.ToldTurn != turn, true
+		}))
+}
+
+// dropUntoldReview drops seat handle's pending review where no turn was told it:
+// a review settled with nothing left to tell is a change undone.
+func (e *Engine) dropUntoldReview(ctx context.Context, handle string) {
+	store := e.reviewSeams().pending
+	if store == nil {
 		return
 	}
-	logReviewErr(ctx, handle, store.DeleteAccessReview(ctx, handle))
+	logReviewErr(ctx, handle, changePending(ctx, store, handle,
+		func(p accessreview.Pending, found bool) (accessreview.Pending, bool, bool) {
+			return p, !found || p.ToldTurn != "", true
+		}))
+}
+
+// clearRemovedSeatReviews drops the pending review of every seat the company no
+// longer holds as an agent, so a handle used again starts with none.
+func (e *Engine) clearRemovedSeatReviews(ctx context.Context, next *Company) {
+	store := e.reviewSeams().pending
+	if store == nil || next == nil || next.Org == nil {
+		return
+	}
+	if err := e.fleetCompany(ctx, next); err != nil {
+		log.DebugContext(ctx, "access_reviews_not_swept", "reason", err.Error(),
+			"detail", "a removed seat's review is cleared by the company the fleet is pointed at")
+		return
+	}
+	revisions, err := e.backends.Fleet.AccessReviewRevisions(ctx)
+	if err != nil {
+		logReviewErr(ctx, "", err)
+		return
+	}
+	for _, handle := range sortedHandles(revisions) {
+		if next.Org.AgentSeatByHandle(handle) != nil {
+			continue
+		}
+		if _, err := store.DeleteAccessReview(ctx, handle, revisions[handle]); err != nil {
+			logReviewErr(ctx, handle, err)
+		}
+	}
 }
 
 // logReviewErr says a pending review record that could not be kept current.
@@ -455,7 +566,11 @@ func (e *Engine) reviewSettled(ctx context.Context, company *Company, handle str
 	if err != nil || !recent.Complete {
 		return false
 	}
-	return recent.Baseline != nil && recent.Baseline.Digest == capability.Take(in).Digest()
+	settled := recent.Baseline != nil && recent.Baseline.Digest == capability.Take(in).Digest()
+	if settled {
+		e.dropUntoldReview(ctx, handle)
+	}
+	return settled
 }
 
 // reviewingLedger is the seat access ledger kicking a seat's review on every
@@ -487,51 +602,107 @@ func (l reviewingLedger) Drop(ctx context.Context, kind integration.Kind, handle
 // questions it asked still open, its runs waiting on a person, and its work
 // items in progress or blocked.
 func (e *Engine) openWork(ctx context.Context, company *Company, handle string) (accessreview.Work, error) {
-	var w accessreview.Work
-	if reads := OperatorNative(e); reads.Tracker {
-		now, loc := time.Now().UTC(), company.Config.Location()
-		asks, err := workPage(ctx, reads.Work, now, loc, worklet.MapParams{"asked_by": handle})
-		if err != nil {
-			return accessreview.Work{}, err
-		}
-		for _, row := range asks.Rows {
-			w.Asks = append(w.Asks, row.Key)
-		}
-		w.MoreAsks = max(asks.TotalHint-len(asks.Rows), 0)
-		assigned, err := workPage(ctx, reads.Work, now, loc, worklet.MapParams{"assignee": handle,
-			"any": `[{"status_group":"` + string(worklet.GroupActive) + `"},{"blocked":true}]`})
-		if err != nil {
-			return accessreview.Work{}, err
-		}
-		for _, row := range assigned.Rows {
-			w.Items = append(w.Items, accessreview.Item{Key: row.Key, Status: string(row.Status),
-				Blocked: row.Blocked})
-		}
-		w.MoreItems = max(assigned.TotalHint-len(assigned.Rows), 0)
-	}
+	var waiting []accessreview.Run
 	if rt := e.sandbox.Load(); rt != nil && rt.pending != nil {
 		runs, err := rt.pending.ListActiveForSeat(ctx, handle)
 		if err != nil {
 			return accessreview.Work{}, fmt.Errorf("engine: read %s's executor runs: %w", handle, err)
 		}
 		for _, run := range waitingRuns(runs) {
-			if len(w.Runs) == accessreview.MaxListed {
-				w.MoreRuns++
-				continue
-			}
-			w.Runs = append(w.Runs, waitingRun(run))
+			waiting = append(waiting, waitingRun(run))
 		}
+	}
+	var tracker trackerTasks
+	if reads := OperatorNative(e); reads.Tracker {
+		tracker = reads.Work
+	}
+	return openWorkOf(ctx, tracker, company.Config.Location(), handle, waiting)
+}
+
+// trackerTasks is the tracker's task read open work is counted through.
+type trackerTasks interface {
+	Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error)
+}
+
+// openWorkOf is seat handle's open work: the runs waiting on a person, and the
+// work items asked on or assigned in tracker, nil where the company has none.
+func openWorkOf(ctx context.Context, tracker trackerTasks, loc *time.Location, handle string,
+	waiting []accessreview.Run) (accessreview.Work, error) {
+
+	w := accessreview.Work{Runs: waiting[:min(len(waiting), accessreview.MaxListed)]}
+	w.MoreRuns = len(waiting) - len(w.Runs)
+	tasks, taskless := runTasks(waiting)
+	w.Open = len(tasks) + taskless
+	if tracker == nil {
+		return w, nil
+	}
+	now := time.Now().UTC()
+	page := func(limit int, params worklet.MapParams) (worklet.Answer, error) {
+		return workPage(ctx, tracker, now, loc, limit, params)
+	}
+	asks, err := page(accessreview.MaxListed, worklet.MapParams{"asked_by": handle})
+	if err != nil {
+		return accessreview.Work{}, err
+	}
+	for _, row := range asks.Rows {
+		w.Asks = append(w.Asks, row.Key)
+	}
+	w.MoreAsks = max(asks.TotalHint-len(asks.Rows), 0)
+	assigned, err := page(accessreview.MaxListed, worklet.MapParams{"assignee": handle,
+		"any": `[{"status_group":"` + string(worklet.GroupActive) + `"},{"blocked":true}]`})
+	if err != nil {
+		return accessreview.Work{}, err
+	}
+	for _, row := range assigned.Rows {
+		w.Items = append(w.Items, accessreview.Item{Key: row.Key, Status: string(row.Status),
+			Blocked: row.Blocked})
+	}
+	w.MoreItems = max(assigned.TotalHint-len(assigned.Rows), 0)
+	// EACH WORK ITEM ONCE, past the listed pages too: the tracker counts the
+	// items asked on or assigned as one set, and the runs on one of them are
+	// already in it.
+	branches, err := json.Marshal([]map[string]any{{"asked_by": handle},
+		{"assignee": handle, "status_group": worklet.GroupActive}, {"assignee": handle, "blocked": true}})
+	if err != nil {
+		return accessreview.Work{}, fmt.Errorf("engine: word the query counting %s's open work: %w", handle, err)
+	}
+	open := worklet.MapParams{"any": string(branches)}
+	counted, err := page(1, open)
+	if err != nil {
+		return accessreview.Work{}, err
+	}
+	w.Open += counted.TotalHint
+	w.OpenAtLeast = counted.TotalCapped
+	if len(tasks) > 0 {
+		open["key"] = strings.Join(tasks, ",")
+		if counted, err = page(1, open); err != nil {
+			return accessreview.Work{}, err
+		}
+		w.Open -= counted.TotalHint
 	}
 	return w, nil
 }
 
-// workPage is one page of the work items a query names, at most
-// [accessreview.MaxListed], over the whole workspace and at `stale`.
-func workPage(ctx context.Context, work interface {
-	Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error)
-}, now time.Time, loc *time.Location, params worklet.MapParams) (worklet.Answer, error) {
+// runTasks are the distinct work items the runs are on, and how many runs are
+// on none.
+func runTasks(runs []accessreview.Run) (tasks []string, taskless int) {
+	for _, run := range runs {
+		switch {
+		case run.Task == "":
+			taskless++
+		case !slices.Contains(tasks, run.Task):
+			tasks = append(tasks, run.Task)
+		}
+	}
+	return tasks, taskless
+}
+
+// workPage is one page of the work items a query names, at most limit, over
+// the whole workspace and at `stale`.
+func workPage(ctx context.Context, work trackerTasks, now time.Time, loc *time.Location, limit int,
+	params worklet.MapParams) (worklet.Answer, error) {
 	params["container"] = "workspace"
-	params["limit"] = accessreview.MaxListed
+	params["limit"] = limit
 	q, err := worklet.ParseQuery(params, now, loc)
 	if err != nil {
 		return worklet.Answer{}, err
@@ -620,7 +791,7 @@ func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *
 		if work.Empty() {
 			continue
 		}
-		out = append(out, seataccess.SeatReview{Handle: handle, Open: work.Count(),
+		out = append(out, seataccess.SeatReview{Handle: handle, Open: work.Open, AtLeast: work.OpenAtLeast,
 			Changes: linesOf(changes[:min(len(changes), capability.MaxLines)])})
 	}
 	return out, nil

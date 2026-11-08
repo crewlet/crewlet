@@ -1,31 +1,42 @@
 package coordtest
 
 var accessReviewCases = []fleetCase{
-	{name: "an access review reads back byte for byte, last write wins, and deletes", fn: func(h *fleetHarness) {
-		if _, found, err := h.f.AccessReview(h.ctx, "sre"); err != nil || found {
+	{name: "an access review is created once, updated and deleted only at the revision read", fn: func(h *fleetHarness) {
+		if _, _, found, err := h.f.AccessReview(h.ctx, "sre"); err != nil || found {
 			h.t.Fatalf("an unwritten review read as found %v (%v)", found, err)
 		}
-		for _, rec := range []string{`{"digest":"a"}`, `{"digest":"b"}`} {
-			if err := h.f.PutAccessReview(h.ctx, "sre", []byte(rec)); err != nil {
-				h.t.Fatalf("PutAccessReview: %v", err)
+		for i, want := range []bool{true, false} {
+			if ok, err := h.f.CreateAccessReview(h.ctx, "sre", []byte(`{"digest":"a"}`)); err != nil || ok != want {
+				h.t.Fatalf("create %d answered %v (%v), want %v", i, ok, err, want)
 			}
 		}
-		if err := h.f.PutAccessReview(h.ctx, "pm", []byte(`{}`)); err != nil {
-			h.t.Fatalf("PutAccessReview: %v", err)
+		value, read, found, readErr := h.f.AccessReview(h.ctx, "sre")
+		if readErr != nil || !found || string(value) != `{"digest":"a"}` || read == 0 {
+			h.t.Fatalf("read back %q at %d (%v, %v)", value, read, found, readErr)
 		}
-		got, found, err := h.f.AccessReview(h.ctx, "sre")
-		if err != nil || !found || string(got) != `{"digest":"b"}` {
-			h.t.Fatalf("read back %q (%v, %v), want the second write", got, found, err)
+		if ok, err := h.f.UpdateAccessReview(h.ctx, "sre", []byte(`{"digest":"b"}`), read); err != nil || !ok {
+			h.t.Fatalf("an update at the revision read answered %v (%v)", ok, err)
 		}
-		for range 2 {
-			if err := h.f.DeleteAccessReview(h.ctx, "sre"); err != nil {
-				h.t.Fatalf("DeleteAccessReview: %v", err)
-			}
+		if ok, err := h.f.UpdateAccessReview(h.ctx, "sre", []byte(`{"digest":"c"}`), read); err != nil || ok {
+			h.t.Fatalf("an update at a revision that moved answered %v (%v), want refused", ok, err)
 		}
-		if _, found, _ := h.f.AccessReview(h.ctx, "sre"); found {
+		if ok, err := h.f.DeleteAccessReview(h.ctx, "sre", read); err != nil || ok {
+			h.t.Fatalf("a delete at a revision that moved answered %v (%v), want refused", ok, err)
+		}
+		if ok, err := h.f.CreateAccessReview(h.ctx, "pm", []byte(`{}`)); err != nil || !ok {
+			h.t.Fatalf("create pm: %v (%v)", ok, err)
+		}
+		revisions, err := h.f.AccessReviewRevisions(h.ctx)
+		if err != nil || len(revisions) != 2 || revisions["sre"] == 0 || revisions["pm"] == 0 {
+			h.t.Fatalf("the reviews listed %v (%v), want sre and pm", revisions, err)
+		}
+		if ok, err := h.f.DeleteAccessReview(h.ctx, "sre", revisions["sre"]); err != nil || !ok {
+			h.t.Fatalf("a delete at the revision read answered %v (%v)", ok, err)
+		}
+		if _, _, found, _ := h.f.AccessReview(h.ctx, "sre"); found {
 			h.t.Fatal("a deleted review still reads")
 		}
-		if _, found, _ := h.f.AccessReview(h.ctx, "pm"); !found {
+		if _, _, found, _ := h.f.AccessReview(h.ctx, "pm"); !found {
 			h.t.Fatal("deleting one seat's review took another's")
 		}
 	}},

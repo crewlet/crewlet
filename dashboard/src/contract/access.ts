@@ -418,6 +418,8 @@ interface AccessSeatReview {
   handle: string;
   /** Its open questions, what its executor waits on, and its work in progress or blocked. */
   open: number;
+  /** The tracker stopped counting at its ceiling, so `open` is a floor. */
+  at_least?: boolean;
   /** The change lines it will be told, at most twenty. */
   changes: string[];
 }

@@ -58,9 +58,11 @@ type Fleet struct {
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
 
-	// accessReviews is each seat's pending access review, by handle.
-	accessReviews map[string][]byte
-	mailboxes     map[uuid.UUID]coord.MailboxRecord
+	// accessReviews is each seat's pending access review, by handle, and the
+	// counter its revisions are drawn from.
+	accessReviews        map[string]accessReview
+	accessReviewRevision uint64
+	mailboxes            map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -181,7 +183,7 @@ func NewFleet() *Fleet {
 		secrets:       map[string]coord.SecretRecord{},
 		integrations:  map[string][]byte{},
 		seatAccess:    map[string]map[string][]byte{},
-		accessReviews: map[string][]byte{},
+		accessReviews: map[string]accessReview{},
 		mailboxes:     map[uuid.UUID]coord.MailboxRecord{},
 		pauses:        map[uuid.UUID]coord.SeatPause{},
 		uploads:       map[string]versioned{},

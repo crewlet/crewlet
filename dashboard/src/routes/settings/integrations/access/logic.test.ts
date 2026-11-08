@@ -793,4 +793,11 @@ describe("reviewWords", () => {
       "3 open items from Site Reliability Engineer were raised under its current access; it will review them after you save.",
     );
   });
+
+  // A FLOOR SAYS SO: past the tracker's ceiling the count is the least it holds.
+  test("says at least where the count is a floor", () => {
+    expect(reviewWords(10000, "Site Reliability Engineer", true)).toBe(
+      "At least 10,000 open items from Site Reliability Engineer were raised under its current access; it will review them after you save.",
+    );
+  });
 });

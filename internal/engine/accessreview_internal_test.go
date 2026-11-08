@@ -63,7 +63,7 @@ func toldAs(turn string, snap capability.Snapshot) accessdomain.Recent {
 // someWork is open work to review: one question asked, one held call.
 func someWork(context.Context, *Company, string) (accessreview.Work, error) {
 	return accessreview.Work{Asks: []string{"ENG-12"},
-		Runs: []accessreview.Run{{Turn: "t-held", Tool: "ssh_operate", Server: "ssh"}}}, nil
+		Runs: []accessreview.Run{{Turn: "t-held", Tool: "ssh_operate", Server: "ssh"}}, Open: 2}, nil
 }
 
 // noWork is a seat with nothing open.

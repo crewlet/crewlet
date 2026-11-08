@@ -202,8 +202,10 @@ type PlanAnswer struct {
 type SeatReview struct {
 	Handle string `json:"handle"`
 	// Open is how many distinct open items it has: questions still open, runs
-	// waiting on a person, and work items in progress or blocked.
-	Open int `json:"open"`
+	// waiting on a person, and work items in progress or blocked. AtLeast is
+	// that the tracker stopped counting at its ceiling, so Open is a floor.
+	Open    int  `json:"open"`
+	AtLeast bool `json:"at_least,omitempty"`
 	// Changes are the change lines it will be told, at most twenty.
 	Changes []string `json:"changes"`
 }

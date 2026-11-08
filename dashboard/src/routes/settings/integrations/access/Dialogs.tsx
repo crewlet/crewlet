@@ -381,6 +381,7 @@ export function ReviewDialog({
     words: reviewWords(
       review.open,
       data.seats.find((seat) => seat.handle === review.handle)?.name ?? handleLabel(review.handle),
+      review.at_least,
     ),
   }));
 

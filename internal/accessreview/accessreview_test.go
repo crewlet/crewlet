@@ -188,11 +188,7 @@ func TestTheSectionNamesTheWorkAndHowToWithdrawIt(t *testing.T) {
 			{Turn: "t-2"}},
 		Items: []accessreview.Item{{Key: "ENG-14", Status: "in_progress"},
 			{Key: "ENG-20", Status: "todo", Blocked: true}},
-	}
-	// DISTINCT ITEMS: ENG-12 carries a question and a waiting run, and counts
-	// once; the run on no item counts on its own, and the rest as counted.
-	if w.Count() != 7 {
-		t.Errorf("the work counts %d items, want 7", w.Count())
+		Open: 7,
 	}
 	got := w.Section()
 	for _, want := range []string{

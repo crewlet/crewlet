@@ -3,19 +3,19 @@ package coord
 import "context"
 
 // AccessReviews holds each agent seat's access change waiting on its review
-// (ADR-0111): written when a change is first measured, deleted when a turn
-// that was told it ends, or when the change is reverted before any turn was.
-//
-// The whole company, now: the node holding the seat writes it, and whichever
-// node serves a person's Inbox reads it. The value is opaque, as
-// [SeatAccess]'s is (internal/accessreview's vocabulary).
+// (ADR-0111). Any node may measure a seat, so every write is conditional on
+// the revision it read; the value is internal/accessreview's.
 type AccessReviews interface {
-	// AccessReview is seat handle's record, false where it has none.
-	AccessReview(ctx context.Context, handle string) ([]byte, bool, error)
-	// PutAccessReview records it, replacing any prior one.
-	PutAccessReview(ctx context.Context, handle string, value []byte) error
-	// DeleteAccessReview drops it; deleting one that is not there is fine.
-	DeleteAccessReview(ctx context.Context, handle string) error
+	// AccessReview is seat handle's record and its revision, false where none.
+	AccessReview(ctx context.Context, handle string) ([]byte, uint64, bool, error)
+	// CreateAccessReview writes a first record, false where one exists.
+	CreateAccessReview(ctx context.Context, handle string, value []byte) (bool, error)
+	// UpdateAccessReview replaces the record read at revision, false where it moved.
+	UpdateAccessReview(ctx context.Context, handle string, value []byte, revision uint64) (bool, error)
+	// DeleteAccessReview drops the record read at revision, false where it moved.
+	DeleteAccessReview(ctx context.Context, handle string, revision uint64) (bool, error)
+	// AccessReviewRevisions is every seat's record revision, by handle.
+	AccessReviewRevisions(ctx context.Context) (map[string]uint64, error)
 }
 
 // AccessReviewClass is the key class a record is filed under in the
@@ -24,3 +24,15 @@ const AccessReviewClass = "access_review"
 
 // AccessReviewKey is one seat's key.
 func AccessReviewKey(handle string) string { return DocumentKey(AccessReviewClass, handle) }
+
+// AccessReviewFilter selects every seat's record.
+func AccessReviewFilter() string { return DocumentFilter(AccessReviewClass) }
+
+// AccessReviewHandle recovers the seat's handle from a key, false for another class.
+func AccessReviewHandle(key string) (string, bool) {
+	segments, ok := DocumentSegments(key)
+	if !ok || len(segments) != 2 || segments[0] != AccessReviewClass || segments[1] == "" {
+		return "", false
+	}
+	return segments[1], true
+}
