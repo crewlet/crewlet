@@ -635,8 +635,10 @@ jobs:
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
       # `make test` refuses to start without it (require-node). The probe
-      # never skips here: with CI set, a missing node fails it, and the skip a
-      # bare local loop takes is declared nowhere in internal/skipgate.
+      # never skips here: `make test` requires every prerequisite of the suite
+      # (internal/prereqtest's CREWLET_REQUIRE_PREREQUISITES), so a missing
+      # node fails it, and the skip a bare local loop takes is declared nowhere
+      # in internal/skipgate.
       # `latest`, and no npm or install, for the reasons the `gates` job below
       # gives.
       - uses: actions/setup-node@v7

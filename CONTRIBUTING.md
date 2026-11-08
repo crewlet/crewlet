@@ -464,10 +464,11 @@ What follows are the prerequisites that legitimately vary by machine.
   stand-in of the bridge's notes route and against a real bridge's;
   `opencode_skills_test.go` drives the skill-load plugin through
   `opencode_skills_probe.mjs`, against a stand-in of the bridge's skill route.
-  That package is in the parallel half, so `make test`
-  requires node too and CI's race shards install it, and its skips have
-  no allowlist entry either. They need no npm either: the plugins import
-  nothing.
+  That package is in the parallel half, so `make test` requires node too and
+  CI's race shards install it; its probes find node by the same rule as the
+  replay, failing under make and skipping only in a bare `go test`, so they
+  have no allowlist entry either. They need no npm either: the plugins
+  import nothing.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, the
