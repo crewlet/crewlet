@@ -21,9 +21,20 @@ type engineHost struct {
 	data, keyring, config, home, secret, cli string
 }
 
+// newEngineHost lays the stand-in out OUTSIDE /tmp, under /var/tmp, which the
+// FHS and macOS both have: bubblewrap gives a confined job a private /tmp, so
+// a tree under the host's /tmp is hidden from the job WHOLE, whether or not a
+// single denial holds, and a write into it lands in memory whether or not the
+// host's root is bound read-only. Out here, each denial and the read-only
+// root are what keep the job out, which is what a case has to hold.
 func newEngineHost(t *testing.T) engineHost {
 	t.Helper()
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/var/tmp", "crewlet-confine-") //nolint:usetesting // t.TempDir is under the host's /tmp, which bubblewrap hides whole
+	if err != nil {
+		t.Fatalf("this host cannot make the stand-in engine host outside /tmp, where a "+
+			"confinement's denials are what keep a job out: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	h := engineHost{
 		data:    filepath.Join(root, "data"),
 		keyring: filepath.Join(root, "keyring.json"),
@@ -61,6 +72,21 @@ func newEngineHost(t *testing.T) engineHost {
 // deep-work run: its data directory and stream store, its keyring, its
 // config, the operator's home, another box and the box's own records. A host
 // that confines nothing must say so rather than run anything.
+//
+// EACH REFUSAL IS JUDGED BY ITS EFFECT, NEVER BY AN EXIT STATUS. Landlock and
+// sandbox-exec REFUSE a denied path, but bubblewrap MASKS it: a denied
+// directory is an empty tmpfs, a denied file is /dev/null, and /tmp is a
+// private tmpfs that takes a write in memory and loses it with the job. So a
+// masked `ls` exits 0 having seen nothing, and a write into the private /tmp
+// exits 0 having written nothing the host keeps; read by exit status, both
+// were reported as reaching the engine on every host that runs bubblewrap.
+// What holds under all three mechanisms is what reaches the job's stdout and
+// what lands on the host, so a read fails when a byte or a real directory
+// entry of what it was denied reaches the job, and a write when its target
+// exists on the host. The stand-in engine host is laid out OUTSIDE /tmp
+// ([newEngineHost]): under bubblewrap every path under /tmp is the private
+// tmpfs, which would hide the whole tree from the job, its denials and a host
+// root bound writable alike.
 func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 	host, err := ProbeConfinement()
 	if err != nil {
@@ -107,18 +133,6 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 	if err := other.WriteFile(ctx, "theirs.txt", []byte("another person's work")); err != nil {
 		t.Fatal(err)
 	}
-	records := filepath.Join(filepath.Dir(box.Home()), "records")
-	// Each refused path is first shown to exist, so a refusal is the
-	// boundary's and never a typo's.
-	theirs := filepath.Join(other.Home(), "theirs.txt")
-	for _, p := range []string{theirs, records, h.keyring, h.config, h.secret, h.data} {
-		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("the fixture is missing %s: %v", p, err)
-		}
-	}
-
-	hostTmpProbe := filepath.Join("/tmp", "crewlet-confine-probe-"+filepath.Base(filepath.Dir(box.Home())))
-	t.Cleanup(func() { _ = os.Remove(hostTmpProbe) })
 	run := func(cmd string) ExecResult {
 		t.Helper()
 		res, err := box.Exec(ctx, cmd, ExecOptions{TimeoutSec: 30})
@@ -127,38 +141,109 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		}
 		return res
 	}
-	refused := map[string]string{
-		"the stream store":             "cat " + q(filepath.Join(h.data, "stream", "store.db")),
-		"the data directory listing":   "ls " + q(h.data),
-		"the keyring":                  "cat " + q(h.keyring),
-		"the config file":              "cat " + q(h.config),
-		"the operator's home":          "cat " + q(h.secret),
-		"another box":                  "cat " + q(theirs),
-		"the box's own records":        "ls " + q(records),
-		"the boxes' directory listing": "ls " + q(filepath.Dir(filepath.Dir(box.Home()))),
-		"a write outside the box":      "echo x > " + q(filepath.Join(filepath.Dir(h.data), "planted")),
-		"a write to the cli install":   "echo x >> " + q(h.cli),
+
+	// EVERY WITNESS IS FIRST SHOWN TO BE THERE, read on the host: what a
+	// file holds and what a directory lists, so a refusal is the boundary's
+	// and never a typo's, and a case that leaked nothing had something to
+	// leak.
+	holding := func(path string) []string {
+		t.Helper()
+		body, err := os.ReadFile(path)
+		if err != nil || len(body) == 0 {
+			t.Fatalf("the fixture's %s holds nothing to leak (%v)", path, err)
+		}
+		return []string{string(body)}
+	}
+	entries := func(dir string) []string {
+		t.Helper()
+		listed, err := os.ReadDir(dir)
+		if err != nil || len(listed) == 0 {
+			t.Fatalf("the fixture's %s lists nothing to leak (%v)", dir, err)
+		}
+		names := make([]string, 0, len(listed))
+		for _, entry := range listed {
+			names = append(names, entry.Name())
+		}
+		return names
+	}
+	records := filepath.Join(filepath.Dir(box.Home()), "records")
+	theirs := filepath.Join(other.Home(), "theirs.txt")
+	boxes := filepath.Dir(filepath.Dir(box.Home()))
+	otherID := filepath.Base(filepath.Dir(other.Home()))
+	if !slices.Contains(entries(boxes), otherID) {
+		t.Fatalf("the boxes' directory %s does not list the other box %s", boxes, otherID)
+	}
+	type deniedRead struct {
+		what, cmd string
+		leaked    []string
+	}
+	reads := []deniedRead{
+		{"the stream store", "cat " + q(filepath.Join(h.data, "stream", "store.db")),
+			holding(filepath.Join(h.data, "stream", "store.db"))},
+		{"the data directory listing", "ls " + q(h.data), entries(h.data)},
+		{"the keyring", "cat " + q(h.keyring), holding(h.keyring)},
+		{"the config file", "cat " + q(h.config), holding(h.config)},
+		{"the operator's home", "cat " + q(h.secret), holding(h.secret)},
+		{"another box", "cat " + q(theirs), holding(theirs)},
+		{"the box's own records", "ls " + q(records), entries(records)},
+		// THIS BOX'S OWN ID IS NO LEAK: bubblewrap masks the boxes'
+		// directory and then makes this box's home's path components
+		// inside the mask to bind the home there, so a masked listing
+		// shows this box and nothing beside it.
+		{"the boxes' directory listing", "ls " + q(boxes), []string{otherID}},
+	}
+	if runtime.GOOS == "linux" {
+		reads = append(reads, deniedRead{"the engine's environment",
+			"cat /proc/" + strconv.Itoa(os.Getpid()) + "/environ", holding("/proc/self/environ")})
+	}
+	for _, read := range reads {
+		res := run(read.cmd)
+		for _, leaked := range read.leaked {
+			if strings.Contains(res.Stdout, leaked) {
+				t.Errorf("%s reached a confined box: %q printed %q", read.what, read.cmd, res.Stdout)
+				break
+			}
+		}
+	}
+
+	hostTmpProbe := filepath.Join("/tmp", "crewlet-confine-probe-"+box.ID())
+	t.Cleanup(func() { _ = os.Remove(hostTmpProbe) })
+	// Beside the stand-in's paths, outside /tmp, where only the host's root
+	// bound read-only refuses it.
+	planted := filepath.Join(filepath.Dir(h.data), "planted")
+	install := holding(h.cli)[0]
+	exists := func(path string) func() bool {
+		return func() bool {
+			_, err := os.Lstat(path)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the host cannot tell whether %s exists: %v", path, err)
+			}
+			return err == nil
+		}
+	}
+	type deniedWrite struct {
+		what, cmd string
+		landed    func() bool
+	}
+	writes := []deniedWrite{
+		{"a write outside the box", "echo x > " + q(planted), exists(planted)},
+		{"a write to the cli install", "echo x >> " + q(h.cli), func() bool {
+			body, err := os.ReadFile(h.cli)
+			if err != nil {
+				t.Fatalf("the host cannot read the cli install back: %v", err)
+			}
+			return string(body) != install
+		}},
 		// The host's own temporary root, where a harness left at its default
 		// would make its per-uid directory: refused, which is why every
 		// temp root is pointed inside the box rather than this let through.
-		"a directory under the host's /tmp": "mkdir -p " + q(hostTmpProbe),
+		{"a directory under the host's /tmp", "mkdir -p " + q(hostTmpProbe), exists(hostTmpProbe)},
 	}
-	if runtime.GOOS == "linux" {
-		refused["the engine's environment"] = "cat /proc/" + strconv.Itoa(os.Getpid()) + "/environ"
-	}
-	for what, cmd := range refused {
-		if res := run(cmd); res.ExitCode == 0 {
-			t.Errorf("%s was reachable from a confined box: %q answered %q", what, cmd, res.Stdout)
+	for _, write := range writes {
+		run(write.cmd)
+		if write.landed() {
+			t.Errorf("%s landed on the host from a confined box: %q", write.what, write.cmd)
 		}
-	}
-	if _, err := os.Stat(hostTmpProbe); err == nil {
-		t.Errorf("a confined job created %s on the host", hostTmpProbe)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(h.data), "planted")); err == nil {
-		t.Error("a confined job wrote outside its box")
-	}
-	if got, _ := os.ReadFile(h.cli); strings.Contains(string(got), "x") && !strings.Contains(string(got), "cli-ran") {
-		t.Error("a confined job changed the harness's install")
 	}
 
 	allowed := map[string]string{
