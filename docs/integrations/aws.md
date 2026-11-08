@@ -102,7 +102,7 @@ Crewlet records each role by name and role ID and never adopts a role by its nam
 
 ### Sessions are issued at use
 
-An agent's credentials are never stored. When a run or a tool needs them, Crewlet signs a 15-minute certificate for the agent, opens the broker with it, and assumes the agent's role for **15 minutes**, naming the session after the agent, which is also its source identity in CloudTrail. The session is renewed with 5 minutes left, and the box's credentials file is rewritten as it renews.
+An agent's credentials are never stored. When a run or a tool needs them, Crewlet signs a 15-minute certificate for the agent, opens the broker with it, and assumes the agent's role for **15 minutes**, naming the session after the agent, which is also its source identity in CloudTrail. The session is renewed with 5 minutes left, and the box's credentials file is rewritten as it renews. Each session is recorded before it is written there, so a [kept session](../concepts/code-sandbox.md#each-launchs-session-kept) of the run is scrubbed of it, whole and by its access key ID, its secret access key and its session token.
 
 After a seat is turned off and back on within 15 minutes, a session issued before it was turned off may work again until it expires.
 
