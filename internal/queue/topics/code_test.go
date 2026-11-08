@@ -81,7 +81,7 @@ func TestTheCodePathRefusesWhatItDidNotBuild(t *testing.T) {
 // whatever is published under the subjects it is created with, a request
 // included, and acknowledges it to the request's reply mailbox: a status
 // question inside the log's space would be stored as a record no applier has
-// a kind for, and answered by the stream's acknowledgement before any git
+// a kind for, and answered by the stream's acknowledgement before any Gitlet
 // node spoke. The name is written out once, since a constant-only assertion
 // would pass with every constant renamed.
 func TestTheCodeStatusSubjectIsOutsideTheCodeLog(t *testing.T) {

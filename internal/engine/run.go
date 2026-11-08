@@ -534,18 +534,18 @@ type Engine struct {
 
 	// gitMemory is Options.gitMemory, kept for the same reason: zero — every
 	// engine New builds outside this package's tests — has the git pool read
-	// the node's own memory ([Engine.buildCodeHost]).
+	// the node's own memory ([Engine.buildGitletHost]).
 	gitMemory int64
 
 	// compactorEstate is Options.compactorEstate, kept for the same reason:
 	// nil — every engine New builds outside this package's tests — hands the
-	// compactor the router's code seam as it is ([Engine.buildCodeHost]).
+	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
 	compactorEstate func(codecompact.Estate) codecompact.Estate
 
 	// homeSeams is Options.homeSeams, kept for the same reason: nil — every
 	// engine New builds outside this package's tests — hands the home's
 	// change work the router's code seam and Gitlet's chain builder
-	// as they are ([Engine.buildCodeHost]).
+	// as they are ([Engine.buildGitletHost]).
 	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
 
 	// committerPublisher is Options.committerPublisher, kept because a
@@ -566,7 +566,7 @@ type Engine struct {
 	fakePlay fakePlayer
 
 	// mirrorSeams is Options.mirrorSeams, kept for the same reason: nil —
-	// every engine New builds outside this package's tests — builds a git
+	// every engine New builds outside this package's tests — builds a Gitlet
 	// node's mirrors with the one outbound dial and the wall clock
 	// ([Engine.buildMirrors]).
 	mirrorSeams func(mirror.Options) mirror.Options
@@ -648,13 +648,13 @@ type Engine struct {
 
 	// boxTokens mints and verifies a coding box's git credential: built on
 	// EVERY node, whatever its roles, for the receiver's and the bridge's
-	// reason — the node that launches a run mints and whichever git node
+	// reason — the node that launches a run mints and whichever Gitlet node
 	// its box dials verifies, so each derives its key from the fleet's
 	// keyring. Gitlet admits boxes by it ([host.Options.Boxes]).
 	boxTokens *host.BoxTokens
 	// checkTokens mints and verifies a check's box's credential, built on
 	// EVERY node for boxTokens' reason: the runner that claims a check
-	// mints, and whichever git node its box dials verifies.
+	// mints, and whichever Gitlet node its box dials verifies.
 	checkTokens *host.CheckTokens
 
 	// boxGitURL is Gitlet's base a coding box clones and pushes
@@ -1463,7 +1463,7 @@ type Options struct {
 	// the memory of whatever machine runs it.
 	gitMemory int64
 
-	// compactorEstate stands between the git node's compactor and the
+	// compactorEstate stands between the Gitlet node's compactor and the
 	// router's code seam it lists and proposes through
 	// ([codecompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject
@@ -1472,7 +1472,7 @@ type Options struct {
 	// packs into it.
 	compactorEstate func(codecompact.Estate) codecompact.Estate
 
-	// homeSeams stands between a git node's home change work and the
+	// homeSeams stands between a Gitlet node's home change work and the
 	// router's code seam it reads and records through and Gitlet's
 	// chain builder it builds its trains with ([codehome.Options.Estate],
 	// [codehome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
@@ -1500,7 +1500,7 @@ type Options struct {
 	// refused completion come back when it clears.
 	resumeGate func(sandbox.TurnGate) sandbox.TurnGate
 
-	// mirrorSeams stands between a git node's mirrors and the options they
+	// mirrorSeams stands between a Gitlet node's mirrors and the options they
 	// are built with ([mirror.Options]), nil for none. UNEXPORTED for
 	// cacheDisk's reason (export_test.go): the knob exists only so a case
 	// whose subject is the mirror alarm a running node raises can show the
@@ -1596,7 +1596,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// And a code search, which every git node carries out as the asker it
+	// And a code search, which every Gitlet node carries out as the asker it
 	// names (codesearch.go).
 	codeSearchWire, err := newCodeSearchWire(recordKeyring(opts.Bootstrap))
 	if err != nil {
@@ -1684,8 +1684,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// A CODING BOX'S GIT CREDENTIAL, the third per-run token beside the
 	// receiver's and the bridge's, from the same keyring under a domain of
 	// its own, and built HERE for their reason: the node that launches a run
-	// mints it and whichever git node its box dials verifies it. Built on
-	// every node whatever its roles — a seats node mints, a git node
+	// mints it and whichever Gitlet node its box dials verifies it. Built on
+	// every node whatever its roles — a seats node mints, a Gitlet node
 	// verifies, one node is often both — and refused with the boot, since
 	// the keyring check above leaves only a broken keyring to refuse it.
 	boxTokens, err := host.NewBoxTokens(tokenMaterial(opts.Bootstrap), nil)
@@ -1693,7 +1693,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, fmt.Errorf("engine: box tokens: %w", err)
 	}
 	// AND A CHECK'S BOX'S, in the same domain and for the same reason: the
-	// git node whose runner claims a check mints it and whichever git node
+	// Gitlet node whose runner claims a check mints it and whichever Gitlet node
 	// the check's box dials verifies it — and every node verifies it,
 	// Gitlet built or not, since a box route on a node serving none of it tells
 	// a box why only once its token verifies (api.CodeSurface.VerifyBox).
@@ -1805,7 +1805,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// auxiliary spend reaches the history like its phases do.
 		auxSpend: auxspend.NewLedger(backends.Queue),
 		// And the reads of unit repositories, on the same queue: every
-		// git node holds data, so its reads are written by its own event
+		// Gitlet node holds data, so its reads are written by its own event
 		// store.
 		codeReads: readaudit.New(backends.Queue),
 		steers:    steers,
@@ -2342,8 +2342,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time.
 		Status: e.nodeStatus,
-		// AND, ON A GIT NODE, WHAT ITS GIT CACHE GIVES ITS BACKGROUND
-		// WORK, beside the status and never in it: what every git node
+		// AND, ON A GITLET NODE, WHAT ITS GIT CACHE GIVES ITS BACKGROUND
+		// WORK, beside the status and never in it: what every Gitlet node
 		// places a repository's maintenance by ([estate.Router.Maintainer]),
 		// so a beat whose status read overran must still say it — and,
 		// from memory, nothing can overrun it ([Engine.gitBackground]).
@@ -3191,9 +3191,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// has already finished or cut, so what stops here is the cache those
 	// reads are answered from — a peer's read asked of this node from now on
 	// is answered unready, and its walk asks the runner-up
-	// ([Engine.stopCodeHost]). And so BEFORE THE LEDGERS' LAST FLUSH: no read
+	// ([Engine.stopGitletHost]). And so BEFORE THE LEDGERS' LAST FLUSH: no read
 	// is filed in the reads ledger after its cache stops.
-	e.stopCodeHost(ctx)
+	e.stopGitletHost(ctx)
 	// BEFORE the custody flush below, which is what carries a node without
 	// `data` its records — the two at once, on one budget ([Engine.stopLedgers]).
 	e.stopLedgers(ctx)

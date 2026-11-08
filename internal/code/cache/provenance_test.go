@@ -223,7 +223,7 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 // run its row names — the turn, the work item's tracker and key, the model —
 // and its way; a coding box's push git received with its run's launch and its
 // harness beside them; a person's push git received with no run. So what
-// a git node says of who pushed a commit (code_landed_in, every server-side
+// a Gitlet node says of who pushed a commit (code_landed_in, every server-side
 // read naming the push behind a commit) is all its push row says, never the
 // credential alone.
 //
@@ -468,9 +468,9 @@ func TestOnlyAWantedHistoryIsBackfilled(t *testing.T) {
 }
 
 // THE BACKFILL PACES BY THE FLEET'S RATIO: after each page it waits
-// BackfillIdle × ⌈live git nodes ÷ live data nodes⌉ × the page's own duration,
+// BackfillIdle × ⌈live Gitlet nodes ÷ live data nodes⌉ × the page's own duration,
 // the counts read from the fleet after every page, so the fleet's backfills
-// hold under half of one reader of each data node however many git nodes
+// hold under half of one reader of each data node however many Gitlet nodes
 // share them — and counts it cannot read are waited on and read again, never
 // paced on a guess.
 //
@@ -531,7 +531,7 @@ func TestTheBackfillPacesByTheFleetsRatio(t *testing.T) {
 			first, cache.BackfillRetry)
 	}
 	if paced, want := <-waits, time.Duration(cache.BackfillIdle*6)*page; paced != want {
-		t.Errorf("after a 10 ms page with 16 git nodes over 3 data nodes the backfill waited %s, want %s "+
+		t.Errorf("after a 10 ms page with 16 Gitlet nodes over 3 data nodes the backfill waited %s, want %s "+
 			"(BackfillIdle × ⌈16÷3⌉ × the page)", paced, want)
 	}
 }

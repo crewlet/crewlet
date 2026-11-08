@@ -77,12 +77,12 @@ import (
 //
 // # Paced by the fleet
 //
-// After each page the loop waits BackfillIdle × ⌈live git nodes ÷ live data
+// After each page the loop waits BackfillIdle × ⌈live Gitlet nodes ÷ live data
 // nodes⌉ × the page's own duration, the counts read from the fleet's
-// placements again after every page (Options.Fleet). Every git node backfills
-// from the data nodes, so its share of them is that ratio: one git node a data
+// placements again after every page (Options.Fleet). Every Gitlet node backfills
+// from the data nodes, so its share of them is that ratio: one Gitlet node a data
 // node holds at most a third of one reader of each, and the fleet's backfills
-// hold under half of one however many git nodes share them — the serving keeps
+// hold under half of one however many Gitlet nodes share them — the serving keeps
 // the rest. Counts that cannot be read are waited on and read again, never
 // paced on a guess.
 //
@@ -117,7 +117,7 @@ const (
 
 // backfillJitter spreads each failure's wait across a fifth of itself either
 // way — the code reconciler's spread for its retries (engine's
-// codeReposRetryJitter) — so the git nodes of a fleet whose data nodes failed
+// codeReposRetryJitter) — so the Gitlet nodes of a fleet whose data nodes failed
 // together do not ask them again on the same second.
 const backfillJitter = 0.2
 
@@ -257,7 +257,7 @@ func (c *Cache) backfillRetry(failures int) time.Duration {
 	return backoff.Jitter(backoff.Doubling(failures, BackfillRetry, BackfillRetryCeiling), backfillJitter)
 }
 
-// fleetRatio is ⌈live git nodes ÷ live data nodes⌉ as the fleet's placements
+// fleetRatio is ⌈live Gitlet nodes ÷ live data nodes⌉ as the fleet's placements
 // count them now, each count at least one: a node with no fleet is both.
 func (c *Cache) fleetRatio() (int, error) {
 	git, data, err := c.fleet()

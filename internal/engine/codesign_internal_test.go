@@ -13,7 +13,7 @@ import (
 // test sets, and a valid one — beside a role name git would cut.
 const signerChart = `name: Acme
 code:
-  native: true
+  backend: gitlet
 %s
 roles:
   - name: No Address
@@ -37,7 +37,7 @@ roles:
 // THE SIGNER FALLS BACK TO THE IDENTITY DOMAIN for every seat whose role
 // states no address a commit may name as written: none, one git would cut, and
 // a `${VAR}` reference — read AS WRITTEN, never resolved through this node's
-// environment, which a retry on another git node need not share, so the
+// environment, which a retry on another Gitlet node need not share, so the
 // variable set here changes nothing — while a valid address is the author's
 // own. A role name git would cut falls back to the handle. The committer is
 // the engine at the identity domain, its default seats.invalid — and the

@@ -33,7 +33,7 @@ import (
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
 // fleet per call. Who serves a repository's GIT work is read off the same
-// view — every live node with the git role ([wholeGit], ADR-0089) — and so is
+// view — every live node with the gitlet role ([wholeGit], ADR-0089) — and so is
 // what each of them advertises it can give its background work, read together
 // with them off one listing ([wholeGit.Listing]), which places a repository's
 // maintenance; this node's own git half is asked per request ([engineGit]).
@@ -97,10 +97,10 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 	if e.local != nil {
 		opts.Local = e.local
 	}
-	// THIS NODE'S OWN GIT HALF, where it has the git role: asked per request
+	// THIS NODE'S OWN GIT HALF, where it has the gitlet role: asked per request
 	// ([engineGit]), since Gitlet is built at boot or at the first
 	// apply that hosts code — after this router exists.
-	if e.profile.Roles.Has(placement.RoleGit) {
+	if e.profile.Roles.Has(placement.RoleGitlet) {
 		opts.LocalGit = e.localGit()
 	}
 	r, err := estate.NewRouter(opts)
@@ -154,7 +154,7 @@ func (w wholeEstate) Holders() ([]string, error) {
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
 // gitPlacement is who serves git as this node routes a repository's git work
-// (ADR-0089): every live node whose presence profile names the git role, from
+// (ADR-0089): every live node whose presence profile names the gitlet role, from
 // the same watched view as the estate's placement — and, read together with
 // them off one listing of that view, what each of them advertises it can give
 // its background work, which places a repository's maintenance
@@ -163,21 +163,21 @@ func (e *Engine) gitPlacement() estate.GitPlacement {
 	return wholeGit{roster: presenceRoster{view: e.dataView}}
 }
 
-// wholeGit is the router's git placement: every live node with the git role,
+// wholeGit is the router's git placement: every live node with the gitlet role,
 // as this node's watched presence view names them — [wholeEstate]'s twin over
-// the git role, for its reasons: answered from memory on every git read, and
+// the gitlet role, for its reasons: answered from memory on every git read, and
 // listed again at once when a node it named went silent.
 type wholeGit struct {
-	// roster is every live git node, from memory.
+	// roster is every live Gitlet node, from memory.
 	roster gitRoster
 }
 
-// gitRoster is every live git node, as the router's git placement reads them.
+// gitRoster is every live Gitlet node, as the router's git placement reads them.
 type gitRoster interface {
-	// LiveGitNodes is every live git node; an error is UNKNOWN.
-	LiveGitNodes() ([]string, error)
+	// LiveGitletNodes is every live Gitlet node; an error is UNKNOWN.
+	LiveGitletNodes() ([]string, error)
 
-	// GitListing is every live git node and what each advertises it can
+	// GitListing is every live Gitlet node and what each advertises it can
 	// give its background work, off ONE listing; an error is UNKNOWN.
 	GitListing() (estate.GitListing, error)
 
@@ -186,10 +186,10 @@ type gitRoster interface {
 	Invalidate()
 }
 
-// Holders is every live git node, sorted. An error from the roster is
-// UNKNOWN, never "no git node".
+// Holders is every live Gitlet node, sorted. An error from the roster is
+// UNKNOWN, never "no Gitlet node".
 func (w wholeGit) Holders() ([]string, error) {
-	nodes, err := w.roster.LiveGitNodes()
+	nodes, err := w.roster.LiveGitletNodes()
 	if err != nil {
 		return nil, fmt.Errorf("engine: who serves git: %w", err)
 	}
@@ -198,16 +198,16 @@ func (w wholeGit) Holders() ([]string, error) {
 	return out, nil
 }
 
-// Listing is every live git node, sorted as Holders sorts them, and what each
+// Listing is every live Gitlet node, sorted as Holders sorts them, and what each
 // one's presence row says its git cache gives its background work
 // ([coord.GitBackgroundKey]), off ONE listing of the view: the nodes and the
 // figures read together, so a node is weighed by the listing that names it
-// ([estate.GitPlacement]). An error from the roster is UNKNOWN, never "no git
+// ([estate.GitPlacement]). An error from the roster is UNKNOWN, never "no Gitlet
 // node".
 func (w wholeGit) Listing() (estate.GitListing, error) {
 	listing, err := w.roster.GitListing()
 	if err != nil {
-		return estate.GitListing{}, fmt.Errorf("engine: who serves git, and what each git node can give "+
+		return estate.GitListing{}, fmt.Errorf("engine: who serves git, and what each Gitlet node can give "+
 			"its background work: %w", err)
 	}
 	slices.Sort(listing.Nodes)
@@ -224,13 +224,13 @@ func (e *Engine) localGit() estate.LocalGit { return engineGit{e: e} }
 
 // engineGit is [estate.LocalGit] over the PUBLISHED native runtime: its git
 // half ([gitHalf]) — the reads by object id of the query server and the merge
-// previews [Engine.buildCodeHost] built beside Gitlet's git surface, and the engine
+// previews [Engine.buildGitletHost] built beside Gitlet's git surface, and the engine
 // writes of that surface itself.
 //
 // LOADED ON EVERY CALL, never captured when the router or the server is built,
 // because Gitlet's git surface — and the query server and the previews with
-// it — is built at boot or at the first apply that sets code.native, after
-// both exist: captured, a git node that applied its company after boot would
+// it — is built at boot or at the first apply that sets code.backend: gitlet, after
+// both exist: captured, a Gitlet node that applied its company after boot would
 // answer every git read and every engine write unserved until it restarted.
 type engineGit struct{ e *Engine }
 
@@ -238,10 +238,10 @@ type engineGit struct{ e *Engine }
 // built no git surface.
 func (g engineGit) Git() (estate.GitServer, bool) {
 	n := g.e.native.Load()
-	if n == nil || n.gitReads == nil || n.mergePreviews == nil || n.codeHost == nil {
+	if n == nil || n.gitReads == nil || n.mergePreviews == nil || n.gitletHost == nil {
 		return nil, false
 	}
-	return gitHalf{reads: n.gitReads, writes: n.codeHost, previews: n.mergePreviews}, true
+	return gitHalf{reads: n.gitReads, writes: n.gitletHost, previews: n.mergePreviews}, true
 }
 
 // estateEnvelopes is how this node signs and verifies every envelope the
@@ -684,9 +684,9 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 }
 
 // presenceRoster is the fleet's presence view as the router's placements read
-// it: every live data node, and every live git node, from memory — one view
+// it: every live data node, and every live Gitlet node, from memory — one view
 // for both, so the two placements can never disagree about who is live — and,
-// read together with the git nodes off one listing of it, what each of them
+// read together with the Gitlet nodes off one listing of it, what each of them
 // advertises it can give its background work ([presenceRoster.GitListing]).
 type presenceRoster struct{ view *coord.LeaseView }
 
@@ -704,11 +704,11 @@ func (r presenceRoster) LiveDataNodes() ([]string, error) {
 	return dataNodesOf(leases), nil
 }
 
-// LiveGitNodes is every live node with the git role. A node with no view has
+// LiveGitletNodes is every live node with the gitlet role. A node with no view has
 // no coordination and so no fleet: nobody else to ask, which is an answer
 // rather than an unknown — its own git half, where it has one, is asked in
 // process ([estate.RouterOptions.LocalGit]).
-func (r presenceRoster) LiveGitNodes() ([]string, error) {
+func (r presenceRoster) LiveGitletNodes() ([]string, error) {
 	if r.view == nil {
 		return nil, nil
 	}
@@ -716,21 +716,21 @@ func (r presenceRoster) LiveGitNodes() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: which nodes serve git: %w", err)
 	}
-	return gitNodesOf(leases), nil
+	return gitletNodesOf(leases), nil
 }
 
-// GitListing is every live node with the git role, by the rule
-// [presenceRoster.LiveGitNodes] lists them by ([gitNodeOf]), and what each
+// GitListing is every live node with the gitlet role, by the rule
+// [presenceRoster.LiveGitletNodes] lists them by ([gitletNodeOf]), and what each
 // one's presence row says its git cache gives its background work
-// ([coord.GitBackgroundKey], which every git node's seat host writes on every
+// ([coord.GitBackgroundKey], which every Gitlet node's seat host writes on every
 // beat beside its status, from [Engine.gitBackgroundBudget]) — off ONE read of
 // the view, each lease decoded once, so a node is weighed by the very listing
-// that names it. A row that names a figure says it, zero included: a git node
+// that names it. A row that names a figure says it, zero included: a Gitlet node
 // with nothing to give — Gitlet not built yet, or transfers that keep all of
 // its memory. A row that names none is NOT SAYING — a build or a host that
 // writes none — and has no entry. A beat whose status read overran says it
 // all the same: the figure is not in the status. A node with no view has no
-// fleet: no git node, and nobody saying anything. An error is UNKNOWN: the
+// fleet: no Gitlet node, and nobody saying anything. An error is UNKNOWN: the
 // view could not be read.
 func (r presenceRoster) GitListing() (estate.GitListing, error) {
 	if r.view == nil {
@@ -742,7 +742,7 @@ func (r presenceRoster) GitListing() (estate.GitListing, error) {
 	}
 	listing := estate.GitListing{Budgets: map[string]int64{}}
 	for _, lease := range leases {
-		node, ok := gitNodeOf(lease)
+		node, ok := gitletNodeOf(lease)
 		if !ok {
 			continue
 		}

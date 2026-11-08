@@ -62,7 +62,7 @@
 // look up. A shorter literal holds no trigram at all, so its clause cannot
 // rule a blob out and is left to the confirm. A pattern NO clause of which
 // can be looked up is REFUSED rather than answered by reading every file —
-// the cost a search budget exists to keep off a git node — and so is one that
+// the cost a search budget exists to keep off a Gitlet node — and so is one that
 // can match across a line (regexlit.LineLocal), because a search answers
 // lines, confirms them one at a time, and would find no match of it there;
 // and one whose program costs too much to run on a line (below).
@@ -100,7 +100,7 @@
 // compiles to as many copies of what it repeats, so 400 bytes of pattern can
 // be a hundred thousand instructions, one and a half milliseconds a byte of
 // a line — some twenty-five minutes of a CPU over a minified file's one
-// mebibyte line, on the git node every clone and push of the repository is
+// mebibyte line, on the Gitlet node every clone and push of the repository is
 // served from. So the cost is bounded where it is decided, three ways. A
 // pattern whose program is past MaxProgram instructions is REFUSED
 // (ErrTooComplex), which nothing a person or a seat searches for comes near.

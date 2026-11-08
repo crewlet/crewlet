@@ -20,7 +20,7 @@ import (
 )
 
 // THE ENGINE WRITE'S CASES (ADR-0092): a commit a seat or a person makes
-// through a tool, built on the repository's git node and landed as a push —
+// through a tool, built on the repository's Gitlet node and landed as a push —
 // asked through Fleet.Write, as the tools ask it.
 
 // newOp is an operation id as a turn or a keyed request mints one: a UUIDv7,
@@ -169,7 +169,7 @@ func anEngineCommitLands(t *testing.T, newFleet NewFleet) {
 }
 
 // F33: one write asked again is one push: asked while the first is still
-// landing (the git node's in-flight join), after it landed, and after another
+// landing (the Gitlet node's in-flight join), after it landed, and after another
 // push moved the branch on — every answer applied with the one commit, one
 // push row, and nothing built twice.
 func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
@@ -198,7 +198,7 @@ func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 		res, err := c.Fleet.Write(c.Ctx, w)
 		second <- answer{res, err}
 	}()
-	// Given a moment to reach the git node building the first, the second ask
+	// Given a moment to reach the Gitlet node building the first, the second ask
 	// joins it — the write's one scratch is the first's, and a scratch of its
 	// own for the same push id would be refused — and one that arrives only
 	// after the first landed is answered from its push's row. Either way it is
@@ -373,7 +373,7 @@ func aSeatsPushToAPersonsBranchIsRefused(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F38: a git node killed at every point of an engine write's path leaves one
+// F38: a Gitlet node killed at every point of an engine write's path leaves one
 // push or none — never two — that every cache converges to and the same write
 // asked again completes as one push.
 func anEngineWriteCrashedAtEveryPointIsOnePush(t *testing.T, newFleet NewFleet) {
@@ -413,7 +413,7 @@ func writeCrashAt(t *testing.T, newFleet NewFleet, point codefault.Point) {
 		}
 	}
 	if killed == "" {
-		t.Fatalf("no git node holds the scratch of push %s at %s", pushID, point)
+		t.Fatalf("no Gitlet node holds the scratch of push %s at %s", pushID, point)
 	}
 	c.Fleet.Kill(t, killed)
 	c.Fleet.Restart(t, killed)

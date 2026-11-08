@@ -25,7 +25,7 @@ const (
 	// CodeLogWildcard is the subject space the stream is created with.
 	CodeLogWildcard = CodeLogPrefix + ".>"
 
-	// CodeStatus is where a question about the fleet's git nodes is
+	// CodeStatus is where a question about the fleet's Gitlet nodes is
 	// scattered: every node serving Gitlet answers it with its own
 	// status — its cache against its budget, the repositories it holds and
 	// the ones it served most (internal/code/host, Server.Status) — and the
@@ -43,7 +43,7 @@ const (
 	CodeStatus = "crewlet.code.status"
 
 	// CodeSearch is where a code search of several repositories is
-	// scattered (internal/codesearch): every git node serves it, and each
+	// scattered (internal/codesearch): every Gitlet node serves it, and each
 	// answers for the repositories the request's assignment table names it
 	// for, searching them as the request's asker.
 	//

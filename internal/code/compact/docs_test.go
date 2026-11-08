@@ -95,7 +95,7 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("The %s is provisional", least),
 			fmt.Sprintf("due past a %s and %s", share, least),
 			fmt.Sprintf("last expunged or found clean %s ago or never", interval),
-			fmt.Sprintf("takes it off every git node's list for %s", interval),
+			fmt.Sprintf("takes it off every Gitlet node's list for %s", interval),
 			fmt.Sprintf("so a clean repository's history is walked at most once %s", interval),
 			fmt.Sprintf("for **%s**, git's own `gc.pruneExpire` default: every object", graceDays),
 			fmt.Sprintf("stays fetchable by its id for %s, and no push in flight", grace),

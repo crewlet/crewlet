@@ -41,7 +41,7 @@ import (
 // has it and greps where not — rather than reading on the slow path a node a
 // moment from its index. Only the first, and only as the home: every node
 // after it in the walk answers, so a search is never left unanswered while
-// both indexes catch up with a push, and a fleet of one git node, whose one
+// both indexes catch up with a push, and a fleet of one Gitlet node, whose one
 // holder has none after it, greps at once (cache.IndexedTip.PassesOn).
 //
 // ONE BUDGET, code.SearchBudget, bounds the whole search after the read's
@@ -97,7 +97,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	if !viaIndex && held.PassesOn && r.q.Home && repo.Search == code.SearchIndexed &&
 		ref == "refs/heads/"+repo.DefaultBranch {
 		return code.GitAnswer{}, r.unready(code.UnreadyIndexBuilding, fmt.Sprintf("%s keeps repository %s's "+
-			"code index and is building it for %s's tip %s; the next git node of its order answers meanwhile",
+			"code index and is building it for %s's tip %s; the next Gitlet node of its order answers meanwhile",
 			r.s.o.NodeID, repo.Name, repo.DefaultBranch, tip))
 	}
 	whole := map[string]string{searchTipKey: tip, searchRefKey: ref}
@@ -112,7 +112,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
-				"share until the read's answer fell due, its asker's attempt spent; another git node answers "+
+				"share until the read's answer fell due, its asker's attempt spent; another Gitlet node answers "+
 				"meanwhile", r.s.o.NodeID))
 		}
 		return code.GitAnswer{}, err

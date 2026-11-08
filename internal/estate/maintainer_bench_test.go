@@ -8,10 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
 
-// BenchmarkMaintainerOf is what a git node pays to judge every repository a
+// BenchmarkMaintainerOf is what a Gitlet node pays to judge every repository a
 // maintainer's pass lists against ONE listing of who serves git and what each
-// git node advertises ([Router.MaintainerOf]): repos=10000 ids over a fleet of
-// git-nodes={8,16}, every node advertising a budget that holds the charge, this
+// Gitlet node advertises ([Router.MaintainerOf]): repos=10000 ids over a fleet of
+// gitlet-nodes={8,16}, every node advertising a budget that holds the charge, this
 // node one of them and maintaining its share — ns/repo, the one read of the
 // listing included, and maintains, the repositories it maintains. It is what
 // each repository this node does NOT maintain costs a pass, since only a
@@ -20,7 +20,7 @@ import (
 func BenchmarkMaintainerOf(b *testing.B) {
 	const charge = int64(1) << 30
 	for _, n := range []int{8, 16} {
-		b.Run(fmt.Sprintf("repos=10000/git-nodes=%d", n), func(b *testing.B) {
+		b.Run(fmt.Sprintf("repos=10000/gitlet-nodes=%d", n), func(b *testing.B) {
 			nodes := make([]string, n)
 			said := make(map[string]int64, n)
 			for i := range nodes {

@@ -14,7 +14,7 @@ import (
 )
 
 // THE LAYERS' FLEET CASES: what only more than one data node can make of a
-// publication — git nodes of different sizes, and two maintainers.
+// publication — Gitlet nodes of different sizes, and two maintainers.
 
 // publication is the repository as the publication due listing through node
 // n names it, or as its rows stand where the listing does not name it.
@@ -84,7 +84,7 @@ func (rc *repoCase) chain(n Node) cache.Chain {
 	return ch
 }
 
-// LY8: a repository's publication is placed on the git node whose advertised
+// LY8: a repository's publication is placed on the Gitlet node whose advertised
 // background budget holds its maintenance, whatever its home: with two
 // members advertising exactly the small repository's charge and one 64 GiB,
 // every publication of the large repository, whose charge passes theirs, is

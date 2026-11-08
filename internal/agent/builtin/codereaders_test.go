@@ -108,7 +108,7 @@ func readersCatalogueOver(wired builtin.CodeDeps, readers builtin.RepoReaders) m
 // serves it.
 func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	readers := &readersFake{}
 	served := readersCatalogue(host, readers)
 	if _, ok := served[builtin.CodeRepoReadersTool]; !ok {
@@ -171,7 +171,7 @@ func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 // refused by name before anything is read.
 func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
+	host := newGitletHost()
 	host.detail.Visibility = code.VisibilityUnit
 	elided := int64(3)
 	last := usage.RepoReader{PrincipalKind: "operator", Principal: "pat:jane-laptop", Seat: "founder", Via: "git",

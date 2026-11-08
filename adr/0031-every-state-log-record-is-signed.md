@@ -271,7 +271,7 @@ believed on its own signature or seal, never on the connection it arrived by.
 ## Amendment: a code search of several repositories is a fourth instruction channel
 
 The scatters this record leaves unsigned only read. A code search of several
-repositories (`internal/codesearch`) reads too, but every git node carries it
+repositories (`internal/codesearch`) reads too, but every Gitlet node carries it
 out AS THE ASKER THE REQUEST NAMES: each repository it is assigned is read
 through the node's own reads by object id, which judge that asker's grant from
 the node's chart, and the lines go back to whoever asked. So the request is an

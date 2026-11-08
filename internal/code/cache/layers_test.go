@@ -1739,7 +1739,7 @@ func TestAReportOnAChainedCopyMakesItsScrubDue(t *testing.T) {
 
 // A LAYER'S GIT IS READ AS IT IS WRITTEN: the release a published row names
 // the git that wrote it by (code.LayerRef.Git, held to its spelling by the
-// domain, which reads no git) is read back on a git node by
+// domain, which reads no git) is read back on a Gitlet node by
 // gitproc.ParseRelease, the exact inverse of gitproc.Version.String — so the
 // node's own release and both floors read back as themselves, every spelling
 // the row's check admits parses, and every one it refuses is refused.
@@ -1764,7 +1764,7 @@ func TestALayersGitIsReadAsItIsWritten(t *testing.T) {
 			t.Fatalf("a row naming git %q: %v", s, err)
 		}
 		if _, err := gitproc.ParseRelease(s); err != nil {
-			t.Errorf("a row's check admits git %q, and a git node cannot read it: %v", s, err)
+			t.Errorf("a row's check admits git %q, and a Gitlet node cannot read it: %v", s, err)
 		}
 	}
 	for _, s := range []string{"2.56", "v2.56.0", "02.56.0", "2.56.0.1", "2.56.0 ", "2.-1.0", "1000000000.0.0",

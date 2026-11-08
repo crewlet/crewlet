@@ -9,11 +9,11 @@ import (
 )
 
 // A CODE SEARCH OF ONE REPOSITORY ([GitSearch], M6-D12, M6-D13) is a git
-// read like any other: the keyed walk asks the repository's git nodes in
+// read like any other: the keyed walk asks the repository's Gitlet nodes in
 // their order, and the one that answers judges the asker's grant from its own
 // chart. What differs is how it reads. A `search: indexed` repository's
 // default branch is read through the trigram index its first [IndexHolders]
-// git nodes keep of its tip (internal/code/cache's DerivedCodeIndex): the
+// Gitlet nodes keep of its tip (internal/code/cache's DerivedCodeIndex): the
 // plan's candidates among the tip's files, confirmed line by line with Go's
 // regexp. Everything else — a `search: grep` repository, a `ref:` other than
 // the indexed tip, a node that holds no index — is read with git grep over
@@ -22,7 +22,7 @@ import (
 // regexp, so both paths answer RE2's matches, and the same ones.
 //
 // THE QUERY CROSSES AS ITS PARTS — the text, the mode, the case and the
-// filters (codeindex.Query) — never as a compiled pattern: the git node makes
+// filters (codeindex.Query) — never as a compiled pattern: the Gitlet node makes
 // the expression and its plan by the one grammar the asker validated it
 // with, so a node and its asker cannot read one search two ways, and a
 // refusal names what the person or the seat wrote. An estate request, never
@@ -140,7 +140,7 @@ func (q SearchQuery) Hits() int {
 	return q.Limit
 }
 
-// validate refuses a search the git node would refuse: codeindex's grammar
+// validate refuses a search the Gitlet node would refuse: codeindex's grammar
 // and plan (Query.Validate, which names what to change), a limit past
 // MaxSearchHits, and a place to continue after that names no line.
 func (q SearchQuery) validate() error {

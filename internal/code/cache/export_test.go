@@ -1667,7 +1667,7 @@ func FoldTimes(o *Options, f func(took time.Duration)) {
 // SyntheticIndex is an index of pushes holding pushes synthetic pushes in
 // runs runs of as many each — every push moving one branch and introducing
 // perPush commits of ids drawn as git's are, uniformly — each run built,
-// written and read back in memory as a git node's are: what
+// written and read back in memory as a Gitlet node's are: what
 // BenchmarkProvenance's lookup arm searches. It answers the index and the
 // bytes its runs hold.
 func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64) {
@@ -1695,7 +1695,7 @@ func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64
 
 // SyntheticMerge is two adjacent runs of pushes synthetic pushes each — every
 // push moving one branch, or with eachRef a ref of its own, and introducing
-// one commit — built, written and read back in memory as a git node's are,
+// one commit — built, written and read back in memory as a Gitlet node's are,
 // and a merge of the two into w: what BenchmarkProvenance's merge arm times.
 func SyntheticMerge(tb testing.TB, pushes int, eachRef bool) func(w io.Writer) error {
 	tb.Helper()

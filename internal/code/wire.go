@@ -71,7 +71,7 @@ type RepoRef struct {
 	Description string `json:"description,omitempty" untrusted:"name"`
 	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
 	// sorted by pattern — never a rule's merge gate. This row is what the
-	// admission of every git request reads, every page of a git node's sync
+	// admission of every git request reads, every page of a Gitlet node's sync
 	// carries and its cache's state file keeps, and none of them reads a
 	// gate: at the domain's bounds a repository's gates are half a mebibyte
 	// of JSON, which each would decode, ship and write to disk for nothing.
@@ -112,7 +112,7 @@ type RepoRef struct {
 	Position statelog.Position `json:"position"`
 }
 
-// StateQuery asks for a repository's refs and packs — the snapshot a git
+// StateQuery asks for a repository's refs and packs — the snapshot a Gitlet
 // node's cache converges to.
 type StateQuery struct {
 	RepoID string `json:"repo_id"`
@@ -123,7 +123,7 @@ type StateQuery struct {
 	// Cursor is nil for the first page, and the Next a page answered after.
 	Cursor *StateCursor `json:"cursor,omitempty"`
 	// Pushes asks a DELTA for its pushes phase: every push of the repository
-	// applied in (Since, the snapshot's position], in log order — what a git
+	// applied in (Since, the snapshot's position], in log order — what a Gitlet
 	// node's cache folds into its index of which push introduced each commit
 	// before the round answers, so the index is level with the copy. Ignored
 	// by a full answer, whose pushes that index reads with the `introduced`
@@ -579,7 +579,7 @@ func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaExpiry} }
 // proposed reports a way a push proposal may name ([proposedVias]).
 func (v PushVia) proposed() bool { return slices.Contains(proposedVias(), v) }
 
-// PushedBy is the push that INTRODUCED a commit, as a git node's index of
+// PushedBy is the push that INTRODUCED a commit, as a Gitlet node's index of
 // which push introduced each commit holds it: which push, where it landed on
 // the log, when, by whom and how.
 type PushedBy struct {
@@ -891,7 +891,7 @@ type ResolvedRef struct {
 	// repository at or past Moved holds them, and the target's moves up to
 	// its tip are every move up to Moved. Never the answer's Position, which
 	// a linearizable read takes past its own barrier, so a copy current to
-	// every push still sits below it and a floor there would make a git
+	// every push still sits below it and a floor there would make a Gitlet
 	// node sync for nothing.
 	Moved statelog.Position `json:"moved,omitzero"`
 	// At and Seat are the ref's row's broker instant of its last move and the
@@ -976,13 +976,13 @@ const (
 	// every change of the repositories the asker may read, each naming the
 	// change it judged ([ReviewRow.Change]).
 	ReadReviews ReadKind = "reviews"
-	// ReadIntroduced is one repository's pushes in log order, as a git
+	// ReadIntroduced is one repository's pushes in log order, as a Gitlet
 	// node's index of which push introduced each commit reads them: the
 	// engine's own read, which no principal makes.
 	ReadIntroduced ReadKind = "introduced"
 	// ReadCompactionDue is the repositories holding at least
 	// [ReadQuery.MinPacks] live packs, MOST FIRST, each with the version
-	// its row was read at: the listing a git node's compactor polls for
+	// its row was read at: the listing a Gitlet node's compactor polls for
 	// the repositories a compaction may be due in — the engine's own read,
 	// which no principal makes, as `introduced` is.
 	ReadCompactionDue ReadKind = "compaction_due"
@@ -1053,7 +1053,7 @@ const (
 	// delivered to — and what tells it whether the change a run asked to
 	// open at its collection is open already.
 	ReadBranchChanges ReadKind = "branch_changes"
-	// ReadChangesDue is the change work a repository's HOME git node owes
+	// ReadChangesDue is the change work a repository's HOME Gitlet node owes
 	// ([ChangesDueQuery]): with no repository, the active repositories
 	// holding a LIVE change whose head revision has no facts or no
 	// mergeability against the branch it merges into, or whose mergeability
@@ -1066,7 +1066,7 @@ const (
 	// ReadIndexed is the active and archived repositories searched by index
 	// ([SearchIndexed]), BY NAME, each by its id and name, a page of
 	// MaxSnapshotItems after the [ReadQuery.Cursor] — the last name a page
-	// served, "" from the start: the listing a git node's indexer polls for
+	// served, "" from the start: the listing a Gitlet node's indexer polls for
 	// the repositories whose code index it may keep (M6-D12). The engine's
 	// own read, as `compaction_due` is.
 	ReadIndexed ReadKind = "indexed"
@@ -1081,7 +1081,7 @@ const (
 	// definition, its tail, the failures its ending named and its kept log —
 	// held to the asker's grant on its repository.
 	ReadCheck ReadKind = "check"
-	// ReadChecksDue is the check work a repository's HOME git node owes
+	// ReadChecksDue is the check work a repository's HOME Gitlet node owes
 	// ([ChecksDueQuery]): with no repository, the active repositories holding
 	// a LIVE change whose head no dispatch for its target names the checks
 	// file its target's row holds, or whose head's latest attempt of a check
@@ -1104,7 +1104,7 @@ const (
 	ReadCheckBox ReadKind = "check_box"
 	// ReadChecksQueued is the attempts waiting for a runner whose definitions
 	// name one cell ([ChecksQueuedQuery]), OLDEST QUEUED FIRST, each with its
-	// definition and its repository's name ([RunnableCheck]): a git node's
+	// definition and its repository's name ([RunnableCheck]): a Gitlet node's
 	// CLAIM WALK (internal/code/checkrun),
 	// every repository's whose repository a runner may still claim in. The
 	// engine's own, as `check_box` is: no principal makes it, and it is held
@@ -1121,7 +1121,7 @@ const (
 	// candidates of the trains testing its targets ([CandidateRow]); or,
 	// naming no repository, every repository's the asker may read.
 	ReadQueue ReadKind = "queue"
-	// ReadQueueDue is the queue work a repository's HOME git node owes
+	// ReadQueueDue is the queue work a repository's HOME Gitlet node owes
 	// ([QueueDueQuery]): with no repository, the active repositories holding
 	// a live entry or a given-up train's attempt, by id; with one, its queue
 	// work a target a page, and on its first page those attempts. The
@@ -1438,7 +1438,7 @@ type ReadQuery struct {
 	// row, description, authors, conversation, mergeability and readiness —
 	// with no page of its revisions beside it, and nothing else answers it:
 	// a read that judges or acts on a change sets it — a merge's and a
-	// rebase's build on the repository's git node (a merge's read again at
+	// rebase's build on the repository's Gitlet node (a merge's read again at
 	// the head of the log before a refusal and once more on every rebuild),
 	// and a seat's write tool resolving the change it names — and a read
 	// that presents its revisions does not. None of those reads a revision, and a
@@ -2043,7 +2043,7 @@ type ChangeProposal struct {
 	// decides none of a seat's — the estate declares the operation to judge
 	// a grant where its asker is a seat. It names no run: a change keeps the
 	// turn and the run that opened it in its own fields. A LANDING NAMES
-	// NONE: it is the repository's home git node's own write, which no
+	// NONE: it is the repository's home Gitlet node's own write, which no
 	// principal asks and no chart judges.
 	Asker Principal `json:"asker"`
 	// Seen is the code log's position the asker read the repository and the
@@ -2081,7 +2081,7 @@ type ChangeProposal struct {
 	Retarget *ChangeRetarget `json:"retarget,omitempty"`
 	Close    *ChangeClose    `json:"close,omitempty"`
 	Reopen   *ChangeReopen   `json:"reopen,omitempty"`
-	// Landed is a landing the repository's home git node asks, with NO
+	// Landed is a landing the repository's home Gitlet node asks, with NO
 	// Asker: the engine's own write ([ChangeLanded]).
 	Landed *ChangeLanded `json:"landed,omitempty"`
 }
@@ -2142,7 +2142,7 @@ type ConversationWrite struct {
 	OpID string `json:"op_id"`
 	// Asker is who asks: a person through a credential bound to their human
 	// seat, or a seat by its handle; a token bound to nobody writes nothing,
-	// and a revision's facts, the repository's home git node's own, name
+	// and a revision's facts, the repository's home Gitlet node's own, name
 	// none. A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
 	// ([ChangeWriterOptions.SeatRules]), and so is every reviewer an ask
 	// names, whoever asks ([ConversationWrite.JudgesChart]): a node that holds
@@ -2178,7 +2178,7 @@ type ConversationWrite struct {
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
 	// Revise is a revision's facts, and Mergeability whether the change's head
 	// revision merges into its target's tip, each of which the repository's
-	// home git node asks with NO Asker: the engine's own writes ([Revise],
+	// home Gitlet node asks with NO Asker: the engine's own writes ([Revise],
 	// [Mergeability]).
 	Revise       *Revise       `json:"revise,omitempty"`
 	Mergeability *Mergeability `json:"mergeability,omitempty"`
@@ -3010,7 +3010,7 @@ type ChangeAuthor struct {
 // source branch's head while it was live — the new head, who moved it and
 // the push that did, empty for a revision an open or a reopen made — where
 // its record landed and the record's broker instant, and the facts the
-// repository's home git node recorded of it, nil for a revision it has
+// repository's home Gitlet node recorded of it, nil for a revision it has
 // recorded none of yet.
 type RevisionRow struct {
 	N          int64             `json:"n"`
@@ -3028,7 +3028,7 @@ type RevisionRow struct {
 // read against with the position that moved it there, the base the change is
 // measured from, the trees of the base and of the head, the id of the change
 // it makes — or that none was taken — the files it touches or that it touches
-// all, the classes of their changes, the git node that recorded them, the
+// all, the classes of their changes, the Gitlet node that recorded them, the
 // path-owner match — the digest of the owners matched against, those matched
 // and those asked no review of — and the record that wrote them. A revision
 // whose head its target holds has none: its change is merged, and its home
@@ -3053,7 +3053,7 @@ type RevisionFactsRow struct {
 	Position        statelog.Position `json:"position"`
 }
 
-// THE READS BY OBJECT ID: what a git node answers about a repository's content
+// THE READS BY OBJECT ID: what a Gitlet node answers about a repository's content
 // — a tree, a file's lines, a diff, a comparison — over its own cache
 // (internal/code/query), never over the rows. They cross the estate wire like
 // every read here, so each is plain JSON and every field is the asker's or the
@@ -3063,7 +3063,7 @@ type RevisionFactsRow struct {
 // a ref, a `^`, a `~` or a `:`: an id names the same object on every node at
 // every position, so a read by one needs no level — what a ref points at is a
 // row, which ResolveQuery and its kin answer — and none of git's revision
-// grammar reaches the git node, whose argument lists carry validated ids and
+// grammar reaches the Gitlet node, whose argument lists carry validated ids and
 // fixed options alone. A PATH is data, never an option: it reaches git on a
 // batch command's standard input, or — for a log and a blame, which read no
 // path there — as the one argument after `--`, a log's as a literal pathspec
@@ -3082,7 +3082,7 @@ const MaxGitAnswerBytes = 56 << 10
 
 // MaxGitPathBytes is the longest path a read by oid names: 4 KiB, PATH_MAX on
 // Linux and far past any path a source tree holds — a bound on what the asker
-// can make a git node look up, not a rule about the repository.
+// can make a Gitlet node look up, not a rule about the repository.
 const MaxGitPathBytes = 4 << 10
 
 // MaxDiffPaths is the most paths one diff's stat is filtered by: a person's or
@@ -3095,7 +3095,7 @@ const MaxDiffPaths = 64
 // person or a model copies out of a log or a message.
 const MinAbbrevDigits = 7
 
-// maxGitCursorBytes bounds a cursor the asker hands back: every cursor a git
+// maxGitCursorBytes bounds a cursor the asker hands back: every cursor a Gitlet
 // node issues is a kind's letter and up to two decimal numbers.
 const maxGitCursorBytes = 64
 
@@ -3239,7 +3239,7 @@ const (
 	// GitRevisionFacts is what a change's revision is against its target's
 	// tip: their merge base, the change's patch-id and the files it touches,
 	// and whether its head is in the target already — what the repository's
-	// home git node records on the change for each revision, or lands it by.
+	// home Gitlet node records on the change for each revision, or lands it by.
 	// THE ENGINE'S OWN READ ([GitReadKind.EnginesOwn]): every reader of a
 	// revision's facts after the home reads the rows, never git.
 	GitRevisionFacts GitReadKind = "revision_facts"
@@ -3273,7 +3273,7 @@ const (
 	// git holds it.
 	GitChecksFile GitReadKind = "checks_file"
 	// GitSearch is the lines of a commit a code search matches — the
-	// default branch's tip through the repository's code index where its git
+	// default branch's tip through the repository's code index where its Gitlet
 	// node keeps one, and otherwise git grep — at most MaxSearchHits of
 	// them, in one answer with no next page (search.go).
 	GitSearch GitReadKind = "search"
@@ -3282,7 +3282,7 @@ const (
 // GitReadKinds is the closed set.
 //
 // A KIND IS AN ESTATE REQUEST'S, NEVER A RECORD'S: a GitQuery crosses the
-// estate wire and is answered by a git node from its cache, and no record of
+// estate wire and is answered by a Gitlet node from its cache, and no record of
 // the code log names one, so a kind added here moves no RecordVersion and
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
@@ -3294,7 +3294,7 @@ func GitReadKinds() []GitReadKind {
 func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
 // EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
-// the repository's home git node reads to record them on the change, or to
+// the repository's home Gitlet node reads to record them on the change, or to
 // land it, and a commit's checks file, which it reads a change's checks'
 // definitions from at its target's tip — so a read of it names NO asker and
 // no seat it reads for, is held to no grant and is recorded as nobody's read:
@@ -3322,7 +3322,7 @@ func (k GitReadKind) Unstampable() bool {
 // EnginesOwn reports a read THE ENGINE makes on its own account: one of a kind
 // only it reads ([GitReadKind.EnginesOwn]), or one it makes FOR A CHECK
 // ([GitQuery.Check]). Such a read names no asker and no seat it reads for, is
-// held to no grant and is recorded as nobody's read — the git node's one test
+// held to no grant and is recorded as nobody's read — the Gitlet node's one test
 // of all three.
 func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
 
@@ -3344,7 +3344,7 @@ type GitQuery struct {
 	// RepoID is the repository's canonical id.
 	RepoID string `json:"repo_id"`
 	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
-	// and held to the repository's read grant by the git node that answers,
+	// and held to the repository's read grant by the Gitlet node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
 	// repository, a person or a token by ADR-0085's rules, which read no
 	// chart. Never trusted for anything but the grant. REFUSED on a read the
@@ -3359,25 +3359,25 @@ type GitQuery struct {
 	// it names no asker, is held to no grant and is recorded as nobody's read
 	// — the check's row is its record. And it reads THE CHECK'S COMMIT ALONE:
 	// a tree or a file at it, or a diff whose head is it — the one commit the
-	// box's token admits it to — which the git node holds it to as it
+	// box's token admits it to — which the Gitlet node holds it to as it
 	// validates it, whatever its asker set; a diff's base is the attempt's
 	// row's, which the admission sets. An estate request's field and no
-	// record's, so it takes no versionedFields row: a git node of a build that
+	// record's, so it takes no versionedFields row: a Gitlet node of a build that
 	// predates it reads such a read as one naming no asker, and refuses it
 	// (ErrInvalid) — the box's read refused, never served as another's.
 	Check *CheckKey `json:"check,omitempty"`
 	// CeilingSeat is the seat the asking seat's turn is acting for, whose
-	// grant the git node judges beside the asker's, from the same chart and
+	// grant the Gitlet node judges beside the asker's, from the same chart and
 	// the row its copy holds, as [ReadQuery.CeilingSeat] says.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Turn is the turn a SEAT'S read is made in (turnctx.Turn.RunID): the
 	// principal its one second look at the log's head is charged to, on its
-	// seat's bucket of the answering git node ([NewResyncs]) — "" for a read
+	// seat's bucket of the answering Gitlet node ([NewResyncs]) — "" for a read
 	// outside a turn, which the seat's bucket alone bounds then. Set only
 	// beside a seat's asker, and never trusted for anything but whose bucket
 	// pays: the asker is judged by who it is, never by what it is doing. An
 	// estate request's field and no record's, so it takes no versionedFields
-	// row: a git node of a build that predates it charges nothing, as that
+	// row: a Gitlet node of a build that predates it charges nothing, as that
 	// build did.
 	Turn string `json:"turn,omitempty"`
 	// Fresh is the asker's floor on the code log, where it holds one: the
@@ -3410,24 +3410,24 @@ type GitQuery struct {
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
 	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
-	// copy it does not hold (ADR-0089): its EFFECTIVE HOME — the first git
+	// copy it does not hold (ADR-0089): its EFFECTIVE HOME — the first Gitlet
 	// node of the repository's order once the walk's demotions are applied —
 	// and, only where that node answered that no copy serving the read is
 	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
 	// failure of its own, not serving Gitlet), the next node of the order in its
-	// place; never two at once. A git node holding no copy of the repository
+	// place; never two at once. A Gitlet node holding no copy of the repository
 	// answers a read without it [ErrGitUnready]{[UnreadyNotHeld]} at once,
 	// having started nothing, because a cold round runs on under the cache's
 	// own lifetime after its read stops waiting: with every node free to
 	// fill, one read of a repository nobody held — the first after its
-	// home's death — began a whole download of it on every git node the walk
+	// home's death — began a whole download of it on every Gitlet node the walk
 	// reached. Stamped by the walk on every attempt it makes, over whatever
 	// its caller set, so no caller chooses it. An estate request, not a
 	// record: a build that knows no `home` reads every read as one it may
 	// fill, which is this build's answer without the rule.
 	Home bool `json:"home,omitempty"`
 	// Unstamped asks for THE PAGE ALONE: its Kind, Rev, Next and the kind's
-	// own part, with none of the fields a git node stamps on an answer — the
+	// own part, with none of the fields a Gitlet node stamps on an answer — the
 	// repository, the copy's position, Memo, the push that introduced each
 	// commit and the coverage of the index that says so ([GitAnswer]) — and
 	// CUT AGAINST A ROOM NONE OF THEM TAKES. A stamped page is cut against
@@ -3442,7 +3442,7 @@ type GitQuery struct {
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. AS A STATED CONDITION: no build that carries the
 	// code domain has run without it — none of the domain is on main — so
-	// every git node that answers a read honours it.
+	// every Gitlet node that answers a read honours it.
 	Unstamped bool `json:"unstamped,omitempty"`
 
 	Tree          *TreeQuery          `json:"tree,omitempty"`
@@ -3460,9 +3460,9 @@ type GitQuery struct {
 }
 
 // ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
-// An estate request's, as every kind's query is ([GitReadKinds]): a git node of
+// An estate request's, as every kind's query is ([GitReadKinds]): a Gitlet node of
 // a build that predates it refuses the read as one naming no query of its kind
-// (ErrInvalid), and its asker asks the next git node of the order.
+// (ErrInvalid), and its asker asks the next Gitlet node of the order.
 type ChecksFileQuery struct {
 	// Commit is the commit read at, its whole id — a change's target's tip,
 	// as its home read it from the rows.
@@ -3505,7 +3505,7 @@ type DiffQuery struct {
 	Base string `json:"base"`
 	Head string `json:"head"`
 	// Paths filters the stat to files equal to one of them or under one as
-	// a directory, judged by the git node over git's whole answer — never
+	// a directory, judged by the Gitlet node over git's whole answer — never
 	// handed to git — at most MaxDiffPaths. Only the files they admit are
 	// counted, so naming paths is what narrows a stat of a wide diff.
 	Paths []string `json:"paths,omitempty"`
@@ -3530,7 +3530,7 @@ type CompareQuery struct {
 // landed it there.
 //
 // THE TARGET IS THE ONE THE ASKER WAS SHOWN: the tip it resolved, at the
-// position it read it at, so the git node judges that tip and pays no barrier
+// position it read it at, so the Gitlet node judges that tip and pays no barrier
 // of its own — and an answer names what it was judged against, never a tip
 // the asker cannot place.
 type LandedInQuery struct {
@@ -3540,7 +3540,7 @@ type LandedInQuery struct {
 	Target string `json:"target"`
 	// TargetOID is the commit Target named when the asker resolved it — a
 	// whole id — and At the position of the record that moved Target there
-	// ([ResolvedRef.Moved]): the git node's copy is brought to At before it
+	// ([ResolvedRef.Moved]): the Gitlet node's copy is brought to At before it
 	// judges, so the moves of Target up to that tip — every move it had when
 	// it was resolved — are in the index it searches.
 	TargetOID string            `json:"target_oid"`
@@ -3659,7 +3659,7 @@ type LogQuery struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	// Grep keeps the commits whose whole message holds it: a LITERAL,
-	// matched case-folded in the git node's own code over each message as it
+	// matched case-folded in the Gitlet node's own code over each message as it
 	// streams by, never handed to git — a regular expression from a model is
 	// a runtime nobody bounded, and text on a command line is what a read by
 	// oid never carries. Valid UTF-8, no NUL, at most MaxLogGrepBytes.
@@ -3709,7 +3709,7 @@ func (q BlameQuery) Range() (start, end int) {
 // ValidRev reports whether rev names an object as a read by oid takes it: a
 // whole object id (40 lowercase hex digits, not the zero id), or an
 // ABBREVIATION of one, MinAbbrevDigits to 39 lowercase hex digits. Never a ref,
-// a `^`, a `~` or a `:` — no revision grammar reaches the git node — and never
+// a `^`, a `~` or a `:` — no revision grammar reaches the Gitlet node — and never
 // an abbreviation shorter than git's own default, which would name dozens of
 // objects of any large repository.
 func ValidRev(rev string) bool {
@@ -3789,7 +3789,7 @@ func WirePath(p string) (text, b64 string) {
 	return strings.ToValidUTF8(p, string(utf8.RuneError)), base64.StdEncoding.EncodeToString([]byte(p))
 }
 
-// Validate refuses a read the git node cannot answer as asked ([ErrInvalid],
+// Validate refuses a read the Gitlet node cannot answer as asked ([ErrInvalid],
 // naming the field): a kind this build does not know, a repository id that is
 // not canonical, an asker no principal is, a turn beside an asker that is no
 // seat or past a turn id's bounds, a sub-query other than its kind's
@@ -3798,8 +3798,8 @@ func WirePath(p string) (text, b64 string) {
 // blame's MaxBlameLines, a diff naming both a file and paths, a log whose
 // literal, limit or date no log takes, and a read made for a check that names
 // an asker or reads anything but its check's commit. A cursor longer than any
-// a git node issues is [ErrBadCursor]; whether a shorter one is the kind's own
-// is the git node's to judge.
+// a Gitlet node issues is [ErrBadCursor]; whether a shorter one is the kind's own
+// is the Gitlet node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
@@ -3822,7 +3822,7 @@ func (q GitQuery) Validate() error {
 		}
 	case q.Kind.EnginesOwn():
 		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
-			return fmt.Errorf("%w: asker: a %s read is the engine's own — its repository's home git node's — "+
+			return fmt.Errorf("%w: asker: a %s read is the engine's own — its repository's home Gitlet node's — "+
 				"which no principal makes", ErrInvalid, q.Kind)
 		}
 	default:
@@ -3900,7 +3900,7 @@ func (q GitQuery) Validate() error {
 // atItsCheck refuses a read made for a check ([GitQuery.Check]) that reads
 // anything but the check's commit — a tree or a file at it, or a diff whose
 // head is it, by its whole id as the attempt's row names it: the one commit a
-// check's box's token admits it to, which the git node holds the read to
+// check's box's token admits it to, which the Gitlet node holds the read to
 // whatever the node that asked it built.
 func (q GitQuery) atItsCheck() error {
 	var field, rev string
@@ -4429,7 +4429,7 @@ type RevisionFactsAnswer struct {
 	// nothing, and where PatchIDOmission says why none was taken: an empty id
 	// equals nothing.
 	PatchID string `json:"patch_id,omitempty"`
-	// PatchIDOmission is why the git node took no id of a diff that is not
+	// PatchIDOmission is why the Gitlet node took no id of a diff that is not
 	// empty, "" where it took one or there was none to take: the diff is past
 	// the bound on one it identifies (OmittedPastBound, final), or it or its
 	// id ran out what was left of the read's budget of git
@@ -4468,7 +4468,7 @@ type RevisionFactsAnswer struct {
 }
 
 // Final reports facts that are a function of their two commits alone, as
-// every git node answers them: nothing in them left out for want of time. A
+// every Gitlet node answers them: nothing in them left out for want of time. A
 // fact left out past a bound is final, the same on every node at every load;
 // one the read's budget of git ran out before is a measure of the node that
 // read it at that moment, so facts holding one are RECORDED BY NOBODY and
@@ -4488,7 +4488,7 @@ const (
 	// OmittedPastBound is a part past a bound of its own: a diff past the
 	// bound on one whose id is taken, Go past the bound a classification
 	// lexes, a revision that touches all. What the bound measures is the two
-	// commits', so every git node omits the part alike: FINAL.
+	// commits', so every Gitlet node omits the part alike: FINAL.
 	OmittedPastBound FactsOmission = "past_bound"
 	// OmittedOutOfTime is a part the read's budget of git ran out before:
 	// what the node could do in its budget at that moment — slower under
@@ -4523,7 +4523,7 @@ type Reanchored struct {
 	Gone     bool   `json:"gone,omitempty"`
 }
 
-// Coverage is what a git node's index of which push introduced each commit
+// Coverage is what a Gitlet node's index of which push introduced each commit
 // holds: every push with a position in (From, Through] but those in (GapFrom,
 // GapThrough], a range a full read of the repository passed over and the
 // index has not yet read. Complete is From being the start of the push history

@@ -199,11 +199,11 @@ func (c *Cache) indexSync(ctx context.Context, repoID string) (Synced, error) {
 // booted over — or a round running on it now. It reads memory alone and
 // starts nothing.
 //
-// It is what a git node asks before a read it was not asked to FILL a copy
+// It is what a Gitlet node asks before a read it was not asked to FILL a copy
 // for (code.GitQuery.Home, ADR-0089): a node that answers false starts
 // nothing for such a read (code.UnreadyNotHeld), so one read of a repository
-// no git node holds costs the fleet one download, by the walk's effective
-// home, rather than one by every git node the walk reaches — a round, once
+// no Gitlet node holds costs the fleet one download, by the walk's effective
+// home, rather than one by every Gitlet node the walk reaches — a round, once
 // begun, runs on under the cache's own lifetime after its caller stops
 // waiting. A round already running is held: a read that joins it adds no
 // download of its own.

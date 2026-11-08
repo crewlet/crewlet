@@ -91,7 +91,7 @@ func decoded(t *testing.T, got tools.Result) map[string]any {
 // they deliver nowhere, red.
 func TestAChangeWriteDeliversToCode(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{}))
 	if len(builtin.ChangeWrites()) == 0 {
 		t.Fatal("there are no change writes, so this certifies nothing")
 	}
@@ -129,7 +129,7 @@ func TestAChangeWriteDeliversToCode(t *testing.T) {
 func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
-	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeOpenChangeTool, openArgs()); got.Failed {
 		t.Fatalf("the open answered %q", got.Output)
@@ -170,7 +170,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 		return code.ChangeResult{Refusal: code.ChangeRefusalChangeExists,
 			Detail: "refs/heads/feature heads site!3 already"}, nil
 	}}
-	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), refusing)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), refusing)), writerTurn(t),
 		builtin.CodeOpenChangeTool, openArgs())
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalExists || !strings.Contains(got.Output, "site!3") {
 		t.Errorf("a refused open answered %q as %s", got.Output, tools.RefusalOf(got))
@@ -184,7 +184,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 		return code.ConversationResult{Refusal: code.ConversationRefusalNotPermitted,
 			Detail: "agent-ceo reviews nothing of site"}, nil
 	}}
-	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), unasked)), writerTurn(t),
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), unasked)), writerTurn(t),
 		builtin.CodeOpenChangeTool, openArgs())
 	answer := decoded(t, got)
 	said, _ := answer["reviewers_not_asked"].(string)
@@ -246,7 +246,7 @@ func TestAnOpenCarriesTheTurnsWorkItemUnlessItNamesOne(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			writer := &codeWrites{}
-			reg := codeRegistry(t, changeWriteDeps(newCodeHost(), writer, c.tasks))
+			reg := codeRegistry(t, changeWriteDeps(newGitletHost(), writer, c.tasks))
 			turn := writerTurn(t)
 			turn.WorkItem = &turnItem
 			args := map[string]any{"repo": "site", "branch": "feature", "title": "Retry the upload"}
@@ -429,7 +429,7 @@ func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {
 			return code.ChangeResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
 		}}
-		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeOpenChangeTool, map[string]any{"repo": "site", "branch": "feature", "title": "t"})
 		class := tools.RefusalOf(got)
 		switch {

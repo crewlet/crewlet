@@ -296,7 +296,7 @@ func writeFull(w io.Writer, refs []code.RefRow, peeled map[string]string, out *r
 // its peel line included — is carried byte for byte, written straight from
 // the read buffer. digest is what this cache last wrote there.
 //
-// IN PLACE, because every git node runs it after every push that moves a ref,
+// IN PLACE, because every Gitlet node runs it after every push that moves a ref,
 // over a file of up to code.MaxRefsPerRepo lines: a line carried is checked
 // on the bytes the reader holds and copied out, and only a moved ref's line is
 // made — so the merge allocates for what moved and never for the file.

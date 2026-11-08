@@ -40,7 +40,7 @@
 // node's own id, with a node whose copy of that domain said it is out of
 // service after the rest and a node that went silent last; a push alone is
 // asked in its repository's order instead, and a read of a repository's git
-// objects in its order over the git nodes (below) — and the failover rule is
+// objects in its order over the Gitlet nodes (below) — and the failover rule is
 // stated per operation (see [opClass]).
 //
 // # What makes a retry safe, per operation
@@ -118,7 +118,7 @@
 // operation id, from which a comment's id is derived.
 //
 // These are the operations keyed on the DATA nodes (a read of a repository's
-// git objects is keyed on the git nodes: below); [op.keyedBy] is the
+// git objects is keyed on the Gitlet nodes: below); [op.keyedBy] is the
 // declaration, and the walk is the ordinary one in every other respect — the
 // floors, the verdict of the operation's own domain, the lagging last resort,
 // and the class rule for a node that may have run it. A data node asks its
@@ -310,35 +310,35 @@
 // memory of the second ([op.ungated]): it asks the copy's own seat admission
 // and routes no later operation.
 //
-// # A repository's git work is asked of its home git node
+// # A repository's git work is asked of its home Gitlet node
 //
 // An operation on a repository's git OBJECTS — a read by object id of a tree,
 // a file, a diff, a MERGE PREVIEW of two commits ([opCodeMergePreview], a read
 // too), and an ENGINE WRITE, a seat's or a person's commit built beside a copy
 // of them and landed as a push (ADR-0092) — is answered by a node with the
-// `git` role from its own cache, never by a data node's copy.
+// `gitlet` role from its own cache, never by a data node's copy.
 // That is ADR-0089, amending ADR-0025: the router's walk has a second
-// placement beside the data nodes, every live git node ([RouterOptions.Git]),
+// placement beside the data nodes, every live Gitlet node ([RouterOptions.Git]),
 // keyed by repository ([op.keyedOnGit]), and such an operation names the git
 // half rather than a domain's copy ([GitCopy]), so no copy verdict, no
 // dispatch floor and no lag gate holds it back — its floor travels in its
-// arguments and is the git node's cache's sync level. It is asked in
-// rendezvous.Order(repository, every live git node) — the repository's HOME
+// arguments and is the Gitlet node's cache's sync level. It is asked in
+// rendezvous.Order(repository, every live Gitlet node) — the repository's HOME
 // first, its runner-up next, the keyed order's demotions and no sticky node,
 // this node at its place where its git half is built ([LocalGit], resolved per
 // request, since Gitlet is built at boot or at the first apply that
 // hosts code) — on lanes of their own, the reads' and the writes'
-// ([laneGitReads], [laneGitWrites]), which a git node registers from boot. The
-// home is a preference, never ownership: no lease, no epoch. A git node that
+// ([laneGitReads], [laneGitWrites]), which a Gitlet node registers from boot. The
+// home is a preference, never ownership: no lease, no epoch. A Gitlet node that
 // cannot answer inside its budget — its copy still syncing, its share full, or
 // every engine write its writes' lane holds already held, the next answered at
 // once ([gitWritesHeld]) — answers `behind`, its reason beside it
 // ([reply.Unready]), and is not demoted, so its askers come back once it is
 // warm; and ONE node a walk FILLS
 // a copy at a time: the walk stamps its effective home's attempt
-// (code.GitQuery.Home, code.EngineWrite.Home), and every other git node holding
+// (code.GitQuery.Home, code.EngineWrite.Home), and every other Gitlet node holding
 // no copy answers at once that it holds none, so a repository nobody holds
-// costs the fleet one download rather than one a git node. The fill moves to
+// costs the fleet one download rather than one a Gitlet node. The fill moves to
 // the next node of the walk only past one bringing no copy up for the
 // operation — behind its configuration for a seat, failing on its own, Gitlet
 // not built — so a home that will not serve a read for a reason that lasts never
@@ -347,20 +347,20 @@
 // request is a signed estate request like any other, and every attempt — a
 // peer's, or this node's own git half in process — is held to its git attempt
 // and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the attempt ends
-// (code.AnswerBy), so a busy git node is heard saying so rather than taken for
+// (code.AnswerBy), so a busy Gitlet node is heard saying so rather than taken for
 // a gone one, and an operation is answered alike whichever node asked it
 // ([GitReadAttempt], [GitWriteAttempt]).
 //
-// AN ENGINE WRITE IS ONE PUSH WHICHEVER GIT NODE BUILDS IT ([opCodeGitWrite]):
+// AN ENGINE WRITE IS ONE PUSH WHICHEVER GITLET NODE BUILDS IT ([opCodeGitWrite]):
 // its push id is derived from its caller's operation (code.WritePushID), and
 // its commit is a pure function of that operation and its parent, so the walk
-// asks it again of the next git node after one that ran nothing or went
+// asks it again of the next Gitlet node after one that ran nothing or went
 // silent, as an idempotent write — the next node builds the same push, and is
 // answered from its row where the silent one landed it — and two nodes that
 // both took themselves for its home build one push, which the repository's
-// committer lands once. Its attempt on one git node is the sum of every wait
+// committer lands once. Its attempt on one Gitlet node is the sum of every wait
 // its stages make at their whole budgets ([GitWriteAttempt], 82 s), which the
-// git node fits the write into — answering busy, before its upload, a write
+// Gitlet node fits the write into — answering busy, before its upload, a write
 // whose proposal would no longer fit — so the attempt is the router's own
 // whatever deadline its caller gives ([Router.budgetFor]): a turn's minutes
 // waited out on a wedged home would leave its runner-up never asked.
@@ -369,7 +369,7 @@
 // engine writes are asked of, and the one its maintenance falls to on a fleet
 // of alike nodes: the first node of the same rendezvous order with NO demotion
 // — one function builds both, so on a quiet fleet a repository's reads, its
-// engine writes and its own git work meet on one git node — and UNKNOWN,
+// engine writes and its own git work meet on one Gitlet node — and UNKNOWN,
 // never a guess, where who serves git cannot be read. [Router.HomeOf] answers
 // which of many repositories this node is the home of off ONE reading of who
 // serves git, three-valued as Home is — the set, or unknown for every one —
@@ -379,19 +379,19 @@
 // each. A home that went quiet is still the home; work two nodes of a split
 // presence view both do is work its repository's writers take once.
 //
-// [Router.Maintainer] names the git node a repository's MAINTENANCE — the
+// [Router.Maintainer] names the Gitlet node a repository's MAINTENANCE — the
 // compaction of its packs, the publication of its layers — is placed on, which
 // is the home unless the home cannot hold the work: the first node of the same
-// order, still with no demotion, whose ADVERTISED background budget (each git
+// order, still with no demotion, whose ADVERTISED background budget (each Gitlet
 // node's maintenance budget, which its presence row carries on every beat
 // beside its status, so a beat whose status was dropped still says it) holds
 // the work's charge, and the home where none does. ONE LISTING answers the
-// whole question ([GitPlacement.Listing]: the git nodes and what each says,
+// whole question ([GitPlacement.Listing]: the Gitlet nodes and what each says,
 // read together), so a node is weighed by the listing that names it, and a
 // node that listing does not carry — this one included, wherever its own git
 // half is built — is GONE, never a node not saying. So on a fleet of alike
 // nodes the maintainer is the home and nothing moves, and on one with a single
-// large git node every repository only it can hold is maintained there.
+// large Gitlet node every repository only it can hold is maintained there.
 // NOTHING MOVES PAST THE HOME ON MISSING INFORMATION: a node
 // whose row carries no figure is NOT SAYING, never a node with nothing to
 // give, and is passed over where it is a runner-up — kept in its place, a

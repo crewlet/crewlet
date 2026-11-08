@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// historyNode is a git node whose reads by object id its own query server
+// historyNode is a Gitlet node whose reads by object id its own query server
 // answers — the page cutting the code tools send — over a copy and a git that
 // stand in for a repository: a history of `commits` commits, newest first, and
 // a file of `lines` lines, each line last changed by a commit of its own, every
@@ -45,12 +45,12 @@ func (n historyNode) host(t *testing.T) builtin.CodeReader {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queryHost{codeHost: newCodeHost(), s: s}
+	return queryHost{gitletHost: newGitletHost(), s: s}
 }
 
 // queryHost is Gitlet, whose reads by object id a query server answers.
 type queryHost struct {
-	*codeHost
+	*gitletHost
 	s *query.Server
 }
 

@@ -79,7 +79,7 @@ func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
 // gitproc.NodeMinVersion's series (gittest.NodeFloor), the oldest git
 // gitproc.New admits. Every claim about what a real git says or does in a
 // pool — the format table, what a request can reach, what the pool's
-// environment keeps from git — is a claim about every git a git node may
+// environment keeps from git — is a claim about every git a Gitlet node may
 // run, and measured on the pin alone it was a claim about one of them: the
 // floor's own expectations were wrong in three arms of the format table, and
 // nothing ran them (ADR-0087, "each floor is a measured claim"). Under every

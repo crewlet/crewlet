@@ -82,7 +82,7 @@ func (o OpenChange) problem(branch string) string {
 // ([OpenChange.Title]): Gitlet's own bound on a change's title
 // (internal/code's MaxChangeTitleBytes), which the launch resolving the ask
 // holds it to and this package imports nothing of — the engine's
-// TestARunsChangeTitleIsBoundAsTheCodeHostBoundsIt holds the two equal. HERE
+// TestARunsChangeTitleIsBoundAsGitletBoundsIt holds the two equal. HERE
 // TOO, because the title rides the run's row in each of its repositories
 // ([PendingRun.Repos]), which the row's budget counts at this bound, and a
 // grant that reaches the row ([PendingStore.GrantRepo]) is held to it by the

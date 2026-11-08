@@ -19,7 +19,7 @@ import (
 // Estate is the code log and the git reads as the home's work reaches them —
 // the router's code seam satisfies it (estate.CodeSeam): the due listings
 // (Read), a revision's facts and a commit's checks file (GitRead, asked of the
-// repository's git nodes, its home first), a record of a revision's facts, of
+// repository's Gitlet nodes, its home first), a record of a revision's facts, of
 // a change's mergeability or of its readiness on the change (Converse, asked
 // of the repository's committing data node's change writer), a landing
 // (Change, asked of its committer), a record of its checks (Checks, asked of
@@ -173,7 +173,7 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 
 // change is one due change: its head revision's FACTS where it owes them —
 // read against its target's tip as the listing read it, asked at the
-// listing's position, so the git node that answers holds both commits — the
+// listing's position, so the Gitlet node that answers holds both commits — the
 // change LANDED where its target holds its head, through its merge step
 // ([changes.merge]), whose ancestry over this node's own copy finds it so and
 // whose walk of the target's moves names the push that merged it; and the
@@ -204,7 +204,7 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 			// node's own copy: the landing names the push that merged the
 			// change, which only a walk of the target's moves through git can
 			// tell, and the merge step holds the copy and the scratch that
-			// walk runs in. Its ancestry agrees with the git node's, which
+			// walk runs in. Its ancestry agrees with the Gitlet node's, which
 			// read the same two commits; where it did not land the change it
 			// recorded its merge, and this turn does no more of it.
 			return c.merge(ctx, repoID, due, at)
@@ -234,7 +234,7 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 // facts is a due change's facts read, then its facts recorded where its head
 // is not in its target ([changes.change]): whether its head is in its target,
 // which its merge step lands, and whether its facts were recorded. Facts the
-// git node left short for time are no facts to keep
+// Gitlet node left short for time are no facts to keep
 // (code.RevisionFactsAnswer.Final): the turn's failure, the change still due.
 func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, rules against,
 	at statelog.Position) (bool, bool, error) {
@@ -262,14 +262,14 @@ func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, 
 		return true, false, nil
 	}
 	if !f.Final() {
-		// FACTS LEFT SHORT FOR TIME are the git node's moment, never the
+		// FACTS LEFT SHORT FOR TIME are the Gitlet node's moment, never the
 		// commits': recorded, they would hold for good — a revise takes
 		// facts of a revision and a tip once — and an id omitted for a slow
 		// node would carry no approval across the revision. The change stays
-		// due its facts, so the next pass asks again, of whichever git node
+		// due its facts, so the next pass asks again, of whichever Gitlet node
 		// the walk reaches then.
 		return false, false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s ran out "+
-			"the git node's budget before their patch id (%q) or their classes (%q) were whole; the next pass "+
+			"the Gitlet node's budget before their patch id (%q) or their classes (%q) were whole; the next pass "+
 			"asks again", due.Revision, due.Number, repoID, f.PatchIDOmission, f.ClassesOmission)
 	}
 	recorded, err := c.revise(ctx, repoID, due, f, rules, at)
@@ -549,7 +549,7 @@ type against struct {
 }
 
 // revise asks the repository's change writer to record due's revision's facts
-// f — its trees and its classes with the rest, as the git node read them —
+// f — its trees and its classes with the rest, as the Gitlet node read them —
 // its touched paths matched against rules' path owners and against the human
 // paths rules' gates hold its target to, and answers whether they were
 // recorded: an answer that the rows moved since — superseded, the change

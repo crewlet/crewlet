@@ -29,9 +29,9 @@ import (
 //
 // # The node fetches, this machine does not
 //
-// The repository's home git node dials the source — over https alone, every
+// The repository's home Gitlet node dials the source — over https alone, every
 // address it resolves held to the public ones unless Tier A's
-// git.import_allow_private says otherwise (M6-D18) — and lands it in chunks,
+// gitlet.import_allow_private says otherwise (M6-D18) — and lands it in chunks,
 // so a history of any size goes in whatever code.limits.max_push_bytes says,
 // with nothing to resume by hand: a restarted home fetches again from the refs
 // already landed. The source's token is the node's too: -credential names the
@@ -139,7 +139,7 @@ func gitletImportOnNode(ctx context.Context, call importCall, stdout, stderr io.
 		fmt.Fprintln(stdout, "  a pull mirror: once imported, its home keeps it in step with the source, "+
 			"and every push to it is refused")
 	}
-	fmt.Fprintf(stdout, "  its home git node fetches the source now; `crewlet gitlet status -repo %s` shows it "+
+	fmt.Fprintf(stdout, "  its home Gitlet node fetches the source now; `crewlet gitlet status -repo %s` shows it "+
 		"importing until the fetch has landed\n", call.name)
 	return nil
 }

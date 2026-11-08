@@ -55,7 +55,7 @@
 //     node's client missed, or stops the turn, on the asking node's word that
 //     the person asked. So unsigned, anybody on the broker could stop anybody's
 //     turn, or end one by answering for the node running it;
-//   - a CODE SEARCH of several repositories (internal/codesearch): every git
+//   - a CODE SEARCH of several repositories (internal/codesearch): every Gitlet
 //     node reads the repositories a request assigns it AS THE ASKER IT NAMES,
 //     judging that asker's grant to each — so unsigned, anybody on the broker
 //     could read any repository as any seat or person in the company.

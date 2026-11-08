@@ -120,7 +120,7 @@ func TestOneCacheObservesAPool(t *testing.T) {
 	second.Stop(context.Background())
 }
 
-// ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one git.cache_dir
+// ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one gitlet.cache_dir
 // would empty each other's tmp/ and scratch/ at boot and race on every
 // repository's files, so the second is refused, told who holds it — from the
 // first one's Prepare on, and before the second's Prepare moves the holder's

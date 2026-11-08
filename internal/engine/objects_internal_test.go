@@ -164,7 +164,7 @@ roles:
 // estate built for the object store alone, where no tool reader exists. Those
 // cover that branch only while the company each boots is served no tracker
 // tools — so that is asserted, not assumed. And Gitlet's estate is
-// offered on every arm, whatever `code.native` says, because its log runs in
+// offered on every arm, whatever `code.backend: gitlet` says, because its log runs in
 // every register: the arm whose state log runs on Gitlet alone, and the
 // others, which host no code, alike.
 func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
@@ -182,10 +182,10 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 		"Worklet":               {doc: companyWithoutSandboxDoc, toolReader: true},
 		"no tracker, on Doclet": {doc: noTrackerDoc, toolReader: false},
 		// THE STATE LOG ON GITLET ALONE: no Worklet and no
-		// Doclet, so nothing but code.native
+		// Doclet, so nothing but code.backend: gitlet
 		// starts the register — and every declaring domain's estate is
 		// still offered, the tracker's built for the object store alone.
-		"Gitlet alone": {doc: codeHostAlone, toolReader: false},
+		"Gitlet alone": {doc: gitletHostAlone, toolReader: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

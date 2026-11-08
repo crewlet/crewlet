@@ -57,7 +57,7 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // its two sibling writers hold at once — each refusing busy at its own
 // node-wide count, so each has its share and none takes another's
 // ([proposalAnswers]) — and a lane answers only the operations declared on it
-// ([op.answeredOn]). A git node's reads of a repository by object id wait
+// ([op.answeredOn]). A Gitlet node's reads of a repository by object id wait
 // too — on a sync of the node's copy and a git process of up to
 // [GitReadAttempt] — so they have a third lane, and its engine writes, which
 // wait on far more again ([GitWriteAttempt]), a fourth: both registered only
@@ -102,12 +102,12 @@ const (
 	laneGitWrites lane = "git-writes"
 )
 
-// gitWritesHeld is how many engine writes a git node HOLDS at once for its
+// gitWritesHeld is how many engine writes a Gitlet node HOLDS at once for its
 // peers on its writes' lane ([laneGitWrites]), each through every wait it
 // makes, up to [GitWriteAttempt]; a write a peer asks past them is answered AT
 // ONCE, before its arguments are decoded or its git half asked: `behind`, at
 // its share (code.UnreadyShare), which its walk moves on from without demoting
-// the node — the next git node holding a copy builds it, or the walk ends
+// the node — the next Gitlet node holding a copy builds it, or the walk ends
 // unserved, saying why ([Router.routeGit]).
 //
 // SIXTY-FOUR, queue.ConcurrentAnswers, the lane's width before it answered at
@@ -125,7 +125,7 @@ const (
 // consumer, which the node logs naming no subject. A write is up to a
 // mebibyte as the wire spells it (code.MaxCommitPayloadBytes), so some
 // sixty-four waiting behind a full lane — 128 large writes in flight against
-// one git node — overflowed it, and the asker of a dropped one heard
+// one Gitlet node — overflowed it, and the asker of a dropped one heard
 // nothing for its whole attempt, then took the healthy node for a gone one:
 // asked it last for every operation for [suspectFor], so every repository it
 // is home to sent its reads and writes to a runner-up that downloaded a copy
@@ -140,14 +140,14 @@ const gitWritesHeld = queue.ConcurrentAnswers
 var lanes = []lane{laneShared, laneProposals}
 
 // gitLanes is every registration a node that serves GIT makes beside [lanes]
-// ([ServerOptions.Git]), and no other node: a node without the git role has no
+// ([ServerOptions.Git]), and no other node: a node without the gitlet role has no
 // git half, and a lane it answered only `no_backend` on would still cost each
 // of its slots a goroutine for nothing a git walk could not learn from the
-// presence view. A git node registers them from boot, before it has
+// presence view. A Gitlet node registers them from boot, before it has
 // built Gitlet, so its askers hear `no_backend` rather than the silence of an
 // unregistered subject, which they would read as a node gone and suspect for
 // every operation — and registers both or neither ([Serve]'s EVERY LANE OR
-// NONE): a git node answering its reads and no write would be heard as gone by
+// NONE): a Gitlet node answering its reads and no write would be heard as gone by
 // every write's walk, no answerer on its subject, and so asked last for every
 // operation and reported to both placements while it served.
 var gitLanes = []lane{laneGitReads, laneGitWrites}
@@ -192,7 +192,7 @@ func (l lane) subject(node string) string {
 // the broker client's buffer only behind the at-once answers ahead of it,
 // each a few milliseconds' work, so the buffer fills only under some
 // sixty-four more mebibyte writes inside those milliseconds — some 192 at one
-// git node at once, where 128 in flight overflowed it before — and past that
+// Gitlet node at once, where 128 in flight overflowed it before — and past that
 // a write is still dropped unheard ([queue.EventQueue.Serve]).
 func (l lane) answers() int {
 	switch l {
@@ -392,11 +392,11 @@ const (
 	// node even when it is asked last, told to answer anyway — the Detail
 	// then says it decides no grant ([decidesNoGrant]) — so the last resort
 	// meets the refusal again and the walk ends unserved. So is a SEAT'S git
-	// read on such a git node, whose git half judges no seat
+	// read on such a Gitlet node, whose git half judges no seat
 	// (code.UnreadyBehindConfig, [reply.Unready]): the posture is the
 	// node's, so every asker remembers it for the node's data operations as
 	// well, while the git walk, which takes no lag gate, moves on from it as
-	// from any git node that ran nothing — and lets the next one fill a copy
+	// from any Gitlet node that ran nothing — and lets the next one fill a copy
 	// ([Router.routeGit]).
 	unservedBehindConfig unservedReason = "behind_config"
 
@@ -405,7 +405,7 @@ const (
 	// not answer inside its budget for a reason about the node
 	// (code.ErrGitUnready: its copy still syncing, its share full, no chart
 	// to judge a seat by, a failure of its own, or no copy held and no fill
-	// asked of it), which another git node may answer; the reply's
+	// asked of it), which another Gitlet node may answer; the reply's
 	// [reply.Unready] then says which.
 	unservedBehind unservedReason = "behind"
 
@@ -531,7 +531,7 @@ type opSpec struct {
 	// they ask the copy's own gate themselves ([opPing]).
 	ungated bool
 
-	// git is an operation asked of the GIT nodes ([op.keyedOnGit]): its
+	// git is an operation asked of the GITLET nodes ([op.keyedOnGit]): its
 	// domain is [GitCopy], so it reads no domain's copy, carries no floor
 	// and meets no lag gate; the router walks the repository's git order for
 	// it ([Router.routeGit]) and a serving node answers it from its git half.
@@ -578,14 +578,14 @@ type op[A, R any] struct {
 	// is its walk's effective home ([op.keyedOnGit]), nil for every other.
 	home func(A, bool) A
 
-	// attempt is a git write's attempt on one git node FOR ITS ARGUMENTS
+	// attempt is a git write's attempt on one Gitlet node FOR ITS ARGUMENTS
 	// ([op.attemptBy]) — an engine write's, which follows its kind's build
 	// (Timing.GitWriteAttemptFor) — and nil for every operation whose
 	// attempt is its class's alone ([Router.wholeAttempt]).
 	attempt func(A, Timing) time.Duration
 }
 
-// attemptBy declares a git write whose attempt on one git node follows its
+// attemptBy declares a git write whose attempt on one Gitlet node follows its
 // arguments: of becomes the walk's attempt in place of the class's
 // [Timing.GitWriteAttempt] — what it waits on each node, and how long a node's
 // silence must last to be evidence it is gone. Only a git write takes one.
@@ -648,7 +648,7 @@ func (s *opSpec) surfaceWrite() bool {
 // define declares an operation, with the domain whose copy it reads — and
 // whose log its floor is on, unless it is declared [op.floorless] — or
 // [SeatCopy] for one that asks about the copy a seat is served by, or
-// [GitCopy] for one a git node answers from its git half, which carries no
+// [GitCopy] for one a Gitlet node answers from its git half, which carries no
 // floor at all ([op.keyedOnGit]). Package-level, at init: a duplicate name is
 // a build that cannot serve, so it panics rather than silently shadowing, and
 // so does a domain this package knows no log for, whose copy no verdict
@@ -764,7 +764,7 @@ func (o op[A, R]) answeredOn(l lane) op[A, R] {
 	case slices.Contains(gitLanes, l) != o.spec.git:
 		// A GIT LANE ANSWERS GIT OPERATIONS AND NOTHING ELSE, since only a
 		// node serving git registers one: a data operation declared on it
-		// would be asked of a subject no data node without the git role
+		// would be asked of a subject no data node without the gitlet role
 		// answers, and a git operation on another lane would hold a slot
 		// that lane's answers wait for.
 		panic(fmt.Sprintf("estate: %s is answered on %s, and a git lane answers git operations alone",
@@ -835,31 +835,31 @@ func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 }
 
 // keyedOnGit declares an operation on a repository's GIT OBJECTS, asked of the
-// git nodes rather than the data nodes (ADR-0089): in [rendezvous.Order] of
-// key(args) over every live git node — the repository's HOME first, its
+// Gitlet nodes rather than the data nodes (ADR-0089): in [rendezvous.Order] of
+// key(args) over every live Gitlet node — the repository's HOME first, its
 // runner-up next — with a node that ran nothing for it asked last for
 // [suspectFor] and one that went silent last of all, no sticky node, and this
-// node at its place, in process, where it is a git node ([Router.routeGit]).
+// node at its place, in process, where it is a Gitlet node ([Router.routeGit]).
 //
 // home stamps each attempt's arguments with whether the node asked is the one
 // node of the walk that may FILL a copy it does not hold: the walk's
 // EFFECTIVE HOME — the first node of the order once its demotions are applied
 // — and in its place the next node only where that one said no copy serving
-// the read is coming there ([Router.routeGit]). Every other git node holding
+// the read is coming there ([Router.routeGit]). Every other Gitlet node holding
 // none answers at once that it holds none, so a read of a repository nobody
-// holds costs the fleet one download at a time rather than one a git node.
+// holds costs the fleet one download at a time rather than one a Gitlet node.
 // The walk calls it on every attempt, over whatever the caller set, so no
 // caller chooses it.
 //
 // The operation must be defined on [GitCopy], which it reads instead of a
 // domain's copy: no copy verdict holds it back, no floor is waited for at
 // dispatch — its floor travels in its arguments, as code.GitQuery.Fresh, and
-// is the git node's cache's sync level — and no lag gate applies, since a git
+// is the Gitlet node's cache's sync level — and no lag gate applies, since a Gitlet
 // node syncs its copy through the router from whichever data node serves.
 // Package-level, at init, before [op.answeredOn] names its lane.
 func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] {
 	if o.spec.domain != GitCopy {
-		panic(fmt.Sprintf("estate: %s is keyed on the git nodes, and reads the %q copy rather than %q",
+		panic(fmt.Sprintf("estate: %s is keyed on the Gitlet nodes, and reads the %q copy rather than %q",
 			o.spec.name, o.spec.domain, GitCopy))
 	}
 	o.spec.git = true

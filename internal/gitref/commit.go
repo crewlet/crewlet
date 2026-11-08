@@ -24,7 +24,7 @@ import (
 // (internal/code/gitproc) holds an identity to it before any process starts,
 // and the code domain holds an engine write's message to it as it validates
 // the write (internal/code's EngineWrite) — the tool that asks a write, the
-// wire it crosses and the git node that builds it, by one reading. Two copies
+// wire it crosses and the Gitlet node that builds it, by one reading. Two copies
 // of it would refuse one text in one place and rewrite it in the other.
 //
 // A NUL is not this rule's: git cuts a commit's message at its first NUL and

@@ -893,7 +893,7 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 // answers what Validate answers once every output's put has filled in its key
 // and digest — a compaction both take, one writing more outputs than a
 // compaction records both refuse, an output whose sizes lay out no bundle
-// both refuse — so the git node that built one holds it to every rule its
+// both refuse — so the Gitlet node that built one holds it to every rule its
 // committer will before a byte of it is uploaded (internal/code/compact). An
 // output already stored is refused: Validate is the check of that.
 //

@@ -20,7 +20,7 @@ var (
 
 	// ErrCacheInUse is a cache directory another process holds — or a
 	// Layout or a Cache of this one, until it is released or stopped: two
-	// nodes pointed at one git.cache_dir.
+	// nodes pointed at one gitlet.cache_dir.
 	ErrCacheInUse = errors.New("cache: another process holds this cache directory")
 
 	// ErrStopped is work asked of a cache that has been stopped: a sync, a
@@ -89,7 +89,7 @@ var (
 	// downloaded, and nothing is: a check builds no copy, since building one
 	// is a whole download of the repository from the object store into a
 	// cache that would then keep it and evict a warm repository to do so
-	// (verify.go). Definite for this node now; a git node that serves the
+	// (verify.go). Definite for this node now; a Gitlet node that serves the
 	// repository holds one. The API answers it 404.
 	ErrNotHeld = errors.New("cache: this node holds no copy of the repository")
 

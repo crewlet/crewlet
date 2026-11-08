@@ -236,7 +236,7 @@ func (r *verifications) sweep(now time.Time) int {
 // log's head, which appends a barrier to the code log — single-flighted only
 // among requests in flight together, so an operator's sweep of every
 // repository one at a time appended one a repository: ten thousand a sweep
-// at config.CodeMaxRepos, on every git node it ran on, a log whose census
+// at config.CodeMaxRepos, on every Gitlet node it ran on, a log whose census
 // counts a day's barriers as its people's git reads. A sweep reads its
 // listing at the head once and names that listing's position for each.
 func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (

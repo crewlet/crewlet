@@ -37,7 +37,7 @@ import (
 // Each seed draws interleavingSteps operations by weight over two
 // repositories, each with a pushed commit to start from, and checks every
 // repository every checkEvery steps and at the end: a linearizable sync, and
-// its image against a fresh cache's. The operations are what a git node
+// its image against a fresh cache's. The operations are what a Gitlet node
 // meets, at the cache's own seams:
 //
 //   - a push, a tag (annotated: a pack of its own; lightweight: a ref), a
@@ -85,7 +85,7 @@ import (
 //     THIS node, its maintainer: the production compactor's, decided and
 //     applied on the log, its layer and any repack's outputs adopted here, a
 //     third of them after a burst of pushes past compact.LayerRepackPacks,
-//     whose plan repacks them first; one by ANOTHER git node, a cache of its
+//     whose plan repacks them first; one by ANOTHER Gitlet node, a cache of its
 //     own over the same log and store, whose layer this node's installer
 //     fetches, a third of them from a git newer than this one's and a third
 //     with this node's installer meeting a store that fails to answer for
@@ -201,7 +201,7 @@ var interleavingOutcomes = []string{
 	"a swap with no graph to keep", "a swap killed at its rename", "a failed swap retried by the next round",
 	"a crash mid-swap",
 	"a layer's file refetched by its check", "a chain file rewritten by its check",
-	"a layer-only publication", "a repacking publication", "a publication by another git node",
+	"a layer-only publication", "a repacking publication", "a publication by another Gitlet node",
 	"a publication by a newer git", "a publication waited for its installer", "a repair",
 	"a layer's part lost", "a layer's part spoiled", "a tip written",
 	"layer installed", "layer adopted", "layer kept", "layer cut", "layer missing", "layer corrupt",
@@ -710,7 +710,7 @@ func (f *fakeLog) retiredRows(repo string) int {
 	return len(f.repos[repo].retired)
 }
 
-// compact merges two or three of repo's live packs into one, as a git node's
+// compact merges two or three of repo's live packs into one, as a Gitlet node's
 // compaction would, and writes the record retiring them and adding it: what
 // the copy's next round takes out of it by a swap (swap.go). Never a pack a
 // published layer names, as no compaction's plan takes one and the decide

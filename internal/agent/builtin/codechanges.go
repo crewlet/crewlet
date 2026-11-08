@@ -65,13 +65,13 @@ import (
 //
 // A revision's files, a file's patch, what changed between two revisions and
 // where a finding's lines are now are reads BY OBJECT ID of the heads and the
-// bases the rows recorded, asked of the repository's home git node at a SYNC
+// bases the rows recorded, asked of the repository's home Gitlet node at a SYNC
 // level: the furthest of this node's own floor on the repository, the
 // record that moved each revision's head and, where its facts are recorded,
 // the record that moved its target to the tip its base was read from. Never
 // at a row read's checkpoint, which a linearizable read takes past its own
 // barrier: a copy current to every push still sits below it, and a floor
-// there would make the git node sync for nothing (codetools.go says the same
+// there would make the Gitlet node sync for nothing (codetools.go says the same
 // of a ref). A finding is placed in a revision floored at the change's HEAD
 // revision too: its findings were raised on revisions up to it, so the copy
 // holds every blob their lines were read in.
@@ -98,7 +98,7 @@ import (
 // as it is sent, fences and all ([fitLabelled]), and resumes after the last
 // row it kept by that row's own cursor — [code.ReadQuery.ChangesCursor] for a
 // listing, each part's row's Cursor for a change's — never by a spelling of
-// the reader's cursors written again here. A git node cuts its page at
+// the reader's cursors written again here. A Gitlet node cuts its page at
 // code.MaxGitAnswerBytes, which leaves these tools' wrapping room in the
 // answer, as it does code_diff's.
 
@@ -143,7 +143,7 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // change it could never review itself. The committer reads that access from
 // the write's kind — review for a review, read for every other — which
 // TestEveryChangeToolNamesTheAccessItNeeds holds to these rows. A REBASE is a
-// branch move and nothing else, so the git node that builds it holds the
+// branch move and nothing else, so the Gitlet node that builds it holds the
 // colleague as it holds every branch write (code.EngineWrite.Ceiling,
 // code.Grant.Under on the source it moves, the seat's own work spared), and no
 // decide reads an access for it.
@@ -159,24 +159,24 @@ var changeToolNeeds = map[string]code.Access{
 	CodeResolveFindingTool:  code.AccessRead,
 	// An apply pushes the change's source branch — a full_access seat's own
 	// namespace on a repository it reads among them — so read, the push's
-	// rule the git node's and the committer's.
+	// rule the Gitlet node's and the committer's.
 	CodeApplySuggestionsTool: code.AccessRead,
 	// A rebase force-pushes the change's source branch, its rule likewise the
-	// git node's and the committer's — and, in a turn a colleague woke, the
-	// colleague's too, on that git node (code.EngineWrite.Ceiling).
+	// Gitlet node's and the committer's — and, in a turn a colleague woke, the
+	// colleague's too, on that Gitlet node (code.EngineWrite.Ceiling).
 	CodeRebaseChangeTool: code.AccessRead,
 	// A merge and a dequeue are decided from the deciding node's own chart —
 	// who may merge into the target is its gate's merge_by (M5-D2), who may
 	// take an entry out its enqueuer, its change's owner, a maintainer or a
 	// person — so read, the least access at which it may admit the call. In
 	// a turn somebody woke each carries the turn's ceiling, held to that
-	// same relation for the requester where it is decided (the git node for
+	// same relation for the requester where it is decided (the Gitlet node for
 	// a merge, the committer for a dequeue), never to an access alone.
 	CodeMergeChangeTool:   code.AccessRead,
 	CodeDequeueChangeTool: code.AccessRead,
 	// A revert creates a branch — a full_access seat's own namespace — and
 	// opens a change in that push's record, so its rule is the push's, the
-	// git node's and the committer's, as a rebase's: read.
+	// Gitlet node's and the committer's, as a rebase's: read.
 	CodeRevertChangeTool: code.AccessRead,
 }
 
@@ -1091,7 +1091,7 @@ func (g *changeRead) readiness(ctx context.Context) (tools.Result, error) {
 // ---- files and diff ------------------------------------------------------- //
 
 // codeChangeDiff is code_get_change's files and diff: a revision's files or
-// one file's patch, from its base or since an earlier revision, as the git
+// one file's patch, from its base or since an earlier revision, as the Gitlet
 // node's page answers it.
 type codeChangeDiff struct {
 	Repo          string `json:"repo"`
@@ -1177,7 +1177,7 @@ func (g *changeRead) recorded(d *code.ChangeSummary, r code.RevisionRow, based b
 		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
 		// within a minute of the push, and nothing a person does is needed.
 		res := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s: revision %d of %s has no "+
-			"recorded base yet: the repository's home git node records each revision's facts against its "+
+			"recorded base yet: the repository's home Gitlet node records each revision's facts against its "+
 			"target within a minute of its push. Try again shortly.", g.tool, r.N, g.ref()))
 		return &res
 	case code.FilesUnrecorded:
