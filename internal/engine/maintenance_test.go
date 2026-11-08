@@ -51,6 +51,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// left to sweep.
 		"a2a_channels",
 		"a2a_channels_idle",
+		// The access log's operation ledger, swept per node like every
+		// domain's.
+		"access_ops",
 		// The diary sweep earns its place here the hard way: Expire
 		// shipped with the diary, diary.go described the background
 		// sweep, and for as long as this list did not name it, nothing

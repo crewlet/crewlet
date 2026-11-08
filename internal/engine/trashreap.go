@@ -168,6 +168,11 @@ func (e *Engine) trashSources() []trashreap.Source {
 	if src, ok := e.executorSource(); ok {
 		out = append(out, src)
 	}
+	// AND THE ACCESS LOG, on the company's access history retention, with a
+	// removed seat's told records forgotten.
+	if src, ok := e.accessSource(); ok {
+		out = append(out, src)
+	}
 	return out
 }
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -126,6 +127,7 @@ func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 		assistantdomain.Domain{}.Name(): "Ask Crewlet",
 		chatlet.Domain{}.Name():         "chat",
 		executordomain.Domain{}.Name():  "executor",
+		accessdomain.Domain{}.Name():    "access",
 	}
 	keys := streamKeys(t)
 	held := map[string]bool{}
@@ -1049,16 +1051,16 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // their floors.
 //
 // THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
-// deployment guide states: eleven logs hold 8.625 GiB at their smallest, so the
+// deployment guide states: twelve logs hold 8.6875 GiB at their smallest, so the
 // 7.6 GiB host that was measured no longer boots by its logs alone (it is
-// refused naming the log it could not reserve), and 11.50 GiB, whose broker
+// refused naming the log it could not reserve), and 11.59 GiB, whose broker
 // grants three quarters of it, is where the same single budget has to fit
 // them. A log added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 11.50 GiB, in hundredths so the arithmetic stays in integers: the
+	// 11.59 GiB, in hundredths so the arithmetic stays in integers: the
 	// first hundredth of a gibibyte whose three quarters hold the logs.
-	free := 1150 * gib / 100
+	free := 1159 * gib / 100
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {

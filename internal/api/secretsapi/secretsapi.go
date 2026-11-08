@@ -122,6 +122,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -209,6 +210,15 @@ type Executor interface {
 	SealedKeys(ctx context.Context) (executordomain.SealedCount, error)
 }
 
+// Access is the access log's half of a keyring rotation: the SSH commands it
+// recorded, each one's text sealed under the same keyring, which a rotation
+// waits out until they age out with `access_history.retention_days`.
+type Access interface {
+	// SealedKeys counts the commands by the keyring key each is sealed
+	// under, opening none of them.
+	SealedKeys(ctx context.Context) (accessdomain.SealedCount, error)
+}
+
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
 // many people's records it published and how many values those carried. Never
 // the ids — a rekey answers the person who ran it, and the count is what they
@@ -226,6 +236,7 @@ type Service struct {
 	identity  Identity
 	assistant Assistant
 	executor  Executor
+	access    Access
 	keyID     string
 	now       func() time.Time
 
@@ -265,6 +276,10 @@ type Options struct {
 	// Executor is the executor log's half of a rotation, NIL-ABLE for the
 	// same reason, and answered `executor_values: null` without one.
 	Executor Executor
+
+	// Access is the access log's half of a rotation, NIL-ABLE for the same
+	// reason, and answered `access_values: null` without one.
+	Access Access
 
 	// Config re-activates the revision that reads a name this surface
 	// wrote (ADR-0070): configapi's Service in `crewlet run`. Required, for
@@ -338,6 +353,7 @@ func New(opts Options) (*Service, error) {
 		identity:  opts.Identity,
 		assistant: opts.Assistant,
 		executor:  opts.Executor,
+		access:    opts.Access,
 		keyID:     opts.ActiveKeyID,
 		now:       now,
 		guard:     guard,
@@ -403,7 +419,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 // estate (ingress requires `data`) and runs the identity estate from boot.
 // `assistant_values` is the same count for the Dashboard Assistant's sealed
 // values, which a rotation waits out, null where this surface was given none,
-// and `executor_values` the same for the seats' sealed executor sessions.
+// `executor_values` the same for the seats' sealed executor sessions, and
+// `access_values` for the SSH commands the access log recorded.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -442,6 +459,15 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		executor = &counted
 	}
+	var access *accessdomain.SealedCount
+	if s.access != nil {
+		counted, err := s.access.SealedKeys(r.Context())
+		if err != nil {
+			s.fail(w, r, "count the access log's sealed commands", err)
+			return
+		}
+		access = &counted
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
@@ -449,6 +475,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"secrets": out, "engine_keys": engine, "identity_values": identity,
 		"assistant_values": assistant, "executor_values": executor,
+		"access_values": access,
 	})
 }
 

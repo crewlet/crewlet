@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -138,6 +139,10 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// linearizable: an end another node published must be applied
 		// before the next turn reads it.
 		executordomain.Domain{}.Name(): true,
+		// A BARRIER, because a turn's dispatch reads its seat's baseline at
+		// linearizable: a told record another node published must be applied
+		// before the next turn diffs against it.
+		accessdomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -198,6 +203,8 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		executordomain.Domain{}.Name():  new(150),
 		// The tracker's figure: a seat's code tools read at linearizable.
 		code.Domain{}.Name(): new(125),
+		// One dispatch read a turn, at thirty turns a seat a day.
+		accessdomain.Domain{}.Name(): new(30),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -527,6 +534,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		chatlet.Domain{}.Name(),
 		executordomain.Domain{}.Name(),
 		code.Domain{}.Name(),
+		accessdomain.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {
