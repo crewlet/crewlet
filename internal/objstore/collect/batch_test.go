@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -163,43 +164,71 @@ func TestABatchRefusedAsARequestTurnsTheCollectionToSingleDeletions(t *testing.T
 // A BATCH THE STORE ANSWERED AND REFUSED IN PART STOPS THE COLLECTION, as a
 // failed deletion does, and the report counts exactly what it removed: a
 // deletion the store refused is the store failing at the one thing the pass
-// asks of it, and the next pass tries again.
+// asks of it, and the next pass tries again. Nor is the batch waiting for the
+// slot sent after it. The group ends dctx only once the refused batch's
+// goroutine has returned, after its slot went, so a collection that read dctx
+// alone handed that slot to the batch behind it: five hundred more deletions
+// sent to a store that had just failed the pass, and carried out on a schedule
+// that let them in before the cancellation (#776). In a bubble the refusal is
+// answered only once the other batch waits for the slot, so a collection that
+// sends it fails here on every run rather than on one schedule in many.
 func TestABatchRefusedInPartStopsTheCollection(t *testing.T) {
 	t.Parallel()
-	h, b, _ := newBatchingHarness(t)
-	var orphans []objstore.Key
-	for i := range 2 * JudgeBatch {
-		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
-	}
-	h.clock.advance(PendingGrace + time.Hour)
-	var first sync.Once
-	b.onBatch = func(ctx context.Context, names []string) error {
-		var err error
-		first.Do(func() {
-			if derr := b.mem.DeleteBatch(ctx, names[1:]); derr != nil {
-				err = derr
-				return
+	synctest.Test(t, func(t *testing.T) {
+		h, b, _ := newBatchingHarness(t)
+		var orphans []objstore.Key
+		for i := range 2 * JudgeBatch {
+			orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
+		}
+		h.clock.advance(PendingGrace + time.Hour)
+		var arrived atomic.Int32
+		answer := make(chan struct{})
+		b.onBatch = func(ctx context.Context, names []string) error {
+			if arrived.Add(1) > 1 {
+				return b.mem.DeleteBatch(ctx, names)
 			}
-			err = &objstore.DeleteBatchError{Failed: map[string]error{names[0]: errors.New("AccessDenied")}}
-		})
-		if err != nil {
-			return err
+			<-answer
+			if err := b.mem.DeleteBatch(ctx, names[1:]); err != nil {
+				return err
+			}
+			return &objstore.DeleteBatchError{Failed: map[string]error{names[0]: errors.New("AccessDenied")}}
 		}
-		return b.mem.DeleteBatch(ctx, names)
-	}
-	r, err := h.c.Collect(t.Context())
-	var refused *objstore.DeleteBatchError
-	if !errors.As(err, &refused) || r.Completed {
-		t.Fatalf("Collect = %+v, %v; want it failed with the batch's refusal", r, err)
-	}
-	gone := 0
-	for _, k := range orphans {
-		if !h.held(k) {
-			gone++
+		type result struct {
+			r   CollectionReport
+			err error
 		}
-	}
-	if r.Deleted != gone || gone != JudgeBatch-1 {
-		t.Fatalf("the collection reported %d deleted and the store lost %d; want both the %d "+
-			"the refused batch removed, and nothing after it", r.Deleted, gone, JudgeBatch-1)
-	}
+		done := make(chan result, 1)
+		go func() {
+			r, err := h.c.Collect(t.Context())
+			done <- result{r, err}
+		}()
+		// Nothing in the bubble can move: the listing has judged both batches
+		// and waits on their deletions, one batch is at the store and the
+		// other waits for its slot.
+		synctest.Wait()
+		if n := len(b.sent()); n != 1 {
+			t.Fatalf("%d batches reached the store before the first was answered, want 1 "+
+				"and the other waiting for its slot", n)
+		}
+		close(answer)
+		got := <-done
+		var refused *objstore.DeleteBatchError
+		if !errors.As(got.err, &refused) || got.r.Completed {
+			t.Fatalf("Collect = %+v, %v; want it failed with the batch's refusal", got.r, got.err)
+		}
+		gone := 0
+		for _, k := range orphans {
+			if !h.held(k) {
+				gone++
+			}
+		}
+		if got.r.Deleted != gone || gone != JudgeBatch-1 {
+			t.Fatalf("the collection reported %d deleted and the store lost %d; want both the %d "+
+				"the refused batch removed, and nothing after it", got.r.Deleted, gone, JudgeBatch-1)
+		}
+		if n := len(b.sent()); n != 1 {
+			t.Fatalf("the store was sent %d batches; want only the one it refused, "+
+				"not the one waiting for the slot when it did", n)
+		}
+	})
 }
