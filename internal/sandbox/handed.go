@@ -130,6 +130,16 @@ import (
 // is never taken out by value; and a seat on the engine's own Google Cloud
 // integration is issued a bare token.
 //
+// AT THE FLOOR EVERY VALUE IS HELD TO, and of its strings alone. The scrub
+// takes nothing out by value under eight bytes (internal/sandbox/executor's
+// minScrubBytes), a document's strings as much as a whole value, since a
+// string that short is as likely ordinary text as a secret; and a document's
+// members' names, numbers, booleans and nulls are no strings it holds. So a
+// `true`, a `1` or a short word in a document, and the registry host a Docker
+// config files its credentials under, are never taken out by value; a longer
+// setting, such as a service-account key's `service_account` type, is, which
+// is the cost above.
+//
 // # A capture that cannot know them keeps nothing
 //
 // A job with no sealed secrets beside its row — a launch whose secrets could
@@ -499,9 +509,11 @@ func loginValues(doc []byte) []string {
 // token printed alone is matched by no whole document and named by no shape.
 // What else such a document holds goes with it, as the file comment says — an
 // AWS session's expiry, as the instant it is written in, and every setting of a
-// document the operator put in a credential position; its member names are no
-// strings it holds, and a string under eight bytes is left to the shapes, as
-// every value is.
+// document the operator put in a credential position. Its members' names, its
+// numbers, booleans and nulls are no strings it holds, and a string under
+// eight bytes is left to the shapes, as every value is: the scrub's floor
+// (internal/sandbox/executor's minScrubBytes) is applied to every value it is
+// handed, these among them, so it is not applied here.
 func secretValues(value string) []string {
 	strs, _ := jsonStrings([]byte(value))
 	return append([]string{value}, strs...)
