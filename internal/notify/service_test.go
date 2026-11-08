@@ -408,8 +408,13 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	if len(woken) != 1 {
 		t.Fatalf("the seat was woken %d times", len(woken))
 	}
-	if got := notify.KeyOf(woken[0]); got != "tracker:u-1" {
-		t.Errorf("the partition function reads %q, want the third-party app's key", got)
+	if got := notify.KeyOfAll(woken[:1]); got != "tracker:u-1" {
+		t.Errorf("the stamped partition key is %q, want the third-party app's key", got)
+	}
+	// AND THE PARTITION FUNCTION SPLITS IT BY WRITER: one turn works for
+	// one writer (ADR-0109).
+	if got, want := notify.KeyOf(woken[0]), "tracker:u-1"+notify.WriterSeparator+"sender:ana"; got != want {
+		t.Errorf("the partition function reads %q, want %q", got, want)
 	}
 	// THE SECOND COPY IS WHAT A TURN'S CONVERSATION KEYS ON. The regression
 	// above shipped once with one copy of one key; there are two keys and
@@ -499,11 +504,14 @@ func TestADirectMessageThreadReplyRejoinsItsConversation(t *testing.T) {
 	if len(woken) != 3 {
 		t.Fatalf("the seat was woken %d times, want three", len(woken))
 	}
-	if a, b := notify.KeyOf(woken[0]), notify.KeyOf(woken[1]); a != b || a != "chat:D1" {
-		t.Errorf("a typing burst partitioned as %q and %q, want one channel partition", a, b)
+	if a, b := notify.KeyOfAll(woken[:1]), notify.KeyOfAll(woken[1:2]); a != b || a != "chat:D1" {
+		t.Errorf("a typing burst was stamped %q and %q, want one channel partition", a, b)
 	}
-	if got := notify.KeyOf(woken[2]); got != "chat:D1:p1" {
-		t.Errorf("a DM thread reply partitioned as %q, want its own thread", got)
+	if a, b := notify.KeyOf(woken[0]), notify.KeyOf(woken[1]); a != b {
+		t.Errorf("one writer's typing burst partitioned as %q and %q, want one turn", a, b)
+	}
+	if got := notify.KeyOfAll(woken[2:]); got != "chat:D1:p1" {
+		t.Errorf("a DM thread reply was stamped %q, want its own thread", got)
 	}
 	for i, ev := range woken {
 		if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {

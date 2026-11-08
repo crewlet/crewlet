@@ -2539,6 +2539,28 @@ test("a task no change names draws no Changes tab, after asking by its id", asyn
   expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
 });
 
+/** A change carrying the task out, as `code_changes` lists one. */
+const CARRYING_CHANGE = {
+  id: "c1",
+  repo_id: "r1",
+  number: 42,
+  title: "Fix the login race",
+  state: "merged",
+  source_ref: "refs/heads/fix",
+  target_ref: "refs/heads/main",
+  head: "0123456789abcdef0123456789abcdef01234567",
+  revision: 1,
+  owner: "swe",
+  owner_kind: "agent",
+  opened_at: "2026-10-27T10:00:00Z",
+  opened_position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 },
+  version: 1,
+  position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 },
+  repo: "web",
+  ref: "web!42",
+  access: "write",
+};
+
 // A TASK A CHANGE CARRIES OUT HAS A CHANGES TAB, listing every change of the
 // item in Gitlet › Changes' grid — whatever its state, so the listing names the
 // task and no state (a work listing that names none lists every one, and the
@@ -2546,29 +2568,7 @@ test("a task no change names draws no Changes tab, after asking by its id", asyn
 // the tab's changes by anything but the task, or name a state, and this
 // fails.
 test("a task a change names has a Changes tab listing the task's changes", async () => {
-  const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
-  const codeAsks = serveChanges([
-    {
-      id: "c1",
-      repo_id: "r1",
-      number: 42,
-      title: "Fix the login race",
-      state: "merged",
-      source_ref: "refs/heads/fix",
-      target_ref: "refs/heads/main",
-      head: "0123456789abcdef0123456789abcdef01234567",
-      revision: 1,
-      owner: "swe",
-      owner_kind: "agent",
-      opened_at: "2026-10-27T10:00:00Z",
-      opened_position: position,
-      version: 1,
-      position,
-      repo: "web",
-      ref: "web!42",
-      access: "write",
-    },
-  ]);
+  const codeAsks = serveChanges([CARRYING_CHANGE]);
   mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
   const tab = await screen.findByRole("tab", { name: "Changes" });
   fireEvent.click(tab);
@@ -2581,4 +2581,26 @@ test("a task a change names has a Changes tab listing the task's changes", async
     expect(u.searchParams.get("work")).toBe("native:t-1");
     expect(u.searchParams.has("state")).toBe(false);
   }
+});
+
+// A READER WITHOUT GITLET IS ASKED NO CHANGE (ADR-0110): the engine refuses
+// the listing to them before it reads anything, so the task keeps its one
+// tab, as it does where no change names it, and an address naming the Changes
+// tab lands on the task. Mutation: probe whatever the reader holds, and the
+// listing is asked and the strip drawn over a change the engine refuses them.
+test("a reader without Gitlet is asked no change, and the task draws no Changes tab", async () => {
+  const codeAsks = serveChanges([CARRYING_CHANGE]);
+  location.hash = "#/worklet/ENG-42?tab=changes";
+  mount(<WorkItemPage id="ENG-42" />, {
+    org: CODE_ORG,
+    viewer: { ...JANE, grants: ["worklet", "doclet"] },
+  });
+  expect(await screen.findByRole("heading", { name: "Fix the login race" })).toBeTruthy();
+  await settled(
+    () => asked.length,
+    () => codeAsks.length,
+  );
+  expect(codeAsks).toEqual([]);
+  expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+  expect(screen.queryByRole("table", { name: "Changes" })).toBeNull();
 });

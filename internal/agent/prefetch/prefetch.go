@@ -167,8 +167,10 @@ type Blocks struct {
 
 	// ThreadContextAnswered are the messages — by the backend's own ids
 	// ([notify.Message.ID]) — that this block SHOWED the turn and that were
-	// waiting for it: posted by somebody else after this seat's own last
-	// reply in the thread and before the message that woke the turn.
+	// waiting for it: posted by the writer of the message that woke the turn
+	// after this seat's own last reply in the thread and before that message.
+	// Another writer's message waits for a turn of its own: one turn works
+	// for one writer (ADR-0109).
 	//
 	// The turn answers them whether it was woken for them or not, because
 	// a turn answers its thread as the block shows it — so when one of them

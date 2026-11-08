@@ -144,7 +144,10 @@ func newChatAnswerRig(t *testing.T) *chatAnswerRig {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	t.Cleanup(coordinator.Stop)
-	reg := notify.NewRegistry(o, nil)
+	// CHATLET'S ACTOR IS A HANDLE, which the company's registry answers as
+	// one, as every node's does for the engine's own surfaces: a reply's
+	// writer is the seat it resolves to (sandbox.Reply.Writer).
+	reg := notify.NewRegistry(o, nil, chatlet.Source)
 	rig.dispatch = &engine.Dispatcher{
 		// THE NODE'S PROMPTS AND PARTIES, which a reply is labelled by as its
 		// trigger was.
@@ -225,7 +228,7 @@ func (rig *chatAnswerRig) chatletWake(t *testing.T, author, body string) *events
 		}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	reg := notify.NewRegistry(rig.org, nil)
+	reg := notify.NewRegistry(rig.org, nil, chatlet.Source)
 	svc, err := notify.New(notify.Options{
 		Queue:    q,
 		Registry: func() *notify.Registry { return reg },
@@ -256,9 +259,11 @@ func (rig *chatAnswerRig) park(t *testing.T, wake *events.Event) {
 	if conv == "" || part == "" {
 		t.Fatalf("the wake states no conversation (%q) or partition (%q)", conv, part)
 	}
+	// ANA'S RUN: she woke the turn that launched it, so the question it asks
+	// its requester is put to her, and only a reply she writes answers it.
 	run := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE",
-		Harness: "claude-code", ConversationKey: conv, PartitionKey: part,
+		Harness: "claude-code", ConversationKey: conv, PartitionKey: part, Requester: "ana",
 	}
 	if _, err := rig.store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

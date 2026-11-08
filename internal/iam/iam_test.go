@@ -60,8 +60,8 @@ func TestEveryDeclaredSetIsTheSizeItClaims(t *testing.T) {
 		got  int
 		want int
 	}{
-		{"AllGrants", len(AllGrants), 5},
-		{"Apps", len(Apps), 4},
+		{"AllGrants", len(AllGrants), 6},
+		{"Apps", len(Apps), 5},
 		{"AdminPostures", len(AdminPostures), 2},
 		{"Kinds", len(Kinds), 4},
 		{"ActorKinds", len(ActorKinds), 4},

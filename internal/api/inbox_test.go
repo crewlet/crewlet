@@ -317,6 +317,21 @@ func (s *inboxSocket) nextInbox(t *testing.T) inboxFrame {
 	}
 }
 
+// watchSeat watches seat and returns once the socket has handled the watch: a
+// socket reads its frames in order and installs a watch before it reads the
+// next one, so its answer to a ping sent after the watch is the signal that
+// the watch reached the index, never a wait on the clock.
+func (s *inboxSocket) watchSeat(t *testing.T, seat string) {
+	t.Helper()
+	s.send(t, map[string]any{"kind": "watch", "seat": seat})
+	s.send(t, map[string]any{"kind": "ping"})
+	for {
+		if f := s.read(t); f.Kind == "pong" {
+			return
+		}
+	}
+}
+
 // drainUntilPong asks the socket to answer a ping and fails on any
 // inbox_changed frame queued in front of the answer — every movement was
 // fanned out before the ping was written, so a frame this socket was sent
@@ -358,4 +373,71 @@ func (c inboxChart) Seat(_ context.Context, ref string) (session.Seat, bool, err
 		}
 	}
 	return session.Seat{}, false, nil
+}
+
+// A CODE MOVEMENT REACHES ONLY A WATCHER HOLDING GITLET (ADR-0110).
+//
+// Each half of an inbox is its app's: the inbox question lists a reader
+// without Gitlet no code notice, so the frame saying a code notice arrived —
+// which names the change and counts the notices — must not reach them either,
+// though their watch of the seat stands (it was decided as a read of the
+// person's inbox, which no app decides). So a code movement and a re-read of
+// the code half reach the watcher holding Gitlet and not the one holding
+// Worklet alone, while the tracker's half still reaches both: the frame the
+// second watcher receives next is the tracker's, which proves the code one was
+// withheld rather than late. Mutation: deliver every movement whatever its app
+// (InboxChange.ForReader answering true), and bob's first frame is the code
+// movement.
+func TestACodeMovementReachesOnlyAWatcherHoldingGitlet(t *testing.T) {
+	t.Parallel()
+	feed := &fakeInbox{}
+	b := config.DefaultBootstrap()
+	authorize(&b,
+		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass",
+			Grants: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}},
+		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass",
+			Grants: []iam.Grant{iam.GrantWorklet}},
+	)
+	seats := map[string]string{
+		iam.TokenLogin("alice"): "alice-seat",
+		iam.TokenLogin("bob"):   "bob-seat",
+	}
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Inbox:     feed,
+		SeatBindings: auth.SeatBindings{
+			Directory: inboxBindings(seats), Chart: inboxChart(seats),
+		},
+	})
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+
+	alice := dialInbox(t, srv.URL, "alice-token-long-enough-to-pass")
+	bob := dialInbox(t, srv.URL, "bob-token-long-enough-to-pass")
+	alice.watchSeat(t, "alice-seat")
+	bob.watchSeat(t, "bob-seat")
+	if hub := a.Stream().Hub(); hub.Watchers("alice-seat") != 1 || hub.Watchers("bob-seat") != 1 {
+		t.Fatalf("the watches had not reached the index by their sockets' pongs (alice %d, bob %d)",
+			hub.Watchers("alice-seat"), hub.Watchers("bob-seat"))
+	}
+
+	for _, seat := range []string{"alice-seat", "bob-seat"} {
+		feed.fire(t, inbox.Movement{Source: "code", Handle: seat, UnreadDelta: 1,
+			Subject: "change:web!12", Reason: "review_requested"})
+	}
+	feed.fireGap(t, "code")
+	feed.fire(t, inbox.Movement{Source: "tracker", Handle: "bob-seat", UnreadDelta: 1,
+		Subject: "task:9a1e", Reason: "assignee"})
+
+	for i, want := range []string{"code", "code"} {
+		got := alice.nextInbox(t)
+		if got.Seat != "alice-seat" || got.Data["source"] != want {
+			t.Fatalf("alice's frame %d was %q %v, want her own seat's %s half", i, got.Seat, got.Data, want)
+		}
+	}
+	got := bob.nextInbox(t)
+	if got.Data["source"] != "tracker" || got.Data["subject"] != "task:9a1e" {
+		t.Fatalf("bob, who holds no Gitlet, was sent %v first, want the tracker's movement: "+
+			"the code half's frames reached a reader the inbox lists no code notice", got.Data)
+	}
 }

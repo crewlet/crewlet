@@ -340,10 +340,11 @@ func servesGit(b *config.Bootstrap) bool {
 // nothing but the overview, or a machine token carrying one app, could start a
 // verify, and its repair, of every repository a Gitlet node keeps. Now:
 //
-//   - THE GIT ROUTES admit everybody the guard resolved
-//     ([authz.ActionCodeGit]), as the code questions do ([authz.ActionCodeRead]):
-//     what each may fetch or push is the per-repository grant the serving node
-//     derives from the chart once the repository is read (code.GrantOf,
+//   - THE GIT ROUTES admit every holder of the gitlet app the guard resolved
+//     ([authz.ActionCodeGit]), as the code questions do, and refuse
+//     everybody else before any repository is read (ADR-0110):
+//     what a holder may fetch or push is the per-repository grant the serving
+//     node derives from the chart once the repository is read (code.GrantOf,
 //     ADR-0088), which no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
@@ -424,22 +425,32 @@ func (a *App) mountCode(mux authz.Mux) error {
 // decision with: the authority table's one mapping ([authz.RefusalFields]),
 // and for a decision this node could not make the 503 [authz.EnvelopeRefusal]
 // answers it with, saying when to come back — so the two cannot drift apart.
-// Every verb a git route is mounted on admits everybody the guard resolved, so
-// what reaches this is a principal whose stage may not act, or a node that
-// could not decide.
+// Every verb a git route is mounted on admits every holder of the gitlet app
+// the guard resolved, so what reaches this is a principal without the app, one
+// whose stage may not act, or a node that could not decide.
 func gitRefusal(w http.ResponseWriter, _ *http.Request, _ authz.Policy, d authz.Decision) {
 	if d.Unknown() {
-		auth.GitUnavailable(w, authz.RetryUndecidedSeconds, gitSentence(httpjson.CodeUnavailable))
+		auth.GitUnavailable(w, authz.RetryUndecidedSeconds, gitSentence(httpjson.CodeUnavailable, nil))
 		return
 	}
-	status, refused, _ := authz.RefusalFields(d)
-	auth.GitText(w, status, gitSentence(refused))
+	status, refused, detail := authz.RefusalFields(d)
+	auth.GitText(w, status, gitSentence(refused, detail))
 }
 
-// gitSentence is a refusal's code as git prints it: the code's own sentence
-// with the code a client branches on beside it.
-func gitSentence(refused httpjson.Code) string {
-	return strings.TrimSuffix(refused.Message(), ".") + " (" + string(refused) + ")"
+// gitSentence is a refusal as git prints it: the sentence the JSON envelope
+// carries for the same refusal — the deciding rule's own, naming the
+// permission where one is the remedy ([httpjson.RefusalMessage]) — with the
+// code a client branches on beside it.
+//
+// THE RULE'S SENTENCE AND NEVER THE CODE'S, because git is the one place a
+// person without the gitlet app meets the refusal: worded by its code alone,
+// `unauthorized` named every permission there is, and a person who lacked
+// one app was sent to ask for all of them, admin among them.
+func gitSentence(refused httpjson.Code, detail httpjson.Detail) string {
+	reason, _ := detail[authz.DetailReason].(string)
+	grants, _ := detail[authz.DetailGrants].([]string)
+	return strings.TrimSuffix(httpjson.RefusalMessage(refused, reason, grants), ".") +
+		" (" + string(refused) + ")"
 }
 
 // gitRoute serves one of the host's git handlers, resolved for this request,

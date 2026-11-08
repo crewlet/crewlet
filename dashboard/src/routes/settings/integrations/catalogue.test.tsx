@@ -179,6 +179,14 @@ test("every surface a card is made of has a name of its own", () => {
   }
 });
 
+// EVERY TILE DRAWS ITS OWN TOOL'S MARK. The brand mark belongs to Crewlet's
+// built-in services, so a tile drawing it reads as one more of them.
+// Mutation: point an entry at "crewlet" and this goes red.
+test("every tile draws its own tool's mark, never the brand mark", () => {
+  for (const entry of CATALOG) expect(entry.vendor, entry.key).not.toBe("crewlet");
+  expect(CATALOG.find((entry) => entry.key === "ssh")?.vendor).toBe("ssh");
+});
+
 // LEARN MORE OPENS A PAGE THE SITE BUILDS. The address is composed from the
 // entry's `doc`, so no grep for a URL can see it: a tool whose page is named
 // wrongly, or a page renamed under the catalogue, is a 404 the reader meets
