@@ -123,7 +123,11 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	p.agent.model.callOnExecute(worklet.WriteProjectFileTool, map[string]any{
 		"project": "ENG", "path": "plans/launch.md", "content": body,
 	})
-	wakeWithMessage(t, p.agent, "ceo")
+	// FOR THE FOUNDER, employed on the data node: a stranger's turn writes
+	// no project file, since an agent uses no app for somebody the company
+	// does not know (ADR-0105).
+	employFounder(t, p.data, p.agent)
+	wakeAsFounder(t, p.agent, "ceo")
 
 	var detail worklet.FileDetail
 	t.Cleanup(func() {

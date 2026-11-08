@@ -282,6 +282,10 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		t.Fatalf("%s was stood up to run no seats and holds %v — there is "+
 			"then no member this wake has to cross to", writer.id, held)
 	}
+	// THE FOUNDER, employed and read on every member: the seat answers her on
+	// whichever member holds it, and an agent uses no app for a seat nobody
+	// holds (ADR-0105).
+	employFounder(t, writer, c.nodes...)
 
 	// NO AGENT IN THE ROOM: the seat is reached by being named, which a
 	// public room carries to a seat that has not joined. With it a member,
@@ -937,6 +941,7 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	waitForSeat(t, n, "ceo")
+	employFounder(t, n)
 
 	// NO AGENT IN THE ROOM, so the line said first wakes nobody: a person's
 	// message in a room with an agent member is answered by its most senior
@@ -1054,6 +1059,7 @@ func TestAPersonIsNeverAnsweredBySilence(t *testing.T) {
 			n := start(t)
 			waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 			waitForSeat(t, n, "ceo")
+			employFounder(t, n)
 			// A ROOM MADE BY HAND, its one agent a member that follows
 			// nothing in particular: before, this was a room nobody heard.
 			made := room(t, n, speaker(t, "founder"), chatlet.NewChannel{
