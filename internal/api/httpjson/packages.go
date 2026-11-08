@@ -60,7 +60,7 @@ var goPackages = map[string]bool{
 	"schedule": true, "scheduletest": true, "search": true, "seat": true,
 	"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 	"setupapi": true, "setuptest": true, "signedask": true, "sigv4": true, "skills": true,
-	"skillsync": true, "slack": true, "slideformat": true, "solo": true,
+	"skillsync": true, "slack": true, "ssh": true, "slideformat": true, "solo": true,
 	"sourcetree": true, "sqlledger": true,
 	"statelog": true, "statelogtest": true, "static": true, "steer": true,
 	"steersourcetest": true, "store": true, "storetest": true, "stream": true, "structured": true,

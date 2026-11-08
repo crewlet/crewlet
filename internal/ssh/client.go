@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The engine's client: it reaches only a host the company registered, accepts
@@ -32,7 +33,7 @@ import (
 const DialTimeout = 10 * time.Second
 
 // ErrUnreachableAddress is an address the engine never connects a server
-// session to (config.SSHReachable), however a name resolved.
+// session to (httpx.ServerAddress), however a name resolved.
 var ErrUnreachableAddress = errors.New("ssh: the address is the engine host or link-local")
 
 // ErrHostKey is a server that presented no pinned key.
@@ -41,13 +42,13 @@ var ErrHostKey = errors.New("ssh: the server presented a host key that is not pi
 // dialer opens a TCP connection; tests hand one reaching their own server.
 type dialer func(ctx context.Context, network, address string) (net.Conn, error)
 
-// guardedDial connects only where config.SSHReachable allows, judged on the
+// guardedDial connects only where httpx.ServerAddress allows, judged on the
 // socket's own address, so a name that resolves twice cannot slip a second,
 // unchecked answer through.
 func guardedDial(ctx context.Context, network, address string) (net.Conn, error) {
 	d := net.Dialer{Timeout: DialTimeout, ControlContext: func(_ context.Context, _, addr string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(addr)
-		if err != nil || !config.SSHReachable(ap.Addr()) {
+		if err != nil || !httpx.ServerAddress(ap.Addr()) {
 			return fmt.Errorf("%w: %s", ErrUnreachableAddress, addr)
 		}
 		return nil

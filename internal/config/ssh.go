@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -236,7 +237,7 @@ func SSHUser(name string) bool { return sshUser().MatchString(name) }
 // a person reads, "" for an address it takes.
 func SSHAddress(address string) string {
 	if a, err := netip.ParseAddr(address); err == nil {
-		if !SSHReachable(a) {
+		if !httpx.ServerAddress(a) {
 			return fmt.Sprintf("%q is the engine host or a link-local address, which no server should be reached at", address)
 		}
 		return ""
@@ -283,16 +284,6 @@ func SSHAllowlistRule(rule string) string {
 		}
 	}
 	return ""
-}
-
-// SSHReachable reports whether a server may be reached at a: never the engine
-// host itself, an unspecified or multicast address, or a link-local one (where
-// a cloud's metadata service answers). The engine's dialer holds the address it
-// connects to the same rule, so a name that resolves to one is refused too.
-func SSHReachable(a netip.Addr) bool {
-	a = a.Unmap()
-	return a.IsValid() && a.Zone() == "" && !a.IsLoopback() && !a.IsUnspecified() && !a.IsLinkLocalUnicast() &&
-		!a.IsLinkLocalMulticast() && !a.IsMulticast()
 }
 
 // SSHHostKeyAlgorithms are the host key types the engine pins, strongest first.
