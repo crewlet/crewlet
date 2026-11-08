@@ -5845,13 +5845,18 @@ a.work-cal-chip {
    `overflow-wrap: anywhere` rather than `break-word` because these lines have
    no spaces to break at: a minified payload, a base64 blob and a long path
    are each one word to a line breaker. */
+/* Every fence wraps wherever it is drawn, inside `.prose.md` or not.
+   `:where()` keeps it at zero specificity, so a kit surface that styles its
+   own code still decides. */
+:where(pre.md-code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .prose.md pre.md-code {
   background: var(--color-surface-inset);
   border-radius: var(--radius-sm);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-xs);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .prose.md blockquote {
   margin: 0;
