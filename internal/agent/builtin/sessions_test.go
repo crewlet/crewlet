@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -576,50 +578,105 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 	}
 }
 
-// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER. A listing's page bound is
-// set by a row's worst case, so a search's page of that many hits, every one
-// at every bound its words are cut to — its conversation's key at its own
-// bound, what its turn was asked, its ending's five accounts, its note on the
-// session it keeps and its snippet, each in plain letters, which JSON leaves as
-// they are — and marked this turn's and this conversation's, is answered
-// whole, never refused for its size: the bound is the most rows whose worst
-// case fits one tool answer.
+// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER, AND ONE MORE ROW WOULD NOT.
+// A listing's page bound is set by a row's worst case, so a search's page of
+// that many hits, every field of every one at the bound its record is held to
+// — its turn's id and the one it was handed, its conversation's key, its
+// harness, what its turn was asked, its ending's engine words, five accounts
+// and who stopped it, its unkept capture and last word at the largest places,
+// the sessions it ran out of context in, its note on a session its turn went
+// on past, the fields it matched and its snippet, each in plain letters, which
+// JSON leaves as they are — marked this turn's and this conversation's, after
+// a cursor at its largest and saying it could not read every record, is
+// answered whole, never refused for its size; and the pages' own measure of a
+// row leaves no room for one more: the bound is the most rows whose worst case
+// fits one tool answer, not merely some number that does.
 //
-// Mutation: raise listedSessionsMax to fifteen, or show a listed row's note
-// uncut, and the page is refused for its size.
+// Mutation: raise listedSessionsMax to eleven, or show a listed row's note
+// uncut, and the page is refused for its size; lower it to nine, and the page
+// has room for another row.
 func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 	t.Parallel()
 	k := newKeptSessions(t)
 	letters := func(n int) string { return strings.Repeat("w", n) }
 	key := letters(executordomain.ConversationKeyMaxBytes)
+	// AN INSTANT AT ITS LONGEST, to the nanosecond, as a broker's is.
+	at := time.Date(2031, 4, 7, 9, 0, 0, 123456789, time.UTC)
+	exhausted := make([]string, executorkeep.ExhaustedMaxSessions)
+	for i := range exhausted {
+		exhausted[i] = fmt.Sprintf("%0*d", executorkeep.SessionIDMaxBytes, i)
+	}
+	turnOf := func(i int) string { return fmt.Sprintf("%0*d", executorkeep.TurnIDMaxBytes, i) }
+	worst := func(i int) executordomain.SearchHit {
+		row := executordomain.Session{Handle: "agent-cto", Turn: turnOf(i),
+			ConversationKey: key, Harness: letters(executorkeep.HarnessMaxBytes),
+			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
+				Size: executorkeep.SealedMaxBytes},
+			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
+			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
+			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
+			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+				Decision: letters(executorkeep.WordMaxBytes), DeliveredTo: letters(executorkeep.WordMaxBytes),
+				Answer: letters(executorkeep.WordMaxBytes), DeliveryUnknown: true,
+				CompletedWork: letters(executorkeep.CompletedWorkMaxBytes),
+				BlockedOn:     letters(executorkeep.BlockedOnMaxBytes),
+				StoppedBy:     letters(executorkeep.ActorMaxBytes),
+				StopReason:    letters(executorkeep.StopReasonMaxBytes),
+				Failure:       letters(executorkeep.FailureMaxBytes),
+				Unkept: &executorkeep.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+					Reason: letters(executorkeep.UnkeptReasonMaxBytes)},
+				WentOn:    true,
+				LastWord:  &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
+				Exhausted: exhausted}}
+		return executordomain.SearchHit{Session: row, Matched: executordomain.SearchFields,
+			Snippet: letters(executordomain.SearchSnippetBytes)}
+	}
 	turn, _ := readerTurn(t)
-	var hits []executordomain.SearchHit
-	for range builtin.ListedSessionsMax {
-		row := k.keep(t, "agent-cto", key, "a session")
-		row.BaseTurn, row.AskExcerpt = uuid.NewString(), letters(executordomain.AskExcerptMaxBytes)
-		row.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "blocked",
-			Delivered: true, DeliveredTo: "chatlet", Answer: "answered",
-			CompletedWork: letters(executorkeep.CompletedWorkMaxBytes),
-			BlockedOn:     letters(executorkeep.BlockedOnMaxBytes), StoppedBy: "ana.diaz",
-			StopReason: letters(executorkeep.StopReasonMaxBytes), Failure: letters(executorkeep.FailureMaxBytes),
-			WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
-				Reason: letters(executorkeep.UnkeptReasonMaxBytes)}}
-		hits = append(hits, executordomain.SearchHit{Session: row, Matched: []executordomain.SearchField{
-			executordomain.SearchAsked}, Snippet: letters(executordomain.SearchSnippetBytes)})
-	}
-	turn.RunID, turn.ConversationKey = hits[0].Session.Turn, key
-	k.found = executordomain.SearchPage{Hits: hits, Scanned: executordomain.SearchScanRows, Next: "77",
-		Complete: true}
+	turn.RunID, turn.ConversationKey = turnOf(0), key
 	list := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ListSessionsTool)
-	got := callFor(t, list, turn, map[string]any{"query": "www", "limit": builtin.ListedSessionsMax})
-	if got.Failed {
-		t.Fatalf("a page of %d sessions at their worst was refused: %s", builtin.ListedSessionsMax, got.Output)
+	largest := strconv.FormatInt(math.MaxInt64, 10)
+	// page answers a search's page of n rows at their worst, read after a
+	// cursor at its largest and stopping short of the seat's oldest, beside
+	// records the answering copy could not read: the longest note a page says.
+	page := func(n int) tools.Result {
+		t.Helper()
+		hits := make([]executordomain.SearchHit, n)
+		for i := range hits {
+			hits[i] = worst(i)
+		}
+		k.mu.Lock()
+		k.found = executordomain.SearchPage{Hits: hits, Scanned: executordomain.SearchScanRows, Next: largest}
+		k.mu.Unlock()
+		return callFor(t, list, turn, map[string]any{"query": "www", "limit": n, "cursor": largest})
 	}
-	if rows := listedTurns(t, sessionAnswer(t, got)); len(rows) != builtin.ListedSessionsMax {
-		t.Errorf("the page holds %d sessions, want all %d", len(rows), builtin.ListedSessionsMax)
+	most := builtin.ListedSessionsMax
+	// A ROW'S WORST, AS THE PAGES THEMSELVES MEASURE IT: two pages short of the
+	// bound, a row apart, both of which fit.
+	sizes := map[int]int{}
+	for _, n := range []int{most - 2, most - 1} {
+		got := page(n)
+		if got.Failed {
+			t.Fatalf("a page of %d sessions at their worst was refused: %s", n, got.Output)
+		}
+		sizes[n] = len(got.Output)
+	}
+	row := sizes[most-1] - sizes[most-2]
+	fit := most - 1 + (builtin.ToolAnswerBytes-sizes[most-1])/row
+	t.Logf("a page of %d sessions at their worst is %d bytes, and a row %d: %d fit in one tool answer's %d",
+		most-1, sizes[most-1], row, fit, builtin.ToolAnswerBytes)
+	got := page(most)
+	if got.Failed {
+		t.Fatalf("a page of %d sessions at their worst was refused, where %d fit: %s", most, fit, got.Output)
+	}
+	if rows := listedTurns(t, sessionAnswer(t, got)); len(rows) != most {
+		t.Errorf("the page holds %d sessions, want all %d", len(rows), most)
 	}
 	if len(got.Output) > builtin.ToolAnswerBytes {
 		t.Errorf("the page is %d bytes, past one tool answer's %d", len(got.Output), builtin.ToolAnswerBytes)
+	}
+	if fit != most {
+		t.Errorf("a page holds at most %d sessions, and %d at their worst fit in one tool answer: the bound "+
+			"is not the most that fits", most, fit)
 	}
 }
 
