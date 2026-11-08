@@ -1341,7 +1341,11 @@ const (
 	// pills and divider come with the shell's sidebar) and the kit's shared
 	// chunks about +690, with no screen's module in the entry. So it moved to
 	// 398 KiB, 2.17 seconds.
-	initialBudget = 398 << 10
+	// Kit 0.119.2 (no panel scrolling sideways, with the kit's releases since
+	// 0.114.0) took it to 398.9 KiB: the one sheet +940 bytes gzipped and the
+	// scripts within a few bytes, with no screen's module in the entry. So it
+	// moved to 399 KiB, 2.18 seconds.
+	initialBudget = 399 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2100,7 +2104,12 @@ const (
 	// +7,929): the sheets +5,189 (the one sheet +5,582, Chatlet's -393) and
 	// script +2,740 (the Chatlet chunk +2,689). The measured size's next KiB:
 	// 5650 KiB.
-	treeBudget = 5<<20 + 530<<10
+	// Kit 0.119.2 (no panel scrolling sideways: references, whole code chips and
+	// titles that wrap inside any box, sliced chips, narrow containers that clip,
+	// and the kit's releases since 0.114.0) took it from 5649.0 KiB (5,784,598
+	// bytes) to 5659.5 KiB (5,795,376 bytes, +10,778): the sheets +7,130 and
+	// script +3,648. The measured size's next KiB: 5660 KiB.
+	treeBudget = 5<<20 + 540<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
