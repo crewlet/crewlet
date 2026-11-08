@@ -272,18 +272,27 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // a file. Beside mcp.json for the reason mcp.json is where it is.
 func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
 
-// ClaudeSettings is where a Claude Code run's own settings file is written —
-// the hooks that hand its main agent a person's notes between its steps
-// ([ClaudeCode.WriteConfig]) — named on its command line with `--settings`.
+// ClaudeSettings is where every Claude Code run's own settings file is written
+// — the setting that holds the harness's own retention sweep off
+// ([claudeSettings]) — named on its command line with `--settings`, unless the
+// run is started with [Paths.ClaudeNotesSettings] in its place.
 //
 // BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
 // repository's, which the run edits and a commit carries, and a file there would
 // replace the repository's own project settings rather than sit above them.
 // `--settings` adds a layer the harness ranks above the repository's settings and
-// below a managed policy, so the repository keeps its own and the run's hooks
+// below a managed policy, so the repository keeps its own and the run's settings
 // are there whatever it holds. Under WorkDir, so a `git clean` in the brief
 // cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
+
+// ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
+// its settings written a second time, with the hooks that hand its main agent a
+// person's notes between its steps ([claudeNotesSettings]): the file the run's
+// script names in place of [Paths.ClaudeSettings] on a release whose note hooks
+// it starts ([claudeNotesGate]). Beside it, and in the work directory for the
+// reason it is.
+func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
 
 // OpenCodeConfig is where an OpenCode run's own configuration is written
 // ([OpenCode.WriteConfig]), and read from by the run's script, which hands its

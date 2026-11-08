@@ -88,27 +88,30 @@ func runsUnder(t *testing.T, box sandbox.Sandbox, sh boxShell, prelude string) {
 var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
 	URL: "http://127.0.0.1:7/mcp/tok/steer"}
 
-// CLAUDE'S COMMAND CARRIES NO BRIEF, AND NAMES ITS SETTINGS WHERE IT HAS SOME.
+// CLAUDE'S COMMAND CARRIES NO BRIEF, AND NAMES ITS SETTINGS.
 //
 // The brief is the prompt `-p` reads on stdin: a brief carries every note the
 // turn has read, one argument is capped at 128 KiB, and a command line is
 // readable by every account on a direct box's host. So no part of it — a quote
-// included — is on the command line at all. A run wired to its notes names the
-// settings file holding its hooks; one that is not names none. And nothing that
-// drops the repository's own settings (--setting-sources, which also drops its
-// CLAUDE.md) or doubles the stream (--include-hook-events) is ever passed.
+// included — is on the command line at all. Every run names the settings every
+// run has; a run wired to its notes names the settings holding its hooks too,
+// for its release to choose between, and one that is not never names them. And
+// nothing that drops the repository's own settings (--setting-sources, which
+// also drops its CLAUDE.md) or doubles the stream (--include-hook-events) is
+// ever passed.
 //
 // Mutation: put the brief back after -p and the first row goes red; name the
-// settings whatever the request and the unwired row does.
+// hooked settings whatever the request and the unwired row does; drop
+// --settings from the unwired run's arguments and it goes red too.
 func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
 	const brief = `fix it'; rm -rf / # "quoted" BRIEF-MARKER`
 	for name, tc := range map[string]struct {
-		steer    sandbox.SteerWiring
-		settings bool
+		steer  sandbox.SteerWiring
+		hooked bool
 	}{
-		"wired to its notes": {steer: steerWiring, settings: true},
+		"wired to its notes": {steer: steerWiring, hooked: true},
 		"wired to none":      {},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -127,9 +130,12 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 			if !strings.Contains(cmd, "\nclaude -p --output-format stream-json --verbose ") {
 				t.Errorf("-p is not the bare print flag, with the prompt left to stdin:\n%s", cmd)
 			}
-			want := "--settings '" + p.ClaudeSettings() + "'"
-			if got := strings.Contains(cmd, want); got != tc.settings {
-				t.Errorf("names %s: %v, want %v:\n%s", want, got, tc.settings, cmd)
+			if every := "--settings '" + p.ClaudeSettings() + "'"; !strings.Contains(cmd, every) {
+				t.Errorf("the run does not name %s, the settings every run has:\n%s", every, cmd)
+			}
+			hooked := "--settings '" + p.ClaudeNotesSettings() + "'"
+			if got := strings.Contains(cmd, hooked); got != tc.hooked {
+				t.Errorf("names %s: %v, want %v:\n%s", hooked, got, tc.hooked, cmd)
 			}
 			for _, never := range []string{"--setting-sources", "--include-hook-events"} {
 				if strings.Contains(cmd, never) {
@@ -203,33 +209,50 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	}
 }
 
-// THE SETTINGS FILE IS THE MEASURED SHAPE, and nothing more: `disableAllHooks`
-// written false (a repository's own true otherwise switches every hook off
-// without a word), one mcp_tool hook at PostToolBatch and one at Stop, each
-// calling the tool the launch named on the server it named, with the event and
-// the agent id the harness fills in, under a ten-second timeout. No field newer than
-// 2.1.263 — print mode ignores a file it cannot validate, hooks and all — which
-// the whole-document comparison holds: a key added is a key this case did not
-// measure.
+// THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
+// holds the harness's own retention sweep off and nothing else; a run wired to
+// its notes has them again with its hooks: `disableAllHooks` written false (a
+// repository's own true otherwise switches every hook off without a word), one
+// mcp_tool hook at PostToolBatch and one at Stop, each calling the tool the
+// launch named on the server it named, with the event and the agent id the
+// harness fills in, under a ten-second timeout. No field newer than the oldest
+// release each is handed — print mode ignores a file it cannot validate, hooks,
+// retention and all — which the whole-document comparisons hold: a key added is
+// a key this case did not measure.
 //
-// Mutation: tag disableAllHooks omitempty and the document loses it.
-func TestTheSettingsFileIsTheMeasuredShape(t *testing.T) {
+// Mutation: tag disableAllHooks omitempty and the hooked document loses it;
+// write the hooks into every run's settings and the unwired document gains
+// them.
+func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	t.Parallel()
+	shape := func(t *testing.T, b sandbox.Sandbox, file, measured string) {
+		t.Helper()
+		raw, err := b.ReadFile(t.Context(), file)
+		if err != nil {
+			t.Fatalf("no settings were written at %s: %v", file, err)
+		}
+		var got, want any
+		if err = json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("the settings are not JSON: %v\n%s", err, raw)
+		}
+		if err = json.Unmarshal([]byte(measured), &want); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("the settings at %s are not the measured shape:\n%s", file, raw)
+		}
+	}
+	const every = `{"cleanupPeriodDays": 36500}`
+
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), b,
 		sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
-	raw, err := b.ReadFile(t.Context(), p.ClaudeSettings())
-	if err != nil {
-		t.Fatalf("no settings were written: %v", err)
-	}
-	var got, want any
-	if err = json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("the settings are not JSON: %v\n%s", err, raw)
-	}
-	const measured = `{
+	shape(t, b, p.ClaudeSettings(), every)
+	shape(t, b, p.ClaudeNotesSettings(), `{
+		"cleanupPeriodDays": 36500,
 		"disableAllHooks": false,
 		"hooks": {
 			"PostToolBatch": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
@@ -237,67 +260,70 @@ func TestTheSettingsFileIsTheMeasuredShape(t *testing.T) {
 			"Stop": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
 				"input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}]
 		}
-	}`
-	if err = json.Unmarshal([]byte(measured), &want); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("the settings file is not the measured shape:\n%s", raw)
-	}
+	}`)
 	if executor.ClaudeHookTimeout != 10*time.Second {
 		t.Errorf("the hook timeout is %v, and the file says ten seconds", executor.ClaudeHookTimeout)
 	}
 
-	// A RUN WIRED TO NO NOTES WRITES NONE: the assistant's deep work has no
-	// inbox, and hooks calling a tool its bridge does not serve would be a
-	// call at every step for nothing.
+	// A RUN WIRED TO NO NOTES WRITES NO HOOKS: the assistant's deep work has
+	// no inbox, and hooks calling a tool its bridge does not serve would be a
+	// call at every step for nothing. It has every run's settings all the same.
 	plain := sandbox.NewFakeSandbox("box-2")
-	if _, err = (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
+	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
 		sandbox.RunRequest{Brief: "x"}, executor.PathsFor(plain)); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
-	if raw, _ := plain.ReadFile(t.Context(), executor.PathsFor(plain).ClaudeSettings()); raw != nil {
-		t.Errorf("a run wired to no notes wrote settings: %s", raw)
+	shape(t, plain, executor.PathsFor(plain).ClaudeSettings(), every)
+	if raw, _ := plain.ReadFile(t.Context(), executor.PathsFor(plain).ClaudeNotesSettings()); raw != nil {
+		t.Errorf("a run wired to no notes wrote the notes' hooks: %s", raw)
 	}
 }
 
-// THE SETTINGS FILE IS WRITTEN PRIVATE, UNDER THE BOX'S WORK DIRECTORY, on a real
-// box: outside the checkout, which a commit carries and the run edits, and
+// THE SETTINGS FILES ARE WRITTEN PRIVATE, UNDER THE BOX'S WORK DIRECTORY, on a
+// real box: outside the checkout, which a commit carries and the run edits, and
 // written afresh at the mode a box writes every file with even where a previous
 // run left one wider — the run's artefacts are cleared before it starts, and a
 // box write replaces a file whole rather than keeping the replaced one's mode.
 //
 // Mutation: drop the settings from ClearArtifacts and write a local box's file
-// in place (O_TRUNC), and the previous run's wide file keeps its mode — either
+// in place (O_TRUNC), and the previous run's wide files keep their mode — either
 // alone still holds it.
-func TestTheSettingsFileIsWrittenPrivateUnderTheWorkDir(t *testing.T) {
+func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
 	p := executor.PathsFor(box)
-	if !strings.HasPrefix(p.ClaudeSettings(), p.WorkDir()+"/") ||
-		strings.Contains(p.ClaudeSettings(), "/"+sandbox.WorkspaceSubdir+"/") {
-		t.Fatalf("the settings file %q is not under the work directory %q, out of the checkout",
-			p.ClaudeSettings(), p.WorkDir())
+	files := map[string]string{
+		// What each holds of this run's own writing.
+		p.ClaudeSettings():      `"cleanupPeriodDays"`,
+		p.ClaudeNotesSettings(): `"steer_take"`,
 	}
-	// A PREVIOUS RUN'S FILE, left world-readable.
-	if err := os.WriteFile(p.ClaudeSettings(), []byte(`{"hooks":{}}`), 0o644); err != nil {
-		t.Fatalf("stage the previous run's file: %v", err)
-	}
-	if err := os.Chmod(p.ClaudeSettings(), 0o644); err != nil {
-		t.Fatalf("chmod: %v", err)
+	for file := range files {
+		if !strings.HasPrefix(file, p.WorkDir()+"/") || strings.Contains(file, "/"+sandbox.WorkspaceSubdir+"/") {
+			t.Fatalf("the settings file %q is not under the work directory %q, out of the checkout",
+				file, p.WorkDir())
+		}
+		// A PREVIOUS RUN'S FILE, left world-readable.
+		if err := os.WriteFile(file, []byte(`{"hooks":{}}`), 0o644); err != nil {
+			t.Fatalf("stage the previous run's file: %v", err)
+		}
+		if err := os.Chmod(file, 0o644); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
 	}
 	installClaude(t, box, `echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`)
 	waitRun(t, runner, box, sandbox.RunRequest{Brief: "x", Steer: steerWiring})
 
-	info, err := os.Stat(p.ClaudeSettings())
-	if err != nil {
-		t.Fatalf("stat the settings: %v", err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("the settings file is mode %o, want 0600", mode)
-	}
-	if raw, _ := os.ReadFile(p.ClaudeSettings()); !strings.Contains(string(raw), `"steer_take"`) {
-		t.Errorf("the file holds the previous run's settings: %s", raw)
+	for file, own := range files {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatalf("stat the settings: %v", err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Errorf("the settings file %s is mode %o, want 0600", file, mode)
+		}
+		if raw, _ := os.ReadFile(file); !strings.Contains(string(raw), own) { //nolint:gosec // the case's own box
+			t.Errorf("%s holds the previous run's settings: %s", file, raw)
+		}
 	}
 }
 
@@ -426,14 +452,16 @@ func after(argv []string, flag string) string {
 // and before 2.1.163 it drops what a Stop hook answers: a note taken as the run
 // finishes would be recorded read, and published delivered, by a run that never
 // saw it. So a run wired to its notes reads the box's version first and names
-// its settings, and the standing instructions told of notes, only on 2.1.163 or
-// later; an older release is handed the standing instructions alone, and the
-// run's error stream says why — its notes then wait for the review, and its
-// collection says it never asked. A version it cannot read is taken for a
-// current release. Under every sh a box may run the script with.
+// the settings holding its hooks, and the standing instructions told of notes,
+// only on 2.1.163 or later; an older release is handed the settings every run
+// has and the standing instructions alone, and the run's error stream says why
+// — its notes then wait for the review, and its collection says it never asked.
+// A version it cannot read is taken for a current release. Under every sh a
+// box may run the script with.
 //
-// Mutation: name the settings whatever the version, compare the patch alone, or
-// hand an older release the instructions told of notes, and this goes red.
+// Mutation: name the hooked settings whatever the version, compare the patch
+// alone, or hand an older release the instructions told of notes, and this
+// goes red.
 func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
@@ -445,8 +473,8 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 `
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
-			version  string
-			settings bool
+			version string
+			hooks   bool
 		}{
 			{"2.1.150 (Claude Code)", false},
 			{"2.1.162 (Claude Code)", false},
@@ -483,23 +511,25 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 					t.Fatalf("the harness never started: %v\n%s", err, stderr.String())
 				}
 				args := strings.Split(strings.TrimSpace(string(raw)), "\n")
-				named := slices.Contains(args, "--settings")
-				if named != tc.settings {
-					t.Errorf("on %q the harness was started with --settings: %v, want %v (argv %q)",
-						tc.version, named, tc.settings, args)
+				// ONE SETTINGS FILE, the one the hooks decide: with them
+				// where they are read, every run's where they are not.
+				settings := p.ClaudeSettings()
+				if tc.hooks {
+					settings = p.ClaudeNotesSettings()
 				}
-				if named && args[slices.Index(args, "--settings")+1] != p.ClaudeSettings() {
-					t.Errorf("--settings names %q, want %q", args[slices.Index(args, "--settings")+1],
-						p.ClaudeSettings())
+				if n := strings.Count(strings.Join(args, "\n"), "--settings"); n != 1 ||
+					after(args, "--settings") != settings {
+					t.Errorf("on %q the harness was handed %d settings files, %q, want %q alone (argv %q)",
+						tc.version, n, after(args, "--settings"), settings, args)
 				}
-				if said := strings.Contains(stderr.String(), "older than 2.1.163"); said == tc.settings {
+				if said := strings.Contains(stderr.String(), "older than 2.1.163"); said == tc.hooks {
 					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
-						tc.version, said, !tc.settings, stderr.String())
+						tc.version, said, !tc.hooks, stderr.String())
 				}
 				// ONE SYSTEM TEXT, the one the hooks decide: told of notes
 				// where they are read, as it stands where they are not.
 				want := p.System()
-				if tc.settings {
+				if tc.hooks {
 					want = p.ClaudeNotesSystem()
 				}
 				if n := strings.Count(strings.Join(args, "\n"), "--append-system-prompt-file"); n != 1 ||
@@ -510,6 +540,72 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 			})
 		}
 	})
+}
+
+// EVERY CLAUDE CODE RUN IS STARTED WITH ITS BOX'S SWEEP HELD OFF: whatever its
+// release and whatever it is wired to, the settings file its harness is handed
+// holds `cleanupPeriodDays` at a hundred years — a run wired to its notes on a
+// release that reads them in the file with its hooks, and every other run, one
+// below the note floor among them, in the file every run has. The box's Claude
+// Code sweeps its configuration directory about five seconds into every run,
+// by each file's own mtime, and a session carried into the box keeps the
+// mtimes it was packed with: at the harness's default of thirty days a
+// continued conversation's turn lost its oldest tool results and its task list
+// to its own box (measured on 2.1.310). Played on a real box, the harness a
+// stand-in that keeps the file its --settings names.
+//
+// Mutation: drop cleanupPeriodDays from every run's settings, embed no
+// retention in the hooked ones, or start a run below the floor or wired to
+// none without --settings, and a row goes red.
+func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		version string
+		steer   sandbox.SteerWiring
+		hooks   bool
+	}{
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true},
+		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false},
+		"wired to its notes, on a release it cannot read":  {"Claude Code, a version of its own", steerWiring, true},
+		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false},
+		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := realBox(t)
+			p := executor.PathsFor(box)
+			record := t.TempDir()
+			writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\n"+
+				`[ "$1" = --version ] && { echo `+shQuote(tc.version)+`; exit 0; }`+"\n"+
+				`d=`+shQuote(record)+"\n"+
+				`for a in "$@"; do printf '%s\n' "$a"; done > "$d/argv"`+"\n"+
+				`prev=; for a in "$@"; do [ "$prev" = --settings ] && cp "$a" "$d/settings.json"; prev=$a; done`+"\n"+
+				`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")
+			waitRun(t, runner, box, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer})
+
+			argv := lines(t, filepath.Join(record, "argv"))
+			want := p.ClaudeSettings()
+			if tc.hooks {
+				want = p.ClaudeNotesSettings()
+			}
+			if n := strings.Count(strings.Join(argv, "\n"), "--settings"); n != 1 || after(argv, "--settings") != want {
+				t.Fatalf("the harness was handed %d settings files, %q, want %q alone (argv %q)",
+					n, after(argv, "--settings"), want, argv)
+			}
+			var settings struct {
+				CleanupPeriodDays *int            `json:"cleanupPeriodDays"`
+				Hooks             json.RawMessage `json:"hooks"`
+			}
+			readJSON(t, filepath.Join(record, "settings.json"), &settings)
+			if settings.CleanupPeriodDays == nil || *settings.CleanupPeriodDays != 36500 {
+				t.Errorf("the settings the harness was handed hold cleanupPeriodDays %v, want 36500: "+
+					"its box would sweep the session it carries", settings.CleanupPeriodDays)
+			}
+			if hooked := len(settings.Hooks) > 0; hooked != tc.hooks {
+				t.Errorf("the settings the harness was handed hold hooks: %v, want %v", hooked, tc.hooks)
+			}
+		})
+	}
 }
 
 // A RUN THAT RAN OUT OF CONTEXT IS TOLD FROM EVERY OTHER FAILED ONE, by the

@@ -764,7 +764,7 @@ const (
 )
 
 // codingHooks is a run's own hooks, by event, read off the settings file its
-// `--settings` names — none for a run started without one.
+// `--settings` names — none for a file that holds none.
 type codingHooks map[string][]codingHook
 
 // codingHook is one hook of the settings file.
@@ -775,25 +775,39 @@ type codingHook struct {
 	Input  map[string]string `json:"input"`
 }
 
-// readCodingHooks reads the hooks of the settings file at path, refusing a
-// file that switches hooks off or holds a hook this stand-in cannot play, so a
-// run handed one fails saying so rather than playing nothing.
+// readCodingHooks reads the hooks of the settings file at path, refusing a run
+// started with none or with one that leaves its box's retention sweep on —
+// every Claude Code run is handed the settings that hold it off, since the
+// sweep would delete what the engine carries — and a file holding hooks that
+// does not switch them on or holds one this stand-in cannot play, so a run
+// handed one fails saying so rather than playing nothing. A file with no hooks
+// plays none: the settings every run has, which a run wired to no notes, or on
+// a release that cannot read them, is started with.
 func readCodingHooks(path string) (codingHooks, error) {
 	if path == "" {
-		return nil, nil
+		return nil, errors.New("the run was started without --settings, so its box's harness " +
+			"would sweep the session it carries")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading the settings file: %w", err)
 	}
 	var doc struct {
-		DisableAllHooks *bool `json:"disableAllHooks"`
-		Hooks           map[string][]struct {
+		CleanupPeriodDays *int  `json:"cleanupPeriodDays"`
+		DisableAllHooks   *bool `json:"disableAllHooks"`
+		Hooks             map[string][]struct {
 			Hooks []codingHook `json:"hooks"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("reading the settings file: %w", err)
+	}
+	if doc.CleanupPeriodDays == nil {
+		return nil, fmt.Errorf("the settings file sets no cleanupPeriodDays, so the box's harness "+
+			"would sweep the session it carries at its default of thirty days: %s", raw)
+	}
+	if len(doc.Hooks) == 0 {
+		return nil, nil
 	}
 	if doc.DisableAllHooks == nil || *doc.DisableAllHooks {
 		return nil, fmt.Errorf("the settings file does not switch hooks on, so a repository's "+
