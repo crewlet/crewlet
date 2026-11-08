@@ -483,7 +483,7 @@ const (
 	// ActionSSHRequester is a server reached FOR whoever woke the turn of an
 	// agent holding an SSH grant: anybody of the company who may act, a
 	// colleague seat among them, and nobody outside it.
-	ActionSSHRequester Action = "ssh.requester"
+	ActionSSHRequester Action = "ssh.requester.read"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -1683,7 +1683,7 @@ var rules = map[Action]rule{
 	// The tools answer only an agent's own run; a person reaches a server
 	// with their own key.
 	ActionSSHRead: {class: ClassAdmin, seatGrant: SeatGrantSSHRead, recency: iam.RecencyAny,
-		assist: AssistApprove},
+		assist: AssistRead},
 	ActionSSHOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools

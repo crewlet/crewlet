@@ -536,53 +536,72 @@ func sortedAfter[T any](rows []T, idOf func(T) string, cursor string) int {
 // no deputy, and a turn nobody woke — a schedule, an alarm's wake — reads for
 // nobody but the seat.
 func (t *fleetHealth) forRequester(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	return companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), requesterTerms{
+		action: authz.ActionFleetHealthRead, done: "the deployment's health is read", nothing: "Nothing was read.",
+	})
+}
+
+// requesterTerms are what [companyRequester] decides and says: the row a
+// requester must hold, what the tool does only for somebody of the company,
+// and what was not done.
+type requesterTerms struct {
+	action        authz.Action
+	done, nothing string
+}
+
+// companyRequester is nil where a seat's call may act for whoever its turn is
+// acting for ([ceilingOf]), decided by the authority table on terms.action,
+// and otherwise the refusal it is answered with. A stranger, or a person who
+// may not act in the company now, is refused; a colleague seat, a person of
+// the company, and a turn nobody woke are not. A requester this node could not
+// compose or decide is undecidable, never a turn nobody woke. A person's or a
+// token's own call is no deputy.
+func companyRequester(ctx context.Context, turn *turnctx.Turn, requesters Requesters, chart authz.Chart,
+	tool string, terms requesterTerms) *tools.Result {
 	// WHO CALLS, as the gate decided them: the context's answer, or the
 	// turn's seat where nothing has answered (turnctx.WithPrincipal).
 	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
 	if p.Kind != iam.KindSeat {
 		return nil
 	}
-	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Requesters)
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, requesters)
 	if err != nil {
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
-			fmt.Sprintf("%s could not establish who this turn's work is for, and the deployment's health "+
-				"is read only for somebody of the company who may act. Nothing was read. Try again shortly.",
-				t.Name()))
+			fmt.Sprintf("%s could not establish who this turn's work is for, and %s only for somebody "+
+				"of the company who may act. %s Try again shortly.", tool, terms.done, terms.nothing))
 		return &r
 	}
 	if ceiling.Kind == authz.CeilingNone {
 		return nil
 	}
-	dec := authz.DecideWithin(ctx, p, ceiling, authz.ActionFleetHealthRead, authz.Object{}, t.deps.Chart,
-		time.Now().UTC())
+	dec := authz.DecideWithin(ctx, p, ceiling, terms.action, authz.Object{}, chart, time.Now().UTC())
 	switch {
 	case dec.Unknown():
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
 			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may act in "+
-				"the company. Nothing was read. Try again shortly.", t.Name()))
+				"the company. %s Try again shortly.", tool, terms.nothing))
 		return &r
 	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
-		r.Output = healthCeilingRefused(t.Name(), ceiling.Kind)
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
+		r.Output = companyCeilingRefused(tool, ceiling.Kind, terms.done)
 		return &r
 	case !dec.Allowed:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
 		return &r
 	}
 	return nil
 }
 
-// healthCeilingRefused is what a health tool refused for whoever its turn is
-// acting for is answered with, by who that is: a stranger, or a requester who
-// may not act in the company.
-func healthCeilingRefused(tool string, kind authz.CeilingKind) string {
+// companyCeilingRefused is what a tool refused for whoever its turn is acting for is
+// answered with, by who that is: a stranger, or a requester who may not act in
+// the company.
+func companyCeilingRefused(tool string, kind authz.CeilingKind, done string) string {
 	if kind == authz.CeilingStranger {
 		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
-			"the deployment's health is read for nobody outside the company. A person or a seat of the "+
-			"company has to ask for it.", tool)
+			"%s for nobody outside the company. A person or a seat of the company has to ask for it.", tool, done)
 	}
 	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
-		"and the deployment's health is read only for somebody who may.", tool)
+		"and %s only for somebody who may.", tool, done)
 }
 
 // nodeHealthOf is one presence lease as fleet_health reports it.

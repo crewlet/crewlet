@@ -42,6 +42,7 @@ type BuiltinGroupKey =
   | "artifacts"
   | "code"
   | "health"
+  | "servers"
   | "colleagues"
   | "memory"
   | "discovery";
@@ -56,7 +57,9 @@ type BuiltinGroupKey =
  * work or file is in. `artifact_viewer`, `artifact_editor`, `artifact_owner`:
  * the least role on the one artifact the call names (an editor also authors
  * artifacts). `health_tools`: an agent whose role carries the `health_tools`
- * grant, the deployment's health being an admin's read.
+ * grant, the deployment's health being an admin's read. `ssh_read`,
+ * `ssh_operate`: an agent whose SSH access is on with a server, and one at
+ * operate.
  */
 export type BuiltinGate =
   | "everybody"
@@ -70,7 +73,9 @@ export type BuiltinGate =
   | "artifact_viewer"
   | "artifact_editor"
   | "artifact_owner"
-  | "health_tools";
+  | "health_tools"
+  | "ssh_read"
+  | "ssh_operate";
 
 export interface ToolRow {
   name: string;

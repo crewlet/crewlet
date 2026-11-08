@@ -122,6 +122,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// table refuses every other seat, which is what leaves them off its
 	// surfaces ([Company.withheldFrom]).
 	deps.Health = HealthToolDeps(e)
+	// AND THE SSH TOOLS, the same way: registered for every seat, offered
+	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
+	deps.SSH = SSHToolDeps(e)
 	// AND THE ROOMS. Without this the nine chat tools were built,
 	// documented and registered against a zero [builtin.ChatDeps] — which
 	// gates every one of them off — so a company on `chat.backend: chatlet`

@@ -213,6 +213,61 @@ func (c *Company) SSHHostGrantees(host string) []string {
 	return out
 }
 
+// SSHReach is what one agent seat reaches over SSH now: its level and the
+// hosts its block grants, in the block's order. The zero value reaches nothing.
+type SSHReach struct {
+	Level string
+	Hosts []SSHHost
+}
+
+// Host is the granted host id, or false where the seat is not granted it.
+func (r SSHReach) Host(id string) (SSHHost, bool) {
+	for _, h := range r.Hosts {
+		if h.ID == id {
+			return h, true
+		}
+	}
+	return SSHHost{}, false
+}
+
+// HostIDs is the granted hosts' ids, in the block's order.
+func (r SSHReach) HostIDs() []string {
+	out := make([]string, 0, len(r.Hosts))
+	for _, h := range r.Hosts {
+		out = append(out, h.ID)
+	}
+	return out
+}
+
+// SSHReachOf is handle's SSH reach as the document says now: nothing where the
+// integration, its authority or the seat's block is off.
+func (c *Company) SSHReachOf(handle string) SSHReach {
+	s := c.Integrations.SSH
+	if s == nil || !s.Enabled || s.Provisioning == nil || strings.TrimSpace(s.Provisioning.CertificateAuthority) == "" {
+		return SSHReach{}
+	}
+	for role := range c.EachRole() {
+		if role.IdentityKey() != handle {
+			continue
+		}
+		b := role.Integrations.SSH
+		if b == nil || !SeatAccessOn(b.Enabled) {
+			return SSHReach{}
+		}
+		var hosts []SSHHost
+		for _, id := range b.Hosts {
+			if h, ok := s.Host(id); ok {
+				hosts = append(hosts, h)
+			}
+		}
+		if len(hosts) == 0 {
+			return SSHReach{}
+		}
+		return SSHReach{Level: b.LevelOrDefault(), Hosts: hosts}
+	}
+	return SSHReach{}
+}
+
 // The shapes a host's names take, compiled at first use for the reason
 // internal/setup's shape patterns give.
 var (

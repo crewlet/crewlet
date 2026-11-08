@@ -136,6 +136,11 @@ type Deps struct {
 	// surfaces ([Withheld]). See healthtools.go.
 	Health HealthDeps
 
+	// SSH is the SSH tools': the company's servers, reached for a seat whose
+	// SSH block grants them. The zero value omits both. Offered only to a seat
+	// whose role carries the grant, as Health is. See ssh.go.
+	SSH SSHDeps
+
 	// Sessions are the seat's own executor sessions, which its executor
 	// lists and reads back: its rows, the objects they name and the switch
 	// each call asks. Any of the three nil omits both tools, which is what a
@@ -300,7 +305,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// (the switch below) — and the health tools after them, the same way
 	// ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code), healthCandidates(deps.Health))
+		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH))
 
 	var names []string
 	for _, c := range candidates {
@@ -308,6 +313,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			continue
 		}
 		opts := []tools.Option{}
+		if _, fixed := c.tool.(fixedTool); fixed {
+			opts = append(opts, tools.AsksBeforeEveryCall)
+		}
 		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
 		// answers by moving the item, commenting on it, filing the
 		// follow-up, or merging it into the item it duplicates — and without
@@ -410,6 +418,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := healthAnnotations(name); ok {
+		return a
+	}
+	if a, ok := sshAnnotations(name); ok {
 		return a
 	}
 	switch name {

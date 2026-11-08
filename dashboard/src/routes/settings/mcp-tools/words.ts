@@ -363,6 +363,14 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail:
       "Agents whose role carries the health_tools grant: the deployment's health is an admin's read.",
   },
+  ssh_read: {
+    label: "SSH access",
+    detail: "Agents whose SSH access is on with a server: allowlisted reads, with no approval.",
+  },
+  ssh_operate: {
+    label: "SSH operate",
+    detail: "Agents whose SSH access is at operate. Every call waits for an admin or a named approver.",
+  },
 };
 
 /** What an alarm row is about: the server by its title, and the agent or node it names. */

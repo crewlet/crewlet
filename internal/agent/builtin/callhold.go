@@ -128,6 +128,11 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 			"nothing a person can be asked", call.Name), call.Name+" was not called: the engine "+
 			"could not word its question, so nothing was asked"), false
 	}
+	// REFUSED BEFORE ANYBODY IS ASKED: a call its tool would refuse once
+	// approved is never put to a person.
+	if refusal := tool.BeforeHold(ctx, turn, call.Args); refusal != nil {
+		return *refusal, false
+	}
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
@@ -206,10 +211,13 @@ func (h *CallHold) record(ctx context.Context, runID, launch, name string, ask s
 func sealedKiB(sealed string) int { return (kept.Quoted(sealed) + 1<<10 - 1) >> 10 }
 
 // fixedTool is an engine tool that asks before every call
-// ([tools.Entry.ApprovalFixed]): its definition's digest, which the resume
-// holds the call to, the question and context a person reads, never the
-// call's credentials, and who may answer ([sandbox.HeldCall.Approvers]).
+// ([tools.Entry.ApprovalFixed]): the refusal of a call it would never make,
+// its definition's digest, which the resume holds the call to, the question
+// and context a person reads, never the call's credentials, and who may
+// answer ([sandbox.HeldCall.Approvers]). The registry asks before every call
+// to any builtin that is one ([Register]).
 type fixedTool interface {
+	BeforeHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) *tools.Result
 	Digest() string
 	HeldWords(turn *turnctx.Turn, args map[string]any) (question, context string)
 	Approvers() string

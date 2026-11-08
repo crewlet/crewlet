@@ -38,6 +38,8 @@ var gateRows = map[Gate]rowShape{
 	GateArtifactEditor: {class: authz.ClassShared, role: artifacts.RoleEditor, app: iam.GrantArtifacts},
 	GateArtifactOwner:  {class: authz.ClassShared, role: artifacts.RoleOwner},
 	GateHealthTools:    {class: authz.ClassAdmin, seatGrant: authz.SeatGrantHealth},
+	GateSSHRead:        {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHRead},
+	GateSSHOperate:     {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHOperate},
 }
 
 // shapeOf is a tool's authority row as a gate would name it, and false for a

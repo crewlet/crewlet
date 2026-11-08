@@ -747,6 +747,7 @@ group, and names the **gate** its authority row decides:
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
 | Code | `code` | The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)) |
 | Health | `health` | The deployment's health: `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
+| Servers | `servers` | The company's servers over SSH: `ssh_read` and `ssh_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns and sessions, and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from its launch, and its harness defers a server's tools itself) |
@@ -765,6 +766,8 @@ group, and names the **gate** its authority row decides:
 | `artifact_editor` | The artifact's editors who also author artifacts |
 | `artifact_owner` | The artifact's owner |
 | `health_tools` | An agent whose role carries the `health_tools` grant, since the deployment's health is an administrator's read |
+| `ssh_read` | An agent whose SSH access is on with a server |
+| `ssh_operate` | An agent whose SSH access is at `operate`. Every call also waits for an administrator or a named approver |
 
 An administrator passes every app gate. A group whose surface the company does
 not run is not there at all: a company on Jira holds no Worklet tool, one on
