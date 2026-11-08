@@ -144,11 +144,11 @@ alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps eleven ordered logs on the stream: the tracker's mutation
+The engine keeps twelve ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the executor log, Gitlet's
 log, the identity estate's log, the usage log, the artifacts log, the
-artifact datastore's log, Ask Crewlet's log and the chat log. Each log's byte
-ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
+artifact datastore's log, Ask Crewlet's log, the chat log and the access log.
+Each log's byte ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
 one, and otherwise three quarters of
@@ -254,7 +254,7 @@ figure up.
   16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1); from there up each log gets what it
   asked for. With the objects in S3 no bucket is reserved and the share is
   five eighths of three quarters of the broker's limit, about 47 % of the free
-  space, so from about 489 GiB free.
+  space, so from about 490 GiB free.
 - **The code log's ask is paid whether or not anything pushes.** Below about
   653 GiB free it comes out of the other logs' share: at 100 GiB free the
   mutation log and the vector changelog are created at 9.1 GiB each rather
