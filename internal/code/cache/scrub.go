@@ -530,8 +530,9 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 			c.repairRound(e)
 		}
 	}
-	// What it vouched for and found is what the backfill's look at the copy
-	// reads of its runs (schedule.go), however the scrub ended.
+	// What it found is what the backfill's look at the copy reads of its runs
+	// (schedule.go), however the scrub ended: marked in the hold that records
+	// it, as each vouch was in its own.
 	c.backfillDirty(e)
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
@@ -724,6 +725,9 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 			}
 			e.mu.Lock()
 			vouch(inc, f.rel, id)
+			if c.backfillReads(f.rel) {
+				c.backfillDirty(e)
+			}
 			e.mu.Unlock()
 			continue
 		}
@@ -828,6 +832,11 @@ func (c *Cache) settleFound(e *entry, inc *incarnation, found []checkedFile, unr
 			delete(inc.repair.found, f.rel)
 			if isPack {
 				delete(inc.repair.fetchFailed, cs)
+			}
+			if c.backfillReads(f.rel) {
+				// A run's failure settled: the backfill's look reads it
+				// (runMarks).
+				c.backfillDirty(e)
 			}
 		}
 	}

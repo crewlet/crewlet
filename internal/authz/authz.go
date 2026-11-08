@@ -31,7 +31,7 @@
 // write's method a read grant may send, so the assistant's preview asks the
 // route before the person is shown a change.
 //
-// A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY USE: ADR-0103, whose authority
+// A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY USE: ADR-0104, whose authority
 // this package is. Inside such a turn every verb whose row names an app is
 // decided for the requester's app too ([DecideWithinApps]) — the app read off
 // the same row, any one of a [ClassAnyApp] row's set, the asked arm as the row

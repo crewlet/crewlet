@@ -1948,7 +1948,7 @@ type Stream struct {
 	// append rather than shedding history. The log runs on every node that
 	// runs a state log, whether or not the company hosts code, as every
 	// domain's log does — so its derived ask is paid by every company:
-	// below about 652 GiB free it comes out of the other logs' share (at
+	// below about 653 GiB free it comes out of the other logs' share (at
 	// 100 GiB the mutation log is created at 9.1 GiB rather than 11.1;
 	// docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes, and internal/engine's
@@ -2058,6 +2058,18 @@ type Stream struct {
 	// `turn_engine.conversation_session.retention_days`, and does not depend
 	// on this.
 	ExecutorLogMaxBytes int64 `yaml:"executor_log_max_bytes,omitempty" json:"executor_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the executor log, where seats' executor sessions are named; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
+
+	// AccessLogMaxBytes is the byte ceiling on the access log, where what
+	// each seat was told about its access and every SSH certificate and
+	// command is recorded before it is applied.
+	//
+	// UNSET TAKES 128 MiB ([DefaultAccessLogMaxBytes]), sized by the records
+	// the company's seats write rather than by the disk, and scaled down as
+	// far as its 64 MiB floor where the broker is short. Crossing it refuses
+	// the append: a turn is told nothing new and an SSH command is refused
+	// unrecorded. How long the records are kept is the company's own
+	// `access_history.retention_days`, and does not depend on this.
+	AccessLogMaxBytes int64 `yaml:"access_log_max_bytes,omitempty" json:"access_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the access log, where what each seat was told about its access and every SSH certificate and command are recorded; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2591,6 +2603,8 @@ func (s *Stream) validate(path Path) error {
 		ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling)
 	bytesInRange(&p, path, "executor_log_max_bytes", s.ExecutorLogMaxBytes,
 		ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling)
+	bytesInRange(&p, path, "access_log_max_bytes", s.AccessLogMaxBytes,
+		AccessLogMaxBytesFloor, AccessLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2600,8 +2614,8 @@ func (s *Stream) validate(path Path) error {
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
 	//
-	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor and
-	// code logs included. The sum is what the broker will be asked to back, so a log
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor,
+	// code and access logs included. The sum is what the broker will be asked to back, so a log
 	// left out of it is a limit this check passes and the boot refuses —
 	// which is the one outcome the check exists to prevent, arriving with a
 	// message that says the configuration was fine.
@@ -2629,7 +2643,8 @@ func (s *Stream) validate(path Path) error {
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
 				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
 				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
-				"code_log_max_bytes %d = %d): the broker refuses a stream "+
+				"code_log_max_bytes %d + access_log_max_bytes %d = %d): the "+
+				"broker refuses a stream "+
 				"whose ceiling it cannot back, so this node would fail to "+
 				"provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings, and leave headroom, because the state logs reserve only "+
@@ -2638,7 +2653,8 @@ func (s *Stream) validate(path Path) error {
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, declared)
+			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, s.AccessLogMaxBytes,
+			declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

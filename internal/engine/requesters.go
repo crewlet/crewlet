@@ -24,7 +24,7 @@ import (
 // the apps their own grants name and never admin: the routed identity
 // directory answers who holds the seat, at what stage and with what grants —
 // that ONE seat's requester, asked by its handle — so the ceiling bounds an
-// agent by the apps the requester uses (ADR-0103), by their RELATIONS to what
+// agent by the apps the requester uses (ADR-0104), by their RELATIONS to what
 // it reads — an artifact's shares, units and leads, a repository's grant for a
 // seat — and by whether they may act at all. Admin is never part of a
 // ceiling: an administrator who asks an agent for somebody's private artifact

@@ -35,7 +35,7 @@ func objectFor(apps []iam.Grant) authz.Object {
 		ContainerKind: authz.KindProject}
 }
 
-// A REQUESTER WHO DOES NOT USE AN APP HAS NO AGENT USE IT FOR THEM (ADR-0103).
+// A REQUESTER WHO DOES NOT USE AN APP HAS NO AGENT USE IT FOR THEM (ADR-0104).
 //
 // Every verb whose row names an app, taken by an agent that may take it, in a
 // turn a person woke who does not hold the app, is refused [authz.ReasonCeiling]
@@ -46,7 +46,7 @@ func objectFor(apps []iam.Grant) authz.Object {
 // held the day its row is written.
 //
 // Mutation: compose the ceiling's person with every app (the requester ceiling
-// before ADR-0103), or skip the app half — every row goes red.
+// before ADR-0104), or skip the app half — every row goes red.
 func TestARequesterWithoutTheAppRefusesItsVerbs(t *testing.T) {
 	t.Parallel()
 	agent := seat("cto", iam.Apps...)

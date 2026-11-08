@@ -92,6 +92,24 @@
         "null"
       ]
     },
+    "AccessHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "retention_days": {
+          "description": "How long the record of what each agent was told about its access, and of every SSH certificate and command, is kept (default 400, 90..3650). Each agent's newest record stays while the agent exists.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Assistant": {
       "additionalProperties": false,
       "properties": {
@@ -5851,6 +5869,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "access_history": {
+      "$ref": "#/$defs/AccessHistory"
+    },
     "artifacts": {
       "$ref": "#/$defs/CompanyArtifacts"
     },

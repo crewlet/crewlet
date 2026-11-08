@@ -69,7 +69,7 @@ func TestAnAgentNeverDisclosesToOrWritesForARequesterWhoCouldNot(t *testing.T) {
 // add an asset, reshape or fill in its data, and create a new one, as they may
 // ask an agent to change any other work it owns. They may NOT have it read the
 // artifact back to them, nor share it with them, which is the same read one
-// step removed. The app is asked before the spare (ADR-0103): a requester who
+// step removed. The app is asked before the spare (ADR-0104): a requester who
 // does not use the artifacts app steers none of its edits, and neither does a
 // stranger, who uses no app — what either still steers is an edit no app
 // gates, such as filling in the agent's own data. On somebody else's artifact

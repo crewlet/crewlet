@@ -84,6 +84,10 @@ code: {...}                             # optional — Gitlet, the engine's own 
 inbox:                                  # optional — a person's inbox, every native domain's notices
   retention_days: 365                   #   how long it keeps one (default 365, 30..3650). See
                                         #   "A person's inbox" under "Tracker" below.
+access_history:                         # optional: what each agent was told about its access,
+  retention_days: 400                   #   and every SSH certificate and command, kept this long
+                                        #   (default 400, 90..3650); each agent's newest told
+                                        #   record stays while the agent exists.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 
@@ -1267,6 +1271,19 @@ stream:
                                     #   long a session is kept is the company
                                     #   document's turn_engine.
                                     #   conversation_session.retention_days
+  # access_log_max_bytes: 134217728
+                                    #   the access log, where what each seat
+                                    #   was told about its access and every
+                                    #   SSH certificate and command are
+                                    #   recorded (64 MiB..64 GiB). UNSET TAKES
+                                    #   128 MiB, sized by those records rather
+                                    #   than by the disk, and scaled down as far
+                                    #   as 64 MiB where the broker is short:
+                                    #   about two months of a completely blocked
+                                    #   trim at the reference company's ~2 MB a
+                                    #   day. How long the records are kept is
+                                    #   the company document's
+                                    #   access_history.retention_days
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -1294,7 +1311,7 @@ stream:
                                     #   twice the mutation log's ceiling, its
                                     #   least, which comes out of the other
                                     #   logs' share whole (at 100 GiB free,
-                                    #   13.4 GiB beside a mutation log of
+                                    #   13.3 GiB beside a mutation log of
                                     #   6.7 GiB). Once the streams exist, the
                                     #   ratio the two logs' bytes_per_day
                                     #   show in `crewlet retention status` is
