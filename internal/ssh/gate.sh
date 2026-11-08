@@ -1,8 +1,8 @@
 #!/bin/sh
-# crewlet-gate 1: the only program a Crewlet certificate runs on this server.
+# crewlet-gate 2: the only program a Crewlet certificate runs on this server.
 set -eu
 set -f
-GATE_VERSION=1
+GATE_VERSION=2
 ALLOWLIST=/etc/ssh/crewlet/read-allowlist
 
 say() { logger -t crewlet-gate -p authpriv.notice -- "$(printf '%s' "$*" | tr '\n\r' '  ')" 2>/dev/null || :; }
@@ -16,20 +16,33 @@ key_id() {
 }
 
 # matches RULE ARG...: RULE's first word is an absolute path, matched by the
-# path or its base name; "*" is any one word not starting with "-"; a word
-# ending in "=*" is that prefix and any value; a final "..." is any further words.
+# path or its base name; where the rule runs a program through "sudo -n", the
+# program's absolute path is matched by the path or its bare name too, a name
+# with no "/", which sudo resolves through its own secure_path and checks
+# against the sudoers line naming that path; "*" is any one word not starting
+# with "-"; a word ending in "=*" is that prefix and any value; a final "..."
+# is any further words. Every other word matches exactly.
 matches() {
   rule=$1
   shift
-  first=1
+  pos=0
+  sudo=0
   for word in $rule; do
     if [ "$word" = "..." ]; then
       return 0
     fi
     [ $# -gt 0 ] || return 1
-    if [ "$first" = 1 ]; then
+    if [ "$pos" = 0 ]; then
       [ "$1" = "$word" ] || [ "$1" = "${word##*/}" ] || return 1
-      first=0
+      [ "${word##*/}" = sudo ] && sudo=1
+    elif [ "$pos" = 1 ] && [ "$sudo" = 1 ] && [ "$word" = "-n" ]; then
+      [ "$1" = "-n" ] || return 1
+      sudo=2
+    elif [ "$pos" = 2 ] && [ "$sudo" = 2 ] && [ "${word#/}" != "$word" ]; then
+      case "$1" in
+        */*) [ "$1" = "$word" ] || return 1 ;;
+        *) [ "$1" = "${word##*/}" ] || return 1 ;;
+      esac
     elif [ "$word" = "*" ]; then
       case "$1" in -*) return 1 ;; esac
     elif [ "${word%=\*}" != "$word" ]; then
@@ -37,6 +50,7 @@ matches() {
     elif [ "$word" != "$1" ]; then
       return 1
     fi
+    pos=$((pos + 1))
     shift
   done
   [ $# -eq 0 ]

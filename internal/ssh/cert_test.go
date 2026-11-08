@@ -174,7 +174,7 @@ func TestTheSetupIsRenderedFromTheHostAlone(t *testing.T) {
 	}
 	for _, want := range []string{current + "\n" + next + "\nCREWLET_CA", "HOST_ID=api-1", "OPS_USER=crewlet-ops",
 		"Match User crewlet-read,crewlet-ops", "Match User crewlet-read\n    ForceCommand /usr/local/sbin/crewlet-gate read",
-		"crewlet-gate 1:", "/usr/bin/journalctl --no-pager -u * --since=*", "rm -f /etc/sudoers.d/crewlet-read"} {
+		"crewlet-gate 2:", "/usr/bin/journalctl --no-pager -u * --since=*", "rm -f /etc/sudoers.d/crewlet-read"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
 		}

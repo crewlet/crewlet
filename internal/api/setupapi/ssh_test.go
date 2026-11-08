@@ -134,7 +134,7 @@ func TestAnSSHServerIsWrittenAsARevisionAndRemovedOnlyOnceNoAgentNamesIt(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.SSH == nil || state.SSH.CAPublicKey != ca.PublicLine() || state.SSH.SetupVersion != 1 ||
+	if state.SSH == nil || state.SSH.CAPublicKey != ca.PublicLine() || state.SSH.SetupVersion != sshint.SetupVersion ||
 		len(state.SSH.Hosts) != 1 || state.SSH.Hosts[0].ID != "api-1" || state.SSH.Hosts[0].Port != 22 ||
 		len(state.SSH.Hosts[0].Fingerprints) != 1 || state.SSH.Hosts[0].Fingerprints[0] != fingerprint {
 		t.Fatalf("the answer shows %+v", state.SSH)

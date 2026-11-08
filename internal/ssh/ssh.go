@@ -26,6 +26,13 @@
 // crewlet.<host id>.<level>, so one issued for one server is refused by
 // another.
 //
+// # What the gate takes, and what the seat is told (ADR-0108)
+//
+// The gate matches a read rule word for word, taking a program's bare name
+// only as the rule's first word and after `sudo -n`, where sudo resolves it
+// and the sudoers line names its path. [ReadCommands] renders a host's rules
+// in the form a seat types them, for its access section and a refused read.
+//
 // # No account to make
 //
 // The integration creates nothing at a vendor: a seat's access is the document

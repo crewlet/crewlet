@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
 
 // Version is the snapshot shape this build writes. A snapshot evolves by
@@ -118,6 +119,18 @@ type Integration struct {
 	// not in effect yet, as sorted `key:access` entries joined by commas.
 	Tool    string `json:"tool"`
 	Pending string `json:"pending"`
+
+	// Commands is, for SSH, the read commands each host in Scope admits, as
+	// the seat types them ([sshint.ReadCommands]).
+	Commands []HostCommands `json:"commands,omitempty"`
+}
+
+// HostCommands is the read commands one SSH host's allowlist admits, in its
+// order, and how many past the shown ones it holds ([MaxCommands]).
+type HostCommands struct {
+	Host string   `json:"host"`
+	Run  []string `json:"run"`
+	More int      `json:"more,omitempty"`
 }
 
 // Policy is one company policy: the digest of its whole text, and as much of
@@ -248,6 +261,9 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 	}
 	slices.Sort(pending)
 	out.Pending = strings.Join(pending, ",")
+	if lane == seataccess.LaneSSH {
+		out.Commands = hostCommands(c, want.Scope)
+	}
 	for _, entry := range want.Scope {
 		if name := strings.TrimSpace(words.ScopeNames[entry]); name != "" && name != entry {
 			if out.ScopeLabels == nil {
@@ -371,6 +387,8 @@ func (s Snapshot) normal() Snapshot {
 	slices.SortFunc(s.Integrations, func(a, b Integration) int { return strings.Compare(a.Lane, b.Lane) })
 	for i := range s.Integrations {
 		s.Integrations[i].Scope = sortedSet(s.Integrations[i].Scope)
+		s.Integrations[i].Commands = slices.Clone(s.Integrations[i].Commands)
+		slices.SortFunc(s.Integrations[i].Commands, func(a, b HostCommands) int { return strings.Compare(a.Host, b.Host) })
 	}
 	s.NotGranted = sortedSet(s.NotGranted)
 	slices.SortFunc(s.Policies, func(a, b Policy) int { return strings.Compare(a.Digest, b.Digest) })
@@ -445,4 +463,16 @@ func Parse(data []byte) (Snapshot, error) {
 func digestOf(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// hostCommands is each granted host's listed read commands, by host id.
+func hostCommands(c *config.Company, hosts []string) []HostCommands {
+	var out []HostCommands
+	for _, id := range sortedSet(hosts) {
+		if h, ok := c.Integrations.SSH.Host(id); ok {
+			run, more := sshint.ListedCommands(h)
+			out = append(out, HostCommands{Host: id, Run: run, More: more})
+		}
+	}
+	return out
 }
