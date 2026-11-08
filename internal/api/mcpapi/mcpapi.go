@@ -67,6 +67,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // Searcher is the community registry a catalogue read searches, as
@@ -115,6 +116,11 @@ type Options struct {
 	// approval unavailable.
 	Approvals Approvals
 
+	// HeldCalls opens a held call's arguments for whoever may answer it
+	// (GET /mcp-approvals/{id}); nil shows none, and an SSH operate command
+	// is then never approved here.
+	HeldCalls *sandbox.CallSeal
+
 	// Reviews reads a server's tool changes and writes a decision about
 	// one (changes.go); nil leaves the review route answered unavailable.
 	Reviews Reviews
@@ -152,6 +158,7 @@ type Service struct {
 	documents ValueDocuments
 	tools     ToolDocuments
 	approvals Approvals
+	heldCalls *sandbox.CallSeal
 	reviews   Reviews
 	values    ValueStore
 	now       func() time.Time
@@ -203,7 +210,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		tools: opts.Tools, approvals: opts.Approvals, reviews: opts.Reviews, values: opts.Values, now: now,
+		tools: opts.Tools, approvals: opts.Approvals, heldCalls: opts.HeldCalls, reviews: opts.Reviews, values: opts.Values, now: now,
 		signIns: opts.SignIns, audit: opts.Audit, guard: guard}, nil
 }
 
@@ -307,6 +314,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// run made the call once the handler has read it. It acts on the held
 	// call and keeps it, as an answer to a run's question does.
 	approvals := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerApprove))
+	// AND THE CALL WHOLE, read on the same terms by whoever may answer it.
+	if err := approvals.Handle("GET /mcp-approvals/{id}",
+		authz.Policy{Action: authz.ActionToolsApprove, Object: ownRecord},
+		http.HandlerFunc(s.serveHeld)); err != nil {
+		return err
+	}
 	return approvals.Handle("POST /mcp-approvals/{id}",
 		authz.Policy{Action: authz.ActionToolsApprove, Object: ownRecord}.Rewriting(),
 		s.audited(types.MCPServerApprove, s.serveApproval))

@@ -430,6 +430,11 @@ type Object struct {
 	// nobody has looked.
 	Asked string
 
+	// Named are the seat handles the company document names for a
+	// [ClassNamed] gesture (integrations.ssh.approvers), read from the
+	// document by the caller, never from an argument.
+	Named []string
+
 	// Container is the project a task is filed under, the container a page
 	// sits in, or the UNIT a unit's chat room belongs to. It is what the
 	// container, tidy and destructive classes ask the chart about — and, for
@@ -660,7 +665,9 @@ const (
 	// verb is part of everybody's overview ([ClassEverybody]).
 	ReasonEverybody Reason = "everybody"
 	// ReasonAsked is an admission on being ASKED: an open ask on the work
-	// item names the caller ([ClassAppOrAsked], [Object.Asked]).
+	// item names the caller ([ClassAppOrAsked], [Object.Asked]), or the
+	// company document names them for the gesture ([ClassNamed],
+	// [Object.Named]).
 	ReasonAsked Reason = "asked"
 	// ReasonSeatOnly is a refusal a person or a credential gets and an
 	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).

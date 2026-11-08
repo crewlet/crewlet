@@ -2312,6 +2312,10 @@
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
+        },
+        "ssh": {
+          "$ref": "#/$defs/SSH",
+          "description": "The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."
         }
       },
       "type": [
@@ -4387,6 +4391,10 @@
         "slack": {
           "$ref": "#/$defs/RoleSlack",
           "description": "This seat's own Slack app: whether it is on."
+        },
+        "ssh": {
+          "$ref": "#/$defs/RoleSSH",
+          "description": "This seat's SSH access: whether it is on, its level and its servers."
         }
       },
       "type": [
@@ -4547,6 +4555,48 @@
             "number",
             "boolean",
             "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleSSH": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent may reach servers over SSH. Off stops issuing its certificates at once; ones already issued expire within minutes.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "hosts": {
+          "description": "Ids of the servers in integrations.ssh.hosts this agent may reach. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): the server's allowlisted read commands, with no approval. operate: read, plus any command, each one approved by a person before it runs.",
+          "enum": [
+            "read",
+            "operate",
+            "",
+            null
           ]
         }
       },
@@ -4722,6 +4772,245 @@
             "null"
           ],
           "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SSH": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats that may approve an agent's operate command, beside administrators. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "commands": {
+          "$ref": "#/$defs/SSHCommands",
+          "description": "How long a command may run and how much of its output reaches the agent. Optional."
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "hosts": {
+          "description": "The servers agents may be granted, at most 200, each with its address, pinned host keys and the two login users the server setup creates.",
+          "items": {
+            "$ref": "#/$defs/SSHHost"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/SSHProvisioning",
+          "description": "The engine's SSH certificate authority, a staged next one during a rotation, and the addresses certificates may be used from. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SSHCommands": {
+      "additionalProperties": false,
+      "properties": {
+        "max_output_bytes": {
+          "description": "Bytes of each of a command's output streams returned to the agent, the rest cut: 4096 to 1048576. Empty is 65536.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_seconds": {
+          "description": "Seconds a command may run before the engine stops it: 10 to 900. Empty is 120.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SSHHost": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The server's host name or IP address, with no scheme, user, port or path.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "containers": {
+          "description": "Let the read user list containers and read their logs through sudo -n docker ps and docker logs --tail. Off by default.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "What the server is, in one line of up to 200 characters, shown to agents and approvers.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "host_keys": {
+          "description": "The server's public host keys, one to eight lines as /etc/ssh/ssh_host_*_key.pub holds them. The engine accepts no other key from this server and never learns one on first use.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Short name of the server: up to 40 lowercase letters, digits and hyphens. It is part of every certificate principal for this server, so changing it means running the server setup again.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "The server's SSH port. Empty is 22.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "read_allowlist": {
+          "description": "The commands the read user may run, one rule each, replacing the default list: an absolute path, then words, where * is any one word not starting with -, a word ending in =* is that option with any value, and a final ... is any further words. At most 100 rules. Empty renders the default list.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "users": {
+          "$ref": "#/$defs/SSHHostUsers",
+          "description": "The login users the server setup creates."
+        }
+      },
+      "required": [
+        "id",
+        "address",
+        "host_keys"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SSHHostUsers": {
+      "additionalProperties": false,
+      "properties": {
+        "operate": {
+          "description": "The login user for approved operate commands, such as crewlet-ops. Absent leaves the server read-only.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "read": {
+          "description": "The login user for read access, whose every command is forced through the server's read allowlist, such as crewlet-read.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "read"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SSHProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "certificate_authority": {
+          "description": "Reference to the engine's SSH certificate authority, an unencrypted OpenSSH Ed25519 private key such as ${SSH_CERTIFICATE_AUTHORITY}. Minted by the connect form and never shown; servers trust only its public line. It can sign a certificate for any host's read or operate user.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "next_certificate_authority": {
+          "description": "Reference to a staged certificate authority, such as ${SSH_CERTIFICATE_AUTHORITY_NEXT}, present only while a rotation is in progress. The engine never signs with it until it is promoted.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "source_addresses": {
+          "description": "Address ranges, such as 203.0.113.7/32, every certificate may be used from: the engine's egress addresses. At most 16. Empty leaves certificates usable from anywhere until they expire.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": [

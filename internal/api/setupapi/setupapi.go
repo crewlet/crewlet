@@ -114,6 +114,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -260,6 +261,13 @@ type Options struct {
 	// is open on every node.
 	StateClaims StateClaims
 
+	// SSHTests is the fleet's record of each SSH server's latest Test
+	// connection, which the SSH answer shows on each server's row.
+	SSHTests SSHTests
+
+	// SSH is the engine's half of Test connection and the SSH audit.
+	SSH SSHAccess
+
 	// Access is the engine's per-seat access: each agent seat's setting,
 	// account and last sync on every integration that manages one account
 	// per agent, the plan a draft would take, and the sync a save starts.
@@ -284,10 +292,14 @@ type Service struct {
 	secrets   setup.Secrets
 	passes    *setup.Runner
 	// access is the engine's per-seat access. See [Options.Access].
-	access  Access
-	probes  map[integration.Kind]setup.Probe
-	sink    sinkFactory
-	status  Status
+	access Access
+	probes map[integration.Kind]setup.Probe
+	sink   sinkFactory
+	status Status
+	// sshTests is [Options.SSHTests].
+	sshTests SSHTests
+	// ssh is [Options.SSH].
+	ssh     SSHAccess
 	clock   func() time.Time
 	appFlow *AppFlow
 
@@ -315,6 +327,8 @@ func New(opts Options) (*Service, error) {
 		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
 		{"Access", opts.Access == nil},
+		{"SSHTests", opts.SSHTests == nil},
+		{"SSH", opts.SSH == nil},
 		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
@@ -348,6 +362,8 @@ func New(opts Options) (*Service, error) {
 		secrets:        opts.Secrets,
 		passes:         opts.Passes,
 		access:         opts.Access,
+		sshTests:       opts.SSHTests,
+		ssh:            opts.SSH,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -439,6 +455,20 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// agent: it rewrites the seat's sealed credential.
 	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential",
 		authz.EffectRewrites, s.accessCredential)
+	// THE SSH SERVERS: see ssh.go. A scan dials an address an administrator
+	// typed, so it is the connect verb, reading; a server's fields are a
+	// revision of the document; the setup is a read of what it renders.
+	post("POST /setup/integrations/ssh/hosts/scan", authz.EffectReads, s.sshScan)
+	mount("PUT /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshPutHost)
+	mount("DELETE /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshDeleteHost)
+	mount("GET /setup/integrations/ssh/hosts/{id}/setup", authz.ActionSetupRead, s.sshSetup)
+	// A TEST SIGNS CERTIFICATES and dials the server, so it is the connect
+	// verb; the audit is an administrator's read.
+	post("POST /setup/integrations/ssh/hosts/{id}/test", authz.EffectReads, s.sshTest)
+	mount("GET /setup/integrations/ssh/audit", authz.ActionSSHAuditRead, s.sshAudit)
+	// A ROTATION SEALS A NEW AUTHORITY, or replaces the current one with it,
+	// so it rewrites.
+	post("POST /setup/integrations/ssh/rotation", authz.EffectRewrites, s.sshRotation)
 	return errors.Join(failures...)
 }
 
@@ -543,6 +573,10 @@ type ToolState struct {
 	Configured   bool                `json:"configured"`
 	Enabled      bool                `json:"enabled"`
 	Requirements []setup.Requirement `json:"requirements"`
+
+	// SSH is the SSH integration's servers and authority lines, on its own
+	// answer alone.
+	SSH *SSHServers `json:"ssh,omitempty"`
 
 	// Guide is the app's intro, setup steps and caution, flattened onto this
 	// answer; it lives in Go so the screen knows nothing about any app.
@@ -871,6 +905,16 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if kind == integration.KindSSH {
+		servers, err := s.sshServers(r.Context(), fc.company)
+		if err != nil {
+			log.WarnContext(r.Context(), "setup_ssh_tests_unavailable", "error", err.Error())
+			httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+				httpjson.Detail{"reason": "the servers' latest tests could not be read from the coordination store"})
+			return
+		}
+		state.SSH = servers
+	}
 	httpjson.Write(w, http.StatusOK, state)
 }
 
@@ -1054,6 +1098,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
 		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindSSH:
+		// NO ROSTER HERE, as for Google Cloud: each agent's hosts are on
+		// the integration's Agents tab, and its certificates are issued at
+		// use, never named in the document.
+		block := company.Integrations.SSH
+		guide = sshint.Guide()
+		reqs = sshint.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

@@ -76,7 +76,7 @@ func (c *Company) validateSeatBlocks() error {
 				// seat already, each with its own remedy: the GitHub App by
 				// [Company.validateHumanSeatCode], the chat apps by the org
 				// model's agent-only rule.
-				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud"}, b.lane) {
+				if slices.Contains([]string{"datadog", "gitlab", "jira", "confluence", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh"}, b.lane) {
 					p.add(here, ErrConflict, "%s: a person signs in as themselves. "+
 						"Remove this block, or make the seat an agent seat", seatAccessOnHuman)
 				}
@@ -114,6 +114,7 @@ func (c *Company) validateSeatBlocks() error {
 		c.checkDigitalOcean(&p, at(base, "digitalocean"), in.DigitalOcean)
 		c.checkAWS(&p, at(base, "aws"), in.AWS)
 		c.checkGoogleCloud(&p, at(base, "google_cloud"), in.GoogleCloud)
+		c.checkSSH(&p, at(base, "ssh"), in.SSH)
 	}
 	return p.err()
 }
@@ -138,6 +139,8 @@ func (c *Company) connected(lane string) bool {
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
+	case "ssh":
+		return in.SSH != nil
 	default:
 		return true
 	}

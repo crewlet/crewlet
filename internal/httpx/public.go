@@ -302,6 +302,18 @@ func public(ip netip.Addr, nat64 []netip.Prefix) bool {
 	return false
 }
 
+// ServerAddress reports whether ip may be where a server the operator registered
+// is reached: a private address included, since an operator's own servers are
+// often on one, but never this host (loopback or unspecified), a link-local
+// address (where a cloud's metadata service answers) or a multicast group. An
+// IPv4 address written in IPv6 form is judged as itself, and a zoned address
+// names one of this host's links, so it is refused.
+func ServerAddress(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsValid() && ip.Zone() == "" && !ip.IsLoopback() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast()
+}
+
 // allowlisted reports whether ip is in global unicast and outside every block
 // there that is not on the internet ([notGlobal6]): the allowlist an IPv6
 // address no NAT64 prefix holds is judged by.

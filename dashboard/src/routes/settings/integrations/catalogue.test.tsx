@@ -671,7 +671,7 @@ test("the catalogue is ordered by name, whatever is connected", () => {
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   // And the order does not depend on state: the same list, connected or not.
   expect(names[0]).toBe("Atlassian");
-  expect(names.at(-1)).toBe("Slack");
+  expect(names.at(-1)).toBe("SSH");
 });
 
 // WHICH PHASES THE SCREEN KEEPS WATCHING, and the rule tying that to what it

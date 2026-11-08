@@ -243,6 +243,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		authz.ActionFleetRead: "a read of the deployment's own controls " +
 			"changes nothing",
 		authz.ActionAuditRead: "a read of the trail changes nothing",
+		authz.ActionSSHAuditRead: "a read of the SSH audit changes nothing, and a person reads it " +
+			"from their own session alone",
 		authz.ActionCatalogueWrite: "a tool, asked through the operator MCP " +
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +
@@ -257,6 +259,10 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"step-up reaches",
 		authz.ActionCodeStatus: "a read of the Gitlet nodes' caches changes nothing, " +
 			"and it is a tool a granted seat holds, which no step-up reaches",
+		authz.ActionSSHRead: "a read the server's own allowlist bounds, and a tool a granted seat " +
+			"holds, which no step-up reaches",
+		authz.ActionSSHOperate: "a tool a granted seat holds, which no step-up reaches: what it " +
+			"asks waits for a person who approves it at a fresh step-up (ssh.operate.approve)",
 		authz.ActionModelsCheck: "a model's checks change no config and no " +
 			"credential: they spend a few tokens on a call the company already makes",
 		authz.ActionModelsRetry: "a retry changes no config and no credential: " +

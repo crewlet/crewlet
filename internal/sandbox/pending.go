@@ -1346,6 +1346,10 @@ type PendingRun struct {
 	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
 
+	// Stranger is a run whose turn acts for somebody the company does not
+	// know through a colleague's ask, which its resumed turn acts for too.
+	Stranger bool `json:"stranger,omitempty"`
+
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,
 	// nil for a turn no ask woke — see [ColleagueAsk].
 	//

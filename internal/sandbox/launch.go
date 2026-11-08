@@ -116,6 +116,9 @@ type TurnRef struct {
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
+	// Stranger is a turn acting for somebody the company does not know
+	// through a colleague's ask ([turnctx.Turn.Stranger]).
+	Stranger bool
 
 	// ColleagueAsk is the colleague's A2A question the turn answers, nil
 	// for a turn no ask woke — written onto the row, because the segment
@@ -567,7 +570,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		WorkItem: req.Turn.WorkItem,
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
-		Requester: req.Turn.Requester,
+		Requester: req.Turn.Requester, Stranger: req.Turn.Stranger,
 		// THE TURN'S READ OF ITS CONVERSATION, frozen by the write that
 		// creates the record and kept by every reset: a relaunch continues
 		// the base this read named, never one read again — see

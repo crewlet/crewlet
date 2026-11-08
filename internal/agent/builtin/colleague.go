@@ -70,6 +70,11 @@
 // operation to make again ([unknownWrite], [failedUnknown]) — never a receipt
 // carrying `outcome: unknown` beside a key or a version, which a model reads as
 // the write done and a person's screen would draw.
+//
+// # The company's servers
+//
+// ssh_read and ssh_operate reach a seat's servers for the company alone, and
+// ssh_operate only once a person approved that one call (ADR-0107, ssh.go).
 package builtin
 
 import (

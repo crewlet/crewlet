@@ -573,7 +573,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	}
 	if refusedByContract {
 		recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: res.Output,
-			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
+			Failed: true, Cause: RefusalInvalid}, e.Annotations, target, false)
 		s.reportLoop(name, target, run, turn)
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
@@ -584,7 +584,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	// THE MODEL READS TEXT, so the note is rendered after the output here
 	// ([Rendered]), and the ledger records what the model read.
 	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res),
-		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
+		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target, e.OutputUnkept)
 	res.Output = recorded.Output
 	s.reportLoop(name, target, run, turn)
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
@@ -613,7 +613,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
-		Origin: e.Origin, Server: server, Source: e.Origin,
+		Origin: e.Origin, Server: server, Source: e.Origin, Unkept: e.OutputUnkept,
 	}, nil
 }
 

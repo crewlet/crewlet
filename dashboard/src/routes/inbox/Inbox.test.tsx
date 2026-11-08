@@ -21,7 +21,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, setStepUpConfirmer } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
@@ -2138,6 +2138,136 @@ describe("the pane", () => {
     // NO EMPTY LIST between the heading and the line: an empty <ol> is a flex
     // item, and the thread's gap around it doubled the space above the line.
     expect(region.querySelector(".inbox-thread-list")).toBeNull();
+  });
+
+  // A HELD CALL IS ANSWERED ONLY BY ITS OWN BUTTONS: an operate command's run
+  // draws Review and allow once and Deny, never the run's options, Something
+  // else or a reply field; Allow once reads the whole call, is confirmed with
+  // a step-up the engine asks for, and answers `POST /mcp-approvals/{id}` with
+  // the digest it showed, never `answer_executor`. An MCP tool's held call
+  // keeps Allow once, Always allow and Deny, sent with the answer alone.
+  // Mutation: draw a held run through the question pane and its options post
+  // `answer_executor`, which the engine refuses.
+  describe("a run holding a call", () => {
+    const WHOLE = {
+      id: "h-9",
+      question: "May cto run a command on api-1 as crewlet-ops?",
+      arguments: { host: "api-1", command: "sudo systemctl restart api", reason: "stuck" },
+      arguments_sha256: "ab".repeat(32),
+    };
+    function heldRun(held: Record<string, unknown>) {
+      return {
+        turn_id: "turn-9",
+        launch_id: "q9",
+        agent_handle: "cto",
+        status: "awaiting_clarification",
+        question: WHOLE.question,
+        question_context: "Allow once runs exactly this command, once.",
+        decision: {
+          question: WHOLE.question,
+          options: [
+            { id: "once", label: "Allow once" },
+            { id: "deny", label: "Deny" },
+          ],
+          role: "approver",
+        },
+        audience_handles: ["jane"],
+        held_call: { id: "h-9", digest: "", held_at: "", ...held },
+        started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      };
+    }
+    /** The approvals route's traffic, the first POST refused for a step-up where `stepUp`. */
+    function approvals(stepUp: boolean) {
+      const sent: { method: string; body: unknown }[] = [];
+      const base = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (!String(url).includes("/mcp-approvals/")) return base(url, init);
+          const method = init.method ?? "GET";
+          sent.push({ method, body: init.body ? JSON.parse(init.body as string) : undefined });
+          const json = (status: number, body: unknown) =>
+            new Response(JSON.stringify(body), {
+              status,
+              headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+            });
+          if (method === "GET") return json(200, WHOLE);
+          if (stepUp && sent.filter((s) => s.method === "POST").length === 1) {
+            return json(403, {
+              error: "step_up_required",
+              message: "Confirm it’s you to do this, then try again.",
+              reason: "step_up",
+              window: "step_up",
+              grants: [],
+            });
+          }
+          return json(200, { id: "h-9", answer: "once", outcome: "pending" });
+        }),
+      );
+      return sent;
+    }
+    let uninstall: (() => void) | null = null;
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+    });
+
+    test("an operate call is allowed once after a step-up, through the approvals route", async () => {
+      const sent = approvals(true);
+      let confirmed = 0;
+      uninstall = setStepUpConfirmer(async () => {
+        confirmed++;
+        return true;
+      });
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({
+        server: "ssh",
+        tool: "ssh_operate",
+        raw: "ssh_operate",
+        fixed: true,
+        approvers: "ssh",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Your answer to the executor" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Review and allow once" }));
+      await screen.findByText(/sudo systemctl restart api/);
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(2));
+      expect(confirmed).toBe(1);
+      for (const post of sent.filter((s) => s.method === "POST")) {
+        expect(post.body).toEqual({ answer: "once", arguments_sha256: WHOLE.arguments_sha256 });
+      }
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    test("an MCP tool's held call keeps its three answers, sent with the answer alone", async () => {
+      const sent = approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({ server: "linear", tool: "linear_delete_issue", raw: "delete_issue" });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Always allow" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toEqual({ method: "POST", body: { answer: "once" } });
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

@@ -602,6 +602,10 @@ export interface HeldCall {
   extra?: ReactNode;
   /** What it was answered, said, where somebody answered it already; absent while it waits. */
   answered?: string;
+  /** A call its tool asks about every time: Allow once or Deny alone, read whole first. */
+  fixed?: boolean;
+  /** Who answers it where not the seat's lead. */
+  approvers?: string;
 }
 
 /** The call a parked run holds for approval, or null for a run parked on a question. */
@@ -616,6 +620,8 @@ export function heldCallOf(run: ExecutorRow): HeldCall | null {
     at: held.held_at || run.paused_at || run.updated_at,
     item: run.work_item ?? null,
     args: run.held_arguments,
+    fixed: held.fixed,
+    approvers: held.approvers,
   };
 }
 
@@ -694,6 +700,8 @@ export function HeldCallRow({
           <HeldCallButtons
             id={call.id}
             seat={call.seat}
+            fixed={call.fixed}
+            approvers={call.approvers}
             onAnswered={(words, done) => {
               setSaid({ words, settled: done });
               onAnswered?.();
