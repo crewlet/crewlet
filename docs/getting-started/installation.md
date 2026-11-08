@@ -82,8 +82,11 @@ without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` pr
 limit sentences on 2.1.303 and 2.1.310; take a newer one when
 `crewlet llm doctor` passes against it. A box continues a Claude Code session
 packed in another box only on 2.1.310 or later (OpenCode 2.0.32), and packs and
-restores one with `tar` and `gzip`, which the published image carries for a
-`direct` cell and a `container` image or an `e2b` template must carry too
+restores one with `tar` and `gzip` and a POSIX userland — `find`, `ls`, `wc`,
+`sed`, `grep`, `head`, `tail`, `cksum` and `touch` among its tools, and a
+`sleep` that takes a tenth of a second — all of which the published image,
+built on `debian:trixie-slim`, carries for a `direct` cell, and a `container`
+image or an `e2b` template must carry too
 ([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)).
 Give the container a volume for the state directory
 (`CREWLET_LLM_HARNESS_HOME=/var/lib/crewlet/llm-harness`, say), so a login survives a
