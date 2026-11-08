@@ -145,8 +145,19 @@ import (
 // itself; on a relaunch the record can stand, and the relaunch, having read
 // the capture refused, does not continue it — what it did before any settle,
 // when it started a session of its own beside a begun stamp it would not wait
-// out. Closing that would take the settle's refusal to the executor log
-// itself, ordered against a late capture as the end's tombstone is.
+// out. THAT IS DECIDED, AND NO REFUSAL GOES TO THE LOG: ordered there as the
+// end's tombstone is, the settle's refusal would have the applier refuse the
+// late capture and lose a session, and no session history is given up for a
+// stamp's sake. So a late capture the log takes before the turn's end is kept
+// and read as any other — the turn's row names it, a session read and the
+// conversation's next turn take it — and past the one relaunch that settled
+// it, nothing treats the stamp as authoritative once the log names the
+// capture: the end names it unkept at the row's own place, which releases
+// nothing ([executorkeep.Ending.Unkept]), and an account of how the turn ended
+// tells a capture as not kept only where the row names an older one
+// (internal/executordomain's Session.Unkept). That relaunch started without
+// it, the outcome of one that does not wait out a slow keep
+// ([relaunchCaptureWait]): a session of its own, beside the capture.
 //
 // NOT PRESENCE, which answers another question. A draining node gives its
 // presence up at once while its keeps still upload, so a taker read as gone
