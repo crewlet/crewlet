@@ -1522,13 +1522,17 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 
 // handedSet is the part kept beside a run's row holding what its job's box
 // was handed, sealed ([CoordStore.Handed]), named for the job it was written
-// for.
+// for: by its launch, and every token the completion poll renewed in the box
+// since ([CoordStore.AddHanded]).
 //
 // BESIDE THE ROW, NEVER ON IT ([coord.RunHanded]): up to [MaxHandedBytes]
 // before sealing — a launch whose environment holds a large file comes near
 // it — which every read of the row would carry, every git request of a coding
-// box and every listing among them, though only a capture of the job's
-// session and the next launch's opening read it.
+// box and every listing among them, though only three read it: a capture of
+// the job's session, to scrub it out; the next launch's opening, to carry it
+// into a box it continues in; and the poll's record of a token it renews in
+// the box, which reads the part and grows it by one compare-and-swap, or marks
+// it ([handedSet.Incomplete]).
 type handedSet struct {
 	// Launch is the job the set was written for ([PendingRun.LaunchID]): a
 	// set read for another job is none.
@@ -1539,6 +1543,21 @@ type handedSet struct {
 	LaunchSeq int64 `json:"launch_seq"`
 	// Sealed is the set as [SessionKeep.SealHanded] sealed it.
 	Sealed string `json:"sealed"`
+	// Incomplete is why the job's set no longer holds every value its box
+	// holds, where a refresh could not add a token it wrote there
+	// ([PendingStore.AddHanded]); Sealed is then empty. Words of the
+	// engine's, never a value, since it sits unsealed. AN EMPTY SEAL IS WHAT
+	// REFUSES, so an older build, which reads none of this, takes the job as
+	// one that keeps nothing and refuses its captures as this build does —
+	// and a later job continuing in the box carries nothing of it, and
+	// refuses its own ([Coordinator.carryHanded]).
+	Incomplete string `json:"incomplete,omitempty"`
+
+	// Extra is every key of the part this build does not know, kept
+	// verbatim through a renewal's write of it (wirekeys.go), and dropped
+	// with the job's set by the next job's attach, which replaces it whole.
+	// Filled by the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // of is the sealed set where it was written for launch, and "" otherwise.
@@ -1547,6 +1566,15 @@ func (h handedSet) of(launch string) string {
 		return ""
 	}
 	return h.Sealed
+}
+
+// incompleteFor is why launch's set holds less than its box does, or "" where
+// the set is not launch's or not marked so.
+func (h handedSet) incompleteFor(launch string) string {
+	if launch == "" || h.Launch != launch {
+		return ""
+	}
+	return h.Incomplete
 }
 
 // readHanded reads the handed set beside turnID's run — the zero set where
@@ -1572,7 +1600,11 @@ func (s *CoordStore) readHanded(ctx context.Context, turnID string) (handedSet, 
 // what the box the row still names was handed, and carried forward in place
 // of what that box does hold.
 //
-// NEVER OVER A LATER JOB'S: a set a later launch wrote is left as it is.
+// NEVER OVER A LATER JOB'S: a set a later launch wrote is left as it is. NOR
+// OVER ITS OWN JOB'S MARK ([handedSet.Incomplete]): only a poll of the running
+// job writes one, after a token it wrote into the box found no set to join,
+// so a write of the job's own set that reaches the store after it — applied
+// once its asker had given up — would hold none of that token.
 //
 // A FAILURE IS LOGGED, NOT RETURNED: the attach has landed and its job runs,
 // and an attach answered as refused would abandon a box the row names. A job
@@ -1587,7 +1619,8 @@ func (s *CoordStore) writeHanded(ctx context.Context, turnID string, job handedS
 			func(current coord.Record, found bool) ([]byte, error) {
 				if found {
 					var held handedSet
-					if json.Unmarshal(current.Value, &held) == nil && held.LaunchSeq > job.LaunchSeq {
+					if json.Unmarshal(current.Value, &held) == nil && (held.LaunchSeq > job.LaunchSeq ||
+						held.incompleteFor(job.Launch) != "") {
 						return nil, nil
 					}
 				}
@@ -1609,7 +1642,88 @@ func (s *CoordStore) Handed(ctx context.Context, run PendingRun) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("sandbox: %w", err)
 	}
+	if why := held.incompleteFor(run.LaunchID); why != "" {
+		return "", fmt.Errorf("%w: %s", ErrHandedIncomplete, why)
+	}
 	return held.of(run.LaunchID), nil
+}
+
+// AddHanded hands run's job's sealed set to add before a refresh writes a
+// token into the job's box. See the contract on [PendingStore].
+//
+// THE ROW FIRST, THEN THE PART. The part's own compare-and-swap decides the
+// set (the job's, by its launch, as [handedSet.of] reads it), and the read of
+// the row before it refuses a poll whose listing is older than the job's end:
+// a relaunch's opening reads the set before it resets the row
+// ([CoordStore.resetLaunch]) and a stop's or a loss's capture reads it after
+// the ending's decision, so a token recorded after either would be in a set
+// nobody reads again. Between the two reads is one round trip, which no claim,
+// collection and relaunch fits in.
+func (s *CoordStore) AddHanded(ctx context.Context, run PendingRun,
+	add func(sealed string) (next, incomplete string)) (bool, error) {
+
+	current, found, err := s.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: read run %s to record what its box is handed: %w", run.TurnID, err)
+	case !found || current.LaunchID != run.LaunchID || current.LaunchSeq != run.LaunchSeq ||
+		current.Status != StatusRunning || current.Launch.Collected || current.Lost != nil ||
+		current.endDecided():
+		return false, nil
+	}
+	// SET ON EVERY ASK OF decide, which runs again on a lost race.
+	later, wrote := false, false
+	_, changed, err := s.runs.MutateSandboxRunPart(ctx, run.TurnID, coord.RunHanded,
+		func(record coord.Record, found bool) ([]byte, error) {
+			later, wrote = false, false
+			var held handedSet
+			if found && json.Unmarshal(record.Value, &held) != nil {
+				// A SET THAT DOES NOT DECODE is none the job's captures
+				// could read either: marked below, like a set never written.
+				held = handedSet{}
+			}
+			switch {
+			case held.Launch == run.LaunchID && held.Sealed == "":
+				// MARKED ALREADY, or kept empty: every capture of the job
+				// is refused, so the token adds nothing to keep.
+				return nil, nil
+			case held.Launch == run.LaunchID:
+				// THE JOB'S OWN PART, written back with the keys a later
+				// build put in it (wirekeys.go): a renewal changes the seal
+				// and the mark, and nothing else of it.
+				next, why := add(held.Sealed)
+				if next == held.Sealed {
+					return nil, nil
+				}
+				held.Sealed, held.Incomplete = next, ""
+				if next == "" {
+					held.Incomplete = why
+				}
+			case held.LaunchSeq > run.LaunchSeq:
+				// A LATER JOB'S SET: this job is over, whatever the row read
+				// a moment ago said.
+				later = true
+				return nil, nil
+			default:
+				// NONE FOR THE JOB — its launch sealed none, or its write
+				// did not land — MARKED as the job's, refusing every
+				// capture of it as its captures are refused already, so a
+				// write of the launch's own set that lands late, its answer
+				// lost, cannot land without this token in it.
+				held = handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Incomplete: handedUnkept}
+			}
+			wrote = true
+			return json.Marshal(held)
+		})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: record what run %s's box is handed: %w", run.TurnID, err)
+	case later, wrote && !changed:
+		// A LATER JOB'S SET, or a run that ended under the write, which the
+		// store undid.
+		return false, nil
+	}
+	return true, nil
 }
 
 // MarkBoxPaused stamps the box as snapshotted, with the instant the pause TTL
