@@ -110,8 +110,8 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 				"nothing sent", by)
 		}
 	}
-	// A ROW IN PROGRESS AND ONE THAT IS NOT, so the screen's placing of the
-	// note by `in_progress` is held to both.
+	// A ROW IN PROGRESS AND ONE THAT IS NOT, so the screen's reading of
+	// `in_progress` is held to both.
 	for _, progress := range []bool{true, false} {
 		if !slices.ContainsFunc(rows, func(row map[string]any) bool { return row["in_progress"] == progress }) {
 			t.Errorf("no row of the page says `in_progress: %v`, so the screen's reading of it is held to "+

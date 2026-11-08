@@ -247,8 +247,12 @@ func (s Session) WentOnNote() string {
 // collection took it, while the turn goes on to its review or waits on a
 // person's answer, or one a loss or a stop left its box to take — which a run
 // of the turn may have gone on past, and whose last call may have no result
-// yet. Such a row is the turn's session, read and continued as one; only never
-// as an ended turn's, which says how the turn left it.
+// yet. Such a row is read as the turn's session, and never as an ended turn's,
+// which says how the turn left it. Whether a relaunch of the turn continues it
+// is the relaunch's own decision, never this one: a relaunch continues only the
+// newest kept capture of the job it follows, and the row's is often an earlier
+// job's (internal/sandbox's ContinuityOf, which a person's read of the row
+// asks).
 //
 // READ OFF THE ROW ALONE: nothing on the log says what kind of capture landed
 // a row, and a reader of it — a person's read surface, a seat's own reads and
@@ -263,9 +267,15 @@ func (s Session) InProgress() bool { return !s.Ended() && s.HasObject() }
 // words, "" of any other: that the turn has not ended, that this is the newest
 // session its runs have kept and when it was captured, that its run may have
 // gone on past it, and that its last call may have no result yet. The ONE
-// SENTENCE OF IT, for every surface that shows a row in words, through
-// [Session.KeptNote]: the engine's words alone, and the row's own instant, so
-// the shown form says it as the row as held does.
+// SENTENCE OF IT, for every surface that shows a row in words.
+//
+// THE ENGINE'S WORDS ALONE, and the row's own instant, so the row as held and
+// its shown form ([Session.Redacted]) say it alike, and a surface carries it
+// apart from what a reader is told of a row its turn went on past
+// ([Session.WentOnNote]), which quotes what refused a capture: as words nobody
+// else wrote, never fenced as theirs. The two never meet — one is of a live
+// row, the other of an ended one — and each is placed where it reads, this one
+// beside the row's not having ended.
 func (s Session) InProgressNote() string {
 	if !s.InProgress() {
 		return ""
@@ -278,24 +288,6 @@ func (s Session) InProgressNote() string {
 		note += ", captured at " + s.CapturedAt.UTC().Format(time.RFC3339)
 	}
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
-}
-
-// KeptNote is what a reader is told of the session the row keeps, beyond its
-// fields, "" where there is nothing to tell: of a session in progress, that it
-// is ([Session.InProgressNote]); of an ended turn's kept up to a session it
-// went on past, or may have, that, with the newer capture that was not kept
-// and why ([Session.WentOnNote]). The two never meet — one is of a live row,
-// the other of an ended one — so a surface carries them in ONE field, beside
-// whether the row is in progress, which says which of the two it holds, and
-// no surface joins them itself.
-//
-// Asked of the shown form ([Session.Redacted]), as every surface shows a row:
-// the unkept capture's reason in it quotes what refused it.
-func (s Session) KeptNote() string {
-	if s.InProgress() {
-		return s.InProgressNote()
-	}
-	return s.WentOnNote()
 }
 
 // Kept is the row as continuing its turn's kept session reads it

@@ -54,11 +54,14 @@ import (
 // (executordomain.LinearizableReadsPerSeatDay).
 //
 // A row says what a person's read of it says of the session it keeps, in the
-// domain's one set of words (`kept_note`, executordomain.Session.KeptNote):
-// that the session of a turn that has not ended is in progress
-// (`in_progress`), its run maybe gone on past it — so a seat reading its own
+// domain's one sentence of each: that the session of a turn that has not ended
+// is in progress, its run maybe gone on past it (`in_progress`,
+// `in_progress_note`: executordomain.Session.InProgressNote, the engine's
+// words alone and never fenced as somebody's) — so a seat reading its own
 // earlier launch's session never takes it for an ended turn's — or that an
-// ended turn went on past the session it kept.
+// ended turn went on past the session it kept (`kept_note`:
+// executordomain.Session.WentOnNote, which quotes what refused a capture, and
+// is fenced as the row's other words are).
 //
 // # Every word fenced as a harness's
 //
@@ -184,11 +187,12 @@ const (
 	listedSessionsMax = 13
 
 	// listedProseBytes is the most of each of a listed row's words — what
-	// its turn was asked, each of its ending's accounts and its note on the
-	// session it keeps — a page shows, cut on a rune boundary and marked:
-	// THREE HUNDRED BYTES, about three lines, which tell one session from
-	// another, and hold a session in progress's whole sentence. The first
-	// page of a session's read shows its row whole.
+	// its turn was asked, each of its ending's accounts and its note on a
+	// session its turn went on past — a page shows, cut on a rune boundary
+	// and marked: THREE HUNDRED BYTES, about three lines, which tell one
+	// session from another. The first page of a session's read shows its row
+	// whole. A session in progress's sentence is the engine's, of a length
+	// it bounds itself, and is shown whole wherever it is.
 	listedProseBytes = 300
 )
 
@@ -227,14 +231,19 @@ type sessionRow struct {
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
 	// InProgress marks the session of a turn that has not ended, which its
-	// run may have gone on past, and KeptNote is what the seat is told of the
-	// session the row keeps, in the domain's one set of words for every
-	// surface (executordomain.Session.KeptNote): of a session in progress,
-	// that it is; of a turn that went on past the session it kept, or was
-	// lost, that, and why its newer capture was not kept — which quotes what
-	// refused it: somebody's words, declared on the field.
-	InProgress bool   `json:"in_progress,omitempty"`
-	KeptNote   string `json:"kept_note,omitempty" untrusted:"fence"`
+	// run may have gone on past, and InProgressNote says so in the domain's
+	// one sentence of it for every surface
+	// (executordomain.Session.InProgressNote): the engine's words alone,
+	// which no fence labels as somebody else's.
+	InProgress     bool   `json:"in_progress,omitempty"`
+	InProgressNote string `json:"in_progress_note,omitempty"`
+
+	// KeptNote is what the seat is told of a turn that went on past the
+	// session it kept, or was lost, in the domain's one sentence of it
+	// (executordomain.Session.WentOnNote): that, and why its newer capture
+	// was not kept — which quotes what refused it: somebody's words,
+	// declared on the field.
+	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
 
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
@@ -259,7 +268,8 @@ type sessionRow struct {
 // session or of the conversation the reading turn serves — and, of the
 // session it keeps, whether it is in progress and what the domain tells every
 // reader of it, asked of that shown form, so a seat is told of its session
-// what a person's read of the same row is told.
+// what a person's read of the same row is told: the in-progress sentence
+// whole, as the engine's, and a went-on note cut as the row's other words.
 func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow {
 	s = s.Redacted()
 	shorten := func(text string) string {
@@ -272,7 +282,8 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		Turn: s.Turn, Conversation: s.ConversationKey, Harness: s.Harness,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		Kept: s.HasObject(), BaseTurn: s.BaseTurn, Asked: shorten(s.AskExcerpt),
-		InProgress: s.InProgress(), KeptNote: shorten(s.KeptNote()),
+		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(),
+		KeptNote: shorten(s.WentOnNote()),
 	}
 	if row.Kept {
 		row.KeptBytes = s.Object.Size
@@ -307,11 +318,12 @@ func sessionInstant(at time.Time) *time.Time {
 }
 
 // fenceRow registers the words of row, at path in read's answer: what its
-// turn was asked, its ending's accounts, what it is told of the session it
-// keeps and a search's snippet, each a kept session's naming nobody — the row
+// turn was asked, its ending's accounts, its note on a session its turn went on
+// past and a search's snippet, each a kept session's naming nobody — the row
 // keeps no writer of its ask, and its ending's accounts and its note quote
 // what a box, a tool or a person wrote — and the name of whoever stopped it,
-// defused in place, on the envelope.
+// defused in place, on the envelope. Never the sentence of a session in
+// progress, which is the engine's own and quotes nobody.
 func fenceRow(read *foreignRead, path fieldPath, row sessionRow) {
 	nobody := sessionLabel("")
 	fenceSession(read, path.key("asked"), nobody, row.Asked)

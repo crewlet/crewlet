@@ -15,23 +15,25 @@ import (
 // and whose row names a session — the newest its runs have kept, a job's final
 // capture its collection took while the turn goes on, or one a loss left its
 // box to take — is read as a session in progress, in the one sentence every
-// surface carries ([executordomain.Session.KeptNote]): that the turn has not
-// ended, that this is the newest session its runs have kept and when it was
-// captured, in UTC as every instant the engine words is, that its run may have
-// gone on past it and that its last call may have no result yet. Never as an
-// ended turn's session, and never as one saved as its run works, which nothing
-// on the row says. A live row naming no session yet is said by why it names
-// none; an ended row by how its turn left it — the note of one its turn went on
-// past, or none; and a row in progress is never told as one its turn went on
-// past. Asked of the row as it is held or of its shown form, which every reader
-// is shown, it reads alike.
+// surface carries ([executordomain.Session.InProgressNote]): that the turn has
+// not ended, that this is the newest session its runs have kept and when it
+// was captured, in UTC as every instant the engine words is, that its run may
+// have gone on past it and that its last call may have no result yet. Never as
+// an ended turn's session, and never as one saved as its run works, which
+// nothing on the row says. A live row naming no session yet is said by why it
+// names none; an ended row by how its turn left it — the note of one its turn
+// went on past, a lost turn's at its last word among them, or none — and a row
+// in progress is never told as one its turn went on past, nor an ended row as
+// one in progress. The sentence is the engine's words alone, so the row as held
+// and its shown form, which every reader is shown, say it alike; the went-on
+// note quotes what refused a capture, and its shown form is its redaction.
 //
 // Mutation: read InProgress off the row's object alone, and the ended rows read
 // in progress; off the ending alone, and the live row naming no session does;
-// let KeptNote answer WentOnNote whatever the row, and the row in progress says
-// nothing; answer InProgressNote of an ended row, and the ended rows say they
-// have not ended; drop the instant, word it in the capture's own zone, or word
-// a row's zero instant as a date, and a sentence reads wrong.
+// answer InProgressNote of an ended row, and the ended rows say they have not
+// ended; let WentOnNote answer of a live row, and the row in progress is told
+// its turn went on past it; drop the instant, word it in the capture's own
+// zone, or word a row's zero instant as a date, and a sentence reads wrong.
 func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 	t.Parallel()
 	// AN INSTANT OUTSIDE UTC, as the broker's clock is read on a node in
@@ -52,49 +54,50 @@ func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 	wentOn := &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true,
 		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "refused while it read " + plantedToken}}
 	for _, c := range []struct {
-		name     string
-		row      executordomain.Session
-		progress bool
-		// note is the row's whole note, "" for none, and wentOn whether it
-		// is the note of a row its turn went on past.
-		note   string
-		wentOn bool
+		name string
+		row  executordomain.Session
+		// progress is the row's in-progress sentence, "" for a row not in
+		// progress, and wentOn whether it is told it is kept up to a session
+		// its turn went on past.
+		progress string
+		wentOn   bool
 	}{
-		{name: "a live turn's row naming a session", row: row(object, at, nil), progress: true, note: inProgress},
+		{name: "a live turn's row naming a session", row: row(object, at, nil), progress: inProgress},
 		{name: "a live turn's row naming a session whose capture holds no instant",
-			row: row(object, time.Time{}, nil), progress: true,
-			note: "This turn has not ended: this is the newest session its runs have kept; its run may have " +
-				"gone on past it, and its last call may have no result yet."},
+			row: row(object, time.Time{}, nil),
+			progress: "This turn has not ended: this is the newest session its runs have kept; its run may " +
+				"have gone on past it, and its last call may have no result yet."},
 		{name: "a live turn's row naming no session yet", row: row(objstore.Object{}, time.Time{}, nil)},
 		{name: "an ended turn's row naming its last word",
 			row: row(object, at, &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted})},
 		{name: "an ended turn's row naming a session it went on past", row: row(object, at, wentOn),
 			wentOn: true},
-		{name: "a lost turn's row", row: row(object, at, &executorkeep.Ending{Outcome: executorkeep.OutcomeLost}),
-			wentOn: true},
+		// A LOST TURN'S ROW AT ITS LAST WORD is told it may not hold the last
+		// of what the turn did all the same, as every lost turn's row is.
+		{name: "a lost turn's row at its last word", row: row(object, at, &executorkeep.Ending{
+			Outcome: executorkeep.OutcomeLost, WentOn: true,
+			LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}), wentOn: true},
 	} {
 		for form, s := range map[string]executordomain.Session{"as held": c.row, "as shown": c.row.Redacted()} {
-			note := s.KeptNote()
-			if s.InProgress() != c.progress || (s.InProgressNote() != "") != c.progress {
-				t.Errorf("%s, %s: reads in progress %v with the sentence %q, want %v", c.name, form,
-					s.InProgress(), s.InProgressNote(), c.progress)
+			said := s.InProgressNote()
+			if s.InProgress() != (c.progress != "") || said != c.progress {
+				t.Errorf("%s, %s: reads in progress %v with the sentence %q, want %q", c.name, form,
+					s.InProgress(), said, c.progress)
 			}
-			if c.progress && (note != c.note || note != s.InProgressNote() || s.WentOnNote() != "") {
-				t.Errorf("%s, %s: is told %q (went on %q), want %q", c.name, form, note, s.WentOnNote(), c.note)
+			if strings.Contains(strings.ToLower(said), "save") {
+				t.Errorf("%s, %s: is told %q, which says the session is saved", c.name, form, said)
 			}
-			if c.progress && strings.Contains(strings.ToLower(note), "save") {
-				t.Errorf("%s, %s: is told %q, which says the session is saved", c.name, form, note)
-			}
-			if !c.progress && (note != s.WentOnNote() || (note != "") != c.wentOn) {
-				t.Errorf("%s, %s: is told %q, want the note of a row its turn went on past %v (%q)", c.name,
-					form, note, c.wentOn, s.WentOnNote())
-			}
-			if !c.progress && strings.Contains(note, "has not ended") {
-				t.Errorf("%s, %s: an ended or empty row is told %q", c.name, form, note)
+			if went := s.WentOnNote(); (went != "") != c.wentOn || (said != "" && went != "") {
+				t.Errorf("%s, %s: is told it went on past its session in %q, want %v", c.name, form, went,
+					c.wentOn)
 			}
 		}
-		if own, shown := redact.Secrets(c.row.KeptNote()), c.row.Redacted().KeptNote(); own != shown {
+		if own, shown := redact.Secrets(c.row.WentOnNote()), c.row.Redacted().WentOnNote(); own != shown {
 			t.Errorf("%s: the row as held is told %q, and its shown form %q", c.name, own, shown)
+		}
+		if c.wentOn && strings.Contains(c.row.Redacted().WentOnNote(), plantedToken) {
+			t.Errorf("%s: its shown form is told %q, the unkept capture's reason unredacted", c.name,
+				c.row.Redacted().WentOnNote())
 		}
 	}
 	if begun := row(objstore.Object{}, time.Time{}, nil); begun.NotKept() !=

@@ -677,19 +677,20 @@ func TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testi
 // A ROW KEPT UP TO A SESSION ITS TURN WENT PAST CARRIES ITS NOTE, in both
 // questions: an ended row naming a session its turn went on past, beside a
 // newer capture that was not kept, and a lost turn's row, are each sent the
-// domain's own note of the session they keep (`kept_note`,
-// executordomain.Session.KeptNote) — asked of the row's shown form, so the
-// reason the unkept capture quotes is redacted as the ending's is — and not
-// `in_progress`; a live row naming a session is sent in progress, its note
-// the domain's sentence for one and never a note of a turn that went on past
-// it; and a row at its turn's last word, and a live one naming no session yet,
-// are sent no note at all. A row read alone is told what a row of the list is.
+// domain's own note of it (`kept_note`, executordomain.Session.WentOnNote) —
+// asked of the row's shown form, so the reason the unkept capture quotes is
+// redacted as the ending's is — and are not in progress; a live row naming a
+// session is sent in progress (`in_progress`, `in_progress_note`: the domain's
+// sentence for one, executordomain.Session.InProgressNote) and never a note of
+// a turn that went on past it; and a row at its turn's last word, and a live
+// one naming no session yet, are sent neither. A row read alone is told what a
+// row of the list is.
 //
 // Mutation: send the note of the row as it is held rather than of its shown
-// form, and the token reaches the reader; send WentOnNote for kept_note, and
-// the row in progress is sent nothing; read in_progress off the row's object
-// alone, and every ended row is sent in progress; leave either field out of
-// the row, and a check names it.
+// form, and the token reaches the reader; send the in-progress sentence as
+// kept_note, or the went-on note as in_progress_note, and a row is sent the
+// other's; read in_progress off the row's object alone, and every ended row is
+// sent in progress; leave a field out of the row, and a check names it.
 func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
@@ -731,16 +732,19 @@ func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 	if len(sent) != 2*len(rows) {
 		t.Fatalf("the two questions answered %d rows, want each of the %d twice", len(sent), len(rows))
 	}
+	// progress is the in-progress sentence a row is sent, "" for none, and
+	// says what its went-on note says, nothing for none.
 	want := map[string]struct {
-		progress bool
+		progress string
 		says     []string
 	}{
 		wentPast.Turn: {says: []string{"kept up to a session taken while the turn still worked",
 			"its newer capture (launch 1, capture 2) was not kept: ", redact.Marker}},
 		lost.Turn:     {says: []string{"its turn may have gone on past", "the turn was lost"}},
 		lastWord.Turn: {},
-		running.Turn: {progress: true, says: []string{"This turn has not ended",
-			"captured at " + running.CapturedAt.UTC().Format(time.RFC3339)}},
+		running.Turn: {progress: "This turn has not ended: this is the newest session its runs have kept, " +
+			"captured at " + running.CapturedAt.UTC().Format(time.RFC3339) + "; its run may have gone on " +
+			"past it, and its last call may have no result yet."},
 		begun.Turn: {},
 	}
 	held := map[string]executordomain.Session{}
@@ -749,10 +753,13 @@ func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 	}
 	for question, row := range sent {
 		w, shown := want[row.Turn], held[row.Turn].Redacted()
-		if row.InProgress != w.progress || row.KeptNote != shown.KeptNote() ||
-			(row.KeptNote != "") != (len(w.says) > 0) {
-			t.Errorf("%s is sent in progress %v and the note %q, want in progress %v and the note %q",
-				question, row.InProgress, row.KeptNote, w.progress, shown.KeptNote())
+		if row.InProgress != (w.progress != "") || row.InProgressNote != w.progress ||
+			row.InProgressNote != shown.InProgressNote() {
+			t.Errorf("%s is sent in progress %v and the sentence %q, want in progress %v and %q", question,
+				row.InProgress, row.InProgressNote, w.progress != "", w.progress)
+		}
+		if row.KeptNote != shown.WentOnNote() || (row.KeptNote != "") != (len(w.says) > 0) {
+			t.Errorf("%s is sent the note %q, want %q", question, row.KeptNote, shown.WentOnNote())
 		}
 		for _, says := range w.says {
 			if !strings.Contains(row.KeptNote, says) {
@@ -761,9 +768,6 @@ func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 		}
 		if strings.Contains(row.KeptNote, plantedKey) {
 			t.Errorf("%s is sent the note %q, the unkept capture's reason unredacted", question, row.KeptNote)
-		}
-		if w.progress && strings.Contains(row.KeptNote, "went on past") {
-			t.Errorf("%s, a turn that has not ended, is sent %q", question, row.KeptNote)
 		}
 	}
 }

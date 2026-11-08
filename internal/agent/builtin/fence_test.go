@@ -347,17 +347,23 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		}
 		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 
-		// A TURN STILL RUNNING: its row's note, the domain's sentence for a
-		// session in progress, is the field's, and fenced as it is.
+		// A TURN STILL RUNNING: the domain's sentence for a session in
+		// progress is the engine's words alone, quoting nobody, and reaches the
+		// model as the engine's — never fenced as somebody else's.
 		running := k.keep(t, "agent-cto", "chat:room", "the work so far")
 		running.Ending, running.EndedAt = nil, time.Time{}
 		k.replace("agent-cto", running.Turn, &running)
 		got = callIn(t, reg, turn, builtin.ReadSessionTool, map[string]any{"turn_id": running.Turn})
 		seen, answer = fencesIn(t, b, got.Output)
-		want = []wantFence{{kept, "the work so far"}, {nobody, "This turn has not ended"}}
+		want = []wantFence{{kept, "the work so far"}}
 		assertFences(t, seen, want)
 		if len(seen) != len(want) {
 			t.Errorf("read_session of a turn still running answered %d fences, want %d", len(seen), len(want))
+		}
+		session, _ := answer["session"].(map[string]any)
+		if said, _ := session["in_progress_note"].(string); said != running.InProgressNote() || said == "" {
+			t.Errorf("read_session of a turn still running says %q of it, want the engine's %q", said,
+				running.InProgressNote())
 		}
 		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})

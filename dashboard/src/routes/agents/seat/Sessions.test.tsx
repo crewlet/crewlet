@@ -76,14 +76,14 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
 }
 
 /** What the engine tells every reader of a live turn's kept session, as it
- *  sends it (`executordomain.Session.InProgressNote`). */
+ *  sends it (`in_progress_note`, `executordomain.Session.InProgressNote`). */
 const IN_PROGRESS_NOTE =
   "This turn has not ended: this is the newest session its runs have kept, captured at " +
   "2026-10-30T12:04:00Z; its run may have gone on past it, and its last call may have no result yet.";
 
 /** What it tells them of a session its turn went on past, beside a newer capture not
- *  kept, as it sends it (`executordomain.Session.WentOnNote`): a clause of the engine's,
- *  the unkept capture's reason closing it with a full stop of its own. */
+ *  kept, as it sends it (`kept_note`, `executordomain.Session.WentOnNote`): a clause of
+ *  the engine's, the unkept capture's reason closing it with a full stop of its own. */
 const WENT_ON_NOTE =
   "kept up to a session taken while the turn still worked; the turn went on past it, and what " +
   "it did after is not in it; its newer capture (launch 2, capture 1) was not kept: refused: past " +
@@ -96,7 +96,7 @@ function live(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ending: null,
     ended_at: null,
     in_progress: true,
-    kept_note: IN_PROGRESS_NOTE,
+    in_progress_note: IN_PROGRESS_NOTE,
     continued_by: "relaunch",
     ...over,
   });
@@ -139,15 +139,15 @@ test("a turn with no ending reads as not ended, never with an outcome", () => {
 });
 
 // A LIVE TURN'S KEPT SESSION READS AS IN PROGRESS, beside "not ended" and in the
-// engine's own sentence — the newest session its runs have kept, which its run
-// may have gone on past — so it never reads as an ended turn's session; and an
-// ended turn's, or a live turn's that has kept no session yet, says nothing of
-// progress.
+// engine's own sentence (`in_progress_note`) — the newest session its runs have
+// kept, which its run may have gone on past — so it never reads as an ended
+// turn's session; and an ended turn's, or a live turn's that has kept no
+// session yet, says nothing of progress beside its tag.
 //
 // Mutation: drop the in-progress line, and the sentence is not drawn; draw it
 // under the line saying when the session was captured, and it is no longer
-// beside "not ended"; draw it by whether the row has a note rather than by
-// `in_progress`, and the ended turn's note is drawn as one in progress.
+// beside "not ended"; draw the went-on note (`kept_note`) in its place, and the
+// ended turn's note is drawn beside its tag.
 test("a live turn's kept session reads as in progress", () => {
   const { unmount } = render(
     <Router>
@@ -161,7 +161,7 @@ test("a live turn's kept session reads as in progress", () => {
 
   for (const row of [
     session({ kept_note: WENT_ON_NOTE }),
-    live({ kept: false, object_bytes: 0, in_progress: false, kept_note: undefined }),
+    live({ kept: false, object_bytes: 0, in_progress: false, in_progress_note: undefined }),
   ]) {
     const { container, unmount: done } = render(
       <Router>
@@ -502,13 +502,16 @@ test("a turn whose newest session was not kept says why", () => {
 // A SESSION ITS TURN WENT ON PAST SAYS SO BESIDE WHEN IT WAS CAPTURED, in the
 // engine's own words made a sentence of the screen's — its first letter
 // capitalised and closed once, the reason bringing its own full stop — so the
-// capture is never read as all the turn did; and it is never drawn beside its
-// outcome as a session in progress is.
+// capture is never read as all the turn did; it is never drawn beside its
+// outcome as a session in progress is; and the reason its newer capture was
+// not kept, which the note names, is said once — never again by the line a row
+// that keeps no session says it in.
 //
 // Mutation: drop the note's line, and nothing says the turn went on; draw it
-// beside the outcome, or by whether the row has a note alone, and it is no
-// longer under the line saying when it was captured; draw the note as sent, and
-// it reads uncapitalised; close it again, and it ends in two full stops.
+// beside the outcome, and it is no longer under the line saying when it was
+// captured; draw the note as sent, and it reads uncapitalised; close it again,
+// and it ends in two full stops; draw the unkept line whatever the note says,
+// and the reason is said twice.
 test("a session its turn went on past says so beside captured", () => {
   const { container } = render(
     <Router>
@@ -532,6 +535,9 @@ test("a session its turn went on past says so beside captured", () => {
   // BESIDE "CAPTURED": the line under the one saying when it was captured.
   expect(said.previousElementSibling?.textContent).toMatch(/ · captured /);
   expect(container.querySelector(".thread-entry > .row")?.nextElementSibling).not.toBe(said);
+  // THE REASON ONCE: the note names the capture that was not kept, and why.
+  expect(screen.queryByText(/Its newest session was not kept/)).toBeNull();
+  expect(container.textContent?.split("past the seat's budget")).toHaveLength(2);
 });
 
 // A LIVE SESSION KEPT AGAIN READS IN THE RUN'S WORDS: a capture newer than the
@@ -564,7 +570,7 @@ test("a live session kept again reads in the run's words", () => {
   // after it is any capture.
   expect(
     recapturedWords(
-      live({ kept: false, object_bytes: 0, in_progress: false, kept_note: undefined }),
+      live({ kept: false, object_bytes: 0, in_progress: false, in_progress_note: undefined }),
     ),
   ).toBe("This session was captured again since this transcript was read.");
   for (const words of [recapturedWords(live()), unfollowedWords(live())]) {

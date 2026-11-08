@@ -721,12 +721,14 @@ export function continuableWords(row: ExecutorSessionRow): string {
  * and knows it did not go: a delivery the engine cannot vouch for either way
  * is said as not known, never as not made.
  *
- * WHAT THE ENGINE TELLS EVERY READER OF THE SESSION IT KEEPS (`kept_note`) is
- * its own sentence, never one of the screen's, placed by which it is: a
- * session in progress (`in_progress`) beside "not ended", so a live turn's
- * kept session never reads as an ended turn's; and an ended turn's kept up to
- * a session it went on past beside when it was captured, so the capture is
- * never read as all the turn did.
+ * WHAT THE ENGINE TELLS EVERY READER OF THE SESSION IT KEEPS is its own
+ * sentence, never one of the screen's, each where it reads: a session in
+ * progress (`in_progress_note`) beside "not ended", so a live turn's kept
+ * session never reads as an ended turn's; and an ended turn's kept up to a
+ * session it went on past (`kept_note`) under when it was captured, so the
+ * capture is never read as all the turn did. That note names the newer capture
+ * that was not kept and why, so the line saying the newest session was not
+ * kept is drawn only where no note says it: the reason once.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
@@ -746,7 +748,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
           turn
         </a>
       </div>
-      {row.in_progress && note && <p className="t-caption">{note}</p>}
+      {row.in_progress_note && <p className="t-caption">{row.in_progress_note}</p>}
       <p className="t-caption">
         {row.harness}
         {row.harness_version ? ` ${row.harness_version}` : ""}
@@ -754,7 +756,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
       </p>
-      {!row.in_progress && note && <p className="t-caption">{note}</p>}
+      {note && <p className="t-caption">{note}</p>}
       {row.base_turn && <HandedSession turn={row.base_turn} />}
       <p className="t-caption">{continuableWords(row)}</p>
       {ending?.delivered && (
@@ -770,7 +772,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
           Its reply did not reach the party waiting on {ending.delivered_to}.
         </p>
       )}
-      {ending?.unkept && (
+      {ending?.unkept && !note && (
         <p className="t-caption">
           {unkept
             ? `Its newest session was not kept: ${unkept}.`

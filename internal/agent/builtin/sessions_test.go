@@ -478,20 +478,23 @@ func TestTheMarksNameThisTurnAndThisConversation(t *testing.T) {
 
 // A SEAT IS TOLD OF A SESSION IN PROGRESS, AND OF ONE ITS TURN WENT PAST, WHAT
 // A PERSON IS: both tools show a row with the domain's own words for the
-// session it keeps (executordomain.Session.KeptNote), asked of the row's shown
-// form, fenced as the row's words are. The reading turn's earlier launch's
-// session — `this_turn`, its turn not ended — is in progress, never an ended
-// turn's, its sentence whole in a listing and on the read's first page; an
-// ended row kept up to a session its turn went on past says so, the reason its
-// newer capture was not kept redacted, cut in a listing as the row's other
-// words are and whole on the read's first page; and a row at its turn's last
+// session it keeps, asked of the row's shown form. The reading turn's earlier
+// launch's session — `this_turn`, its turn not ended — is in progress, never an
+// ended turn's, in the engine's sentence for one
+// (executordomain.Session.InProgressNote), whole in a listing and on the
+// read's first page, and never fenced, since it is the engine's words alone
+// and quotes nobody; an ended row kept up to a session its turn went on past
+// says so (executordomain.Session.WentOnNote), the reason its newer capture
+// was not kept redacted, fenced as the row's other words are, cut in a listing
+// as they are and whole on the read's first page; and a row at its turn's last
 // word says neither.
 //
-// Mutation: ask the note of the row as it is held, and the token reaches the
-// seat; leave in_progress or kept_note off the row, or show WentOnNote for it,
-// and a row says nothing; cut the read's first page's note, and its reason is
-// lost there; leave a listed note uncut, and the listing's row runs past its
-// words' bound.
+// Mutation: ask the went-on note of the row as it is held, and the token
+// reaches the seat; leave in_progress, in_progress_note or kept_note off the
+// row, or show one note in the other's field, and a row says the wrong thing;
+// fence the in-progress sentence, and it is labelled somebody else's; cut the
+// read's first page's note, and its reason is lost there; leave a listed note
+// uncut, and the listing's row runs past its words' bound.
 func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testing.T) {
 	t.Parallel()
 	k := newKeptSessions(t)
@@ -532,7 +535,8 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 		{"a session its turn went on past", past, false},
 		{"a session at its turn's last word", last, false},
 	} {
-		whole := c.row.Redacted().KeptNote()
+		shown := c.row.Redacted()
+		whole := shown.WentOnNote()
 		first := sessionAnswer(t, callFor(t, read, turn, map[string]any{"turn_id": c.row.Turn}))
 		for where, w := range map[string]struct {
 			row  map[string]any
@@ -541,11 +545,20 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 			"listed":                 {listed[c.row.Turn], textcut.Within(whole, builtin.ListedProseBytes)},
 			"read on its first page": {first["session"].(map[string]any), whole},
 		} {
+			progress, _ := w.row["in_progress"].(bool)
+			said, _ := w.row["in_progress_note"].(string)
+			if progress != c.progress || said != shown.InProgressNote() || (said != "") != c.progress {
+				t.Errorf("%s, %s: in progress %v, told %q; want in progress %v, told %q", c.name, where,
+					w.row["in_progress"], said, c.progress, shown.InProgressNote())
+			}
+			if strings.Contains(said, "[untrusted:") {
+				t.Errorf("%s, %s: the engine's sentence %q is fenced as somebody else's words", c.name, where,
+					said)
+			}
 			sent, _ := w.row["kept_note"].(string)
 			note := provenance.Unfence(b, sent)
-			if progress, _ := w.row["in_progress"].(bool); progress != c.progress || note != w.note {
-				t.Errorf("%s, %s: in progress %v, told %q; want in progress %v, told %q", c.name, where,
-					w.row["in_progress"], note, c.progress, w.note)
+			if note != w.note {
+				t.Errorf("%s, %s: told it went on past its session in %q, want %q", c.name, where, note, w.note)
 			}
 			if note != "" && note == sent {
 				t.Errorf("%s, %s: its note %q is not fenced", c.name, where, sent)
@@ -555,11 +568,11 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 			}
 		}
 	}
-	if whole := past.Redacted().KeptNote(); !strings.Contains(whole, redact.Marker) ||
-		len(whole) <= builtin.ListedProseBytes || !strings.HasPrefix(own.Redacted().KeptNote(),
+	if whole := past.Redacted().WentOnNote(); !strings.Contains(whole, redact.Marker) ||
+		len(whole) <= builtin.ListedProseBytes || !strings.HasPrefix(own.Redacted().InProgressNote(),
 		"This turn has not ended") {
 		t.Fatalf("the premise: the notes are %q and %q, want a redacted one past a listing's bound beside a "+
-			"session in progress's", whole, own.Redacted().KeptNote())
+			"session in progress's", whole, own.Redacted().InProgressNote())
 	}
 }
 

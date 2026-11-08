@@ -231,8 +231,8 @@ func (o openedNothing) Open(context.Context, executordomain.Session) (io.ReadClo
 // packed one; the row read once, and no object opened. Once its runs have kept
 // a session, the read opens it and hands its entries out beside the row as the
 // log holds it — in progress, in the domain's sentence for one
-// (executordomain.Session.KeptNote), which every surface carries — never said
-// as an ended turn's session, nor as nothing captured.
+// (executordomain.Session.InProgressNote), which every surface carries — never
+// said as an ended turn's session, nor as nothing captured.
 //
 // Mutation: tell a live turn's nothing as an ended one's
 // (executordomain.Session.NotKept), answer a live row as none where it names a
@@ -254,9 +254,9 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 		t.Errorf("a live row with no session yet reads %s %q after %d reads of the row, want none, "+
 			"saying nothing of it has been captured yet, after one", page.State, page.Why, len(rows.asked))
 	}
-	if page.Read.Session.InProgress() || page.Read.Session.KeptNote() != "" {
+	if page.Read.Session.InProgress() || page.Read.Session.InProgressNote() != "" {
 		t.Errorf("a live row with no session yet reads in progress %v, told %q", page.Read.Session.InProgress(),
-			page.Read.Session.KeptNote())
+			page.Read.Session.InProgressNote())
 	}
 
 	// ITS RUNS HAVE KEPT A SESSION since, and the turn has not ended.
@@ -279,9 +279,10 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 	note := "This turn has not ended: this is the newest session its runs have kept, captured at " +
 		running.CapturedAt.UTC().Format(time.RFC3339)
 	if row.Turn != running.Turn || row.Object != running.Object || !row.InProgress() ||
-		!strings.HasPrefix(row.KeptNote(), note) || row.NotKept() != "" {
-		t.Errorf("a live row naming a session is handed out as %+v, in progress %v, told %q (%q), want the "+
-			"row read, in progress, told %q…", row.Object, row.InProgress(), row.KeptNote(), row.NotKept(), note)
+		!strings.HasPrefix(row.InProgressNote(), note) || row.WentOnNote() != "" || row.NotKept() != "" {
+		t.Errorf("a live row naming a session is handed out as %+v, in progress %v, told %q (%q, %q), want "+
+			"the row read, in progress, told %q…", row.Object, row.InProgress(), row.InProgressNote(),
+			row.WentOnNote(), row.NotKept(), note)
 	}
 }
 
