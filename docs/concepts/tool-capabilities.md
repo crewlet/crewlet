@@ -281,7 +281,14 @@ It counts every tool the delivery check counts, and beyond those only what a
 tool's own hints POSITIVELY say: that half fails open where the delivery check
 fails closed, because a true answer gives a trigger up, while the first fails
 closed with it — an MCP tool with no hints at all counts here as it counts
-there.
+there. A `no_action` sent back for a call to an MCP tool that no hint marks as
+a read or as a write, from its server or from a `tool_annotations` override,
+names it as a call the engine cannot tell from a write rather than as an act:
+a turn that only searched through one would read "acted" as false. A tool
+marked `read_only: false` or `destructive: true`, by its server or by an
+override, is named as an act; `destructive: false` alone marks neither, since
+it says only that whatever the tool changes it does not destroy, and a tool
+that only reads may carry it.
 
 - a tool the delivery check counts → **yes**;
 - `open_world` is `Yes` and `read_only` is not `Yes` → **yes**: `a2a_ask`, a

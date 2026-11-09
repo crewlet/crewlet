@@ -2183,6 +2183,7 @@ func describe(s *tools.Surface) turn.Surface {
 		Deliveries:     u.Deliveries(),
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
+		PresumedWrites: u.PresumedWrites(),
 		// Every MCP-served tool, on a phase that reaches one only by
 		// discovering it — so a refusal can tell the tools a seat already
 		// holds from the ones it has to go and find. See

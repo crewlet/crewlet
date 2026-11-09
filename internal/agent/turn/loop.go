@@ -174,6 +174,16 @@ type Surface struct {
 	// `ssh_read` — reads the world and changes nothing in it, so [Acted]
 	// leaves it out unless it delivers.
 	KnownOpenWorld []string
+	// PresumedWrites is every MCP-served tool that no hint, its server's or
+	// an operator's override, marks as a read or as a write (`read_only:
+	// false` and `destructive: true` mark a write): a delivery by the
+	// fail-closed default ([Deliverable]), and so an act ([Acted]), though
+	// nothing says its call changed anything.
+	//
+	// It exists for the correction that says what a turn did
+	// ([ActedAccount]): told it "acted" after only searching through such a
+	// tool, a model reads the correction as false against its own call.
+	PresumedWrites []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
 	// `activate_tool` promotes onto the next round — and nothing on a phase

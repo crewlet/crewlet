@@ -228,6 +228,47 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	}
 }
 
+// A CALL THE ENGINE ONLY PRESUMES WROTE REACHES THE TURN AS ONE. An MCP tool
+// that no hint marks as a read or as a write delivers by the fence's
+// fail-closed default, and so counts as an act; the turn must also know which
+// calls it counts by that default alone, or a turn nobody asked for that only
+// searched through one is told it "already acted outside the engine". A tool
+// its server marks a write is an act, and one it marks a read is neither.
+//
+// Mutation: stop filling PresumedWrites in describe, and the search is told it
+// acted.
+func TestTheSurfaceHandedToTheTurnSaysWhichWritesItPresumes(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for name, ann := range map[string]tools.Annotations{
+		"jira_search_issues": {},
+		"jira_add_comment":   {ReadOnly: mcp.No, OpenWorld: mcp.Yes},
+		"jira_get_issue":     {ReadOnly: mcp.Yes},
+	} {
+		if err := reg.RegisterWith(stubTool(name), tools.Origin("jira"), ann); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := describe(tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"jira_search_issues", "jira_add_comment", "jira_get_issue"}))
+
+	if !slices.Equal(got.PresumedWrites, []string{"jira_search_issues"}) {
+		t.Errorf("PresumedWrites = %v, want only the tool its server leaves unmarked", got.PresumedWrites)
+	}
+	searched := turn.ActedAccount([]ledger.Call{{Name: "jira_search_issues"}}, got)
+	if !strings.Contains(searched, "does not mark read-only") || strings.Contains(searched, "already acted") {
+		t.Errorf("account = %q, want the search named as a call the engine cannot tell from a write",
+			searched)
+	}
+	commented := turn.ActedAccount([]ledger.Call{{Name: "jira_add_comment"}}, got)
+	if !strings.Contains(commented, "already acted outside the engine") {
+		t.Errorf("account = %q, want the comment its server marks a write named as an act", commented)
+	}
+	if read := turn.ActedAccount([]ledger.Call{{Name: "jira_get_issue"}}, got); read != "" {
+		t.Errorf("account = %q, want nothing for a read its server marks as one", read)
+	}
+}
+
 // WHAT A SEAT HOLDS AND WHAT IT HAS TO GO AND FIND reach the turn too, or a
 // delivery refusal cannot tell them apart. It once could not: every refusal
 // sent the seat to `list_mcp_server_tools`, and a seat woken on Worklet

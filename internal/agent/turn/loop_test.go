@@ -234,7 +234,8 @@ func TestNoActionAfterActingIsCorrected(t *testing.T) {
 // A NO_ACTION AFTER A COLLEAGUE ASK IS CORRECTED WITHOUT A REVIEW. Nothing was
 // delivered — an ask answers nobody waiting on the turn — but a colleague was
 // woken, so the round is sent back by the engine itself, without a review call,
-// and the next round reports what the turn did and is reviewed then.
+// told what it called, and the next round reports what the turn did and is
+// reviewed then.
 //
 // Mutation: read Delivered for Check's `acted` again, and the turn ends
 // skipped in its first round.
@@ -262,8 +263,8 @@ func TestANoActionAfterAColleagueAskIsCorrectedWithoutAReview(t *testing.T) {
 		t.Errorf("the reviewer ran on rounds %v, want round 2 alone: the engine corrects "+
 			"round 1 itself", f.reviewedRounds)
 	}
-	if len(f.notesSeen) != 2 || f.notesSeen[1] == "" {
-		t.Errorf("notes = %q, want round 2 told why round 1 came back", f.notesSeen)
+	if len(f.notesSeen) != 2 || !strings.Contains(f.notesSeen[1], `called "a2a_ask"`) {
+		t.Errorf("notes = %q, want round 2 told why round 1 came back, naming the ask", f.notesSeen)
 	}
 }
 

@@ -555,7 +555,7 @@ func deliverySurface(reg *tools.Registry) turn.Surface {
 	}
 	u := reg.Snapshot()
 	return turn.Surface{Catalogue: u.Names(), Deliveries: u.Deliveries(), KnownReads: u.KnownReads(),
-		KnownOpenWorld: u.KnownOpenWorld(), Discoverable: u.MCPNames()}
+		KnownOpenWorld: u.KnownOpenWorld(), PresumedWrites: u.PresumedWrites(), Discoverable: u.MCPNames()}
 }
 
 // runEnding is how a run's turn ended where the coordinator's ending, not the

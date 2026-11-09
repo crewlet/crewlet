@@ -500,26 +500,282 @@ func TestNoActionIsNotASkipOnceAnEarlierRoundActed(t *testing.T) {
 // message did something somebody else sees; ended as "nobody was asking" it
 // leaves no episode and nothing reviewed, so the conversation's next turn would
 // not know. The check read deliveries alone, and each of these ended skipped.
+// And the correction names what the turn called, which a closed round's call
+// is as much as the round's own.
 //
-// Mutation: read Delivered for `acted` again, and every case is a skip.
+// Mutation: read Delivered for `acted` again, and every case is a skip; name
+// nothing, and the correction leaves the model to guess what it is told about.
 func TestANoActionAfterAnActIsCorrectedNotSkipped(t *testing.T) {
 	t.Parallel()
 	s := worldSurface()
 	for name, tc := range map[string]struct {
 		calls   []ledger.Call
 		earlier []ledger.Iteration
+		named   string
 	}{
-		"it asked a colleague":           {calls: []ledger.Call{{Name: "a2a_ask"}}},
-		"it reacted to a message":        {calls: []ledger.Call{{Name: "react_to_message"}}},
-		"an earlier round asked instead": {earlier: []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "a2a_ask"}}}}},
+		"it asked a colleague":    {calls: []ledger.Call{{Name: "a2a_ask"}}, named: "a2a_ask"},
+		"it reacted to a message": {calls: []ledger.Call{{Name: "react_to_message"}}, named: "react_to_message"},
+		"an earlier round asked instead": {
+			earlier: []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "a2a_ask"}}}},
+			named:   "a2a_ask",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing to do", Calls: tc.calls}
-			if v := turn.Check(quiet, tc.earlier, turn.NoReply(), s); v.Skip || v.Correction == "" {
-				t.Errorf("Check = %+v, want a correction: the turn acted outside the engine", v)
+			v := turn.Check(quiet, tc.earlier, turn.NoReply(), s)
+			if v.Skip || v.Correction == "" {
+				t.Fatalf("Check = %+v, want a correction: the turn acted outside the engine", v)
+			}
+			if want := `called "` + tc.named + `"`; !strings.Contains(v.Correction, want) {
+				t.Errorf("correction = %q, want it to say the turn %s", v.Correction, want)
 			}
 		})
+	}
+}
+
+// WHAT A TURN ACTED WITH IS SAID ONCE A TOOL, IN NAME ORDER, AND BOUNDED. A
+// correction is carried into every later round's brief, so it names each
+// acting tool once however often it was called, five at most and then how many
+// more; it names no read, no failed call and no diary write, and it is empty —
+// never "none" — exactly where the turn did not act, so no correction can say
+// a turn called nothing.
+//
+// Mutation: drop the dedupe, and the repeated ask is named twice; drop the
+// sort, and the reaction leads; return words.AndMore of an empty set, and a
+// turn that only read is said to have called "none".
+func TestActedWithNamesEachActingToolOnceAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	s.KnownOpenWorld = append(s.KnownOpenWorld, "t1", "t2", "t3", "t4", "t5", "t6", "t7")
+	var seven []ledger.Call
+	for _, name := range []string{"t7", "t3", "t1", "t6", "t2", "t5", "t4"} {
+		seven = append(seven, ledger.Call{Name: name})
+	}
+	for name, tc := range map[string]struct {
+		calls []ledger.Call
+		want  string
+	}{
+		"each acting tool once, in name order": {
+			calls: []ledger.Call{{Name: "react_to_message"}, {Name: "a2a_ask"}, {Name: "web_search"},
+				{Name: "a2a_ask"}, {Name: "comment_on_work_item", Failed: true}, {Name: "reflect_and_persist"}},
+			want: `"a2a_ask" and "react_to_message"`,
+		},
+		"a record of reads":        {calls: []ledger.Call{{Name: "web_search"}, {Name: "get_work_item"}}, want: ""},
+		"nothing at all":           {want: ""},
+		"five by name, then a sum": {calls: seven, want: `"t1", "t2", "t3", "t4", "t5" and 2 more`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := turn.ActedWith(tc.calls, s)
+			if got != tc.want {
+				t.Errorf("ActedWith = %q, want %q", got, tc.want)
+			}
+			if acted := turn.Acted(tc.calls, s); (got != "") != acted {
+				t.Errorf("ActedWith = %q while Acted = %v: the two must agree", got, acted)
+			}
+		})
+	}
+}
+
+// A CALL THE ENGINE ONLY PRESUMES WROTE IS NAMED AS ONE, NEVER AS AN ACT. An
+// MCP tool that no hint marks as a read or as a write counts as a delivery,
+// and so as an act, whatever it did, so a turn nobody asked for that only
+// searched through one has its no_action sent back. Told it "already acted
+// outside the engine", it reads the correction as false against its own call,
+// so it is told why the call counts: its server does not mark it read-only,
+// and the engine cannot tell it from a write. A proven act keeps its own
+// words, a turn that did both is told both, and the account is empty exactly
+// where Acted is false.
+//
+// Mutation: name every acting tool as an act, and the search is told it acted;
+// drop the plural, and two searches are told "it".
+func TestANoActionAfterAPresumedWriteIsToldWhyTheCallCounts(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	s.Catalogue = append(s.Catalogue, "jira_search_issues", "linear_list_issues")
+	s.Deliveries["jira_search_issues"] = "jira"
+	s.Deliveries["linear_list_issues"] = "linear"
+	s.PresumedWrites = []string{"jira_search_issues", "linear_list_issues"}
+
+	for name, tc := range map[string]struct {
+		calls []ledger.Call
+		want  string
+	}{
+		"a search alone": {
+			calls: []ledger.Call{{Name: "jira_search_issues"}},
+			want: `this turn called "jira_search_issues", which its server does not mark ` +
+				`read-only, so the engine cannot tell it from a write`,
+		},
+		"two searches": {
+			calls: []ledger.Call{{Name: "linear_list_issues"}, {Name: "jira_search_issues"}},
+			want: `this turn called "jira_search_issues" and "linear_list_issues", which their ` +
+				`servers do not mark read-only, so the engine cannot tell them from writes`,
+		},
+		"an ask and a search": {
+			calls: []ledger.Call{{Name: "jira_search_issues"}, {Name: "a2a_ask"}},
+			want: `this turn already acted outside the engine — it called "a2a_ask" — and it ` +
+				`called "jira_search_issues", which its server does not mark read-only, so the ` +
+				`engine cannot tell it from a write`,
+		},
+		"an ask alone": {
+			calls: []ledger.Call{{Name: "a2a_ask"}},
+			want:  `this turn already acted outside the engine — it called "a2a_ask"`,
+		},
+		"a read of the world":  {calls: []ledger.Call{{Name: "web_search"}}, want: ""},
+		"a search that failed": {calls: []ledger.Call{{Name: "jira_search_issues", Failed: true}}, want: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := turn.ActedAccount(tc.calls, s)
+			if got != tc.want {
+				t.Errorf("ActedAccount = %q\nwant           %q", got, tc.want)
+			}
+			if acted := turn.Acted(tc.calls, s); (got != "") != acted {
+				t.Errorf("ActedAccount = %q while Acted = %v: the two must agree", got, acted)
+			}
+			quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing for me", Calls: tc.calls}
+			v := turn.Check(quiet, nil, turn.NoReply(), s)
+			switch {
+			case tc.want == "" && !v.Skip:
+				t.Errorf("Check = %+v, want a skip: the turn did nothing outside the engine", v)
+			case tc.want != "" && !strings.Contains(v.Correction, "You reported no_action, but "+tc.want+"."):
+				t.Errorf("correction = %q, want it to say %q", v.Correction, tc.want)
+			}
+		})
+	}
+}
+
+// A NO_ACTION'S ACCOUNT NAMES FIVE OF EACH KIND, THEN HOW MANY MORE. It is a
+// correction, carried into every later round's brief, so each of its two
+// lists — the acts, and the calls the engine only presumes wrote — is
+// bounded as ActedWith's is: each tool once, in name order, the first five by
+// name and then a count. The no_action correction says the bounded account.
+//
+// Mutation: list either kind with words.And, and all seven of that kind are
+// named.
+func TestANoActionAccountNamesFiveOfEachKindAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	var calls []ledger.Call
+	for _, n := range []string{"7", "3", "1", "6", "2", "5", "4"} {
+		act, presumed := "t"+n, "p"+n
+		s.KnownOpenWorld = append(s.KnownOpenWorld, act)
+		s.Catalogue = append(s.Catalogue, presumed)
+		s.Deliveries[presumed] = "vendor"
+		s.PresumedWrites = append(s.PresumedWrites, presumed)
+		calls = append(calls, ledger.Call{Name: presumed}, ledger.Call{Name: act})
+	}
+	want := `this turn already acted outside the engine — it called "t1", "t2", "t3", ` +
+		`"t4", "t5" and 2 more — and it called "p1", "p2", "p3", "p4", "p5" and 2 ` +
+		`more, which their servers do not mark read-only, so the engine cannot tell them ` +
+		`from writes`
+	if got := turn.ActedAccount(calls, s); got != want {
+		t.Errorf("ActedAccount = %q\nwant           %q", got, want)
+	}
+	quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing for me", Calls: calls}
+	if v := turn.Check(quiet, nil, turn.NoReply(), s); !strings.Contains(v.Correction,
+		"You reported no_action, but "+want+".") {
+		t.Errorf("correction = %q, want it to say the bounded account %q", v.Correction, want)
+	}
+}
+
+// A DELIVERY CLAIM THAT ONLY ACTED IS TOLD WHAT IT CALLED. A turn somebody is
+// waiting on that asked a colleague and claimed the work delivered was told "no
+// tool that acts outside the engine was called" — false against its own
+// record, so the model argued with the correction. Now it is told what it
+// called and that none of it delivered, on a named surface and on none, and
+// where it was asked wherever the engine can name that; a turn that only read
+// is still told it called nothing that acts. An ask a closed round made is
+// named as the round's own is, since the claim is judged on the turn's whole
+// record.
+//
+// Mutation: drop the acted case, and the colleague ask is told it called
+// nothing that acts outside the engine; drop where it was asked, and the turn
+// waiting on `work` is not told so; name only the round's own calls, and a
+// closed round's ask is named as nothing.
+func TestADeliveryClaimThatOnlyActedIsToldWhatItCalled(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	claim := func(call string) turn.Work {
+		return turn.Work{Outcome: turn.OutcomeDelivered, Summary: "handled it",
+			Calls: []ledger.Call{{Name: call}}}
+	}
+	asked := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "a2a_ask"}}}}
+	const where = "on `work`, which is where this was asked"
+	for _, reply := range []turn.Reply{turn.ToolReply("work"), turn.ToolReply("")} {
+		v := turn.Check(claim("a2a_ask"), nil, reply, s)
+		if !strings.Contains(v.Correction, `called "a2a_ask"`) ||
+			strings.Contains(v.Correction, "no tool that acts outside the engine") {
+			t.Errorf("%s: correction = %q, want it to name the colleague ask and not deny an act",
+				reply, v.Correction)
+		}
+		if named := reply.Surface != ""; strings.Contains(v.Correction, where) != named {
+			t.Errorf("%s: correction = %q, want %q in it exactly where the surface is named",
+				reply, v.Correction, where)
+		}
+		if read := turn.Check(claim("get_work_item"), nil, reply, s); !strings.Contains(read.Correction,
+			"no tool that acts outside the engine") {
+			t.Errorf("%s: correction = %q, want a turn that only read told it called nothing that acts",
+				reply, read.Correction)
+		}
+		closed := turn.Check(turn.Work{Outcome: turn.OutcomeDelivered, Summary: "handled it"}, asked, reply, s)
+		if !strings.Contains(closed.Correction, `called "a2a_ask"`) ||
+			strings.Contains(closed.Correction, "no tool that acts outside the engine") {
+			t.Errorf("%s: correction = %q, want it to name the colleague ask a closed round made",
+				reply, closed.Correction)
+		}
+	}
+}
+
+// AN OVERTURNED DONE SAYS WHAT AN UNDELIVERED TURN CALLED. A reviewer's done
+// over a turn that asked a colleague and answered nobody waiting is overturned,
+// and the correction names the ask rather than saying no tool that acts
+// outside the engine was called — or that the turn reached somebody, which on a
+// named surface is kept for a turn that delivered elsewhere. An ask a closed
+// round made is named as the round's own is, since the done is judged on the
+// turn's whole record.
+//
+// Mutation: drop either acted case, and the colleague ask is told it called
+// nothing; name only the round's own calls, and a closed round's ask is named
+// as nothing.
+func TestAnOverturnedDoneSaysWhatAnUndeliveredTurnCalled(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	blocked := turn.Work{Outcome: turn.OutcomeBlocked, Summary: "asked the lead",
+		Evidence: "waiting on the lead", Calls: []ledger.Call{{Name: "a2a_ask"}}}
+
+	override, unnamed := turn.OverrideDone(blocked, nil, turn.ToolReply(""), s)
+	if !override || !strings.Contains(unnamed, `called "a2a_ask"`) ||
+		!strings.Contains(unnamed, "the requester will never see it") ||
+		strings.Contains(unnamed, "no tool that acts outside the engine") {
+		t.Errorf("override = %v, correction = %q; want it to name the ask the turn made", override, unnamed)
+	}
+	override, named := turn.OverrideDone(blocked, nil, turn.ToolReply("work"), s)
+	if !override || !strings.Contains(named, `called "a2a_ask"`) ||
+		!strings.Contains(named, "Nothing in this turn reached the person waiting") ||
+		strings.Contains(named, "reached somebody") {
+		t.Errorf("override = %v, correction = %q; want it to name the ask and say nobody waiting "+
+			"was reached", override, named)
+	}
+
+	asked := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "a2a_ask"}}}}
+	waiting := turn.Work{Outcome: turn.OutcomeBlocked, Summary: "waiting on the lead",
+		Evidence: "the lead has not answered"}
+	for _, reply := range []turn.Reply{turn.ToolReply("work"), turn.ToolReply("")} {
+		overturned, closed := turn.OverrideDone(waiting, asked, reply, s)
+		if !overturned || !strings.Contains(closed, `called "a2a_ask"`) ||
+			strings.Contains(closed, "no tool that acts outside the engine") {
+			t.Errorf("%s: override = %v, correction = %q; want it to name the ask a closed round made",
+				reply, overturned, closed)
+		}
+	}
+
+	read := blocked
+	read.Calls = []ledger.Call{{Name: "get_work_item"}}
+	if _, c := turn.OverrideDone(read, nil, turn.ToolReply(""), s); !strings.Contains(c,
+		"no tool that acts outside the engine") {
+		t.Errorf("correction = %q, want a turn that only read told it called nothing that acts", c)
 	}
 }
 

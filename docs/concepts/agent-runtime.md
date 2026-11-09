@@ -109,7 +109,8 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    ├── no_action nobody asked for, and nothing done outside the
    │     engine -> the turn ends
    ├── a claim the record refutes -> loop back with a correction
-   │     naming the tools that deliver where the asker is waiting
+   │     naming what the turn did and the tools that deliver where
+   │     the asker is waiting
    └── a work pickup's turn with no typed answer on its item while
          the item is still the seat's, read off the seat's own rows
          on it since the turn began -> loop back naming the five
