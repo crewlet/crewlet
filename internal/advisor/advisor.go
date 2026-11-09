@@ -161,9 +161,13 @@ type Answer struct {
 	Unread   []string  `json:"unread"`
 }
 
-// UnreadIntegrations is [Answer.Unread]'s word for integrations whose last
-// reconcile this node could not read.
-const UnreadIntegrations = "integrations"
+// [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
+// work patterns, and the alarm evaluation this node could not read.
+const (
+	UnreadIntegrations = "integrations"
+	UnreadWork         = "work"
+	UnreadAlarms       = "alarms"
+)
 
 // Inputs is what one answer is read from.
 type Inputs struct {

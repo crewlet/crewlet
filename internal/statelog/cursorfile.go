@@ -67,7 +67,21 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 		return nil, fmt.Errorf("statelog: open %s: %w", path, err)
 	}
 	defer func() { _ = db.Close() }()
+	out, err := Cursors(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read the checkpoints in %s: %w", path, err)
+	}
+	return out, nil
+}
 
+// Cursors reads every domain's committed checkpoint out of one replicated
+// estate, keyed by stream: [CursorsInFile]'s read, over a handle the caller
+// already holds (a backup pins the live estate's positions before copying it).
+//
+// ONLY THE LOGS WITH A ROW. A row is written by a log's first apply, so a log
+// nobody has written yet is absent here, and a caller naming every log places
+// it at the zero position itself.
+func Cursors(ctx context.Context, db ReadEstate) (map[string]FileCursor, error) {
 	out := map[string]FileCursor{}
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
@@ -93,7 +107,7 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 		}
 		return rows.Err()
 	}); err != nil {
-		return nil, fmt.Errorf("statelog: read the checkpoints in %s: %w", path, err)
+		return nil, err
 	}
 	return out, nil
 }

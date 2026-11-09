@@ -242,17 +242,9 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	copier, err := backup.New(backup.Options{
-		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
-		Conn: backends.Conn(), API: backends.API(),
-		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
-		Keyring: e.RecordKeyring(),
-		// AS cmd/crewlet WIRES IT, the stream included: a backup of a fleet
-		// whose files ride the broker's bucket snapshots that stream and
-		// checks each object it names, rather than copying them beside it.
-		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
-			Stream: e.ObjectsStream()},
-	})
+	// AS cmd/crewlet WIRES IT: the engine's own options, every registered log
+	// and the object stream included.
+	copier, err := backup.New(e.BackupOptions())
 	if err != nil {
 		return fail("backup", err)
 	}

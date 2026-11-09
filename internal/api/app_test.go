@@ -142,6 +142,7 @@ func (f *fakeRuntime) MCPRestarter() mcpapi.Restarter {
 
 // LatestAlarms is the evaluation a case set, nil (none has run) otherwise.
 func (f *fakeRuntime) LatestAlarms() []statelog.Alarm { return f.alarms }
+func (f *fakeRuntime) AlarmsEvaluated() bool          { return f.alarms != nil }
 
 // MCPChecker is the checker a case set, else one that finds every server
 // serving: what a test does is held by mcpapi's own suite and the engine's.

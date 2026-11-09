@@ -189,3 +189,28 @@ func TestThePatternsWindowIsAWeekAndAReviewIsIdleAfterADay(t *testing.T) {
 		t.Errorf("the reviewers are %v, want every agent seat in the chart's order", q.Reviewers)
 	}
 }
+
+// A SOURCE THE CALLER COULD NOT READ RAISES NOTHING AND IS NAMED: what would
+// have fired stays silent, and the answer says the list may be short.
+func TestAnUnreadSourceRaisesNothingAndIsNamed(t *testing.T) {
+	t.Parallel()
+	firing := worklet.WorkPatterns{Answers: 4, Moot: 4, Overtaken: []string{"c-1"}}
+	in := advisor.Inputs{Company: liveShape(t), Revision: "rev-1", Integrations: []integration.State{}}
+	read := advisor.ReadWithEvidence(in, advisor.Evidence{Work: firing, Backup: advisor.Backup{Standing: true}})
+	if !slices.Equal(read.Unread, []string{}) || !hasClass(read, advisor.ClassAskOvertaken) ||
+		!hasClass(read, advisor.ClassNoVerifiedBackup) {
+		t.Fatalf("with every source read, unread %v and findings %v", read.Unread, read.Findings)
+	}
+	blind := advisor.ReadWithEvidence(in, advisor.Evidence{Work: firing, Backup: advisor.Backup{Standing: true},
+		WorkUnread: true, AlarmsUnread: true})
+	if hasClass(blind, advisor.ClassAskOvertaken) || hasClass(blind, advisor.ClassNoVerifiedBackup) {
+		t.Errorf("an unread source still raised its classes: %v", blind.Findings)
+	}
+	if !slices.Equal(blind.Unread, []string{advisor.UnreadWork, advisor.UnreadAlarms}) {
+		t.Errorf("unread %v, want work and alarms named", blind.Unread)
+	}
+}
+
+func hasClass(a advisor.Answer, class advisor.Class) bool {
+	return slices.ContainsFunc(a.Findings, func(f advisor.Finding) bool { return f.Class == class })
+}

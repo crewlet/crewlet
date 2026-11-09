@@ -166,6 +166,9 @@ func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: 
 // ([engine.Engine.LatestAlarms]).
 func (r engineRuntime) LatestAlarms() []statelog.Alarm { return r.engine.LatestAlarms() }
 
+// AlarmsEvaluated is [engine.Engine.AlarmsEvaluated].
+func (r engineRuntime) AlarmsEvaluated() bool { return r.engine.AlarmsEvaluated() }
+
 // MCPChecker is the engine's test of an MCP server and check of an address,
 // its refusals mapped onto the routes' ([mcpChecker]).
 func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engine} }

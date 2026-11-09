@@ -52,6 +52,9 @@ type Evidence struct {
 	Work  worklet.WorkPatterns
 	// Backup is the node's backup alarm as its latest evaluation stands.
 	Backup Backup
+	// WorkUnread and AlarmsUnread say the caller could not read that source,
+	// so its classes raise nothing and the answer names it as unread.
+	WorkUnread, AlarmsUnread bool
 }
 
 // Backup is whether the backup alarm stands, and over how many logs.
@@ -126,6 +129,9 @@ func WorkClasses() []Class {
 func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 	out := []Finding{}
 	for _, d := range detectors {
+		if d.work && ev.WorkUnread || d.class == ClassNoVerifiedBackup && ev.AlarmsUnread {
+			continue
+		}
 		out = append(out, d.detect(ev, kind)...)
 	}
 	sortFindings(out)
@@ -151,6 +157,12 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	answer.Findings = append(answer.Findings, found...)
 	sortFindings(answer.Findings)
+	if ev.WorkUnread {
+		answer.Unread = append(answer.Unread, UnreadWork)
+	}
+	if ev.AlarmsUnread {
+		answer.Unread = append(answer.Unread, UnreadAlarms)
+	}
 	return answer
 }
 

@@ -365,6 +365,9 @@ type Engine struct {
 	// of the seat's chain is limited, each with the alarm that lifts it for
 	// a probe when the first is tried again. See providerpark.go.
 	providerParks providerParks
+	// failures is each seat's latest failure a retry cannot cure, on this
+	// node: its second in a row pauses the seat (failurehold.go).
+	failures lastFailures
 
 	// limitProbes is one probe per limited chain, which settles every seat
 	// parked on it. See providerpark.go.
@@ -2731,6 +2734,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Provider == nil {
 		d.Provider = e.providerPark
+	}
+	if d.Failure == nil {
+		d.Failure = e.failureHold
 	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
