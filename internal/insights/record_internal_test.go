@@ -53,9 +53,9 @@ func TestARecordOutsideTheCatalogueIsRefused(t *testing.T) {
 // historyDir holds each published schema's catalogue, frozen.
 const historyDir = "schema/insights-history"
 
-// A PUBLISHED CLASS'S SHAPE IS IMMUTABLE: a class a frozen schema names keeps
-// its facts and their values while this build's schema is that one, so moving a
-// bucket takes a schema bump, which turns the class off until consent again.
+// A PUBLISHED CLASS'S SHAPE IS IMMUTABLE: a class a frozen schema names keeps its
+// facts, labels, floors and the evidence they read while this build's schema is
+// that one, so moving a bucket takes a schema bump and a consent again.
 func TestAPublishedClassShapeIsImmutable(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(sourcetree.Root(t), filepath.FromSlash(historyDir))
@@ -87,8 +87,10 @@ func TestAPublishedClassShapeIsImmutable(t *testing.T) {
 			Classes []struct {
 				Class Class `json:"class"`
 				Facts []struct {
-					Key    FactKey `json:"key"`
-					Values []Label `json:"values"`
+					Key    FactKey  `json:"key"`
+					Values []Label  `json:"values"`
+					Floors []int64  `json:"floors"`
+					Reads  []string `json:"reads"`
 				} `json:"facts"`
 			} `json:"classes"`
 		}
@@ -111,7 +113,8 @@ func TestAPublishedClassShapeIsImmutable(t *testing.T) {
 				continue
 			}
 			for i, f := range c.Facts {
-				if facts[i].Key != f.Key || !slices.Equal(facts[i].Values, f.Values) {
+				if facts[i].Key != f.Key || !slices.Equal(facts[i].Values, f.Values) ||
+					!slices.Equal(facts[i].Floors, f.Floors) || !slices.Equal(facts[i].Reads, f.Reads) {
 					t.Errorf("schema %d is published: %s's %s moved from %v", number, c.Class, f.Key, f.Values)
 				}
 			}

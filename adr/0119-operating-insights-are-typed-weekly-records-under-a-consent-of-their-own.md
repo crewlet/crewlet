@@ -39,9 +39,10 @@ carries an install id, a nonce or a sequence, so no field joins one record to
 another.
 
 **One catalogue both ends vendor.** The table in `internal/insights` is the
-catalogue; `schema/insights-catalogue.json` is its generated export, which the
-relay's insights route validates against, and the relay's own CI compares its
-vendored copy to that file. A published class's shape is immutable: each schema
+catalogue; `schema/insights-catalogue.json` is its generated export. The relay's
+insights route, a separate change, is to validate against its vendored copy, and
+its CI must compare that copy to this file. A published class's shape (its
+facts, labels, floors and the evidence they read) is immutable: each schema
 is frozen in `schema/insights-history/`, a change is a new class id or a schema
 bump, and a bump turns the changed classes off until an administrator accepts
 them again. Only a public
