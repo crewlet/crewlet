@@ -1,7 +1,9 @@
 package insights
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sync"
@@ -12,15 +14,41 @@ import (
 )
 
 // A Record is one class's operating pattern in one ISO week: what an opted-in
-// engine may share, and nothing else. EVERY STRING IN IT IS A NAMED TYPE that
-// only [Records] makes, so no company text can reach one.
+// engine may share, and nothing else. SEALED: its fields are unexported, so
+// only [Records] makes one, and a record built anywhere else fails [Record.Valid].
 type Record struct {
+	schema  int
+	class   Class
+	week    Week
+	version Version
+	facts   map[FactKey]Label
+}
+
+// recordJSON is a record as it is sent.
+type recordJSON struct {
 	Schema  int               `json:"schema"`
 	Class   Class             `json:"class"`
 	Week    Week              `json:"week"`
 	Version Version           `json:"version"`
 	Facts   map[FactKey]Label `json:"facts"`
 }
+
+// MarshalJSON writes the record as it is sent.
+func (r Record) MarshalJSON() ([]byte, error) {
+	return json.Marshal(recordJSON{Schema: r.schema, Class: r.class, Week: r.week, Version: r.version, Facts: r.facts})
+}
+
+// Class is the record's catalogue class.
+func (r Record) Class() Class { return r.class }
+
+// Week is the ISO week the record describes.
+func (r Record) Week() Week { return r.week }
+
+// Version names the build that made the record.
+func (r Record) Version() Version { return r.version }
+
+// Facts is a copy of the record's facts.
+func (r Record) Facts() map[FactKey]Label { return maps.Clone(r.facts) }
 
 // Week is an ISO week, `2030-W02`: the finest instant a record holds.
 type Week string
@@ -112,7 +140,7 @@ func (e Entry) record(findings []advisor.Finding, week Week, version Version) (R
 		}
 		facts[fact.Key] = label
 	}
-	return Record{Schema: SchemaVersion, Class: e.Class, Week: week, Version: version, Facts: facts}, true
+	return Record{schema: SchemaVersion, class: e.Class, week: week, version: version, facts: facts}, true
 }
 
 // readable reports whether every fact of e reads a label off ev.
@@ -131,22 +159,22 @@ func (e Entry) readable(ev map[string]int64) bool {
 // Valid reports why r is no record the catalogue allows, nil when it is one:
 // the check a sender and the relay both make before anything leaves.
 func (r Record) Valid() error {
-	e, ok := entryOf(r.Class)
+	e, ok := entryOf(r.class)
 	switch {
 	case !ok:
-		return fmt.Errorf("insights: %q is no catalogue class", r.Class)
-	case r.Schema != SchemaVersion:
-		return fmt.Errorf("insights: schema %d, want %d", r.Schema, SchemaVersion)
-	case !weekShape().MatchString(string(r.Week)):
-		return fmt.Errorf("insights: %q is no ISO week", r.Week)
-	case !versionShape().MatchString(string(r.Version)):
-		return fmt.Errorf("insights: %q is no release tag or main", r.Version)
-	case len(r.Facts) != len(e.Facts):
-		return fmt.Errorf("insights: %s carries %d facts, want %d", r.Class, len(r.Facts), len(e.Facts))
+		return fmt.Errorf("insights: %q is no catalogue class", r.class)
+	case r.schema != SchemaVersion:
+		return fmt.Errorf("insights: schema %d, want %d", r.schema, SchemaVersion)
+	case !weekShape().MatchString(string(r.week)):
+		return fmt.Errorf("insights: %q is no ISO week", r.week)
+	case !versionShape().MatchString(string(r.version)):
+		return fmt.Errorf("insights: %q is no release tag or main", r.version)
+	case len(r.facts) != len(e.Facts):
+		return fmt.Errorf("insights: %s carries %d facts, want %d", r.class, len(r.facts), len(e.Facts))
 	}
 	for _, fact := range e.Facts {
-		if !slices.Contains(fact.Values, r.Facts[fact.Key]) {
-			return fmt.Errorf("insights: %s's %s is %q, outside its set", r.Class, fact.Key, r.Facts[fact.Key])
+		if !slices.Contains(fact.Values, r.facts[fact.Key]) {
+			return fmt.Errorf("insights: %s's %s is %q, outside its set", r.class, fact.Key, r.facts[fact.Key])
 		}
 	}
 	return nil

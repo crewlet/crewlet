@@ -1,0 +1,203 @@
+{
+  "schema": 1,
+  "patterns": {
+    "version": "^(v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+)?|main)$",
+    "week": "^\\d{4}-W(0[1-9]|[1-4]\\d|5[0-3])$"
+  },
+  "limits": {
+    "facts.count": 4,
+    "record.bytes": 2048
+  },
+  "classes": [
+    {
+      "class": "wake.agent_mentions_without_ask",
+      "title": "Agents woke each other with comments that asked nothing",
+      "summary": "Wakes per 100 agent comments, and how many agents were woken.",
+      "facts": [
+        {
+          "key": "per_100_agent_comments",
+          "values": [
+            "1",
+            "2-4",
+            "5-9",
+            "10-24",
+            "25+"
+          ]
+        },
+        {
+          "key": "seats",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "person.requests_without_ask",
+      "title": "Agents named a person without asking them a question",
+      "summary": "Comments naming the most-named person, and how many people were named.",
+      "facts": [
+        {
+          "key": "count",
+          "values": [
+            "5-9",
+            "10-19",
+            "20-49",
+            "50+"
+          ]
+        },
+        {
+          "key": "people",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "ask.overtaken",
+      "title": "People answered questions that no longer needed an answer",
+      "summary": "The share of answers that went to a question asked again or already finished.",
+      "facts": [
+        {
+          "key": "share",
+          "values": [
+            "5-9",
+            "10-19",
+            "20-39",
+            "40+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "review.idle",
+      "title": "Work in review waited a day for the agent holding it",
+      "summary": "Idle reviews held by the agent holding the most, and how many agents held one.",
+      "facts": [
+        {
+          "key": "count",
+          "values": [
+            "1",
+            "2-3",
+            "4-9",
+            "10+"
+          ]
+        },
+        {
+          "key": "seats",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "durability.no_verified_backup",
+      "title": "No recent verified backup",
+      "summary": "The class alone.",
+      "facts": []
+    },
+    {
+      "class": "person.notice_load",
+      "title": "A person was sent more notices than anyone reads",
+      "summary": "Notices to the most-notified person, the share of them asking something, and how many people.",
+      "facts": [
+        {
+          "key": "count",
+          "values": [
+            "350-699",
+            "700-1399",
+            "1400+"
+          ]
+        },
+        {
+          "key": "asked_share",
+          "values": [
+            "0-4",
+            "5-9",
+            "10-24",
+            "25+"
+          ]
+        },
+        {
+          "key": "people",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "wake.noop_share",
+      "title": "An agent was woken for turns that changed nothing",
+      "summary": "The share of the worst agent's turns that committed nothing, and how many agents.",
+      "facts": [
+        {
+          "key": "share",
+          "values": [
+            "25-34",
+            "35-49",
+            "50-74",
+            "75+"
+          ]
+        },
+        {
+          "key": "seats",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "work.pickup_still_waiting",
+      "title": "Agents picked up work that could not move yet",
+      "summary": "The share of pickups that ended in words only.",
+      "facts": [
+        {
+          "key": "share",
+          "values": [
+            "20-29",
+            "30-49",
+            "50+"
+          ]
+        }
+      ]
+    },
+    {
+      "class": "spend.auxiliary_share",
+      "title": "An agent spent a large share of its tokens on auxiliary calls",
+      "summary": "The worst agent's auxiliary share of its tokens, and how many agents.",
+      "facts": [
+        {
+          "key": "share",
+          "values": [
+            "15-24",
+            "25-39",
+            "40-59",
+            "60+"
+          ]
+        },
+        {
+          "key": "seats",
+          "values": [
+            "1",
+            "2-3",
+            "4+"
+          ]
+        }
+      ]
+    }
+  ]
+}

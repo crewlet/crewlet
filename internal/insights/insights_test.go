@@ -66,9 +66,9 @@ func TestEveryClassIsReadOffItsDetectorsOwnFindings(t *testing.T) {
 	records := insights.Records(advisor.Detect(everyPattern(), kindOf), monday, tagged)
 	var got []insights.Class
 	for _, r := range records {
-		got = append(got, r.Class)
+		got = append(got, r.Class())
 		if err := r.Valid(); err != nil {
-			t.Errorf("%s: %v", r.Class, err)
+			t.Errorf("%s: %v", r.Class(), err)
 		}
 	}
 	var want []insights.Class
@@ -219,7 +219,7 @@ func TestEveryFindingOfAClassFoldsIntoOneRecord(t *testing.T) {
 		started("app", "chat:message", "nothing", 6, 0, 0), started("app", "chat:message", "moved", 14, 0, 0),
 		started("qa", "chat:message", "nothing", 12, 0, 0), started("qa", "chat:message", "moved", 8, 0, 0)}
 	records := insights.Records(advisor.Detect(advisor.Evidence{Ledger: ledger}, kindOf), monday, tagged)
-	if len(records) != 1 || !maps.Equal(records[0].Facts, map[insights.FactKey]insights.Label{
+	if len(records) != 1 || !maps.Equal(records[0].Facts(), map[insights.FactKey]insights.Label{
 		insights.FactShare: "50-74", insights.FactSeats: "2-3"}) {
 		t.Errorf("two agents' no-op turns made %+v, want one record of the worse share and 2-3 seats", records)
 	}
@@ -235,8 +235,8 @@ func TestARecordNamesTheBuildByItsTagOrMain(t *testing.T) {
 	}
 	for origin, want := range map[*issuereport.Origin]insights.Version{&tagged: "v1.4.0", &onMain: "main"} {
 		for _, r := range insights.Records(findings, monday, *origin) {
-			if r.Version != want {
-				t.Errorf("%s is named %q, want %q", origin.Build.Version, r.Version, want)
+			if r.Version() != want {
+				t.Errorf("%s is named %q, want %q", origin.Build.Version, r.Version(), want)
 			}
 		}
 	}
@@ -256,35 +256,24 @@ func TestARecordsInstantIsItsISOWeek(t *testing.T) {
 	}
 }
 
-// A RECORD OUTSIDE THE CATALOGUE IS REFUSED: the check a sender and the relay
-// both make, so a hand-built record is no way past it.
-func TestARecordOutsideTheCatalogueIsRefused(t *testing.T) {
+// A RECORD IS SEALED: it has no exported field, so outside this package a
+// record is one [insights.Records] made or the zero record, which fails Valid,
+// and decoding one from JSON leaves it the zero record too.
+func TestARecordBuiltOutsideThePackageFailsValid(t *testing.T) {
 	t.Parallel()
-	good := insights.Records(advisor.Detect(everyPattern(), kindOf), monday, tagged)
-	if len(good) == 0 {
-		t.Fatal("no record to start from")
-	}
-	r := good[0]
-	for name, bad := range map[string]func(insights.Record) insights.Record{
-		"an unknown class":  func(r insights.Record) insights.Record { r.Class = "payroll.secret"; return r },
-		"a day, not a week": func(r insights.Record) insights.Record { r.Week = "2030-01-07"; return r },
-		"a commit":          func(r insights.Record) insights.Record { r.Version = "main-0123456789ab"; return r },
-		"a raw count": func(r insights.Record) insights.Record {
-			r.Facts = maps.Clone(r.Facts)
-			for k := range r.Facts {
-				r.Facts[k] = "17"
-			}
-			return r
-		},
-		"an extra fact": func(r insights.Record) insights.Record {
-			r.Facts = maps.Clone(r.Facts)
-			r.Facts["seat"] = "payroll-agent"
-			return r
-		},
-	} {
-		if err := bad(r).Valid(); err == nil {
-			t.Errorf("%s was accepted", name)
+	for field := range reflect.TypeFor[insights.Record]().Fields() {
+		if field.IsExported() {
+			t.Errorf("Record.%s is exported, so a caller could set it", field.Name)
 		}
+	}
+	if err := (insights.Record{}).Valid(); err == nil {
+		t.Error("the zero record passed Valid")
+	}
+	var decoded insights.Record
+	forged := `{"schema":1,"class":"wake.noop_share","week":"2030-W02","version":"main",` +
+		`"facts":{"share":"75+","seats":"4+"}}`
+	if err := json.Unmarshal([]byte(forged), &decoded); err == nil && decoded.Valid() == nil {
+		t.Error("a record decoded from JSON passed Valid")
 	}
 }
 
@@ -294,7 +283,7 @@ func TestEveryRecordFitsItsBound(t *testing.T) {
 	for _, r := range insights.Records(advisor.Detect(everyPattern(), kindOf), monday, tagged) {
 		raw, err := json.Marshal(r)
 		if err != nil || len(raw) > insights.MaxRecordBytes {
-			t.Errorf("%s encodes to %d bytes (%v), want at most %d", r.Class, len(raw), err, insights.MaxRecordBytes)
+			t.Errorf("%s encodes to %d bytes (%v), want at most %d", r.Class(), len(raw), err, insights.MaxRecordBytes)
 		}
 	}
 }

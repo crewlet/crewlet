@@ -152,7 +152,7 @@ var (
 	namedBucket    = bucket{[]int64{5, 10, 20, 50}, []Label{"5-9", "10-19", "20-49", "50+"}}
 	idleBucket     = bucket{[]int64{1, 2, 4, 10}, []Label{"1", "2-3", "4-9", "10+"}}
 	noticesBucket  = bucket{[]int64{350, 700, 1400}, []Label{"350-699", "700-1399", "1400+"}}
-	askedBucket    = bucket{[]int64{0, 5, 10}, []Label{"0-4", "5-9", "10-24"}}
+	askedBucket    = bucket{[]int64{0, 5, 10, 25}, []Label{"0-4", "5-9", "10-24", "25+"}}
 )
 
 // catalogue is every class a record may describe: a class the advisor raises

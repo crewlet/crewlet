@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/insights`
-- **Enforced-by:** `internal/insights.TestARecordHoldsNoPlainString`, `internal/insights.FuzzNoFindingTextReachesARecord`, `internal/insights.TestTwoCompaniesWithOnePatternSendTheSameBytes`, `internal/insights.TestEveryClassIsSmallAndClosed`, `internal/insights.TestEveryClassIsReadOffItsDetectorsOwnFindings`, `internal/insights.TestEveryFindingOfAClassFoldsIntoOneRecord`, `internal/insights.TestARecordNamesTheBuildByItsTagOrMain`, `internal/insights.TestARecordOutsideTheCatalogueIsRefused`, `internal/insights.TestEveryRecordFitsItsBound`, `cmd/crewlet.TestTheCheckedInInsightsCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:** `internal/insights.TestARecordHoldsNoPlainString`, `internal/insights.TestARecordBuiltOutsideThePackageFailsValid`, `internal/insights.FuzzNoFindingTextReachesARecord`, `internal/insights.TestTwoCompaniesWithOnePatternSendTheSameBytes`, `internal/insights.TestEveryClassIsSmallAndClosed`, `internal/insights.TestEveryClassIsReadOffItsDetectorsOwnFindings`, `internal/insights.TestEveryFindingOfAClassFoldsIntoOneRecord`, `internal/insights.TestARecordNamesTheBuildByItsTagOrMain`, `internal/insights.TestARecordOutsideTheCatalogueIsRefused`, `internal/insights.TestAPublishedClassShapeIsImmutable`, `internal/insights.TestEveryRecordFitsItsBound`, `cmd/crewlet.TestTheCheckedInInsightsCatalogueIsWhatTheGeneratorEmits`
 - **Cost-when-tried:** not tried here. Before this record the only way to learn which operating patterns are common across companies was a manual analysis of one company's own data, and the defect reporter (ADR-0101) excludes usage by design.
 - **Tag-status:** unreleased
 
@@ -14,9 +14,11 @@ promises that a defect report carries nothing about usage, and an operating
 pattern is usage, so widening that consent would break the promise every
 company that turned defects on has already accepted.
 
-**A record is an allowlist, held by its type.** `insights.Record` has no plain
-string: a class of the catalogue, the ISO week, the build's release tag or
-`main`, and at most four facts, each a label of a closed set of at most six. A
+**A record is an allowlist, held by its type.** `insights.Record` is sealed: its
+fields are unexported, so only `insights.Records` makes one, and a record built
+or decoded anywhere else is the zero record, which fails `Record.Valid`. It holds
+no plain string: a class of the catalogue, the ISO week, the build's release tag
+or `main`, and at most four facts, each a label of a closed set of at most six. A
 fact is a bucket of a share or a count, never the count. A class has at most 64
 combinations of facts, so a record is a handful of bits. Never sent: a name of a
 role, seat, person, unit, server or host; an item key or title; any text; a raw
@@ -38,9 +40,11 @@ another.
 
 **One catalogue both ends vendor.** The table in `internal/insights` is the
 catalogue; `schema/insights-catalogue.json` is its generated export, which the
-relay's insights route validates against. A published class's shape is
-immutable: a change is a new class id or a schema bump, and a bump turns the
-changed classes off until an administrator accepts them again. Only a public
+relay's insights route validates against, and the relay's own CI compares its
+vendored copy to that file. A published class's shape is immutable: each schema
+is frozen in `schema/insights-history/`, a change is a new class id or a schema
+bump, and a bump turns the changed classes off until an administrator accepts
+them again. Only a public
 build sends, by ADR-0101's own origin rule.
 
 **Consent is its own, an administrator's, and off by default.** The switch is
