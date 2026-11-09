@@ -136,12 +136,21 @@ type Deps struct {
 	// surfaces ([Withheld]). See healthtools.go.
 	Health HealthDeps
 
+	// SSH is the SSH tools': the company's servers, reached for a seat whose
+	// SSH block grants them. The zero value omits both. Offered only to a seat
+	// whose role carries the grant, as Health is. See ssh.go.
+	SSH SSHDeps
+
 	// Sessions are the seat's own executor sessions, which its executor
 	// lists and reads back: its rows, the objects they name and the switch
 	// each call asks. Any of the three nil omits both tools, which is what a
 	// company that keeps no session has (`turn_engine.conversation_session.
 	// enabled: false`), and a node with no object store. See sessions.go.
 	Sessions SessionDeps
+
+	// Withdraw is withdraw_ask's resolver and run desk (ADR-0111); its tracker
+	// reads and writes are [Deps.Work]'s, set by [Register].
+	Withdraw WithdrawDeps
 
 	// Chat is Chatlet. Every half nil omits all nine tools, which
 	// is what a company on Slack or Mattermost has — there the colleague
@@ -169,6 +178,15 @@ type Deps struct {
 	// fields could set two of them differently, which is the drift this
 	// whole seam exists to remove.
 	Authorize Authorizer
+
+	// Requesters composes who a seat's turn is acting for — the requester
+	// ceiling — which the gate binds to every call the turn makes, so every
+	// app verb is held to the apps whoever woke the turn uses (ADR-0109) and
+	// the families that decide a relation for them read the same
+	// composition. Nil binds nobody, and a call is then decided for the seat
+	// alone, as on a surface no seat calls through: a seat's registry is
+	// always handed one (internal/engine's equip).
+	Requesters Requesters
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -187,13 +205,24 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
+	// AND THE ONE COMPOSER, for [Deps.Authorize]'s reason: the gate binds a
+	// turn's ceiling from it, and the families that decide a relation for
+	// the requester read that binding — handed a second composer, a family
+	// could compose somebody else than the gate did.
+	if deps.Requesters != nil {
+		deps.Artifacts.Requesters, deps.Code.Requesters = deps.Requesters, deps.Requesters
+		deps.Health.Requesters = deps.Requesters
+	}
+
+	withdraw := deps.Withdraw
+	withdraw.Work = deps.Work
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
 	// the tool every other addressing decision goes through.
 	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
-		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
+		{&a2aAsk{svc: deps.A2A, env: deps.Env, requesters: deps.Requesters}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
 			skills:   deps.Refinable,
@@ -229,6 +258,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
+		// AND WITHDRAWING ONE'S OWN QUESTION, on a work item or one the
+		// seat's executor waits on. See withdrawask.go.
+		{&withdrawAsk{deps: withdraw, requesters: deps.Requesters}, withdraw.serves()},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can
@@ -300,7 +332,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// (the switch below) — and the health tools after them, the same way
 	// ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code), healthCandidates(deps.Health))
+		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH))
 
 	var names []string
 	for _, c := range candidates {
@@ -308,6 +340,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			continue
 		}
 		opts := []tools.Option{}
+		if _, fixed := c.tool.(fixedTool); fixed {
+			opts = append(opts, tools.AsksBeforeEveryCall)
+		}
+		if u, ok := c.tool.(interface{ OutputUnkept() bool }); ok && u.OutputUnkept() {
+			opts = append(opts, tools.KeepsNoOutput)
+		}
 		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
 		// answers by moving the item, commenting on it, filing the
 		// follow-up, or merging it into the item it duplicates — and without
@@ -347,7 +385,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// each tool: the authority table is keyed on the tool's own
 		// name, so one wrapper covers every verb and a new tool cannot
 		// ship ungated by somebody forgetting a line inside it.
-		if err := reg.RegisterWith(gate(c.tool, deps.Authorize),
+		if err := reg.RegisterWith(gate(c.tool, deps.Authorize, deps.Requesters),
 			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)
@@ -410,6 +448,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := healthAnnotations(name); ok {
+		return a
+	}
+	if a, ok := sshAnnotations(name); ok {
 		return a
 	}
 	switch name {

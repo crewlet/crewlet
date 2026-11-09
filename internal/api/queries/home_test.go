@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -570,5 +571,48 @@ func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
 		t.Errorf("a lead without Worklet reading a report's decisions = %v, "+
 			"want a refusal naming [worklet]", err)
+	}
+}
+
+// pendingReviews is an asking agent's pending access review, for every seat.
+type pendingReviews struct{ pending accessreview.Pending }
+
+func (p pendingReviews) PendingAccessReview(context.Context, string) (accessreview.Pending, bool, error) {
+	return p.pending, true, nil
+}
+
+// AN AGENT'S ACCESS CHANGE IS DETAILED ONLY TO WHOEVER MAY READ THE SETUP. A
+// person an agent asked reads that its access changed since; the change itself
+// (levels, scopes, hosts, tools) is the company's setup, which only a caller
+// holding setup.read is sent, through the API as much as the dashboard.
+//
+// Mutation: send the lines to every caller and the member reads them.
+func TestAnAgentsAccessChangeIsDetailedOnlyToASetupReader(t *testing.T) {
+	t.Parallel()
+	askedAt := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
+	work := &stubWork{decisions: worklet.DecisionsAnswer{
+		Asks: []worklet.AskRow{{Comment: "c-1", AskedBy: "swe", AskedAt: askedAt}},
+	}}
+	sources := viewerSources(t, work)
+	sources.Access = pendingReviews{pending: accessreview.Pending{Baseline: "t-1", Digest: "d",
+		ChangedAt: askedAt.Add(time.Hour), Lines: []string{"SSH: its level is now Read (was Operate)."}}}
+	noteOf := func(got any, err error) *queries.AccessChanged {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("decisions: %v", err)
+		}
+		items := got.(map[string]any)["items"].([]queries.DecisionItem)
+		if len(items) != 1 {
+			t.Fatalf("decisions listed %d items, want the one question", len(items))
+		}
+		return items[0].AccessChanged
+	}
+	admin := noteOf(askAsSeat(t, sources, "ana", "decisions", nil))
+	if admin == nil || len(admin.Lines) != 1 {
+		t.Errorf("a setup reader is told %+v, want the change line", admin)
+	}
+	member := noteOf(askHolding(t, sources, "ana", "decisions", nil, iam.GrantWorklet))
+	if member == nil || len(member.Lines) != 0 {
+		t.Errorf("a member is told %+v, want only that the access changed", member)
 	}
 }

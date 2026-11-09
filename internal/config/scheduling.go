@@ -3,7 +3,9 @@ package config
 import "time"
 
 // Scheduling configures the role/unit scheduler: recurring work a seat or a
-// unit owns, fired on a cron expression.
+// unit owns, fired on a cron expression. It also carries the work pickup
+// ([WorkPickup]), the engine's own cadence for handing an idle seat its
+// ready work, which runs whether or not the cron scheduler does.
 //
 // Which CLOCK a schedule fires on is not here: a schedule that names no zone
 // of its own fires on the company's `timezone`, which is the clock every other
@@ -48,6 +50,54 @@ type Scheduling struct {
 	// schedule's own half-period.
 	CatchupMinSeconds int `yaml:"catchup_min_seconds,omitempty" json:"catchup_min_seconds,omitempty" js:"min=1" desc:"Lower clamp on the missed-tick catchup window (at least 1)."`
 	CatchupMaxSeconds int `yaml:"catchup_max_seconds,omitempty" json:"catchup_max_seconds,omitempty" js:"min=0" desc:"Upper clamp on the missed-tick catchup window."`
+
+	// WorkPickup is how an idle agent seat is handed its next ready work
+	// item (ADR-0112). Independent of Enabled above, which switches the
+	// cron scheduler alone.
+	WorkPickup WorkPickup `yaml:"work_pickup,omitempty" json:"work_pickup,omitzero" desc:"Hands an idle agent seat its next ready work item (default on)."`
+}
+
+// WorkPickup configures the work pickup: the wake the engine derives for an
+// agent seat that is idle while it holds assigned work that is ready.
+type WorkPickup struct {
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Hand an idle agent seat its next ready work item (default on)."`
+
+	// CooldownSeconds is the least time between two pickups of one seat,
+	// across the fleet.
+	CooldownSeconds int `yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty" js:"min=60;max=1800" desc:"Least time between two pickups of one seat, 60..1800 seconds (default 600)."`
+}
+
+// DefaultWorkPickupCooldownSeconds is ten minutes: a seat that declines one
+// ready item after another is offered the next at most six times an hour,
+// and a seat that finished its item is handed the next within one cooldown.
+const DefaultWorkPickupCooldownSeconds = 600
+
+// MaxWorkPickupCooldownSeconds is the fleet claim's own ceiling
+// (coord.MaxClaimTTL): the cooldown is a claim held for this long.
+const MaxWorkPickupCooldownSeconds = 1800
+
+// minWorkPickupCooldownSeconds is one pickup tick: a shorter cooldown could
+// not be observed by the loop that honours it.
+const minWorkPickupCooldownSeconds = 60
+
+// Runs reports whether the work pickup runs, applying the true default.
+func (w *WorkPickup) Runs() bool { return w.Enabled.Or(true) }
+
+// Cooldown is the least time between two pickups of one seat.
+func (w *WorkPickup) Cooldown() time.Duration {
+	return time.Duration(w.CooldownSeconds) * time.Second
+}
+
+func (w *WorkPickup) validate(path Path) error {
+	var p problems
+	if w.CooldownSeconds < minWorkPickupCooldownSeconds ||
+		w.CooldownSeconds > MaxWorkPickupCooldownSeconds {
+		p.add(at(path, "cooldown_seconds"), ErrOutOfRange,
+			"must be %d..%d, got %d: the pickup loop ticks once a minute and "+
+				"the cooldown is a fleet claim, which lasts at most thirty minutes",
+			minWorkPickupCooldownSeconds, MaxWorkPickupCooldownSeconds, w.CooldownSeconds)
+	}
+	return p.err()
 }
 
 // DefaultScheduling is the scheduler's shipped defaults.
@@ -59,6 +109,7 @@ func DefaultScheduling() Scheduling {
 		// morning restart from replaying the whole night.
 		CatchupMinSeconds: 120,
 		CatchupMaxSeconds: 7200,
+		WorkPickup:        WorkPickup{CooldownSeconds: DefaultWorkPickupCooldownSeconds},
 	}
 }
 
@@ -104,5 +155,6 @@ func (s *Scheduling) validate(path Path) error {
 			"must be at least catchup_min_seconds (%d), got %d",
 			s.CatchupMinSeconds, s.CatchupMaxSeconds)
 	}
+	p.wrap(s.WorkPickup.validate(at(path, "work_pickup")))
 	return p.err()
 }

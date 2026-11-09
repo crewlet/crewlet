@@ -237,6 +237,10 @@ func healthAnnotations(name string) (tools.Annotations, bool) {
 // ([ErrUndecidable]) offers the tool and the call decides it again, as every
 // call is; withholding on silence would hide a tool from a seat that holds it.
 // An MCP or agent-to-agent tool is no builtin and has no row to ask.
+//
+// OUTSIDE ANY TURN, as [Admits] says: what a seat is offered is its own
+// authority, asked before any turn exists, and whoever wakes a turn later
+// bounds each of its calls, never the offer.
 func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot) []string {
 	var out []string
 	for _, e := range snapshot.Entries() {
@@ -536,53 +540,103 @@ func sortedAfter[T any](rows []T, idOf func(T) string, cursor string) int {
 // no deputy, and a turn nobody woke — a schedule, an alarm's wake — reads for
 // nobody but the seat.
 func (t *fleetHealth) forRequester(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	return companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), requesterTerms{
+		action: authz.ActionFleetHealthRead, done: "the deployment's health is read", nothing: "Nothing was read.",
+	})
+}
+
+// requesterTerms are what [companyRequester] decides and says: the row a
+// requester must hold, what the tool does only for somebody of the company,
+// and what was not done.
+type requesterTerms struct {
+	action        authz.Action
+	done, nothing string
+}
+
+// companyRequester is nil where a seat's call may act for whoever its turn is
+// acting for ([ceilingOf]), decided by the authority table on terms.action,
+// and otherwise the refusal it is answered with. A stranger, or a person who
+// may not act in the company now, is refused; a colleague seat, a person of
+// the company, and a turn nobody woke are not. A requester this node could not
+// compose or decide is undecidable, never a turn nobody woke. A person's or a
+// token's own call is no deputy.
+//
+// A CREDENTIAL ACTING AS NO SEAT is refused too ([worksForACredential]): a
+// token or a service account is somebody of the company for the apps its
+// grants name alone (ADR-0109), its reach stated at its pin, and what these
+// tools read — the deployment's health, a server — is no app. So a turn a
+// `[worklet]` CI token woke reads neither, as it never could before it was a
+// requester at all, and neither does an `[admin]` token's, whose requester
+// carries apps and never admin.
+func companyRequester(ctx context.Context, turn *turnctx.Turn, requesters Requesters, chart authz.Chart,
+	tool string, terms requesterTerms) *tools.Result {
 	// WHO CALLS, as the gate decided them: the context's answer, or the
 	// turn's seat where nothing has answered (turnctx.WithPrincipal).
 	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
 	if p.Kind != iam.KindSeat {
 		return nil
 	}
-	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Requesters)
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, requesters)
 	if err != nil {
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
-			fmt.Sprintf("%s could not establish who this turn's work is for, and the deployment's health "+
-				"is read only for somebody of the company who may act. Nothing was read. Try again shortly.",
-				t.Name()))
+			fmt.Sprintf("%s could not establish who this turn's work is for, and %s only for somebody "+
+				"of the company who may act. %s Try again shortly.", tool, terms.done, terms.nothing))
 		return &r
 	}
 	if ceiling.Kind == authz.CeilingNone {
 		return nil
 	}
-	dec := authz.DecideWithin(ctx, p, ceiling, authz.ActionFleetHealthRead, authz.Object{}, t.deps.Chart,
-		time.Now().UTC())
+	if worksForACredential(ceiling) {
+		r := credentialRefused(tool, terms)
+		return &r
+	}
+	dec := authz.DecideWithin(ctx, p, ceiling, terms.action, authz.Object{}, chart, time.Now().UTC())
 	switch {
 	case dec.Unknown():
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
 			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may act in "+
-				"the company. Nothing was read. Try again shortly.", t.Name()))
+				"the company. %s Try again shortly.", tool, terms.nothing))
 		return &r
 	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
-		r.Output = healthCeilingRefused(t.Name(), ceiling.Kind)
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
+		r.Output = companyCeilingRefused(tool, ceiling.Kind, terms.done)
 		return &r
 	case !dec.Allowed:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
 		return &r
 	}
 	return nil
 }
 
-// healthCeilingRefused is what a health tool refused for whoever its turn is
-// acting for is answered with, by who that is: a stranger, or a requester who
-// may not act in the company.
-func healthCeilingRefused(tool string, kind authz.CeilingKind) string {
+// worksForACredential reports a ceiling composed for a credential acting as no
+// seat ([credentialCeiling]): the requester a turn a token's or a service
+// account's write woke is worked for, as a machine principal.
+func worksForACredential(c authz.Ceiling) bool {
+	return c.Kind == authz.CeilingRequester && c.Principal.Kind == iam.KindMachine
+}
+
+// credentialRefused is a tool that acts only for a person or a seat of the
+// company, refused in a turn a credential acting as no seat woke
+// ([companyRequester]): the requester ceiling's reason, for a machine.
+func credentialRefused(tool string, terms requesterTerms) tools.Result {
+	r := authorityRefusal(tool, DecisionError(terms.action, authz.Decision{Reason: authz.ReasonCeiling,
+		Ceiling: authz.CeilingRequester, RequesterKind: iam.KindMachine}))
+	r.Output = fmt.Sprintf("%s didn't run: this turn is working for a credential acting as no seat, which "+
+		"reaches only the apps its grants name, and %s only for a person or a seat of the company. %s",
+		tool, terms.done, terms.nothing)
+	return r
+}
+
+// companyCeilingRefused is what a tool refused for whoever its turn is acting for is
+// answered with, by who that is: a stranger, or a requester who may not act in
+// the company.
+func companyCeilingRefused(tool string, kind authz.CeilingKind, done string) string {
 	if kind == authz.CeilingStranger {
 		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
-			"the deployment's health is read for nobody outside the company. A person or a seat of the "+
-			"company has to ask for it.", tool)
+			"%s for nobody outside the company. A person or a seat of the company has to ask for it.", tool, done)
 	}
 	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
-		"and the deployment's health is read only for somebody who may.", tool)
+		"and %s only for somebody who may.", tool, done)
 }
 
 // nodeHealthOf is one presence lease as fleet_health reports it.
@@ -734,6 +788,31 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 	return t.CallForTurn(ctx, nil, args)
 }
 
+// forCompany is nil where code_status may read the deployment's view for
+// whoever its turn is acting for, and the refusal for a credential acting as no
+// seat ([worksForACredential]) — composed once and bound to the call, so the
+// code read decided after it on the same composition reads nothing again.
+func (t *codeStatus) forCompany(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
+	if p.Kind != iam.KindSeat {
+		return nil
+	}
+	terms := requesterTerms{action: authz.ActionCodeRead,
+		done: "the deployment's view is read", nothing: "Nothing was read."}
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Code.Requesters)
+	switch {
+	case err != nil:
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, and %s only for a person or a "+
+				"seat of the company. %s Try again shortly.", t.Name(), terms.done, terms.nothing))
+		return &r
+	case worksForACredential(ceiling):
+		r := credentialRefused(t.Name(), terms)
+		return &r
+	}
+	return nil
+}
+
 // codeStatusFleet is code_status's answer about the fleet's Gitlet nodes: one
 // page of them.
 type codeStatusFleet struct {
@@ -787,6 +866,17 @@ type repoOnNode struct {
 func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
+	// THE DEPLOYMENT'S VIEW FIRST — every Gitlet node's cache — which is the
+	// health grant's, read for a person or a seat of the company and never
+	// for a credential acting as no seat, whose reach is the apps its grants
+	// name ([companyRequester]). Its repository reads alone would bound
+	// nothing: such a credential reads every repository itself. And FIRST,
+	// because no app given to the credential would let it read the view: a
+	// refusal naming Gitlet would send an administrator to grant something
+	// that changes nothing.
+	if refusal := t.forCompany(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
 	// WHO IT READS AS, AND FOR: the code tools' one composition, with
 	// whoever woke the turn decided on Gitlet's read verb — the
 	// repository reads below are the requester ceiling's, the rest of the

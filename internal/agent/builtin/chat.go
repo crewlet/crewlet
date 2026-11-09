@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // Chatlet's tool names, re-exported from the package that owns the
@@ -825,8 +826,39 @@ func addressesRoom(body string) bool {
 // already sent. An operator's assistant over MCP names neither, and each of its
 // posts is a new message — exactly as a person pressing send twice says it
 // twice, since nothing redelivers that call.
-func (d ChatDeps) message(body string, links []string) chatlet.NewMessage {
-	return ChatMessage(d.Mentions, body, links)
+func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMessage {
+	in := ChatMessage(d.Mentions, body, links)
+	in.Asks = asks
+	return in
+}
+
+// asksParam is the `asks` argument every posting tool requires of an agent:
+// its own statement that its message asks something (ADR-0113). Not in the
+// schema's required list, because a person's message asks whatever it says.
+func asksParam() map[string]any {
+	return map[string]any{
+		"type": "boolean",
+		"description": "Required of an agent. true when the message asks someone for an " +
+			"answer or an action: a question, a request, a hand-off. Whoever it " +
+			"asks, or the other side of a direct conversation, must then answer. false for " +
+			"news, status notes, acknowledgements and thanks: it wakes only the " +
+			"colleagues you @-mention, told it asks nothing, whoever's question it " +
+			"answers, and anyone with an open question in the thread.",
+	}
+}
+
+// asksOf is the call's `asks`, or, for an agent, the refusal of a call that
+// left it out: whether its message asks is the author's to say, never the
+// engine's guess. A person's message asks whatever it says, so a person's call
+// may leave it out.
+func asksOf(tool string, args map[string]any, author chatlet.AuthorKind) (bool, *tools.Result) {
+	asks, typed := argval.Bool(args["asks"])
+	if !typed && author == chatlet.AuthorAgent {
+		refused := failed(tool + " needs `asks`: true when the message asks someone " +
+			"for an answer or an action, false otherwise.")
+		return false, &refused
+	}
+	return asks, nil
 }
 
 // ChatMessage is what a post carries, read from the words a person or a model
@@ -896,6 +928,14 @@ func postReceipt(written chatlet.Written, channelID string) map[string]any {
 	if len(written.Message.Mentions) > 0 {
 		out["mentioned"] = written.Message.Mentions
 	}
+	if written.Message.AuthorKind == chatlet.AuthorAgent && !written.Message.Asks {
+		// SAID BACK, so a seat that meant to ask learns at once that its
+		// words reached only whom they name (ADR-0113).
+		out["asks"] = false
+		out["wakes"] = "only the colleagues it names, whoever's question it " +
+			"answers and anyone in the thread who still owes an answer; post " +
+			"again with asks: true if you need an answer from the room"
+	}
 	if written.Message.Collective {
 		// SAID BACK, because the model did not pass a flag: it wrote
 		// `@channel` in prose and the engine read it as an address, so
@@ -951,6 +991,7 @@ func (t *postMessage) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"channel", "body"},
 	}
@@ -975,9 +1016,13 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(PostMessageTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, PostMessageTool)
 	written, err := t.deps.Writer.Post(ctx, actor, id,
-		t.deps.message(body, argStrings(args, "links")))
+		t.deps.message(body, argStrings(args, "links"), asks))
 	if err != nil {
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1023,6 +1068,7 @@ func (t *replyInThread) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs, %s. No file attachments.",
 					chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"channel", "reply_to", "body"},
 	}
@@ -1051,9 +1097,13 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(ReplyInThreadTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, ReplyInThreadTool)
 	written, err := t.deps.Writer.Reply(ctx, actor, id, replyTo,
-		t.deps.message(body, argStrings(args, "links")))
+		t.deps.message(body, argStrings(args, "links"), asks))
 	if err != nil {
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1094,6 +1144,7 @@ func (t *sendDM) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"to", "body"},
 	}
@@ -1129,8 +1180,12 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(SendDMTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, SendDMTool)
-	said := t.deps.message(body, argStrings(args, "links"))
+	said := t.deps.message(body, argStrings(args, "links"), asks)
 	// WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS WRITTEN. A body
 	// over the cap is refused by the post however the room is found, so
 	// opening the conversation first only left a room in every

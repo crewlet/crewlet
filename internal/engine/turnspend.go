@@ -377,6 +377,10 @@ func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner
 	e.auxSpend.FlushTurn(ctx, tel.runID)
 	e.publishTurnCompleted(ctx, tel, spend, res, err, charge.ended)
 	e.recordTurnSpend(ctx, ready)
+	if !res.Suspended {
+		// A TURN TOLD AN ACCESS CHANGE HAS REVIEWED IT once it ends (ADR-0111).
+		e.endReviewOnTurnEnd(ctx, tel.handle, tel.runID)
+	}
 }
 
 // cardedCharge is a segment's charge readied for its write: its card fitted

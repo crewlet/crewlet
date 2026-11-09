@@ -50,7 +50,7 @@ import {
 } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, CHATLET, DOCLET, WORKLET, holds } from "./access.ts";
+import { ADMIN, CHATLET, DOCLET, GITLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
@@ -88,6 +88,11 @@ export interface ViewerState {
   doclet: boolean;
   /** Whether this caller holds CHATLET: every room question. */
   chatlet: boolean;
+  /**
+   * Whether this caller holds GITLET: every repository, change, push and
+   * code search question, and the code half of the inbox.
+   */
+  gitlet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -232,6 +237,7 @@ function viewerState(
     worklet: holds(grants, WORKLET),
     doclet: holds(grants, DOCLET),
     chatlet: holds(grants, CHATLET),
+    gitlet: holds(grants, GITLET),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",

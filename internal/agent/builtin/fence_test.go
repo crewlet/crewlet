@@ -1417,9 +1417,9 @@ func TestABodySentBackInItsFenceIsStoredWithoutIt(t *testing.T) {
 	f := newFakeChat()
 	chatReg := chatRegistry(t, chatDeps(f))
 	for name, args := range map[string]map[string]any{
-		builtin.PostMessageTool:   {"channel": chatRoomID, "body": fenced},
-		builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": fenced},
-		builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": fenced},
+		builtin.PostMessageTool:   {"channel": chatRoomID, "asks": false, "body": fenced},
+		builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "asks": false, "body": fenced},
+		builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "asks": false, "body": fenced},
 	} {
 		if got := callChat(t, chatReg, name, turn, args); got.Failed {
 			t.Fatalf("%s failed: %s", name, got.Output)

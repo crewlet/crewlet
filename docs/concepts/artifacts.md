@@ -280,12 +280,15 @@ What an **agent** may do is narrower than its shares, on purpose:
   true`;
 - every artifact tool passes the **requester ceiling**: an agent reads for
   somebody only what that somebody could read, and writes for them only what
-  they could write, except on an artifact the agent owns, which anybody who
+  they could write — authoring nothing for somebody who does not use the
+  artifacts app ([An agent uses only the apps of the person it works
+  for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for))
+  — except on an artifact the agent owns, which anybody who uses the app and
   can message the agent may ask it to change. The somebody is whoever woke the
   turn: a colleague's ask, or the first speaker of the message, comment or
   remark it answers, on a vendor's surface or on Worklet, Doclet and Chatlet
-  alike. A turn woken by somebody the company does not know does nothing on an
-  artifact beyond those changes to the agent's own. The ceiling holds the turn
+  alike. A turn woken by somebody the company does not know authors nothing,
+  and changes only what no app gates of the agent's own, such as its data. The ceiling holds the turn
   somebody woke and no turn after it: a colleague the agent asks reads for the
   agent, the turn the colleague's answer wakes is the agent's own, and what the
   agent already knows — its memory, what it read in a turn nobody woke — is no

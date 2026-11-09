@@ -231,6 +231,136 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
+	// Environment: a container runtime for a real sshd. Like the container
+	// mode's case above, these do not skip in CI, whose runners have docker;
+	// each entry covers a workstation without docker or podman.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/ssh",
+		Test:    "TestTheRenderedSetupPassesSshdAndIsIdempotent",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestTheSetupChangesNothingForOtherUsers",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAReadCertificateRunsAnAllowlistedCommand",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAReadCertificateCannotRunAnythingElse",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAReadCertificateGetsNoShellPtyOrForwarding",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves the gate and sudo admit a program's bare name and nothing else.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAHeldOperateCallApprovedOnceRunsOnce",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves an approved operate call runs once on a real server.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestEveryCertificateAndCommandIsRecorded",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves each certificate and command is recorded as the server answered it.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestACommandThatDidNotRunIsRecordedByWhatStoppedIt",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves each certificate and command is recorded as the server answered it.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAnOperateCertificateRunsOnlyItsForcedCommand",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestACertificateForOneHostIsRefusedByAnother",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAnExpiredCertificateIsRefused",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAnUnpinnedHostKeyIsRefusedBeforeAuthentication",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestTestConnectionReportsEachStep",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestTheGateRefusesShellCharactersAndOptionInjection",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestTheScanReadsEachHostKey",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+
+	// -----------------------------------------------------------------
 	// Environment: a Bourne shell. Listed for the same reason as the
 	// container entry — it does not fire on any machine the gates run on,
 	// and an entry is what makes the day it starts firing visible rather

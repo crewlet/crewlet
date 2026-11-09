@@ -102,6 +102,13 @@ func (w Work) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
+// ReadyWork answers what one seat could start now: the work pickup's read
+// (ADR-0112), from whichever data node serves the tracker.
+func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
+	worklet.ReadyWork, error) {
+	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
@@ -384,6 +391,17 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 	out, err := call(ctx, w.r, opEditTaskComment, &w.actor, editCommentOnTaskArgs{
 		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Body: body,
 		Notify: notify,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// ResolveComment resolves the writer's own remark on a work item: an open
+// question its asker withdraws.
+func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
+	out, err := call(ctx, w.r, opResolveTaskComment, &w.actor, resolveCommentOnTaskArgs{
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -857,13 +875,15 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
-// SeatHolder answers who holds one seat, and whether anybody does, read in one
-// snapshot on the node that answered — [Identity.SeatHolders]' answer for that
-// seat alone, as two seeks rather than the whole directory. An error is
-// UNKNOWN, never a seat nobody holds.
-func (i Identity) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
-	out, err := call(ctx, i.r, opSeatHolder, nil, seatArgs{Seat: seat})
-	return out.Holder, out.Held, err
+// Requester answers who holds one seat, with the holder's grants, and whether
+// anybody does, read in one snapshot on the node that answered —
+// [Identity.SeatHolders]' answer for that seat alone, as two seeks rather than
+// the whole directory, and the person a seat's turn is acting for is composed
+// from it. An error is UNKNOWN, never a seat nobody holds; a node that does not
+// know the question leaves it unserved, and none that answers is an error.
+func (i Identity) Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error) {
+	out, err := call(ctx, i.r, opRequester, nil, seatArgs{Seat: seat})
+	return out.Requester, out.Held, err
 }
 
 // MachineToken answers the row a presented machine token is checked against —

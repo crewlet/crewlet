@@ -36,6 +36,8 @@ subcommand below is served by it.
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
+| `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
+| `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -903,7 +905,7 @@ optional. `seats` lists which seats are free.
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
 | `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every data node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every data node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
@@ -925,7 +927,7 @@ optional. `seats` lists which seats are free.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the node's answer as JSON rather than a table: every field and number as the node sent them, its text as written (`<`, `>` and `&` as themselves) and its keys sorted |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts` and `chatlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts`, `chatlet` and `gitlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -948,8 +950,8 @@ states.** On `grant` they are opposite intentions and an empty flag value
 cannot carry both, so the word is explicit — and it is the one spelling that
 could never be a permission. `-grants none` on a person is the
 [overview](../concepts/identity-and-access.md#everybodys-overview) alone: they
-see the org chart, what the agents are doing and the spend, and use neither
-app.
+see the org chart, what the agents are doing and the spend, and use no app —
+the company's code included, which takes `gitlet`.
 
 **A value shown once is shown once.** `invite`, a person's `create`,
 `reset-password` and `token` each print something nothing can read back: what
@@ -1626,6 +1628,12 @@ alone and find the node from the Tier A file's `api` block — `-api` overrides
 it, and with `-api` given no Tier A file is read. `export`, `import -local` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
+`status`, `import` and `purge-unreachable` need the token to carry the Gitlet
+permission (`gitlet`), as the git that `export`, `import -local` and
+`credential` serve does
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)):
+without it the node refuses before any repository is read. `verify` is the
+deployment's own control, and takes `admin`.
 
 `crewlet gitlet hook` is the engine's own: git starts it inside every push. Run
 by hand it says so and exits 2.
@@ -2283,6 +2291,64 @@ The key reaches every stream and bucket and never the system account —
 membership changes go through `remove` — and it grants nothing its holder
 lacks: whoever reads the node's Tier A holds the keyring. It is admitted for as
 long as its key is in `secrets.keys`; write it again after a rotation drops it.
+
+## `crewlet feeds`
+
+```
+crewlet feeds dead-letters [-json] [<config.yaml>] [-api URL]
+crewlet feeds discard <id> -confirm <id> [<config.yaml>] [-api URL]
+```
+
+The wake feeds' dead letters. A domain's wake feed hands a record it cannot read
+back for a node that can, and one no node has read within an hour of being
+stored is kept as a dead letter in `CREWLET_DLQ`, its sealed frame inside, and
+raises `feed_dead_lettered`; the first node whose feed starts able to read an
+entry replays it, and the stream's age bound lets one go after
+`stream.event_retention_hours`
+([Dead letters](../concepts/event-system.md#dead-letters)). Both commands talk
+to a running node, since the entries are kept in its broker, and every node
+serving the API answers alike. They are clients of the routes in the
+[API reference](api-endpoints.md#the-wake-feeds-dead-letters), and the token
+in `CREWLET_API_TOKEN` takes `admin`.
+
+### `crewlet feeds dead-letters`
+
+One row per entry, every feed's in turn: its **id**, the one `discard` names; its
+**feed** (`work`, `page`, `chat` or `code`); the **reason** no node read it
+(`newer_record`, `newer_envelope`, `unknown_key`, `untranslatable`, or
+`(unreadable)` for an entry a newer build kept, which this build cannot read
+past its id); where its **record** was delivered from, written as every
+operator surface writes a position (`CREWLET_TRACKER_LOG@1:1234`); its **key**;
+how long ago it was **kept** and when it **expires**, by the answering node's
+clock. Under the table, each entry's own words: what the node that gave up met,
+or why this build cannot read the entry. Feeds holding nothing say so.
+
+A feed whose dead letters the node could not list is named on stderr with its
+error, and the command **exits non-zero** — an unread feed is not an empty one.
+`-json` prints the node's answer as JSON for a script, its keys sorted, and
+exits the same way.
+
+### `crewlet feeds discard`
+
+Drops the entry `<id>` from whichever feed holds it, and prints the entry it
+dropped. **Its wake is lost for good: no node will ever derive it**, which is
+why `-confirm` must repeat the id. Discard an entry only once you have decided
+its wake can be lost — one no build will ever read, such as a record sealed
+under a key you have retired from every node's `secrets.keys`, which would
+otherwise keep `feed_dead_lettered` raised until the retention lets it go. An
+entry a newer build will read is not one: finish the roll instead, and the
+first node on that build replays it.
+
+The node takes the claim on the entry's going that its replay and the alarm's
+expiry count take, so no node counts a discarded entry as a wake the retention
+lost; it logs `changefeed_dead_letter_discarded` naming who pressed it and
+counts `crewlet.tracker.feed.dead_letter_discarded`. An id no feed holds — never
+an entry, one already replayed, expired or discarded, or a subscription's
+poison under another `dlq.` subject, which this never reaches — is refused as
+`no_dead_letter` and removes nothing. Where a feed could not be listed and no
+other holds the id, the node says so rather than "no such entry": run it again.
+A discard the node did not answer may have been made; `dead-letters` lists what
+the feeds still hold.
 
 ## `crewlet seats`
 
@@ -3432,7 +3498,7 @@ One case per file:
 ```yaml
 name: spend-by-agent              # default: the file's name
 person:
-  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet
+  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet, gitlet
   acts: [create_work_item]        # the act tools they may propose; default none
 page:                             # optional: the page chip, as the dashboard sends it
   screen: spend

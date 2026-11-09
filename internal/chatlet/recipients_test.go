@@ -169,12 +169,29 @@ func TestAHandleHearsUnderTheFirstReasonThatNamesIt(t *testing.T) {
 			"speaking in the thread and following the room, and only the "+
 			"strongest reason obliges an answer", got, chatlet.ReasonMention)
 	}
+	// A MESSAGE THAT NAMES SOMEBODY IS ADDRESSED TO THEM (ADR-0113), so the
+	// thread's author is not woken for a reply aimed at a colleague.
+	if got := reasonOf(routed, "jane"); got != "" {
+		t.Errorf("jane was woken as %q by a reply naming eng-lead alone", got)
+	}
+
 	// AND THE WEAKER FACT IS STILL ROUTED FOR SOMEBODY IT IS THE
-	// STRONGEST FACT ABOUT.
-	if got := reasonOf(routed, "jane"); got != chatlet.ReasonReplyToOwnRoot {
+	// STRONGEST FACT ABOUT, where the reply names nobody.
+	unnamed, _ := chatlet.Resolve(chatlet.Routing{
+		ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+		Members:    []chatlet.Member{{Handle: "eng-lead", FollowAll: true}, {Handle: "jane"}},
+		ThreadRoot: "root-1", RootAuthor: "jane",
+		ThreadParticipants: []string{"eng-lead", "jane"},
+		Followers:          []string{"eng-lead"},
+	})
+	if got := reasonOf(unnamed, "jane"); got != chatlet.ReasonReplyToOwnRoot {
 		t.Errorf("jane was woken as %q, want %q — she started the thread, "+
 			"which is a question put back to her rather than news",
 			got, chatlet.ReasonReplyToOwnRoot)
+	}
+	if got := reasonOf(unnamed, "eng-lead"); got != chatlet.ReasonReply {
+		t.Errorf("eng-lead was woken as %q, want %q: speaking in the thread "+
+			"outranks following it and the room", got, chatlet.ReasonReply)
 	}
 }
 
@@ -202,9 +219,11 @@ func collectiveIsCapped(t *testing.T, author chatlet.AuthorKind) {
 	for i := range cap(room) {
 		room = append(room, chatlet.Member{Handle: fmt.Sprintf("seat-%02d", i)})
 	}
+	// AN AGENT'S ADDRESS THAT ASKS, the one that wakes the room (ADR-0113).
+	asks := author == chatlet.AuthorAgent
 	routed, truncated := chatlet.Resolve(chatlet.Routing{
 		ChannelKind: chatlet.KindPublic, AuthorKind: author,
-		Members: room, Collective: true,
+		Members: room, Collective: true, Asks: asks,
 	})
 
 	if len(routed) != chatlet.MaxCollectiveRecipients {
@@ -223,7 +242,7 @@ func collectiveIsCapped(t *testing.T, author chatlet.AuthorKind) {
 	// flag set unconditionally would break.
 	_, whole := chatlet.Resolve(chatlet.Routing{
 		ChannelKind: chatlet.KindPublic, AuthorKind: author,
-		Members: room[:chatlet.MaxCollectiveRecipients], Collective: true,
+		Members: room[:chatlet.MaxCollectiveRecipients], Collective: true, Asks: asks,
 	})
 	if whole {
 		t.Errorf("a broadcast that reached everybody it named reported itself " +
@@ -263,6 +282,7 @@ func TestTheTotalCapBoundsAnArmWithNoCapOfItsOwn(t *testing.T) {
 	}
 	routed, truncated := chatlet.Resolve(chatlet.Routing{
 		ChannelKind: chatlet.KindUnit, AuthorKind: chatlet.AuthorAgent, Members: room,
+		Asks: true,
 	})
 
 	if len(routed) != chatlet.MaxRecipients {
@@ -313,7 +333,7 @@ func TestAPersonIsAddressableAndNeverWoken(t *testing.T) {
 	// its participants more directly and a person is still not woken.
 	routed, _ := chatlet.Resolve(chatlet.Routing{
 		ChannelKind: chatlet.KindDM, AuthorKind: chatlet.AuthorAgent,
-		Members: members("eng", "sarah"),
+		Members: members("eng", "sarah"), Asks: true,
 	})
 	if got := reasonOf(routed, "sarah"); got != chatlet.ReasonDM {
 		t.Fatalf("sarah is a participant of the conversation and the record "+
@@ -505,6 +525,9 @@ func TestAPersonsChannelAddressAsksAndAnAgentsTells(t *testing.T) {
 			woken := chatlet.Route(chatResolved(chatlet.Routing{
 				ChannelKind: chatlet.KindPublic, AuthorKind: tc.author,
 				Members: members(seats...), Collective: true, Answerer: "cto",
+				// AN AGENT'S ADDRESS THAT ASKS: one that asks nothing
+				// wakes nobody (ADR-0113).
+				Asks: tc.author == chatlet.AuthorAgent,
 			}), agents().Seat, "jane")
 			if !slices.Equal(handlesRouted(woken), seats) {
 				t.Fatalf("the address woke %v, want every member of the room",

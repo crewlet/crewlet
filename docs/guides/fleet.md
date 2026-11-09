@@ -807,6 +807,29 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
+- **A roll finishes within the hour, or its wakes are dead-lettered.**
+  Every node pulls each domain's wake feed from one durable consumer, so a
+  node on the older build that meets a record the newer build wrote — or a
+  node not yet restarted onto a key a keyring rotation added — hands the
+  record back for a peer that can read it, waiting from two seconds to thirty
+  between attempts, rather than acknowledge it for the whole fleet
+  (`crewlet.tracker.feed.deferred` counts each). A record no node has read
+  within an hour of being stored is kept whole, its sealed frame inside, as a
+  dead letter in `CREWLET_DLQ`, and let go, and `feed_dead_lettered` is raised
+  from the first one. The first node whose feed starts able to read an entry
+  replays it, derives its wake once and drops it — so a stalled roll is
+  finished by restarting the remaining nodes onto the new build.
+  [`crewlet feeds dead-letters`](../reference/cli.md#crewlet-feeds-dead-letters)
+  lists every entry by id, with the record it holds, why no node read it and
+  how long it has left. An entry no node will ever read — a record sealed
+  under a key you have retired from every node, one no build translates — is
+  abandoned with
+  [`crewlet feeds discard <id> -confirm <id>`](../reference/cli.md#crewlet-feeds-discard),
+  which loses its wake for good
+  (`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays
+  or discards is kept for `stream.event_retention_hours` and then expires,
+  and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
+  [Dead letters](../concepts/event-system.md#dead-letters).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two
@@ -955,11 +978,15 @@ deployment for them, and both tools hold it to the company: a colleague seat
 or a person of the company is answered the seat's whole view — they need not
 hold `admin` themselves, the view being the seat's grant — while a turn woken
 by somebody the company does not know (a chat sender no seat or person maps
-to), or by a person who may not act in the company now, is answered nothing,
-so a seat that watches the deployment never relays it outside the company.
+to), by a person who may not act in the company now, or by a credential acting
+as no seat (a pipeline's token or a service account, whose reach is the apps
+its permissions name), is answered nothing, so a seat that watches the
+deployment never relays it outside the company or past a token's pin.
 `fleet_health` decides whoever woke the turn on `fleet.health.read`, which
 everybody of the company who may act holds, and `code_status` on Gitlet's
-read verb; its repository reads are code reads besides, made for that
+read verb, which takes the Gitlet permission, so a turn a person without
+Gitlet woke is answered nothing by `code_status` and the seat's whole view by
+`fleet_health`; its repository reads are code reads besides, made for that
 somebody as every code read is
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)),
 so in a colleague seat's turn its answer also leaves out what the colleague

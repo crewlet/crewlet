@@ -277,22 +277,25 @@ func TestTheCodeFeedIsDeclaredWithItsTranslator(t *testing.T) {
 	}
 }
 
-// A FEED RECORD CARRIES ITS DELIVERY'S PLACE AND THE BROKER'S INSTANT FOR IT.
+// A FEED RECORD CARRIES ITS DELIVERY'S PLACE, THE BROKER'S INSTANT FOR IT AND
+// ITS DELIVERY COUNT.
 //
 // The position, the stream and the generation are what a woken seat reads no
 // older than; the stored instant is what the wake is timed from (wake
-// latency). Each is read off the delivery or the envelope every build reads,
-// never off a clock or a field the domain's own decoder fills.
+// latency) and what a deferral's age is read from; the count is what a
+// deferral backs off by. Each is read off the delivery or the envelope every
+// build reads, never off a clock or a field the domain's own decoder fills.
 //
-// Mutation: drop the stored instant, and no wake is ever timed.
+// Mutation: drop the stored instant, and no wake is ever timed nor any record
+// dead-lettered; drop the count, and every deferral waits the first step.
 func TestAFeedRecordCarriesItsDeliverysPlaceAndInstant(t *testing.T) {
 	t.Parallel()
 	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
-	got := feedRecord("CREWLET_TRACKER_LOG", statelog.Envelope{OpID: "op-1", Gen: 3},
-		[]byte(`{"v":1}`), &jetstream.DomainDelivery{Subject: "crewlet.tracker.log.task.t1",
-			Seq: 42, StoredAt: stored})
+	got := feedRecord(placeOf("CREWLET_TRACKER_LOG", &jetstream.DomainDelivery{
+		Subject: "crewlet.tracker.log.task.t1", Seq: 42, StoredAt: stored, Delivered: 3,
+	}), statelog.Envelope{OpID: "op-1", Gen: 3}, []byte(`{"v":1}`))
 	want := changefeed.Record{ID: "op-1", Position: 42, Stream: "CREWLET_TRACKER_LOG", Gen: 3,
-		Key: "crewlet.tracker.log.task.t1", StoredAt: stored, Payload: []byte(`{"v":1}`)}
+		Key: "crewlet.tracker.log.task.t1", StoredAt: stored, Delivered: 3, Payload: []byte(`{"v":1}`)}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the feed read %+v, want %+v", got, want)
 	}

@@ -1,14 +1,19 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -44,8 +49,41 @@ func (r audienceResolver) ResolveAudience(run sandbox.PendingRun, label string) 
 	if company == nil || company.Org == nil {
 		return sandbox.Audience{Fallback: true}
 	}
+	if run.HeldCall != nil {
+		// A HELD CALL IS PUT TO WHO MAY ANSWER IT, whatever the run named.
+		return heldAudience(company, run, r.engine.adminSeats())
+	}
 	return resolveAudience(company.Org, r.engine.LookupSecret, r.engine.WithheldContacts(),
 		run, label)
+}
+
+// MayAnswer reports whether whoever holds seat may answer a parked question in
+// the conversation now ([sandbox.AudienceResolver.MayAnswer]), as the
+// authority table composes the seat's holder ([turnRequesters.Requester]).
+func (r audienceResolver) MayAnswer(ctx context.Context, seat string) (bool, error) {
+	p, err := turnRequesters(r).Requester(ctx, seat)
+	return holderMayAnswer(p, err)
+}
+
+// holderMayAnswer is [audienceResolver.MayAnswer]'s decision over the seat's
+// holder as the authority table composed it: an agent seat the chart holds
+// answers; a human seat answers only where a person holds it and may act now.
+//
+// NOT A SEAT NOBODY HOLDS, though the authority table lets such a seat's
+// contacts keep its shares: a question put to a seat is put to the person
+// holding it, and with nobody holding it there is nobody to have answered.
+// NOT A SEAT THE CHART LOST, which is nobody's (errNoSuchSeat). Any other
+// error is the directory that could not say, which is UNKNOWN.
+func holderMayAnswer(p iam.Principal, err error) (bool, error) {
+	switch {
+	case errors.Is(err, errNoSuchSeat):
+		return false, nil
+	case err != nil:
+		return false, err
+	case p.Kind == iam.KindSeat:
+		return true, nil
+	}
+	return p.Kind == iam.KindPerson && p.ID != uuid.Nil && p.Stage.MayAct(), nil
 }
 
 // The labels a run's ask names its audience by, beside a free name: the

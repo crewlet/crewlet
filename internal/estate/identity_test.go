@@ -65,19 +65,25 @@ func (d directory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) 
 	}, nil
 }
 
-// SeatHolder is the one seat's entry of [directory.SeatHolders], and nobody for
-// a seat it does not list.
-func (d directory) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
+// Requester is the one seat's entry of [directory.SeatHolders] with the
+// holder's grants — jane's, as [directory.PersonByLoginVouched] holds them, and
+// none for a removal — and nobody for a seat it does not list.
+func (d directory) Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error) {
 	holders, err := d.SeatHolders(ctx)
 	if err != nil {
-		return iamdomain.SeatHolder{}, false, err
+		return iamdomain.Requester{}, false, err
 	}
 	for _, h := range holders {
-		if h.Seat == seat {
-			return h, true, nil
+		if h.Seat != seat {
+			continue
 		}
+		out := iamdomain.Requester{SeatHolder: h}
+		if !h.Removed {
+			out.Grants = []iam.Grant{iam.GrantAdmin}
+		}
+		return out, true, nil
 	}
-	return iamdomain.SeatHolder{}, false, nil
+	return iamdomain.Requester{}, false, nil
 }
 
 // MachineToken is the row held under id: [machineID]'s token, or the absent
@@ -197,39 +203,94 @@ func TestSeatHoldersCrossWhole(t *testing.T) {
 	}
 }
 
-// ONE SEAT'S HOLDER CROSSES AS ITS OWN QUESTION — the seat named on the wire
-// and the three answers kept apart: a holder at their stage, a removal's
-// tombstone, and nobody. A turn composes the person it acts for from it on
-// every tool call, so it asks the serving node about that seat alone, and an
-// unreadable directory is UNKNOWN rather than a seat nobody holds, which the
-// turn would read as one the chart alone speaks for.
-func TestASeatHolderCrossesAsOneSeatsAnswer(t *testing.T) {
+// ONE SEAT'S REQUESTER CROSSES AS ITS OWN QUESTION — the seat named on the
+// wire and the three answers kept apart: a holder at their stage with their
+// grants, a removal's tombstone holding none, and nobody. A turn composes the
+// person it acts for from it, so it asks the serving node about that seat
+// alone, and an unreadable directory is UNKNOWN rather than a seat nobody
+// holds, which the turn would read as one the chart alone speaks for.
+func TestARequesterCrossesAsOneSeatsAnswer(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	f.nodes["data-a"].set(func(n *fakeNode) { n.directory = directory{} })
 	for _, tc := range []struct {
-		seat string
-		want iamdomain.SeatHolder
-		held bool
+		seat   string
+		want   iamdomain.SeatHolder
+		grants []iam.Grant
+		held   bool
 	}{
-		{"jane", iamdomain.SeatHolder{Seat: "jane", Person: "p-1", Stage: iam.StageSuspended}, true},
-		{"sam", iamdomain.SeatHolder{Seat: "sam", Person: "p-2", Removed: true}, true},
-		{"nobody", iamdomain.SeatHolder{}, false},
+		{"jane", iamdomain.SeatHolder{Seat: "jane", Person: "p-1", Stage: iam.StageSuspended},
+			[]iam.Grant{iam.GrantAdmin}, true},
+		{"sam", iamdomain.SeatHolder{Seat: "sam", Person: "p-2", Removed: true}, nil, true},
+		{"nobody", iamdomain.SeatHolder{}, nil, false},
 	} {
-		holder, held, err := f.client.Identity().SeatHolder(t.Context(), tc.seat)
-		if err != nil || held != tc.held || holder != tc.want {
-			t.Errorf("seat %s's holder = (%+v, %v, %v), want (%+v, %v)", tc.seat,
-				holder, held, err, tc.want, tc.held)
+		got, held, err := f.client.Identity().Requester(t.Context(), tc.seat)
+		if err != nil || held != tc.held || got.SeatHolder != tc.want || !slices.Equal(got.Grants, tc.grants) {
+			t.Errorf("seat %s's requester = (%+v, %v, %v), want (%+v with %v, %v)", tc.seat,
+				got, held, err, tc.want, tc.grants, tc.held)
 		}
 	}
 
 	f.nodes["data-a"].set(func(n *fakeNode) {
 		n.directory = directory{err: store.ErrNoEstate}
 	})
-	if holder, held, err := f.client.Identity().SeatHolder(t.Context(), "jane"); !errors.Is(err,
-		store.ErrNoEstate) || held || holder != (iamdomain.SeatHolder{}) {
-		t.Fatalf("an unreadable directory's holder = (%+v, %v, %v), want its error",
-			holder, held, err)
+	if got, held, err := f.client.Identity().Requester(t.Context(), "jane"); !errors.Is(err,
+		store.ErrNoEstate) || held || got.SeatHolder != (iamdomain.SeatHolder{}) || got.Grants != nil {
+		t.Fatalf("an unreadable directory's requester = (%+v, %v, %v), want its error",
+			got, held, err)
+	}
+}
+
+// A REQUESTER CARRIES THE GRANTS AND NOTHING ELSE OF THE PERSON: the wire's
+// answer is the seat's holder — who, at what stage, or a removal — and the
+// grants a turn's ceiling is decided on, and never a credential, a verifier or
+// a sealed field, which the asking node has no use for and an observer of the
+// broker would. Held as a property of the type that crosses, so a field added
+// to it is a decision this test makes somebody take.
+//
+// Mutation: carry the person's credentials on iamdomain.Requester — the
+// answer's fields are more than the five.
+func TestTheRequesterReadCarriesGrantsAndNothingElse(t *testing.T) {
+	t.Parallel()
+	var fields []string
+	var walk func(reflect.Type)
+	walk = func(typ reflect.Type) {
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			if f.Type.Kind() == reflect.Struct && f.Type.PkgPath() == reflect.TypeFor[iamdomain.Requester]().PkgPath() {
+				// The directory's own types cross whole: their fields are
+				// what crosses.
+				walk(f.Type)
+				continue
+			}
+			fields = append(fields, f.Name)
+		}
+	}
+	walk(reflect.TypeFor[heldRequester]())
+	want := []string{"Seat", "Person", "Stage", "Removed", "Grants", "Held"}
+	if !slices.Equal(fields, want) {
+		t.Errorf("identity.requester's answer crosses %v, want %v and nothing else", fields, want)
+	}
+}
+
+// A QUESTION THIS BUILD NO LONGER DECLARES IS LEFT UNSERVED, naming itself: a
+// node one build behind asks identity.seat_holder, the seat's holder alone,
+// which this build answers as identity.requester — and the asker moves on to a
+// node that knows it, or reads no answer at all, never a seat nobody holds.
+// The same holds the other way round, which is why the requester read took a
+// new name rather than a reshaped answer.
+func TestARetiredIdentityQuestionIsLeftUnserved(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.directory = directory{} })
+	args, err := json.Marshal(seatArgs{Seat: "jane"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := askSignedOn(t, f.start(t), Subject("data-a"),
+		request{Op: "identity.seat_holder", Args: args, From: "agent-9"})
+	if rep.Unserved != unservedNoBackend || !strings.Contains(rep.Detail, `"identity.seat_holder"`) {
+		t.Errorf("identity.seat_holder answered %+v, want it unserved, naming the operation", rep)
 	}
 }
 

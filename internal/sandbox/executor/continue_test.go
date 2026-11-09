@@ -568,6 +568,17 @@ func threadsResumed(t *testing.T, b sandbox.Sandbox) {
 	}
 }
 
+// boxHas reports whether anything is at path in box, a file, a directory or a
+// link.
+func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
+	t.Helper()
+	res, err := box.Exec(t.Context(), "[ -e "+shQuote(path)+" ] || [ -L "+shQuote(path)+" ]", sandbox.ExecOptions{})
+	if err != nil {
+		t.Fatalf("asking the box for %s: %v", path, err)
+	}
+	return res.ExitCode == 0
+}
+
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW AND LEAVES ITS
 // INTERRUPTED TURN AS IT IS. Every run compacts at the window of its model
 // (sandbox.ClaudeCodeWindow), whatever the seat's environment set: a window of

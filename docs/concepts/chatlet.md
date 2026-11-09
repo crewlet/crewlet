@@ -347,6 +347,48 @@ So a message wakes:
   room, names nobody and wakes no other agent, because silence there looks
   exactly like a message that was lost.
 
+**Words wake only the seats they address**
+([ADR-0113](../../adr/0113-an-agents-words-wake-only-the-seats-they-address.md)).
+Everything above is a standing arrangement except a name, and a standing
+arrangement wakes a seat only for a message that asks something and names
+nobody in particular:
+
+- **A message that names somebody is addressed to them**, whoever wrote it. It
+  wakes the seats it @-mentions, the seat whose question it answers and, when
+  it asks, the other side of a direct conversation; nobody else in the room or
+  the thread is woken for it. A status note for a person (`@sara, the deploy
+  is done`) wakes no agent at all, and Sara reads it as she reads everything.
+- **An agent's message asks something only where the agent says so.** The
+  posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an
+  agent to state `asks`: true when the message asks someone for an answer or
+  an action, which obliges the named seat, or the other side of a
+  direct conversation, to answer. A message with `asks: false` wakes the agents
+  it names, under `named`, which obliges no answer; the agent whose open
+  question it answers, under `answer`; and the seats with a stake in its
+  thread. It wakes no direct conversation's other side, no thread author, no
+  speaker, no follower and no `@channel`: an acknowledgement, a thank-you or a
+  status note is read where it was said. The receipt says so to the agent that
+  posted it.
+- **A stake in a thread is woken by any reply in it** by somebody else,
+  whatever the reply names: the seat that asked something there with no answer
+  yet, under `awaiting`, and the seat asked that still owes the answer, under
+  `owing`. The one exception is a co-asker: a reply by a seat whose only stake
+  is awaiting the same addressee does not wake another seat awaiting it, and a
+  person whose open message reached that addressee is a co-asker too. A
+  top-level message in a named room answers the newest open top-level ask each
+  agent holds of its author there, and wakes the agent that asked under
+  `answer`; an older ask stays open for a later message.
+- **An asking message gives each seat it asks a receipt**, a person's post as
+  it always has, and an agent's for the seats it woke for anything but their
+  own stake or an answer, the people it named and the other side of a direct
+  conversation. The seat's reply in the thread, or
+  anywhere later in a direct conversation, closes the receipt and wakes the
+  asker under `answer`. So a question and its answer each wake once, and the
+  thanks after them wake nobody.
+
+What the rule held back rides the message's record (`held`), and the node that
+routes it logs `chat_wakes_held` with the count.
+
 **A person is never answered by silence.** The answerer is one seat, woken only
 when the message woke no other agent, and obliged to reply. A message that
 names a colleague has been addressed, so it has no answerer even when the
@@ -386,7 +428,8 @@ agent, name it.
 
 **Being named in a thread follows it.** A seat a message names — when it is
 posted, or by an edit that adds the name — is woken by every later reply in
-that thread, so somebody asked a question hears its answer. The follow lasts as
+that thread that asks something and names nobody else, so somebody asked a
+question hears its answer. The follow lasts as
 long as the thread still names them: an edit that drops the name, a delete or
 an erase of the message that named them takes it back, unless another message
 in the thread names them too. A colleague named by mistake and corrected away
@@ -394,9 +437,12 @@ costs one wake, not one for every reply the thread ever gets.
 
 **Which of those obliges a reply** is narrower still: a direct message, a
 mention, a reply in a thread you started, a person's `@channel`, and the
-room's answerer. An agent's broadcast does not, a reply in a thread you follow
-does not, and neither does a reply in a thread you merely once spoke in: that
-last one is how a tracker fills with "noted, thanks".
+room's answerer. An agent's broadcast does not, an agent's name that asks
+nothing (`named`) does not, an answer to your question does not, a follow-up in
+a thread where you owe an answer adds to an obligation you already have, a
+reply in a thread you follow does not, and neither does a reply in a thread you
+merely once spoke in: that last one is how a tracker fills with "noted,
+thanks".
 
 **People are never woken.** A human seat is addressable and never runs a turn;
 what a person gets is an unread count, a mention feed and a live screen. A

@@ -165,18 +165,55 @@ func (s *resumeSpy) calls() []ResumeRequest {
 }
 
 // audienceSpy resolves every question to the seats it is told to, and records
-// what each park asked it.
+// what each park asked it. Every seat's holder may act unless the spy is told
+// otherwise ([audienceSpy.mayNotAct], [audienceSpy.unknown]).
 type audienceSpy struct {
 	mu     sync.Mutex
 	answer Audience
 	asked  []string
+	// barred are the seats whose holder may not act now, and unreadable
+	// the error every MayAnswer answers while it is set.
+	barred     map[string]bool
+	unreadable error
 }
 
 func (a *audienceSpy) ResolveAudience(run PendingRun, label string) Audience {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.asked = append(a.asked, run.TurnID+"/"+label)
+	if len(a.answer.Handles) == 0 && !a.answer.Fallback {
+		// PUT TO [askedSeat], who writes every [chatReply], for a case
+		// whose subject is not who may answer.
+		return Audience{Handles: []string{askedSeat}}
+	}
 	return Audience{Handles: append([]string(nil), a.answer.Handles...), Fallback: a.answer.Fallback}
+}
+
+func (a *audienceSpy) MayAnswer(_ context.Context, seat string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.unreadable != nil {
+		return false, a.unreadable
+	}
+	return !a.barred[seat], nil
+}
+
+// mayNotAct says whoever holds seat may not act now: suspended, removed, or
+// nobody at all.
+func (a *audienceSpy) mayNotAct(seat string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.barred == nil {
+		a.barred = map[string]bool{}
+	}
+	a.barred[seat] = true
+}
+
+// unknown makes every MayAnswer answer err: a directory that cannot say.
+func (a *audienceSpy) unknown(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.unreadable = err
 }
 
 func (a *audienceSpy) resolves(to Audience) {
@@ -1071,7 +1108,7 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.ask("t1", whichBranch())
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", questionAt(rig.now)); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	rig.resumer.err = errors.New("no seat here")

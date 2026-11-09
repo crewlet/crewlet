@@ -1346,7 +1346,13 @@ const (
 	// 0.114.0) took it from 397.9 KiB to 398.7 KiB: the one sheet +0.8 KiB
 	// gzipped and the authority remedy chunk +0.1, with no screen's module in
 	// the entry. So it moved to 399 KiB, 2.18 seconds.
-	initialBudget = 399 << 10
+	// Kit 0.121.0 (the SSH integration's own mark) took it from 398.7 KiB to
+	// 399.0 KiB, past that by bytes (+302 gzipped): the kit's theme swatch
+	// helpers left the entry for a shared chunk of their own in its graph
+	// (+735, the entry -471), the one sheet +8 (the mark's colour rule) and the
+	// shell's chunks +29. The SSH drawing itself is in a lazy chunk, and no
+	// screen's module is in the entry. So it moved to 400 KiB, 2.18 seconds.
+	initialBudget = 400 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2125,8 +2131,28 @@ const (
 	// fills its first line, and the kit's side panel that fills its column),
 	// took it from 5671.6 KiB (5,807,684 bytes) to 5673.4 KiB (5,809,565
 	// bytes, +1,881): script +1,969 and the sheets +14, with 102 fewer
-	// elsewhere. The measured size's next KiB: 5674 KiB.
-	treeBudget = 5<<20 + 554<<10
+	// elsewhere. The measured size's next KiB: 5674 KiB. The SSH integration's
+	// catalogue tile and its words took it to 5674.9 KiB (5,811,097 bytes,
+	// +1,532, all script). The measured size's next KiB: 5675 KiB. The SSH
+	// tools' catalogue group and gates took it to 5675.1 KiB (5,811,351 bytes,
+	// +254, all script). The measured size's next KiB: 5676 KiB. An SSH
+	// operate call's review before Allow once took it to 5676.9 KiB (5,813,150
+	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB. A
+	// held call answered in the Inbox's reading pane by its own buttons took
+	// it to 5677.9 KiB (5,814,186 bytes, +1,036, all script). The measured
+	// size's next KiB: 5678 KiB. The SSH integration's own mark, on kit
+	// 0.121.0 (VendorMark's key in place of the brand mark), took it to 5679.1
+	// KiB (5,815,396 bytes, +1,210): script +1,044 (the drawing), the sheets
+	// +64 (its colour rule) and 102 more in index.html. The measured size's
+	// next KiB: 5680 KiB. Gitlet behind its own permission (its workspace, Home's
+	// card, a seat's Code tab, a work item's changes and the palette's
+	// repositories and code search locked as Worklet's are), merged on top of it,
+	// took it to 5680.1 KiB (5,816,420 bytes, +1,024, all script). The measured
+	// size's next KiB: 5681 KiB. The access change review's Inbox note and the
+	// access save's review callout, merged on top of it, took it to 5681.3 KiB
+	// (5,817,698 bytes, +1,104, all script). The measured size's next KiB:
+	// 5682 KiB.
+	treeBudget = 5<<20 + 562<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

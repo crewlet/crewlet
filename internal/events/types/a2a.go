@@ -94,6 +94,54 @@ type A2ARequest struct {
 	// that was itself answering somebody.
 	WorkItem      *WorkItem     `json:"work_item,omitempty"`
 	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
+	// WorkingFor is who the asking turn worked for, directly or through
+	// colleagues' asks ([WorkingFor]): the answering turn works for them
+	// too, held to what they may use (ADR-0109), and never for the asking
+	// seat alone. Nil for an ask from a turn that worked for its own seat.
+	WorkingFor *WorkingFor `json:"working_for,omitempty"`
+}
+
+// WorkingFor is who a turn works for when it hands its work on to a
+// colleague, carried on the colleague's ask and on the answer back so the
+// turn each wakes works for them too (ADR-0109): a seat requester (a person's
+// seat, or a colleague seat's), a credential acting as no seat with the apps
+// the handing turn was held to, or somebody the company does not know.
+//
+// THE ENGINE'S, NEVER THE MODEL'S: composed once, from the handing turn's own
+// bound ceiling, where the engine builds the ask or the answer. Nothing a
+// tool's arguments carry reaches it, and the woken turn re-composes a seat on
+// its own node and narrows a credential again, never widens.
+type WorkingFor struct {
+	Kind WorkingForKind `json:"kind"`
+	// Seat is the requester's seat handle, for kind seat.
+	Seat string `json:"seat,omitempty"`
+	// Login is the credential's login, and Apps the apps the handing turn
+	// was held to for it, for kind credential.
+	Login string      `json:"login,omitempty"`
+	Apps  []iam.Grant `json:"apps,omitempty"`
+}
+
+// WorkingForKind is which of the three a [WorkingFor] is.
+type WorkingForKind string
+
+const (
+	// WorkingForSeat is a seat requester: a person's seat, or a colleague
+	// seat's.
+	WorkingForSeat WorkingForKind = "seat"
+	// WorkingForCredential is a credential acting as no seat.
+	WorkingForCredential WorkingForKind = "credential"
+	// WorkingForStranger is somebody the company does not know.
+	WorkingForStranger WorkingForKind = "stranger"
+)
+
+// Valid reports a kind this build knows. A kind it does not is read as a
+// stranger's by whoever composes a ceiling from it, the closed end.
+func (k WorkingForKind) Valid() bool {
+	switch k {
+	case WorkingForSeat, WorkingForCredential, WorkingForStranger:
+		return true
+	}
+	return false
 }
 
 // EventType is the "a2a_request" wire type.
@@ -191,6 +239,12 @@ type A2AMessage struct {
 	Question string `json:"question,omitempty"`
 	// Content is the answer, verbatim.
 	Content string `json:"content"`
+	// WorkingFor is who the answering turn worked for ([WorkingFor]),
+	// which is who the asking turn worked for when it asked: the asker's
+	// turn this answer wakes works for them as well, and never for the
+	// colleague who answered. The asking seat itself where the ask was its
+	// own work.
+	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 
 // EventType is the "a2a_message" wire type.

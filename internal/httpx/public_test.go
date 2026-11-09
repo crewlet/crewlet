@@ -649,3 +649,20 @@ type resolverFunc func(ctx context.Context, network, host string) ([]netip.Addr,
 func (f resolverFunc) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	return f(ctx, network, host)
 }
+
+// A SERVER THE OPERATOR REGISTERED MAY BE PRIVATE, NEVER THIS HOST: private and
+// public addresses are reachable, and loopback, unspecified, link-local (the
+// metadata address among them), multicast and zoned addresses are not, in
+// either family and in IPv6 form.
+func TestAServerAddressIsNeverThisHostOrLinkLocal(t *testing.T) {
+	t.Parallel()
+	for addr, want := range map[string]bool{
+		"10.0.0.5": true, "192.168.1.20": true, "203.0.113.7": true, "2001:db8::1": true, "fd00::1": true,
+		"127.0.0.1": false, "::1": false, "0.0.0.0": false, "::": false, "169.254.169.254": false,
+		"fe80::1": false, "224.0.0.1": false, "ff02::1": false, "::ffff:127.0.0.1": false, "fe80::1%eth0": false,
+	} {
+		if got := httpx.ServerAddress(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("%s: %v, want %v", addr, got, want)
+		}
+	}
+}

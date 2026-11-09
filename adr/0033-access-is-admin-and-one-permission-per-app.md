@@ -103,3 +103,18 @@ And it does not decide **which apps exist**: a new app is a new member of
 are there — which is how `artifacts`
 ([ADR-0034](0034-an-artifact-is-shared-and-a-share-is-a-relation.md)) and
 `chatlet` arrived.
+
+## Amendment: a seat uses only its requester's apps
+
+Since [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), an agent seat that holds every app uses,
+inside a turn a principal woke, only the apps that principal holds. A person
+holds the apps their grants name, and never admin. A stranger and a human seat
+nobody holds in the directory hold none. The seat's own grants are unchanged,
+and a turn nobody woke is bounded by them alone.
+
+## Amendment: Gitlet is the fifth app
+
+Since [ADR-0110](0110-reaching-a-repository-takes-the-gitlet-permission.md) there are six permissions.
+`gitlet` uses Gitlet, the engine's own git host, and was appended after `chatlet`, as `chatlet` was
+after `artifacts`, so no stored row moved. "Everything else is everybody's" no longer includes the
+company's code: reaching a repository takes the app, as reading a work item takes `worklet`.

@@ -19,7 +19,7 @@ func msg(id, who, what string) notify.Message {
 // A message that failed and comes round behind its conversation's newer mail
 // is dropped as worked when the newer message's turn was shown it waiting: so
 // what counts is exactly what that turn SAW and what was still waiting for an
-// answer. Somebody else's, after the seat's own last reply, before the
+// answer. The trigger's writer's, after the seat's own last reply, before the
 // trigger. Not the seat's own replies, not what it had already answered, not
 // the trigger itself, and not anything after it.
 func TestTheThreadBlockNamesTheWaitingMessagesItShowed(t *testing.T) {
@@ -28,7 +28,7 @@ func TestTheThreadBlockNamesTheWaitingMessagesItShowed(t *testing.T) {
 		msg("100", "U1", "can you look at staging"),
 		{ID: "101", Text: "on it", Own: true},
 		msg("102", "U1", "it loops on /login"), // M1: failed, comes round later
-		msg("103", "U2", "and on /logout"),     // M2: what woke this turn
+		msg("103", "U1", "and on /logout"),     // M2: what woke this turn
 		msg("104", "U1", "a message written after the turn was woken"),
 	}}
 	r := threadRequest(t)
@@ -54,6 +54,43 @@ func TestTheThreadBlockNamesTheWaitingMessagesItShowed(t *testing.T) {
 	short := &threads{messages: source.messages, stoppedShort: true}
 	if got := fetch(t, prefetch.Sources{Threads: short}, r).ThreadContextAnswered; len(got) != 0 {
 		t.Fatalf("answered = %v from a read that stopped short, want none", got)
+	}
+}
+
+// ANOTHER WRITER'S WAITING MESSAGE IS OWED A TURN OF ITS OWN: one turn works
+// for one writer (ADR-0109), held to their apps, so a turn A woke never
+// records S's message as worked. Dropped when it came back behind A's turn,
+// S's message would have been answered only inside a turn that worked for A.
+// The interleaved drain M1(A) M2(S) M3(A), with M3 waking A's turn: A's own M1
+// is answered by it, and S's M2 still gets S's turn. A message whose sender
+// the backend did not name counts for nobody, and nor does anything when the
+// trigger's own sender is unnamed.
+//
+// Mutation: drop the writer check from waitingMessages, and M2 is recorded as
+// worked by A's turn.
+func TestAnotherWritersWaitingMessageIsOwedItsOwnTurn(t *testing.T) {
+	t.Parallel()
+	source := &threads{messages: []notify.Message{
+		msg("100", "UA", "can you look at staging"),
+		{ID: "101", Text: "on it", Own: true},
+		msg("102", "UA", "it loops on /login"), // M1(A): failed, comes round later
+		msg("103", "US", "and on /logout"),     // M2(S): owed S's own turn
+		msg("104", "", "an unnamed sender's"),  // nobody's
+		msg("105", "UA", "and on /health"),     // M3(A): what woke this turn
+	}}
+	r := threadRequest(t)
+	r.Message = "105"
+	if got := fetch(t, prefetch.Sources{Threads: source}, r).ThreadContextAnswered; !slices.Equal(got, []string{"102"}) {
+		t.Fatalf("answered = %v, want [102]: A's own waiting message, never S's or an unnamed sender's", got)
+	}
+	unnamed := &threads{messages: []notify.Message{
+		msg("100", "UA", "root"),
+		msg("101", "", "waiting"),
+		msg("102", "", "the trigger, its sender unnamed"),
+	}}
+	r.Message = "102"
+	if got := fetch(t, prefetch.Sources{Threads: unnamed}, r).ThreadContextAnswered; len(got) != 0 {
+		t.Fatalf("answered = %v for a trigger whose sender the backend did not name, want none", got)
 	}
 }
 

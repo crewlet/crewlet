@@ -102,3 +102,39 @@ func TestAnApprovedCallRunsOnlyAToolTheSurfaceStillFiles(t *testing.T) {
 		t.Fatalf("an approved call to a tool no longer filed answered %+v, want not found", res)
 	}
 }
+
+// A BUILTIN WITH FIXED APPROVAL IS HELD: an engine tool filed as asking before
+// every call reaches its executor's holder as a tool at Needs approval does,
+// marked fixed, never runs until a person approves it, and RequireApproval,
+// which only ever widens an MCP tool's wait, leaves it as it is. A builtin
+// filed without it runs at once.
+//
+// Mutation: drop the option's NeedsApproval, and the call runs unasked.
+func TestABuiltinWithFixedApprovalIsHeld(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	operate, plain := tool("ssh_operate"), tool("ssh_read")
+	if err := reg.RegisterWith(operate, tools.OriginBuiltin, tools.Annotations{}, tools.AsksBeforeEveryCall); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterWith(plain, tools.OriginBuiltin, tools.Annotations{}); err != nil {
+		t.Fatal(err)
+	}
+	if reg.RequireApproval("ssh_operate") {
+		t.Error("RequireApproval reported a builtin it does not govern")
+	}
+	holder := &recordingHolder{}
+	exec := tools.NewSurface("execute", reg.Snapshot(), []string{"ssh_operate", "ssh_read"}).WithHolder(holder)
+	res, err := exec.Execute(t.Context(), llm.ToolCall{Name: "ssh_operate", Arguments: map[string]any{"host": "api-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Held || len(holder.held) != 1 || !holder.held[0].Entry.ApprovalFixed || len(operate.seen) != 0 {
+		t.Fatalf("the operate call answered %+v (held %+v, ran %d), want it held, fixed, not run",
+			res, holder.held, len(operate.seen))
+	}
+	if res, err := exec.Execute(t.Context(), llm.ToolCall{Name: "ssh_read", Arguments: map[string]any{}}); err != nil ||
+		res.Held || len(plain.seen) != 1 {
+		t.Fatalf("a builtin that does not ask answered %+v, %v", res, err)
+	}
+}

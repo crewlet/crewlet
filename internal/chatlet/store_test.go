@@ -1741,9 +1741,11 @@ func TestAPersonsChannelAddressAsksEveryAgentAtTheWrite(t *testing.T) {
 		{person("jane"), chatlet.ReasonCollectiveRequest, []string{"amir", "cto", "dev"}},
 		{seat("dev", "run-1"), chatlet.ReasonCollective, []string{"amir", "cto"}},
 	} {
+		// AN AGENT'S ADDRESS THAT ASKS, the one that wakes the room
+		// (ADR-0113); ignored for a person.
 		if _, err := r.store.Post(t.Context(), keyed(tc.actor, requested("k-"+tc.actor.Handle)),
 			room.Channel.ID, chatlet.NewMessage{
-				Body: "@channel status by end of day, please", Collective: true,
+				Body: "@channel status by end of day, please", Collective: true, Asks: true,
 			}); err != nil {
 			t.Fatalf("post as %s: %v", tc.actor.Handle, err)
 		}
@@ -2238,9 +2240,11 @@ func TestAnEditThatNamesAColleagueSubscribesThemToTheThread(t *testing.T) {
 	}
 	r.drain()
 
+	// AN AGENT'S REPLY THAT ASKS, which wakes the thread's followers; one
+	// that asks nothing wakes only who still owes an answer (ADR-0113).
 	if _, err := r.store.Reply(t.Context(), seat("ops", "turn-1"),
 		room.Channel.ID, root.Message.ID,
-		chatlet.NewMessage{Body: "the platform team"}); err != nil {
+		chatlet.NewMessage{Body: "the platform team", Asks: true}); err != nil {
 		t.Fatalf("reply: %v", err)
 	}
 	notify := r.lastRecord().Notify
@@ -2365,9 +2369,11 @@ func takeBack(t *testing.T, take func(r *writeRound, room, message string) error
 	}
 	r.drain()
 
+	// AN AGENT'S REPLY THAT ASKS, which wakes the thread's followers; one
+	// that asks nothing wakes only who still owes an answer (ADR-0113).
 	if _, err := r.store.Reply(t.Context(), seat("ops", "turn-1"),
 		room.Channel.ID, root.Message.ID,
-		chatlet.NewMessage{Body: "the platform team"}); err != nil {
+		chatlet.NewMessage{Body: "the platform team", Asks: true}); err != nil {
 		t.Fatalf("the answer: %v", err)
 	}
 	notify := r.lastRecord().Notify

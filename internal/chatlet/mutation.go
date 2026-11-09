@@ -592,6 +592,10 @@ type MessagePost struct {
 	// [MaxCollectiveRecipients] is what bounds it.
 	Collective bool `json:"collective,omitempty"`
 
+	// Asks is an agent author's statement that the message asks something
+	// of the seats it reaches ([Routing.Asks]).
+	Asks bool `json:"asks,omitempty"`
+
 	// Links are what the message points at. THERE ARE NO ATTACHMENTS —
 	// see the package doc — so this is the whole of what a message carries
 	// besides its text. Each is an absolute http, https or mailto address,

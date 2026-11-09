@@ -398,7 +398,7 @@ type Capabilities struct {
 	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
 	// Whichever way this flag points,
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// sixteen and refuses a backend that answers some one way and some the
+	// twenty-one and refuses a backend that answers some one way and some the
 	// other. After Stop there is no choice — see
 	// a_stopped_queue_refuses_every_verb.
 	//
@@ -489,6 +489,9 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// Which mailboxes exist, asked of the broker rather than of any
 	// record. See runListing.
 	group("Listing", s.runListing)
+	// What a reader that settles its own deliveries keeps when it gives
+	// up, in the one place every dead letter lives. See runDeadLetters.
+	group("DeadLetters", s.runDeadLetters)
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.
 	group("NegativePaths", s.runNegativePaths)

@@ -200,6 +200,7 @@ export const INTEGRATION_TOOLS = {
   scaleway: ["scaleway"],
   aws: ["aws"],
   google_cloud: ["google_cloud"],
+  ssh: ["ssh"],
 } as const;
 
 /**

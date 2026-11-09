@@ -18,7 +18,10 @@ import (
 )
 
 // mirrorCompany is gitCompany with its one repository pushed to a mirror at
-// another host, as the founder.
+// another host, as the agent seat that owns it. A person's seat would push only
+// while its holder uses Gitlet (ADR-0110), which this case's identity directory
+// holds nobody for, and the alarm, not who a mirror may push as, is its
+// subject (internal/code's and internal/code/mirror's own suites hold that).
 const mirrorCompany = `
 name: Nimbus
 tracker:
@@ -31,11 +34,11 @@ code:
     WEB_MIRROR_TOKEN: {hosts: [mirror.example.com]}
   repos:
     - name: web
-      owner: {seat: founder}
+      owner: {seat: swe}
       mirror_to:
         url: https://mirror.example.com/web.git
         credential: "${WEB_MIRROR_TOKEN}"
-        as: founder
+        as: swe
 roles:
   - name: SWE
     handle: swe

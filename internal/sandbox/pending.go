@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -407,6 +408,10 @@ type ColleagueAsk struct {
 	TraceID      string   `json:"trace_id,omitempty"`
 	SpanID       string   `json:"span_id,omitempty"`
 	ParentSpanID string   `json:"parent_span_id,omitempty"`
+	// WorkingFor is who the answering turn works for, and so who the
+	// answer back is worked for ([types.A2AMessage.WorkingFor]): the ask's
+	// own carrier, or the asking seat where the ask was its own work.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
 // RunStop is who ENDED a run by pausing its seat with a stop
@@ -1347,6 +1352,29 @@ type PendingRun struct {
 	// A row without it resolves "requester" to the fallback, which is what
 	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
+
+	// RequesterLogin is the credential acting as no seat — a Tier A token, a
+	// service account — whose write woke the turn that launched this run,
+	// by its login and never its value, and RequesterApps the apps its
+	// writes carried, as the node that took them resolved them. Empty
+	// wherever [PendingRun.Requester] is set, and for a turn no credential
+	// woke.
+	//
+	// ON THE ROW because every segment that resumes the turn, and every call
+	// its box makes through the bridge after a takeover, is still worked for
+	// that credential: what each call may use for it is these apps and the
+	// running node's own resolution of the login, whichever is narrower
+	// (ADR-0109). A row without them — an older build's — reads the turn as
+	// a stranger's, which is what an older build's own turn did. Nobody is
+	// asked anything for a credential: a question addressed to "requester"
+	// resolves to the fallback, as a row naming no requester does.
+	RequesterLogin string      `json:"requester_login,omitempty"`
+	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
+
+	// WorkingFor is who the run's turn works for when a colleague's ask or
+	// an answer handed it on ([types.WorkingFor]), which its resumed turn
+	// works for too.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,
 	// nil for a turn no ask woke — see [ColleagueAsk].

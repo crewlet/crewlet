@@ -373,6 +373,70 @@ func TestASubjectPageAnsweredWithoutALeaderIsRefused(t *testing.T) {
 	}
 }
 
+// A SUBJECT LISTING'S LAST SEQUENCE IS THE ONE ITS FIRST PAGE STATED.
+//
+// A reader compares two listings' last sequences to learn whether anything
+// was stored between them — the dead letters' alarm lists again only when it
+// moved — and a message stored while a listing ran can be counted on a later
+// page. So the listing answers the earliest sequence it read, its first
+// page's: a message stored after that page moves the next listing's, however
+// the pages fell. A listing of nothing still answers the sequence.
+//
+// Mutation: answer a later page's sequence, and the three pages read 9 where
+// the first said 7.
+func TestASubjectListingAnswersItsFirstPagesLastSequence(t *testing.T) {
+	t.Parallel()
+	list := []string{"log.a", "log.b", "log.c", "log.d", "log.e", "log.f", "log.g"}
+	subject := fmt.Sprintf(server.JSApiStreamInfoT, "LOG")
+	f := fakeBroker(t, subject, func(n int, req []byte) any {
+		page := subjectsPage(list, offsetOf(req), 3)
+		// A MESSAGE STORED BEFORE EACH LATER PAGE: the first states 7,
+		// the second 8, the third 9.
+		page.State.LastSeq = uint64(6 + n)
+		return page
+	})
+	leader, err := jsapi.NewLeader(f.js, "LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	last, err := leader.SubjectsSince(t.Context(), "log.>", func(page map[string]uint64) error {
+		for subject := range page {
+			got = append(got, subject)
+		}
+		return nil
+	})
+	slices.Sort(got)
+	if err != nil || !slices.Equal(got, list) {
+		t.Fatalf("listed %v (%v), want %v", got, err, list)
+	}
+	if offsets := f.offsets(t); len(offsets) != 3 {
+		t.Fatalf("the listing asked %d pages, want three for the case to read one sequence "+
+			"per page", len(offsets))
+	}
+	if last != 7 {
+		t.Errorf("the listing answered the last sequence %d, want 7, the first page's", last)
+	}
+
+	none := fakeBroker(t, subject, func(int, []byte) any {
+		page := subjectsPage(nil, 0, 3)
+		page.State.LastSeq = 42
+		return page
+	})
+	if leader, err = jsapi.NewLeader(none.js, "LOG"); err != nil {
+		t.Fatal(err)
+	}
+	visited := false
+	last, err = leader.SubjectsSince(t.Context(), "log.>", func(map[string]uint64) error {
+		visited = true
+		return nil
+	})
+	if err != nil || visited || last != 42 {
+		t.Errorf("a listing of nothing answered %d (%v, visited %v), want 42 and nothing visited",
+			last, err, visited)
+	}
+}
+
 // THE STREAM NAMES ARE ASKED A PAGE AT A TIME, a dropped page asked again —
 // only the metadata leader answers them, and the backup and the mailbox sweep
 // list them — and every stream there throughout is named once.

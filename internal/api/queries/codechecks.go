@@ -34,7 +34,7 @@ import (
 //   - `code_check_log`, a page of that log's bytes.
 //
 // Each is decided PER REPOSITORY as every code question is: registered
-// [DecidedBy] `code.read`, and held to the grant the serving node derives
+// [Requires] the gitlet app, and held to the grant the serving node derives
 // from its chart by the reader — a listing leaves out what the asker may not
 // read, a read of one repository it may not is refused [NotPermitted]. A
 // narrowing is the reader's statement's, never a filter of a page it read

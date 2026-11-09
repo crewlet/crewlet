@@ -36,6 +36,7 @@ const ADA: ViewerState = {
   worklet: false,
   doclet: false,
   chatlet: true,
+  gitlet: false,
   handle: "ada",
   owner: "ada",
   name: "Ada",

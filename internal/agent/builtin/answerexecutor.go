@@ -254,10 +254,10 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// writes the level an Always allow sets. This tool asks only
 		// whether the caller may answer the run, which a run's requester
 		// may, so an answer here would approve a call on a narrower grant.
-		return refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is waiting "+
-			"for a person to approve a call to %s, which is answered with POST /mcp-approvals/%s "+
-			"by an administrator or a lead of the seat's unit, not by this tool. Nothing was "+
-			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), nil
+		return toPerson(refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is "+
+			"waiting for a person to approve a call to %s, which is answered with POST "+
+			"/mcp-approvals/%s by a person its approval admits, not by this tool. Nothing was "+
+			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), caveat.HeldCallAnswer()), nil
 	}
 	// THE QUESTION THE PERSON READ, never the one the run asks now if
 	// those differ: a run that moved on to another question since would
@@ -373,13 +373,23 @@ var errUnreadableSeatID = errors.New("builtin: a pending run's seat id is unread
 // ([faulted]): the row is this node's own and stays unreadable however long
 // anybody waits, so "try again" would be a promise nothing keeps.
 func (t *answerExecutor) parties(ctx context.Context, run sandbox.PendingRun) (runParties, *tools.Result) {
+	parties, err := partiesOf(run)
+	if err != nil {
+		return runParties{}, refusalOf(faulted(ctx, AnswerExecutorTool, err, fmt.Sprintf(
+			AnswerExecutorTool+" cannot answer the executor of turn %s: its record names no seat id "+
+				"this build can read, so the seat it would wake cannot be named: %s.", clip(run.TurnID),
+			faultSaid)))
+	}
+	return parties, nil
+}
+
+// partiesOf is [answerExecutor.parties] without the refusal: errUnreadableSeatID
+// for a row with no seat id this build can read.
+func partiesOf(run sandbox.PendingRun) (runParties, error) {
 	id, err := uuid.Parse(run.AgentID)
 	if err != nil || id == uuid.Nil {
-		return runParties{}, refusalOf(faulted(ctx, AnswerExecutorTool,
-			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf(AnswerExecutorTool+" cannot answer the executor of "+
-				"turn %s: its record names no seat id this build can read, so the seat it would wake "+
-				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
+		return runParties{}, fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
+			errUnreadableSeatID)
 	}
 	return runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}, nil
 }
@@ -392,10 +402,16 @@ func (t *answerExecutor) parties(ctx context.Context, run sandbox.PendingRun) (r
 func (t *answerExecutor) mayAnswer(ctx context.Context, actor Actor,
 	parties runParties) *tools.Result {
 
-	owner := parties.handle
-	if parties.requester != "" && actor.Handle == parties.requester {
-		owner = parties.requester
+	return askAuthority(ctx, t.authorize, authz.ActionExecutorAnswer, parties.answeredBy(actor.Handle))
+}
+
+// answeredBy is what answering the run asks the authority about for the caller
+// named handle: the requester's own seat where the caller is the requester (the
+// rule's self arm), and the run's seat otherwise, where its lead is admitted.
+func (p runParties) answeredBy(handle string) authz.Object {
+	owner := p.handle
+	if p.requester != "" && handle == p.requester {
+		owner = p.requester
 	}
-	return askAuthority(ctx, t.authorize, authz.ActionExecutorAnswer,
-		authz.Object{Kind: authz.KindPerson, ID: parties.seat.String(), Owner: owner})
+	return authz.Object{Kind: authz.KindPerson, ID: p.seat.String(), Owner: owner}
 }

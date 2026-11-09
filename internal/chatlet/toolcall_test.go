@@ -41,18 +41,18 @@ func TestASeatsTurnSaysEverythingItSaidOnce(t *testing.T) {
 	run := func(runID string) {
 		say := seat.run(runID)
 		first := say.message(chatlet.PostMessageTool,
-			map[string]any{"channel": room, "body": "on it"})
+			map[string]any{"channel": room, "asks": false, "body": "on it"})
 		say.message(chatlet.PostMessageTool,
-			map[string]any{"channel": room, "body": "opened ENG-14"})
+			map[string]any{"channel": room, "asks": false, "body": "opened ENG-14"})
 		say.message(chatlet.ReplyInThreadTool,
-			map[string]any{"channel": room, "reply_to": first, "body": "it was the cache"})
+			map[string]any{"channel": room, "reply_to": first, "asks": false, "body": "it was the cache"})
 		// THE SAME WORDS AFTER A DIFFERENT POST: a remark of its own.
 		say.message(chatlet.PostMessageTool,
-			map[string]any{"channel": room, "body": "on it"})
+			map[string]any{"channel": room, "asks": false, "body": "on it"})
 		// AND ASKED AGAIN WITH NOTHING BETWEEN, as an executor that repeats
 		// itself does: the same message.
 		say.message(chatlet.PostMessageTool,
-			map[string]any{"channel": room, "body": "on it"})
+			map[string]any{"channel": room, "asks": false, "body": "on it"})
 	}
 	messages := func() int {
 		t.Helper()
@@ -119,7 +119,7 @@ func TestASeatSaysOneThingInTwoPlacesInBoth(t *testing.T) {
 	// THE ROOM.
 	post := func(room string) (string, string) {
 		id, channel, _ := receipt(chatlet.PostMessageTool,
-			map[string]any{"channel": room, "body": "on it"})
+			map[string]any{"channel": room, "asks": false, "body": "on it"})
 		return id, channel
 	}
 	first, _ := post(launch)
@@ -137,7 +137,7 @@ func TestASeatSaysOneThingInTwoPlacesInBoth(t *testing.T) {
 	// THE MESSAGE A REPLY ANSWERS.
 	reply := func(to string) (string, string) {
 		id, _, root := receipt(chatlet.ReplyInThreadTool,
-			map[string]any{"channel": launch, "reply_to": to, "body": "ok"})
+			map[string]any{"channel": launch, "reply_to": to, "asks": false, "body": "ok"})
 		return id, root
 	}
 	underQuestion, _ := reply(question)
@@ -288,7 +288,7 @@ func TestASeatOutsideAUnitSpeaksInItsRoomByName(t *testing.T) {
 	}
 	call := newSeatTools(t, r).run("run-1")
 	call.do(chatlet.PostMessageTool, map[string]any{
-		"channel": "#platform", "body": "decided: we ship on friday",
+		"channel": "#platform", "asks": false, "body": "decided: we ship on friday",
 	})
 	if got := r.count(`SELECT COUNT(*) FROM chat_messages
 		WHERE channel_id = ? AND author_handle = ? AND body = ?`,
@@ -326,10 +326,10 @@ func TestASeatsLinkToNoAddressIsRefusedInTheStoresWords(t *testing.T) {
 	end := seat.end()
 	call := seat.run("run-1")
 	for tool, args := range map[string]map[string]any{
-		chatlet.PostMessageTool: {"channel": room, "body": "here", "links": sent},
-		chatlet.ReplyInThreadTool: {"channel": room, "reply_to": question, "body": "here",
+		chatlet.PostMessageTool: {"channel": room, "asks": false, "body": "here", "links": sent},
+		chatlet.ReplyInThreadTool: {"channel": room, "reply_to": question, "asks": false, "body": "here",
 			"links": sent},
-		chatlet.SendDMTool: {"to": []any{"jane"}, "body": "here", "links": sent},
+		chatlet.SendDMTool: {"to": []any{"jane"}, "asks": false, "body": "here", "links": sent},
 	} {
 		res, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: tool, Arguments: args})
 		if err != nil {
@@ -389,7 +389,7 @@ func TestASeatReadsARoomEventAsOneAndCannotAnswerIt(t *testing.T) {
 
 	for tool, args := range map[string]map[string]any{
 		chatlet.ReactToMessageTool: {"channel": room, "message_id": founding, "emoji": ":eyes:"},
-		chatlet.ReplyInThreadTool:  {"channel": room, "reply_to": founding, "body": "noted"},
+		chatlet.ReplyInThreadTool:  {"channel": room, "reply_to": founding, "asks": false, "body": "noted"},
 	} {
 		res, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: tool, Arguments: args})
 		if err != nil {
@@ -423,7 +423,7 @@ func TestAMessagesLinksAreASet(t *testing.T) {
 	call := seat.run("run-1")
 	sent := []any{"https://example.com/b", "https://example.com/a", "https://example.com/b"}
 	res, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: chatlet.PostMessageTool,
-		Arguments: map[string]any{"channel": room, "body": "both", "links": sent}})
+		Arguments: map[string]any{"channel": room, "asks": false, "body": "both", "links": sent}})
 	if err != nil || res.Failed {
 		t.Fatalf("post_message: %v %s", err, res.Output)
 	}

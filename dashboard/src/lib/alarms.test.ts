@@ -31,6 +31,7 @@ describe("an alarm kind is read as words", () => {
     ["ivf_recall_below_floor", "IVF recall below floor"],
     ["records_gated", "Records gated"],
     ["feed_unreadable", "Feed unreadable"],
+    ["feed_dead_lettered", "Feed dead lettered"],
     ["maintenance_open", "Maintenance open"],
     ["volume_low", "Volume low"],
     ["wal_large", "WAL large"],

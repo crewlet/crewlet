@@ -352,40 +352,40 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
 
-		// GITLET'S ROWS, each decided per repository by the grant the
-		// serving node derives from its chart (code.GrantOf, ADR-0088):
-		// a listing leaves out what the caller may not read, and a read of
-		// one such repository is refused.
-		"code_repos":  "decided_by:" + string(authz.ActionCodeRead),
-		"code_repo":   "decided_by:" + string(authz.ActionCodeRead),
-		"code_pushes": "decided_by:" + string(authz.ActionCodeRead),
+		// GITLET'S ROWS, each asked behind the gitlet app (ADR-0110) and
+		// decided per repository by the grant the serving node derives from
+		// its chart (code.GrantOf, ADR-0088): a listing leaves out what the
+		// caller may not read, and a read of one such repository is refused.
+		"code_repos":  string(iam.GrantGitlet),
+		"code_repo":   string(iam.GrantGitlet),
+		"code_pushes": string(iam.GrantGitlet),
 		// AND A CHANGE'S, decided per repository alike.
-		"code_changes":        "decided_by:" + string(authz.ActionCodeRead),
-		"code_change":         "decided_by:" + string(authz.ActionCodeRead),
-		"code_change_routing": "decided_by:" + string(authz.ActionCodeRead),
-		"code_reviews":        "decided_by:" + string(authz.ActionCodeRead),
+		"code_changes":        string(iam.GrantGitlet),
+		"code_change":         string(iam.GrantGitlet),
+		"code_change_routing": string(iam.GrantGitlet),
+		"code_reviews":        string(iam.GrantGitlet),
 		// AND A REPOSITORY'S CONTENT, decided per repository alike — and
 		// again by the Gitlet node that answers a read by object id.
-		"code_refs":    "decided_by:" + string(authz.ActionCodeRead),
-		"code_tree":    "decided_by:" + string(authz.ActionCodeRead),
-		"code_blob":    "decided_by:" + string(authz.ActionCodeRead),
-		"code_log":     "decided_by:" + string(authz.ActionCodeRead),
-		"code_blame":   "decided_by:" + string(authz.ActionCodeRead),
-		"code_diff":    "decided_by:" + string(authz.ActionCodeRead),
-		"code_compare": "decided_by:" + string(authz.ActionCodeRead),
-		"code_commit":  "decided_by:" + string(authz.ActionCodeRead),
+		"code_refs":    string(iam.GrantGitlet),
+		"code_tree":    string(iam.GrantGitlet),
+		"code_blob":    string(iam.GrantGitlet),
+		"code_log":     string(iam.GrantGitlet),
+		"code_blame":   string(iam.GrantGitlet),
+		"code_diff":    string(iam.GrantGitlet),
+		"code_compare": string(iam.GrantGitlet),
+		"code_commit":  string(iam.GrantGitlet),
 		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does
 		// not.
-		"code_queue":     "decided_by:" + string(authz.ActionCodeRead),
-		"code_checks":    "decided_by:" + string(authz.ActionCodeRead),
-		"code_check":     "decided_by:" + string(authz.ActionCodeRead),
-		"code_check_log": "decided_by:" + string(authz.ActionCodeRead),
+		"code_queue":     string(iam.GrantGitlet),
+		"code_checks":    string(iam.GrantGitlet),
+		"code_check":     string(iam.GrantGitlet),
+		"code_check_log": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.
-		"code_search": "decided_by:" + string(authz.ActionCodeRead),
+		"code_search": string(iam.GrantGitlet),
 		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
 		// anything is read: an admin's, since the answer names the people
 		// who read it, which no repository's grant gives.

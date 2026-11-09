@@ -383,51 +383,129 @@ func anUnboundTokenFetchesAndNeverPushes(t *testing.T, newFleet NewFleet) {
 
 // F19: concurrent pushes share records — a committer holding one record takes
 // everything queued behind it into the next.
+//
+// ORDERED BY SIGNALS, NEVER BY A WAIT. The followers are received ONE AT A
+// TIME, each started once the one before it has parked where its pack is
+// stored and nothing is proposed, so the case runs no more receive paths at
+// once than any other, and holds nothing at the committer while they run.
+// Only then is the lead pushed and its record held where it is appended, the
+// followers let go to queue behind it, and that record let go once the
+// committer's queue holds every follower — read from the queue
+// (Fleet.Queued), because the next record takes what is queued when the held
+// one ends and nothing that arrives after it. Holding the first record while
+// fifty pushes were received at once failed on a loaded runner both ways
+// (#827): pushes refused 503 before their first byte never uploaded, so the
+// case held on for its whole minute, and the held batch outlived its
+// CommitBudget, which answered its push unknown.
 func concurrentPushesShareRecords(t *testing.T, newFleet NewFleet) {
 	const pushers = 50
+	// THE LAST PUSH LEADS and the others follow it, into ONE record:
+	// code.MaxPushesPerRecord is more than they are.
+	const followers = pushers - 1
 	// A TRANSFER LANE FOR EVERY PUSH: a receive-pack holds its slot until
-	// its record is answered, so a lane of fewer slots than pushes would
-	// leave the rest waiting for a slot rather than queued at the
-	// committer.
+	// its record is answered, a parked follower's included, so a lane of
+	// fewer slots than pushes would leave the lead waiting for one.
 	c := newCase(t, newFleet, Shape{MaxTransfers: pushers + 8}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "base\n"}, "base")
 	c.MustPush(p, work, "main")
+	repoID := c.Rows().Repo.ID
+	branch := func(i int) string { return fmt.Sprintf("b%02d", i) }
 	for i := range pushers {
-		p.Git().Run(t, work, "checkout", "--quiet", "-B", fmt.Sprintf("b%02d", i), "main")
-		p.Commit(work, map[string]string{fmt.Sprintf("f%02d.txt", i): fmt.Sprintf("%d\n", i)}, fmt.Sprintf("b%02d", i))
+		p.Git().Run(t, work, "checkout", "--quiet", "-B", branch(i), "main")
+		p.Commit(work, map[string]string{fmt.Sprintf("f%02d.txt", i): fmt.Sprintf("%d\n", i)}, branch(i))
 	}
-	uploads := c.Fleet.Faults().Hits(codefault.HostAfterUpload)
-	held, reached := make(chan struct{}), make(chan struct{})
-	c.Fleet.Faults().Arm(codefault.CommitterAfterAppend, codefault.Action{Once: true, Block: held, Reached: reached})
-	results := make([]Pushed, pushers)
+
+	faults := c.Fleet.Faults()
+	parked, held, reached := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	release, letGo := sync.OnceFunc(func() { close(parked) }), sync.OnceFunc(func() { close(held) })
+	results, ended := make([]Pushed, pushers), make([]chan struct{}, pushers)
 	var wg sync.WaitGroup
-	for i := range pushers {
-		wg.Go(func() { results[i] = p.Push(c.Ctx, work, c.URL(0), fmt.Sprintf("b%02d", i)) })
+	// EVERY PUSH ENDS BEFORE THE CASE DOES, however the case ends: a parked
+	// follower and a held lead are let go first.
+	t.Cleanup(func() { release(); letGo(); wg.Wait() })
+	push := func(i int) {
+		ended[i] = make(chan struct{})
+		wg.Go(func() {
+			defer close(ended[i])
+			results[i] = p.Push(c.Ctx, work, c.URL(0), branch(i))
+		})
 	}
-	<-reached
-	// EVERY OTHER PUSH IS PROPOSING, queued behind the held record, before
-	// the record is let go: deterministic, where a race against the
-	// committer would commit singletons on a fast machine and be right.
-	if !within(time.Minute, func() bool { return c.Fleet.Faults().Hits(codefault.HostAfterUpload)-uploads == pushers }) {
-		t.Errorf("only %d of %d pushes uploaded", c.Fleet.Faults().Hits(codefault.HostAfterUpload)-uploads, pushers)
+
+	// 1 THE FOLLOWERS, each PARKED once its pack is stored, and the next
+	// one started only then. A follower that ends instead was refused
+	// before its upload, and fails the case with its own output.
+	uploads := faults.Hits(codefault.HostAfterUpload)
+	faults.Arm(codefault.HostAfterUpload, codefault.Action{Block: parked})
+	for i := range followers {
+		push(i)
+		if !within(time.Minute, func() bool {
+			return faults.Hits(codefault.HostAfterUpload)-uploads > i || isClosed(ended[i])
+		}) {
+			t.Fatalf("follower %d neither stored its pack nor ended in a minute", i)
+		}
+		if isClosed(ended[i]) {
+			t.Fatalf("follower %d ended before its pack was stored: %s", i, results[i])
+		}
 	}
-	close(held)
+
+	// 2 THE LEAD, ITS RECORD HELD where it is appended. Every follower is
+	// parked short of its proposal, so the committer's queue is empty and
+	// that record carries the lead alone.
+	faults.Disarm(codefault.HostAfterUpload)
+	faults.Arm(codefault.CommitterAfterAppend, codefault.Action{Once: true, Block: held, Reached: reached})
+	push(followers)
+	if !within(time.Minute, func() bool { return isClosed(reached) || isClosed(ended[followers]) }) {
+		t.Fatalf("the lead's record was neither appended nor refused in a minute")
+	}
+	if !isClosed(reached) {
+		t.Fatalf("the lead ended before its record was appended: %s", results[followers])
+	}
+
+	// 3 THE FOLLOWERS LET GO, to queue behind the held record, and that
+	// record let go once the committer's queue holds every one of them.
+	release()
+	if !within(time.Minute, func() bool { return c.Fleet.Queued(repoID) == followers }) {
+		t.Errorf("%d of %d followers queued behind the held record", c.Fleet.Queued(repoID), followers)
+	}
+	letGo()
 	wg.Wait()
 	for i, res := range results {
-		if ref := fmt.Sprintf("refs/heads/b%02d", i); !res.OK(ref) {
+		if ref := "refs/heads/" + branch(i); !res.OK(ref) {
 			t.Errorf("push %d: %s", i, res)
 		}
 	}
-	positions := map[statelog.Position]bool{}
+
+	// 4 THE LEAD'S RECORD, THEN ONE RECORD CARRYING EVERY FOLLOWER.
+	at := map[string]statelog.Position{}
 	for _, row := range pushRows(t, c) {
-		positions[row.Position] = true
+		for _, cmd := range row.Commands {
+			at[cmd.Ref] = row.Position
+		}
 	}
-	if len(positions) >= pushers+1 {
-		t.Errorf("%d pushes landed in %d records: none shared one", pushers, len(positions)-1)
+	lead, first := at["refs/heads/"+branch(followers)], at["refs/heads/"+branch(0)]
+	if lead == first {
+		t.Errorf("the lead and the first follower landed in one record, at %s: the lead's record was held "+
+			"alone", lead)
+	}
+	for i := 1; i < followers; i++ {
+		if got := at["refs/heads/"+branch(i)]; got != first {
+			t.Errorf("follower %d landed at %s and the first follower at %s: the record after the lead's "+
+				"carries every follower (code.MaxPushesPerRecord %d)", i, got, first, code.MaxPushesPerRecord)
+		}
 	}
 	assertConverged(t, c.Fleet)
+}
+
+// isClosed reports whether ch is closed, without waiting for it.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // objectNames is every name the backend lists.

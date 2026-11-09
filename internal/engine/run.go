@@ -72,6 +72,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -176,10 +177,13 @@ type Engine struct {
 	adminPosture iam.AdminPosture
 
 	// tierATokens are the ids this node's `api.auth.tokens` declares — the
-	// holders of every `token:<id>` login this node can authenticate — for
-	// [Engine.HolderRecord], which answers a login no entry declares as
-	// nobody's. Tier A, so read once at boot like the posture beside it.
-	tierATokens map[string]struct{}
+	// holders of every `token:<id>` login this node can authenticate — with
+	// the grants each declares: for [Engine.HolderRecord], which answers a
+	// login no entry declares as nobody's, and for a turn such a token woke,
+	// whose every call is bounded by the apps it holds HERE
+	// (turnRequesters.Credential, ADR-0109). Tier A, so read once at boot like
+	// the posture beside it.
+	tierATokens map[string][]iam.Grant
 
 	// companyManaged is whether only named systems write this deployment's
 	// company document (`api.auth.company_writers`), which decides who holds
@@ -219,6 +223,16 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+
+	// deadLetterLedger is the queue's dead-letter verbs as this node's wake
+	// feeds and its operator surface call them, accounting for every entry
+	// a replay or a discard drops so the alarm reading never counts it as a
+	// wake the retention lost (feeddeadletters.go). ONE PER PROCESS, built
+	// in [New] over the node's queue and the fleet's claims, so every
+	// feed's replay, an operator's discard ([Engine.FeedDeadLetters]) and
+	// the reading share it. Nil on an engine literal a case builds without
+	// a queue.
+	deadLetterLedger *deadLetterLedger
 
 	// objectives is the node's service objective meter, which every
 	// artifacts recording site counts its events into and the alarm table
@@ -471,6 +485,11 @@ type Engine struct {
 	// exclude a node whose admission the first Stop had already removed —
 	// and announced `engine_stopped` twice for one shutdown.
 	stopOnce sync.Once
+
+	// sshRunner runs the SSH tools' commands, holding each turn's read
+	// certificate in memory until it ends ([Engine.sshRun]).
+	sshRunnerOnce sync.Once
+	sshRunner     *sshint.Runner
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
@@ -1036,6 +1055,11 @@ type Engine struct {
 	// draining node took into "no evaluation has ever run".
 	alarms atomic.Pointer[statelog.Tracker]
 
+	// accessReviews is this node's debounce of its seats' access reviews
+	// (accessreview.go). ATOMIC because it is armed by Start while an apply
+	// may already be kicking it, and stopped by the drain.
+	accessReviews atomic.Pointer[accessReviews]
+
 	// waitingWatch stops this node listening on the seats' waiting channel
 	// (queued.go); nil when it is not listening.
 	waitingWatch queue.Unsubscribe
@@ -1192,6 +1216,10 @@ type Engine struct {
 	// runs, and rebuilding it on an apply would leave two loops racing for
 	// one company's fires. reconcileScheduler arms and disarms it instead.
 	scheduler schedulerLoop
+
+	// pickup is the work pickup's loop over the agent seats this node holds
+	// (ADR-0112), and which of them its last pass found idle.
+	pickup pickupLoop
 
 	// onboarded remembers which seats this PROCESS has seen onboarded.
 	//
@@ -1846,6 +1874,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		checkTokens:         checkTokens,
 		sessions:            sessions,
 		metrics:             opts.Metrics,
+		deadLetterLedger:    newDeadLetterLedger(backends.Queue, backends.Fleet),
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
 		incarnation:         incarnation,
@@ -1882,9 +1911,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		e.adminPosture = opts.Bootstrap.API.Auth.Admin
 	}
 	e.companyManaged = opts.Bootstrap.API.Auth.CompanyManaged()
-	e.tierATokens = make(map[string]struct{}, len(opts.Bootstrap.API.Auth.Tokens))
+	e.tierATokens = make(map[string][]iam.Grant, len(opts.Bootstrap.API.Auth.Tokens))
 	for _, token := range opts.Bootstrap.API.Auth.Tokens {
-		e.tierATokens[token.ID] = struct{}{}
+		e.tierATokens[token.ID] = slices.Clone(token.Grants)
 	}
 	// THE EVENT LOG FILES AN EVENT UNDER EVERY AGENT IT INVOLVES, by the
 	// agent id the org chart derives for each seat a participant tag names
@@ -2374,6 +2403,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// whole seat — see [node.Config.SeatAdmitted].
 		SeatAdmitted: func(_ context.Context, s placement.Seat) {
 			e.readmitResumes(waitOwnership, s.Handle)
+			// AND A SEAT NOW HELD HERE IS MEASURED FOR A REVIEW, after the
+			// quiet window: its previous holder may not have lived to ask.
+			e.kickAccessReviews(s.Handle)
 		},
 		// And a seat whose turn has ended re-checks what was refused for
 		// the turn running ([node.ErrSeatBusy]): an answer by turn whose
@@ -2589,6 +2621,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.startMemorySync(ctx)
 	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
+	// BESIDE THE SCHEDULER, the other producer of a seat's own work: it
+	// reads the company on every pass, so no apply re-arms it.
+	e.startPickups(ctx)
 	// AFTER the epoch is current, because the dispatcher resolves a turn's
 	// seat against it — and before notifications, so a turn woken by the
 	// first inbound message already has somewhere to write what it learns.
@@ -2711,6 +2746,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}
+	if d.ReviewSettled == nil {
+		d.ReviewSettled = e.AccessReviewSettled
+	}
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
@@ -2785,6 +2823,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	// queued.go. After the host, like the meters, because what it answers
 	// is whether this node runs the seat.
 	e.startWaitingWatch(ctx)
+	// THE ACCESS REVIEWS, armed with every seat this node holds: a review a
+	// node did not live to ask for is asked for by whoever holds the seat now.
+	reviews := newAccessReviews(context.WithoutCancel(ctx), e.checkAccessReviews)
+	e.accessReviews.Store(reviews)
+	reviews.kick()
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (coalesce.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
@@ -2961,6 +3004,9 @@ func (e *Engine) Drain(ctx context.Context) {
 		e.applying.Lock()
 		e.stopped = true
 		e.applying.Unlock()
+		// NO REVIEW IS ASKED FOR BY A DRAINING NODE: the seats it holds are
+		// about to be held elsewhere, whose admission checks them.
+		e.accessReviews.Load().stop()
 		// WHERE THE STOP IS DECIDED, rather than where it completes. The
 		// broker stays open until the teardown, so the drain's far end
 		// would carry this line just as well; what that end does not
@@ -3186,6 +3232,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryFill()
 	e.stopLearning()
 	e.stopScheduler()
+	e.stopPickups()
 	// GITLET'S GIT SURFACE WITH THEM, and not with the publishers it shares a
 	// reason with further down (the committer and the estate subject, which
 	// it still stops before): its git reads are answered for peers on this

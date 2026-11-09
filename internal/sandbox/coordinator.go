@@ -357,6 +357,15 @@ type Accountant interface {
 // is part of the answer ([Audience.Fallback]), never a failure of the park.
 type AudienceResolver interface {
 	ResolveAudience(run PendingRun, label string) Audience
+
+	// MayAnswer reports whether whoever holds seat may answer a parked
+	// question in the conversation NOW, read when the reply arrives and
+	// never at the park: an agent seat the chart holds, or a human seat
+	// whose person may act. A person suspended or removed since the park,
+	// and a human seat nobody holds, answer nothing, and their reply runs
+	// as the ordinary message it is. An error is UNKNOWN, which keeps the
+	// reply's place rather than spending it either way.
+	MayAnswer(ctx context.Context, seat string) (bool, error)
 }
 
 // CoordinatorOptions configures a [Coordinator].
@@ -2786,6 +2795,12 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 	// Bounded by the seat's runs: every lost race is a run some other reply
 	// or transition took, and a delivery cannot lose one more often than
 	// there are runs for it to lose.
+	//
+	// mayAnswer is whether the writer's holder may act now, asked once and
+	// only after a run would take the reply ([AudienceResolver.MayAnswer]):
+	// a chat message no parked question was put to its writer reads nothing
+	// of the identity directory.
+	mayAnswer := false
 	for range len(runs) + 1 {
 		if recorded, ok := reply.recordedOn(runs); ok {
 			// A COPY OF AN ANSWER ALREADY RECORDED. Spent as the answer
@@ -2803,6 +2818,28 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			// NOTHING WAS MATCHED, so nothing is owed the delivery: it
 			// is an ordinary message and is handled as one.
 			return AnswerNotMine, nil
+		}
+		if !mayAnswer {
+			// THE WRITER'S HOLDER, NOW: the question was put to their
+			// seat, and a person suspended or removed since, or a human
+			// seat nobody holds, answers nothing. A directory that
+			// cannot say keeps the reply's place, bounded per run as
+			// every deferred answer is: never spent on the run, and
+			// never on an ordinary turn the run was owed.
+			may, err := c.audience.MayAnswer(ctx, reply.Writer)
+			if err != nil {
+				return c.deferAnswer(ctx, run, trigger,
+					fmt.Errorf("sandbox: whether %s may answer %s now: %w", reply.Writer, run.TurnID, err))
+			}
+			if !may {
+				log.InfoContext(ctx, "sandbox_answer_writer_may_not_act", "turn_id", run.TurnID,
+					"agent", handle, "writer", reply.Writer,
+					"detail", "the question was put to this seat, and whoever holds it may not act in "+
+						"the company now, so the reply runs as the ordinary message it is and the "+
+						"run waits on its question")
+				return AnswerNotMine, nil
+			}
+			mayAnswer = true
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
 		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
@@ -5974,6 +6011,17 @@ type AskedRun struct {
 	// with the answer's choice and the writes that make it at most once;
 	// nil for every other question (ADR-0077).
 	Held *HeldResume
+
+	// Withdrawn is whether the run's own seat gave the answer: it withdrew
+	// the question, or the held call (as Deny), with Answer its reason
+	// (ADR-0111). Derived from who answered, never carried apart from it.
+	Withdrawn bool
+}
+
+// WithdrawnBy reports an answer given by the run's own seat: an agent seat
+// answers no question but its own run's, and only to withdraw it.
+func WithdrawnBy(run PendingRun, by, byKind string) bool {
+	return by != "" && by == run.AgentHandle && byKind == string(iam.ActorAgent)
 }
 
 // askedRun is what run's recorded answer resumes it with: the words its seal
@@ -5993,7 +6041,8 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionRan(),
-		BoxKept: run.SandboxID != "",
-		Label:   answer.Label,
+		BoxKept:   run.SandboxID != "",
+		Label:     answer.Label,
+		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
 	}
 }

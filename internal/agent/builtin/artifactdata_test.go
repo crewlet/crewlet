@@ -35,7 +35,7 @@ func newDataRig(t *testing.T, chart artifactChart, req requesters) dataRig {
 		reg: tools.NewRegistry()}
 	art := artifactDeps(r.art, chart, req)
 	art.Presence = r.presence
-	if _, err := builtin.Register(r.reg, builtin.Deps{Artifacts: art,
+	if _, err := builtin.Register(r.reg, builtin.Deps{Artifacts: art, Requesters: art.Requesters,
 		ArtifactData: artifactDataDeps(r.data), Authorize: builtin.Decide(chart)}); err != nil {
 		t.Fatalf("register: %v", err)
 	}

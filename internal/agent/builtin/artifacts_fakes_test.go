@@ -442,6 +442,14 @@ func (r requesters) Requester(_ context.Context, handle string) (iam.Principal, 
 	return p, nil
 }
 
+// Credential places a credential acting as no seat by the entry keyed
+// "login:" and its login, as this node resolves it; any other login is one it
+// cannot place.
+func (r requesters) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	p, ok := r["login:"+login]
+	return p, ok, nil
+}
+
 // founderPrincipal is the person who holds the Nimbus founder's seat.
 func founderPrincipal(grants ...iam.Grant) iam.Principal {
 	return iam.Principal{Kind: iam.KindPerson, Login: "founder@example.com", Seat: "founder",

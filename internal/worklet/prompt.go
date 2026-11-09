@@ -181,7 +181,7 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 // did while both keyed on the task's key.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaTaskID]; id != "" {
-		return string(KindTask) + ":" + id
+		return ItemConversation(id)
 	}
 	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
 	// key would put every person-scoped wake in the company into ONE
@@ -915,3 +915,9 @@ func promptSender(n notify.Inbound, parties notify.Parties) string {
 	}
 	return actor
 }
+
+// ItemConversation is the conversation a task IS, named by its id: what every
+// wake about the task is filed under ([Prompt.ConversationIdentity]), and what
+// the work pickup stamps its wake with, so a pickup's turn continues the
+// task's own conversation (ADR-0112).
+func ItemConversation(id string) string { return string(KindTask) + ":" + id }

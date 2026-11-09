@@ -59,11 +59,13 @@ import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
-import type { SeatCondition } from "~/lib/decisions.ts";
+import { accessNote, type SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
+import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
+import type { McpHeldCall } from "~/contract/mcp.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -248,6 +250,9 @@ function OpenPane({
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
+  // A QUESTION ASKED BEFORE THE AGENT'S ACCESS CHANGED says so under who asked
+  // it, so the person answers knowing the agent may not be able to act on it.
+  const accessed = row.kind === "decision" ? accessNote(row.subject) : undefined;
   // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
   // byline's start slot floated beside a wrapped byline's middle line.
   const back = onBack ? (
@@ -272,7 +277,7 @@ function OpenPane({
         {back}
         <ReadingPaneByline
           leading={<Badge row={row} who={who} size={20} />}
-          note={note || undefined}
+          note={[note, accessed].filter(Boolean).join(" ") || undefined}
         >
           {sentence}
         </ReadingPaneByline>
@@ -296,7 +301,17 @@ function OpenPane({
             />
           );
         case "run":
-          return (
+          // A HELD CALL IS ANSWERED BY ITS OWN BUTTONS, never as a question:
+          // `answer_executor` refuses a run that holds a call.
+          return row.subject.run.held_call ? (
+            <HeldRunPane
+              run={row.subject.run}
+              held={row.subject.run.held_call}
+              frame={frame}
+              now={now}
+              onSettled={onSettled}
+            />
+          ) : (
             <RunPane
               run={row.subject.run}
               frame={frame}
@@ -1366,6 +1381,77 @@ function RunPane({
           </Stack>
         )}
         <RunLink turnId={run.turn_id} hold={hold} />
+      </>
+    </TokenScope>
+  );
+}
+
+/**
+ * An executor parked on a call held for approval: the call as its question
+ * describes it, then the call's own answers (`HeldCallButtons`, through
+ * `POST /mcp-approvals/{id}`, which asks for a step-up when one is due). No
+ * reply and no "Something else": the run's own answer is refused for a held
+ * call, and the call is decided by the people its approval admits.
+ */
+function HeldRunPane({
+  run,
+  held,
+  frame,
+  now,
+  onSettled,
+}: {
+  run: ExecutorRow;
+  held: McpHeldCall;
+  frame: Frame;
+  now: number;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
+}) {
+  const [said, setSaid] = useState<{ words: string; settled: boolean } | null>(null);
+  const landing = useFocusLanding(said !== null);
+  const question = (run.question ?? "").trim();
+  const context = run.question_context.trim();
+  return (
+    <TokenScope texts={runAskTexts(run)}>
+      <>
+        {frame.byline(
+          <>
+            <strong>{frame.name}</strong>
+            {"’s executor asks to make a call"}
+            {frame.task && <> on {frame.task}</>}
+          </>,
+        )}
+        {question ? (
+          <RunQuestion question={question} />
+        ) : (
+          <ReadingPaneTitle>
+            Call <span className="mono">{held.tool}</span> on {held.server}?
+          </ReadingPaneTitle>
+        )}
+        {context && (
+          <ReadingPaneLead>
+            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+          </ReadingPaneLead>
+        )}
+        {said && (
+          <ReadingPaneOutcome {...landing} tone={said.settled ? "done" : "pending"}>
+            {said.words}
+          </ReadingPaneOutcome>
+        )}
+        {said?.settled ? null : (
+          <Inline gap={2}>
+            <HeldCallButtons
+              id={held.id}
+              seat={run.agent_handle}
+              fixed={held.fixed}
+              approvers={held.approvers}
+              onAnswered={(words, settled) => {
+                setSaid({ words, settled });
+                onSettled("Answered", undefined, !settled);
+              }}
+            />
+          </Inline>
+        )}
+        <RunLink turnId={run.turn_id} hold={holdLine(run, now)} />
       </>
     </TokenScope>
   );

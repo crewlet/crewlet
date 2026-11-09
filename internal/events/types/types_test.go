@@ -27,7 +27,7 @@ func catalogue() []events.Payload {
 		// config.go
 		ConfigRevisionActivated{}, ConfigRevisionApplied{},
 		// task.go
-		TaskAssigned{},
+		TaskAssigned{}, WorkPickup{},
 		// schedule.go
 		ScheduledTaskFired{},
 		ScheduledFireSuperseded{},
@@ -207,6 +207,7 @@ var wireTypes = []string{
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",
+	"work_pickup",
 }
 
 func TestRegistryMatchesWireTypes(t *testing.T) {
@@ -369,14 +370,15 @@ var wireTags = map[string][]string{
 		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
+	"work_pickup":                   {"agent_id", "item", "key", "moved", "progressed", "ready", "ready_capped", "role", "status", "why", "working_for"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
-	"a2a_request":                   {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis"},
-	"a2a_message":                   {"channel_id", "content", "question", "sender", "sender_role"},
+	"a2a_request":                   {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis", "working_for"},
+	"a2a_message":                   {"channel_id", "content", "question", "sender", "sender_role", "working_for"},
 	"a2a_channel_opened":            {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},
 	"a2a_message_sent":              {"channel_id", "content", "message_id", "recipient", "sender", "sender_role", "turn_id", "work_key"},
 	"a2a_channel_closed":            {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},

@@ -302,6 +302,9 @@ repositories in Gitlet and keep others on a vendor.
 Today it is a place for **people and agents** to keep and review their code:
 people clone, fetch and push over HTTPS with their own API token ([Hosting
 Code on Gitlet](../guides/gitlet.md)), and every push is recorded as whoever made it.
+Using it is a permission, as using Worklet is: a person reaches the code only
+while they hold **Gitlet**, which an administrator ticks for them, so a company
+can keep its source from somebody it keeps off its tracker.
 Agents change it through their code tools — a small commit, a revert or a
 pick, a branch, each built by the engine and recorded as the seat's push — or
 push from a coding box's clone with their run's own credential ([Coding

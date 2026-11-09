@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -141,6 +143,17 @@ type turnTelemetry struct {
 	// trigger is described from, or off the parked row on a resume, by the
 	// seat's handle (ADR-0013).
 	requester string
+	// workingFor is who a colleague's ask, or the answer to this seat's
+	// own ask, handed the turn on to work for ([turnctx.Turn.WorkingFor]).
+	workingFor *types.WorkingFor
+
+	// requesterLogin and requesterApps are the credential acting as no seat
+	// whose write started this turn, and the apps its writes carried — see
+	// [turnctx.Turn.RequesterLogin] — read as [requester] is: off the
+	// trigger at dispatch ([credentialRequesterOf]), off the parked row on a
+	// resume.
+	requesterLogin string
+	requesterApps  []iam.Grant
 
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
@@ -329,6 +342,9 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.ask, t.askLabel = t.askParts.Text(), t.askParts.Label()
 	t.senders = sendersSpoken(t.interactions)
 	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
+	t.requesterLogin, t.requesterApps = credentialRequesterOf(req.Events, req.Ask(),
+		t.interactions, req.Handle)
+	t.workingFor = workingForIn(req.Events)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -459,7 +475,11 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
-			Requester: t.requester,
+			Requester: t.requester, WorkingFor: t.workingFor,
+			// OR THE CREDENTIAL that did, which no question reaches: what
+			// the turn may use for it is bounded by its apps (ADR-0109).
+			RequesterLogin: t.requesterLogin,
+			RequesterApps:  slices.Clone(t.requesterApps),
 			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
 			// filter — see [turnctx.Turn.Senders]. Off the telemetry rather
 			// than the interactions, which a resumed segment does not have:
@@ -983,7 +1003,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// answer is somebody replying to the run, not somebody asking this
 		// turn for something, so a second run the resumed turn detaches is
 		// still the first requester's.
-		requester: in.Run.Requester,
+		requester: in.Run.Requester, workingFor: in.Run.WorkingFor,
+		// AND THE CREDENTIAL, off the row for the same reason: the turn is
+		// still worked for whoever its first segment was.
+		requesterLogin: in.Run.RequesterLogin,
+		requesterApps:  slices.Clone(in.Run.RequesterApps),
 		// WHAT IT WAS ASKED, off the park: the event that resumed it is a
 		// collection or a reply, and its ask is not the turn's.
 		ask:      in.State.Ask,
@@ -1144,6 +1168,105 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, s
 		return in.Sender.Handle
 	}
 	return ""
+}
+
+// credentialRequesterOf is the credential acting as no seat whose write
+// started seat's turn, by its login, and the apps every one of its writes in
+// the turn carried — or nothing, where the requester [requesterOf] reads is no
+// such credential.
+//
+// THE SAME SPEAKER [requesterOf] READS: a colleague's ask names a seat, and
+// otherwise the first interaction that is not the seat's own. A credential is
+// never a seat's handle, so where requesterOf names a seat this names nobody,
+// and the two never both answer.
+//
+// ITS APPS ARE EVERY WRITE'S, intersected, off the ask's own constituents (the
+// interactions carry no apps): a merge must not launder a constraint, so a
+// burst a token began before it was narrowed is held to the narrower record.
+// A write that carries none — an older build's — leaves none, and a
+// credential's turn with no apps is worked for as a stranger (ADR-0109).
+func credentialRequesterOf(evs, ask []*events.Event, interactions []types.InboundInteraction,
+	seat string) (string, []iam.Grant) {
+
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if _, ok := events.DataAs[*types.A2ARequest](ev); ok {
+			return "", nil
+		}
+		break
+	}
+	login := ""
+	for _, in := range interactions {
+		if in.Sender.Handle != "" && in.Sender.Handle == seat {
+			continue
+		}
+		login = in.Sender.Login
+		break
+	}
+	if login == "" {
+		return "", nil
+	}
+	var (
+		apps []iam.Grant
+		read bool
+	)
+	for _, w := range writersIn(ask) {
+		if w == nil || w.Kind != iam.ActorOperator || strings.TrimSpace(w.Login) != login {
+			continue
+		}
+		if !read {
+			apps, read = slices.Clone(w.Apps), true
+			continue
+		}
+		apps = slices.DeleteFunc(apps, func(g iam.Grant) bool { return !slices.Contains(w.Apps, g) })
+	}
+	return login, apps
+}
+
+// writersIn is every first-party writer a turn's trigger names, constituent
+// by constituent in the order they spoke — the rule [interactionsFor] reads
+// the interactions by: a coalesced notification's constituents, never its
+// flat fields beside them, which are the latest constituent's again.
+func writersIn(evs []*events.Event) []*types.NotificationWriter {
+	var out []*types.NotificationWriter
+	for _, n := range notificationsIn(evs) {
+		if len(n.Messages) == 0 {
+			out = append(out, n.Writer)
+			continue
+		}
+		for _, m := range n.Messages {
+			out = append(out, m.Writer)
+		}
+	}
+	return out
+}
+
+// workingForIn is who the wake that started a turn handed it on to work for
+// ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
+// a colleague's ask carries whoever the asking turn worked for, and the
+// answer to this seat's own ask carries whoever the answering turn worked
+// for, which is who this seat worked for when it asked. Nil for any other
+// wake, and for one that carried nobody.
+func workingForIn(evs []*events.Event) *types.WorkingFor {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if ask, ok := events.DataAs[*types.A2ARequest](ev); ok && ask != nil {
+			return ask.WorkingFor
+		}
+		if answer, ok := events.DataAs[*types.A2AMessage](ev); ok && answer != nil {
+			return answer.WorkingFor
+		}
+		// A PICKUP IS WORKED FOR WHOM ITS ITEM IS FOR (ADR-0109, ADR-0112).
+		if pickup, ok := events.DataAs[*types.WorkPickup](ev); ok && pickup != nil {
+			return pickup.WorkingFor
+		}
+		return nil
+	}
+	return nil
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

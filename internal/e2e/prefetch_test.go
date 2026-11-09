@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -201,14 +202,21 @@ roles:
 }
 
 // wakeWithPointer publishes a trigger that only NAMES what changed, which is
-// what the thin-trigger gate exists for.
+// what the thin-trigger gate exists for — from the founder, by the Slack id the
+// company document gives her seat, so the turn is worked for somebody the
+// company knows (a vendor's sender it cannot place is a stranger, for whom an
+// agent uses no app: ADR-0109).
 func wakeWithPointer(t *testing.T, n *node, handle string) {
 	t.Helper()
 	body := "PR !42 got a comment"
 	ev := events.New(types.ExternalNotification{
-		NotificationSource: "gitlab", SourceEventType: "note.comment",
-		Sender: "human-dev", Subject: "Add the rate limiter",
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: "Jane Doe", Subject: "Add the rate limiter",
 		Body: body, SalientBody: &body,
+		Metadata: map[string]string{
+			notify.ActorField:       "U0FOUNDER",
+			notify.ChannelKindField: string(types.ChannelDM),
+		},
 		// THE FLAG the parser sets, and the only thing that tells the
 		// engine this body is a reference rather than the context.
 		ContextRequiresRecon: true,
@@ -231,6 +239,10 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	wiki := fakeWiki(t)
 	n := startWith(t, wikiCompany(wiki.url))
 	waitForSeat(t, n, "ceo")
+	// THE POINTER IS THE FOUNDER'S, employed: the search the executor
+	// recovers is Doclet's, which an agent uses only for somebody who uses it
+	// (ADR-0109).
+	employFounder(t, n)
 
 	n.model.searchOnExecute("staging login redirect proxy")
 	wakeWithPointer(t, n, "ceo")

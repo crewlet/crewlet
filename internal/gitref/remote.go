@@ -119,7 +119,7 @@ func ParseRemoteURL(raw string) (RemoteURL, error) {
 
 // remoteHost is u's host as a remote's: an IPv6 address in brackets or an
 // IPv4 address in dotted decimal, each in its one written form, and the
-// address; or a DNS name, lowercased ([dnsName]), and no address.
+// address; or a DNS name, lowercased ([DNSName]), and no address.
 //
 // AN IPv6 ADDRESS WITH A ZONE IS REFUSED: a zone names a link of this host, so
 // no host on the internet has one, and libcurl cannot pin one.
@@ -142,7 +142,7 @@ func remoteHost(u *url.URL) (string, netip.Addr, error) {
 		return addr.String(), addr, nil
 	}
 	name := strings.ToLower(h)
-	if !dnsName(name) {
+	if !DNSName(name) {
 		return "", netip.Addr{}, fmt.Errorf("%s's host %q is not a DNS name of letters, digits and hyphens "+
 			"whose last label begins with a letter, nor an IP address in its one written form (dotted decimal, "+
 			"or IPv6 in brackets): write it so, without a trailing dot, an internationalised name as its "+
@@ -151,7 +151,7 @@ func remoteHost(u *url.URL) (string, netip.Addr, error) {
 	return name, netip.Addr{}, nil
 }
 
-// dnsName reports whether s, lowercase, is a host name every parser reads
+// DNSName reports whether s, lowercase, is a host name every parser reads
 // alike: labels of letters, digits and hyphens, 1 to 63 bytes each and
 // neither beginning nor ending with a hyphen, 253 bytes in all, with no empty
 // label (so no trailing dot, which libcurl may strip before it looks the name
@@ -159,7 +159,7 @@ func remoteHost(u *url.URL) (string, netip.Addr, error) {
 // does — a host that ends in a number is an IPv4 address to libcurl and the C
 // resolver, which read 127.1, 0x7f.1 and 010.0.0.1 as addresses (the last as
 // octal) where netip refuses all three.
-func dnsName(s string) bool {
+func DNSName(s string) bool {
 	if s == "" || len(s) > 253 {
 		return false
 	}

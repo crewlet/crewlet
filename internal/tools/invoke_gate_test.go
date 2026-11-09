@@ -167,8 +167,10 @@ func outsideInvoke(fset *token.FileSet, file *ast.File, rel string) []string {
 }
 
 // toolMethods are a tool's own calls by the arguments each takes:
-// Call(ctx, args) and CallForTurn(ctx, turn, args).
-var toolMethods = map[string]int{"Call": 2, "CallForTurn": 3}
+// Call(ctx, args), CallForTurn(ctx, turn, args) and CallInTurn(ctx, turn,
+// args), the last the turn a seat's call of a [tools.TurnBound] tool is made
+// in, which builtin's gate binds the requester ceiling from.
+var toolMethods = map[string]int{"Call": 2, "CallForTurn": 3, "CallInTurn": 3}
 
 // typeExpr reports x names a type, as a method expression's receiver does:
 // an exported name (`Callable`, `tools.Callable`), a pointer type or a

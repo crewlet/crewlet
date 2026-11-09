@@ -962,7 +962,15 @@ export function AnswerRunButton({
   const [dialog, show] = usePresentedDialog();
   // A RUN HOLDING A CALL FOR APPROVAL is answered through the approvals
   // route: its own answer is refused for a held call.
-  if (run.held_call) return <HeldCallButtons id={run.held_call.id} seat={run.agent_handle} />;
+  if (run.held_call)
+    return (
+      <HeldCallButtons
+        id={run.held_call.id}
+        seat={run.agent_handle}
+        fixed={run.held_call.fixed}
+        approvers={run.held_call.approvers}
+      />
+    );
   return (
     <>
       <Button

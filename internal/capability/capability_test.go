@@ -386,3 +386,121 @@ func TestATermOfAChangeIsWhatANoteNamesItBy(t *testing.T) {
 		t.Errorf("a policy change has terms %v: no note is about a policy's access", got)
 	}
 }
+
+// sshCompany is one whose SRE seat reads api-1, which runs containers, and
+// not db-1.
+func sshCompany() *config.Company {
+	c := company()
+	c.Integrations.SSH = &config.SSH{Enabled: true, Hosts: []config.SSHHost{
+		{ID: "api-1", Address: "api-1.example.com", Containers: true},
+		{ID: "db-1", Address: "db-1.example.com", ReadAllowlist: []string{"/usr/bin/psql --version"}},
+	}}
+	c.SeatAccessMigrated = append(c.SeatAccessMigrated, "ssh")
+	c.Roles[0].Integrations.SSH = &config.RoleSSH{Enabled: on(), Hosts: []string{"api-1"}}
+	return c
+}
+
+// A SEAT IS TOLD THE READ COMMANDS EACH OF ITS HOSTS ADMITS, as it types them:
+// bare program names, placeholders for the words a rule leaves open, and no
+// host it was not granted.
+//
+// Mutation: drop the commands from the SSH lane and the section names hosts
+// only, as before the seat could tell a refused spelling from a refused
+// command.
+func TestYourAccessListsEachHostsReadCommands(t *testing.T) {
+	t.Parallel()
+	in := input(sshCompany())
+	in.Observed[seataccess.LaneSSH] = seataccess.Observed{Exists: true, Enabled: true}
+	got := capability.YourAccess(capability.Take(in))
+	for _, want := range []string{"Read commands on api-1: `uptime`", "`sudo -n docker ps`",
+		"`sudo -n docker logs --tail <n> <container>`", "`systemctl status <unit>`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Your access does not say %q:\n%s", want, got)
+		}
+	}
+	for _, never := range []string{"db-1", "psql", "/usr/bin/"} {
+		if strings.Contains(got, never) {
+			t.Errorf("Your access says %q:\n%s", never, got)
+		}
+	}
+}
+
+// A CHANGED ALLOWLIST MOVES THE DIGEST AND IS TOLD BY THE NEXT SECTION: the
+// commands are part of the snapshot, so the seat is never left with a list
+// its host no longer admits, and no change line is invented for it.
+//
+// Mutation: leave the commands out of the snapshot's encoding and the digest
+// stays put.
+func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
+	t.Parallel()
+	in := input(sshCompany())
+	in.Observed[seataccess.LaneSSH] = seataccess.Observed{Exists: true, Enabled: true}
+	was := capability.Take(in)
+	changed := sshCompany()
+	changed.Integrations.SSH.Hosts[0].Containers = false
+	in.Company = changed
+	now := capability.Take(in)
+	if was.Digest() == now.Digest() {
+		t.Fatal("the host stopped admitting docker and the digest did not move")
+	}
+	if strings.Contains(capability.YourAccess(now), "docker") {
+		t.Error("Your access still lists docker after the host stopped admitting it")
+	}
+	if changes := capability.Diff(was, now); len(changes) != 0 {
+		t.Errorf("an allowlist change is told as %+v", changes)
+	}
+	if again := capability.Take(in); again.Digest() != now.Digest() {
+		t.Error("one access takes two digests")
+	}
+}
+
+// AN AUDIENCE IS ONE OF THE TWO THIS BUILD WORDS LINES FOR: the seat and a
+// person are valid, anything else is not, and a line is never worded for it.
+//
+// Mutation: word an unknown audience as the seat and a person reads "your".
+func TestAnAudienceIsOneThisBuildWordsLinesFor(t *testing.T) {
+	t.Parallel()
+	for _, a := range []capability.Audience{capability.ForSeat, capability.ForPerson} {
+		if !a.Valid() {
+			t.Errorf("audience %q reads as not valid", a)
+		}
+	}
+	for _, a := range []capability.Audience{"", "admin"} {
+		if a.Valid() {
+			t.Errorf("audience %q reads as valid", a)
+		}
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a change was worded for audience %q", a)
+				}
+			}()
+			capability.DiffFor(told("secure"), told("operate"), a)
+		}()
+	}
+}
+
+// A PERSON READS A CHANGE ABOUT THE SEAT, NOT ABOUT THEMSELVES: the same
+// change worded for a person names the seat in the third person, from one
+// formatter, and says the same facts.
+//
+// Mutation: hand a person the seat's own line and they read "your level".
+func TestAPersonReadsAChangeAboutTheSeat(t *testing.T) {
+	t.Parallel()
+	seat := capability.DiffFor(told("secure"), told("operate"), capability.ForSeat)
+	person := capability.DiffFor(told("secure"), told("operate"), capability.ForPerson)
+	if len(seat) != 1 || len(person) != 1 || seat[0].Kind != person[0].Kind {
+		t.Fatalf("the two audiences were told %+v and %+v, want one change each", seat, person)
+	}
+	if !strings.Contains(seat[0].Line, "your level is now Operate (was Secure)") ||
+		!strings.Contains(person[0].Line, "its level is now Operate (was Secure)") {
+		t.Errorf("the seat reads %q and a person %q", seat[0].Line, person[0].Line)
+	}
+	for _, c := range capability.DiffFor(capability.Take(input(company())), told("read"), capability.ForPerson) {
+		for _, word := range []string{" you ", " your ", "you are", "you now", "to you"} {
+			if strings.Contains(" "+c.Line+" ", word) {
+				t.Errorf("a person's line %q says %q", c.Line, strings.TrimSpace(word))
+			}
+		}
+	}
+}

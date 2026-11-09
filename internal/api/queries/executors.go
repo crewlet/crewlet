@@ -567,12 +567,13 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for —
 		// neither, once an ending reclaims the box.
-		"box_exists":         run.SandboxID != "" && !reclaimed,
-		"paused_at":          isoOrEmpty(heldSince),
-		"pause_ttl_seconds":  run.PauseTTLSeconds,
-		"started_at":         isoOrEmpty(run.CreatedAt),
-		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		"box_exists":        run.SandboxID != "" && !reclaimed,
+		"paused_at":         isoOrEmpty(heldSince),
+		"pause_ttl_seconds": run.PauseTTLSeconds,
+		"started_at":        isoOrEmpty(run.CreatedAt),
+		"updated_at":        isoOrEmpty(run.UpdatedAt),
+		// NEVER A HELD CALL, which its approval answers alone.
+		"answerable_in_chat": answerableInChat(run.ConversationKey) && run.HeldCall == nil,
 		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
 		// arrived in (answer_executor answers it as `answer_id`): a person who
 		// answered is told from here that the run could not take their
@@ -654,6 +655,9 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 		row["held_call"] = map[string]any{
 			"id": held.ID, "server": held.Server, "tool": held.Tool, "raw": held.Raw,
 			"digest": held.Digest, "held_at": isoOrEmpty(held.HeldAt),
+			// A CALL ITS TOOL ASKS ABOUT EVERY TIME, answered once or deny
+			// alone, and who answers it where not the seat's lead.
+			"fixed": held.Fixed, "approvers": held.Approvers,
 		}
 		row["held_arguments"] = opened.heldArgs
 	}

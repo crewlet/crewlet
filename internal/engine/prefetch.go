@@ -620,6 +620,9 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 		Sender: types.CanonicalIdentity{
 			Handle: subject.Handle, ExternalID: subject.ExternalID,
 			Platform: subject.Platform, DisplayName: subject.Name,
+			// A CREDENTIAL ACTING AS NO SEAT, by its login: the requester a
+			// turn it woke is worked for (ADR-0109).
+			Login: credentialLogin(writer),
 		},
 		Body:       body,
 		Provenance: label,
@@ -630,6 +633,16 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 		RawEventType:  rawType,
 		RequiresRecon: requiresRecon,
 	}
+}
+
+// credentialLogin is the login a first-party writer names where it is a
+// credential acting as no seat, and "" for every other writer and for a
+// vendor's sender, which names no writer at all.
+func credentialLogin(w *types.NotificationWriter) string {
+	if w == nil || w.Kind != iam.ActorOperator {
+		return ""
+	}
+	return strings.TrimSpace(w.Login)
 }
 
 // salientBody is the raw inbound message, never the enriched prompt.

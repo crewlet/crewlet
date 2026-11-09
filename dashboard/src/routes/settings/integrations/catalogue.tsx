@@ -153,6 +153,7 @@ const SURFACE_NAMES: Record<string, string> = {
   scaleway: "Scaleway",
   aws: "AWS",
   google_cloud: "Google Cloud",
+  ssh: "SSH",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -261,6 +262,16 @@ export const CATALOG: Entry[] = [
     vendor: "google-cloud",
     surfaces: surfacesOf("google_cloud"),
     doc: "google-cloud",
+  },
+  {
+    key: "ssh",
+    name: "SSH",
+    description: "Your servers, through certificates Crewlet signs for minutes at a time.",
+    // NO THIRD PARTY: SSH is a protocol, so the kit draws Crewlet's own key for
+    // it, never the brand mark the built-in services carry.
+    vendor: "ssh",
+    surfaces: surfacesOf("ssh"),
+    doc: "ssh",
   },
 ];
 

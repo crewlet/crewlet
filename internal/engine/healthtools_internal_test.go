@@ -72,7 +72,8 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	e.epoch.current.Store(c)
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
-		Authorize: builtin.Decide(orgchart.Of(c.Org)),
+		Authorize:  builtin.Decide(orgchart.Of(c.Org)),
+		Requesters: turnRequesters{engine: e},
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Self: "node-a", Requesters: turnRequesters{engine: e},
 			Chart: orgchart.Of(c.Org), Status: idleGitletNodes{},
 			Code: builtin.CodeDeps{Code: unreadCode{}, Requesters: turnRequesters{engine: e},

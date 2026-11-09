@@ -278,8 +278,37 @@ func (l *Leader) outlasted(took time.Duration) {
 // message throughout the listing is visited once (see this file's head); a
 // page answered by a member of a group with no leader is [ErrLeaderless].
 func (l *Leader) Subjects(ctx context.Context, filter string, visit func(map[string]uint64) error) error {
+	_, err := l.SubjectsSince(ctx, filter, visit)
+	return err
+}
+
+// SubjectsSince is [Leader.Subjects], answering besides the stream's last
+// sequence as the leader stated it on the listing's FIRST page — what every
+// message the listing counted was stored at or after, short of one stored
+// while it ran.
+//
+// THE FIRST PAGE'S, the earliest the listing read: a message stored while
+// later pages were read may be counted on one of them, but never left out of
+// a later listing's last sequence, so a reader comparing two listings' last
+// sequences sees every message stored between their first pages move it. Read
+// from a later page, a message stored on an earlier page's subject after that
+// page and a message let go from the same subject would leave its count and
+// this sequence both where the next listing finds them. Within one page the
+// leader states the sequence before it counts the subjects (nats-server
+// v2.15.2, server/jetstream_api.go:2192 and 2207, jsStreamInfoRequest: the
+// state, then SubjectsTotals), which errs the same way.
+//
+// One request where the subjects fit one page, as a dead-letter subtree's
+// always do: it is the read a reader asks on every beat.
+func (l *Leader) SubjectsSince(ctx context.Context, filter string,
+	visit func(map[string]uint64) error) (uint64, error) {
+
+	var (
+		last  uint64
+		first = true
+	)
 	term := jsprovision.ReadTerm + time.Duration(l.paged.Load())
-	return sorted(func(offset int) (map[string]uint64, int, error) {
+	err := sorted(func(offset int) (map[string]uint64, int, error) {
 		var resp server.JSApiStreamInfoResponse
 		took, heard, err := page(ctx, l.conn, l.info,
 			server.JSApiStreamInfoRequest{ApiPagedRequest: server.ApiPagedRequest{Offset: offset},
@@ -317,8 +346,15 @@ func (l *Leader) Subjects(ctx context.Context, filter string, visit func(map[str
 		// moment later — and so is the next listing's first.
 		term = jsprovision.ReadTerm + took
 		l.paged.Store(int64(took))
+		if first {
+			last, first = resp.State.LastSeq, false
+		}
 		return resp.State.Subjects, resp.Total, nil
 	}, visit)
+	if err != nil {
+		return 0, err
+	}
+	return last, nil
 }
 
 // Meta reads the listings only the METADATA leader answers — the stream

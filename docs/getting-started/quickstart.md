@@ -112,8 +112,8 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
                           #   non-empty: admin, worklet, doclet,
-                          #   artifacts, chatlet. Admin runs the company and
-                          #   includes every app.
+                          #   artifacts, chatlet, gitlet. Admin runs the
+                          #   company and includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -519,7 +519,7 @@ seat** in the page bar, and the **Person** section of its editor). Press
 
 - **your email address** — what the invitation is held against;
 - **your access**: tick **Admin**, which ticks and locks every app (Worklet,
-  Doclet, Artifacts and Chatlet) beside it. The founder token holds `admin`, and nobody can
+  Doclet, Artifacts, Chatlet and Gitlet) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -545,6 +545,16 @@ that). Redeeming it puts you on the `founder` seat and signs you in: from your
 first sign-in you act as that seat. The secret after the `.` never leaves the
 page in a URL: the link carries it in the fragment, which no browser sends to a
 server, and the screen sends it in a header and a body instead.
+
+**Until a person holds a human seat, an agent uses no app for what that seat
+says.** The seat's `contact` lets the agents recognise who is writing to them,
+but a permission is a person's: until you redeem the invitation (or an
+administrator creates the person on the seat), a message from the founder's
+chat account wakes an agent that files no task, reads and writes no page,
+posts in no room and authors no artifact for it, and tells you why ([An agent
+uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+The same holds for every human seat you add later.
 
 This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
 signs you in here. **Leave that line out on a deployment reached off
@@ -587,8 +597,8 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `worklet`, `doclet`, `artifacts`, `chatlet` or `none`, and left out
-on an invitation it sends every app and not admin.
+`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet` or `none`, and
+left out on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…

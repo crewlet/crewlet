@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/recordseal`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -162,9 +162,14 @@ the amendments below for presence, the live relay and the assistant's frames
 are the channels that rule reaches.
 
 It does not decide what a reader does once verification fails — only that it
-must not decode. The change feed acknowledges and derives no wake; the applier
-retains or stops. Both follow from what each can do with a record it cannot
-attribute, and neither is forced by this record.
+must not decode. The change feed derives no wake from such a record: a frame
+whose MAC fails under a key the node holds is acknowledged and skipped, and a
+frame sealed under a key the node does not hold is handed back for a peer that
+holds it, and dead-lettered whole once it is an hour old — never acknowledged
+bare, since the feed's consumer is the fleet's and an acknowledgement here
+would lose the wake on every node ([ADR-0012](0012-a-wake-is-derived-not-published.md)'s
+amendment). The applier retains or stops. Both follow from what each can do
+with a record it cannot attribute, and neither is forced by this record.
 
 ## Amendment: presence frames are sealed too
 

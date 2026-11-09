@@ -42,6 +42,7 @@ type BuiltinGroupKey =
   | "artifacts"
   | "code"
   | "health"
+  | "servers"
   | "colleagues"
   | "memory"
   | "discovery";
@@ -50,13 +51,16 @@ type BuiltinGroupKey =
  * Who may call a built-in: what its authority row asks of the caller, named
  * by the engine and never decided here. Holding a tool is not being allowed
  * to call it. `everybody`: any agent. `self`: the agent, about its own
- * notes, turns and skills. `worklet`, `doclet`, `chatlet`, `artifacts`: an
- * agent that uses that app. `worklet_asked`: one that uses Worklet, or one an
+ * notes, turns and skills. `worklet`, `doclet`, `chatlet`, `artifacts`,
+ * `gitlet`: an agent that uses that app (what it may do to a repository is
+ * then its grant there). `worklet_asked`: one that uses Worklet, or one an
  * open ask on the item names. `project_lead`: the lead of the project the
  * work or file is in. `artifact_viewer`, `artifact_editor`, `artifact_owner`:
  * the least role on the one artifact the call names (an editor also authors
  * artifacts). `health_tools`: an agent whose role carries the `health_tools`
- * grant, the deployment's health being an admin's read.
+ * grant, the deployment's health being an admin's read. `ssh_read`,
+ * `ssh_operate`: an agent whose SSH access is on with a server, and one at
+ * operate.
  */
 export type BuiltinGate =
   | "everybody"
@@ -67,10 +71,13 @@ export type BuiltinGate =
   | "doclet"
   | "chatlet"
   | "artifacts"
+  | "gitlet"
   | "artifact_viewer"
   | "artifact_editor"
   | "artifact_owner"
-  | "health_tools";
+  | "health_tools"
+  | "ssh_read"
+  | "ssh_operate";
 
 export interface ToolRow {
   name: string;

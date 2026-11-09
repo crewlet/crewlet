@@ -257,6 +257,22 @@ func TestTheApprovalReadsWhatTheRouteSends(t *testing.T) {
 	holdUnion(t, "McpApprovalOutcome", []statelog.Outcome{statelog.OutcomePending, statelog.OutcomeUnknown})
 }
 
+// THE REVIEW READS WHAT THE HELD CALL'S READ SENDS. Review and allow once
+// reads an operate call whole through `GET /mcp-approvals/{id}` and reads it
+// as `McpHeldWhole`, held both ways over the answer as the route writes it.
+//
+// Mutation: drop `arguments_sha256` from McpHeldWhole, and this is red.
+func TestTheReviewReadsWhatTheHeldCallReadSends(t *testing.T) {
+	t.Parallel()
+	seal := operateSeal(t)
+	svc := operateSurface(t, &fakeApprovals{run: operateRun(t, seal)}, seal)
+	code, held := read(t, svc, seated("ops-lead", time.Minute), "/mcp-approvals/"+heldID)
+	if code != http.StatusOK {
+		t.Fatalf("the named approver reads %d %v", code, held)
+	}
+	holdDeclared(t, "McpHeldWhole", []map[string]any{held}, false)
+}
+
 // THE REVIEW READS WHAT THE ROUTE SENDS. The Drift dialog decides a server's
 // changed tools through `POST /mcp-servers/{name}/changes` and reads its
 // answer as `McpChangesAnswer` (`moved`, the tools somebody else decided

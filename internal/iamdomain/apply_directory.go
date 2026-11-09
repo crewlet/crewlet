@@ -394,7 +394,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	// twice and a position changes under a republish. The seat it released
 	// is a column beside the claims as well (replicated migration 0122), the
 	// claims' own value, because one seat's standing is a seek on it
-	// ([Reader.SeatHolder], [reboundRemovals]) where the claims are a decode
+	// ([Reader.Requester], [reboundRemovals]) where the claims are a decode
 	// of every tombstone; [Applier.Rederive] recomputes it from the same
 	// claims whenever a checkpoint's rule set differs from this build's.
 	result, err := tx.ExecContext(ctx, `

@@ -201,7 +201,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
 	// THE IDENTITY DIRECTORY'S, which a node holding no data reads through
-	// a data node ([opIdentityBinding], [opSeatHolders], [opSeatHolder]) —
+	// a data node ([opIdentityBinding], [opSeatHolders], [opRequester]) —
 	// and the identity vocabulary's and the session's, which the questions a
 	// person verb is decided on answer in ([iam.Holders],
 	// [session.ResolveSeat]).

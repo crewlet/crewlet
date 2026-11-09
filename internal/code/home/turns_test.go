@@ -185,3 +185,45 @@ func TestATurnPastItsBoundIsCutAndListedAgain(t *testing.T) {
 		t.Errorf("the home counted %d of the repository's turns failed, want the turns past their bound cut", got)
 	}
 }
+
+// lateReads is an estate whose git reads answer only once their turn's context
+// has ended, and then answer as the estate does.
+type lateReads struct{ *estate }
+
+func (l lateReads) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	<-ctx.Done()
+	return l.estate.GitRead(context.WithoutCancel(ctx), q)
+}
+
+// A TURN WHOSE WORK FINISHES PAST ITS BOUND DID IT: a repository's turn whose
+// facts read answers only once its one Backstop has ended, and whose work then
+// finishes, the facts recorded, is counted `worked`. Counted `cut`, it would
+// say the rest of its work is listed again by the next pass when none is left,
+// and a home whose turns all ran a little long would count none worked (#826).
+//
+// Mutation: count a turn cut whenever its bound has ended, whatever its work
+// answered, and this turn is counted cut, red.
+func TestATurnWhoseWorkFinishesPastItsBoundDidIt(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+		Touched: []string{"a.go"}})
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	_, rec := loopOver(t, home.Options{Chart: noChart,
+		Estate: lateReads{e}, Placement: asNode{placement: p, node: "node-a"},
+		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+		Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2)}, 50*time.Millisecond)
+	e.waitDone(t, repoA, 10*time.Second)
+	// COUNTED AS THE TURN ENDS, after the write that emptied its list.
+	waitTurns(t, rec, 1)
+	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
+		"outcome": "cut"}); got != 0 {
+		t.Errorf("the home counted %d of the repository's turns cut, want the turn whose work finished past "+
+			"its bound worked", got)
+	}
+	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
+		"outcome": "worked"}); got == 0 {
+		t.Errorf("the home counted none of the repository's turns worked, want the turn whose work finished " +
+			"past its bound")
+	}
+}

@@ -1085,6 +1085,20 @@ func (c *cluster) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 	return m.router.Load().Code().PushOutcome(ctx, q)
 }
 
+// Queued is how many proposals wait in repoID's queue across the members'
+// committers — the repository's committer holds them, and a member that
+// commits none of it holds none — and none on a killed member, which runs
+// no committer (codetest.Fleet).
+func (c *cluster) Queued(repoID string) int {
+	n := 0
+	for _, m := range c.members {
+		if committer := m.data.Served().Committer; committer != nil {
+			n += committer.Queued(repoID)
+		}
+	}
+	return n
+}
+
 // Expunge is an expunge proposal asked through the first running member's
 // router — of the repository's committer first, its runner-up after — as a
 // member's compactor asks its begins and commits (codetest.Fleet).

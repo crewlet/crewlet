@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -442,8 +443,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// to the epoch's code.scratch — and decided nowhere on a node
 				// confirmed behind the company's configuration, since every
 				// kind's "who may" reads the chart (Reconciler.Admits through
-				// SetAdmits).
+				// SetAdmits). A push mirror set as a person's seat is held to
+				// the person using Gitlet, composed as the requester ceiling
+				// composes a person (turnRequesters, ADR-0110).
 				SeatRules: e.codeSeatRules, Current: e.admits, Policy: e.codeLifecyclePolicy,
+				People: turnRequesters{engine: e},
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}
@@ -477,11 +481,14 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// conversation of on the same node: the same epoch's chart
 			// a reviewer and a seat are judged by, the same posture gate
 			// and the same retention its repo_deleted sentence names — and
-			// the same event stream a review it landed is announced on.
+			// the same event stream a review it landed is announced on. A
+			// person an ask names is asked only where they use Gitlet,
+			// composed as the requester ceiling composes a person
+			// (turnRequesters, ADR-0109 and ADR-0110).
 			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
-				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, People: turnRequesters{engine: e},
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)
@@ -1222,10 +1229,16 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		if !e.joins(ctx, translator.Source().Group) {
 			continue
 		}
+		// AND THE QUEUE'S DEAD-LETTER STREAM, where the feed keeps a record
+		// it handed back for an hour and its start replays what it kept,
+		// through the ledger that accounts for every entry a replay drops,
+		// so the alarm reading never counts one as a lost wake
+		// (feeddeadletters.go).
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 			Metrics: e.metrics, Objectives: e.objectives,
+			DeadLetters: e.feedDeadLetters(),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
@@ -1288,7 +1301,8 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 }
 
 // nativeParsers is what the engine's own sources contribute to the inbound
-// edge: the native backends' parsers, and the alarms' (internal/alarmwake).
+// edge: the native backends' parsers, the alarms' (internal/alarmwake) and the
+// access reviews' (internal/accessreview).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
 // company-derived input is the org chart — the native backends' LEAD MAP, the
@@ -1307,6 +1321,11 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		Granted: orgchart.GrantedSeats(c.Org, authz.SeatGrantHealth),
 	})}
 	prompts := []notify.Prompt{alarmwake.Prompt{}}
+	// THE ACCESS REVIEWS, on every node too: a review names its seat, and
+	// the roster the delivery is routed against is all it reads
+	// (internal/accessreview).
+	parsers = append(parsers, accessreview.Parser{})
+	prompts = append(prompts, accessreview.Prompt{})
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
@@ -1953,6 +1972,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 // as one party.
 type trackerWriter interface {
 	builtin.WorkWriter
+	builtin.AskResolver
 	builtin.ProjectWriter
 	builtin.WorkDepender
 	builtin.WorkMerger

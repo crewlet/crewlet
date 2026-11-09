@@ -8,6 +8,11 @@ and the packs it holds — is replicated state every data node keeps whole, and
 the bytes of each push are one object in the [object store](object-store.md)
 the whole fleet shares.
 
+Using it is a permission, as using Worklet is: a person, a token or a service
+account reaches a repository only while it holds `gitlet`, the Gitlet
+permission, through every door — the dashboard, git and the code tools alike
+([Who may read and push](#who-may-read-and-push)).
+
 Gitlet is not exclusive. The [GitHub](../integrations/github.md) and
 [GitLab](../integrations/gitlab.md) integrations keep working beside it, and a
 company may host some repositories in Gitlet and keep others on a vendor.
@@ -56,8 +61,8 @@ readiness](#merge-readiness)).
 
 Every record about a change says **whom it concerns**, and that is who hears
 of it: a seat is woken from the code log itself, as it is woken about a work
-item or a page, and a person finds a notice in their inbox ([Who a change
-wakes](#who-a-change-wakes)). Seats, and a person's own assistant, open,
+item or a page, and a person holding the Gitlet permission finds a notice in
+their inbox ([Who a change wakes](#who-a-change-wakes)). Seats, and a person's own assistant, open,
 review and answer changes through the [code
 tools](../guides/tools-and-mcp.md#the-companys-code); a person reviews one on
 its page in the dashboard's [Gitlet
@@ -135,8 +140,9 @@ code:
   does have.
 - **`visibility`** — which **seats** may read it: `company` (unset), every
   seat, or `unit`, only the seats the chart relates to its owner (see
-  [Visibility](#visibility)). It narrows seats and nobody else: a person reads
-  every repository whatever it says. Any other value refuses the revision.
+  [Visibility](#visibility)). It narrows seats and nobody else: a person
+  holding the Gitlet permission reads every repository whatever it says, and
+  one without it reads none. Any other value refuses the revision.
 - **`search`** — how code search reads it: `indexed` (unset), from an index of
   its default branch, which a search across the company's repositories reads
   as well as one naming the repository; or `grep`, with git grep over a copy,
@@ -576,7 +582,9 @@ a scratch repository keeps its seat's handle, and a project stays one label,
 since a project renamed to `alice.web` would read as seat `alice`'s own and
 squat the name `alice` would create.
 
-**Who may.** A person maintains every repository a tool made. A seat may what
+**Who may.** A person holding the Gitlet permission maintains every repository
+a tool made, and one without it reaches none ([Who may read and
+push](#who-may-read-and-push)). A seat may what
 its [grant](#who-may-read-and-push) on the repository maintains: the owning
 unit's effective lead at `full_access` a project, and the seat a scratch
 repository belongs to its own. A settings change is judged as the repository
@@ -788,10 +796,27 @@ writer there that is not the mirror is undone within the interval.
 **It pushes as a seat, never as a bot.** `mirror_to.as` names the seat whose own
 identity at the other host the push carries: the token the mirror's
 `credential` variable holds is that seat's own token there. The seat must read
-the repository (a person's seat reads every one, an agent's what its grant on
-the repository reads), and the home asks again before every push, against the
-chart it holds then, so a revision that takes the seat's read away stops the
-mirror rather than letting it publish what its seat can no longer see.
+the repository. An agent's seat reads what its grant on the repository reads.
+A person's seat reads every one only while the person holding it uses Gitlet:
+a seat nobody holds, one held by a person who may not act and one held by a
+person not given the Gitlet permission read none, since a mirror pushing as
+them would publish the company's code under an identity the company withheld
+it from
+([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+A person's create and a settings change that sets the mirror ask the identity
+directory before they are decided, and are refused for such a seat
+(`mirror_to.as: nobody holding <seat> uses Gitlet now …`, saying an
+administrator gives them Gitlet or the mirror names a seat that reads the
+repository); a directory that cannot answer decides nothing. A repository `code.repos`
+declares is judged on the chart alone when its revision is checked, since a
+configuration reads no identity directory, so whether its person uses Gitlet
+is judged at push time only. The home asks both again before every push, against the chart
+it holds and the directory as it answers then, so a revision that takes the
+seat's read away, or an administrator who takes the person's Gitlet away,
+stops the mirror rather than letting it publish what its seat can no longer
+see: the attempt fails, and a mirror not brought level for half an hour raises
+`code_mirror_failing`. A directory that cannot answer fails the attempt too,
+and the next attempt asks again.
 
 **Box commit trailers travel as they are.** A commit a coding box made carries
 the `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item` trailers its box's
@@ -1945,7 +1970,8 @@ behind their batches and contend with every push to the repository.
   dismissal of a finding it raised, its resolution of a thread it started and
   its ask for review as an author among them. Those rules admit a writer by
   what it did on the change, which outlives its standing on the repository; a
-  person maintains every repository and is never refused so.
+  person holding the Gitlet permission maintains every repository and is never
+  refused so, and one without it is refused before any of this is asked.
 - **A table is written by one subject's records.** The repository's records
   keep the change's row, its body, its authors and its revisions; the change's
   keep its conversation's tables:
@@ -2009,11 +2035,22 @@ seat they hold; which is which is read off the chart.
 
 - **Who may ask:** an author of the change, a principal that reviews the
   repository (`review`, `write` or `maintain` — see [Who may read and
-  push](#who-may-read-and-push)), and any person.
-- **Who may be asked:** a person, always; a seat only where the chart lets it
-  review the repository, and never an author of the change, whose review of
-  their own change would count for nothing. A seat that may not is refused
-  `not_permitted`, the sentence naming what it holds and what would admit it.
+  push](#who-may-read-and-push)), and any person holding the Gitlet
+  permission.
+- **Who may be asked:** a person only where they hold the Gitlet permission,
+  since reading a change is reading its repository's code; a seat only where
+  the chart lets it review the repository, and never an author of the change,
+  whose review of their own change would count for nothing. A seat that may
+  not is refused `not_permitted`, the sentence naming what it holds and what
+  would admit it. A person who may not is refused `not_permitted` too — a
+  human seat nobody holds, a person who may not act, or one not given the
+  app: `"<seat>" has no Gitlet permission, so they cannot read <change> and
+  are asked to review none of it: an administrator gives them Gitlet first`.
+  Whether each person the ask names uses Gitlet is read from the identity
+  directory before the ask is decided; a directory that cannot say answers the
+  ask `busy`, to be sent again, never as a refusal of somebody who may well
+  hold the app
+  ([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
 - **A change asks at most 32 reviewers at once.** Only an ask still waiting
   counts — not a withdrawn one, one the reviewer's review answered, or one
   the change's end ended — and an ask past the bound is refused
@@ -2427,9 +2464,12 @@ all its repositories, or past about 60 MiB of them — so:
   passed, or failed, a timed-out run included — since a seat that could rerun
   a failure would re-roll a flaky test until it passed; and `not_permitted`
   unless the writer's own chart grants it write on the repository, or it is an
-  author of the change the attempt checks — in a turn somebody woke, held to
-  them too, the seat's own work excepted. A check a CI reports is refused
-  `native_check`: its CI runs it again;
+  author of the change the attempt checks — in a turn a colleague seat woke,
+  held to that colleague too, the seat's own work excepted, and in one a
+  stranger, a person who may not act or a person without the Gitlet
+  permission woke, refused before it is asked
+  ([Writes made for somebody else](#writes-made-for-somebody-else)). A check a
+  CI reports is refused `native_check`: its CI runs it again;
 - **a report is a person's CI's, onto the same rows**: `code_report_check`
   records `running` as the attempt's claim and how it ended as its ending, the
   row placed `external` and naming the person whose CI sent it, so a check the
@@ -2437,8 +2477,9 @@ all its repositories, or past about 60 MiB of them — so:
   which is how the writer tells a CI's check from the engine's: a name the
   engine queued at that commit is refused `native_check`, one check being one
   runner's or one CI's and never both — and an ending sent again is answered
-  from the row. A seat's report, and a token bound to nobody's, is refused
-  before it is asked ([External CI](../guides/gitlet.md#external-ci)).
+  from the row. A seat's report, a token bound to nobody's, and one through a
+  credential without the Gitlet permission are refused before it is asked
+  ([External CI](../guides/gitlet.md#external-ci)).
 
 Where two nodes both believe they decide for a repository — the committing
 node gone quiet, its runner-up asked — each may append, and the
@@ -4307,6 +4348,16 @@ no deploy token — because the token is already how the engine knows who a
 person is, and a second identity system would be one more thing to revoke and
 audit ([ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person-reaches-git-with-their-own-bound-token.md)).
 
+- **It takes the Gitlet permission.** A person reaches git only while they hold
+  `gitlet` (an administrator holds it through `admin`), and their token only
+  while it carries it too: a token is held to the grants it was minted with as
+  well as to the person, so one minted without `gitlet` — every token minted
+  before the permission existed, unless it carries `admin` — is minted again.
+  A Tier A token needs `gitlet` in its `grants`, and a service account in its
+  own. Without it, every request is refused `403` before any repository is
+  read, and git prints `remote: You don't have the access this needs (Gitlet).
+  Ask an admin for it (unauthorized)`
+  ([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
 - **A credential acting as a human seat pushes as that person** — every
   person holds one ([humans in the org](humans-in-the-org.md)), so a person's
   own machine token pushes as them. That is the same principal the
@@ -4404,8 +4455,12 @@ only reads a repository can ask a seat to change it on the seat's own branch,
 `seats/<handle>/…`, never on `main` or a `release/*` branch the seat itself
 could move. The seat's own work — the branches under its own namespace, and
 every branch of a repository it owns, such as its scratch repositories — stays
-its own, which anybody who can message it steers. A run a person asked for, or nobody, is bounded by its seat
-alone: a person maintains every repository.
+its own, which the colleague who woke it steers. A run a person holding the
+Gitlet permission asked for, or nobody, is bounded by its seat alone: such a
+person maintains every repository. A run a stranger, a person who may not act
+or a person without the Gitlet permission woke is given no repository at all:
+a launch naming one is refused, saying why, before any box exists ([Reads made
+for somebody else](#reads-made-for-somebody-else)).
 
 **The admission**, in this order, each refusal in the one line git prints:
 
@@ -4664,11 +4719,30 @@ computed every time it is asked, from the repository's row and the chart the
 deciding node runs, by one rule
 ([ADR-0088](https://github.com/crewlet/crewlet/blob/main/adr/0088-a-repository-grant-is-derived-from-the-chart.md)).
 
+**Reaching any repository takes the Gitlet permission first.** `gitlet` is one
+of the [apps](identity-and-access.md#access-admin-and-one-permission-per-app):
+an administrator holds it through `admin`, an agent seat holds it as it holds
+every app, and a person, a personal token, a Tier A token and a service account
+hold it when they are given it. Every door asks it before any repository is
+read — the dashboard, the `/gitlet/` reads and the `code_*` questions, git over
+`/git/`, every code tool and the code half of the inbox — and refuses a
+principal without it `403 unauthorized`, naming `gitlet`, so no answer, count
+or line of git tells them what a repository holds
+([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+Wherever this page says what a person may do, it means a person holding
+`gitlet`. Behind the permission, the table decides:
+
 | Who | What they may do |
 |---|---|
-| A person — a credential acting as their human seat | **maintain** every repository: create, update, force and delete any branch, create and delete tags |
-| A credential bound to no seat — a Tier A token or a service account | **read** every repository: fetch and clone, never push |
+| A person holding `gitlet` — a credential acting as their human seat | **maintain** every repository: create, update, force and delete any branch, create and delete tags |
+| A credential bound to no seat holding `gitlet` — a Tier A token or a service account | **read** every repository: fetch and clone, never push |
 | A seat | the **lesser** of its tier and its relation to the repository, below |
+| Anybody else — a person, a token or a service account without `gitlet` | **nothing**: refused at the door, before any repository is read |
+
+`code.access` caps a seat and never a person, and the permission gates persons
+and credentials acting as themselves and never a seat. Who read a repository
+([Who read it](#who-read-it)), the Gitlet nodes' cache report (`code_status`)
+and Settings › Gitlet stay an administrator's.
 
 A seat's **tier** is its `role.code.access` and caps what it may do anywhere:
 `read_only` reads, `review` reads and reviews, `full_access` maintains; a seat
@@ -4735,18 +4809,23 @@ seat the chart relates to the repository in no other way — and nothing else:
   company document, so asking for one that does not exist is still answered
   "not found" — and what it holds is.
 
-**Visibility narrows seats only.** A person reads every repository whatever it
-says, and so does a credential bound to no seat: the people who run the company
-are never shut out of its code by a setting that exists to keep one team's
-seats out of another's. A seat's own branches are only on the repositories it
+**Visibility narrows seats only.** A person holding the Gitlet permission reads
+every repository whatever it says, and so does a credential bound to no seat
+that holds it: the people who run the company are never shut out of its code
+by a setting that exists to keep one team's seats out of another's. What keeps
+a person off the company's code is the permission, never a visibility: a
+company that keeps a contractor off its source leaves **Gitlet** unticked for
+them, as it leaves Worklet unticked to keep them off its tracker, and code only
+some seats may read goes in its own repository with `visibility: unit`. A
+seat's own branches are only on the repositories it
 may read, so a `full_access` seat outside the unit has none on a `unit`
 repository. What does read a `unit` repository's contents — a person, a
 credential or a seat — is recorded, for an admin to ask
 ([Who read it](#who-read-it)).
 
 A `unit` repository owned by a unit with **no lead** — neither its own nor one
-above it — is read only by persons and the unit's members, and `crewlet
-validate` warns about it at its `visibility`. Changing a repository's
+above it — is read only by persons holding the Gitlet permission and the
+unit's members, and `crewlet validate` warns about it at its `visibility`. Changing a repository's
 visibility is a settings change like any other: one record at its activation,
 and every listing and read after it judged by the new one.
 
@@ -4859,10 +4938,12 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 | The turn was woken by | What the seat reads |
 |---|---|
 | nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
-| a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
+| a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a person of the company or a credential acting as no seat without the Gitlet permission, or a person on a human seat no person in the directory holds | nothing: they could read no repository themselves, so every code tool is refused for them before anything is read, and the seat is told an administrator can give them Gitlet |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
-| somebody the company does not know — a chat sender no seat or person maps to — or a credential acting as no seat, such as an automation's change on a work item or a page | nothing |
+| a credential acting as no seat that holds the Gitlet permission, such as an automation's change on a work item or a page | what its own grant allows: such a credential reads every repository itself |
+| somebody the company does not know — a chat sender no seat or person maps to — or a credential the node running the turn cannot place | nothing |
 
 A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
@@ -4879,8 +4960,12 @@ home finds by walking the target's moves back from the tip, since a push on
 top of the merge may have moved the target since; the landing names whoever
 made that push, and the change's other authors told it merged read for that
 pusher's grant too. A
-credential acting as no seat holds no seat a ceiling could be decided for, so
-the turn its change wakes reads nothing, as a stranger's does. The seat's own
+credential acting as no seat is the requester by its own login: it reads every
+repository itself and pushes to none, so the turn its change wakes reads as the
+seat may and writes only the seat's own work
+([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+One the node running the turn cannot place is a stranger. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
 whoever speaks in it next is — a colleague or a person as above, and somebody
 the company does not know as a stranger.
@@ -4890,16 +4975,21 @@ The same holds for the repositories a seat with the
 `code_status`: its hot list and the repository it names are read as the code
 tools read them, so in a colleague's turn the hot list leaves out what the
 colleague may not read as well, and a stranger's turn is answered nothing. Who
-woke the turn is asked only what a code read asks of them — the deployment's
-view beside the repositories is the seat's own grant, read for anybody of the
-company who may act. So is `fleet_health`'s, which reads no repository: the
-last two rows of the table above are answered nothing by either tool, and
-every other row the seat's whole view
+woke the turn is asked only what a code read asks of them — the Gitlet
+permission, and for a colleague its grant — and the deployment's view beside
+the repositories is the seat's own grant, read for anybody of the company who
+may act and uses Gitlet. `fleet_health`, which reads no repository, asks only
+that they may act: the last two rows of the table above are answered nothing
+by either tool, a person without the Gitlet permission nothing by
+`code_status` and the seat's whole view by `fleet_health`, and every other row
+the seat's whole view by both
 ([The health tools](../guides/fleet.md#the-health-tools)).
 
 And for an [executor](#coding-boxes) the seat launches in such a turn: its
-repositories are resolved for whoever woke it, so a stranger's turn is given
-none and a colleague's is given none that colleague could not read; the run's
+repositories are resolved for whoever woke it, so a turn a stranger, a person
+who may not act or a person without the Gitlet permission woke is given none —
+a launch naming one is refused, saying why, before any box exists — and a
+colleague's is given none that colleague could not read; the run's
 row names the colleague, and its box is held to the colleague's grant on every
 request it makes — every fetch, and every push outside the seat's own work —
 its own namespace and the repositories it owns. A launch asking to `write` a
@@ -4921,17 +5011,33 @@ calls them in no turn and reads for nobody but its caller. The ceiling bounds
 and never grants: what the seat reads is still its own read, judged by its
 own grant.
 
-**The ceiling holds the turn somebody woke, and no turn after it.** Each turn
-is decided for whoever woke that turn. A colleague the seat asks with
-`a2a_ask` answers in a turn the asking seat woke, so it reads for the asking
-seat and never for whoever woke the asker; the answer wakes the asking seat in
-a turn of its own work, which nothing beyond its own grant bounds; and a work
-item the seat files for itself is worked in a turn of its own too. Nor does
-the ceiling reach what a seat already holds: its memory, or what it read in a
-turn nobody woke. What a seat was refused for somebody can therefore still
-reach them through a colleague's answer or the seat's own memory: the ceiling
-decides what a turn reads for somebody, not what a seat may go on to tell
-them.
+The repository's grant is the relation half of the ceiling. The app half holds
+every tool alike: in a turn somebody woke, an agent uses only the apps that
+somebody uses ([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+Every code tool names `gitlet`, and the app is decided first, before any
+repository is read
+([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)):
+the rows of the table above that read nothing are refused at the app, and the
+grant bounds a code read only for a colleague seat.
+
+**The ceiling crosses a colleague's ask, and the answer back.** A colleague
+the seat asks with `a2a_ask` answers in a turn worked for whoever the asking
+turn worked for (the person, the credential at the apps it was held to, or
+the stranger), which the engine composes from the asking turn's own ceiling
+and never from the ask's words. The colleague's node composes them again, so
+a revocation since the ask applies and a credential is narrowed again, never
+widened. The answer wakes the asking seat in a turn worked for them too, and a
+chain of asks carries them end to end
+([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+**What a seat writes that wakes another seat does not carry them yet**: a
+work item it files or assigns, a comment, a page or a mention in it, and a
+Chatlet message each wake their seat in a turn worked for the seat that
+wrote them (crewlet#798's fourth piece). Nor does the ceiling reach what a
+seat already holds: its memory, or what it read in a turn nobody woke. What a
+seat was refused for somebody can therefore still reach them through such a
+write or the seat's own memory: the ceiling decides what a turn reads for
+somebody, not what a seat may go on to tell them.
 
 ### Writes made for somebody else
 
@@ -4946,21 +5052,32 @@ or its protections — exactly as they would be decided asking it themselves.
 | The turn was woken by | What the seat changes |
 |---|---|
 | nobody, or the outcome of its own act | what its own grant allows |
-| a person of the company | what its own grant allows: a person maintains every repository |
+| a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository |
 | a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
-| a person who may not act in the company now, or somebody the company does not know | its own work, and nothing else |
+| a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else |
+| a person without the Gitlet permission or on a human seat no person in the directory holds, a person who may not act in the company now, a credential without the Gitlet permission, or somebody the company does not know | **nothing**, its own work included |
 
-**Its own work is steered by whoever woke it**, as an agent's own artifact is:
-anybody who can message a seat may ask it to fix its own work. That is every
-branch under its own namespace (`seats/<handle>/`), every branch of a
-repository the seat owns — its scratch repositories, and a project a person
-handed it — creating its own scratch repository, and changing the settings or
-the protections of a repository it owns. **What discloses, hands on or retires
-a repository is never steered**, as sharing, transferring and trashing an
-artifact are not: changing its visibility or its owner, renaming, archiving,
-deleting or restoring it are decided for whoever woke the turn like any other
-write. A colleague seat bounds every read the write makes too, so a write tool
-shows nothing of a repository the colleague could not read.
+**No write is made for somebody who uses no Gitlet.** A stranger, a person who
+may not act, and a person or a credential without the permission use no app,
+so every code write tool is refused for them before a write is formed: the app
+is decided before the rule that lets a requester steer a seat's own work, so
+not even the seat's own namespace is changed for them, and the refusal tells
+the seat why
+([ADR-0110](https://github.com/crewlet/crewlet/blob/main/adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+
+**Its own work is steered by whoever woke it and uses Gitlet**, as an agent's
+own artifact is: a colleague seat whose grant would not reach the work, or a
+credential that holds the permission and pushes to no repository itself, may
+still ask the seat to fix its own. That is every branch under its own
+namespace (`seats/<handle>/`), every branch of a repository the seat owns —
+its scratch repositories, and a project a person handed it — creating its own
+scratch repository, and changing the settings or the protections of a
+repository it owns. **What discloses, hands on or retires a repository is never
+steered**, as sharing, transferring and trashing an artifact are not: changing
+its visibility or its owner, renaming, archiving, deleting or restoring it are
+decided for whoever woke the turn like any other write. A colleague seat
+bounds every read the write makes too, so a write tool shows nothing of a
+repository the colleague could not read.
 
 The write's ceiling is judged where the write is decided — the Gitlet node that
 builds an [engine-built commit](#engine-built-commits) and the data node that
@@ -4979,11 +5096,12 @@ commenting, and answering findings. For a colleague seat the question is the
 `review` for a review and `read` for every other write. Who owns the change, who
 may push its source branch and who wrote it are the seat's own to meet, and
 judged for the seat alone. That is what lets a change's author ask a seat to
-review the change, which its author may never review itself. For a stranger,
-or a person who may not act in the company now, a seat writes nothing of a
-change except its own work: a change it owns, an open of a branch under its own
-namespace, and any change of a repository it owns. Every read a change tool
-makes is held to a colleague as every code read is. **A change's
+review the change, which its author may never review itself. Its own work —
+a change it owns, an open of a branch under its own namespace, and any change
+of a repository it owns — is steered by a colleague as above. For a stranger,
+a person who may not act in the company now or a person without the Gitlet
+permission, a seat writes nothing of a change, its own included. Every read a
+change tool makes is held to a colleague as every code read is. **A change's
 [rebase](#a-change-rebased) is a branch write**, so the Gitlet node that builds it
 holds it as it holds every one: for a colleague seat, a source branch the
 colleague could push, or the seat's own work. **A change's
@@ -4993,9 +5111,10 @@ to the merge authority the colleague holds itself into the target (its
 gate's `merge_by` and the company's floor, by the one rule the change's
 readiness judges that term by, judged for the colleague from the Gitlet node's
 own chart and the gate the merge reads anyway, the change read once), and to
-a repository the colleague may read, refused `not_permitted` otherwise; for a
-stranger, or a person who may not act in the company now, a seat merges
-nothing but into a branch of its own namespace or of a repository it owns.
+a repository the colleague may read, refused `not_permitted` otherwise, but
+into a branch of the seat's own namespace or of a repository it owns; for a
+stranger, a person who may not act in the company now or a person without the
+Gitlet permission, a seat merges nothing.
 
 ---
 
@@ -5072,8 +5191,10 @@ to read instead. A binary file is answered by its size, as git calls one
 binary: a NUL in its first 8 000 bytes.
 
 **Who may read** is judged by the Gitlet node that answers, from its own chart,
-by the rules of [Who may read and push](#who-may-read-and-push): a person reads
-every repository, and a seat what its tier and its relation allow, so a
+by the rules of [Who may read and push](#who-may-read-and-push): a person
+holding the Gitlet permission reads every repository — one without it is
+refused before the read reaches a Gitlet node — and a seat what its tier and
+its relation allow, so a
 `visibility: unit` repository is refused to a seat outside the unit,
 `not_permitted`, naming the visibility. A read a seat makes for the colleague
 whose ask woke its turn is held to the colleague's grant as well, from the same
@@ -6962,7 +7083,11 @@ chart holds, in the snapshot, and not the asker's list beside them.
   them, each named by its record and its change (the `record_id` a mark
   names), a
   change's page says whom its records reached, and each committed batch tells
-  the dashboards watching an inbox that it moved. A person's notice is kept
+  the dashboards watching an inbox that it moved. The inbox's code half is the
+  Gitlet permission's, as its tracker half is Worklet's: a reader without it is
+  listed and counted none of these notices, marks none, and is pushed no frame
+  that one arrived, though the rows are written all the same and are listed
+  once an administrator gives them Gitlet. A person's notice is kept
   the company's `inbox.retention_days`, a seat's 30 days
   ([Retention](../guides/retention.md#old-data-is-not-cold-data)); a seat is
   woken from the record itself, never from its row.
@@ -7001,8 +7126,9 @@ each wake from the record's own routing, on any node — never from a row, and
 never from the goroutine of the node that decided the record, so a node that
 stops after its record committed loses no wake.
 
-- **Only seats are woken.** A person reads their code notices in their inbox,
-  from the rows above, and is never woken as a seat is; a record that tells
+- **Only seats are woken.** A person holding the Gitlet permission reads their
+  code notices in their inbox, from the rows above, and is never woken as a
+  seat is; a record that tells
   only persons, or only whoever made it, is no wake at all.
 - **A seat the company no longer employs is not woken**, and keeps its row:
   the chart is asked at the wake, so a reviewer who left after being asked
@@ -8136,6 +8262,7 @@ words, since git does not read the header.
 | What happened | What git prints | What to do |
 |---|---|---|
 | No credential, or a wrong one | git asks for one (a 401 challenge) | Give your token as the password. |
+| You, or the token you gave, do not hold the Gitlet permission | `remote: You don't have the access this needs (Gitlet). Ask an admin for it (unauthorized)` (403), before any repository is read | Ask an administrator to give you **Gitlet** (Settings › People). A token carries the grants it was minted with, so one minted without `gitlet` stays without it: mint a new one. A Tier A token needs `gitlet` in its `grants`. |
 | Your token acts as a seat the org chart no longer holds as a human seat | `seat "<handle>" isn't in the org chart anymore`, or `seat "<handle>" is a "agent" seat now, and only a "human" seat can be held` (403) | Ask an admin to move you to a human seat; signing in again changes nothing. |
 | A session that may only enrol a second factor (where `api.auth.totp` is `required`) | `This company requires two-step verification. Set it up (POST /auth/totp) before you do anything else.` (403) | Enrol an authenticator in the dashboard, then push or fetch with your own token. |
 | The node cannot tell who your token is — it cannot read its identity estate or the org chart, or is behind on identity changes | `this node cannot tell who this credential is right now: retry in 2 s, or against another node` (503) | Retry, or against another node. |

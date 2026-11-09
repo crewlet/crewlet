@@ -59,9 +59,10 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 			append([]Grant{GrantAdmin}, Apps...)},
 		{"admin beside an app it already includes",
 			[]Grant{GrantDoclet, GrantAdmin},
-			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet}},
+			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet, GrantGitlet}},
 		{"an unknown name is carried through", []Grant{future, GrantAdmin},
-			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}},
+			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet,
+				GrantGitlet}},
 		{"duplicates in the row stay as given", []Grant{GrantWorklet, GrantWorklet},
 			[]Grant{GrantWorklet, GrantWorklet}},
 		// THE CONTROL: no admin, nothing added.
@@ -91,6 +92,30 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 	}
 }
 
+// GITLET IS THE LAST APP, AND EVERY APP BEFORE IT KEEPS ITS PLACE.
+//
+// The order of [Apps] is what [Expand] stores in a row and what every list of
+// an administrator's permissions reads in, so an app is appended and never
+// inserted (ADR-0110 appended gitlet after chatlet, as ADR-0033's amendment
+// appended chatlet after artifacts). The prefix is pinned by value rather than
+// read off the list, because a list compared with itself cannot move.
+// Mutation: insert gitlet before chatlet and the order goes red; drop it from
+// AllGrants and the vocabulary does.
+func TestGitletIsTheLastApp(t *testing.T) {
+	t.Parallel()
+	want := []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+	if !slices.Equal(Apps, want) {
+		t.Fatalf("Apps = %v, want %v: an app moved, so every row Expand stored reads in "+
+			"another order", Apps, want)
+	}
+	if GrantGitlet != "gitlet" || !GrantGitlet.Valid() || !GrantGitlet.IsApp() {
+		t.Errorf("gitlet is not a valid app: %q", GrantGitlet)
+	}
+	if got := AllGrants[len(AllGrants)-1]; got != GrantGitlet {
+		t.Errorf("the vocabulary ends with %q, want gitlet appended last", got)
+	}
+}
+
 // EVERY PERMISSION IS ONE LOWERCASE WORD.
 //
 // These strings land in rows, in Tier A files and on the dashboard's picker,
@@ -109,6 +134,65 @@ func TestEveryGrantIsOneLowercaseWord(t *testing.T) {
 				t.Errorf("%q is not one lowercase word", g)
 				break
 			}
+		}
+	}
+}
+
+// WHAT A REQUESTER USES IS APPS, AND NEVER ADMIN: admin includes every app, and
+// running the company is nothing a turn may do for somebody (ADR-0109). A name
+// this build does not know grants nothing, and the answer never aliases the
+// row it was read from.
+func TestAppsOfIsEveryAppAdminIncludesAndNeverAdmin(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		held []Grant
+		want []Grant
+	}{
+		{nil, []Grant{}},
+		{[]Grant{GrantAdmin}, Apps},
+		{[]Grant{GrantDoclet, "teleport", GrantWorklet}, []Grant{GrantDoclet, GrantWorklet}},
+		{[]Grant{GrantChatlet, GrantAdmin},
+			[]Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts, GrantGitlet}},
+	} {
+		held := slices.Clone(c.held)
+		got := AppsOf(held)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("AppsOf(%v) = %v, want %v", c.held, got, c.want)
+		}
+		if slices.Contains(got, GrantAdmin) {
+			t.Errorf("AppsOf(%v) carries admin", c.held)
+		}
+		if len(got) > 0 {
+			got[0] = "edited"
+			if !slices.Equal(held, c.held) {
+				t.Errorf("AppsOf(%v) aliases the row it read: an edit to the answer "+
+					"changed it to %v", c.held, held)
+			}
+		}
+	}
+}
+
+// A WRITE RECORDS APPS FOR A CREDENTIAL ACTING AS NO SEAT, AND FOR NOBODY ELSE:
+// a seat's or a person's record names the seat, whose holder the node running
+// a turn reads, and apps on it would be a second, stale answer to that.
+func TestActorAppsAreACredentialsAlone(t *testing.T) {
+	t.Parallel()
+	every := []Grant{GrantAdmin}
+	for _, c := range []struct {
+		name string
+		p    Principal
+		want []Grant
+	}{
+		{"a Tier A token", Principal{Kind: KindMachine, Login: TokenLogin("ci"),
+			Grants: []Grant{GrantWorklet}}, []Grant{GrantWorklet}},
+		{"an admin token", Principal{Kind: KindMachine, Login: TokenLogin("ops"), Grants: every}, Apps},
+		{"a person on their seat", Principal{Kind: KindPerson, Login: "ana", Seat: "ana",
+			Grants: every}, nil},
+		{"an agent seat", Principal{Kind: KindSeat, Seat: "swe", Grants: every}, nil},
+		{"the engine", Principal{Kind: KindEngine, Login: "node-a", Grants: every}, nil},
+	} {
+		if got := ActorApps(c.p); !slices.Equal(got, c.want) {
+			t.Errorf("%s records apps %v, want %v", c.name, got, c.want)
 		}
 	}
 }

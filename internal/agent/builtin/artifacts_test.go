@@ -47,7 +47,7 @@ func newArtifactRig(t *testing.T, chart artifactChart, req requesters,
 		tune(&deps)
 	}
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Artifacts: deps,
+	if _, err := builtin.Register(reg, builtin.Deps{Artifacts: deps, Requesters: deps.Requesters,
 		Authorize: builtin.Decide(chart)}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -1215,7 +1215,8 @@ func TestALongPageAColleagueWroteIsCondensedUnlessTheSourceIsAsked(t *testing.T)
 	model := &rewriter{answer: "a review table of the release, one row per service"}
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{Artifacts: artifactDeps(f, chart, requesters{}),
-		Compact: compact.New(model, compact.NewCache()), Authorize: builtin.Decide(chart)}); err != nil {
+		Requesters: requesters{}, Compact: compact.New(model, compact.NewCache()),
+		Authorize: builtin.Decide(chart)}); err != nil {
 		t.Fatal(err)
 	}
 	r := artifactRig{f: f, reg: reg}

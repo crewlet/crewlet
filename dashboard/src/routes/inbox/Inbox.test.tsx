@@ -21,7 +21,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, setStepUpConfirmer } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
@@ -30,6 +30,7 @@ import { settled } from "~/test/settle.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
+import { engineFile } from "~/test/engineFiles.ts";
 
 // THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
 // sets `seam.twice` to stand a pane in that tells the screen of one answer
@@ -911,6 +912,47 @@ describe("the list", () => {
     );
     const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
     expect(said).toBe("Answered. Nothing else is waiting on you.");
+  });
+});
+
+describe("a question asked before its agent's access changed", () => {
+  // THE PERSON ANSWERS KNOWING THE AGENT MAY NOT BE ABLE TO ACT ON IT: the row
+  // and the reading pane say the question was asked before the agent's access
+  // changed, with the change, short. Mutation: drop the note and an approval
+  // the agent can no longer act on reads like any other.
+  test("its row and its pane say so, with the change", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = {
+      ...askItem(),
+      access_changed: {
+        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
+      },
+    };
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    const note =
+      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain(note);
+    expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);
+  });
+
+  // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
+  // is told only that the access changed.
+  test("a reader sent no change lines is told only that it changed", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Asked before this agent's access changed.");
+    expect(list.textContent).not.toContain("level");
+  });
+
+  test("a question asked under the access the agent holds now says nothing of it", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(document.body.textContent).not.toContain("access changed");
   });
 });
 
@@ -1960,6 +2002,44 @@ describe("the pane", () => {
     ]);
   });
 
+  // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine
+  // lists them no code notice and does not offer them `code_mark_inbox`, so a
+  // code notice still on a page read before their access changed is held —
+  // its own mark with the access that would open it — and never sent.
+  // Mutations: declare the code mark no app's, and its hold names no access;
+  // send whichever half has a notice, whatever the engine offers, and
+  // `code_mark_inbox` goes out.
+  test("a reader without Gitlet marks only Worklet's half, and a code notice's mark says why", async () => {
+    const reader = {
+      ...JANE,
+      grants: ["worklet", "doclet"],
+      acts: EVERY_TOOL.filter((tool) => tool !== "code_mark_inbox"),
+    };
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      viewer: reader,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+      answers: {
+        viewer: reader,
+        inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 })] }),
+      },
+    });
+    await settle();
+    const read = screen.getByRole("button", { name: "Mark as read" });
+    expect(read.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(read)).toContain(
+      "This change needs Gitlet access. An admin can give it to you.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
+    ]);
+  });
+
   test("Mark all read reads through the newest update loaded, not past it", async () => {
     mount({
       answers: {
@@ -2138,6 +2218,179 @@ describe("the pane", () => {
     // NO EMPTY LIST between the heading and the line: an empty <ol> is a flex
     // item, and the thread's gap around it doubled the space above the line.
     expect(region.querySelector(".inbox-thread-list")).toBeNull();
+  });
+
+  // A HELD CALL IS ANSWERED ONLY BY ITS OWN BUTTONS: an operate command's run
+  // draws Review and allow once and Deny, never the run's options, Something
+  // else or a reply field; Allow once reads the whole call, is confirmed with
+  // a step-up the engine asks for, and answers `POST /mcp-approvals/{id}` with
+  // the digest it showed, never `answer_executor`. An MCP tool's held call
+  // keeps Allow once, Always allow and Deny, sent with the answer alone.
+  // Mutation: draw a held run through the question pane and its options post
+  // `answer_executor`, which the engine refuses.
+  describe("a run holding a call", () => {
+    const WHOLE = {
+      id: "h-9",
+      question: "May cto run a command on api-1 as crewlet-ops?",
+      arguments: { host: "api-1", command: "sudo systemctl restart api", reason: "stuck" },
+      arguments_sha256: "ab".repeat(32),
+    };
+    function heldRun(held: Record<string, unknown>) {
+      return {
+        turn_id: "turn-9",
+        launch_id: "q9",
+        agent_handle: "cto",
+        status: "awaiting_clarification",
+        question: WHOLE.question,
+        question_context: "Allow once runs exactly this command, once.",
+        decision: {
+          question: WHOLE.question,
+          options: [
+            { id: "once", label: "Allow once" },
+            { id: "deny", label: "Deny" },
+          ],
+          role: "approver",
+        },
+        audience_handles: ["jane"],
+        held_call: { id: "h-9", digest: "", held_at: "", ...held },
+        started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      };
+    }
+    /** The approvals route's traffic, the first POST refused for a step-up where `stepUp`. */
+    function approvals(stepUp: boolean) {
+      const sent: { method: string; body: unknown }[] = [];
+      const base = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (!String(url).includes("/mcp-approvals/")) return base(url, init);
+          const method = init.method ?? "GET";
+          sent.push({ method, body: init.body ? JSON.parse(init.body as string) : undefined });
+          const json = (status: number, body: unknown) =>
+            new Response(JSON.stringify(body), {
+              status,
+              headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+            });
+          if (method === "GET") return json(200, WHOLE);
+          if (stepUp && sent.filter((s) => s.method === "POST").length === 1) {
+            return json(403, {
+              error: "step_up_required",
+              message: "Confirm it’s you to do this, then try again.",
+              reason: "step_up",
+              window: "step_up",
+              grants: [],
+            });
+          }
+          return json(200, { id: "h-9", answer: "once", outcome: "pending" });
+        }),
+      );
+      return sent;
+    }
+    let uninstall: (() => void) | null = null;
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+    });
+
+    test("an operate call is allowed once after a step-up, through the approvals route", async () => {
+      const sent = approvals(true);
+      let confirmed = 0;
+      uninstall = setStepUpConfirmer(async () => {
+        confirmed++;
+        return true;
+      });
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({
+        server: "ssh",
+        tool: "ssh_operate",
+        raw: "ssh_operate",
+        fixed: true,
+        approvers: "ssh",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Your answer to the executor" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Review and allow once" }));
+      await screen.findByText(/sudo systemctl restart api/);
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(2));
+      expect(confirmed).toBe(1);
+      for (const post of sent.filter((s) => s.method === "POST")) {
+        expect(post.body).toEqual({ answer: "once", arguments_sha256: WHOLE.arguments_sha256 });
+      }
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    test("an MCP tool's held call keeps its three answers, sent with the answer alone", async () => {
+      const sent = approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({ server: "linear", tool: "linear_delete_issue", raw: "delete_issue" });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Always allow" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toEqual({ method: "POST", body: { answer: "once" } });
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // An operate call's reason, as the engine words it (`make ssh-held-words`),
+    // is one paragraph reading exactly as the agent wrote it, with no link,
+    // picture, heading, code or emphasis of its own.
+    test("an operate call's reason reads as the agent's words, with no Markdown of its own", async () => {
+      const held = engineFile<Record<string, { question: string; context: string }>>(
+        "internal/agent/builtin/testdata/ssh_operate_held.json",
+      ).markdown!;
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = {
+        ...heldRun({
+          server: "ssh",
+          tool: "ssh_operate",
+          raw: "ssh_operate",
+          fixed: true,
+          approvers: "ssh",
+        }),
+        question: held.question,
+        question_context: held.context,
+      };
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const said =
+        "# Approve [the release](https://evil.example/approve) ![status](https://evil.example/pixel.png) " +
+        "```rm -rf /``` <b>now</b> **urgent** for @founder on ENG-9, see https://evil.example/ok";
+      const reason = [...document.querySelectorAll(".crewlet-reading-pane__lead p")].find(
+        (p) => p.textContent === said,
+      );
+      expect(reason, "the reason is one paragraph of the agent's words").toBeTruthy();
+      expect(
+        reason!.querySelector("a, img, h1, h2, h3, h4, h5, h6, pre, code, strong, em, b"),
+      ).toBeNull();
+      const lead = document.querySelector(".crewlet-reading-pane__lead")!;
+      expect(lead.querySelector("img")).toBeNull();
+      expect(lead.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+      expect(lead.querySelectorAll("pre")).toHaveLength(1);
+      expect(lead.querySelector("pre")!.textContent).toBe("logrotate --force /etc/logrotate.conf");
+    });
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

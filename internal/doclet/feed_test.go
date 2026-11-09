@@ -1,7 +1,11 @@
 package doclet_test
 
 import (
+	"encoding/json"
+	"errors"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -150,8 +154,12 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 	}{
 		{author("jane"), types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
 		{agent("swe"), types.NotificationWriter{Kind: iam.ActorAgent, Seat: "swe"}},
-		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator},
-			types.NotificationWriter{Kind: iam.ActorOperator}},
+		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
+		// node that took its write recorded for it (ADR-0109).
+		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator,
+			Apps: []iam.Grant{iam.GrantDoclet}},
+			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantDoclet}}},
 	} {
 		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
 			doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}); err != nil {
@@ -166,7 +174,7 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 		if wake == nil {
 			t.Fatalf("%s's mention of bob woke nobody", c.actor.Handle)
 		}
-		if got := wake.Writer; got == nil || *got != c.want {
+		if got := wake.Writer; got == nil || !reflect.DeepEqual(*got, c.want) {
 			t.Errorf("%s's comment names its writer %+v, want %+v", c.actor.Handle, got, c.want)
 		}
 	}
@@ -230,6 +238,39 @@ func TestTheLeadFallbackDropsAHandleTheCompanyNoLongerEmploys(t *testing.T) {
 		t.Errorf("a create fell back to %+v, and that handle is not a seat — "+
 			"the wake can only be reported as undeliverable somewhere that "+
 			"cannot name the container it came from", gone)
+	}
+}
+
+// A RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER ON THAT BUILD, never
+// answered "no wake".
+//
+// The page's record is real — written through the store, its frame opened —
+// and only its version is moved past what this build decodes, so the envelope
+// still reads and the rules are a newer build's. Answered "no wake", the feed
+// acknowledges it for the whole fleet and the watcher's wake is gone (#838);
+// answered with the feed's deferral, a peer on the newer build derives it.
+//
+// Mutation: answer the future-version arm with no wake, and the deferral is
+// gone.
+func TestAPageRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose", Watchers: []string{"carla"}})
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(r.lastRecord(), &raw); err != nil {
+		t.Fatalf("read the record: %v", err)
+	}
+	raw["v"] = json.RawMessage(strconv.Itoa(doclet.RecordVersion + 1))
+	future, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	_, wake, err := doclet.NewTranslator(nil).Translate(t.Context(),
+		changefeed.Record{Payload: future, Key: "k"})
+	var deferral *changefeed.Deferral
+	if wake || !errors.As(err, &deferral) || deferral.Reason != changefeed.DeferNewerRecord {
+		t.Fatalf("a newer build's page record answered wake=%v, %v; want it deferred to a "+
+			"peer on that build (%s)", wake, err, changefeed.DeferNewerRecord)
 	}
 }
 

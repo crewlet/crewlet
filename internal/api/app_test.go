@@ -390,6 +390,11 @@ func withRequired(opts api.Options) api.Options {
 	if opts.FleetBroker == nil {
 		opts.FleetBroker = &fakeFleetBroker{}
 	}
+	if opts.DeadLetters == nil {
+		// FEEDS HOLDING NO DEAD LETTER: a listing of empty feeds, and every
+		// discard answered as an id nothing holds.
+		opts.DeadLetters = &fakeDeadLetters{}
+	}
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}

@@ -923,3 +923,119 @@ exit 3
 		t.Errorf("a box without tar packed a capture (%v)", err)
 	}
 }
+
+// A BOX WITHOUT FIND RESUMES ITS SESSION, ITS THREADS AS THEY WERE, AND SAYS
+// SO. A resume cuts back the torn last line of every subagent's thread under
+// the session's sidecar directory, which it walks with find; on a box whose
+// image has none, the run still resumes the session — its transcript cut back
+// as on every box, which takes no find — leaves every thread as it was, and
+// says on its error stream that it cut back none of them, rather than hand the
+// harness threads it may have left torn without a word.
+//
+// Mutation: walk the threads without asking the box for find, or say nothing
+// where it has none, and the case goes red.
+func TestABoxWithoutFindResumesItsSessionAndSaysItCutNoThread(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	p := executor.Paths{Home: filepath.Join(dir, "home")}
+	const session = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a"
+	project := filepath.Join(p.ClaudeConfigDir(), "projects", executor.ClaudeProjectDir)
+	for _, d := range []string{bin, p.WorkDir(), filepath.Join(project, session, "subagents")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	transcript := filepath.Join(project, session+".jsonl")
+	thread := filepath.Join(project, session, "subagents", "agent-1.jsonl")
+	const torn = tornWhole + `{"type":"us`
+	for _, file := range []string{transcript, thread} {
+		if err := os.WriteFile(file, []byte(torn), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE BOX'S PATH holds the harness and the tools the transcript's own cut
+	// reads and moves it with, and no find.
+	for _, tool := range []string{"mkdir", "rm", "mv", "tail", "wc", "head"} {
+		if path, err := exec.LookPath(tool); err != nil || os.Symlink(path, filepath.Join(bin, tool)) != nil {
+			t.Fatalf("%s for the box: %v", tool, err)
+		}
+	}
+	argv := filepath.Join(dir, "argv")
+	writeStandIn(t, filepath.Join(bin, "claude"), `#!/bin/sh
+if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
+for a; do printf '%s\n' "$a"; done > `+shQuote(argv)+"\n")
+	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", Resume: session}, p, ""))
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", script) //nolint:gosec // the script under test
+	cmd.Env = []string{"PATH=" + bin, "CLAUDE_CONFIG_DIR=" + p.ClaudeConfigDir(),
+		"CLAUDE_CODE_PROJECT_DIR_NAME=" + executor.ClaudeProjectDir}
+	var stderr strings.Builder
+	cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("the script ended %v:\n%s", err, stderr.String())
+	}
+	if raw, err := os.ReadFile(argv); err != nil || !strings.Contains(string(raw), "--resume\n"+session+"\n") {
+		t.Fatalf("the harness was not resumed on the session (%v):\n%s\n%s", err, raw, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "this box has no find, so no subagent's thread of the session was cut back") {
+		t.Errorf("the error stream does not say that no thread was cut back:\n%s", stderr.String())
+	}
+	for file, want := range map[string]string{transcript: tornWhole, thread: torn} {
+		if raw, err := os.ReadFile(file); err != nil || string(raw) != want {
+			t.Errorf("after the resume %s holds %q (%v), want %q", file, raw, err, want)
+		}
+	}
+}
+
+// A TORN TRANSCRIPT A PACK PADDED WITH NULS IS CUT BACK WHEN IT IS RESTORED,
+// under every sh a box may have. GNU tar pads a file that shrank while it read
+// it with NULs to the size it first saw (measured on 1.35), and a session's
+// transcript can shrink as a pack of its job, still working, reads it: 2.1.310
+// rewrites it in place to withdraw a message (read in its shipped code).
+// Restored from such an archive, the transcript ends in the torn line tar read
+// and its padding — a last line with no newline, like any torn one — and is
+// cut back to its last whole line before the harness resumes it, though a
+// shell's command substitution drops a NUL, so a test of the last byte by its
+// text reads the padding as a whole last line.
+//
+// Mutation: read the last byte as text rather than count its newline, or cut
+// no transcript at all, and the padded line is resumed as it was, the
+// harness's next record written onto it.
+func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.T) {
+	t.Parallel()
+	const cutOff = `{"type":"assistant","message":{"content":[{"type":"tool_us`
+	ending := cutOff + strings.Repeat("\x00", 64)
+	// THE FIRST BOX'S HARNESS leaves its transcript as such a pack holds it,
+	// which its run's script then packs byte for byte.
+	harness := strings.Replace(sessionHarness("2.1.310"), `printf '{"type":"result"`,
+		`printf '%s' `+shQuote(cutOff)+` >> "$p/$s.jsonl" && head -c 64 /dev/zero >> "$p/$s.jsonl"`+"\n"+
+			`printf '{"type":"result"`, 1)
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		first, a := realBox(t)
+		writeBoxStandIn(t, a, executor.PathsFor(a).BinDir()+"/claude", harness)
+		_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
+		held := boxFile(t, a, transcriptOf(a, ran.SessionID))
+		whole, ok := strings.CutSuffix(held, ending)
+		if !ok {
+			t.Fatalf("the first box's transcript does not end in a torn line and its padding:\n%q", held)
+		}
+		described, body, err := first.OpenCapture(t.Context(), a)
+		if err != nil || body == nil {
+			t.Fatalf("OpenCapture = %v, %v", body, err)
+		}
+		defer func() { _ = body.Close() }()
+
+		second, b := realBoxUnder(t, sh)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", sessionHarness("2.1.310"))
+		_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+			Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
+		if !res.Continued {
+			t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		got := boxFile(t, b, transcriptOf(b, ran.SessionID))
+		if strings.Contains(got, "tool_us") || strings.ContainsRune(got, 0) || !strings.HasPrefix(got, whole) ||
+			strings.Count(got, "\n") != strings.Count(whole, "\n")+1 {
+			t.Errorf("the restored transcript was resumed with its torn line and its padding:\n%q", got)
+		}
+	})
+}

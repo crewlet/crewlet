@@ -45,9 +45,9 @@ import (
 // went further than the kept one, and a run continued from the older would
 // believe it knew everything it did. And only one whose stamp states its SAVE
 // POINT ([SessionCapture.Through]), a count of the round's calls the session is
-// known to hold — the run's log as the capture read it before its pack, where
-// its harness ended its own run, and else the newest point its launch was
-// known to hold (savepoint.go) — which is what the continuation is told the
+// known to hold — the run's log as the capture read it once its job was over,
+// where its harness ended its own run, and else the newest point its launch
+// was known to hold (savepoint.go) — which is what the continuation is told the
 // calls after by: one an older build stamped states only the places it read
 // the log at, which cannot say which calls came after it.
 //

@@ -84,7 +84,7 @@ func TestNoLedgeredTypeIsANameNothingPublishes(t *testing.T) {
 //
 // LedgeredTypes is what the guard above reads, so a name added to the map is
 // only as visible as the assertions over it. This is the one that notices a
-// FIFTH covered type appearing without anyone deciding it should be — the
+// SIXTH covered type appearing without anyone deciding it should be: the
 // guard above accepts any registered type, and every trigger type is
 // registered.
 func TestTheLedgeredSetIsExactlyWhatItClaims(t *testing.T) {
@@ -94,6 +94,7 @@ func TestTheLedgeredSetIsExactlyWhatItClaims(t *testing.T) {
 		types.A2ARequestType,
 		types.ExternalNotification{}.EventType(),
 		types.TaskAssigned{}.EventType(),
+		types.WorkPickupType,
 	}
 	slices.Sort(want)
 	if got := inbox.LedgeredTypes(); !slices.Equal(got, want) {

@@ -408,6 +408,26 @@ describe("credentials", () => {
     expect(vendorIdentities(off, offSeat.node)).toEqual([]);
   });
 
+  // AN SSH SEAT LEAVES NOTHING BEHIND: it holds only certificates the engine
+  // signs for minutes, and nothing is made on a server for it.
+  test("an SSH seat names nothing to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      ssh: {
+        enabled: true,
+        provisioning: { certificate_authority: "${SSH_CERTIFICATE_AUTHORITY}" },
+      },
+    };
+    const role = doc.units![0]!.children![0]!.roles![0]!;
+    role.integrations = { ssh: { enabled: true, level: "operate", hosts: ["api-1"] } };
+    const on = keyedState(doc);
+    const sre = locate(on.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(TOOL_NAMES.ssh).toBe("SSH");
+    expect(vendorIdentities(on, sre.node)).toEqual([]);
+  });
+
   // The labels are a map, which the fact once printed as "[object Object]".
   test("a placement reads as the node it pins and the labels a node must carry", () => {
     expect(placementSummary({ node: "node-a" })).toBe("Pinned to node node-a");

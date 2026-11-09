@@ -1761,18 +1761,21 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label,
+		Label: asked.Label, Withdrawn: asked.Withdrawn,
 	}
 	if held := asked.Held; held != nil {
 		call := held.Call
 		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
-			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
+			Choice: held.Choice, Approver: held.By, HeldID: call.ID, Fixed: call.Fixed, Binding: call.Binding,
+			Commit: heldCommit{held: held, seal: seal}}
 		// A CALL AN EARLIER ATTEMPT MARKED KEEPS ITS ARGUMENTS SEALED: it is
 		// answered from its mark and never made again
 		// ([runner.HeldCommit.Marked]), so nothing would run them, and a seal
 		// this node cannot open is no reason to say anything about a call it
 		// will not make.
-		if sandbox.HeldMakes(held.Choice) && !call.Calling() {
+		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
+		// arguments, so they are opened for a deny as well.
+		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
 			args, err := seal.OpenArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
@@ -2349,7 +2352,11 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		WorkItem: t.WorkItem,
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
-		Requester: t.Requester,
+		Requester: t.Requester, WorkingFor: t.WorkingFor,
+		// OR THE CREDENTIAL that did, which a resumed segment's every call
+		// is still bounded by — see [sandbox.PendingRun.RequesterLogin].
+		RequesterLogin: t.RequesterLogin,
+		RequesterApps:  slices.Clone(t.RequesterApps),
 		// AND WHEN THE TURN'S CAP ENDS, for the poll to end a run that
 		// outlasts it — see [sandbox.PendingRun.Deadline].
 		Deadline: t.Deadline,

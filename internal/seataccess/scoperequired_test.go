@@ -19,6 +19,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/googlecloud"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/slack"
+	_ "github.com/crewlet/crewlet/internal/ssh"
 )
 
 // THE DOCUMENT'S RULES AND THE VENDORS AGREE ON WHICH LANES REQUIRE A SCOPE, so

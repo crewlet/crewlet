@@ -3935,11 +3935,12 @@ var SessionKeepAlive = class {
 *    write filed under `null` raises no floor, so the screen's next read may
 *    come from before the press;
 *  - `apps` — the apps ANY ONE of which the change needs, in the order its
-*    authority row names them: its app for an app's change, the row's own set
-*    for one that draws on whichever of several the caller holds
-*    (`answer_knowledge`, the tracker and the knowledge base it answers
-*    from), and none for a change no app holds (pausing a seat, answering an
-*    executor). What a control the engine does not offer is held with —
+*    authority row names them: its app for an app's change (Gitlet for every
+*    change on the code log, ADR-0110), the row's own set for one that draws
+*    on whichever of several the caller holds (`answer_knowledge`, the
+*    tracker and the knowledge base it answers from), and none for a change
+*    no app holds (pausing a seat, answering an executor). What a control
+*    the engine does not offer is held with —
 *    "needs Worklet access" — so a reader is told what to ask an admin for
 *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
 *    rather than guessed from the domain: a change can need an app and land
@@ -4324,7 +4325,7 @@ var ACTIONS = {
 			"seen"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4336,14 +4337,14 @@ var ACTIONS = {
 			"mirror_to"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
 	code_purge_unreachable: {
 		args: ["repo"],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4358,7 +4359,7 @@ var ACTIONS = {
 			"mirror"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4373,7 +4374,7 @@ var ACTIONS = {
 			"carries"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4388,7 +4389,7 @@ var ACTIONS = {
 			"resolve"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4401,7 +4402,7 @@ var ACTIONS = {
 			"note"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4413,7 +4414,7 @@ var ACTIONS = {
 			"draft"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4426,7 +4427,7 @@ var ACTIONS = {
 			"reopen"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4442,7 +4443,7 @@ var ACTIONS = {
 			"work_item"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4455,7 +4456,7 @@ var ACTIONS = {
 			"message"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4470,7 +4471,7 @@ var ACTIONS = {
 			"override_reason"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	},
@@ -4481,7 +4482,7 @@ var ACTIONS = {
 			"all_failed"
 		],
 		domain: "code",
-		apps: [],
+		apps: ["gitlet"],
 		refreshes: [],
 		scope: "person"
 	}

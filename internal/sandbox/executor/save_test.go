@@ -27,17 +27,6 @@ const (
 	takerB = "node-b:7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f01"
 )
 
-// boxHas reports whether anything is at path in box, a file, a directory or a
-// link.
-func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
-	t.Helper()
-	res, err := box.Exec(t.Context(), "[ -e "+shQuote(path)+" ] || [ -L "+shQuote(path)+" ]", sandbox.ExecOptions{})
-	if err != nil {
-		t.Fatalf("asking the box for %s: %v", path, err)
-	}
-	return res.ExitCode == 0
-}
-
 // forgetCapture removes the archive the run's script packed as its harness
 // exited, and the digests beside it: a box whose job never got its own pack in,
 // so whatever is found at a pack's destination after is that pack's doing.

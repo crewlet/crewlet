@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -91,6 +92,11 @@ type node struct {
 	// without one has. The lifecycle store decides by it too: with none, it
 	// decides no lifecycle request, as a node with no epoch installed.
 	chart code.Roster
+
+	// people is the identity directory the lifecycle store asks who holds a
+	// person's seat a push mirror is set to push as: every seat held by an
+	// active person using every app, unless a case names the grants of one.
+	people *directory
 
 	// scratch is the lifecycle policy the store holds a create to — the
 	// defaults a company that sets no code.scratch runs under, with the
@@ -277,6 +283,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(nil), pub: pub,
 		waiter: waiter, authority: authority, reserve: reserve,
 		scratch: code.ScratchOf(config.Code{RemoteCredentials: forgeCredentials}),
+		people:  &directory{grants: map[string][]iam.Grant{}},
 	}
 	// THE LIFECYCLE STORE, deciding a tool's request by this node's chart,
 	// its scratch policy and whether it is behind — each read per request,
@@ -292,6 +299,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 		},
 		Current: func() bool { return !n.behind.Load() },
 		Policy:  func() code.LifecyclePolicy { return n.scratch },
+		People:  n.people,
 	})
 	if err != nil {
 		t.Fatalf("build the store: %v", err)

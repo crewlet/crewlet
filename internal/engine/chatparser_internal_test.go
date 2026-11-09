@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -53,12 +54,12 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	t.Helper()
 	parsers, prompts := e.nativeParsers(&Company{})
 
-	// THE ALARMS' ARM ASIDE: every node registers it whatever halves its
-	// company runs ([Engine.nativeParsers]), so what this case holds is that
-	// the halves' parsers are chat's and nothing else.
+	// THE ALARMS' AND THE ACCESS REVIEWS' ARMS ASIDE: every node registers
+	// them whatever halves its company runs ([Engine.nativeParsers]), so what
+	// this case holds is that the halves' parsers are chat's and nothing else.
 	var sources []string
 	for _, p := range parsers {
-		if p.Source() != alarmwake.Source {
+		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source {
 			sources = append(sources, p.Source())
 		}
 	}
@@ -71,7 +72,7 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	sources = nil
 	var chats []notify.Prompt
 	for _, p := range prompts {
-		if p.Source() != alarmwake.Source {
+		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source {
 			sources = append(sources, p.Source())
 			chats = append(chats, p)
 		}
