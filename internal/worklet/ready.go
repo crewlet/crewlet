@@ -32,8 +32,9 @@ import (
 //
 // # What a pickup keys on, and whom its turn works for
 //
-// [ReadyItem.Moved] is the last change somebody else made to the item, so the
-// seat's own comment does not hand it the same item again. [ReadyItem.For] is
+// [ReadyItem.Moved] is the last change to the item that would have woken the
+// seat, so neither its own comment nor a change that only tells it (another
+// agent's words that ask nothing, a watcher added) hands it the same item again. [ReadyItem.For] is
 // whom the item's work is for, so the turn is held to their apps (ADR-0109).
 
 // ReadyRows is one page of ready work: the pickup reads the next page only
@@ -63,9 +64,9 @@ type ReadyItem struct {
 	// Why is what put it at its place ([types.PickupWhy]).
 	Why types.PickupWhy `json:"why"`
 
-	// Moved is the log position of the last change somebody other than the
-	// seat made to the item, zero where nobody else ever has, and MovedAt
-	// that change's instant (the item's creation where Moved is zero).
+	// Moved is the log position of the last change to the item that would
+	// have woken the seat, zero where none has, and MovedAt that change's
+	// instant (the item's creation where Moved is zero).
 	Moved   uint64    `json:"moved"`
 	MovedAt time.Time `json:"moved_at"`
 
@@ -266,9 +267,11 @@ func arms(n int, arm string) string {
 	return strings.Join(parts, " UNION ALL ")
 }
 
-// readyMovedArm is one item's last change by somebody other than the seat.
-const readyMovedArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
-	WHERE h.subject_id = ? AND h.actor <> ? ORDER BY h.log_seq DESC LIMIT 1`
+// readyMovedArm is the newest notice to the seat about one item that started
+// its turn: a change that would have woken it, by the notifier's own decision.
+const readyMovedArm = `SELECT n.task_id, n.log_seq, n.created_at
+	FROM tracker_notifications n INDEXED BY tracker_notifications_woke_idx
+	WHERE n.task_id = ? AND n.recipient = ? AND n.starts_turn = 1 ORDER BY n.log_seq DESC LIMIT 1`
 
 // readyFirstArm is one item's first change, the creation the seat made itself.
 const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
@@ -290,9 +293,9 @@ const readyCreatedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_app
 	  AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq LIMIT 1`
 
-// loadMoved stamps each item with the last change somebody other than handle
-// made to it, and that change's instant; an item only the seat ever changed
-// takes the instant it was created.
+// loadMoved stamps each item with the last change that would have woken handle,
+// and that change's instant; an item no such change reached takes the instant
+// it was created.
 func loadMoved(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
 	if len(items) == 0 {
 		return nil

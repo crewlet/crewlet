@@ -75,32 +75,36 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 		}
 	}
 
-	// THE LAST CHANGE SOMEBODY ELSE MADE: the seat's own comment does not
-	// move it, and a colleague's does.
+	// THE LAST CHANGE THAT WOULD HAVE WOKEN THE SEAT: its own comment does
+	// not move it, and a person's does.
 	before := got.Items[3].Moved
-	if before == 0 {
-		t.Fatal("an item somebody else filed reads as never changed by anybody else")
-	}
 	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
 	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) {
 		t.Helper()
 		c := worklet.Comment{ID: op, Task: "low", Author: author, AuthorKind: kind,
 			Body: "noted", CreatedAt: wednesday}
+		detail, err := r.reader.Task(t.Context(), "low", worklet.DetailWants{},
+			statelog.Freshness{Level: statelog.ReadSession})
+		if err != nil {
+			t.Fatalf("read low: %v", err)
+		}
+		wake := worklet.Wake{Kind: worklet.ChangeComment, Before: detail.Task, After: detail.Task,
+			Comment: &c}.Notify(nil)
 		if _, err := w.UpdateTask(t.Context(), op, "low", "ENG", worklet.NoIfMatch,
-			worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, nil); err != nil {
+			worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, wake); err != nil {
 			t.Fatalf("comment %s: %v", op, err)
 		}
 		r.drain()
 	}
 	comment(ana, "c-ana", "ana", worklet.AuthorAgent)
 	if after := r.readyWork("ana").Items[3].Moved; after != before {
-		t.Errorf("the seat's own comment moved the item's version by somebody else "+
+		t.Errorf("the seat's own comment moved the item's key "+
 			"from %d to %d, so a seat that declines with a comment is handed it again", before, after)
 	}
 	comment(r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{}), "c-pm", "pm",
 		worklet.AuthorHuman)
 	if after := r.readyWork("ana").Items[3].Moved; after <= before {
-		t.Errorf("a colleague's comment left the version by somebody else at %d", after)
+		t.Errorf("a person's comment left the item's key at %d", after)
 	}
 }
 
