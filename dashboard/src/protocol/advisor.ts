@@ -93,8 +93,8 @@ export interface AdvisorAnswer {
   /** What reaches the administrators' Inbox; absent from an engine older than the notices. */
   notices?: AdvisorNotice[];
   /**
-   * What the answer could not read (`integrations`, `alarms`), so a short list
-   * never reads as all clear.
+   * What the answer could not read (`integrations`, `work`, `ledger`, `alarms`),
+   * so a short list never reads as all clear.
    */
   unread: string[];
 }

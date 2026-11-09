@@ -38,3 +38,17 @@ func TestTheWorkPatternsReadSeeksItsWindow(t *testing.T) {
 		})
 	}
 }
+
+// A PERSON'S NOTICE LOAD IS A SEEK OF THEIR OWN ROWS (either index leading on
+// the recipient), never a walk of every notice the company was sent.
+func TestTheNoticeLoadReadSeeksThePersonsInbox(t *testing.T) {
+	t.Parallel()
+	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
+	plan := storetest.Plan(t, db, patternNoticesStatement,
+		[]any{"owner", store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)})
+	byRecipient := storetest.Seeks(plan, "tracker_notifications_inbox_idx") ||
+		storetest.Seeks(plan, "tracker_notifications_reason_idx")
+	if !byRecipient || storetest.ScansHeap(plan, "tracker_notifications") {
+		t.Errorf("the notice load read does not seek the person's inbox:\n%s", strings.Join(plan, "\n"))
+	}
+}

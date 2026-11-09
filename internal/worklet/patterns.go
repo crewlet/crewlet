@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -23,6 +22,16 @@ type PatternsQuery struct {
 	// turn by its holder since QuietSince is idle.
 	Reviewers  []string
 	QuietSince time.Time
+	// People are the persons whose notices in the window are counted.
+	People []string
+}
+
+// NoticeLoad is how many notices one person was sent in the window, and how
+// many of them asked something of them.
+type NoticeLoad struct {
+	Handle    string `json:"handle"`
+	Notices   int    `json:"notices"`
+	Addressed int    `json:"addressed"`
 }
 
 // IdleReview is an item in review its agent holder has taken no turn on.
@@ -56,6 +65,8 @@ type WorkPatterns struct {
 	Decisions []DecisionTally `json:"decisions"`
 	// IdleReviews are the reviewers' items in review idle since QuietSince.
 	IdleReviews []IdleReview `json:"idle_reviews"`
+	// Notices are the people's notice loads, in the order they were asked for.
+	Notices []NoticeLoad `json:"notices"`
 }
 
 // DecisionTally is one person's choices on one agent's decisions.
@@ -100,7 +111,10 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
 			return err
 		}
-		return readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out)
+		if err := readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out); err != nil {
+			return err
+		}
+		return readNoticeLoads(ctx, tx, q.People, since, until, &out)
 	})
 	return out, err
 }
@@ -269,24 +283,19 @@ ORDER BY t.status_entered_at, t.id`
 func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet time.Time,
 	out *WorkPatterns) error {
 	out.IdleReviews = []IdleReview{}
-	at := store.EncodeTime(quiet)
 	for _, reviewer := range reviewers {
-		if err := readIdleReviewsOf(ctx, tx, reviewer, at, out); err != nil {
+		if err := readIdleReviewsOf(ctx, tx, reviewer, quiet, out); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// patternAssignedStatement is when an item last changed hands, a seek of its own
-// history; an item never reassigned has no row and was held from its filing.
-const patternAssignedStatement = `SELECT h.effective_at FROM tracker_history h
-	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
-	ORDER BY h.log_seq DESC LIMIT 1`
-
 // readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue,
 // leaving out one it was handed after the quiet instant: its wait starts then.
-func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int64, out *WorkPatterns) error {
+func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet time.Time,
+	out *WorkPatterns) error {
+	at := store.EncodeTime(quiet)
 	rows, err := tx.QueryContext(ctx, patternIdleReviewsStatement, reviewer,
 		string(StatusInReview.Group()), at, at)
 	if err != nil {
@@ -307,20 +316,35 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int6
 		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
 	}
 	for _, r := range candidates {
-		var assigned int64
-		err := tx.QueryRowContext(ctx, patternAssignedStatement, r.Task).Scan(&assigned)
+		handed, ok, err := readHandedOver(ctx, tx, r.Task)
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return fmt.Errorf("worklet: read when %s changed hands: %w", r.Task, err)
-		case assigned >= at:
+			return err
+		case ok && !handed.Before(quiet):
 			continue
-		default:
-			if t := store.DecodeTime(assigned); t.After(r.Since) {
-				r.Since = t
-			}
+		case ok && handed.After(r.Since):
+			r.Since = handed
 		}
 		out.IdleReviews = append(out.IdleReviews, r)
+	}
+	return nil
+}
+
+// patternNoticesStatement is one person's notices in the window, a seek of
+// their own rows, which the inbox horizon already bounds.
+const patternNoticesStatement = `SELECT COUNT(*), COALESCE(SUM(addressed), 0)
+FROM tracker_notifications
+WHERE recipient = ? AND created_at >= ? AND created_at < ?`
+
+func readNoticeLoads(ctx context.Context, tx *sql.Tx, people []string, since, until int64, out *WorkPatterns) error {
+	out.Notices = make([]NoticeLoad, 0, len(people))
+	for _, handle := range people {
+		load := NoticeLoad{Handle: handle}
+		if err := tx.QueryRowContext(ctx, patternNoticesStatement, handle, since, until).Scan(
+			&load.Notices, &load.Addressed); err != nil {
+			return fmt.Errorf("worklet: count %s's notices: %w", handle, err)
+		}
+		out.Notices = append(out.Notices, load)
 	}
 	return nil
 }

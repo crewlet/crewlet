@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -62,6 +63,12 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 		"one idle review": {worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{{Key: "W-1", Holder: "qa"}}},
 			[]advisor.Class{advisor.ClassReviewIdle}},
 		"no idle review": {worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{}}, nil},
+		"350 notices, 87 put to the person": {worklet.WorkPatterns{Notices: []worklet.NoticeLoad{
+			{Handle: "owner", Notices: 350, Addressed: 87}}}, []advisor.Class{advisor.ClassNoticeLoad}},
+		"349 notices": {worklet.WorkPatterns{Notices: []worklet.NoticeLoad{
+			{Handle: "owner", Notices: 349, Addressed: 0}}}, nil},
+		"400 notices, a quarter put to the person": {worklet.WorkPatterns{Notices: []worklet.NoticeLoad{
+			{Handle: "owner", Notices: 400, Addressed: 100}}}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -73,6 +80,76 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 				t.Fatalf("raised %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// started is one ledger row of a seat's started turns under wake with outcome.
+func started(seat, wake, outcome string, turns int64) usage.TurnLedgerRow {
+	return usage.TurnLedgerRow{AgentID: "id-" + seat, Handle: seat, Wake: wake,
+		Disposition: "started", Outcome: outcome, Turns: turns}
+}
+
+// spent is a seat's started turns that spent tokens of their own and auxiliary.
+func spent(seat string, own, aux int64) usage.TurnLedgerRow {
+	r := started(seat, "chat:message", "moved", 1)
+	r.Input, r.AuxInput = own, aux
+	return r
+}
+
+// EACH LEDGER DETECTOR FIRES AT ITS THRESHOLD AND IS SILENT ONE BELOW IT, and a
+// wake that was held, never started, counts toward none.
+func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
+	t.Parallel()
+	const pickup = "work_item:pickup"
+	held := usage.TurnLedgerRow{AgentID: "id-app", Handle: "app", Wake: pickup, Disposition: "held", Turns: 500}
+	for name, tc := range map[string]struct {
+		ledger []usage.TurnLedgerRow
+		want   []advisor.Class
+	}{
+		"5 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 5),
+			started("app", "chat:message", "moved", 15)}, []advisor.Class{advisor.ClassNoopShare}},
+		"4 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 4),
+			started("app", "chat:message", "moved", 16)}, nil},
+		"19 turns, all nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 19), held}, nil},
+		"2 of 10 pickups said words": {[]usage.TurnLedgerRow{started("app", pickup, "words", 1),
+			started("qa", pickup, "words", 1), started("qa", pickup, "moved", 8)},
+			[]advisor.Class{advisor.ClassPickupStillWaiting}},
+		"1 of 10 pickups said words": {[]usage.TurnLedgerRow{started("app", pickup, "words", 1),
+			started("qa", pickup, "moved", 9)}, nil},
+		"9 pickups, all words":     {[]usage.TurnLedgerRow{started("app", pickup, "words", 9), held}, nil},
+		"words under another wake": {[]usage.TurnLedgerRow{started("app", "chat:message", "words", 10)}, nil},
+		"more than 15% auxiliary of a million": {[]usage.TurnLedgerRow{spent("sre", 849_999, 150_001)},
+			[]advisor.Class{advisor.ClassAuxiliaryShare}},
+		"15% auxiliary of a million":      {[]usage.TurnLedgerRow{spent("sre", 850_000, 150_000)}, nil},
+		"half auxiliary, under a million": {[]usage.TurnLedgerRow{spent("sre", 499_999, 499_999)}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got []advisor.Class
+			for _, f := range advisor.Detect(advisor.Evidence{Ledger: tc.ledger}, kindOf) {
+				got = append(got, f.Class)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("raised %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A LEDGER FINDING NAMES ITS SEAT by the handle the ledger carries, and by the
+// seat's id when the ledger carries none, so no finding is about nobody.
+func TestALedgerFindingNamesItsSeat(t *testing.T) {
+	t.Parallel()
+	unnamed := started("", "chat:message", "nothing", 20)
+	unnamed.AgentID = "id-gone"
+	found := advisor.Detect(advisor.Evidence{Ledger: []usage.TurnLedgerRow{
+		started("app", "chat:message", "nothing", 20), unnamed}}, kindOf)
+	var seats []string
+	for _, f := range found {
+		seats = append(seats, f.Subject.Seat)
+	}
+	if !slices.Equal(seats, []string{"app", "id-gone"}) {
+		t.Errorf("the no-op findings name %v, want app and the unnamed seat's id", seats)
 	}
 }
 
@@ -109,20 +186,27 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	work := worklet.WorkPatterns{AgentComments: 9, Answers: 3, Moot: 3, Overtaken: many[:5],
 		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, WokenComments: many[:5]},
 			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}},
-		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}}}
-	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
-	// Every work class but approval.rubber_stamp, the owner's, held on its own below.
-	if len(found) != len(advisor.WorkClasses())-1 {
-		t.Fatalf("raised %d findings, want one per engine class the work patterns raise", len(found))
+		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}},
+		Notices:     []worklet.NoticeLoad{{Handle: "owner", Notices: 400}}}
+	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
+		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000)}
+	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
+	// Every class but approval.rubber_stamp, the owner's, held on its own below.
+	if len(found) != len(advisor.WorkClasses())-1+len(advisor.LedgerClasses()) {
+		t.Fatalf("raised %d findings, want one per engine class the work patterns and the ledger raise", len(found))
 	}
+	// A COUNT NAMES NO RECORD: these classes read totals, not rows to open.
+	counts := append([]advisor.Class{advisor.ClassNoticeLoad}, advisor.LedgerClasses()...)
 	for _, f := range found {
 		if f.Actor != advisor.ActorEngine || f.Source != advisor.SourceEvidence ||
 			f.Fix.Kind != advisor.FixNone || len(f.Fix.Options) != 0 {
 			t.Errorf("%s is %s from %s with a %s fix of %d options, want the engine's, "+
 				"from evidence, with nothing to send", f.Class, f.Actor, f.Source, f.Fix.Kind, len(f.Fix.Options))
 		}
-		if len(f.Records) > worklet.MaxPatternExamples || len(f.Records) == 0 {
-			t.Errorf("%s names %d records, want 1 to %d", f.Class, len(f.Records), worklet.MaxPatternExamples)
+		if len(f.Records) > worklet.MaxPatternExamples ||
+			len(f.Records) == 0 != slices.Contains(counts, f.Class) {
+			t.Errorf("%s names %d records, want 1 to %d, or none for a count", f.Class, len(f.Records),
+				worklet.MaxPatternExamples)
 		}
 		if f.Title == "" || f.Why == "" || len(f.Evidence) == 0 {
 			t.Errorf("%s has no words or no evidence: %+v", f.Class, f)
@@ -189,26 +273,37 @@ func TestThePatternsWindowIsAWeekAndAReviewIsIdleAfterADay(t *testing.T) {
 	if !slices.Equal(q.Reviewers, []string{"pm", "designer", "app", "backend", "qa", "sre"}) {
 		t.Errorf("the reviewers are %v, want every agent seat in the chart's order", q.Reviewers)
 	}
+	if !slices.Equal(q.People, []string{"owner"}) {
+		t.Errorf("the notice loads read are %v, want every person and no agent", q.People)
+	}
 }
 
 // A SOURCE THE CALLER COULD NOT READ RAISES NOTHING AND IS NAMED: what would
 // have fired stays silent, and the answer says the list may be short.
 func TestAnUnreadSourceRaisesNothingAndIsNamed(t *testing.T) {
 	t.Parallel()
-	firing := worklet.WorkPatterns{Answers: 4, Moot: 4, Overtaken: []string{"c-1"}}
+	firing := advisor.Evidence{Work: worklet.WorkPatterns{Answers: 4, Moot: 4, Overtaken: []string{"c-1"}},
+		Ledger: []usage.TurnLedgerRow{started("app", "chat:message", "nothing", 20)},
+		Backup: advisor.Backup{Standing: true}}
+	classes := []advisor.Class{advisor.ClassAskOvertaken, advisor.ClassNoopShare, advisor.ClassNoVerifiedBackup}
 	in := advisor.Inputs{Company: liveShape(t), Revision: "rev-1", Integrations: []integration.State{}}
-	read := advisor.ReadWithEvidence(in, advisor.Evidence{Work: firing, Backup: advisor.Backup{Standing: true}})
-	if !slices.Equal(read.Unread, []string{}) || !hasClass(read, advisor.ClassAskOvertaken) ||
-		!hasClass(read, advisor.ClassNoVerifiedBackup) {
-		t.Fatalf("with every source read, unread %v and findings %v", read.Unread, read.Findings)
+	read := advisor.ReadWithEvidence(in, firing)
+	if !slices.Equal(read.Unread, []string{}) {
+		t.Fatalf("with every source read, unread %v", read.Unread)
 	}
-	blind := advisor.ReadWithEvidence(in, advisor.Evidence{Work: firing, Backup: advisor.Backup{Standing: true},
-		WorkUnread: true, AlarmsUnread: true})
-	if hasClass(blind, advisor.ClassAskOvertaken) || hasClass(blind, advisor.ClassNoVerifiedBackup) {
-		t.Errorf("an unread source still raised its classes: %v", blind.Findings)
+	for _, c := range classes {
+		if !hasClass(read, c) {
+			t.Fatalf("with every source read, %s did not fire: %v", c, read.Findings)
+		}
 	}
-	if !slices.Equal(blind.Unread, []string{advisor.UnreadWork, advisor.UnreadAlarms}) {
-		t.Errorf("unread %v, want work and alarms named", blind.Unread)
+	blind := firing
+	blind.WorkUnread, blind.LedgerUnread, blind.AlarmsUnread = true, true, true
+	answer := advisor.ReadWithEvidence(in, blind)
+	if slices.ContainsFunc(classes, func(c advisor.Class) bool { return hasClass(answer, c) }) {
+		t.Errorf("an unread source still raised its classes: %v", answer.Findings)
+	}
+	if !slices.Equal(answer.Unread, []string{advisor.UnreadWork, advisor.UnreadLedger, advisor.UnreadAlarms}) {
+		t.Errorf("unread %v, want work, the ledger and alarms named", answer.Unread)
 	}
 }
 

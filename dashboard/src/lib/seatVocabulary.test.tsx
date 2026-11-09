@@ -69,6 +69,7 @@ function queue(agents: AgentRow[]) {
     mcpAlarms: [],
     notices: [],
     findings: [],
+    setupUnread: [],
   };
   return attentionQueue(input);
 }

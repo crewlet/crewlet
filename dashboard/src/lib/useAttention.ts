@@ -27,6 +27,9 @@ const NO_MCP_ALARMS: readonly McpAlarm[] = [];
 const NO_NOTICES: readonly AdvisorNotice[] = [];
 const NO_FINDINGS: readonly AdvisorFinding[] = [];
 
+/** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
+const NO_SETUP_UNREAD: readonly string[] = [];
+
 /** How often the queue asks the advisor again: a setup changes by revisions. */
 const ADVISOR_POLL_MS = 60_000;
 
@@ -83,6 +86,7 @@ export function useAttention(): Attention[] {
   // older than the notices, raises nothing here.
   const notices = readsMcp && Array.isArray(advisor?.notices) ? advisor.notices : NO_NOTICES;
   const findings = readsMcp && Array.isArray(advisor?.findings) ? advisor.findings : NO_FINDINGS;
+  const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
   return useMemo(
     () =>
       attentionQueue({
@@ -97,6 +101,7 @@ export function useAttention(): Attention[] {
         mcpAlarms,
         notices,
         findings,
+        setupUnread,
       }),
     [
       agents,
@@ -110,6 +115,7 @@ export function useAttention(): Attention[] {
       mcpAlarms,
       notices,
       findings,
+      setupUnread,
     ],
   );
 }

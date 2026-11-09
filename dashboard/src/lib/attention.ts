@@ -43,6 +43,7 @@ import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
 import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
+import { unreadSentences } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -237,6 +238,8 @@ export interface AttentionInput {
   notices: readonly AdvisorNotice[];
   /** The advisor's findings, where a notice about one finds its words and fix. */
   findings: readonly AdvisorFinding[];
+  /** What the advisor could not read, for the same reader; empty when it read everything. */
+  setupUnread: readonly string[];
 }
 
 /** Whether a finding is about the subject a notice names. */
@@ -280,7 +283,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
-  const { notices, findings } = input;
+  const { notices, findings, setupUnread } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -523,6 +526,21 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       action: "Open the advisor",
       clears: "Clears once the setup no longer raises it.",
       ...at,
+    });
+  }
+  // A SOURCE THE ADVISOR COULD NOT READ IS SAID, so a blocker it would have
+  // raised never leaves the queue without a word.
+  if (setupUnread.length > 0) {
+    out.push({
+      id: "setup-unread",
+      severity: "caution",
+      subject: "setup",
+      icon: "list-checks",
+      title: "The advisor couldn't read everything",
+      detail: unreadSentences(setupUnread).join(" "),
+      path: ["settings", "advisor"],
+      action: "Open the advisor",
+      clears: "Clears once the advisor reads every source again.",
     });
   }
 
