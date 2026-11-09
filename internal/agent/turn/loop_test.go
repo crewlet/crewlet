@@ -231,6 +231,42 @@ func TestNoActionAfterActingIsCorrected(t *testing.T) {
 	}
 }
 
+// A NO_ACTION AFTER A COLLEAGUE ASK IS CORRECTED WITHOUT A REVIEW. Nothing was
+// delivered — an ask answers nobody waiting on the turn — but a colleague was
+// woken, so the round is sent back by the engine itself, without a review call,
+// and the next round reports what the turn did and is reviewed then.
+//
+// Mutation: read Delivered for Check's `acted` again, and the turn ends
+// skipped in its first round.
+func TestANoActionAfterAColleagueAskIsCorrectedWithoutAReview(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{
+			{Outcome: turn.OutcomeNoAction, Summary: "nothing to do",
+				Calls: []ledger.Call{{Name: "a2a_ask"}}},
+			{Outcome: turn.OutcomeDelivered, Summary: "asked the lead to own the follow-up"},
+		},
+		surfaces: []turn.Surface{worldSurface()},
+		reviews:  []turn.Review{{}, {Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
+		turn.Input{RunID: "t1", Reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done {
+		t.Errorf("decision = %s, want done: a turn that asked a colleague is reported, not skipped",
+			res.Decision)
+	}
+	if !slices.Equal(f.reviewedRounds, []int{2}) {
+		t.Errorf("the reviewer ran on rounds %v, want round 2 alone: the engine corrects "+
+			"round 1 itself", f.reviewedRounds)
+	}
+	if len(f.notesSeen) != 2 || f.notesSeen[1] == "" {
+		t.Errorf("notes = %q, want round 2 told why round 1 came back", f.notesSeen)
+	}
+}
+
 // WRITING ABOUT AN ACTION DOES NOT PERFORM IT. The claim is checked against
 // the engine's own record before any model judges it.
 func TestADeliveryClaimWithNoCallIsCorrectedWithoutAReview(t *testing.T) {

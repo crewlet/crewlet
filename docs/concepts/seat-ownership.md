@@ -627,7 +627,8 @@ turn's own machinery: the discovery pair is annotated read-only and
 closed-world, the sub-agent spawner closed-world, and the executor's own
 `submit_work` carries no annotations at all, so they cannot trip it; a predicate
 written as "not proven read-only" would fire on every turn that closed a single
-round.
+round. The same rule decides whether a `no_action` may end a turn as skipped
+([the engine check](turn-engine.md#three-checks-in-increasing-cost)).
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger

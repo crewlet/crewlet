@@ -183,13 +183,19 @@ const (
 	// deliver it, the tool ran.
 	OutcomeDelivered Outcome = "delivered"
 
-	// OutcomeNoAction — nobody was asking this seat to do anything. The
-	// turn ends and nothing is posted.
+	// OutcomeNoAction — nobody was asking this seat to do anything, and it
+	// did nothing outside the engine. The turn ends and nothing is posted.
 	//
 	// Deliberately NOT the way to decline. A seat that was mentioned,
 	// assigned or asked and is saying no must say so where it was asked,
 	// so the requester learns the message landed rather than waiting in
 	// silence for an answer that is never coming.
+	//
+	// Nor the way to end a turn that ACTED outside the engine ([Acted]),
+	// though nobody asked: one that asked a colleague, reacted or published
+	// reports what it did as delivered, and [Check] sends its no_action
+	// back. Ended as one that did nothing, it would leave no episode and
+	// nothing reviewed, and the conversation's next turn would not know.
 	OutcomeNoAction Outcome = "no_action"
 
 	// OutcomeBlocked — the work cannot proceed and the executor says why.
@@ -449,7 +455,16 @@ func DeliverersFor(s Surface, reply Reply) []string {
 }
 
 // Acted reports whether this record shows the turn already reached outside
-// the engine: that re-running it would repeat something it cannot take back.
+// the engine: that re-running it would repeat something it cannot take back,
+// and that ending it as though nobody was asking would leave something that
+// happened unreported.
+//
+// ONE RULE, TWO READERS. [Abandon] spends a trigger on a true answer — a
+// redelivery that would have re-run the turn is given up instead — and [Check]
+// will not end as skipped a `no_action` this answers true for. Check read
+// [Delivered] instead, the other question below, so a turn nobody asked for
+// that asked a colleague, reacted or published and then said nobody was asking
+// ended skipped, with no episode and nothing reviewed.
 //
 // A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
 // Delivered asks whether an answer could have reached somebody, so it counts
@@ -459,12 +474,12 @@ func DeliverersFor(s Surface, reply Reply) []string {
 // irreversible happened at all, so a builtin that wakes a colleague counts
 // exactly as much as a Jira comment does.
 //
-// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. Its caller spends a trigger on a
-// true answer — a redelivery that would have re-run this turn is given up
-// instead — so a false positive discards work that never left the process,
-// while a false negative merely leaves today's behaviour in place. So the half
-// this rule adds counts PROOF alone: a call whose own annotations say
-// open-world and do not say read-only, and a first-party tool nobody
+// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. A false positive costs [Abandon]
+// work that never left the process — a trigger given up that a redelivery
+// would have run cleanly — and costs Check a round sent back to report what it
+// did, and a review; a false negative merely leaves today's behaviour in place.
+// So the half this rule adds counts PROOF alone: a call whose own annotations
+// say open-world and do not say read-only, and a first-party tool nobody
 // classified proves nothing and is not counted. The other half is the delivery
 // check's ([Deliverable]): a first-party tool registered as reaching somebody,
 // or an MCP-served tool not proven read-only, which FAILS CLOSED, the rule
@@ -474,10 +489,11 @@ func DeliverersFor(s Surface, reply Reply) []string {
 //
 // A READ OF THE WORLD IS NOT AN ACT. A web search or `ssh_read` is open-world
 // — it reaches outside the process — and read-only: it changes nothing anybody
-// sees, so a retry repeats nothing and there is nothing to report. Counted, a
-// turn that broke after a search was given up as one that had written. The
-// exclusion is on the open-world half alone: a delivery is always an act, so
-// nothing [Delivered] counts can read as no act here.
+// sees, so a retry repeats nothing and there is nothing to report. Were it
+// counted, a triage turn that searched and found nothing to do could not end
+// quietly, and one that broke after a search would be given up as one that had
+// written. The exclusion is on the open-world half alone: a delivery is always
+// an act, so nothing [Delivered] counts can read as no act here.
 //
 // SUCCESSFUL calls only, like Delivered: a post that failed did not post.
 func Acted(calls []ledger.Call, s Surface) bool {
@@ -530,7 +546,12 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 	// and fail the second — it files a ticket while a founder waits in chat
 	// — and collapsing them lets that turn pass one check under the other's
 	// name.
-	acted := Delivered(record, s)
+	//
+	// `acted` is [Acted], the rule a broken turn's redelivery is decided by.
+	// It was [Delivered] once, which collapsed the first question into the
+	// second: a turn nobody asked for that asked a colleague or reacted, and
+	// then said nobody was asking, ended skipped.
+	acted := Acted(record, s)
 	delivered := DeliveredTo(record, s, reply)
 
 	// A rescue never takes any fast path. The engine wrote the outcome,
@@ -583,8 +604,10 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 		// NAMED WHERE IT IS KNOWN, exactly as [OverrideDone] and the
 		// submission check do. A turn that DID write somewhere is told "no
 		// tool was called", reads that as false against its own record, and
-		// argues with the correction instead of acting on it.
-		if on := reply.Surface; on != "" && s.Reaches(on) && acted {
+		// argues with the correction instead of acting on it. Keyed on a
+		// DELIVERY elsewhere, never on an act: "filing the work somewhere
+		// else" said to a turn that only asked a colleague is false too.
+		if on := reply.Surface; on != "" && s.Reaches(on) && Delivered(record, s) {
 			return Verdict{Correction: "You reported the work as delivered, and you " +
 				"did act — but nothing was delivered on `" + on + "`, which is where " +
 				"this was asked. Filing the work somewhere else does not tell the " +

@@ -271,9 +271,12 @@ in the other direction.
 ### Did this turn act outside the engine?
 
 *Did this turn do anything outside the engine that it cannot take back?*
-`turn.Acted` answers it, and a broken turn's trigger turns on the answer: one
-whose record says yes is given up rather than redelivered, since a redelivery
-would do it again ([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)).
+`turn.Acted` answers it, and two things turn on the answer: whether a turn
+nobody asked for may end as `no_action`, which one that acted may not
+([the engine check](turn-engine.md#three-checks-in-increasing-cost)), and
+whether a broken turn's trigger is given up rather than redelivered, since a
+redelivery would do it again
+([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)).
 It counts every tool the delivery check counts, and beyond those only what a
 tool's own hints POSITIVELY say: that half fails open where the delivery check
 fails closed, because a true answer gives a trigger up, while the first fails
@@ -286,7 +289,8 @@ there.
 - everything else → **no**: a first-party tool nobody classified (the
   executor's own `submit_work`), and **a read of the world** — `read_only:
   true` beside `open_world: true` — which reaches outside the process and
-  changes nothing a retry would repeat: a web search, or `ssh_read`.
+  changes nothing a retry would repeat or anybody needs telling about: a web
+  search, or `ssh_read`.
 
 ---
 
@@ -381,8 +385,9 @@ guard cannot auto-deny that server's write tools (the parent's explicit
 allowlist remains the curation), the delivery check counts every one of
 its tools, reads included, as a possible delivery, and every successful
 call to one counts as an [act](#did-this-turn-act-outside-the-engine),
-so a turn that broke after only such reads is given up rather than
-redelivered.
+so a turn nobody asked for that only read through them cannot end as
+`no_action`, and one that broke after only such reads is given up rather
+than redelivered.
 
 ---
 

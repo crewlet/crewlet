@@ -738,8 +738,8 @@ mcp_servers:
     # 0.2.22, which lists these five — and each only reads the web.
     # Unannotated, every one counts as a possible delivery and as having
     # acted, so a turn that only searched could pass the delivery check,
-    # and is given up rather than redelivered if it breaks; these say what
-    # the server does not.
+    # has its no_action sent back, and is given up rather than redelivered
+    # if it breaks; these say what the server does not.
     tool_annotations:
       tavily_search:   { read_only: true, open_world: true }
       tavily_extract:  { read_only: true, open_world: true }

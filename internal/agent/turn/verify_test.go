@@ -495,6 +495,78 @@ func TestNoActionIsNotASkipOnceAnEarlierRoundActed(t *testing.T) {
 	}
 }
 
+// A NO_ACTION AFTER AN ACT IS CORRECTED, NOT SKIPPED, though nothing was
+// delivered. A turn nobody asked for that asked a colleague or reacted to a
+// message did something somebody else sees; ended as "nobody was asking" it
+// leaves no episode and nothing reviewed, so the conversation's next turn would
+// not know. The check read deliveries alone, and each of these ended skipped.
+//
+// Mutation: read Delivered for `acted` again, and every case is a skip.
+func TestANoActionAfterAnActIsCorrectedNotSkipped(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	for name, tc := range map[string]struct {
+		calls   []ledger.Call
+		earlier []ledger.Iteration
+	}{
+		"it asked a colleague":           {calls: []ledger.Call{{Name: "a2a_ask"}}},
+		"it reacted to a message":        {calls: []ledger.Call{{Name: "react_to_message"}}},
+		"an earlier round asked instead": {earlier: []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "a2a_ask"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing to do", Calls: tc.calls}
+			if v := turn.Check(quiet, tc.earlier, turn.NoReply(), s); v.Skip || v.Correction == "" {
+				t.Errorf("Check = %+v, want a correction: the turn acted outside the engine", v)
+			}
+		})
+	}
+}
+
+// A NO_ACTION AFTER ONLY READING THE WORLD IS STILL A SKIP. A triage turn that
+// searched the web, read a server and the tracker, and found nothing to do did
+// nothing anybody sees — and a colleague ask that failed asked nobody — so it
+// ends quietly, which is what makes triage cheap.
+//
+// Mutation: drop the read-only clause from Acted, or count a failed call, and
+// the turn is sent back to report an act it never made.
+func TestANoActionAfterOnlyReadingTheWorldIsStillASkip(t *testing.T) {
+	t.Parallel()
+	quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing for me here",
+		Calls: []ledger.Call{{Name: "web_search"}, {Name: "ssh_read"}, {Name: "get_work_item"},
+			{Name: "a2a_ask", Failed: true}}}
+	if v := turn.Check(quiet, nil, turn.NoReply(), worldSurface()); !v.Skip || v.Correction != "" {
+		t.Errorf("Check = %+v, want a skip: the turn only read", v)
+	}
+}
+
+// AN ACT IS NOT A DELIVERY ELSEWHERE. A delivery claim refuted on the surface
+// it was asked on is told "filing the work somewhere else does not tell the
+// person waiting" only where the turn DID deliver somewhere else: said to a
+// turn that only asked a colleague, it is false, and a model argues with a
+// correction it can see is false.
+//
+// Mutation: key that sentence on Check's `acted` rather than on a delivery,
+// and the colleague ask is told it filed the work elsewhere.
+func TestAnActIsNotCalledADeliveryElsewhere(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	asked := turn.ToolReply("work")
+	claim := func(call string) turn.Work {
+		return turn.Work{Outcome: turn.OutcomeDelivered, Summary: "handled it",
+			Calls: []ledger.Call{{Name: call}}}
+	}
+	if v := turn.Check(claim("a2a_ask"), nil, asked, s); v.Correction == "" ||
+		strings.Contains(v.Correction, "somewhere else") {
+		t.Errorf("Check = %+v, want a correction that does not say the turn filed the work "+
+			"elsewhere: it only asked a colleague", v)
+	}
+	if v := turn.Check(claim("mattermost_post_message"), nil, asked, s); !strings.Contains(v.Correction,
+		"somewhere else") {
+		t.Errorf("Check = %+v, want the correction to say the chat post went somewhere else", v)
+	}
+}
+
 // THE REMEDY NAMES THE TOOLS. It used to name a mechanism — "list_mcp_server_
 // tools and activate_tool will find it" — which is right for a vendor's
 // surface and wrong for the tracker's, whose tools no discovery call lists: a

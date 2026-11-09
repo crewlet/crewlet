@@ -1410,7 +1410,8 @@ var underAnnotatedReads = map[string][]string{
 // one, so an unannotated tool is not proven read-only, and the delivery check
 // counts every such tool as a possible delivery: a turn that only searched the
 // web can pass it as one that reached somebody. Every such call counts as
-// having acted too, so a turn that broke after only searching is given up
+// having acted too, so a turn nobody asked for that only searched has its
+// no_action sent back, and one that broke after only searching is given up
 // rather than redelivered. The server will not say, so each documented entry
 // for it must, under the tool's own name or with the entry's tool_prefix — the
 // two spellings an override is matched by.
