@@ -57,6 +57,7 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 		{"what the fleet holds: a seat's spend", appliedSeatTokensSQL, []string{seat}},
 		{"what the fleet holds: a seat's reads", appliedSeatReadsSQL, []string{seat}},
 		{"what the fleet holds: a seat's tool calls", appliedSeatToolsSQL, []string{seat}},
+		{"what the fleet holds: a seat's turn ledger", appliedSeatLedgerSQL, []string{seat}},
 		{"what the fleet holds: a person's spend", appliedPersonSQL, []string{person}},
 		{"what the fleet holds: a schedule's fires", appliedScheduleSQL, []string{schedule}},
 		{"what the fleet holds: a schedule's superseded fires", appliedSupersededSQL,
@@ -70,6 +71,7 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 		{"the apply's clear: a seat's spend", applyClearSeatTokensSQL, []string{seat}},
 		{"the apply's clear: a seat's reads", applyClearSeatReadsSQL, []string{seat}},
 		{"the apply's clear: a seat's tool calls", applyClearSeatToolsSQL, []string{seat}},
+		{"the apply's clear: a seat's turn ledger", applyClearSeatLedgerSQL, []string{seat}},
 		{"the apply's clear: a schedule's fires", applyClearScheduleSQL, []string{schedule}},
 		{"the apply's clear: a schedule's superseded fires", applyClearSupersededSQL,
 			[]string{schedule}},
@@ -113,6 +115,29 @@ func containsAny(s string, subs []string) bool {
 		}
 	}
 	return false
+}
+
+// THE TURN LEDGER IS READ BY ITS KEY'S LEADING DAY: a day range of every node
+// and every seat, never a walk of the whole table.
+//
+// Mutation: lead the key with anything but the day, and the plan walks the table.
+func TestTheTurnLedgerSeeksItsDayIndex(t *testing.T) {
+	t.Parallel()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	steps := storetest.Plan(t, db.Replicated(), turnLedgerSQL, []any{"2026-09-17", "2026-09-23"})
+	sought := false
+	for _, step := range steps {
+		if strings.Contains(step, "sqlite_autoindex_usage_turn_ledger_1 (day>=? AND day<=?)") {
+			sought = true
+		}
+		if strings.HasPrefix(step, "SCAN l") || strings.HasPrefix(step, "SCAN usage_turn_ledger") {
+			t.Errorf("the plan walks the table: %s", step)
+		}
+	}
+	if !sought {
+		t.Errorf("the plan %q does not seek the ledger by day", steps)
+	}
 }
 
 // A SERVER'S CALLS ARE READ BY ITS OWN INDEX: the read is a range of days of

@@ -244,6 +244,19 @@ type UsageTurns struct {
 
 	// LastEndedAt is the newest end in the window, zero when none ended.
 	LastEndedAt time.Time
+
+	// Ledger is the tallied turns that ended in the window by what woke them
+	// and what they did ([types.TurnTally]), in (wake, outcome) order; a turn
+	// whose end states no wake or outcome is in none of them.
+	Ledger []UsageLedger
+}
+
+// UsageLedger is one seat's turns under one wake and one outcome, and what they
+// spent: each figure the turns' own tallies added up.
+type UsageLedger struct {
+	Wake, Outcome string
+	Turns         int64
+	Tokens        types.TurnTokens
 }
 
 // UsageRead is one (backend, page, via) a seat reached in the window, with
@@ -965,6 +978,8 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 		at, durationMS            int64
 		failed, reviews, sentBack int64
 		unaccepted, tallied       int64
+		wake, outcome             string
+		tokens                    types.TurnTokens
 	}
 	turns, err := func() ([]ended, error) {
 		query, args := usageEndedTurnsSQL(w)
@@ -977,7 +992,9 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 		for rows.Next() {
 			var e ended
 			if err := rows.Scan(&e.id, &e.agent, &e.at, &e.handle, &e.role, &e.durationMS,
-				&e.failed, &e.reviews, &e.sentBack, &e.unaccepted, &e.tallied); err != nil {
+				&e.failed, &e.reviews, &e.sentBack, &e.unaccepted, &e.tallied, &e.wake, &e.outcome,
+				&e.tokens.Input, &e.tokens.Output, &e.tokens.CacheRead, &e.tokens.CacheWrite,
+				&e.tokens.AuxInput, &e.tokens.AuxOutput); err != nil {
 				return nil, fmt.Errorf("store: scan the usage day's ended turns: %w", err)
 			}
 			out = append(out, e)
@@ -1039,8 +1056,24 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 		if at := DecodeTime(e.at); at.After(s.Turns.LastEndedAt) {
 			s.Turns.LastEndedAt = at
 		}
+		if e.wake != "" && e.outcome != "" {
+			s.Turns.Ledger = addLedger(s.Turns.Ledger, e.wake, e.outcome, e.tokens)
+		}
 	}
 	return nil
+}
+
+// addLedger counts one turn into its (wake, outcome) row, kept in key order.
+func addLedger(rows []UsageLedger, wake, outcome string, tokens types.TurnTokens) []UsageLedger {
+	i, found := slices.BinarySearchFunc(rows, [2]string{wake, outcome}, func(r UsageLedger, k [2]string) int {
+		return cmp.Or(cmp.Compare(r.Wake, k[0]), cmp.Compare(r.Outcome, k[1]))
+	})
+	if !found {
+		rows = slices.Insert(rows, i, UsageLedger{Wake: wake, Outcome: outcome})
+	}
+	rows[i].Turns++
+	rows[i].Tokens = rows[i].Tokens.Plus(tokens)
+	return rows
 }
 
 // usageEndedTurnsSQL is [DB.usageTurns]'s statement — the turns that ended in
@@ -1063,7 +1096,15 @@ func usageEndedTurnsSQL(w UsageWindow) (string, []any) {
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.reviews'), 0)),
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.sent_back'), 0)),
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.unaccepted'), 0)),
-		       MAX(CASE WHEN json_type(e.payload, '$.turn') IS NULL THEN 0 ELSE 1 END)
+		       MAX(CASE WHEN json_type(e.payload, '$.turn') IS NULL THEN 0 ELSE 1 END),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.wake'), '')),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.outcome'), '')),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.input'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.output'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.cache_read'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.cache_write'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.aux_input'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.aux_output'), 0))
 		  FROM crewlet_events AS e
 		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
 		   AND e.turn_id != '' AND e.agent_id != ''

@@ -95,7 +95,8 @@ const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
 		       duration_hist, last_ended_at, reads_elided, tools_elided,
-		       changes_opened, reviews_given, findings_received, checks_failed, ejections
+		       changes_opened, reviews_given, findings_received, checks_failed, ejections,
+		       ledger_elided
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -111,6 +112,10 @@ const (
 	appliedSeatToolsSQL = `
 		SELECT server, tool, calls, failed, unavailable, refused, total_ms, last_at
 		  FROM usage_tool_calls
+		 WHERE day = ? AND node = ? AND agent_id = ?`
+	appliedSeatLedgerSQL = `
+		SELECT wake, outcome, turns, input, output, cache_read, cache_write, aux_input, aux_output
+		  FROM usage_turn_ledger
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedPersonSQL = `
 		SELECT role, phase, worker, model, provider_key, input, output,
@@ -166,7 +171,7 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
 				&rec.ToolsElided, &code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived,
-				&code.ChecksFailed, &code.Ejections); {
+				&code.ChecksFailed, &code.Ejections, &rec.LedgerElided); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -189,7 +194,10 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			if rec.Reads, err = appliedReads(ctx, tx, s); err != nil {
 				return err
 			}
-			rec.Tools, err = appliedTools(ctx, tx, s)
+			if rec.Tools, err = appliedTools(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Ledger, err = appliedLedger(ctx, tx, s)
 			return err
 		case KindPerson:
 			var err error
@@ -335,6 +343,26 @@ func appliedTools(ctx context.Context, tx *sql.Tx, s Subject) ([]ToolCalls, erro
 	return out, rows.Err()
 }
 
+// appliedLedger reads a seat-day's turn ledger, in key order.
+func appliedLedger(ctx context.Context, tx *sql.Tx, s Subject) ([]LedgerRow, error) {
+	rows, err := tx.QueryContext(ctx, appliedSeatLedgerSQL, s.Day, s.Node, s.Seat)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []LedgerRow
+	for rows.Next() {
+		var l LedgerRow
+		if err := rows.Scan(&l.Wake, &l.Outcome, &l.Turns, &l.Input, &l.Output, &l.CacheRead,
+			&l.CacheWrite, &l.AuxInput, &l.AuxOutput); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	slices.SortFunc(out, compareLedgerKey)
+	return out, rows.Err()
+}
+
 // appliedFires reads a schedule-day's fires, in fire order.
 func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	rows, err := tx.QueryContext(ctx, appliedScheduleSQL, s.Day, s.Node, s.ScopeType,
@@ -410,6 +438,8 @@ func Join(derived, applied Record) Record {
 		out.Code = joinCode(derived.Code, applied.Code)
 		out.Tools, out.ToolsElided = joinTools(derived.Tools, derived.ToolsElided,
 			applied.Tools, applied.ToolsElided)
+		out.Ledger, out.LedgerElided = joinLedger(derived.Ledger, derived.LedgerElided,
+			applied.Ledger, applied.LedgerElided)
 	case KindPerson:
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
@@ -626,6 +656,34 @@ func joinTools(d []ToolCalls, dElided int, a []ToolCalls, aElided int) ([]ToolCa
 	}
 	held := max(len(d)+dElided, len(a)+aElided, len(all))
 	kept, _ := capTools(all)
+	return kept, held - len(kept)
+}
+
+// joinLedger joins two seat-days' turn ledgers on [joinTools]' terms: every
+// figure of a row both hold at the larger of the two, a row only the fleet holds
+// kept, and the union capped again by the derivation's rule ([capLedger]).
+func joinLedger(d []LedgerRow, dElided int, a []LedgerRow, aElided int) ([]LedgerRow, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[ledgerKey]int, len(all))
+	for i, l := range all {
+		at[keyOfLedger(l)] = i
+	}
+	for _, l := range a {
+		i, ok := at[keyOfLedger(l)]
+		if !ok {
+			all = append(all, l)
+			continue
+		}
+		c := &all[i]
+		c.Turns, c.Input, c.Output = max(c.Turns, l.Turns), max(c.Input, l.Input), max(c.Output, l.Output)
+		c.CacheRead, c.CacheWrite = max(c.CacheRead, l.CacheRead), max(c.CacheWrite, l.CacheWrite)
+		c.AuxInput, c.AuxOutput = max(c.AuxInput, l.AuxInput), max(c.AuxOutput, l.AuxOutput)
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capLedger(all)
 	return kept, held - len(kept)
 }
 

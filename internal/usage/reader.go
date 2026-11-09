@@ -88,6 +88,11 @@ func (r Reader) ServerToolCalls(ctx context.Context, q ServerToolCallsQuery) ([]
 	return ServerToolCalls(ctx, r.Estate, q)
 }
 
+// TurnLedger is [TurnLedger] over r's estate.
+func (r Reader) TurnLedger(ctx context.Context, q SpendQuery) ([]TurnLedgerRow, error) {
+	return TurnLedger(ctx, r.Estate, q)
+}
+
 // ToolsElided is [ToolsElided] over r's estate.
 func (r Reader) ToolsElided(ctx context.Context, from, to string) (int64, error) {
 	return ToolsElided(ctx, r.Estate, from, to)

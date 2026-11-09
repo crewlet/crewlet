@@ -52,8 +52,13 @@ func TestASeatsCodeDayIsStampedByWhatItCounts(t *testing.T) {
 			t.Errorf("a seat's day counting %s is stamped %d (%v), want 6", name, v, err)
 		}
 	}
-	if usage.RecordVersion != 6 {
-		t.Errorf("this build reads version %d, want 6", usage.RecordVersion)
+	ledgered := seatRecord("node-a", "2026-09-23", "seat-1", "m")
+	ledgered.Ledger = []usage.LedgerRow{{Wake: "work_item:assignee", Outcome: "moved", Turns: 1}}
+	if v, err := stamp(ledgered); err != nil || v != 7 {
+		t.Errorf("a seat's day carrying its turn ledger is stamped %d (%v), want 7", v, err)
+	}
+	if usage.RecordVersion != 7 {
+		t.Errorf("this build reads version %d, want 7", usage.RecordVersion)
 	}
 
 	person := usage.Record{RecordEnvelope: usage.RecordEnvelope{Writer: "node-a",
