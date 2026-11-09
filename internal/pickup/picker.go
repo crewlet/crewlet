@@ -182,39 +182,19 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 		return out
 	}
 	now := p.Now()
-	pick, err := p.choose(ctx, seat, now)
+	cooled := false
+	pick, err := p.choose(ctx, seat, now, func(c candidate) (bool, Skip, error) {
+		return p.hold(ctx, seat.ID, c, now, &cooled)
+	})
 	out.Ready, out.Item = pick.ready, pick.item
 	switch {
+	case pick.skip != "":
+		out.Skip, out.Err = pick.skip, err
+		return out
 	case err != nil:
 		return failed(out, err)
-	case pick.skip != "":
-		out.Skip = pick.skip
-		return out
 	}
-	// A DECLINE IS SPACED, WORK IS NOT: the cooldown is taken only when the
-	// pickup passes over an item the seat was handed and left unchanged.
-	if pick.passed {
-		if skip, err := p.claim(ctx, CooldownKey(seat.ID), p.Cooldown, now, SkipCooldown); skip != "" {
-			out.Skip, out.Err = skip, err
-			return out
-		}
-	}
-	// HELD FOR THE FLEET'S LONGEST CLAIM, so a copy waiting in the inbox is
-	// not published again before its turn records it in the ledger.
 	key := pick.key
-	if skip, err := p.claim(ctx, key.ClaimKey(), coord.MaxClaimTTL, now, SkipClaimed); skip != "" {
-		out.Skip, out.Err = skip, err
-		return out
-	}
-	// THE SEAT'S OWN PROGRESS HANDS A STARTED ITEM BACK once per cooldown,
-	// so a turn answering every pickup with a write cannot loop.
-	if skip, err := p.claim(ctx, key.ProgressKey(), p.Cooldown, now, SkipCooldown); skip != "" {
-		if rerr := p.Claims.Release(context.WithoutCancel(ctx), key.ClaimKey()); rerr != nil {
-			err = errors.Join(err, rerr)
-		}
-		out.Skip, out.Err = skip, err
-		return out
-	}
 	var trace events.TraceContext
 	if p.Trace != nil {
 		trace = p.Trace(ctx)
@@ -230,7 +210,7 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 		// ledger collapse, so both claims are given back for the next pass.
 		release := context.WithoutCancel(ctx)
 		claims := []string{key.ClaimKey(), key.ProgressKey()}
-		if pick.passed {
+		if cooled {
 			claims = append(claims, CooldownKey(seat.ID))
 		}
 		for _, claim := range claims {
@@ -244,21 +224,32 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 	return out
 }
 
-// picked is what [Picker.choose] found: the item and its key, whether it
-// passed over an item already handed over, and the ready count.
+// picked is what [Picker.choose] found: the item and its key, and the ready
+// count.
 type picked struct {
 	item   worklet.ReadyItem
 	key    Key
-	passed bool
 	ready  int
 	capped bool
 	skip   Skip
 }
 
+// candidate is one unworked item [Picker.choose] offers, and whether the
+// pass passed over a handed item to reach it.
+type candidate struct {
+	item   worklet.ReadyItem
+	key    Key
+	passed bool
+}
+
 // choose walks the seat's ready work page by page and asks the ledger key by
-// key, stopping at the first pickup the seat has not had.
-func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time) (picked, error) {
+// key, offering each item the seat has not had until offer takes one. An item
+// offer answers neither taken nor stopped is cooling, and the walk goes on.
+func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time,
+	offer func(candidate) (bool, Skip, error)) (picked, error) {
+
 	var out picked
+	passed, cooling := false, false
 	for page := 0; ; page++ {
 		// THE NODE'S OWN COPY: the settle gave the last turn's writes a
 		// pass to land, and a stale answer costs a pickup the ledger refuses.
@@ -280,19 +271,69 @@ func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time) (picked, 
 		}
 		for _, item := range ready.Items {
 			key := KeyOf(seat.ID, item)
-			if !p.Ledger.Worked(ctx, seat.Handle, []string{key.WorkKey()})[key.WorkKey()] {
+			if p.Ledger.Worked(ctx, seat.Handle, []string{key.WorkKey()})[key.WorkKey()] {
+				passed = true
+				continue
+			}
+			taken, skip, err := offer(candidate{item: item, key: key, passed: passed})
+			switch {
+			case skip != "" || err != nil:
+				out.skip = skip
+				return out, err
+			case taken:
 				out.item, out.key = item, key
 				p.remember(seat.ID, "")
 				return out, nil
 			}
-			out.passed = true
+			cooling = true
 		}
 		if !ready.More {
+			// A COOLING ITEM IS NOT OFFERED YET, so the set is not
+			// remembered as all offered.
+			if cooling {
+				p.remember(seat.ID, "")
+				out.skip = SkipCooldown
+				return out, nil
+			}
 			p.remember(seat.ID, ready.Fingerprint)
 			out.skip = SkipOffered
 			return out, nil
 		}
 	}
+}
+
+// hold takes one candidate's claims: the seat's cooldown, once a pass, when
+// it passed over a handed item; the item's; then its progress. A progress
+// claim held elsewhere answers neither taken nor stopped: the item is cooling.
+func (p *Picker) hold(ctx context.Context, seat uuid.UUID, c candidate, now time.Time,
+	cooled *bool) (bool, Skip, error) {
+
+	// A DECLINE IS SPACED, WORK IS NOT: the cooldown is taken only when the
+	// pickup passes over an item the seat was handed and left unchanged.
+	if c.passed && !*cooled {
+		if skip, err := p.claim(ctx, CooldownKey(seat), p.Cooldown, now, SkipCooldown); skip != "" {
+			return false, skip, err
+		}
+		*cooled = true
+	}
+	// HELD FOR THE FLEET'S LONGEST CLAIM, so a copy waiting in the inbox is
+	// not published again before its turn records it in the ledger.
+	if skip, err := p.claim(ctx, c.key.ClaimKey(), coord.MaxClaimTTL, now, SkipClaimed); skip != "" {
+		return false, skip, err
+	}
+	// THE SEAT'S OWN PROGRESS HANDS A STARTED ITEM BACK once per cooldown,
+	// so a turn answering every pickup with a write cannot loop.
+	skip, err := p.claim(ctx, c.key.ProgressKey(), p.Cooldown, now, SkipCooldown)
+	if skip == "" {
+		return true, "", nil
+	}
+	if rerr := p.Claims.Release(context.WithoutCancel(ctx), c.key.ClaimKey()); rerr != nil {
+		err = errors.Join(err, rerr)
+	}
+	if err != nil {
+		return false, skip, err
+	}
+	return false, "", nil
 }
 
 // claim takes one fleet claim, answering the skip that holds the seat back,

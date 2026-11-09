@@ -373,7 +373,8 @@ nobody in particular:
   whatever the reply names: the seat that asked something there with no answer
   yet, under `awaiting`, and the seat asked that still owes the answer, under
   `owing`. The one exception is a co-asker: a reply by a seat whose only stake
-  is awaiting the same addressee does not wake another seat awaiting it. A
+  is awaiting the same addressee does not wake another seat awaiting it, and a
+  person whose open message reached that addressee is a co-asker too. A
   top-level message in a named room answers the newest open top-level ask each
   agent holds of its author there, and wakes the agent that asked under
   `answer`; an older ask stays open for a later message.

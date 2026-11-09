@@ -1,6 +1,7 @@
 package chatlet_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -221,5 +222,67 @@ func TestATopLevelPostAnswersOnlyTheNewestAsk(t *testing.T) {
 	}
 	if got := say("k-more", "Also cleaned the old tables."); len(got) != 0 {
 		t.Fatalf("a's third post woke %v, want nobody: both asks were answered", got)
+	}
+}
+
+// A PERSON'S OWN ASK IS A STAKE (ADR-0113): a person awaiting the same seat an
+// agent awaits is a co-asker, so the person's nudge to that seat does not wake
+// the agent, as in a tracker thread.
+func TestAPersonCoAskersNudgeLeavesTheAgentAsleep(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("sara"))
+	room := r.room(seat("b", "run-0"), "launch", "a", "b", "sara")
+	ask, err := r.store.Post(t.Context(), keyed(seat("b", "run-1"), requested("k-b")),
+		room.Channel.ID, chatlet.NewMessage{Body: "@a is the deploy done?",
+			Mentions: []string{"a"}, Asks: true})
+	if err != nil {
+		t.Fatalf("b's ask: %v", err)
+	}
+	r.drain()
+	nudge := func(key, body string) map[string]chatlet.Reason {
+		t.Helper()
+		if _, err := r.store.Reply(t.Context(), keyed(person("sara"), requested(key)),
+			room.Channel.ID, ask.Message.ID, chatlet.NewMessage{Body: body,
+				Mentions: []string{"a"}}); err != nil {
+			t.Fatalf("sara's %q: %v", body, err)
+		}
+		r.drain()
+		return wokenBy(r)
+	}
+	nudge("k-sara", "@a and the release notes?")
+	if got := nudge("k-sara2", "@a any word?"); len(got) != 1 || got["a"] != chatlet.ReasonMention {
+		t.Fatalf("sara's nudge woke %v, want a alone: b only awaits the seat sara awaits", got)
+	}
+}
+
+// ONE ASKER'S MANY ASKS DO NOT CROWD OUT ANOTHER'S: a top-level post answers
+// each asker's newest ask, however many older ones the first asker left open.
+func TestATopLevelPostAnswersEveryAskersNewestAsk(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents())
+	room := r.room(seat("b", "run-0"), "platform", "a", "b", "c")
+	ask := func(asker, key string) {
+		t.Helper()
+		if _, err := r.store.Post(t.Context(), keyed(seat(asker, "run-"+key), requested(key)),
+			room.Channel.ID, chatlet.NewMessage{Body: "@a is it done?",
+				Mentions: []string{"a"}, Asks: true}); err != nil {
+			t.Fatalf("%s's ask %s: %v", asker, key, err)
+		}
+		r.drain()
+	}
+	for i := range chatlet.MaxThreadParticipants + 1 {
+		ask("b", fmt.Sprintf("k-b%02d", i))
+	}
+	ask("c", "k-c")
+	if _, err := r.store.Post(t.Context(), keyed(seat("a", "run-a"), requested("k-a")),
+		room.Channel.ID, chatlet.NewMessage{Body: "It is done."}); err != nil {
+		t.Fatalf("a's answer: %v", err)
+	}
+	r.drain()
+	got := wokenBy(r)
+	if got["b"] != chatlet.ReasonAnswer || got["c"] != chatlet.ReasonAnswer ||
+		len(r.lastRecord().Notify.Answering) != 2 {
+		t.Fatalf("a's top-level post woke %v answering %d asks, want b and c, one ask each",
+			got, len(r.lastRecord().Notify.Answering))
 	}
 }

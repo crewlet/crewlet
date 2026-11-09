@@ -639,8 +639,9 @@ the last word anybody said about that item.
   item, comments on it or records a blocker on it is not handed it again until
   somebody else changes it or its status moves. Started work the seat makes
   progress on (a field it changes, never a write of the value already there)
-  is handed back when it is idle again, at most once per cooldown, and a turn
-  that changed nothing does not bring it back.
+  is handed back when it is idle again, at most once per cooldown (the next
+  ready item is handed over meanwhile), and a turn that changed nothing does
+  not bring it back.
 - **Past the first page.** Ready work is read twenty items at a time, so item
   twenty-one onwards is handed over once the first twenty were, and a seat
   whose whole ready set was handed over already is not asked about again until

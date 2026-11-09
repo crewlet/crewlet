@@ -128,6 +128,38 @@ func TestACoAskersReplyLeavesTheOtherAskerAsleep(t *testing.T) {
 	}
 }
 
+// A PERSON'S OWN ASK IS A STAKE (ADR-0113): a person awaiting the seat an
+// agent awaits is a co-asker, so the person's reply does not wake the agent,
+// as in a chat thread; somebody with no ask there still does.
+func TestAPersonsOpenAskMakesACoAsker(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("ship or hold")
+	root := "c-dev"
+	for _, c := range []worklet.Comment{
+		{ID: root, Author: "dev", AuthorKind: worklet.AuthorAgent, Body: "Friday?", Ask: "ana"},
+		{ID: "c-jane", Author: "jane", AuthorKind: worklet.AuthorHuman, Body: "and the notes?",
+			Ask: "ana", ReplyTo: &root},
+	} {
+		c.Task, c.CreatedAt = created.ID, wednesday
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+c.ID, created.ID, "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, nil); err != nil {
+			t.Fatalf("%s: %v", c.ID, err)
+		}
+		r.drain()
+	}
+	for author, want := range map[string][]string{"jane": {"jane"}, "lead": {"dev", "jane"}} {
+		got, err := r.reader.Thread(t.Context(), worklet.ThreadQuery{Task: created.ID,
+			ReplyTo: root, Author: author}, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("read the thread as %s: %v", author, err)
+		}
+		if !slices.Equal(got.Awaiting, want) {
+			t.Errorf("a reply by %s has %v awaiting, want %v", author, got.Awaiting, want)
+		}
+	}
+}
+
 func withAuthor(s worklet.Snapshot, kind worklet.AuthorKind) worklet.Snapshot {
 	s.CommentAuthorKind = kind
 	return s
