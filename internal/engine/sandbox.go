@@ -959,6 +959,17 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		return fmt.Errorf("%w: run %s has no parked turn state",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
 	}
+	if req.Asked != nil {
+		// AN ANSWER TO A QUESTION ABOUT A FINISHED ITEM IS MOOT: the run is
+		// settled and the reply goes back to the seat as the message it is.
+		finished, err := r.engine.itemFinished(ctx, req.Run)
+		if err != nil {
+			return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
+		}
+		if finished != nil {
+			return finished
+		}
+	}
 	// ONE EPOCH for the whole resume: the seat checked here, the organization
 	// it belongs to, and the company the resumed turn then runs in (see
 	// [resumeInput.Company]). A second read of the engine's company is a
@@ -2107,6 +2118,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = tel.written.Items()
+	for _, c := range tel.written.Changes() {
+		suspension.State.Committed = append(suspension.State.Committed, string(c))
+	}
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = tel.ask

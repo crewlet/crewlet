@@ -451,8 +451,14 @@ func TestAnAgentsPageCommentThatAsksNothingWakesNoAgent(t *testing.T) {
 				Mentions: []string{"bob"}, Asks: c.asks}); err != nil {
 			t.Fatalf("comment as %s: %v", c.actor.Handle, err)
 		}
-		if got := routedTo(r.routeVia(r.lastRecord(), nil, roster)); !slices.Equal(got, c.want) {
+		routed := r.routeVia(r.lastRecord(), nil, roster)
+		if got := routedTo(routed); !slices.Equal(got, c.want) {
 			t.Errorf("case %d: %s's comment reached %v, want %v", i, c.actor.Handle, got, c.want)
+		}
+		// THE AGENT IT NAMED IS TOLD AND HELD, a held wake on its record.
+		if wantHeld := c.asks != nil && !*c.asks; wantHeld != slices.Equal(heldBy(routed), []string{"bob"}) {
+			t.Errorf("case %d: %s's comment held %v, want bob held %v", i, c.actor.Handle,
+				heldBy(routed), wantHeld)
 		}
 	}
 	// AN OLDER BUILD'S AGENT COMMENT, which states nothing, routes as before.
@@ -515,11 +521,25 @@ func reencode(t *testing.T, rec doclet.MutationRecord) []byte {
 	return out
 }
 
-// routedTo is the handles a routing reached, sorted.
+// routedTo is the handles a routing woke, sorted.
 func routedTo(routed []notify.Routed) []string {
 	var out []string
 	for _, c := range routed {
-		out = append(out, c.To.Handle)
+		if !c.Held {
+			out = append(out, c.To.Handle)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// heldBy is the handles a routing told and did not wake, sorted.
+func heldBy(routed []notify.Routed) []string {
+	var out []string
+	for _, c := range routed {
+		if c.Held {
+			out = append(out, c.To.Handle)
+		}
 	}
 	slices.Sort(out)
 	return out

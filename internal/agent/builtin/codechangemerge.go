@@ -168,6 +168,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
 	}
+	commit(turn, res.Outcome, types.CommittedCode)
 	out := codeMergeAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Change: cv.g.ref(), Target: strings.TrimPrefix(w.Ref, branchRoot), OpID: cv.g.c.actor.Operation}
 	m := res.Merge
@@ -509,6 +510,7 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, g.c, g.repo, op, err), nil
 	}
+	commit(turn, res.Outcome, types.CommittedCode)
 	target := strings.TrimPrefix(cv.change.TargetRef, branchRoot)
 	switch {
 	case res.Refusal != "":

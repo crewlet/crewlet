@@ -18,6 +18,33 @@ func init() {
 	events.Register[TurnTriggerSkipped]()
 	events.Register[NotificationsCoalesced]()
 	events.Register[NotificationSkipped]()
+	events.Register[WakeHeld]()
+}
+
+// WakeHeld records a notice an agent seat was told and not woken by: its notice
+// row is written and no turn starts (ADR-0113). The turn ledger counts it per
+// seat and day as the wake's `held` disposition, under [WakeOf]'s key.
+type WakeHeld struct {
+	Agent              string        `json:"agent_id"`
+	AgentHandle        string        `json:"agent_handle"`
+	NotificationSource string        `json:"notification_source"`
+	Origin             TriggerOrigin `json:"origin"`
+}
+
+// EventType is the "wake_held" wire type.
+func (WakeHeld) EventType() string { return "wake_held" }
+
+// AgentID is the seat that was told and not woken.
+func (e WakeHeld) AgentID() string { return e.Agent }
+
+// Wake is the held notice's key in the turn ledger, as a turn's wake is keyed.
+func (e WakeHeld) Wake() string {
+	return WakeOf(Trigger{Type: ExternalNotification{}.EventType(), Origin: e.Origin})
+}
+
+// Summary names the seat and what it was told.
+func (e WakeHeld) Summary() string {
+	return lead(e.AgentHandle, "was told and not woken ("+e.Wake()+")")
 }
 
 // NotificationWriter is who wrote the record a FIRST-PARTY notification

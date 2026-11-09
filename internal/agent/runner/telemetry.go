@@ -292,6 +292,10 @@ type Spend struct {
 	// executions themselves, as each phase completes.
 	Tools []types.ToolTally
 
+	// Refusals is this segment's refused calls per (server, tool, class), the
+	// engine's own tools included ([types.TurnTally.Refusals]).
+	Refusals []types.RefusalTally
+
 	// Review is the notes of the NEWEST review that sent the work back —
 	// what the reviewer asked for on the pass that followed. The LAST one,
 	// because a turn sent back twice was answered on the second request;
@@ -337,6 +341,7 @@ func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 	// with the seat's grant, so a server's count without them would miss
 	// every call a fan-out made.
 	s.Tools = types.SumToolTallies(s.Tools, toolTallies(res.Executions))
+	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(res.Executions))
 }
 
 // recordJudge folds one extension judgement into the turn's tally.
@@ -394,6 +399,7 @@ func (s *Spend) record(rec phaseRecord) {
 	}
 	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
 	s.Tools = types.SumToolTallies(s.Tools, toolTallies(rec.Result.Executions))
+	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
 		names := toolNames(rec.Result.Executions)
 		// REPLACED, not appended — see the field's own note.
@@ -439,6 +445,22 @@ func toolTallies(execs []toolloop.Execution) []types.ToolTally {
 		out = append(out, t)
 	}
 	return types.SumToolTallies(out)
+}
+
+// refusalTallies counts a phase's refused calls per (server, tool, class): every
+// call the engine classed a refusal, its own tools' included, under the server
+// whose tool it named.
+func refusalTallies(execs []toolloop.Execution) []types.RefusalTally {
+	var out []types.RefusalTally
+	for _, ex := range execs {
+		if ex.Refusal == "" {
+			continue
+		}
+		server, _ := mcp.OriginServer(ex.Source)
+		out = append(out, types.RefusalTally{Server: server, Tool: ex.Name,
+			Class: string(ex.Refusal), Calls: 1})
+	}
+	return types.SumRefusals(out)
 }
 
 // toolNames is the called tools in order, including repeats.

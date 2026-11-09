@@ -26,6 +26,10 @@ type pickupLoop struct {
 	done   chan struct{}
 
 	picker *pickup.Picker
+
+	// unread is the seats whose parked runs could not be judged on the last
+	// pass, so the failure is said once and its end once.
+	unread map[string]bool
 }
 
 // startPickups arms the loop on a node that publishes wakes. The company is
@@ -85,6 +89,9 @@ func (e *Engine) pickupPass(ctx context.Context) {
 		!c.Config.Scheduling.WorkPickup.Runs() ||
 		c.Config.TrackerBackendFor() != config.TrackerWorklet {
 		p.Forget()
+		// PARKED RUNS ARE STILL JUDGED EVERY PASS, which the pickup's own
+		// idle check does where it runs: a settle once held back is retried.
+		e.settleParkedRuns(ctx)
 		return
 	}
 	var seats []pickup.Seat
@@ -143,10 +150,20 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 		Shedding:        !screen.AdmitsTriggers,
 		Draining:        e.shuttingDown.Load(),
 	}
+	awaits := c.ExecutorAwaits
+	c.ExecutorAwaits = false
 	if !pickup.IdleNow(c) {
 		// THE CHEAP ANSWERS FIRST: a seat that is busy is not asked
 		// about its budget, its provider or its inbox.
+		c.ExecutorAwaits = awaits
 		return c
+	}
+	if awaits {
+		// A PARKED RUN HOLDS THE PICKUP ONLY WHILE ITS BOX WAITS PAUSED for
+		// its answer; past its pause it still takes the answer when it comes.
+		if c.ExecutorAwaits = e.parkedHoldsPickup(ctx, seat.Handle); c.ExecutorAwaits {
+			return c
+		}
 	}
 	// THE QUESTION A RELAUNCH ASKS BEFORE IT RUNS, asked without a
 	// delivery: a budget window that would refuse the launch, a provider
@@ -158,6 +175,62 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 	// rather than queue work behind mail it cannot see.
 	c.MailWaiting = err != nil || waiting.Total() > 0
 	return c
+}
+
+// settleParkedRuns judges the parked runs of every held seat with a question
+// open, settling those no build will resume.
+func (e *Engine) settleParkedRuns(ctx context.Context) {
+	rt := e.sandbox.Load()
+	if rt == nil || e.node == nil {
+		return
+	}
+	for _, seat := range e.node.Host().HeldSeats() {
+		if _, awaits := rt.coordinator.SeatRuns(seat.Handle); !awaits {
+			continue
+		}
+		e.settleParkedOf(ctx, rt.coordinator, seat.Handle)
+	}
+}
+
+// parkedHoldsPickup settles the seat's parked runs no build will resume and
+// reports whether one still waits within its pause; a store that cannot say
+// holds the pickup, as an inbox that cannot be read does.
+func (e *Engine) parkedHoldsPickup(ctx context.Context, handle string) bool {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return false
+	}
+	pausing, ok := e.settleParkedOf(ctx, rt.coordinator, handle)
+	return pausing || !ok
+}
+
+// settleParkedOf settles one seat's parked runs ([sandbox.Coordinator.SettleParked]),
+// saying at warn the first pass they cannot be judged and once when they can
+// again; ok is false where the store could not answer.
+func (e *Engine) settleParkedOf(ctx context.Context, c *sandbox.Coordinator, handle string) (pausing, ok bool) {
+	pausing, err := c.SettleParked(ctx, handle)
+	e.pickup.mu.Lock()
+	was := e.pickup.unread[handle]
+	if err != nil {
+		if e.pickup.unread == nil {
+			e.pickup.unread = map[string]bool{}
+		}
+		e.pickup.unread[handle] = true
+	} else {
+		delete(e.pickup.unread, handle)
+	}
+	e.pickup.mu.Unlock()
+	switch {
+	case err != nil && !was:
+		log.WarnContext(ctx, "work_pickup_parked_unread", "handle", handle, "error", err.Error(),
+			"detail", "the seat's parked runs could not be judged, so none is settled and the seat "+
+				"is handed no work while one may still wait within its pause; said again once it reads")
+	case err != nil:
+		log.DebugContext(ctx, "work_pickup_parked_unread", "handle", handle, "error", err.Error())
+	case was:
+		log.InfoContext(ctx, "work_pickup_parked_read", "handle", handle)
+	}
+	return pausing, err == nil
 }
 
 // notePickup records what a pass decided for a seat it found idle: counted

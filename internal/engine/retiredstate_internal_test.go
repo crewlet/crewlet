@@ -13,6 +13,8 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PARKED RUN OF A RETIRED STATE VERSION IS SETTLED ONLY ONCE NO LIVE NODE
@@ -131,4 +133,62 @@ func present(ctx context.Context, t *testing.T, backend coord.Backend, node stri
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A RUN PARKED ON A QUESTION ABOUT A FINISHED OR REMOVED WORKLET ITEM IS
+// SETTLED: its question is moot. An open item, an item on another tracker, a run
+// on no item, and an item that cannot be read settle nothing.
+func TestAParkedRunIsSettledWhenItsItemCloses(t *testing.T) {
+	t.Parallel()
+	worklet7 := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "W-7"}
+	for _, tc := range []struct {
+		name    string
+		item    *types.WorkItem
+		tasks   taskReader
+		settled bool
+		fails   bool
+	}{
+		{name: "done", item: worklet7, tasks: taskAt(worklet.StatusDone), settled: true},
+		{name: "cancelled", item: worklet7, tasks: taskAt(worklet.StatusCancelled), settled: true},
+		{name: "removed", item: worklet7, tasks: taskErr{worklet.ErrNoTask}, settled: true},
+		{name: "in progress", item: worklet7, tasks: taskAt(worklet.StatusInProgress)},
+		{name: "on another tracker", item: &types.WorkItem{Backend: types.WorkJira, ID: "10042"},
+			tasks: taskAt(worklet.StatusDone)},
+		{name: "on no item", tasks: taskAt(worklet.StatusDone)},
+		{name: "unreadable", item: worklet7, tasks: taskErr{errors.New("no copy serves")}, fails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			run := sandbox.PendingRun{TurnID: "t1", AgentHandle: "app", Status: sandbox.StatusAwaiting,
+				WorkItem: tc.item}
+			got, err := finishedItem(context.Background(), tc.tasks, run)
+			if (err != nil) != tc.fails {
+				t.Fatalf("judged with error %v, want an error %v", err, tc.fails)
+			}
+			if (got != nil) != tc.settled {
+				t.Fatalf("settled = %+v, want settled %v", got, tc.settled)
+			}
+			if got != nil && got.Reason != types.ExecutorFailureItemFinished {
+				t.Fatalf("settled under %q, want %q", got.Reason, types.ExecutorFailureItemFinished)
+			}
+		})
+	}
+}
+
+// taskAt answers every task read with a task in status.
+type taskAt worklet.Status
+
+func (s taskAt) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+	var detail worklet.TaskDetail
+	detail.Task.Status = worklet.Status(s)
+	return detail, nil
+}
+
+// taskErr answers every task read with an error.
+type taskErr struct{ err error }
+
+func (e taskErr) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+	return worklet.TaskDetail{}, e.err
 }
