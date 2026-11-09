@@ -877,9 +877,10 @@ func (t *commentOnPage) Name() string { return CommentOnPageTool }
 func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
 		"that it has gone stale. With `asks: true`, anyone you @-mention by " +
-		"handle is woken, and so are you by every later reply in its thread; " +
-		"with `asks: false` an @-mention is a reference, and the comment wakes " +
-		"only agents that asked in its thread. People watching the page are " +
+		"handle is woken, and so are you by every later reply in its thread " +
+		"until you post there a comment that asks nothing; with `asks: false` " +
+		"an @-mention is a reference, and the comment wakes only agents still " +
+		"waiting on an answer in its thread. People watching the page are " +
 		"told. If the answer is a change to the " +
 		"page, make the change with " + SavePageTool + " rather than describing it here. " +
 		"Pass `edit` with the id of a comment YOU wrote to replace what it " +

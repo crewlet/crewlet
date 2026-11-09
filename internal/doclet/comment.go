@@ -110,8 +110,8 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 					excerpt(body), mentions)
 				if notify != nil {
 					notify.Asks = asks
-					if notify.Awaiting, err = threadAskersTx(ctx, tx, pageID,
-						comment.ReplyTo, actor.Name()); err != nil {
+					if notify.Awaiting, err = awaitingTx(ctx, tx, pageID,
+						comment.ReplyTo, actor.Name(), mentions); err != nil {
 						return statelog.Decision{}, err
 					}
 				}
@@ -375,13 +375,32 @@ func statedBy(actor Actor, asks *bool) *bool {
 	return &stated
 }
 
-// threadAskersTx is the agents other than author that asked something in the
-// thread replyTo is in, its root and every reply to it, cut at [MaxAwaiting].
-func threadAskersTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author string) (
-	[]string, error) {
+// awaitingTx is the agents a comment by author wakes for their stake on the
+// page (ADR-0113): in a reply's thread, each whose newest comment there asks,
+// less a co-asker; at the top level, each it names whose newest comment in a
+// thread asks author. Cut at [MaxAwaiting].
+func awaitingTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author string,
+	mentions []string) ([]string, error) {
 
 	if replyTo == "" {
-		return nil, nil
+		if len(mentions) == 0 {
+			return nil, nil
+		}
+		threads, err := stakesTx(ctx, tx, pageCommentsStatement, pageID, MaxThreadComments)
+		if err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, stakes := range threads {
+			for _, s := range stakes {
+				if s.Author != author && len(out) < MaxAwaiting && slices.Contains(mentions, s.Author) &&
+					slices.Contains(s.Mentions, author) && !slices.Contains(out, s.Author) {
+					out = append(out, s.Author)
+				}
+			}
+		}
+		slices.Sort(out)
+		return out, nil
 	}
 	root := replyTo
 	switch replied, err := readCommentTx(ctx, tx, pageID, replyTo); {
@@ -392,23 +411,64 @@ func threadAskersTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author str
 	case replied.ReplyTo != "":
 		root = replied.ReplyTo
 	}
-	rows, err := tx.QueryContext(ctx, threadCommentsStatement, pageID, root, root, MaxThreadComments)
+	threads, err := stakesTx(ctx, tx, threadCommentsStatement, pageID, root, root, MaxThreadComments)
 	if err != nil {
-		return nil, fmt.Errorf("doclet: read the thread of comment %s: %w", root, err)
+		return nil, err
+	}
+	stakes := threads[root]
+	owes := false
+	var own []string
+	for _, s := range stakes {
+		owes = owes || (s.Author != author && slices.Contains(s.Mentions, author))
+		if s.Author == author {
+			own = s.Mentions
+		}
+	}
+	var out []string
+	for _, s := range stakes {
+		// A CO-ASKER'S REPLY: an author whose only stake is awaiting the
+		// seat this asker awaits does not wake it.
+		if s.Author == author || len(out) == MaxAwaiting || (!owes &&
+			slices.ContainsFunc(s.Mentions, func(h string) bool { return slices.Contains(own, h) })) {
+			continue
+		}
+		out = append(out, s.Author)
+	}
+	return out, nil
+}
+
+// stakesTx reads page comments newest first and keeps, per thread root, each
+// author's newest comment where it asks: an author awaits only while its last
+// word in the thread is an ask.
+func stakesTx(ctx context.Context, tx *sql.Tx, statement string, args ...any) (
+	map[string][]Comment, error) {
+
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("doclet: read the comments that ask: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []string
+	seen := map[string]bool{}
+	out := map[string][]Comment{}
 	for rows.Next() {
 		var document []byte
 		if err := rows.Scan(&document); err != nil {
 			return nil, err
 		}
 		c, err := DecodeComment(document)
-		if err != nil || c.Asks == nil || !*c.Asks || c.Author == author ||
-			slices.Contains(out, c.Author) || len(out) == MaxAwaiting {
+		if err != nil {
 			continue
 		}
-		out = append(out, c.Author)
+		root := c.ID
+		if c.ReplyTo != "" {
+			root = c.ReplyTo
+		}
+		if key := root + "\x00" + c.Author; !seen[key] {
+			seen[key] = true
+			if c.Asks != nil && *c.Asks {
+				out[root] = append(out[root], c)
+			}
+		}
 	}
 	return out, rows.Err()
 }
@@ -552,11 +612,16 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 const commentTxStatement = `SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`
 
 // threadCommentsStatement reads one comment thread of a page, its root and its
-// replies, oldest first.
+// replies, newest first; pageCommentsStatement every thread of a page.
 const threadCommentsStatement = `
 	SELECT document FROM pages_comments
 	WHERE page_id = ? AND (id = ? OR reply_to = ?)
-	ORDER BY created_at LIMIT ?`
+	ORDER BY created_at DESC LIMIT ?`
+
+const pageCommentsStatement = `
+	SELECT document FROM pages_comments
+	WHERE page_id = ?
+	ORDER BY created_at DESC LIMIT ?`
 
 // revisionStatement reads one immutable body by its page and its number — the
 // statement [Store.Revision] and [Reader.Revision] both read it with, named for

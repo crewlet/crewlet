@@ -209,6 +209,7 @@ func pageReads(t *testing.T) map[string]pageIndexed {
 		"a head at a version":             seek(heads, headAtStatement, "p-0001"),
 		"a held comment":                  seek(comments, heldCommentStatement, "c"),
 		"a reply's thread":                seek(thread, threadCommentsStatement, "p-0001", "c", "c", 200),
+		"a page's comments, newest first": seek(thread, pageCommentsStatement, "p-0001", 200),
 		"a comment removed":               seek(comments, removeCommentStatement, "c", 1),
 		"a page's watchers cleared":       seek(watchers, clearWatchersStatement, "p-0001"),
 		"a revision retired":              seek(revs, retireRevisionStatement, "p-0001", 1),

@@ -543,3 +543,105 @@ func TestAPageCommentEditKeepsItsAsks(t *testing.T) {
 		}
 	}
 }
+
+// pageThread is a page whose comments a test posts and routes, against a
+// roster of jane, a person, and agents a, b and c.
+type pageThread struct {
+	t      *testing.T
+	r      *roundTrip
+	page   string
+	roster *notify.Registry
+}
+
+func newPageThread(t *testing.T) *pageThread {
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	return &pageThread{t: t, r: r, page: page.Page.ID, roster: chart(t, "jane", "a", "b", "c")}
+}
+
+// say posts one comment and answers the agents it woke.
+func (p *pageThread) say(who, replyTo string, asks bool, body string, mentions ...string) (string, []string) {
+	p.t.Helper()
+	posted, _, err := p.r.store.Comment(p.t.Context(), agent(who), p.page,
+		doclet.NewComment{Body: body, ReplyTo: replyTo, Mentions: mentions, Asks: &asks})
+	if err != nil {
+		p.t.Fatalf("%s's %q: %v", who, body, err)
+	}
+	var agents []string
+	for _, handle := range routedTo(p.r.routeVia(p.r.lastRecord(), nil, p.roster)) {
+		if handle != "jane" {
+			agents = append(agents, handle)
+		}
+	}
+	return posted.ID, agents
+}
+
+// TWO AGENTS THAT ASKED EACH OTHER ON A PAGE STOP AFTER ONE ROUND (ADR-0113):
+// an agent awaits only while its newest comment in the thread asks, so the
+// acknowledgements after the answers wake nobody.
+func TestTwoAskersOnAPageStopAfterOneRound(t *testing.T) {
+	t.Parallel()
+	p := newPageThread(t)
+	root, woke := p.say("a", "", true, "@b is section 3 still accurate?", "b")
+	if !slices.Equal(woke, []string{"b"}) {
+		t.Fatalf("a's question woke %v, want b", woke)
+	}
+	if _, woke = p.say("b", root, true, "@a which version?", "a"); !slices.Equal(woke, []string{"a"}) {
+		t.Fatalf("b's question back woke %v, want a", woke)
+	}
+	if _, woke = p.say("a", root, false, "v2"); !slices.Equal(woke, []string{"b"}) {
+		t.Fatalf("a's answer woke %v, want b, who asked", woke)
+	}
+	for i, line := range []struct{ who, body string }{
+		{"b", "then yes, accurate"}, {"a", "thanks"}, {"b", "you're welcome"}, {"a", "cheers"},
+	} {
+		if _, woke = p.say(line.who, root, false, line.body); len(woke) != 0 {
+			t.Fatalf("acknowledgement %d (%s: %q) woke %v, want nobody", i, line.who, line.body, woke)
+		}
+	}
+}
+
+// A CO-ASKER'S NUDGE ON A PAGE WAKES NOBODY WHO AWAITS THE SAME SEAT, while
+// the addressee's reply still wakes the agent that asked.
+func TestAPageCoAskersNudgeLeavesTheOtherAskerAsleep(t *testing.T) {
+	t.Parallel()
+	p := newPageThread(t)
+	root, _ := p.say("a", "", true, "@b is section 3 still accurate?", "b")
+	p.say("c", root, true, "@b and section 4?", "b")
+	if _, woke := p.say("c", root, false, "any word?"); len(woke) != 0 {
+		t.Fatalf("c's nudge woke %v, want nobody: c only awaits the seat a awaits", woke)
+	}
+	if _, woke := p.say("b", root, false, "yes, both still hold"); !slices.Equal(woke, []string{"a"}) {
+		t.Errorf("b's answer woke %v, want a, still awaiting", woke)
+	}
+}
+
+// AN ANSWER POSTED AT THE TOP LEVEL REACHES THE AGENT THAT ASKED, when it names
+// the asker whose open question asked its author; it wakes no other agent.
+func TestATopLevelPageAnswerNamingTheAskerWakesIt(t *testing.T) {
+	t.Parallel()
+	p := newPageThread(t)
+	p.say("a", "", true, "@b is section 3 still accurate?", "b")
+	if _, woke := p.say("b", "", false, "@a section 3 is still accurate.", "a"); !slices.Equal(woke, []string{"a"}) {
+		t.Fatalf("b's top-level answer woke %v, want a", woke)
+	}
+	if _, woke := p.say("c", "", false, "@a noted.", "a"); len(woke) != 0 {
+		t.Errorf("c's top-level remark woke %v, want nobody: a asked b, not c", woke)
+	}
+}
+
+// A REMOVED ASKING COMMENT ASKS NOTHING: its row is gone, so its author awaits
+// no reply in its thread.
+func TestARemovedPageAskStopsWaking(t *testing.T) {
+	t.Parallel()
+	p := newPageThread(t)
+	root, _ := p.say("b", "", false, "Section 3 was reviewed.")
+	ask, _ := p.say("a", root, true, "@b which reviewer?", "b")
+	if _, err := p.r.store.RemoveComment(t.Context(), agent("a"), p.page, ask,
+		doclet.CommentAuthority{}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, woke := p.say("b", root, false, "the usual one"); len(woke) != 0 {
+		t.Errorf("a reply after the ask was removed woke %v, want nobody", woke)
+	}
+}

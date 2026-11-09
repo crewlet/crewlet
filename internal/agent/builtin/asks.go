@@ -27,11 +27,13 @@ var (
 			"question in the thread are woken.",
 	}
 	// pageAsks is a page comment's: a page has no answer record, so an agent
-	// that asked in a comment's thread hears every reply in it.
+	// whose last word in a thread asks hears every reply in it.
 	pageAsks = asksSurface{
 		asked: "The colleagues you @-mention are woken, and every later reply in " +
-			"this comment's thread wakes you.",
-		quiet: "only agents that asked something in this comment's thread are woken.",
+			"this comment's thread wakes you until you post there a comment that " +
+			"asks nothing.",
+		quiet: "the agents still waiting on an answer in this comment's thread " +
+			"(or, at the top level, the ones you name who asked you) are woken.",
 	}
 )
 
