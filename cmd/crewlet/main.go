@@ -2413,45 +2413,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	backups, err := backup.New(backup.Options{
-		Store: e.Backends().Store,
-		// WHAT THIS NODE HOLDS, from the rule the engine opens it by —
-		// never whether the replicated estate happens to be open, which it
-		// is not while an adoption replaces it.
-		Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
-		// Nil on a node that dialled an external NATS cluster, whose
-		// streams are backed up at the cluster. See internal/backup.
-		Conn: e.Backends().Conn(),
-		API:  e.Backends().API(),
-		// The trim-hold register. A backup is not a counted node, so
-		// without this the fleet's own trim can delete exactly the records
-		// the artefact's store-to-stream gap needs to be replayable, and
-		// the backup would report success.
-		Holds: e.Backends().Fleet,
-		// And where a finished copy is announced. Without it the trim's
-		// backup term has no input at all and refuses for ever, so a
-		// fleet with a working nightly backup would still never trim its
-		// log.
-		Backups: e.Backends().Fleet,
-		// The engine's own name for this node, never boot.Node.ID: the
-		// raw field is empty on a node named through CREWLET_NODE_ID, and
-		// this id keys the node's trim hold and its announced backup point.
-		NodeID: nodeID,
-		// Every object a required table of the store copy names,
-		// streamed from the one store the fleet shares and checked
-		// against the row naming it — or, where they ride the broker's
-		// own bucket, asked after once its stream is snapshotted.
-		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
-			Stream: e.ObjectsStream()},
-		// The keyring the appliers open every record with: the records a
-		// restore replays past the copy are signed frames, read for the
-		// files they name only once verified, exactly as they are applied.
-		Keyring: e.RecordKeyring(),
-		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
-		// duration is a catalogued instrument, and two recorders in one
-		// process would be two sets of series for one fleet.
-		Metrics: e.Recorder(),
-	})
+	// THE ENGINE'S OWN WIRING, every registered log included, so a backup
+	// names each one and the trim and the backup alarm can count it.
+	backups, err := backup.New(e.BackupOptions())
 	if err != nil {
 		return nil, err
 	}

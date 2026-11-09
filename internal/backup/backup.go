@@ -134,13 +134,13 @@ package backup
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -267,6 +267,12 @@ type Manifest struct {
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
 	// keyed by domain stream.
+	//
+	// EVERY LOG THE BUILD REGISTERS ([Options.Logs]), and nothing else. A
+	// log the copy holds no checkpoint on is named at the zero position:
+	// its applier has applied nothing, so a restore replays it from its
+	// first record. Left out, the backup covered it nowhere, and that log's
+	// trim and backup alarm waited for a backup that could never name it.
 	//
 	// READ FROM THE VERIFIED COPY, never from the live database. The
 	// checkpoint commits in the same transaction as the rows, so the
@@ -398,6 +404,16 @@ type Options struct {
 	// reads no log and needs none.
 	Keyring recordseal.Keyring
 
+	// Logs is the stream of every state-log domain this build registers
+	// (the engine's register). Required where the node holds the replicated
+	// estate, and refused at [New] when empty or repeated.
+	//
+	// THE BUILD'S LIST, NEVER THE COPY'S ROWS. A checkpoint row is written
+	// by the first apply, so a log nobody has written yet has none; read
+	// off the rows alone, the backup named only the logs that had applied
+	// something, and the rest were covered by no backup at all.
+	Logs []string
+
 	// Metrics is where the copy's duration is recorded. Nil records
 	// nothing, which is a legal deployment and leaves the `backup_taken`
 	// log line as the only account of how long it took.
@@ -451,7 +467,9 @@ type Service struct {
 	tables []objstore.ReferenceTable
 	// ring is the keyring each declaring log's records are opened with
 	// ([Options.Keyring]).
-	ring    recordseal.Keyring
+	ring recordseal.Keyring
+	// logs is every registered domain's stream ([Options.Logs]).
+	logs    []string
 	metrics *metrics.Recorder
 	now     func() time.Time
 	// pageRead is called after each read of the copy's references — nil but
@@ -509,6 +527,9 @@ func New(opts Options) (*Service, error) {
 			"they are answered")
 	}
 	if opts.Estate == HoldsReplicated {
+		if err := checkLogs(opts.Logs); err != nil {
+			return nil, err
+		}
 		// ASKED OF EVERY DECLARING LOG'S DOMAIN NOW, rather than when its
 		// first record turns up: a keyring that cannot verify one is a
 		// wiring mistake, and found at the first record past a copy it
@@ -527,8 +548,57 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
-		tables: references.All, ring: opts.Keyring, metrics: opts.Metrics, now: now,
-		volumeFree: store.VolumeFree}, nil
+		tables: references.All, ring: opts.Keyring, logs: slices.Clone(opts.Logs),
+		metrics: opts.Metrics, now: now, volumeFree: store.VolumeFree}, nil
+}
+
+// checkLogs refuses a register a backup of the replicated estate cannot name
+// every log by: none at all, a blank stream, or one stream twice.
+func checkLogs(logs []string) error {
+	if len(logs) == 0 {
+		return errors.New("backup: Options.Logs is required on a node holding the " +
+			"replicated estate: the manifest names every registered log, and a log " +
+			"it leaves out is covered by no backup; pass the engine's register")
+	}
+	seen := make(map[string]bool, len(logs))
+	for _, stream := range logs {
+		switch {
+		case strings.TrimSpace(stream) == "":
+			return errors.New("backup: Options.Logs names a blank stream")
+		case seen[stream]:
+			return fmt.Errorf("backup: Options.Logs names %s twice", stream)
+		}
+		seen[stream] = true
+	}
+	return nil
+}
+
+// placed is where every registered log stands in rows, the checkpoints one
+// estate holds (where names it in a refusal): a log with no row at the zero
+// position, since its applier has applied nothing.
+//
+// A ROW ON A LOG THE BUILD DOES NOT REGISTER IS REFUSED. No applier of this
+// build writes one, so the file and the build disagree about which logs exist,
+// and a restore by this build would leave that log's rows unreplayed.
+func (s *Service) placed(rows map[string]statelog.Position, where string) (
+	map[string]statelog.Position, error) {
+
+	out := make(map[string]statelog.Position, len(s.logs))
+	for _, stream := range s.logs {
+		at, held := rows[stream]
+		if !held {
+			at = statelog.Position{Stream: stream}
+		}
+		out[stream] = at
+	}
+	for stream := range rows {
+		if _, registered := out[stream]; !registered {
+			return nil, fmt.Errorf("backup: %s holds a checkpoint on %s, which this "+
+				"build registers no domain for, so a restore by it would never replay "+
+				"that log; take the backup with the build that wrote the file", where, stream)
+		}
+	}
+	return out, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -638,13 +708,13 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("backup: read the copy's own "+
 				"checkpoints: %w", err)
 		}
-		// THE POSITIONS ONLY. A backup names where the copy got to so a
-		// restore knows what the log still has to replay; which stream
-		// instance it was is a snapshot's concern, because only a
-		// snapshot is adopted into a running fleet.
-		manifest.Domains = make(map[string]statelog.Position, len(cursors))
-		for stream, cursor := range cursors {
-			manifest.Domains[stream] = cursor.Position
+		// THE POSITIONS ONLY, of every registered log ([Service.placed]).
+		// A backup names where the copy got to so a restore knows what the
+		// log still has to replay; which stream instance it was is a
+		// snapshot's concern, because only a snapshot is adopted into a
+		// running fleet.
+		if manifest.Domains, err = s.placed(positionsOf(cursors), "the copy"); err != nil {
+			return Manifest{}, err
 		}
 		// THE OBJECTS THE COPY'S REQUIRED TABLES NAME, read from the
 		// copy for the reason the positions are: the rows a restore
@@ -1030,12 +1100,9 @@ func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error
 	if err != nil {
 		return nil, err
 	}
-	if len(live) == 0 {
-		// A node with no registered domain has no log to pin. Not a
-		// failure: it is every deployment before the first domain's
-		// stream exists.
-		return func() {}, nil
-	}
+	// EVERY REGISTERED LOG IS PINNED, one this node has applied nothing on at
+	// zero: the copy names it there, so a restore replays it from its first
+	// record, and the trim must not take that record while the copy runs.
 	pin, err := statelog.HoldTail(ctx, statelog.TailHold{
 		Register: s.holds,
 		Owner:    coord.HoldOwner(s.nodeID, HoldPurpose),
@@ -1055,31 +1122,30 @@ func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error
 }
 
 // livePositions is where the appliers of the replicated estate a backup copies
-// stand right now.
+// stand right now, on every registered log ([Service.placed]).
 func (s *Service) livePositions(ctx context.Context, replicated *store.DB) (map[string]coord.Position, error) {
-	out := map[string]coord.Position{}
-	if err := replicated.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT stream, generation, seq FROM statelog_cursor`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var stream string
-			var generation, seq int64
-			if err := rows.Scan(&stream, &generation, &seq); err != nil {
-				return err
-			}
-			out[stream] = coord.Position{
-				Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
-			}
-		}
-		return rows.Err()
-	}); err != nil {
+	cursors, err := statelog.Cursors(ctx, replicated)
+	if err != nil {
 		return nil, fmt.Errorf("backup: read this node's log positions: %w", err)
 	}
+	placed, err := s.placed(positionsOf(cursors), "this node's replicated estate")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]coord.Position, len(placed))
+	for stream, at := range placed {
+		out[stream] = coord.Position{Stream: stream, Generation: at.Generation, Seq: at.Seq}
+	}
 	return out, nil
+}
+
+// positionsOf is the positions alone of a set of checkpoints.
+func positionsOf(cursors map[string]statelog.FileCursor) map[string]statelog.Position {
+	out := make(map[string]statelog.Position, len(cursors))
+	for stream, cursor := range cursors {
+		out[stream] = cursor.Position
+	}
+	return out
 }
 
 // copyOf is the file name one estate's copy was written under.
@@ -1181,10 +1247,10 @@ func (s *Service) previousObjects(ctx context.Context, dir string) string {
 // is why this is a WARN rather than an error.
 func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 	if len(manifest.Domains) == 0 {
-		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node with no state
-		// log has nothing to say about how far a log is covered, and a
-		// point claiming to reach no domain would be refused anyway —
-		// see [coord.BackupPoint.Validate].
+		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node holding no
+		// replicated estate copies no log's rows, so it has nothing to say
+		// about how far a log is covered, and a point claiming to reach no
+		// domain would be refused anyway — see [coord.BackupPoint.Validate].
 		return
 	}
 	point := coord.BackupPoint{
