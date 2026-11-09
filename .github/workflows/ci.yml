@@ -88,10 +88,14 @@ concurrency:
 # exactly what its job used (THE EPOCH, below), the first push under this
 # budget saved 2.98 GB (run 42427469948). The entries keyed on what they hold
 # rather than on the commit are saved only when that changes: the modules
-# (0.27 GB), the pinned gits (0.06 GB) and npm's cache (0.04 GB). `caches`, at
-# the end of the run, then deletes every entry a newer one of its kind
-# supersedes. So the repository holds one set, 3.36 GB in 15 entries after
-# that run, and a push's saves take it to about 6.3 GB until that job runs.
+# (0.27 GB), the pinned gits (0.06 GB), the pinned Chromiums (0.30 GB, both
+# linux64 builds as actions/cache stores them, tar and zstd, measured from a
+# development machine's cache) and npm's cache (0.04 GB). `caches`, at the end
+# of the run, then deletes every entry a newer one of its kind supersedes. So
+# the repository holds one set, 3.36 GB in 15 entries after that run and 3.66
+# GB in 16 with the Chromiums', and a push's saves take it to about 6.6 GB
+# until that job runs, 6.9 GB on the push that moves a Chromium pin or the
+# layout of its recipe.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -639,6 +643,39 @@ jobs:
         name: install what building git needs
         if: steps.git.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
+      # THE PINNED CHROMIUMS. Both test targets depend on `make chromium`,
+      # which fetches the two Chrome for Testing builds
+      # scripts/chromium-pin.env pins into CREWLET_CHROMIUM_CACHE (the
+      # Makefile's `##@ The pinned Chromiums`), and name them (CHROMIUM_ENV).
+      # Cached as the gits are, for their reasons: the directory set here is
+      # the one both the recipe and the cache read, and the key is what names
+      # the builds and nothing else — the pins themselves, the pin file's
+      # CHROMIUM_ lines and never its comments, and the layout the recipe
+      # sets on its `layout=` line, never the rest of the recipe, which
+      # changes no build's bytes (scripts/chromium.sh) — both in the key's
+      # last part, so `caches` reads every entry of them as one kind, and with
+      # no restore-keys. Without the cache every shard of every run would
+      # download about 0.4 GB from Google's bucket, putting a third party on
+      # every run's path; with it, a pull request that moves a pin or the
+      # layout downloads it on each shard until main saves it, and one that
+      # edits a comment downloads nothing. No library is installed: GitHub's
+      # Ubuntu image ships Google Chrome, so what a Chrome for Testing build
+      # links is there, and a build that could not start fails the recipe's
+      # own --version check, naming its deb.deps.
+      - &chromium-cache-dir
+        name: name the pinned Chromiums' cache directory, and read what names their builds
+        id: chromium-key
+        run: |
+          echo "CREWLET_CHROMIUM_CACHE=$HOME/.cache/crewlet/chromium" >> "$GITHUB_ENV"
+          echo "layout=$(sed -n 's/^layout=\([0-9][0-9]*\)$/\1/p' scripts/chromium.sh)" >> "$GITHUB_OUTPUT"
+          echo "pins=$(grep '^CHROMIUM_' scripts/chromium-pin.env | sha256sum | cut -c1-64)" >> "$GITHUB_OUTPUT"
+      - &chromium-restore
+        name: restore the pinned Chromiums main fetched
+        id: chromium
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_CHROMIUM_CACHE }}
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
       # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
@@ -692,6 +729,15 @@ jobs:
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
           key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+      # The pinned Chromiums, by the same rule: main only, a miss only, the
+      # first leg alone, after the make step fetched what the restore did not
+      # bring. The solo shards below restore them and never save.
+      - name: save the pinned Chromiums
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.chromium.outputs.cache-hit != 'true' && strategy.job-index == 0
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_CHROMIUM_CACHE }}
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
       # What this shard ran and how long each package took: the aggregate job
       # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.
@@ -847,11 +893,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      # The pinned gits, as in the race shards above, whose comment says why.
-      # Restored here and never saved: the first race shard is their one saver.
+      # The pinned gits and Chromiums, as in the race shards above, whose
+      # comments say why. Restored here and never saved: the first race shard
+      # is their one saver.
       - *git-cache-dir
       - *git-restore
       - *git-deps
+      - *chromium-cache-dir
+      - *chromium-restore
       - name: this shard of the packages that run alone
         env:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -1099,10 +1148,11 @@ jobs:
   # so the repository holds one set rather than whatever eviction leaves. An
   # entry's kind is its key without the last part, which is the commit for an
   # entry saved on every push and the hash of what it holds for the rest (the
-  # modules, the pinned gits, npm's cache, the test weights). Only main's
-  # entries of the kinds this file saves are listed, newest first, and the
-  # first of each kind is kept. So no kind is ever emptied, and a job that
-  # failed, and therefore saved nothing, keeps the entry it saved last.
+  # modules, the pinned gits, the pinned Chromiums, npm's cache, the test
+  # weights). Only main's entries of the kinds this file saves are listed,
+  # newest first, and the first of each kind is kept. So no kind is ever
+  # emptied, and a job that failed, and therefore saved nothing, keeps the
+  # entry it saved last.
   #
   # This is the one job here that changes anything outside its own run, so
   # every line of it is security review:
@@ -1137,7 +1187,7 @@ jobs:
           kept=0 count=0
           while IFS=$'\t' read -r id key size; do
             case "$key" in
-              gobuild-*|gomod-*|git-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              gobuild-*|gomod-*|git-*|chromium-*|test-weights-*|golangci-lint-*|npm-*) ;;
               *) continue ;;
             esac
             kind="${key%-*}-"

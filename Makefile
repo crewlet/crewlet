@@ -24,7 +24,12 @@
 # broker per test. The suite's git is the same posture's: every target that
 # runs Go tests runs the git the engine image builds, which `make git` builds
 # once a machine, and a machine without a C compiler or libcurl's headers is
-# told so by name rather than handed its own git (`##@ The pinned gits`).
+# told so by name rather than handed its own git (`##@ The pinned gits`). So
+# are its Chromiums: every target that runs the whole suite names the two
+# Chrome for Testing builds scripts/chromium-pin.env pins, which `make
+# chromium` fetches once a machine, and a machine without curl, unzip or a
+# SHA-256 tool is told so by name rather than handed its own Chrome (`##@ The
+# pinned Chromiums`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -476,6 +481,17 @@ CHROMIUM_PINS := newest floor
 chromium: ## fetch the pinned Chromiums the suite drives (scripts/chromium-pin.env; needs curl and unzip)
 	@for pin in $(CHROMIUM_PINS); do scripts/chromium.sh $$pin >/dev/null || exit 1; done
 
+# THE CHROMIUMS EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES: the newest and the
+# floor's builds, in CREWLET_TEST_CHROMIUM and CREWLET_TEST_CHROMIUM_FLOOR.
+# Each from scripts/chromium.sh, which a target's `chromium` prerequisite has
+# already fetched, so here it only prints the path. STATEMENTS, as GIT_ENV's
+# are and for its reason: a prefix whose command failed would name an empty
+# path, which reads as unset rather than as the recipe's failure. A recipe
+# line starts with it, and what follows it runs with both named.
+CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
+	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
+	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
+
 ##@ Gates — `make check` is all of them
 
 # REQUIRED makes every prerequisite of the suite a requirement: a case whose
@@ -487,12 +503,13 @@ chromium: ## fetch the pinned Chromiums the suite drives (scripts/chromium-pin.e
 # statement, as GIT_ENV's are, so what follows it on the recipe line runs with
 # it exported.
 #
-# SUITE_ENV is what the whole suite runs under: the requirement and the pinned
-# gits. `test`, `test-solo` and `test-norace` start with it; `test-gitproc` and
-# `bench`, which run gitproc's own suite and the benchmarks, start with REQUIRED
-# and GIT_ENV.
+# SUITE_ENV is what the whole suite runs under: the requirement, the pinned
+# gits and the pinned Chromiums. `test`, `test-solo` and `test-norace` start
+# with it, and depend on `git` and `chromium` to have built and fetched what it
+# names; `test-gitproc` and `bench`, which run gitproc's own suite and the
+# benchmarks, start with REQUIRED and GIT_ENV.
 REQUIRED = export CREWLET_REQUIRE_PREREQUISITES=1;
-SUITE_ENV = $(REQUIRED) $(GIT_ENV)
+SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
 
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
 # else stays a prerequisite — which is about correctness rather than tidiness.
@@ -621,14 +638,14 @@ git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet
 # pin check (scripts/chromium-pin-check.sh), for git-test's reasons: shell no
 # Go test reaches, each failing silently where it matters — a recipe that
 # unpacks over a Chromium another checkout's suite is running, or prints
-# something on stdout beside the path it is asked for; a check that calls
-# every pin current because it read nothing, or carries a listing's words into
-# the issue it reports to. It runs the real scripts against a stand-in Chrome
-# for Testing tree and release listing under file://, each zip holding a
-# stand-in `chrome`, so it fetches no Chromium and reads no network, then runs
-# itself once more, by a relative path, under a developer's most hostile
-# environment: about ten seconds, half of them that second run. It needs curl,
-# zip, unzip and sha256sum (or shasum).
+# something above the path a make target exports as the suite's browser; a
+# check that calls every pin current because it read nothing, or carries a
+# listing's words into the issue it reports to. It runs the real scripts
+# against a stand-in Chrome for Testing tree and release listing under
+# file://, each zip holding a stand-in `chrome`, so it fetches no Chromium and
+# reads no network, then runs itself once more, by a relative path, under a
+# developer's most hostile environment: about ten seconds, half of them that
+# second run. It needs curl, zip, unzip and sha256sum (or shasum).
 chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/chromium-pin_test.sh
 
@@ -711,7 +728,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # prebuilt at the default -p first, as the solo half is (PREBUILD, below).
 PARALLEL_HALF_PACKAGES := 4
 
-test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
+test: require-node git chromium ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
@@ -758,7 +775,7 @@ test: require-node git ## the suite, minus the packages that run alone (ci: test
 # share action IDs — and $(2) the packages.
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git chromium ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
@@ -788,7 +805,7 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # runs them: `override` beats a TEST_SHARD from the command line or the
 # environment.
 test-norace: override TEST_SHARD =
-test-norace: require-node git ## the full suite without -race (faster; not a gate)
+test-norace: require-node git chromium ## the full suite without -race (faster; not a gate)
 	@$(SUITE_ENV) status=0; \
 	echo "==> parallel partition"; \
 	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \

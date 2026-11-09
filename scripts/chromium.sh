@@ -54,7 +54,9 @@ set -eu
 
 # layout is the version of how this recipe lays a build out — the directory its zip is unpacked into, its .complete,
 # and what `intact` reads of it — and the one part of the recipe a build's name carries. It moves with any change to
-# one of those, so a build laid out otherwise is never read as one laid out this way, and with nothing else.
+# one of those, so a build laid out otherwise is never read as one laid out this way, and with nothing else. ci.yml's
+# cache of the builds is keyed on this line beside the pins themselves, the pin file's CHROMIUM_ lines, which are
+# everything else a name carries.
 layout=1
 
 usage() {

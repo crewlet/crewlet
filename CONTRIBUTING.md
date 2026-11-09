@@ -104,6 +104,18 @@ platforms the engine is released for, `linux64`, `linux-arm64`, `mac-x64` and
 `mac-arm64`, and refuses any other naming it. A build that cannot start says so
 when the recipe asks it its version, naming that `deb.deps`.
 
+**The pinned Chromiums.** Every make target that runs the whole suite
+(`test`, `test-solo`, `test-norace`) depends on `make chromium` and names the
+two builds — `CREWLET_TEST_CHROMIUM` and `CREWLET_TEST_CHROMIUM_FLOOR`, each
+the path `scripts/chromium.sh newest` or `floor` prints (the Makefile's
+`CHROMIUM_ENV`) — as it names the pinned gits: Chrome for Testing's Stable and
+the newest patch of `cdp.MinMajor`, the oldest major the CDP client drives.
+Never the machine's own Chrome, which has no exact version to pin and carries
+no floor, and never the Chromium Playwright installs for the dashboard's
+layout suites (below): that one is pinned to the Playwright release that
+drives it, checksummed by nothing, and fetched by npm, which the engine's
+suite does not need.
+
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
@@ -173,6 +185,7 @@ go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 make git         # the pinned gits, built once a machine (both test targets need it)
+make chromium    # the pinned Chromiums, fetched once a machine (both test targets need them)
 make test        # the suite, minus the packages that run alone, on the node pin, four at a time
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
@@ -1705,7 +1718,8 @@ that room where `/tmp` is a small tmpfs), run `make chromium` — it fetches the
 new build and refuses a zip that is not the digest — then `make check`, and
 title the pull request as the report does:
 `build(deps): bump chromium from <a> to <b>` for the newest pin,
-`build(deps): bump chromium's floor from <a> to <b>` for the floor.
+`build(deps): bump chromium's floor from <a> to <b>` for the floor. The suite
+fetches the new build on CI until `main` saves it.
 
 **Raising the floor** is never a bump: it is a change to `cdp.MinMajor`,
 argued in `internal/browser/cdp/floor.go` with what it measured, and it moves

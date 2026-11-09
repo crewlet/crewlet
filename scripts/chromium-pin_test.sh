@@ -5,8 +5,8 @@
 #
 # No Go test reaches either script, and each regresses silently in the direction that matters: a recipe that unpacks
 # into the directory another checkout's suite is running its Chromium from, hands back a build it never checked, or
-# prints something on stdout beside the path it is asked for; a check that calls every pin current because it read
-# nothing, or carries a listing's text into the issue it reports to. So every case runs the REAL
+# prints something above the path a make target exports as the suite's browser; a check that calls every pin current
+# because it read nothing, or carries a listing's text into the issue it reports to. So every case runs the REAL
 # script — copied beside a pin file the case writes, because both read their pin beside themselves — against local
 # stand-ins: a Chrome for Testing tree under file:// (<version>/<platform>/chrome-<platform>.zip), each zip holding a
 # stand-in `chrome` that answers --version, a release listing of LATEST_RELEASE_* files, a stand-in `uname` that names
@@ -647,8 +647,8 @@ done
 
 # --- a curl configuration changes nothing the recipe prints ------------------------------------------------------
 
-# The recipe's stdout is the executable's path and nothing else, because whoever asks for a build reads its path
-# there: a `write-out` in a person's curlrc once put a 000 above git.sh's directory. A fetch under such a curlrc must
+# The recipe's stdout is the executable's path and nothing else, because a make target exports it as the suite's
+# browser: a `write-out` in a person's curlrc once put a 000 above git.sh's directory. A fetch under such a curlrc must
 # print the path alone, and what the curlrc wrote on stderr (the control: the configuration was read, and kept).
 # Mutation: let the recipe's download write curl's stdout to its own -> red.
 s="$(scripts curlrc)"
