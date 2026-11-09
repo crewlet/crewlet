@@ -123,6 +123,7 @@ export type MeSection =
   | "asked-of-me"
   | "asked-by-me"
   | "unblocked"
+  | "holding-up"
   | "collaborating"
   | "watching"
   | "checklist"
@@ -132,6 +133,7 @@ const ME_SECTIONS: readonly MeSection[] = [
   "asked-of-me",
   "asked-by-me",
   "unblocked",
+  "holding-up",
   "collaborating",
   "watching",
   "checklist",
