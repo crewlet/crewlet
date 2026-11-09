@@ -186,6 +186,11 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
 		record.Actor, record.ActorKind, record.OperatorID = "token:ci", worklet.AuthorOperator, "token:ci"
 		record.ActorApps = []iam.Grant{iam.GrantWorklet}
+	case "Snapshot.ThreadOwing":
+		// A ROUTING SNAPSHOT naming who a thread still awaits an answer
+		// from, which only a reply reads and every build must carry.
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
+			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

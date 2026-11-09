@@ -198,7 +198,11 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 			if err != nil {
 				return err
 			}
-			out.Participants = participants
+			owing, err := threadOwing(ctx, tx, q.Task, q.ReplyTo)
+			if err != nil {
+				return err
+			}
+			out.Participants, out.Owing = participants, owing
 		}
 		var posted *PostedRemark
 		if q.Comment != "" {
@@ -279,6 +283,37 @@ func threadParticipants(ctx context.Context, tx *sql.Tx, task, replyTo string) (
 		var handle string
 		var first int64
 		if err := rows.Scan(&handle, &first); err != nil {
+			return nil, err
+		}
+		out = append(out, handle)
+	}
+	return out, rows.Err()
+}
+
+// threadOwing is every handle an open ask in ONE thread is addressed to: asked
+// something there, and not answered or resolved yet (ADR-0113). The thread is
+// resolved as [threadParticipants] resolves it, and cut at the same cap.
+func threadOwing(ctx context.Context, tx *sql.Tx, task, replyTo string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		WITH root AS (
+			SELECT COALESCE(NULLIF(reply_to, ''), id) AS id
+			FROM tracker_comments WHERE id = ? AND task_id = ?
+		)
+		SELECT DISTINCT c.ask
+		FROM tracker_comments c, root
+		WHERE c.task_id = ? AND c.removed = 0 AND c.ask <> ''
+		  AND c.resolved = 0 AND c.answered_by IS NULL
+		  AND (c.id = root.id OR c.reply_to = root.id)
+		ORDER BY c.ask
+		LIMIT ?`, replyTo, task, task, MaxThreadParticipants)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read who owes an answer under %s: %w", replyTo, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var handle string
+		if err := rows.Scan(&handle); err != nil {
 			return nil, err
 		}
 		out = append(out, handle)

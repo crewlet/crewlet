@@ -3756,8 +3756,8 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment,
 	// WHETHER IT WAKES THEM, AND ASKS THEM, is the routing's answer for this
 	// record: a person's comment on the task is the ask and needs no
 	// warning; another agent's reaches the assignee's inbox and starts no
-	// turn, unless it is a reply in a thread they wrote in, which wakes them
-	// without asking them anything.
+	// turn, unless it is a reply in a thread where they still owe an answer,
+	// which wakes them without asking them anything (ADR-0113).
 	heard, ok := worklet.CandidateFor(notify, task.Assignee)
 	if !ok || heard.Addressed {
 		return caveat.Caveat{}

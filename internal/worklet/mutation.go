@@ -41,7 +41,9 @@ import (
 // at that version and drop the field it was minted for.
 //
 // Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
-const RecordVersion = 2
+// Version 3 is the participants a comment thread still awaits an answer from
+// ([Snapshot.ThreadOwing], ADR-0113).
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -86,6 +88,7 @@ const baseRecordVersion = 1
 // field from its row.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1278,6 +1281,13 @@ type Snapshot struct {
 	// only on a reply.
 	ThreadParticipants []string `json:"thread_participants,omitempty"`
 
+	// ThreadOwing are the handles an open ask in this thread is addressed
+	// to: asked something here and not answered yet. A reply in the thread
+	// wakes them whoever wrote it, because what is said there while they
+	// owe the answer is part of what they were asked (ADR-0113). Set only
+	// on a reply.
+	ThreadOwing []string `json:"thread_owing,omitempty"`
+
 	// RemovedWatchers are the handles a watchers commit dropped. They go
 	// to the INBOX only: a human learns that a lead removed her watch, and
 	// an agent is not woken about a decision that was not its own.
@@ -1537,6 +1547,7 @@ func (n *Notify) checkSnapshot() error {
 		{"unblocked", len(n.Snapshot.Unblocked), MaxDependents},
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
+		{"thread_owing", len(n.Snapshot.ThreadOwing), MaxThreadParticipants},
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {

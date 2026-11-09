@@ -125,7 +125,7 @@ func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 // A THIRD LIST, and not either of the two above, because it answers a third
 // question: not "must the turn answer" ([Reason.Addressed]) and not "does it
 // lead a person's inbox" ([DefaultPrimaryReasons]), but "is it worth a turn at
-// all". `answered` and `thread` are replies to something the seat wrote;
+// all". `answered` is a reply to something the seat asked;
 // `unblocked`, `routed_to`, `parent_assignee`, `checklist` and `blocking` move
 // work the seat owns; `mention`, `prioritised` and `asked` put something to
 // it; `purged` takes work out of the lead's project. None of these is
@@ -133,7 +133,7 @@ func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 // again.
 var turnReasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonAsked, ReasonAnswered,
-	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
+	ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
 	ReasonChecklist, ReasonBlocking, ReasonPurged,
 }
 
@@ -163,11 +163,18 @@ var ownerReasons = []Reason{
 // checklist in 4 of 92; a change to the task woke its owner into a turn that
 // changed the work far more often (a status move by somebody else 82%, a
 // change to its dependencies 43%).
+//
+// `thread` IS DECIDED PER HANDLE, in [Candidates]: a reply in a thread wakes
+// the participants an open ask there is addressed to whoever wrote it, and the
+// rest only for a person's comment that names nobody (ADR-0113). Measured on a
+// live company, two agents in one thread answered each other's
+// acknowledgements six times in five minutes, each turn woken by `thread`.
+// Here `asked` is that per-handle answer.
 func (r Reason) StartsTurn(asked bool) bool {
 	switch {
 	case slices.Contains(turnReasons, r):
 		return true
-	case slices.Contains(ownerReasons, r), r == ReasonWatcher:
+	case slices.Contains(ownerReasons, r), r == ReasonWatcher, r == ReasonThread:
 		return asked
 	}
 	return false
@@ -258,7 +265,10 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 		add(n.Snapshot.Reporter, ReasonReporter, false)
 	}
 	if n.Kind == ChangeComment {
-		addAll(n.Snapshot.ThreadParticipants, ReasonThread, false)
+		for _, handle := range n.Snapshot.ThreadParticipants {
+			b.AddWaking(handle, ReasonThread, false,
+				ReasonThread.StartsTurn(n.threadAsked(handle)))
+		}
 	}
 	// THE UNBLOCKED NOTICE TAKES ITS PLACE LIKE ANY OTHER REASON, because its
 	// record is one of its own: [Writer.TellUnblocked] — the repair, and the
@@ -373,13 +383,35 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 // the other agent to acknowledge it back, and changed the work in 14%; the
 // comment tool tells an agent so, and its result warns when a comment reaches
 // the assignee's inbox and no further, reading this rule through
-// [CandidateFor]. A person's comment is the ask, and wakes the owner whatever
-// it names.
+// [CandidateFor]. A person's comment that names nobody is the ask, and wakes
+// the owner.
+//
+// A PERSON'S COMMENT THAT NAMES SOMEBODY IS ADDRESSED TO THEM: an @-mention, an
+// ask or an answer makes the comment somebody's in particular, and the owner
+// hears it in its inbox unless it is the one named (ADR-0113).
 func (n *Notify) ownerAsked() bool {
 	if n.Kind.Conversation() {
-		return n.personComment()
+		return n.personComment() && !n.addressedToSomebody()
 	}
 	return n.Kind != ChangeWatchers
+}
+
+// threadAsked decides whether a reply wakes one thread participant: one an
+// open ask in the thread is addressed to, whoever wrote the reply, and any
+// other only for a person's comment that names nobody in particular.
+func (n *Notify) threadAsked(handle string) bool {
+	if slices.Contains(n.Snapshot.ThreadOwing, handle) {
+		return true
+	}
+	return n.personComment() && !n.addressedToSomebody()
+}
+
+// addressedToSomebody reports a comment that names whom it is for: an
+// @-mention, an ask, or an answer to somebody's ask. Each of those reaches
+// its handle under a reason of its own that starts a turn.
+func (n *Notify) addressedToSomebody() bool {
+	return len(n.Mentions) > 0 || n.Snapshot.CommentAsk != "" ||
+		n.Snapshot.AnsweredAuthor != ""
 }
 
 // watcherAsked decides whether the change wakes a WATCHER, which follows the
@@ -388,7 +420,7 @@ func (n *Notify) ownerAsked() bool {
 // anybody; every other change reaches a watcher's inbox, and a seat that
 // needs a watcher to act names it.
 func (n *Notify) watcherAsked() bool {
-	return n.Kind.Conversation() && n.personComment()
+	return n.Kind.Conversation() && n.personComment() && !n.addressedToSomebody()
 }
 
 // personComment reports a comment a person wrote ([AuthorKind.Person]).

@@ -23,6 +23,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
 	closed := map[int][]string{
 		2: {"MutationRecord.ActorApps"},
+		3: {"Snapshot.ThreadOwing"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

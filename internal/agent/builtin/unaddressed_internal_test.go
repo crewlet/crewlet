@@ -9,9 +9,10 @@ import (
 
 // A COMMENT THAT LEAVES THE ASSIGNEE UNASKED IS WARNED ABOUT, IN THE ROUTING'S
 // OWN TERMS, AND ONE THAT ASKS THEM NEVER IS. Another agent's remark naming
-// nobody is warned that it does not wake the assignee at all; a reply in a
-// thread the assignee wrote in, that it wakes them without asking them
-// anything; a person's remark is the ask, so it carries no warning. An answer
+// nobody is warned that it does not wake the assignee at all, and so is a
+// reply in a thread the assignee wrote in (ADR-0113); a reply in a thread
+// where the assignee still owes an answer, that it wakes them without asking
+// them anything; a person's remark is the ask, so it carries no warning. An answer
 // closes a question and expects no reply, so warning its author that nobody is
 // asked to reply is wrong.
 //
@@ -34,17 +35,20 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 		comment worklet.Comment
 		thread  []string
 		want    int
+		owing   []string
 	}{
-		"another agent's remark naming nobody":       {task, agent, worklet.Comment{}, nil, notWoken},
-		"an agent's reply in the assignee's thread":  {task, agent, worklet.Comment{}, []string{"backend-engineer"}, wokenUnasked},
-		"an agent's reply in somebody else's thread": {task, agent, worklet.Comment{}, []string{"designer"}, notWoken},
-		"a person's remark naming nobody":            {task, person, worklet.Comment{}, nil, quiet},
-		"an answer to a question":                    {task, agent, worklet.Comment{Answers: &question}, nil, quiet},
-		"an answer naming its choice":                {task, person, worklet.Comment{Answers: &question, Choice: "yes"}, nil, quiet},
-		"a question":                                 {task, agent, worklet.Comment{Ask: "backend-engineer"}, nil, quiet},
-		"a remark that mentions":                     {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet},
-		"the assignee's own remark":                  {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent}, worklet.Comment{}, nil, quiet},
-		"a task nobody holds":                        {worklet.Task{}, agent, worklet.Comment{}, nil, quiet},
+		"another agent's remark naming nobody":       {task, agent, worklet.Comment{}, nil, notWoken, nil},
+		"an agent's reply in the assignee's thread":  {task, agent, worklet.Comment{}, []string{"backend-engineer"}, notWoken, nil},
+		"an agent's reply in somebody else's thread": {task, agent, worklet.Comment{}, []string{"designer"}, notWoken, nil},
+		"an agent's reply where the assignee owes an answer": {task, agent, worklet.Comment{},
+			[]string{"backend-engineer"}, wokenUnasked, []string{"backend-engineer"}},
+		"a person's remark naming nobody": {task, person, worklet.Comment{}, nil, quiet, nil},
+		"an answer to a question":         {task, agent, worklet.Comment{Answers: &question}, nil, quiet, nil},
+		"an answer naming its choice":     {task, person, worklet.Comment{Answers: &question, Choice: "yes"}, nil, quiet, nil},
+		"a question":                      {task, agent, worklet.Comment{Ask: "backend-engineer"}, nil, quiet, nil},
+		"a remark that mentions":          {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
+		"the assignee's own remark":       {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent}, worklet.Comment{}, nil, quiet, nil},
+		"a task nobody holds":             {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -54,6 +58,7 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 				Snapshot: worklet.Snapshot{
 					Assignee: c.task.Assignee, CommentAuthorKind: c.actor.Kind,
 					CommentAsk: comment.Ask, ThreadParticipants: c.thread,
+					ThreadOwing: c.owing,
 				}}
 			got := unaddressedCaveat(c.task, c.actor, &comment, notify)
 			switch {

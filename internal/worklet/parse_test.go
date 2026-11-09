@@ -27,14 +27,17 @@ import (
 func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind:     worklet.ChangeComment,
-		Excerpt:  "can you look at this",
-		Mentions: []string{"bo"},
+		Kind:    worklet.ChangeComment,
+		Excerpt: "can you look at this",
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", Title: "wire it",
 			Status: worklet.StatusInProgress, Assignee: "cy",
 			CommentAuthorKind:  worklet.AuthorHuman,
 			ThreadParticipants: []string{"di"},
+			// A WATCHER, so a person's comment that names nobody reaches
+			// three seats under three reasons (ADR-0113: one naming
+			// somebody would wake that somebody alone).
+			Watchers: []string{"bo"},
 		},
 	})
 
@@ -55,7 +58,7 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"bo": string(worklet.ReasonMention),
+		"bo": string(worklet.ReasonWatcher),
 		"cy": string(worklet.ReasonAssignee),
 		"di": string(worklet.ReasonThread),
 	}
@@ -164,6 +167,7 @@ func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
+			CommentAuthorKind: worklet.AuthorHuman,
 		},
 	})
 	parser := worklet.NewParser(worklet.ParserOptions{})
@@ -205,6 +209,7 @@ func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
+			CommentAuthorKind: worklet.AuthorHuman,
 		},
 	})
 	routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(t.Context(),
