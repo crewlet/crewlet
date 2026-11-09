@@ -219,8 +219,8 @@ EOF
 	cat "$work/report"
 	cat <<EOF
 A bump replaces a pin's lines in scripts/chromium-pin.env, runs \`make chromium\` (it fetches the new build and checks
-it against the digest) and \`make check\`, and lands as its own pull request under the title
-above. The floor only moves to a newer patch of its major; raising it is a change to
+it against the digest) and \`make check\` (the protocol cases on it), and lands as its own pull request under the
+title above. The floor only moves to a newer patch of its major; raising it is a change to
 internal/browser/cdp.MinMajor, argued in its floor.go, that moves this pin with it.
 EOF
 	exit 1

@@ -24,8 +24,9 @@ type declared interface {
 // keep their names unexported, so nothing outside this package can declare
 // another. TestEveryDeclaredMethodAndEventIsInTheInventory holds the list to
 // the declarations in both directions, and the floor's measurement reads
-// every name and field of it, so a command added here is one the floor is
-// measured against.
+// every name and field of it against each pinned Chromium's own description
+// of the protocol (TestThePinsDescribeEveryMethodTheClientDeclares), so a
+// command added here is one the floor is proven against.
 var inventory = []declared{
 	// Browser
 	BrowserGetVersion,
@@ -143,11 +144,11 @@ var inventory = []declared{
 }
 
 // testOnly is the commands and events this package's own tests send and
-// listen for, which the inventory never holds: the scripted peer's.
-// export_test.go registers them, so Call, Send, Listen and Of take them in
-// this package's test binary and in no other build. No file but a test file
-// writes it: the package's other files name it twice, here and in
-// declarations' one read of it, and
+// listen for, which the inventory never holds: the scripted peer's, and
+// Page.crash, which the crash case sends. export_test.go registers them, so
+// Call, Send, Listen and Of take them in this package's test binary and in no
+// other build. No file but a test file writes it: the package's other files
+// name it twice, here and in declarations' one read of it, and
 // TestEveryDeclaredMethodAndEventIsInTheInventory fails a third.
 var testOnly []declared
 

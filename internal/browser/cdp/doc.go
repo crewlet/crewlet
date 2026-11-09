@@ -88,20 +88,23 @@
 //
 // [MinMajor] is the oldest Chromium major the engine drives, and
 // [CheckVersion] refuses an older browser naming both versions. The value is
-// measured against every command, event and field declared here, and
-// floor.go says how; scripts/chromium-pin.env pins two Chrome for Testing
-// builds, the newest and the floor's own, which hold its two ends.
+// measured, and floor.go says how; the suite holds it on every run against
+// two pinned Chrome for Testing builds, the newest and the floor's own
+// (scripts/chromium-pin.env), reading each one's own description of the
+// protocol against every command, event and field declared here.
 //
-// That measurement is complete by construction rather than by review: [Call]
-// and [Send] send, and [Session.Listen] and [Event.Of] read, only an entry of
-// the package's inventory with the very types it is declared with there, so a
+// That proof is complete by construction rather than by review: [Call] and
+// [Send] send, and [Session.Listen] and [Event.Of] read, only an entry of the
+// package's inventory with the very types it is declared with there, so a
 // descriptor built by any other spelling — a type alias of Method, a name set
 // on a zero one, a struct of its shape converted — sends and reads nothing;
 // and [Method] and [Event] keep their names unexported, so only this package
-// can declare one. A test holds the inventory to the package's declarations
-// both ways; the commands the package's own tests send beside it are
-// registered by a test file, and by no other. Every command anything in the
-// engine can send is one the floor was measured against.
+// can declare one, and each of their instantiations is a type of its own, so
+// no declared one converts to other parameters. A test holds the inventory
+// to the package's declarations both ways; the commands the package's own
+// tests send beside it are registered by a test file, and by no other. Every
+// command anything in the engine can send is one the floor was measured
+// against.
 //
 // # What is never logged
 //

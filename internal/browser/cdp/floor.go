@@ -27,13 +27,25 @@ import (
 //     2026-11-10). A floor a supported development platform cannot fetch is
 //     a gate that platform skips.
 //
-// The second is the newer, so it set the floor. scripts/chromium-pin.env
-// pins the newest patch of that major beside Chrome for Testing's Stable. No
-// build older than 153 was driven: none of them could be the floor.
+// The second is the newer, so it set the floor. The suite holds both ends of
+// the promise on every run: scripts/chromium-pin.env pins the newest patch of
+// that major beside Chrome for Testing's Stable, and the protocol cases run on
+// both — TestThePinsDescribeEveryMethodTheClientDeclares reads each pin's own
+// /json/protocol against the inventory, and the behavioural cases (auto-attach
+// holding each kind of target AutoAttach's doc says Chromium holds, a crash, a
+// detach, a kill, the floor read from the browser) drive each. Two run on the
+// newest alone, each doc saying why the floor adds nothing to it:
+// TestAScreenshotSizedMessageCrossesBothTransports and
+// TestAPageEndsAtMostItsOwnSessionWithAMessagePastTheReadLimit, whose claims
+// are about this client's own transports and reader. No build older than 153
+// was driven: none of them could be the floor.
 //
 // Raising it is argued here with what was measured, and moves the floor pin to
 // the newest patch of the new major in the same change:
-// TestThePinsMeetTheFloor fails while they disagree.
+// TestThePinsMeetTheFloor fails while they disagree. A declaration that
+// needs a newer protocol than the floor describes fails
+// TestThePinsDescribeEveryMethodTheClientDeclares on the floor's arm, and is a
+// reason to raise it, argued here.
 const MinMajor = 153
 
 // Version is what a browser says it is: its product (Browser.getVersion's
