@@ -663,6 +663,9 @@ type Provenance struct {
 // this writer wrote".
 type WriteLog interface {
 	Add(types.WorkItem)
+	// Commit records the kind of change a committed write was, which the
+	// turn's outcome is read from.
+	Commit(types.CommittedChange)
 }
 
 // NewWriter builds the tracker's write authority.
@@ -2213,7 +2216,7 @@ func (w *Writer) recording(ctx context.Context, req *statelog.Request) *committi
 			return decision, err
 		}
 		named := writtenItem(ctx, tx, id, decision.Payload)
-		wrote.item = &named
+		wrote.item, wrote.change = &named, committedChange(decision.Payload)
 		return decision, nil
 	}
 	return wrote
@@ -2221,7 +2224,10 @@ func (w *Writer) recording(ctx context.Context, req *statelog.Request) *committi
 
 // committing is the item one write will report once it commits, set by the
 // last round of its decide.
-type committing struct{ item *types.WorkItem }
+type committing struct {
+	item   *types.WorkItem
+	change types.CommittedChange
+}
 
 // report hands the turn's [WriteLog] the item a write named, once the write is
 // known to have committed.
@@ -2241,8 +2247,33 @@ func (w *Writer) report(wrote *committing, result statelog.Result) {
 	switch result.Outcome {
 	case statelog.OutcomeApplied, statelog.OutcomePending:
 		w.written.Add(*wrote.item)
+		if wrote.change != "" {
+			w.written.Commit(wrote.change)
+		}
 	case statelog.OutcomeUnknown:
 	}
+}
+
+// committedChange is the kind of change one record is, for its turn's outcome:
+// a comment, an answer to an ask, or a move of the item; "" for a change that
+// moves no work (who watches it).
+func committedChange(payload []byte) types.CommittedChange {
+	record, err := Decode(payload)
+	if err != nil {
+		return types.CommittedItem
+	}
+	switch {
+	case record.Kind == ChangeWatchers:
+		return ""
+	case record.Kind.Conversation():
+		var patch TaskPatch
+		if json.Unmarshal(record.Mutation, &patch) == nil && patch.Comment != nil &&
+			patch.Comment.Answers != nil {
+			return types.CommittedAnswer
+		}
+		return types.CommittedComment
+	}
+	return types.CommittedItem
 }
 
 // writtenItem is the task one record commits to, named as a work item.

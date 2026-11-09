@@ -12,6 +12,8 @@ type countingLog struct{ items []types.WorkItem }
 
 func (l *countingLog) Add(item types.WorkItem) { l.items = append(l.items, item) }
 
+func (l *countingLog) Commit(types.CommittedChange) {}
+
 // AN `unknown` WRITE CHARGES THE TURN TO NOTHING, whatever else it carries.
 //
 // The set a turn is charged from holds only records this write appended:

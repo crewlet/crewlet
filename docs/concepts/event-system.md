@@ -417,7 +417,19 @@ turn_trigger_skipped       # a redelivery the completion ledger had already
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
-turn_completed, episode_written, persist_decider_completed
+turn_completed             # the record that ends a turn; its `turn` tally
+                           # states the whole turn however it was spread over
+                           # nodes and parks: duration, reviews, tool calls,
+                           # `wake` (what woke its first segment: the object's
+                           # kind and reason, `schedule:<name>`, or the
+                           # waking event's type), `outcome` (`moved`, `words`
+                           # or `nothing`, read from the kinds of change its
+                           # committed writes recorded: an item moved, a page
+                           # saved, or code pushed, merged or reviewed is
+                           # moved; comments, answers to asks and chat posts
+                           # are words) and `tokens` (its model spend, and its
+                           # in-turn auxiliary calls apart)
+episode_written, persist_decider_completed
 counterparty_profile_updated, reflection_completed
 skill_synthesized, skill_refined, skill_promoted
 skill_used                 # a seat loaded a skill; a company-published tool

@@ -1367,6 +1367,9 @@ func (x exchange) record(rep reply) {
 	for _, item := range rep.Written {
 		x.written.Add(item)
 	}
+	for _, c := range rep.Committed {
+		x.written.Commit(c)
+	}
 }
 
 // budgetFor is one attempt's budget on one node: the router's own attempt
