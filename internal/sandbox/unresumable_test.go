@@ -156,3 +156,34 @@ func TestASeatWaitingPastThePauseTTLIsHandedWork(t *testing.T) {
 		}
 	})
 }
+
+// A SETTLE HELD BACK AT RECOVERY IS RETRIED ON THE NEXT PASS: a run judged
+// resumable while an older node still read its state is ended once the judge
+// says no build will, with no answer needed.
+func TestASettleHeldBackAtRecoveryIsRetriedOnTheNextPass(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.coordinator.Stop()
+	var readerGone bool
+	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) {
+		next.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
+			if !readerGone {
+				return nil, nil
+			}
+			return stateRetired(), nil
+		}
+	})
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status %q at recovery, want the run held back while a reader is live", got.Status)
+	}
+	readerGone = true
+	if pausing, err := next.coordinator.SettleParked(t.Context(), "swe"); err != nil || pausing {
+		t.Fatalf("SettleParked = %v, %v, want the run ended and the seat free", pausing, err)
+	}
+	rig.finished("t1")
+	announcedOnce(t, rig, types.ExecutorFailureStateRetired)
+	if held, awaits := next.coordinator.SeatRuns("swe"); held || awaits {
+		t.Fatalf("SeatRuns = %v, %v, want the seat free", held, awaits)
+	}
+}

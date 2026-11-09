@@ -85,6 +85,9 @@ func (e *Engine) pickupPass(ctx context.Context) {
 		!c.Config.Scheduling.WorkPickup.Runs() ||
 		c.Config.TrackerBackendFor() != config.TrackerWorklet {
 		p.Forget()
+		// PARKED RUNS ARE STILL JUDGED EVERY PASS, which the pickup's own
+		// idle check does where it runs: a settle once held back is retried.
+		e.settleParkedRuns(ctx)
 		return
 	}
 	var seats []pickup.Seat
@@ -168,6 +171,23 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 	// rather than queue work behind mail it cannot see.
 	c.MailWaiting = err != nil || waiting.Total() > 0
 	return c
+}
+
+// settleParkedRuns judges the parked runs of every held seat with a question
+// open, settling those no build will resume.
+func (e *Engine) settleParkedRuns(ctx context.Context) {
+	rt := e.sandbox.Load()
+	if rt == nil || e.node == nil {
+		return
+	}
+	for _, seat := range e.node.Host().HeldSeats() {
+		if _, awaits := rt.coordinator.SeatRuns(seat.Handle); !awaits {
+			continue
+		}
+		if _, err := rt.coordinator.SettleParked(ctx, seat.Handle); err != nil {
+			log.DebugContext(ctx, "work_pickup_parked_unread", "handle", seat.Handle, "error", err.Error())
+		}
+	}
 }
 
 // parkedHoldsPickup settles the seat's parked runs no build will resume and
