@@ -147,15 +147,33 @@ func TestSummaries(t *testing.T) {
 	}, {
 		// WHAT A REFUSED ANSWER CAME TO IS ROUNDED UP, so a byte past the
 		// bound never reads as the bound itself, and the bound named is the
-		// one the route's answer was held to. Mutation: state the figure in
+		// one the route's answer was held to. AND A REFUSED REPLY SAYS WHAT
+		// IS RECORDED OF IT: refused, its executor to be resumed told so
+		// (ADR-0114), never told already, which a let-go before any turn
+		// told it would leave false. Mutation: state the figure in
 		// kept.Size and the reply reads "512 KiB, past the 512 KiB"; word
 		// both routes alike and an answer by turn names a record it never
-		// weighed.
+		// weighed, or a refused reply a question still waiting for a
+		// shorter one, which nothing is.
 		name: "a reply a byte past what its run's record carries reads past it",
 		payload: ExecutorAnswered{RoleName: "Dev", Via: AnswerViaChat, Outcome: AnswerTooLarge,
 			AnswerBytes: 512<<10 + 1, AnswerMaxBytes: 512 << 10},
 		want: "Dev was answered with a reply of 513 KiB, past the 512 KiB its executor's record can " +
-			"carry as an answer; the question is still waiting for a shorter one",
+			"carry as an answer, so the reply was refused; its executor is resumed told it did not " +
+			"reach it, to ask again for less or carry on without it",
+	}, {
+		// A REFUSED REPLY LET GO OF SAYS SO, as a refusal no turn told the
+		// run of: the reply goes back to the seat and the question waits
+		// again, which the too_large record before it did not say
+		// (ADR-0114). Mutation: word a chat `declined` as an answer the
+		// executor could not carry on with, and the feed keeps "is resumed
+		// told" for a run waiting on its question again.
+		name: "a refused reply let go of says the question waits again",
+		payload: ExecutorAnswered{RoleName: "Dev", Via: AnswerViaChat, Outcome: AnswerDeclined,
+			AnswerBytes: 3 << 20, AnswerMaxBytes: 512 << 10},
+		want: "Dev was answered with a reply of 3.0 MiB, too large for its executor to take, and the " +
+			"executor could not be resumed told so: the reply goes back to the seat as the message it " +
+			"was, and the question waits for an answer again",
 	}, {
 		name: "an answer by turn past a page names what an answer may be",
 		payload: ExecutorAnswered{RoleName: "Dev", Via: AnswerViaOperator, Outcome: AnswerTooLarge,

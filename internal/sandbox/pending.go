@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -1225,6 +1226,44 @@ type PendingRun struct {
 	// took is never deleted ([ErrAnswerOwed]). See [RecordedAnswer].
 	Answer *RecordedAnswer `json:"answer,omitempty"`
 
+	// AnswerRefusal is set where the recorded answer is a REFUSAL: the reply
+	// the question was answered with was past what the row carries as an
+	// answer ([MaxAnswerBytes]), so what the row records as the question's
+	// outcome is that reply's figures, beside [PendingRun.Answer] naming its
+	// deliveries and when the newest was posted, and none of its words
+	// ([PendingStore.RecordRefusal], ADR-0114). Read through
+	// [PendingRun.Refused], which takes it only while it names the very
+	// deliveries the answer does; nil on every other row.
+	//
+	// A KEY OF ITS OWN AT THE TOP OF THE ROW rather than a field of
+	// [RecordedAnswer], for the reason [PendingRun.Stop] is one: the row is
+	// rewritten whole by every node that touches it, and a key a build does
+	// not know survives only at the top ([PendingRun.Extra]) or inside a
+	// section that carries its own (wirekeys.go) — which [RecordedAnswer]
+	// does not. Inside it, a build without this field would write the answer
+	// back without its refusal on its next lease or status flip, and the run
+	// would read an answer with no words where it was told its reply was too
+	// large. Written and cleared by the writes that write the answer:
+	// [PendingStore.RecordRefusal] sets it and every other write that records,
+	// lets go of or clears the answer clears it.
+	AnswerRefusal *AnswerRefusal `json:"answer_refusal,omitempty"`
+
+	// EndingReturnsRefusal is set with the run's ending ([PendingRun.Ending])
+	// where what the ending hands back to the seat is a reply too large for
+	// the run to take, whose refusal the run held untold
+	// ([PendingRun.AnswerRefusal]): its delivery, kept on the seat's inbox,
+	// goes back as the message it came in, and the ending's announcement
+	// says so rather than "the answer a person gave it" — the run was given
+	// none of it, and the refusal's own record said the run would be told.
+	// Decided in the ending's write, as [RecordedEnding.Returned] is, since
+	// the let-go clears the refusal before the announcement is made.
+	//
+	// A KEY OF ITS OWN AT THE TOP OF THE ROW, beside the ending, as
+	// [PendingRun.Stop] is: [RecordedEnding] carries no Extra of its own, so
+	// a field of it would be dropped by a build that does not know it on its
+	// next write of the row (wirekeys.go).
+	EndingReturnsRefusal bool `json:"ending_returns_refusal,omitempty"`
+
 	// DeclinedAnswers are the deliveries this question was recorded with
 	// and then let go of — every attempt to resume with them failed, so they
 	// went on to the seat's ordinary route instead (see
@@ -1643,6 +1682,30 @@ type PendingRun struct {
 	// ([BridgeLog.CutFor]) — so an answer whose opening failed is still cut by
 	// the relaunch after it, and a cut already taken is never moved by one.
 	AnsweredJob string `json:"answered_job,omitempty"`
+
+	// RoundRefusals are the replies refused as too large for the questions
+	// the round's jobs asked ([AnswerRefusal]), oldest first, as the round's
+	// review reads them: the job whose question each answered, how many
+	// messages it was and its figures — never its words, nor its deliveries
+	// (ADR-0114). Appended by the relaunch that carries the round on from a
+	// refused question, in the write that clears the refusal itself
+	// ([CoordStore.resetLaunch]); cleared by a new round, as
+	// [PendingRun.AnsweredJob] is; held to [maxRoundRefusals], the newest
+	// kept.
+	//
+	// THE REVIEWER'S, because it judges the round from its calls alone, and
+	// in those calls a question asked again after its reply was refused reads
+	// as the same question sent twice — the duplicate it sends a round back
+	// for — and a run's word that a reply never reached it has nothing of the
+	// engine's to be held against. A key of its own at the top of the row,
+	// as [PendingRun.AnswerRefusal] is.
+	//
+	// AND THE ROW'S WORD THAT A TURN KEPT THE REFUSAL: only the turn that took
+	// it writes the relaunch that tells the run, so an entry naming the job a
+	// refusal was recorded for says the refused reply's delivery is spent,
+	// where the refusal itself is gone from the row and the completion ledger
+	// fails open ([PendingRun.carriedOnFromRefusal], [Coordinator.refusedReply]).
+	RoundRefusals []RoundRefusal `json:"round_refusals,omitempty"`
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
@@ -2814,11 +2877,41 @@ type PendingStore interface {
 	// answered another way, moved on to another question or ending since the
 	// caller matched it, it is false with no error, whatever it weighs, like
 	// any other answer the question no longer takes: the reply is the
-	// ordinary message a reply after an answer is, and never a refusal that
-	// says a run no longer waiting on the question waits for a shorter
-	// answer to it.
+	// ordinary message a reply after an answer is, and never a refusal of a
+	// reply to a question no run is waiting on any more. What the
+	// coordinator records of a reply refused here is its REFUSAL
+	// ([PendingStore.RecordRefusal]).
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
 	) (PendingRun, bool, error)
+
+	// RecordRefusal records a reply too large to be the answer
+	// ([ErrAnswerTooLarge]) as the OUTCOME of the question a run is parked
+	// on: the run flips to [StatusAnswered] holding answer — the reply's
+	// deliveries by id, when the newest was posted, and a seal of who gave
+	// it and of the refusal, with none of its words ([AnswerWords.Refusal])
+	// — and refusal beside it ([PendingRun.AnswerRefusal]), in one write,
+	// and hands back the row IFF THIS CALL WON (ADR-0114).
+	//
+	// ON [PendingStore.RecordAnswer]'S TERMS EXACTLY: the same
+	// compare-and-set on the question still waiting, none of the reply's
+	// deliveries declined ([PendingRun.takesAnswer]); the same lease rule,
+	// refused with [ErrSeatNotHeld] where a newer lease owns the row; FALSE
+	// IS NOT AN ERROR. From the write on the refusal is the question's
+	// answer to every other write here — claimed, taken, revived, declined
+	// and let go of as one — because the run is owed a resume with it, and
+	// while it holds the question takes nothing written after it. Declined
+	// or let go of, the question waits again, as after an answer let go of.
+	//
+	// IT CARRIES NONE OF THE REPLY. An answer that carries any of its
+	// deliveries ([RecordedAnswer.Events]) is an error, never a record: they
+	// are the very bytes the row could not carry, and what goes back to the
+	// seat if the refusal is let go of is the delivery itself, kept on the
+	// seat's inbox until the refusal leaves the run ([AnswerRefused]). So is
+	// one that names no delivery, no valid route or carries no seal, as
+	// [PendingStore.RecordAnswer] refuses, and a refusal that names other
+	// deliveries than the answer or figures that are no reply past a share.
+	RecordRefusal(ctx context.Context, turnID, launch string, answer RecordedAnswer, refusal AnswerRefusal,
+		fence Fence) (PendingRun, bool, error)
 
 	// DeclineAnswer lets go of a recorded answer the run could not be
 	// resumed with, IN ONE WRITE: the run goes back to the status the record
@@ -3306,6 +3399,149 @@ type RecordedAnswer struct {
 // Taken reports whether a resumed turn took this answer — see
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
+
+// AnswerRefusal is what a run's row records of a reply to its question that
+// was past what the row carries as an answer ([MaxAnswerBytes]): which
+// deliveries it was made of and the figures it was refused on — never a word
+// of it (ADR-0114). Beside it, [PendingRun.Answer] names the same deliveries
+// and when the newest was posted, sealed with who gave them and this refusal
+// ([AnswerWords.Refusal]).
+//
+// THE QUESTION'S OUTCOME, RESUMED LIKE AN ANSWER. Refused and left waiting, as
+// it once was, the question took the person's next short message ("any
+// luck?") as its answer, and the reply went to the seat as a message nobody
+// had asked about. Recorded, the question waits no more: nothing written after
+// it qualifies, the run is resumed told — in the engine's words — that the
+// person replied and the reply did not reach it, and it asks again under a new
+// question of its own ([PendingRun.AskedAt]), or carries on without it. Every
+// guarantee the answered path gives an answer holds for it: recorded before
+// anything is done with it, taken once by a resumed turn, retried with the
+// seat's inbox held behind it, revived, or let go — and then the reply goes
+// back to the seat the way it came ([AnswerRefused]).
+//
+// AND LET GO OF, THE QUESTION WAITS AGAIN, as one whose answer was let go of
+// does: a refusal declined after its attempts, or whose seal does not open,
+// puts the run back on its question under the anchor it was asked at, with the
+// reply declined for it, and the next qualifying reply answers it — a short
+// message written since included. The guarantee that nothing written after the
+// refusal is taken for the answer holds while the refusal is the run's, which
+// is every case but that one, and the let-go is announced, so the record that
+// said the run would be told is not left standing
+// ([Coordinator.announceRefusalLetGo]).
+//
+// NO EXTRA OF ITS OWN, and none needed: a later build that grows what a
+// refusal records adds a key of its own at the top of the row, as this one
+// sits beside [RecordedAnswer] (wirekeys.go), rather than a field here, which
+// this build would drop on its next write of the row.
+type AnswerRefusal struct {
+	// EventIDs are the deliveries the reply was made of: the answer's own
+	// ([RecordedAnswer.EventIDs]), which bind the refusal to it. How many
+	// messages the reply was is how many there are.
+	EventIDs []string `json:"event_ids"`
+
+	// Bytes is what the reply weighed as the row would have held it as an
+	// answer — the larger of the answer and the copies letting it go would
+	// owe ([AnswerTooLargeError.Weighs]) — and MaxBytes what an answer may
+	// weigh there: the two figures the run, the record and the API state,
+	// Bytes rounded up (kept.SizeUp) so a reply past the share never reads
+	// as within it.
+	Bytes    int `json:"bytes"`
+	MaxBytes int `json:"max_bytes"`
+
+	// Address is where the reply was posted: the transport metadata of its
+	// newest message — the transport, the conversation and its thread, the
+	// message and its sender, as ids — and none of its words. What the
+	// resume this refusal drives raises its working indicator in
+	// ([AnswerRefusal.trigger]), as an answer's resume raises it off the
+	// deliveries the answer carries: without it the person whose reply was
+	// refused saw no sign in their conversation that anything was happening,
+	// on a vendor's chat where the engine posts nothing of its own. Nil where
+	// the message stamped none, or more than [MaxRefusalAddressBytes]; the
+	// resume then raises no indicator, and nothing else is lost.
+	Address map[string]string `json:"address,omitempty"`
+}
+
+// Messages is how many messages the refused reply was: one delivery each.
+func (r AnswerRefusal) Messages() int { return len(r.EventIDs) }
+
+// equal reports whether two refusals are the same, nil equal to nil alone.
+func (r *AnswerRefusal) equal(other *AnswerRefusal) bool {
+	if r == nil || other == nil {
+		return r == other
+	}
+	return r.Bytes == other.Bytes && r.MaxBytes == other.MaxBytes &&
+		slices.Equal(r.EventIDs, other.EventIDs) && maps.Equal(r.Address, other.Address)
+}
+
+// RoundRefusal is one refused reply as the round's record keeps it for its
+// review ([PendingRun.RoundRefusals]): the job whose question it answered, how
+// many messages it was and the figures it was refused on ([AnswerRefusal]) —
+// none of its words, and none of its deliveries.
+type RoundRefusal struct {
+	Job      string `json:"job"`
+	Messages int    `json:"messages"`
+	Bytes    int    `json:"bytes"`
+	MaxBytes int    `json:"max_bytes"`
+}
+
+// maxRoundRefusals bounds [PendingRun.RoundRefusals].
+//
+// EIGHT, each a person's reply past half a megabyte to one question of one
+// round, which the run was told of and asked about again: a round past that is
+// asking the same thing in a loop its review reads from the calls anyway, and
+// the newest eight say so. Eight entries of a job's id and three figures weigh
+// about a KiB on the row at their widest.
+const maxRoundRefusals = 8
+
+// withRoundRefusal is refusals with the refusal of the question job asked
+// appended — once, however often the relaunch that carries the round on from
+// it is written — and the oldest dropped past [maxRoundRefusals].
+func withRoundRefusal(refusals []RoundRefusal, job string, refusal AnswerRefusal) []RoundRefusal {
+	if slices.ContainsFunc(refusals, func(r RoundRefusal) bool { return r.Job == job }) {
+		return refusals
+	}
+	out := append(slices.Clone(refusals), RoundRefusal{Job: job, Messages: refusal.Messages(),
+		Bytes: refusal.Bytes, MaxBytes: refusal.MaxBytes})
+	if len(out) > maxRoundRefusals {
+		out = out[len(out)-maxRoundRefusals:]
+	}
+	return out
+}
+
+// carriedOnFromRefusal reports whether this run's round was carried on from
+// the question job asked by the relaunch that told the run that question's
+// reply was refused ([PendingRun.RoundRefusals]). Only a turn that TOOK the
+// refusal makes that relaunch — it is how the run is told — so it is the row's
+// own word that a turn kept the refusal, written in the very write that clears
+// the refusal from the row ([CoordStore.resetLaunch]) and readable on every
+// node whatever the completion ledger says ([Coordinator.refusedReply]).
+func (r PendingRun) carriedOnFromRefusal(job string) bool {
+	return slices.ContainsFunc(r.RoundRefusals, func(refused RoundRefusal) bool { return refused.Job == job })
+}
+
+// Refused is the refusal this run's recorded answer is, and whether it is one:
+// [PendingRun.AnswerRefusal] where the row holds an answer naming exactly the
+// deliveries it names.
+//
+// BOUND TO THE ANSWER, so no other answer is ever read as a refusal: a key a
+// build without this field kept at the top of the row (wirekeys.go) while it
+// let the answer go and recorded another names deliveries that answer does
+// not, and reads as no refusal at all.
+func (r PendingRun) Refused() (AnswerRefusal, bool) {
+	if r.Answer == nil || r.AnswerRefusal == nil || !slices.Equal(r.AnswerRefusal.EventIDs, r.Answer.EventIDs) {
+		return AnswerRefusal{}, false
+	}
+	return *r.AnswerRefusal, true
+}
+
+// refusal is [PendingRun.Refused] as a pointer, nil where the answer is none.
+func (r PendingRun) refusal() *AnswerRefusal {
+	refusal, ok := r.Refused()
+	if !ok {
+		return nil
+	}
+	return &refusal
+}
 
 // WaitsOn reports whether this run still waits on the question its job launch
 // asked: that job is the run's, it is parked on its question, no answer is

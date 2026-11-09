@@ -1049,6 +1049,15 @@ func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,
 	return s.inner.RecordAnswer(ctx, turnID, launch, answer, fence)
 }
 
+func (s *refusingStore) RecordRefusal(ctx context.Context, turnID, launch string,
+	answer RecordedAnswer, refusal AnswerRefusal, fence Fence,
+) (PendingRun, bool, error) {
+	if s.called("RecordRefusal") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.RecordRefusal(ctx, turnID, launch, answer, refusal, fence)
+}
+
 func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string,
 	answer []string, handBack []HandedBack, fence Fence,
 ) (PendingRun, bool, error) {

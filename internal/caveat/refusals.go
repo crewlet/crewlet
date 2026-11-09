@@ -70,6 +70,26 @@ func AnsweredAlready(handle string) Refusal {
 		"so your answer was not used.", handle)}
 }
 
+// RefusedReplyFirst is an answer to an executor's question that a reply too
+// large for the executor to take reached first, from handle: the reply was
+// refused, the executor is resumed told it did not reach it, and it asks again
+// if it still needs an answer (ADR-0114). Never told as an answer the executor
+// carries on with, which it did not get, nor as a telling already made, which
+// is owed until a resumed turn makes it. No time, for [AnsweredAlready]'s
+// reason.
+func RefusedReplyFirst(handle string) Refusal {
+	if handle == "" {
+		return Refusal{person: "A reply in the conversation reached this question first and was too " +
+			"long for the executor to take, so it was refused, and the executor is resumed told it did " +
+			"not reach it. Your answer was not used either; if the executor still needs an answer, it " +
+			"asks again."}
+	}
+	return Refusal{person: fmt.Sprintf("A reply from @%s reached this question first and was too long "+
+		"for the executor to take, so it was refused, and the executor is resumed told it did not reach "+
+		"it. Your answer was not used either; if the executor still needs an answer, it asks again.",
+		handle)}
+}
+
 // HeldCallAnswer is a reply or a choice given to an executor that is waiting
 // for a call to be approved, which only the call's own answers settle.
 func HeldCallAnswer() Refusal {

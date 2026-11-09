@@ -708,9 +708,10 @@ func replyBatch(n, size int) sandbox.RecordedAnswer {
 // markup, whose every byte the row's encoder escapes six-fold, weighs
 // megabytes there: twice over with the copies a decline would owe. So the
 // store holds a recorded answer to its share (sandbox's MaxAnswerBytes) and
-// refuses one past it by name, leaving the run waiting on its question, and
-// the reply goes its way as the ordinary message it is. A reply within its
-// share is recorded.
+// refuses one past it by name, leaving the run waiting on its question, for
+// the caller to record the reply's refusal in its place
+// ([sandbox.PendingStore.RecordRefusal]). A reply within its share is
+// recorded.
 //
 // Mutation: keep the events whole whatever they weigh, and twenty messages
 // of 32 KiB of markup are recorded as the run's answer, megabytes of it.
@@ -737,8 +738,8 @@ func testAnAnswerPastItsShareIsRefused(t *testing.T, s sandbox.PendingStore) {
 // answered another way since the caller matched it, or asked of a question the
 // run no longer waits on, the reply is false with no error, whatever it weighs,
 // as every reply after an answer is — the ordinary message it looks like, never
-// a refusal saying the run waits for a shorter answer to a question it is no
-// longer asking. The run is left as the earlier answer left it.
+// a refusal recorded against a question it is no longer asking. The run is
+// left as the earlier answer left it.
 //
 // Mutation: refuse the share before the row is read, as the store did, and
 // both replies come back ErrAnswerTooLarge.

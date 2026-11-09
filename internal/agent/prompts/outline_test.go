@@ -60,7 +60,8 @@ func outlineCorpus() []outlined {
 			name:   "review, every piece of evidence",
 			prompt: BuildReview(richSeat(), richReviewInput()),
 			keys: []string{"identity", "review_phase", "tool_skills", "earlier_rounds", "intent",
-				"outcome", "blocked_by", "tool_log", "open_questions", "produced", "delivered_refs"},
+				"outcome", "blocked_by", "tool_log", "refused_replies", "open_questions", "produced",
+				"delivered_refs"},
 			nested: map[string][]string{
 				"produced":       {"## Summary", "## Next", "p99 → 200 ms"},
 				"earlier_rounds": {"### Round 1 — sent back", "\"## Deploy 2.3 — done 🎉\""},
@@ -71,7 +72,8 @@ func outlineCorpus() []outlined {
 			name:   "review, rescued",
 			prompt: BuildReview(richSeat(), rescued),
 			keys: []string{"identity", "review_phase", "tool_skills", "earlier_rounds", "intent",
-				"outcome", "blocked_by", "tool_log", "open_questions", "produced", "delivered_refs"},
+				"outcome", "blocked_by", "tool_log", "refused_replies", "open_questions", "produced",
+				"delivered_refs"},
 		},
 		{name: "review, nothing", prompt: BuildReview(Seat{}, ReviewInput{}), keys: []string{"review_phase", "tool_log"}},
 		{

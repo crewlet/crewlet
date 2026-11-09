@@ -794,7 +794,8 @@ const (
 	AnswerResumed AnswerOutcome = "resumed"
 
 	// AnswerNotAwaiting — the run exists and was not waiting for an answer
-	// any more: another answer claimed it first, or it is running a job.
+	// any more: another answer claimed it first, a reply too large for it
+	// closed the question first ([AnswerTooLarge]), or it is running a job.
 	AnswerNotAwaiting AnswerOutcome = "not_awaiting"
 
 	// AnswerGone — the run is over: its record is gone, or it could not be
@@ -805,7 +806,13 @@ const (
 	// not be resumed with, in every attempt the node holding its seat made:
 	// the answer was let go of, the run waits on its question again, and the
 	// person has to answer it again. A chat reply let go of the same way goes
-	// on to its seat as the ordinary message it is, and announces nothing.
+	// on to its seat as the ordinary message it is, and announces nothing —
+	// except a reply refused as too large ([AnswerTooLarge]), whose refusal
+	// was announced as the run being told: its let-go before any turn told the
+	// run (declined after its attempts, or a seal that did not open) is
+	// announced on the chat route with the refusal's figures, the reply going
+	// back to the seat as the message it was and the question waiting again,
+	// under the anchor it was asked at.
 	AnswerDeclined AnswerOutcome = "declined"
 
 	// AnswerUnoffered is an answer by turn whose choice is not an option of
@@ -816,18 +823,24 @@ const (
 	AnswerUnoffered AnswerOutcome = "unoffered"
 
 	// AnswerTooLarge is an answer past what its run may take as one
-	// ([ExecutorAnswered.AnswerBytes] past [ExecutorAnswered.AnswerMaxBytes]),
-	// refused before anything was written, the question still waiting. By
-	// chat, a reply too large for the run's record to carry as its answer:
-	// gone on to its seat as the ordinary message it is. THIS RECORD IS HOW
-	// ITS AUTHOR LEARNS IT, and the only way: the dashboard draws it on the
-	// turn's page and in the activity feed, and nothing is posted in the
-	// conversation they replied in — so a person who reads only that takes
-	// the run to have their reply, and the next thing they say there may be
-	// taken for the answer. By turn, an answer saying more than an answer may
+	// ([ExecutorAnswered.AnswerBytes] past [ExecutorAnswered.AnswerMaxBytes]).
+	// By chat, a reply too large for the run's record to carry as its answer:
+	// its REFUSAL is recorded as the question's outcome in the answer's
+	// place, so the question no longer waits and nothing written after it is
+	// taken for its answer, and the run is resumed told, in the engine's
+	// words, that the person replied and the reply did not reach it — it
+	// asks again for something shorter, or another way to receive it, under
+	// a question of its own, or carries on and says so (ADR-0114). ONE
+	// RECORD per run, question and delivery: every publish of it carries the
+	// id and the instant (the reply's own) those derive, which the event
+	// store keeps as one row. No `resumed` is published of it, which would
+	// read the refusal as an answer the run carried on with; a refusal let go
+	// of before any turn told the run is followed by [AnswerDeclined], and the
+	// question waits again. By turn, an answer saying more than an answer may
 	// (internal/sandbox's MaxAnswerTextBytes, measured as `answer_executor`
-	// measures it, which refuses one before it is delivered): spent, with no
-	// ordinary form to go on as.
+	// measures it, which refuses one before it is delivered): spent
+	// unrecorded, with no ordinary form to go on as, the question still
+	// waiting.
 	AnswerTooLarge AnswerOutcome = "too_large"
 )
 
@@ -894,7 +907,7 @@ type ExecutorAnswered struct {
 	// Choice is the option the person chose, by id, and Answer their own
 	// words, redacted; either may be empty, never both on an answer by
 	// turn. Empty on a reply [AnswerTooLarge], whose words are the very thing
-	// no record of the run could carry.
+	// no record of the run could carry, and which the run was never given.
 	Choice string `json:"choice,omitempty"`
 	Answer string `json:"answer,omitempty"`
 
@@ -929,6 +942,14 @@ func (e ExecutorAnswered) SummaryFor(actor string) string {
 	case AnswerGone:
 		return lead(actor, "was answered after its executor had ended")
 	case AnswerDeclined:
+		if e.Via == AnswerViaChat && e.AnswerBytes > 0 {
+			// A REFUSED REPLY LET GO OF: its too_large record said the
+			// executor would be told, and it never was.
+			return lead(actor, fmt.Sprintf("was answered with a reply of %s, too large for its "+
+				"executor to take, and the executor could not be resumed told so: the reply goes back "+
+				"to the seat as the message it was, and the question waits for an answer again",
+				kept.SizeUp(e.AnswerBytes)))
+		}
 		return lead(actor, "was answered, but its executor could not carry on with the answer")
 	case AnswerUnoffered:
 		return lead(actor, "was answered with a choice its executor's question does not offer")
@@ -941,8 +962,13 @@ func (e ExecutorAnswered) SummaryFor(actor string) string {
 				"answer may be; the question is still waiting for a shorter one",
 				kept.SizeUp(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
 		}
+		// WHAT IS RECORDED, never what has not happened yet: the reply was
+		// refused as the question's outcome, and the executor is to be
+		// resumed told so — a let-go before any turn told it says so in a
+		// `declined` record of its own.
 		return lead(actor, fmt.Sprintf("was answered with a reply of %s, past the %s its executor's "+
-			"record can carry as an answer; the question is still waiting for a shorter one",
+			"record can carry as an answer, so the reply was refused; its executor is resumed told it "+
+			"did not reach it, to ask again for less or carry on without it",
 			kept.SizeUp(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
 	}
 	return lead(actor, "was answered")

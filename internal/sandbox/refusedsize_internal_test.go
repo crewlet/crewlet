@@ -11,7 +11,7 @@ import (
 // A REFUSAL ON THE RUN'S ROW STATES A SIZE PAST ITS BOUND ROUNDED UP. Two of
 // the row's refusals say what they refused beside the bound they refused it
 // against: an answer past what the row carries as one (the error a reply too
-// large for its run is logged with, `sandbox_answer_too_large`), and a held
+// large for its run is logged with, `sandbox_answer_refused`), and a held
 // call's arguments past their share. The bound is stated in kept.Size's units,
 // which round whole KiB down, so a figure stated in the same units a byte past
 // the bound read as the bound itself — "weighs 512 KiB on its row, and an

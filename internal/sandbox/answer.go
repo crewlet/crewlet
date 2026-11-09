@@ -22,7 +22,7 @@ import (
 // whole purpose is "send this to a node that can read it": the message was
 // spent here instead.
 //
-// THREE ANSWERS, each mapped onto an action the inbox already has, and what
+// FOUR ANSWERS, each mapped onto an action the inbox already has, and what
 // each costs when it is chosen wrongly:
 //
 //   - [AnswerConsumed] — ack, run no turn. The delivery is the answer and it
@@ -40,6 +40,12 @@ import (
 //     turn it looks like. Wrong here, the answer is SPENT on an unrelated turn
 //     while an executor is still owed it, which is the defect this type
 //     exists to end.
+//   - [AnswerRefused] — hand the delivery back by deferral, UNSPENT, and run
+//     no turn: it is a reply too large to be its run's answer, recorded on
+//     the run as the question's REFUSAL, which resumes the run told so
+//     (ADR-0114). Wrong here (acked), a refusal let go of loses the reply
+//     outright, since the row carries none of it; run as a turn, the seat
+//     answers a reply its run was owed — the defect, again.
 //
 // The asymmetry decides every ambiguous case: an answer that arrives twice is
 // recoverable, and an answer that is spent is not — so where the coordinator
@@ -56,7 +62,9 @@ type AnswerDisposition string
 const (
 	// AnswerConsumed — the delivery WAS the answer and is spent: the
 	// suspended turn was resumed with it, or another inbound had already
-	// claimed the run it answers. Either way no turn runs on it.
+	// claimed the run it answers — or it is a reply too large to be the
+	// answer whose refusal a turn kept, the run told of it ([AnswerRefused]).
+	// Either way no turn runs on it.
 	AnswerConsumed AnswerDisposition = "consumed"
 
 	// AnswerDeferred — a run was matched and the answer is STILL OWED to
@@ -75,11 +83,31 @@ const (
 	// back through the run's row ([PendingStore.OweHandBack]), and the
 	// delivery is spent.
 	AnswerNotMine AnswerDisposition = "not_mine"
+
+	// AnswerRefused — the delivery is a reply too large to be the answer to
+	// the question a run is parked on ([ErrAnswerTooLarge]), and the
+	// question's REFUSAL is recorded on the run in its place
+	// ([PendingStore.RecordRefusal]): the run is owed a resume with it,
+	// which tells it the person replied and the reply did not reach it, and
+	// while it is owed the question takes nothing written after it
+	// (ADR-0114). Run no turn,
+	// and hand the delivery back by DEFERRAL, UNSPENT: the row carries none
+	// of the reply, so the delivery is its only copy, and it waits at the
+	// head of the seat's inbox, behind the hold the owed refusal keeps on it,
+	// until the refusal leaves the run. A turn that takes the refusal and
+	// keeps it records the delivery as worked ([Coordinator.spendRefused]),
+	// and it is dropped when it comes round; a refusal let go of spends
+	// nothing, and it comes round as the ordinary message it is — back to
+	// the seat the way it came, as an answer let go of goes. A chat reply
+	// only: an answer by turn
+	// past what a run may take is spent unrecorded ([AnswerNotMine]), its
+	// author told by its tool before it was ever delivered.
+	AnswerRefused AnswerDisposition = "refused"
 )
 
 func (d AnswerDisposition) String() string { return string(d) }
 
-// Valid reports whether d is one of the three this package defines.
+// Valid reports whether d is one of the four this package defines.
 //
 // EMPTY IS NOT VALID: the zero value is what a seam that answered nothing
 // returns, and a delivery's disposition is exactly the thing no caller may
@@ -88,7 +116,7 @@ func (d AnswerDisposition) String() string { return string(d) }
 // no coordinator at all rather than to a requeue nothing would bound.
 func (d AnswerDisposition) Valid() bool {
 	switch d {
-	case AnswerConsumed, AnswerDeferred, AnswerNotMine:
+	case AnswerConsumed, AnswerDeferred, AnswerNotMine, AnswerRefused:
 		return true
 	default:
 		return false
@@ -123,7 +151,9 @@ func (d AnswerDisposition) Valid() bool {
 //
 // NOT A REPLY'S BOUND: a reply in the conversation the question was asked in
 // is held to what the run's row carries as an answer ([MaxAnswerBytes]),
-// which a page of words at its worst stays far inside. And not
+// which a page of words at its worst stays far inside, so a pasted log or
+// configuration is taken whole; one past that is refused as the question's
+// outcome, and the run told so ([AnswerRefused]). And not
 // internal/agent/builtin's ToolAnswerBytes, which bounds what a tool answers a
 // model: no tool's answer carries this one.
 const MaxAnswerTextBytes = MaxAskContextBytes

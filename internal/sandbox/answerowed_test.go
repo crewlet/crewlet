@@ -465,55 +465,6 @@ func askedOf(req ResumeRequest) AskedRun {
 	return *req.Asked
 }
 
-// A REPLY PAST WHAT THE ROW CARRIES AS AN ANSWER GOES ITS WAY AS A MESSAGE, AND
-// ITS REFUSAL IS RECORDED FOR ITS AUTHOR. A reply is recorded on the run's row
-// as its answer, sealed and with every delivery it was made of, and a batch of
-// long messages in markup weighs megabytes there — once more as the copies a
-// decline would owe. The store refuses such an answer by name (MaxAnswerBytes)
-// before anything is written, and the coordinator hands the reply on as the
-// ordinary message it is: every word of it reaches the seat, the run waits on
-// its question, and nothing retries a record no attempt could land. And the
-// refusal is announced as `executor_answered` with the outcome too_large, what
-// the reply weighed and what an answer may — the record the dashboard draws,
-// which is where its author reads that it was not taken; nothing else tells
-// them, and a reply nobody recorded a word about reads as one the run carries
-// on with.
-//
-// Mutation: defer the reply as a record that may have landed, and it is held
-// back from the seat and tried again, refused every time; drop the
-// announcement, and no record anywhere says the reply was not taken.
-func TestAReplyPastWhatTheRowCarriesAsAnAnswerGoesItsWayAsAMessage(t *testing.T) {
-	t.Parallel()
-	rig := newCoordRig(t)
-	parkOnAQuestion(t, rig)
-	asked := rig.get("t1").AskedAt
-	text := strings.Repeat("<li>a & b</li>", MaxAnswerBytes/14)
-	disposition, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		chatReply(answerOnTheDM, text, replyAt(text, asked.Add(time.Minute))))
-	if err != nil || disposition != AnswerNotMine {
-		t.Fatalf("a reply past a recorded answer's share = %q, %v; want %q, the ordinary message it is",
-			disposition, err, AnswerNotMine)
-	}
-	if got := rig.get("t1"); got.Answer != nil || got.Status != StatusAwaiting {
-		t.Fatalf("the run is %s holding an answer %v; want it waiting on its question", got.Status,
-			got.Answer != nil)
-	}
-	if n := len(rig.resumer.calls()); n != 0 {
-		t.Fatalf("%d resumes ran on a reply that was never the run's answer", n)
-	}
-	told := rig.answeredRecords()
-	if len(told) != 1 {
-		t.Fatalf("announced %d answers, want the refusal recorded once", len(told))
-	}
-	if got := told[0]; got.Outcome != types.AnswerTooLarge || got.Via != types.AnswerViaChat ||
-		got.TurnID != "t1" || got.AnsweredBy == "" || got.AnswerMaxBytes != MaxAnswerBytes ||
-		got.AnswerBytes <= MaxAnswerBytes || got.Answer != "" {
-		t.Errorf("the refusal was recorded as %+v, want %q on the chat route, by its sender, with what it "+
-			"weighed past the %d an answer may and none of its words", got, types.AnswerTooLarge,
-			MaxAnswerBytes)
-	}
-}
-
 // A REPLY TO A RUN WHOSE ENDING IS DECIDED IS AN ORDINARY MESSAGE AT ONCE. A run
 // whose ending is decided keeps the status it was ended in until the ending
 // deletes its row, and the store records no answer on it, nor refuses one for

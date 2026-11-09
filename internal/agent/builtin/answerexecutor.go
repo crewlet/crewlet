@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -223,8 +224,15 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
 		// was and when, rather than taken quietly: an answer is recorded the
 		// moment the seat takes it, so a second person answering the same
-		// question finds it answered here.
+		// question finds it answered here. A REFUSAL CLOSED THE QUESTION THE
+		// SAME WAY, and is never told as an answer the executor resumes
+		// with: the reply was too large to take, the executor is resumed
+		// told so, and it asks again if it still needs the answer (ADR-0114).
 		by := t.deps.Desk.Answerer(run)
+		if refusal, isRefusal := run.Refused(); isRefusal {
+			return toPerson(refused(tools.RefusalAlreadyAnswered, refusedAlready(run, refusal, by)),
+				caveat.RefusedReplyFirst(by)), nil
+		}
 		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run, by)),
 			caveat.AnsweredAlready(by)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
@@ -317,6 +325,36 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
 		run.Question)
 	return read.answer(ctx, AnswerExecutorTool, result, "")
+}
+
+// refusedAlready is the refusal an answer gets for a question a reply too
+// large to take reached first, as the model reads it: whose reply (by, as the
+// refusal's seal names them, or "someone" where it does not open here), when
+// its refusal was recorded (RFC 3339), its figures — never a word of it, which
+// no record of the run keeps — and that the executor is resumed told it did
+// not reach it and asks again if it still needs an answer, which is the
+// question to answer then.
+//
+// NEVER WORDED AS AN ANSWER, which the run did not get: told the question was
+// answered, the person's assistant would tell them the executor carries on
+// with a reply it was given none of. And WORDED AS WHAT IS RECORDED: the
+// refusal is the question's outcome now, and the resume that tells the
+// executor is owed, not done — a refusal let go of before any turn told it
+// puts the question back to waiting, which its own record then says.
+func refusedAlready(run sandbox.PendingRun, refusal sandbox.AnswerRefusal, by string) string {
+	if by == "" {
+		by = "someone"
+	}
+	when := ""
+	if !run.Answer.RecordedAt.IsZero() {
+		when = " at " + run.Answer.RecordedAt.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("A reply from %s in the conversation reached this question first%s. It came "+
+		"to %s as the engine records an answer, past the %s an answer to an executor can carry, so it "+
+		"was not taken: it was refused as the question's outcome, the question no longer waits, the "+
+		"executor is resumed told the reply did not reach it, and your answer was not used. If the "+
+		"executor still needs an answer it asks again, with a question of its own: answer that one.",
+		by, when, kept.SizeUp(refusal.Bytes), kept.Size(refusal.MaxBytes))
 }
 
 // answeredAlready is the refusal an answer gets for a question already

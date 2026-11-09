@@ -372,8 +372,13 @@ executor_stopped        # a run a person ended by pausing its seat with
 executor_answered       # what an answer to a parked run's question became
                            # (resumed | not_awaiting | gone | declined |
                            # unoffered | too_large, with answer_bytes and
-                           # answer_max_bytes), by
-                           # which route
+                           # answer_max_bytes: a chat reply too large is the
+                           # question's refusal, one record per run, question
+                           # and delivery under an id and the reply's own
+                           # instant, and the run is to be resumed told so;
+                           # a refusal let go of before any turn told the
+                           # run is a chat `declined` with the same figures,
+                           # the question waiting again), by which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake
                            # (executor_answer_given), which is not stored and

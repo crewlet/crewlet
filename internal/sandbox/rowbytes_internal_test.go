@@ -331,6 +331,25 @@ func worstRow(t *testing.T) PendingRun {
 		LostClaims: math.MaxInt, FirstLostAt: worstAt}, func(a *RecordedAnswer, pad string) {
 		a.Events = []json.RawMessage{json.RawMessage(`"` + pad + `"`)}
 	})
+	// A REFUSAL BESIDE IT, AT ITS BOUND, which the row never holds beside an
+	// answer at its share (its own answer weighs a few KiB): one delivery's
+	// ids at the most a drain hands one partition (internal/config's
+	// `notification_coalesce_max_batch`, at most 100), its two figures at
+	// their widest, and where it was posted at [MaxRefusalAddressBytes] in the
+	// bytes that escape the most. And the round's refusals kept for its
+	// review, as many as it keeps, each at its widest.
+	address := map[string]string{"transport": ""}
+	pad := MaxRefusalAddressBytes - addressBytes(address)
+	address["transport"] = markup(pad/6) + plain(pad%6)
+	if got := addressBytes(address); got != MaxRefusalAddressBytes {
+		t.Fatalf("the worst address weighs %d, want its bound %d", got, MaxRefusalAddressBytes)
+	}
+	refusal := &AnswerRefusal{EventIDs: ids(100), Bytes: math.MaxInt, MaxBytes: math.MaxInt, Address: address}
+	roundRefusals := make([]RoundRefusal, maxRoundRefusals)
+	for i := range roundRefusals {
+		roundRefusals[i] = RoundRefusal{Job: uuid.NewString(), Messages: math.MaxInt, Bytes: math.MaxInt,
+			MaxBytes: math.MaxInt}
+	}
 	handBack := paddedTo(t, MaxAnswerBytes, []HandedBack{{ID: uuid.NewString(), Original: uuid.NewString()}},
 		func(h *[]HandedBack, pad string) {
 			(*h)[0].Event = json.RawMessage(`"` + pad + `"`)
@@ -432,7 +451,8 @@ func worstRow(t *testing.T) PendingRun {
 		OwedCall:          &OwedCall{Round: uuid.NewString(), Call: approved},
 		ParkedInputTokens: math.MaxInt, ParkedOutputTokens: math.MaxInt,
 		ParkedCacheReadTokens: math.MaxInt, ParkedCacheWriteTokens: math.MaxInt,
-		AskedAt: worstAt, Answer: &answer, DeclinedAnswers: handles(maxDeclinedAnswers), HandBack: handBack,
+		AskedAt: worstAt, Answer: &answer, AnswerRefusal: refusal, DeclinedAnswers: handles(maxDeclinedAnswers),
+		HandBack: handBack, EndingReturnsRefusal: true, RoundRefusals: roundRefusals,
 		Ending: &RecordedEnding{ID: uuid.NewString(), At: worstAt, Reason: plain(64), Detail: markup(1 << 10),
 			Returned: true, Unused: true, Reclaim: true},
 		Stop: &RunStop{By: markup(128), ByKind: plain(32), OperatorID: plain(64), Reason: markup(4 * 500),
