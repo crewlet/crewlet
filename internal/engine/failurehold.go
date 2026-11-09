@@ -49,7 +49,8 @@ var failureRules = map[failureKind]failureRule{
 	failureSandboxSettings: {says: "its sandbox could not start as configured, twice in a row"},
 	failureSandboxRefused:  {says: "the sandbox provider refused the engine's credential, twice in a row"},
 	failureSandboxBilling:  {says: "the sandbox provider refused for billing, twice in a row"},
-	failureModelsRefused:   {says: "every model it can use refused its credential, twice in a row", models: true},
+	failureModelsRefused: {says: "every model it can use refused its credential, twice in a row; " +
+		"resume it once the credential is fixed", models: true},
 	failureContextExhausted: {says: "its context did not fit its models twice in a row, " +
 		"the second time on a fresh session", models: true},
 }
@@ -141,9 +142,16 @@ func (l *lastFailures) forget(seat uuid.UUID) {
 	delete(l.last, seat)
 }
 
+// failureCleared is the dispatcher's [Dispatcher.FailureCleared]: a handle
+// that names no seat has no run of failures to end.
+func (e *Engine) failureCleared(handle string) {
+	if seat, err := e.seatID(handle); err == nil {
+		e.failures.forget(seat)
+	}
+}
+
 // failureHold is the dispatcher's [Dispatcher.Failure]: a failure that will
-// repeat pauses handle's seat on its second time in a row, and a nil failed
-// (the turn worked) ends the run.
+// repeat pauses handle's seat on its second time in a row.
 func (e *Engine) failureHold(ctx context.Context, handle string, failed error) (string, bool, error) {
 	seat, err := e.seatID(handle)
 	if err != nil {

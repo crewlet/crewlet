@@ -2746,6 +2746,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Failure == nil {
 		d.Failure = e.failureHold
 	}
+	if d.FailureCleared == nil {
+		d.FailureCleared = e.failureCleared
+	}
 	if d.Held == nil {
 		d.Held = e.conversationHeld
 	}

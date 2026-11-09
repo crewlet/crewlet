@@ -124,9 +124,11 @@ type Dispatcher struct {
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
 
 	// Failure pauses the seat on the second failure in a row a retry cannot
-	// cure (failurehold.go); a nil failure is a turn that worked and ends the
-	// run. An error is a pause that could not be taken, deferred as Budget's is.
+	// cure (failurehold.go). An error is a pause that could not be taken,
+	// deferred as Budget's is.
 	Failure func(ctx context.Context, handle string, failed error) (reason string, parked bool, err error)
+	// FailureCleared ends the seat's run of failures: its turn worked.
+	FailureCleared func(handle string)
 
 	// Held reports whether the delivery's conversation is held because its
 	// context did not fit (conversationhold.go): its wakes are settled unrun.
@@ -908,9 +910,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return d.abandon(ctx, handle, req, err, reason)
 	}
 	d.recordWorked(ctx, handle, req, result)
-	if d.Failure != nil {
-		// A TURN THAT WORKED ends its seat's run of failures; it pauses nothing.
-		_, _, _ = d.Failure(ctx, handle, nil)
+	if d.FailureCleared != nil {
+		d.FailureCleared(handle)
 	}
 	return queue.Ack()
 }

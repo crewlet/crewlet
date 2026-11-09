@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`
+- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 
@@ -51,6 +51,6 @@ will not, and a longer backoff only spends the same 25 deliveries more slowly.
 
 The first failure of a run still costs one
 retry: the count is each node's, so a restart between the two failures costs
-one more. A pull the local runtime cannot tell apart from a refused image is
-classed as the configuration's, so a pull that fails twice on a network blip
-pauses the seat until a person resumes it.
+one more. A container that would not start is the configuration's only when the runtime
+holds its image; one it does not hold failed to arrive, and is left to the
+retry like any provider that did not answer.
