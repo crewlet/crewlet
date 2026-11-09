@@ -107,6 +107,18 @@ const (
 	// the record.
 	ToolsPerSeatDay = 512
 
+	// LedgerPerSeatDay is how many (wake, outcome) rows one seat-day record
+	// carries: a wake is a kind and a reason (or a schedule's name) under 100
+	// bytes, so a row is under 300 and the cap under 40 KiB beside the tools.
+	// A seat woken in more than forty distinct ways a day keeps its busiest.
+	LedgerPerSeatDay = 128
+
+	// RefusalsPerSeatDay is how many (server, tool, class) refusal rows one
+	// seat-day record carries: half [ToolsPerSeatDay], since a refusal row is a
+	// tool's calls under one class and a seat refused hundreds of distinct tools
+	// a day is a seat whose tools are misconfigured, which the busiest rows say.
+	RefusalsPerSeatDay = 256
+
 	// LogMaxBytes is the ceiling this domain declares for its stream, which
 	// the framework's own suites provision it with; a node sizes it from
 	// Tier A (`stream.usage_log_max_bytes`) instead.
@@ -223,6 +235,8 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		"usage_schedule_superseded": statelog.Divergent,
 		"usage_person_tokens":       statelog.Divergent,
 		"usage_tool_calls":          statelog.Divergent,
+		"usage_turn_ledger":         statelog.Divergent,
+		"usage_tool_refusals":       statelog.Divergent,
 		"usage_repo_read_days":      statelog.Divergent,
 		"usage_repo_reads":          statelog.Divergent,
 
