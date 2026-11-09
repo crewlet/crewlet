@@ -588,7 +588,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // knows which box it has.
 //
 // A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
-// its phase is closed here as failed, saying why, and the turn ends with it.
+// its phase is closed here as failed, saying why, and the turn ends with it —
+// the refusal is permanent ([turn.ErrPermanent]), so neither path a turn
+// arrives by runs it again.
 //
 // THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the job's as it left
 // it — the tools its launch had active and what its bridged calls did to it
@@ -647,6 +649,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if refused := carry.refusal(); refused != nil {
 		// THE ROUND ENDS HERE, and its phase with it: it was opened when the
 		// round first launched, and nothing else will close it now.
+		//
+		// AND THE TURN ENDS BY THE REFUSAL ITSELF ([turn.ErrPermanent]), which
+		// [turn.Abandon] reads before anything the attempt did, so how the
+		// round's calls are counted decides nothing here. They are an EARLIER
+		// ATTEMPT's all the same, as on every other way out of a carried round,
+		// since the jobs before made them.
 		refusedErr := fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round,
@@ -656,9 +664,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			Failed: true, Err: refusedErr,
 		})
 		// AND ITS CALLS WHOSE OUTCOME IS UNKNOWN, after its calls, as the
-		// record of every round lists them ([Resume.Unfinished]).
-		return turn.Work{Calls: append(slices.Clone(logged), bridgedLedger(round.unfinished)...),
-			Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
+		// record of every round lists them ([Resume.Unfinished]): all of
+		// them an earlier attempt's ([turn.Work.Inherited]).
+		calls := append(slices.Clone(logged), bridgedLedger(round.unfinished)...)
+		return turn.Work{Calls: calls, Inherited: len(calls), Elided: elided, Absorbed: absorbed},
+			describe(surface), refusedErr
 	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:

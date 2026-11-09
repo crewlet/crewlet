@@ -358,8 +358,9 @@ func (r Request) Ask() []*events.Event {
 //     still recorded: the ledger answers "has this trigger been worked", not
 //     "did the work succeed", and re-running a failing turn on every
 //     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when its own record proves it had
-//     already reached outside the engine — see [Dispatcher.abandon] for why
+//     PHASE broke is recorded too, but only when [turn.Abandon] gives a
+//     reason — an outward write its own record proves, a panic, or a refusal
+//     every redelivery would meet again — see [Dispatcher.abandon] for why
 //     that is a different question from "did it fail", and why answering it
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
@@ -999,11 +1000,12 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 // So the trigger is recorded and acked. That LOSES the rest of the turn, which
 // is the honest price and the reason it needs a reason rather than suspicion:
 // [turn.Abandon] gives one only for a turn whose record proves it reached
-// outside, or for a panic, which runs the same defect again however many times
-// it is delivered. Everything else (a provider that never answered, a runner
-// that could not be built, a refused budget) proves nothing and keeps its
-// retry. A seat handed to another node mid-turn keeps its retry too, but as a
-// DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
+// outside, for a panic, which runs the same defect again however many times it
+// is delivered, or for a refusal every redelivery would meet again
+// ([turn.ErrPermanent]). Everything else (a provider that never answered, a
+// runner that could not be built, a refused budget) proves nothing and keeps
+// its retry. A seat handed to another node mid-turn keeps its retry too, but as
+// a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
 // what detects it. So does a refused budget, whose seat is parked until the
 // refusing window turns over rather than NAKed into the same refusal: see
 // [Dispatcher.parkOnBudget].

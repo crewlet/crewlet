@@ -600,15 +600,16 @@ its box is keyed on nothing at all. So one deterministic mid-turn failure replay
 external effects across the broker's whole delivery budget — **25 attempts a
 second apart**, each one a real comment on a real issue.
 
-A broken turn is now two cases, and the engine tells them apart from its own
-record rather than from `err != nil`:
+A broken turn is now one of the cases below, and the engine tells them apart
+from its own record and from what broke, rather than from `err != nil`:
 
 | what the turn's record proves | what happens |
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
-| a resumed turn broke before writing anything new | **retried**, whatever was written before it. The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
+| a resumed turn broke before writing anything new | **retried**, whatever was written before it, unless it panicked or was refused for good (below). The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
 | the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
+| its executor's round was lost with its host past its [limit](code-sandbox.md#durability-completion-and-observability) | **recorded and acked**, whatever the record proves: a retry carries the same losses and is refused the same way, so the turn ends on the resume that refused to carry the round on, saying how often the round was lost. That refusal used to be handed back unless the round's jobs had written outside, refused again on every announcement of the run's completion, and given up only once the resume had failed for half an hour, the seat held behind it throughout. |
 
 The proof is deliberately narrow, because a true answer *spends* a trigger.
 A call counts only when it is MCP-backed and not positively annotated
@@ -633,11 +634,13 @@ turn collects the executor's run from its parked state and runs the engine
 check and the reviewer, possibly relaunching the run, so a retried resume
 repeats every call the resumed segment made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting, or that panicked, therefore keeps its claim, which is what stops a retry
-winning the flip, and its run is settled like one that finished: the box is
-reclaimed and the seat is free for its next turn. Every other resume failure
-still un-claims and comes back, because the run's collected work is the
-expensive thing there and a resume that proved nothing has lost nothing by
+acting, that panicked, or that was refused for a reason every retry meets again
+(`turn.ErrPermanent`: its executor's round lost with its host past its limit)
+therefore keeps its claim, which is what stops a retry winning the flip, and
+its run is settled like one that finished: the box is reclaimed and the seat is
+free for its next turn. Every other resume failure still un-claims and comes
+back, because the run's collected work is the expensive thing there and a
+resume that proved nothing, and that a retry may get past, has lost nothing by
 trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:

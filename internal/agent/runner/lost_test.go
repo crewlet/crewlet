@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -110,10 +111,13 @@ func TestALostJobThatHadSubmittedIsCollected(t *testing.T) {
 // A ROUND LOST MORE OFTEN THAN IT IS CARRIED ON AFTER IS NOT STARTED AGAIN: a
 // run that keeps taking its host down would take it — and every other seat's
 // work on it — down again with each relaunch. The phase the round opened is
-// closed failed, saying why, and the turn ends with it.
+// closed failed, saying why, and the turn ends with it: the refusal is one
+// every retry would meet again, so the turn is given up whatever the round's
+// calls proved, rather than handed back to be refused once more.
 //
 // Mutation: drop the refusal, and a run that kills its host is relaunched for
-// ever.
+// ever; drop turn.ErrPermanent from it, and a round whose jobs wrote nothing
+// is handed back for a retry.
 func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -122,6 +126,10 @@ func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 		buildOpts{pub: pub})
 	if !errors.Is(err, runner.ErrRoundLost) {
 		t.Fatalf("Resume = %v; want the round refused as lost too often", err)
+	}
+	if reason, abandon := turn.Abandon(turn.Result{}, err); !abandon || reason != turn.AbandonedPermanent {
+		t.Errorf("Abandon = (%q, %v); want the turn given up as refused for good (%q), though "+
+			"its round's jobs wrote nothing", reason, abandon, turn.AbandonedPermanent)
 	}
 	if n := relauncher.launched(); n != 0 {
 		t.Fatalf("a round lost too often was launched again %d times", n)
