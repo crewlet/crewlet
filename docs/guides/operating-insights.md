@@ -18,7 +18,7 @@ diagnostics:
 - **auto** sends every eligible record on its own.
 - **off** means off: every record that waits is forgotten, on every node, and nothing is kept or sent until it is on again, across restarts.
 
-`accepted` must name the schema of the catalogue this build carries. A build whose catalogue is newer shares nothing until an administrator accepts it again.
+`accepted` must name the schema of the catalogue this build carries. A build whose catalogue is newer shares nothing, every class alike and not only the ones that changed, until an administrator accepts it again.
 
 ## What is sent
 
@@ -36,4 +36,4 @@ A name of a role, seat, person, unit, server or host; an item key or title; any 
 
 ## Where it goes
 
-Records are posted to `https://reports.crewlet.ai/v1/insights`, a constant the company document cannot change. The relay keeps no per-record row and no client address: it counts records per week, class, fact tuple and version, and reads any count under 3 as "under 3".
+Records are posted to `https://reports.crewlet.ai/v1/insights`, a constant the company document cannot change, and only from a public build: a development build's server sends nothing, even a record another server scheduled. Each record keeps the relay's last answer (its status code), and a send that never settled reads as failed after an hour. The relay keeps no per-record row and no client address: it counts records per week, class, fact tuple and version, and reads any count under 3 as "under 3".

@@ -46,25 +46,25 @@ const maxAnswerBytes = 4 << 10
 
 // NewSender posts a record's bytes to url on client. NO HEADER SAYS ANYTHING:
 // the body is the whole record, and no credential or engine address goes with it.
-func NewSender(client *http.Client, url string) func(ctx context.Context, body []byte) error {
-	return func(ctx context.Context, body []byte) error {
+func NewSender(client *http.Client, url string) func(ctx context.Context, body []byte) (int, error) {
+	return func(ctx context.Context, body []byte) (int, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
-			return fmt.Errorf("insights: build the request: %w", err)
+			return 0, fmt.Errorf("insights: build the request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "crewlet-engine")
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("insights: the relay did not answer: %w", err)
+			return 0, fmt.Errorf("insights: the relay did not answer: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		// DRAINED so the connection is reused; the answer carries nothing kept.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswerBytes))
 		switch resp.StatusCode {
 		case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
-			return nil
+			return resp.StatusCode, nil
 		}
-		return fmt.Errorf("insights: the relay answered %d", resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("insights: the relay answered %d", resp.StatusCode)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/insights"
+	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -21,16 +22,18 @@ type relay struct {
 	mu     sync.Mutex
 	bodies [][]byte
 	fail   bool
+	// refuse is the status a failing relay answers, 0 for none at all.
+	refuse int
 }
 
-func (r *relay) send(_ context.Context, body []byte) error {
+func (r *relay) send(_ context.Context, body []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail {
-		return errors.New("the relay did not answer")
+		return r.refuse, errors.New("the relay did not take it")
 	}
 	r.bodies = append(r.bodies, append([]byte(nil), body...))
-	return nil
+	return 202, nil
 }
 
 func (r *relay) sent() int {
@@ -48,11 +51,14 @@ type harness struct {
 	consentErr error
 }
 
-func (h *harness) sharer() *insights.Sharer {
+func (h *harness) sharer() *insights.Sharer { return h.sharerOn(tagged) }
+
+// sharerOn is a node's sharer on a build of origin.
+func (h *harness) sharerOn(origin issuereport.Origin) *insights.Sharer {
 	noops := []usage.TurnLedgerRow{started("app", "chat:message", "nothing", 12, 0, 0),
 		started("app", "chat:message", "moved", 18, 0, 0)}
 	return &insights.Sharer{
-		Store: h.store, Origin: tagged,
+		Store: h.store, Origin: origin,
 		Findings: func(context.Context) ([]advisor.Finding, error) {
 			return advisor.Detect(advisor.Evidence{Ledger: noops}, kindOf), nil
 		},
@@ -294,7 +300,7 @@ func TestAStoredPayloadOutsideTheCatalogueNeverLeaves(t *testing.T) {
 func TestAFailedSendIsTriedAgainThenLeftFailed(t *testing.T) {
 	t.Parallel()
 	h := newHarness(config.InsightsAuto)
-	h.relay.fail = true
+	h.relay.fail, h.relay.refuse = true, 422
 	s := h.sharer()
 	h.pass(t, s)
 	h.now = h.now.Add(24 * time.Hour)
@@ -307,8 +313,67 @@ func TestAFailedSendIsTriedAgainThenLeftFailed(t *testing.T) {
 		if attempt == insights.MaxSendAttempts {
 			want = coord.InsightFailed
 		}
-		if r.Status != want || r.Attempts != attempt {
-			t.Fatalf("after attempt %d the record is %s with %d attempts, want %s", attempt, r.Status, r.Attempts, want)
+		if r.Status != want || r.Attempts != attempt || r.Answer != 422 {
+			t.Fatalf("after attempt %d the record is %s with %d attempts and answer %d, want %s and 422",
+				attempt, r.Status, r.Attempts, r.Answer, want)
 		}
+	}
+}
+
+// ONLY A PUBLIC BUILD SENDS, WHATEVER THE STORE HOLDS: a development build's node
+// sends nothing while a public node's record waits for its time, and the public
+// node sends it.
+func TestAnInertNodeSendsNothingAPublicNodeScheduled(t *testing.T) {
+	t.Parallel()
+	h := newHarness(config.InsightsAuto)
+	public, inert := h.sharer(), h.sharerOn(development)
+	h.pass(t, public)
+	h.now = h.now.Add(24 * time.Hour)
+	h.pass(t, public)
+	h.now = h.now.Add(7 * time.Hour)
+	if err := inert.SendDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := h.record(t); h.relay.sent() != 0 || r.Status != coord.InsightScheduled {
+		t.Fatalf("a development build's node sent %d and left the record %s", h.relay.sent(), r.Status)
+	}
+	if err := public.SendDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := h.record(t); h.relay.sent() != 1 || r.Status != coord.InsightSent || r.Answer != 202 {
+		t.Errorf("the public node sent %d, record %s with answer %d", h.relay.sent(), r.Status, r.Answer)
+	}
+}
+
+// A SEND THAT NEVER SETTLED READS AS FAILED after an hour, and off clears it; a
+// send still under way is left to settle.
+func TestAStaleSendReadsAsFailedAndOffClearsIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(config.InsightsAuto)
+	claim := func(class string, claimedAt time.Time) {
+		t.Helper()
+		if _, _, err := h.store.ClaimInsightRecord(t.Context(), coord.InsightRecord{Class: class, Week: "2030-W02",
+			Status: coord.InsightSending, ClaimedAt: claimedAt}, func(coord.InsightRecord) bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim("wake.noop_share", h.now.Add(-2*time.Hour))
+	claim("review.idle", h.now.Add(-time.Minute))
+	if err := h.sharer().SendDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := h.record(t)
+	fresh, _, _ := h.store.InsightRecord(t.Context(), "review.idle", "2030-W02")
+	if stale.Status != coord.InsightFailed || fresh.Status != coord.InsightSending {
+		t.Fatalf("after a send pass the stale claim is %s and the fresh one %s, want failed and sending", stale.Status, fresh.Status)
+	}
+	claim("ask.overtaken", h.now.Add(-2*time.Hour))
+	h.consent.Share = config.InsightsOff
+	h.pass(t, h.sharer())
+	if _, found, _ := h.store.InsightRecord(t.Context(), "ask.overtaken", "2030-W02"); found {
+		t.Error("off left a stale send standing")
+	}
+	if _, found, _ := h.store.InsightRecord(t.Context(), "review.idle", "2030-W02"); !found {
+		t.Error("off removed a send still under way")
 	}
 }

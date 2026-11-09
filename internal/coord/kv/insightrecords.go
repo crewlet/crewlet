@@ -17,7 +17,7 @@ var insightRecordClass = entryClass[coord.InsightRecord]{
 	key:    coord.InsightRecordKey,
 	entry:  coord.InsightEntryOf,
 	stored: func(r coord.InsightRecord, _ string, version uint64) coord.InsightRecord {
-		r.Version, r.SendAt = version, r.SendAt.UTC()
+		r.Version, r.SendAt, r.ClaimedAt = version, r.SendAt.UTC(), r.ClaimedAt.UTC()
 		return r
 	},
 }

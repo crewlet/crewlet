@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/insights`
-- **Enforced-by:** `internal/insights.TestARecordHoldsNoPlainString`, `internal/insights.TestARecordBuiltOutsideThePackageFailsValid`, `internal/insights.FuzzNoFindingTextReachesARecord`, `internal/insights.TestTwoCompaniesWithOnePatternSendTheSameBytes`, `internal/insights.TestEveryClassIsSmallAndClosed`, `internal/insights.TestEveryClassIsReadOffItsDetectorsOwnFindings`, `internal/insights.TestEveryFindingOfAClassFoldsIntoOneRecord`, `internal/insights.TestARecordNamesTheBuildByItsTagOrMain`, `internal/insights.TestARecordOutsideTheCatalogueIsRefused`, `internal/insights.TestAPublishedClassShapeIsImmutable`, `internal/insights.TestEveryRecordFitsItsBound`, `cmd/crewlet.TestTheCheckedInInsightsCatalogueIsWhatTheGeneratorEmits`, `internal/insights.TestReviewModeSendsNothingUntilSend`, `internal/insights.TestOffMeansOffAcrossARestart`, `internal/insights.TestAnUnreadConsentForgetsNothing`, `internal/insights.TestAnUnacceptedSchemaSharesNothing`, `internal/insights.TestOneClassesWeekLeavesOnceAcrossNodes`, `internal/insights.TestAStoredPayloadOutsideTheCatalogueNeverLeaves`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnInsightsOn`
+- **Enforced-by:** `internal/insights.TestARecordHoldsNoPlainString`, `internal/insights.TestARecordBuiltOutsideThePackageFailsValid`, `internal/insights.FuzzNoFindingTextReachesARecord`, `internal/insights.TestTwoCompaniesWithOnePatternSendTheSameBytes`, `internal/insights.TestEveryClassIsSmallAndClosed`, `internal/insights.TestEveryClassIsReadOffItsDetectorsOwnFindings`, `internal/insights.TestEveryFindingOfAClassFoldsIntoOneRecord`, `internal/insights.TestARecordNamesTheBuildByItsTagOrMain`, `internal/insights.TestARecordOutsideTheCatalogueIsRefused`, `internal/insights.TestAPublishedClassShapeIsImmutable`, `internal/insights.TestEveryRecordFitsItsBound`, `cmd/crewlet.TestTheCheckedInInsightsCatalogueIsWhatTheGeneratorEmits`, `internal/insights.TestReviewModeSendsNothingUntilSend`, `internal/insights.TestOffMeansOffAcrossARestart`, `internal/insights.TestAnUnreadConsentForgetsNothing`, `internal/insights.TestAnUnacceptedSchemaSharesNothing`, `internal/insights.TestOneClassesWeekLeavesOnceAcrossNodes`, `internal/insights.TestAStoredPayloadOutsideTheCatalogueNeverLeaves`, `internal/insights.TestAnInertNodeSendsNothingAPublicNodeScheduled`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnInsightsOn`
 - **Cost-when-tried:** not tried here. Before this record the only way to learn which operating patterns are common across companies was a manual analysis of one company's own data, and the defect reporter (ADR-0101) excludes usage by design.
 - **Tag-status:** unreleased
 
@@ -45,8 +45,10 @@ its CI must compare that copy to this file. A published class's shape (its
 facts, labels, floors and the evidence they read) is immutable: each schema
 is frozen in `schema/insights-history/`, a change is a new class id or a schema
 bump, and the consent names the schema it accepted, so a build whose catalogue
-is newer shares nothing until an administrator accepts it again. Only a public
-build sends, by ADR-0101's own origin rule.
+is newer shares nothing, every class and not only the changed ones, until an
+administrator accepts it again. Only a public
+build sends, by ADR-0101's own origin rule, held at the send: a development
+build's node has no sender, and sends nothing another node scheduled.
 
 **Consent is its own, an administrator's, and off by default.** The switch is
 separate from the defect reporter's. Turning it on shows the whole catalogue and

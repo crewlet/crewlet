@@ -49,8 +49,9 @@ type Sharer struct {
 	Day func(time.Time) string
 	// Delay is a fresh random wait within [MaxDelay].
 	Delay func() time.Duration
-	// Send posts one record's bytes to the relay.
-	Send func(ctx context.Context, body []byte) error
+	// Send posts one record's bytes to the relay and answers its status code,
+	// 0 when it did not answer. Nil on a build that sends nothing.
+	Send func(ctx context.Context, body []byte) (int, error)
 	Now  func() time.Time
 }
 
@@ -101,11 +102,10 @@ func (s *Sharer) observe(ctx context.Context, r Record, today string, consent co
 	case found && held.Status != coord.InsightObserved, found && held.Day == today:
 		return nil
 	case found && held.Day == previousDay(today):
-		payload, err := json.Marshal(r)
-		if err != nil {
+		if want.Payload, err = json.Marshal(r); err != nil {
 			return fmt.Errorf("insights: encode %s: %w", r.class, err)
 		}
-		want.Payload, want.Status = payload, coord.InsightQueued
+		want.Status = coord.InsightQueued
 		if consent.Share == config.InsightsAuto || slices.Contains(consent.Always, string(r.class)) {
 			want.Status, want.SendAt = coord.InsightScheduled, now.Add(s.Delay())
 		}
@@ -119,6 +119,11 @@ func (s *Sharer) observe(ctx context.Context, r Record, today string, consent co
 
 // SendDue sends every scheduled record whose time has come, under consent.
 func (s *Sharer) SendDue(ctx context.Context) error {
+	// ONLY A PUBLIC BUILD SENDS (ADR-0101's origin rule), whatever another
+	// node scheduled in the fleet's store.
+	if s.Send == nil || s.Origin.InertReason() != "" {
+		return nil
+	}
 	if _, ok, err := s.consenting(ctx); err != nil || !ok {
 		return err
 	}
@@ -128,11 +133,19 @@ func (s *Sharer) SendDue(ctx context.Context) error {
 	}
 	now := s.Now()
 	for _, held := range records {
+		if stale(held, now) {
+			failed := held
+			failed.Status = coord.InsightFailed
+			if _, _, err := s.Store.ClaimInsightRecord(ctx, failed, atVersion(held, true)); err != nil {
+				return fmt.Errorf("insights: fail %s's stale send: %w", held.Class, err)
+			}
+			continue
+		}
 		if held.Status != coord.InsightScheduled || held.SendAt.After(now) {
 			continue
 		}
 		sending := held
-		sending.Status = coord.InsightSending
+		sending.Status, sending.ClaimedAt = coord.InsightSending, now
 		claimed, won, err := s.Store.ClaimInsightRecord(ctx, sending, atVersion(held, true))
 		if err != nil {
 			return fmt.Errorf("insights: claim %s's week: %w", held.Class, err)
@@ -149,9 +162,10 @@ func (s *Sharer) SendDue(ctx context.Context) error {
 // valid sealed record leaves, whatever the store held.
 func (s *Sharer) settle(ctx context.Context, claimed coord.InsightRecord, now time.Time) {
 	next := claimed
+	next.Answer = 0
 	err := validPayload(claimed.Payload)
 	if err == nil {
-		err = s.Send(ctx, claimed.Payload)
+		next.Answer, err = s.Send(ctx, claimed.Payload)
 	}
 	switch {
 	case err == nil:
@@ -163,7 +177,7 @@ func (s *Sharer) settle(ctx context.Context, claimed coord.InsightRecord, now ti
 	}
 	if err != nil {
 		log.WarnContext(ctx, "insight_not_sent", "class", claimed.Class, "week", claimed.Week,
-			"attempt", next.Attempts, "error", err.Error())
+			"attempt", next.Attempts, "answer", next.Answer, "error", err.Error())
 	}
 	if _, _, err := s.Store.ClaimInsightRecord(ctx, next, atVersion(claimed, true)); err != nil {
 		log.WarnContext(ctx, "insight_not_settled", "class", claimed.Class, "week", claimed.Week, "error", err.Error())
@@ -209,15 +223,25 @@ func (s *Sharer) forget(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("insights: list the records: %w", err)
 	}
+	now := s.Now()
 	for _, r := range records {
-		switch r.Status {
-		case coord.InsightObserved, coord.InsightQueued, coord.InsightScheduled:
+		if r.Status == coord.InsightObserved || r.Status == coord.InsightQueued ||
+			r.Status == coord.InsightScheduled || stale(r, now) {
 			if _, err := s.Store.DeleteInsightRecord(ctx, r); err != nil {
 				return fmt.Errorf("insights: forget %s's week: %w", r.Class, err)
 			}
 		}
 	}
 	return nil
+}
+
+// StaleSend is how long a claim to send may stand before it reads as failed: a
+// node that stopped mid-send never settles its claim.
+const StaleSend = time.Hour
+
+// stale reports whether r is a send claimed StaleSend or more before now.
+func stale(r coord.InsightRecord, now time.Time) bool {
+	return r.Status == coord.InsightSending && now.Sub(r.ClaimedAt) >= StaleSend
 }
 
 // atVersion admits the held record only at the version read, or an empty entry.

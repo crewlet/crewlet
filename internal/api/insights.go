@@ -36,7 +36,7 @@ func (a *App) serveInsightDecision(w http.ResponseWriter, r *http.Request) {
 		Week   string `json:"week"`
 		Choice string `json:"choice"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil || body.Choice != "send" && body.Choice != "decline" {
+	if err = json.Unmarshal(raw, &body); err != nil || body.Choice != "send" && body.Choice != "decline" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 			"detail": "send a class, a week and a choice of send or decline"})
 		return

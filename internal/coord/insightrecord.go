@@ -54,6 +54,10 @@ type InsightRecord struct {
 	// SendAt is when a scheduled record goes, and Attempts how many sends failed.
 	SendAt   time.Time `json:"send_at,omitzero"`
 	Attempts int       `json:"attempts,omitempty"`
+	// ClaimedAt is when a node claimed it to send, and Answer the relay's last
+	// status code, 0 where it did not answer.
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
+	Answer    int       `json:"answer,omitempty"`
 	// Payload is the sealed record as it is, or was, sent.
 	Payload json.RawMessage `json:"payload,omitempty"`
 	// Version is the store's version of the record as it was read. Not on the wire.
@@ -84,6 +88,8 @@ func (r InsightRecord) Validate() error {
 		return fmt.Errorf("coord: an insight record's payload is past %d bytes", MaxInsightPayloadBytes)
 	case r.Attempts < 0:
 		return fmt.Errorf("coord: an insight record's attempts cannot be negative")
+	case r.Answer != 0 && (r.Answer < 100 || r.Answer > 599):
+		return fmt.Errorf("coord: an insight record's answer %d is no HTTP status", r.Answer)
 	}
 	return nil
 }

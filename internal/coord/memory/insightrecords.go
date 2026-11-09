@@ -13,7 +13,7 @@ import (
 func newInsightRecords() entryRecords[coord.InsightRecord, coord.InsightRecord] {
 	return entryRecords[coord.InsightRecord, coord.InsightRecord]{
 		stamp: func(v coord.InsightRecord, version uint64) coord.InsightRecord {
-			v.SendAt, v.Version = v.SendAt.UTC(), version
+			v.SendAt, v.ClaimedAt, v.Version = v.SendAt.UTC(), v.ClaimedAt.UTC(), version
 			return v
 		},
 		update: func(v *coord.InsightRecord, _ string, _ bool) coord.InsightRecord {

@@ -35,7 +35,9 @@ type InsightRow struct {
 	Status   coord.InsightStatus `json:"status"`
 	SendAt   *time.Time          `json:"send_at,omitempty"`
 	Attempts int                 `json:"attempts,omitempty"`
-	Record   json.RawMessage     `json:"record,omitempty"`
+	// Answer is the relay's last status code for it, absent where none came.
+	Answer int             `json:"answer,omitempty"`
+	Record json.RawMessage `json:"record,omitempty"`
 }
 
 // insightsReading answers `diagnostics_insights`.
@@ -59,7 +61,8 @@ func insightsAnswerOf(consent config.InsightsSharing, records []coord.InsightRec
 	}
 	rows := make([]InsightRow, 0, len(records))
 	for _, r := range records {
-		row := InsightRow{Class: r.Class, Week: r.Week, Status: r.Status, Attempts: r.Attempts, Record: r.Payload}
+		row := InsightRow{Class: r.Class, Week: r.Week, Status: r.Status, Attempts: r.Attempts, Answer: r.Answer,
+			Record: r.Payload}
 		if !r.SendAt.IsZero() {
 			at := r.SendAt
 			row.SendAt = &at
@@ -94,7 +97,7 @@ func (s Sources) insightFindings(ctx context.Context) ([]advisor.Finding, error)
 
 // InsightSharer is the sharer over this node's sources: the advisor's findings,
 // the fleet's consent and record, the company's day, sending on send.
-func (s Sources) InsightSharer(origin issuereport.Origin, send func(context.Context, []byte) error) *insights.Sharer {
+func (s Sources) InsightSharer(origin issuereport.Origin, send func(context.Context, []byte) (int, error)) *insights.Sharer {
 	return &insights.Sharer{
 		Store: s.Insights, Origin: origin, Findings: s.insightFindings, Consent: s.insightConsent,
 		Day:   func(at time.Time) string { return at.In(s.zone()).Format("2006-01-02") },

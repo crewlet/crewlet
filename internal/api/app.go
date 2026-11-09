@@ -961,8 +961,13 @@ func New(opts Options) (*App, error) {
 	// THE OPERATING INSIGHTS, over the fleet's record, sending only from a
 	// public build (ADR-0101's origin rule) to the relay's constant address.
 	if sources.Insights != nil {
-		a.insights = sources.InsightSharer(issuereport.OriginOf(version.String()),
-			insights.NewSender(issuereport.NewClient(), insights.RelayURL))
+		origin := issuereport.OriginOf(version.String())
+		// A BUILD THAT SENDS NOTHING HAS NO SENDER AT ALL.
+		var send func(context.Context, []byte) (int, error)
+		if origin.InertReason() == "" {
+			send = insights.NewSender(issuereport.NewClient(), insights.RelayURL)
+		}
+		a.insights = sources.InsightSharer(origin, send)
 	}
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
