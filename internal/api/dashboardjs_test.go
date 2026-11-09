@@ -2154,8 +2154,10 @@ const (
 	// 5682 KiB. Settings › Advisor (the setup findings and a change's preview
 	// from the entity route's dry run), on top of it, took it to 5687.0 KiB
 	// (5,823,525 bytes, +5,286 over the tree it was built on, all script). The
-	// measured size's next KiB: 5688 KiB.
-	treeBudget = 5<<20 + 568<<10
+	// measured size's next KiB: 5688 KiB. The advisor's integration findings and
+	// its go-live check, on top of it, took it to 5688.9 KiB (5,825,425 bytes,
+	// +1,900 over it, all script). The measured size's next KiB: 5689 KiB.
+	treeBudget = 5<<20 + 569<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
