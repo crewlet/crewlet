@@ -492,6 +492,15 @@ export const WORKSPACES: WorkspaceRow[] = [
         service: "tracker",
       },
       {
+        key: "holding-up",
+        label: "Holding up",
+        icon: "clock",
+        path: ["me", "holding-up"],
+        hint: "Their open work that other work waits on",
+        grants: ["worklet"],
+        service: "tracker",
+      },
+      {
         key: "collaborating",
         label: "Collaborating",
         icon: "users",
@@ -1425,6 +1434,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "asked-of-me",
   "asked-by-me",
   "unblocked",
+  "holding-up",
   "collaborating",
   "watching",
   "checklist",

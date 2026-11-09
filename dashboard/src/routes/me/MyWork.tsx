@@ -97,7 +97,7 @@ import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
-import { ChecklistClaims, RowList } from "~/components/workGrid.tsx";
+import { ChecklistClaims, HoldingList, RowList } from "~/components/workGrid.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
 import {
   Callout,
@@ -352,6 +352,7 @@ export function MyWork({ section }: { section: MeSection }) {
           "asked-of-me": countFor("asked-of-me", mine, listed),
           "asked-by-me": countFor("asked-by-me", mine, listed),
           unblocked: countFor("unblocked", mine, listed),
+          "holding-up": countFor("holding-up", mine, listed),
           collaborating: countFor("collaborating", mine, listed),
           watching: countFor("watching", mine, listed),
           checklist: countFor("checklist", mine, listed),
@@ -555,6 +556,32 @@ export function MyWork({ section }: { section: MeSection }) {
                   empty="Nothing newly unblocked."
                 />
               )}
+              {tab === "holding-up" &&
+                (mine.holding_up.length === 0 ? (
+                  <EmptyState
+                    size="compact"
+                    title="Nothing is waiting"
+                    description={`Open work assigned to ${they} that other work waits on appears here, the most waited on first.`}
+                  />
+                ) : (
+                  <>
+                    <p className="t-caption">
+                      {`Open work assigned to ${they} that other work waits on, the most waited on first. Open an item to answer, reassign or close it.`}
+                    </p>
+                    <HoldingList
+                      rows={mine.holding_up}
+                      chrome={chrome}
+                      hrefOf={workHref}
+                      now={now}
+                      label="Holding up"
+                    />
+                    <PageFoot
+                      shown={mine.holding_up.length}
+                      claim={mine.totals.holding_up}
+                      order="waited"
+                    />
+                  </>
+                ))}
               {tab === "collaborating" && (
                 <Block
                   rows={mine.collaborating}
@@ -838,6 +865,7 @@ function countFor(
     "asked-by-me": listed.askedBy,
     "asked-of-me": totals.asked_of_me,
     unblocked: totals.unblocked_recent,
+    "holding-up": totals.holding_up,
     collaborating: totals.collaborating,
     watching: totals.watching_recent,
     checklist: totals.checklist_items,
@@ -863,8 +891,8 @@ function PageFoot({
 }: {
   shown: number;
   claim?: WorkClaimTotal;
-  /** How the engine ordered the block: by last change, or by task and place. */
-  order: "recent" | "by-task";
+  /** How the engine ordered the block: by last change, by task and place, or by how much waits. */
+  order: "recent" | "by-task" | "waited";
 }) {
   if (!claim || claim.total <= shown) return null;
   const of = pageCount(claim.total, claim.capped === true);
@@ -872,7 +900,9 @@ function PageFoot({
     <p className="t-caption me-page-foot">
       {order === "recent"
         ? `The ${shown} most recently changed of ${of}.`
-        : `The first ${shown} of ${of}, by task.`}
+        : order === "waited"
+          ? `The ${shown} most waited on of ${of}.`
+          : `The first ${shown} of ${of}, by task.`}
     </p>
   );
 }
