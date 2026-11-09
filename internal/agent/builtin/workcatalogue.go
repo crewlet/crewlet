@@ -78,7 +78,7 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// The operator surface supplies its own actor, so this succeeds there.
 	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.GetWorkCatalogueTool), nil
+		return unattributed(worklet.GetWorkCatalogueTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfigured(worklet.GetWorkCatalogueTool), nil
@@ -155,7 +155,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.WriteWorkCatalogueTool), nil
+		return unattributed(worklet.WriteWorkCatalogueTool, err), nil
 	}
 	if t.deps.CatalogueWriter == nil {
 		return unconfigured(worklet.WriteWorkCatalogueTool), nil

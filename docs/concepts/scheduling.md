@@ -657,7 +657,11 @@ the last word anybody said about that item.
   its assignment woke ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
   A seat the organisation no longer holds is worked for as a stranger, and a
   write an older build recorded carries no apps. Work the seat filed for
-  itself is worked as its own.
+  itself is worked as its own. An agent's assignment made in a turn somebody
+  woke is the exception for now: the turn the assignment wakes works for that
+  somebody, but the item's history names only the agent, so its pickup works
+  for the agent until crewlet#798's piece 4b-ii keeps whom the history row
+  was written for.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under

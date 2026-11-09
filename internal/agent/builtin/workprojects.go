@@ -114,7 +114,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.ListProjectsTool), nil
+		return unattributed(worklet.ListProjectsTool, err), nil
 	}
 	reader, ok := t.deps.Reader.(ProjectReader)
 	if !ok || t.deps.Reader == nil {
@@ -205,7 +205,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.DescribeProjectTool), nil
+		return unattributed(worklet.DescribeProjectTool, err), nil
 	}
 	reader, ok := t.deps.Reader.(ProjectReader)
 	if !ok || t.deps.Reader == nil {

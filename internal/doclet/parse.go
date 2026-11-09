@@ -250,8 +250,10 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// AND WHO THE SENDER IS, by the record's own kind: a seat's handle
 		// and a credential's login are spelled alike, and only the kind
 		// tells a turn this wakes whether a colleague is asking
-		// (notify.FirstPartyWriter).
-		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps),
+		// (notify.FirstPartyWriter); and whom an agent wrote it for, which
+		// the turn this wakes works for (ADR-0109).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps,
+			record.WorkingFor),
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -792,7 +793,7 @@ func TestAnIdleScratchRepositoryIsRecordedOncePerTurn(t *testing.T) {
 	}
 
 	repo := host.detail.RepoRef
-	actor := builtin.Actor{Kind: worklet.AuthorAgent, Handle: "agent-cto"}
+	actor := builtin.Actor{Kind: worklet.AuthorAgent, Handle: "agent-cto", WrittenFor: types.ForTurn(nil)}
 	again := writerTurn(t)
 	for range 2 {
 		if err := builtin.HoldRepo(t.Context(), again, writer, actor, repo, nil); err != nil {

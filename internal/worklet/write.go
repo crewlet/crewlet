@@ -385,6 +385,12 @@ type Writer struct {
 	// nil for every other actor.
 	ActorApps []iam.Grant
 
+	// writtenFor is whom this writer's records are written for
+	// ([Provenance.WrittenFor]), set by [Writer.As] alone and asked of the
+	// actor's kind before every record is built ([Writer.decide]): a writer
+	// acting as an agent that states nobody writes nothing.
+	writtenFor types.WrittenFor
+
 	// Origin is where the turn behind this writer was woken — see
 	// [Provenance.Origin] — and what every task it creates states.
 	Origin *Origin
@@ -509,6 +515,10 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	if kind == AuthorOperator {
 		clone.ActorApps = slices.Clone(provenance.Apps)
 	}
+	// AND WHOM THE PARTY WRITES FOR, as stated: refused at the write
+	// ([Writer.decide]) where an agent states nobody, never mended here into
+	// a carrier nobody composed.
+	clone.writtenFor = provenance.WrittenFor
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
@@ -528,6 +538,29 @@ func (w *Writer) recordedApps(notify *Notify) []iam.Grant {
 		return nil
 	}
 	return slices.Clone(w.ActorApps)
+}
+
+// recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
+// or why this writer may write none: an agent's carrier on a record that wakes
+// somebody, nobody on one that wakes nobody (for [Writer.recordedApps]'
+// reason: only a wake reads it, and a record that wakes nobody stays at the
+// version every build reads), and a refusal for a writer acting as an agent
+// that states nobody, or as anybody else carrying somebody
+// ([types.WrittenFor.For]).
+//
+// ASKED OF EVERY RECORD, quiet or not, because the rule is the actor's: an
+// agent's writer whose builder forgot whom its turn works for is a bug however
+// its next record happens to route, and refusing it only where a record woke
+// somebody would let it pass every test that never wakes anybody.
+func (w *Writer) recordedFor(notify *Notify) (*types.WorkingFor, error) {
+	carrier, err := w.writtenFor.For(iam.ActorKind(w.ActorKind))
+	if err != nil {
+		return nil, fmt.Errorf("worklet: a writer acting as %q: %w", w.Actor, err)
+	}
+	if notify == nil {
+		return nil, nil
+	}
+	return carrier, nil
 }
 
 // origin is the origin a create states: the writer's own, and none where the
@@ -643,6 +676,21 @@ type Provenance struct {
 	// byte as a build without the field sends it.
 	Apps []iam.Grant `json:",omitempty"`
 
+	// WrittenFor is whom the writer's records are written for (ADR-0109):
+	// for an [AuthorAgent] writer, whoever the turn behind it works for,
+	// carried on every record it appends that wakes somebody
+	// ([MutationRecord.WorkingFor]) so the turn the record wakes works for
+	// them, and never for the writing seat. AN AGENT'S WRITER THAT STATES
+	// NOTHING WRITES NOTHING ([Writer.recordedFor]), and every other author
+	// carries nobody: see [types.WrittenFor].
+	//
+	// SENT ONLY STATED: the actor a provenance crosses inside
+	// (internal/estate's Actor) refuses to encode one that may write nothing,
+	// so a node never sends a data node an agent's write that states nothing.
+	// Sent only where it carries somebody (`omitzero`), as Apps is, and
+	// decoded as stated ([Provenance.UnmarshalJSON]).
+	WrittenFor types.WrittenFor `json:",omitzero"`
+
 	// Written is where the tasks this writer's records COMMIT to are
 	// reported — the turn's own set, so the engine can charge a turn that
 	// nothing at dispatch named an item for to the one item it wrote. Nil
@@ -653,6 +701,22 @@ type Provenance struct {
 	// committed to in the answer instead, and the asking node adds it to
 	// this set itself (internal/estate's reply.Written).
 	Written WriteLog `json:"-"`
+}
+
+// UnmarshalJSON decodes a provenance that crossed to a data node inside the
+// estate's signed envelope (internal/estate's Actor): whom its writes are for
+// is what the node that built it stated ([types.WrittenFor.Received]), since a
+// node sends no actor that states nothing (that Actor's MarshalJSON); an
+// absent carrier is nobody, which is also what an older node sends.
+func (p *Provenance) UnmarshalJSON(b []byte) error {
+	type wire Provenance
+	var w wire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*p = Provenance(w)
+	p.WrittenFor = p.WrittenFor.Received()
+	return nil
 }
 
 // WriteLog is what a turn's writer reports the tasks it committed to into.
@@ -2059,6 +2123,10 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 			"empty one resolves to the workspace and files its deferral where "+
 			"no project-scoped probe looks", op, subject, subject.Kind)
 	}
+	writtenFor, err := w.recordedFor(notify)
+	if err != nil {
+		return statelog.Decision{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("worklet: encode the %s payload "+
@@ -2078,6 +2146,7 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		ActorApps: w.recordedApps(notify),
 		// THE HISTORY ROW KEEPS THEM from this version on (ADR-0112).
 		ActorAppsKept: len(w.recordedApps(notify)) > 0,
+		WorkingFor:    writtenFor,
 		OperatorID:    w.OperatorID,
 		TurnID:        w.TurnID,
 		Chain:         w.Chain,

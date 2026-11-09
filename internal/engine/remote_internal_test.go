@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -121,18 +122,23 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 // was made under, a task filed from a thread forgot the thread, and a turn
 // that wrote one item was charged to none. A credential's apps are that kind
 // of field: the record keeps them for the turn the write wakes, which is held
-// to them (ADR-0109). So the
-// fixture sets EVERY field a provenance has, and a field added to it later is
-// one this test makes its author carry across or explain.
+// to them (ADR-0109), and so is whom an agent's write was made for, which the
+// turn the write wakes works for. So the fixture sets EVERY field a
+// provenance has, and a field added to it later is one this test makes its
+// author carry across or explain.
+//
+// Mutation: drop WrittenFor from Actor.Provenance, and the agent's write
+// crosses written for nobody.
 func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	t.Parallel()
 	written := &turnctx.Written{}
 	actor := builtin.Actor{
 		Handle: "ops-token", Kind: worklet.AuthorOperator,
 		OperatorID: "tok-1", TurnID: "run-1", Chain: []string{"cto", "swe"},
-		Thread:  &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
-		Apps:    []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
-		Written: written,
+		Thread:     &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
+		Apps:       []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+		WrittenFor: types.ForNobody(),
+		Written:    written,
 	}
 	got := remoteActor(actor)
 	if got.Handle != actor.Handle || got.Kind != actor.Kind || got.Records {
@@ -147,9 +153,16 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	}
 	want := worklet.Provenance{OperatorID: "tok-1", TurnID: "run-1",
 		Chain: []string{"cto", "swe"}, Origin: actor.Thread,
-		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}, Written: written}
+		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}, WrittenFor: types.ForNobody(), Written: written}
 	if !reflect.DeepEqual(got.Provenance, want) {
 		t.Errorf("the provenance crossed as %+v, want %+v", got.Provenance, want)
+	}
+
+	// AN AGENT'S WRITE CROSSES WITH WHOM IT WAS MADE FOR, the carrier whole.
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	agent := builtin.Actor{Handle: "swe", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(ada)}
+	if got := remoteActor(agent).Provenance.WrittenFor; !got.Stated() || !reflect.DeepEqual(got.Carrier(), ada) {
+		t.Errorf("an agent's write for ada crossed written for %+v", got.Carrier())
 	}
 
 	// A TURN WITH NO SET CROSSES WITH NONE: a nil set in the interface would

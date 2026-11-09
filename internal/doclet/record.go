@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -32,7 +33,9 @@ import (
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
 //   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
-const RecordVersion = 2
+//   - 3: whom an agent's record that wakes somebody was written for
+//     ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -59,6 +62,7 @@ const baseRecordVersion = 1
 // been released" does not exempt a new field from its row.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+	{Name: "MutationRecord.WorkingFor", Since: 3, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -257,6 +261,17 @@ type MutationRecord struct {
 	// build retains a record carrying it rather than waking a seat for a
 	// credential it would read as a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
+
+	// WorkingFor is whom an [AuthorAgent] record that wakes somebody was
+	// written for (ADR-0109): whoever the turn that wrote it worked for,
+	// composed from that turn's own bound ceiling, and absent on every other
+	// record: an agent's write made for nobody else, every other author's,
+	// and one that wakes nobody (a gate among them). NOT APPLIED to any row:
+	// the change feed reads it, and the turn the record wakes works for them
+	// (notify.FirstPartyWriter), never for the writing seat, which holds every
+	// app. Version 3: an older build retains a record carrying it rather than
+	// waking a seat for the writing agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.

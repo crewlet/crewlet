@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -235,6 +236,28 @@ type Actor struct {
 	// a turn's [worklet.WriteLog], a set in the asking process that no
 	// wire carries. Set by the router itself wherever that log is present.
 	Records bool `json:"records,omitempty"`
+}
+
+// MarshalJSON encodes the actor of a request this node sends a data node, and
+// refuses one that may write nothing ([types.WrittenFor.For], over its
+// provenance's WrittenFor and its kind): an agent's actor that states nobody
+// it writes for, and a carrier on any other kind's.
+//
+// REFUSED ON THE NODE THAT BUILT IT, because the serving node cannot tell what
+// never arrived from what an older node, knowing no carrier, never sent: it
+// decodes both as nobody ([worklet.Provenance.UnmarshalJSON]), and the turn
+// the write woke would work for the writing seat, every app. The tracker
+// refuses such an actor where it decides a record ([worklet.Writer.As]'s
+// writer), which a request this node answers in process reaches; this is the
+// same refusal for one that crosses. A VALUE RECEIVER, so the request's
+// pointer to it is encoded through it too; the bytes of an actor it admits are
+// its plain encoding's.
+func (a Actor) MarshalJSON() ([]byte, error) {
+	if _, err := a.Provenance.WrittenFor.For(iam.ActorKind(a.Kind)); err != nil {
+		return nil, fmt.Errorf("estate: %s is not sent to a data node: %w", a.Handle, err)
+	}
+	type wire Actor
+	return json.Marshal(wire(a))
 }
 
 // opClass is what a failover may do with an operation that went unanswered.

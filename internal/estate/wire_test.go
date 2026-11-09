@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -68,6 +71,18 @@ var carriedByServer = map[string]string{
 		"an answer carries its result as SavedBy and SavedAt",
 }
 
+// plainlyEncoded are the types an operation carries that implement
+// json.Marshaler only to REFUSE a value, and write every value they admit as
+// their plain encoding: the actors, each of which refuses to be sent when it
+// may write nothing (ADR-0109). So [uncarried] walks into them as into any
+// struct, since every field they hold crosses exactly as a plain struct's
+// would, and TestAPlainlyEncodedActorWritesItsPlainEncoding holds each to that.
+var plainlyEncoded = map[reflect.Type]bool{
+	reflect.TypeFor[Actor]():         true,
+	reflect.TypeFor[doclet.Actor]():  true,
+	reflect.TypeFor[chatlet.Actor](): true,
+}
+
 // extraField is the one field name every record type keeps a newer build's
 // unknown fields in. It is listed once rather than per type: none of it is
 // ever set on a value an operation carries — the tables have no column for
@@ -98,8 +113,8 @@ func uncarried(t *testing.T) map[string]string {
 			return
 		}
 		seen[ty] = true
-		if ty.Implements(reflect.TypeFor[json.Marshaler]()) ||
-			reflect.PointerTo(ty).Implements(reflect.TypeFor[json.Marshaler]()) {
+		if !plainlyEncoded[ty] && (ty.Implements(reflect.TypeFor[json.Marshaler]()) ||
+			reflect.PointerTo(ty).Implements(reflect.TypeFor[json.Marshaler]())) {
 			return
 		}
 		for i := range ty.NumField() {
@@ -151,6 +166,54 @@ func TestEveryFieldAnOperationCarriesArrives(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(carriedByServer)) {
 		if _, still := found[name]; !still {
 			t.Errorf("carriedByServer lists %s, which no operation carries any more", name)
+		}
+	}
+}
+
+// A PLAINLY ENCODED ACTOR WRITES ITS PLAIN ENCODING: each of [plainlyEncoded],
+// given a value it admits with every field it sends set, encodes it exactly as
+// a struct of the same fields and no methods would. That is what lets the sweep
+// above walk into it, and what lets a node's refusal to send an actor that may
+// write nothing change no byte of one it sends.
+//
+// Mutation: have an actor's MarshalJSON write anything but its plain encoding
+// (drop a field, rename a key), and its sample fails here.
+func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
+	t.Parallel()
+	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantWorklet}})
+	key := statelog.NewOpID(envelopeInstant, "page")
+	samples := map[reflect.Type]any{
+		reflect.TypeFor[Actor](): Actor{Handle: "swe", Kind: worklet.AuthorAgent, Records: true,
+			Provenance: worklet.Provenance{OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"},
+				Origin: &worklet.Origin{Surface: "slack", Conversation: "C1"},
+				Apps:   []iam.Grant{iam.GrantWorklet}, WrittenFor: carrier}},
+		reflect.TypeFor[doclet.Actor](): doclet.Actor{Handle: "swe", Kind: doclet.AuthorAgent,
+			OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"}, Apps: []iam.Grant{iam.GrantDoclet},
+			WrittenFor: carrier, OpKey: key},
+		reflect.TypeFor[chatlet.Actor](): chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent,
+			OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"}, WrittenFor: carrier, OpKey: key},
+	}
+	for ty := range plainlyEncoded {
+		sample, ok := samples[ty]
+		if !ok {
+			t.Errorf("%s is listed as plainly encoded and has no sample here", ty)
+			continue
+		}
+		got, err := json.Marshal(sample)
+		if err != nil {
+			t.Errorf("%s refused a value it admits: %v", ty, err)
+			continue
+		}
+		// THE PLAIN ENCODING: the same fields in a struct with no methods.
+		fields := make([]reflect.StructField, ty.NumField())
+		for i := range fields {
+			f := ty.Field(i)
+			fields[i] = reflect.StructField{Name: f.Name, Type: f.Type, Tag: f.Tag}
+		}
+		want, err := json.Marshal(reflect.ValueOf(sample).Convert(reflect.StructOf(fields)).Interface())
+		if err != nil || string(got) != string(want) {
+			t.Errorf("%s encodes as %s, want its plain encoding %s (%v)", ty, got, want, err)
 		}
 	}
 }

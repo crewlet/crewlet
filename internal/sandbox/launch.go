@@ -117,8 +117,8 @@ type TurnRef struct {
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
-	// WorkingFor is who the turn works for when a colleague's ask or an
-	// answer handed it on ([turnctx.Turn.WorkingFor]).
+	// WorkingFor is who the turn works for when a colleague's ask, an answer,
+	// or a colleague's write handed it on ([turnctx.Turn.WorkingFor]).
 	WorkingFor *types.WorkingFor
 
 	// RequesterLogin and RequesterApps are the credential acting as no seat

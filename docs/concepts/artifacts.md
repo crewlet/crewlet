@@ -287,13 +287,13 @@ What an **agent** may do is narrower than its shares, on purpose:
   can message the agent may ask it to change. The somebody is whoever woke the
   turn: the first speaker of the message, comment or remark it answers, on a
   vendor's surface or on Worklet, Doclet and Chatlet alike, or, where that
-  speaker is a colleague agent that asked in a turn worked for somebody, that
-  somebody, carried from the colleague's own turn. A turn woken by somebody
-  the company does not know authors nothing, and changes only what no app
-  gates of the agent's own, such as its data. The ceiling holds the turn
-  somebody woke and every turn its asks hand its work on to: a colleague the
-  agent asks and the turn the colleague's answer wakes both read for the same
-  somebody, while a colleague the agent's writes wake reads for the agent.
+  speaker is a colleague agent that asked or wrote in a turn worked for
+  somebody, that somebody, carried from the colleague's own turn. A turn woken
+  by somebody the company does not know authors nothing, and changes only what
+  no app gates of the agent's own, such as its data. The ceiling holds the turn
+  somebody woke and every turn it hands its work on to: a colleague the agent
+  asks, the turn the colleague's answer wakes, and a colleague the agent's
+  writes on Worklet, Doclet or Chatlet wake all read for the same somebody.
   What the agent already knows (its memory, what it read in a turn nobody
   woke) is no read at all, so an artifact refused to somebody in one turn can
   still reach them through what the agent tells them later

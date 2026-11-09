@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -237,7 +238,7 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 		t.Fatalf("ask: %v", err)
 	}
 	// AN EDIT CORRECTS THE WORDS and keeps the decision as asked.
-	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{})
+	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := dev.EditComment(t.Context(), "op-edit", "fixed", "ENG", "c-a",
 		"Friday, then?", nil); err != nil {
 		t.Fatalf("an edit of the question was refused: %v", err)

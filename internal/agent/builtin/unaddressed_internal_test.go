@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -22,7 +23,7 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 	t.Parallel()
 	question := "c-question"
 	task := worklet.Task{Assignee: "backend-engineer"}
-	agent := Actor{Handle: "qa", Kind: worklet.AuthorAgent}
+	agent := Actor{Handle: "qa", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	person := Actor{Handle: "miles", Kind: worklet.AuthorHuman}
 	const (
 		quiet = iota
@@ -47,7 +48,7 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 		"an answer naming its choice":     {task, person, worklet.Comment{Answers: &question, Choice: "yes"}, nil, quiet, nil},
 		"a question":                      {task, agent, worklet.Comment{Ask: "backend-engineer"}, nil, quiet, nil},
 		"a remark that mentions":          {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
-		"the assignee's own remark":       {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent}, worklet.Comment{}, nil, quiet, nil},
+		"the assignee's own remark":       {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}, worklet.Comment{}, nil, quiet, nil},
 		"a task nobody holds":             {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
@@ -408,6 +409,16 @@ type Actor struct {
 	// resolved it (ADR-0109). Set by [ActorOf] alone.
 	Apps []iam.Grant
 
+	// WrittenFor is whom an AGENT'S writes are made for: whoever its turn
+	// works for, composed from the call's own bound ceiling where the actor
+	// is built ([actorFor], [writtenForTurn]), carried on every record that
+	// wakes somebody, so the turn that record wakes works for them too
+	// (ADR-0109). The tracker refuses an agent's write that states nothing
+	// ([types.WrittenFor.For]): a site that builds an agent's actor without
+	// its turn says why ([types.ForNobody]), and a person's or a credential's
+	// actor carries nobody.
+	WrittenFor types.WrittenFor
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
@@ -630,22 +641,72 @@ type MentionResolver interface {
 // id and chain travel as provenance so an audit can walk from an item back to
 // the turn that wrote it; they bound nothing, because a hand-off is charged
 // to the item's own reassignment counter and not to the delegation depth.
-func actorFor(turn *turnctx.Turn) (Actor, error) {
+//
+// AND WHOM THE TURN WORKS FOR, from the call's own bound ceiling
+// ([writtenForTurn]), so every record the seat writes that wakes somebody
+// carries them and the turn it wakes works for them too (ADR-0109). r is the
+// composer a family asking outside its gate composes with, nil for one whose
+// every call passes the gate.
+func actorFor(ctx context.Context, turn *turnctx.Turn, r Requesters) (Actor, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
 		return Actor{}, err
 	}
+	writtenFor, err := writtenForTurn(ctx, turn, seat.Handle(), r)
+	if err != nil {
+		return Actor{}, err
+	}
 	return Actor{
-		Handle:    seat.Handle(),
-		Kind:      worklet.AuthorAgent,
-		TurnID:    turn.RunID,
-		WorkKey:   turn.WorkKey,
-		WorkSince: turn.WorkSince,
-		RebasedTo: turn.RebasedTo,
-		Chain:     turn.Chain,
-		Thread:    threadOf(turn),
-		Written:   turn.Written,
+		Handle:     seat.Handle(),
+		Kind:       worklet.AuthorAgent,
+		WrittenFor: writtenFor,
+		TurnID:     turn.RunID,
+		WorkKey:    turn.WorkKey,
+		WorkSince:  turn.WorkSince,
+		RebasedTo:  turn.RebasedTo,
+		Chain:      turn.Chain,
+		Thread:     threadOf(turn),
+		Written:    turn.Written,
 	}, nil
+}
+
+// writtenForTurn is whom a seat's write in turn is made for ([types.ForTurn]):
+// whoever the turn works for, read from the call's own bound ceiling
+// ([ceilingOf], [workingForOf]), as a colleague's ask is, and nil for a turn
+// that works for its own seat.
+//
+// FROM THE BOUND CEILING AND NOTHING ELSE, so the carrier is the rule every
+// family decides the turn's own calls by and nothing a tool's arguments or a
+// model writes reaches it. THE GATE'S COMPOSITION ANSWERS FIRST: every call a
+// turn makes passes the gate, which binds the ceiling ([bindCeiling]), so a
+// seat's call composes nothing here that its gate did not; r is asked only by
+// a family that resolves its caller outside a gate with a composer of its own
+// (the code tools' run repositories, [CodeDeps.ResolveRunRepos]), and is nil
+// for every family that has none. A CEILING THAT CANNOT BE COMPOSED IS AN
+// ERROR ([ErrUndecidable]), never a turn nobody woke: a write carrying nobody
+// would wake whoever it reaches for this seat, every app.
+func writtenForTurn(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (types.WrittenFor,
+	error) {
+
+	ceiling, err := ceilingOf(ctx, turn, seat, r)
+	if err != nil {
+		return types.WrittenFor{}, fmt.Errorf("%w: %w", ErrUndecidable, err)
+	}
+	return types.ForTurn(workingForOf(ceiling)), nil
+}
+
+// unattributed is what a call answers when nobody could be named to write or
+// read as ([WorkDeps.actor], [PageDeps.actor]): a call whose turn's requester
+// could not be composed is unavailable for now, since what a seat writes
+// carries that requester to whoever it wakes; any other is a caller with no
+// seat and no principal behind it ([notInATurn]).
+func unattributed(name string, err error) tools.Result {
+	if errors.Is(err, ErrUndecidable) {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not establish who this "+
+			"turn's work is for, which everything this seat writes carries to whoever it wakes. "+
+			"Nothing was done. Try again shortly.", name))
+	}
+	return notInATurn(name)
 }
 
 // threadOf is where a turn was woken, as a create states it: the chat surface
@@ -667,7 +728,7 @@ func threadOf(turn *turnctx.Turn) *worklet.Origin {
 func (a Actor) Provenance() worklet.Provenance {
 	provenance := worklet.Provenance{
 		OperatorID: a.OperatorID, TurnID: a.TurnID, Chain: a.Chain,
-		Origin: a.Thread, Apps: slices.Clone(a.Apps),
+		Origin: a.Thread, Apps: slices.Clone(a.Apps), WrittenFor: a.WrittenFor,
 	}
 	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
 	// reports into nothing, and the writer would do the work of naming an
@@ -678,13 +739,16 @@ func (a Actor) Provenance() worklet.Provenance {
 	return provenance
 }
 
-// actor resolves who this call writes as — see [WorkDeps.Actor].
+// actor resolves who this call writes as — see [WorkDeps.Actor] — and, for a
+// seat's turn, whom it writes for ([actorFor]). An error that is
+// [ErrUndecidable] is a requester this node could not compose, which a caller
+// answers as [unattributed] does.
 //
 // THE RUN'S CALL LOG IS THE TURN'S ON EVERY PATH, whoever resolved the rest:
 // it is not attribution, and a resolver that forgot it would silently hand a
 // repeated call its first copy's operation id.
 func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) {
-	resolve := actorFor
+	resolve := func(turn *turnctx.Turn) (Actor, error) { return actorFor(ctx, turn, nil) }
 	if d.Actor != nil {
 		resolve = func(turn *turnctx.Turn) (Actor, error) { return d.Actor(ctx, turn) }
 	}
@@ -968,7 +1032,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(ListWorkItemsTool), nil
+		return unattributed(ListWorkItemsTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfigured(ListWorkItemsTool), nil
@@ -1345,7 +1409,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(GetWorkItemTool), nil
+		return unattributed(GetWorkItemTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfigured(GetWorkItemTool), nil
@@ -1662,7 +1726,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(CreateWorkItemTool), nil
+		return unattributed(CreateWorkItemTool, err), nil
 	}
 	if t.deps.Writer == nil {
 		return unconfigured(CreateWorkItemTool), nil
@@ -2649,7 +2713,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(UpdateWorkItemTool), nil
+		return unattributed(UpdateWorkItemTool, err), nil
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfigured(UpdateWorkItemTool), nil
@@ -3434,7 +3498,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(CommentOnWorkTool), nil
+		return unattributed(CommentOnWorkTool, err), nil
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfigured(CommentOnWorkTool), nil

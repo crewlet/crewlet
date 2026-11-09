@@ -81,7 +81,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	if before == 0 {
 		t.Fatal("an item somebody else filed reads as never changed by anybody else")
 	}
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) {
 		t.Helper()
 		c := worklet.Comment{ID: op, Task: "low", Author: author, AuthorKind: kind,
@@ -130,7 +130,7 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 		t.Fatalf("Depend: %v", err)
 	}
 	r.drain()
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	ask := worklet.Comment{ID: "q-1", Task: "asked", Author: "ana",
 		AuthorKind: worklet.AuthorAgent, Body: "which environment?", Ask: "pm",
 		CreatedAt: wednesday}
@@ -168,7 +168,7 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
 	token := r.writer.As("token:ci", worklet.AuthorOperator,
 		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}})
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	file := func(w *worklet.Writer, id, assignee string) {
 		t.Helper()
 		task := newTask(id)
@@ -228,7 +228,7 @@ func TestReadyWorkTimesAndProgressFollowTheKey(t *testing.T) {
 	if first.MovedAt.IsZero() {
 		t.Fatal("an item somebody else filed has no instant for the change its key names")
 	}
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	c := worklet.Comment{ID: "c-1", Task: "started", Author: "ana", AuthorKind: worklet.AuthorAgent,
 		Body: "on it", CreatedAt: wednesday}
 	if _, err := ana.UpdateTask(t.Context(), "op-c", "started", "ENG", worklet.NoIfMatch,

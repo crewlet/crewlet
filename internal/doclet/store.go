@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -394,6 +395,10 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 	if err := scope.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
+	writtenFor, err := actor.recordedFor(notify)
+	if err != nil {
+		return statelog.Decision{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("doclet: encode the %s payload "+
@@ -410,6 +415,7 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 		Actor:      actor.Name(),
 		ActorKind:  actor.Kind,
 		ActorApps:  actor.operatorApps(notify),
+		WorkingFor: writtenFor,
 		OperatorID: actor.OperatorID,
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
@@ -503,6 +509,19 @@ type Actor struct {
 	// byte for byte as a build without the field sends it.
 	Apps []iam.Grant `json:",omitempty"`
 
+	// WrittenFor is whom this actor's writes are made for (ADR-0109): for an
+	// [AuthorAgent], whoever the turn behind it works for, carried on every
+	// record it writes that wakes somebody ([MutationRecord.WorkingFor]) so
+	// the turn the record wakes works for them, and never for the writing
+	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([Actor.recordedFor]),
+	// and every other kind carries nobody: see [types.WrittenFor].
+	//
+	// SENT ONLY STATED: an actor this field refuses is never encoded
+	// ([Actor.MarshalJSON]), so a node never sends a data node an agent's
+	// write that states nothing. Sent only where it carries somebody
+	// (`omitzero`), as Apps is, and decoded as stated ([Actor.UnmarshalJSON]).
+	WrittenFor types.WrittenFor `json:",omitzero"`
+
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every write here derives its operation
 	// id from when it is set.
@@ -535,6 +554,63 @@ func (a Actor) operatorApps(notify *Notify) []iam.Grant {
 		return nil
 	}
 	return slices.Clone(a.Apps)
+}
+
+// recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
+// or why this actor may write none: an agent's carrier on a record that wakes
+// somebody, nobody on one that wakes nobody (for [Actor.operatorApps]'
+// reason), and a refusal for an agent that states nobody, or for any other
+// kind carrying somebody ([types.WrittenFor.For]).
+//
+// ASKED OF EVERY RECORD, quiet or not, and in the one builder every write
+// shares ([Store.decide]): the rule is the actor's, and an agent's actor whose
+// builder forgot whom its turn works for is a bug however its next record
+// happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
+// ([Actor.UnmarshalJSON]), so a data node never refuses a write for a key an
+// older node never sends.
+func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
+	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
+	if err != nil {
+		return nil, fmt.Errorf("doclet: %s's write: %w", a.Name(), err)
+	}
+	if notify == nil {
+		return nil, nil
+	}
+	return carrier, nil
+}
+
+// MarshalJSON encodes an actor crossing to a data node in a page write's
+// arguments (internal/estate), and refuses one that may write nothing
+// ([types.WrittenFor.For]): an agent's actor that states nobody it writes for,
+// and a carrier on any other kind's. Refused HERE, on the node that built it,
+// because the data node cannot tell what never arrived from what an older
+// node, knowing no carrier, never sent: it reads both as nobody
+// ([Actor.UnmarshalJSON]), and the turn the write woke would work for the
+// writing seat. A VALUE RECEIVER, so the actor inside every argument struct
+// is encoded through it; the bytes of an actor it admits are its plain
+// encoding's.
+func (a Actor) MarshalJSON() ([]byte, error) {
+	if _, err := a.WrittenFor.For(iam.ActorKind(a.Kind)); err != nil {
+		return nil, fmt.Errorf("doclet: %s is not sent to a data node: %w", a.Name(), err)
+	}
+	type wire Actor
+	return json.Marshal(wire(a))
+}
+
+// UnmarshalJSON decodes an actor that crossed to a data node in a page write's
+// arguments (internal/estate): whom its writes are for is what the node that
+// built it stated ([types.WrittenFor.Received]), since a node sends no actor
+// that states nothing ([Actor.MarshalJSON]); an absent carrier is nobody,
+// which is also what an older node sends.
+func (a *Actor) UnmarshalJSON(b []byte) error {
+	type wire Actor
+	var w wire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*a = Actor(w)
+	a.WrittenFor = a.WrittenFor.Received()
+	return nil
 }
 
 // operation is the id one write is published under: derived from the actor's

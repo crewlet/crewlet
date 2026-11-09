@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -198,6 +199,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// from, which only a reply reads and every build must carry.
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
+	case "MutationRecord.WorkingFor":
+		// AN AGENT'S WRITE THAT WAKES SOMEBODY, made in a turn a person
+		// woke: whom it was written for rides beside the agent.
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -761,7 +762,8 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 	return nil
 }
 
-var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent}
+var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent,
+	Provenance: worklet.Provenance{WrittenFor: types.ForTurn(nil)}}
 
 // A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
 // attached — the asking node's chart cannot cross a wire, and

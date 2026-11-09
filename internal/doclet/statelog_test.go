@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -165,6 +166,11 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
 		rec.Actor, rec.ActorKind, rec.OperatorID = "token:ci", doclet.AuthorOperator, "token:ci"
 		rec.ActorApps = []iam.Grant{iam.GrantDoclet}
+	case "MutationRecord.WorkingFor":
+		// AN AGENT'S WRITE MADE IN A TURN A PERSON WOKE: whom it was
+		// written for rides beside the agent.
+		rec.Actor, rec.ActorKind = "dev", doclet.AuthorAgent
+		rec.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

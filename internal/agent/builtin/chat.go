@@ -300,13 +300,21 @@ func (d ChatDeps) settle(ctx context.Context, at statelog.Position) {
 // a message to the execution that said it. It derives nothing. What makes a
 // re-run turn post once is the call's key ([callOpKey]), whose seed is the
 // unit of work a redelivery reproduces.
-func chatActor(turn *turnctx.Turn) (chatlet.Actor, error) {
+//
+// AND WHOM THE TURN WORKS FOR, from the call's own bound ceiling
+// ([writtenForTurn]): a message that wakes a colleague carries them, so the
+// turn it wakes works for them too (ADR-0109).
+func chatActor(ctx context.Context, turn *turnctx.Turn) (chatlet.Actor, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
 		return chatlet.Actor{}, err
 	}
+	writtenFor, err := writtenForTurn(ctx, turn, seat.Handle(), nil)
+	if err != nil {
+		return chatlet.Actor{}, err
+	}
 	return chatlet.Actor{
-		Handle: seat.Handle(), Kind: chatlet.AuthorAgent,
+		Handle: seat.Handle(), Kind: chatlet.AuthorAgent, WrittenFor: writtenFor,
 		TurnID: turn.RunID, Chain: turn.Chain,
 	}, nil
 }
@@ -330,7 +338,7 @@ func (d ChatDeps) actor(ctx context.Context, turn *turnctx.Turn, tool string,
 	if d.Actor != nil {
 		actor, err = d.Actor(ctx, turn)
 	} else {
-		actor, err = chatActor(turn)
+		actor, err = chatActor(ctx, turn)
 	}
 	if err != nil {
 		out := chatActorFailure(tool, err)
@@ -353,10 +361,11 @@ func (d ChatDeps) actor(ctx context.Context, turn *turnctx.Turn, tool string,
 // [tools.RefusalForbidden]: nothing about the arguments is wrong, and this
 // caller — no seat behind it, no turn, no request a surface resolved — may
 // not speak or read as anybody here. A seat with no turn is told the ordinary
-// sentence; a request that carried nobody is told so.
+// sentence; a request that carried nobody is told so. A seat whose turn's
+// requester could not be composed is told to try again ([unattributed]).
 func chatActorFailure(name string, err error) tools.Result {
-	if errors.Is(err, turnctx.ErrNoSeat) {
-		return notInATurn(name)
+	if errors.Is(err, turnctx.ErrNoSeat) || errors.Is(err, ErrUndecidable) {
+		return unattributed(name, err)
 	}
 	return refusedBy(tools.RefusalForbidden, err, name+" has nobody to act as: "+
 		"this request carries no person bound to a seat. Sign in as the person "+

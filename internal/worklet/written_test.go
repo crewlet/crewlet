@@ -42,7 +42,8 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 	r := newRoundTrip(t)
 	log := &writeLog{}
 	w := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{
-		TurnID: "run-1", Written: log,
+		WrittenFor: types.ForTurn(nil),
+		TurnID:     "run-1", Written: log,
 	})
 
 	if _, err := w.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {

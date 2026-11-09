@@ -567,7 +567,7 @@ give it to them.
 |---|---|
 | nobody: a schedule, a watch, the agent's own work | every app |
 | a colleague agent seat working for nobody but itself | every app |
-| a colleague agent seat's ask, or the answer to the agent's own ask, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask and answer |
+| a colleague agent seat's ask, the answer to the agent's own ask, or what that seat wrote on Worklet, Doclet or Chatlet, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask, answer and write |
 | a person of the company | the apps their permissions name (`admin` includes every app) |
 | a person who may not act now: invited and not yet enrolled, suspended or removed | none |
 | a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
@@ -598,9 +598,28 @@ never from the ask's words. The colleague's turn uses only what they use,
 composed again on its own node, so a person revoked since the ask uses
 nothing and a credential is narrowed again, never widened. The answer wakes
 the asking agent in a turn worked for them too, through every ask of a chain.
-What an agent writes that wakes another agent (a work item, a comment, a page
-or a chat message) still wakes it in a turn worked for the writing agent;
-crewlet#798's fourth piece carries the requester through those too.
+
+**So does what an agent writes.** A work item an agent files or assigns, a
+comment on one, a page or a comment on it, and a Chatlet message, each written
+in a turn somebody woke, carries that somebody: the engine composes them from
+the writing turn's own ceiling, never from the tool's arguments, and records
+them on the write where it wakes another agent. The agent it wakes works for
+them, composed again on its own node, and so does every agent a chain of
+writes reaches; two writes one agent makes for two different people wake its
+colleague in two turns. An agent writing in a turn nobody woke writes for
+itself, and the agent it wakes works for it, as before.
+
+**Where the bound ends.** What an agent writes on a vendor's surface (Slack,
+Mattermost, Jira, GitHub, GitLab, Confluence) comes back as that vendor's
+webhook, which carries nobody, so the agent it wakes works for the agent that
+wrote it. Gitlet's changes, reviews and comments do not carry the requester
+yet either (crewlet#798's piece 4c), nor does the merge queue's close of a
+landed change's work item. To keep the bound, keep agents' work for each other
+on the engine's own surfaces: Worklet, Doclet, Chatlet and `a2a_ask`. During a
+rolling upgrade a node of the older build drops the requester from what it
+writes or reads, so for the minutes of the roll a write can wake its agent in a
+turn worked for the agent that wrote it
+([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet
@@ -633,9 +652,9 @@ for them.
 the identity directory once per tool call, never once per turn, so an
 administrator who takes an app away stops the turn's very next call. A node
 that cannot read the directory refuses the call and says to try again; it never
-guesses. The bound is the turn's and every turn its asks hand on to: a
-colleague the agent asks works for the same person; what the agent already
-knows it may still say.
+guesses. The bound is the turn's and every turn it hands on to: a colleague the
+agent asks, and a colleague its writes wake on the engine's own surfaces, work
+for the same person; what the agent already knows it may still say.
 
 ### Nobody confers what they do not hold
 

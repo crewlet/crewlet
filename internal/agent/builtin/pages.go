@@ -136,23 +136,32 @@ func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
 	}
 }
 
-func pageActor(turn *turnctx.Turn) (doclet.Actor, error) {
+// pageActor builds a page write's attribution from the TURN, as [actorFor]
+// builds a work item's: the seat, its run and chain, and whom the turn works
+// for, from the call's own bound ceiling ([writtenForTurn]).
+func pageActor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
 		return doclet.Actor{}, err
 	}
+	writtenFor, err := writtenForTurn(ctx, turn, seat.Handle(), nil)
+	if err != nil {
+		return doclet.Actor{}, err
+	}
 	return doclet.Actor{
-		Handle: seat.Handle(), Kind: doclet.AuthorAgent,
+		Handle: seat.Handle(), Kind: doclet.AuthorAgent, WrittenFor: writtenFor,
 		TurnID: turn.RunID, Chain: turn.Chain,
 	}, nil
 }
 
-// actor resolves who this call writes as — see [PageDeps.Actor].
+// actor resolves who this call writes as — see [PageDeps.Actor] — and, for a
+// seat's turn, whom it writes for ([pageActor]). An error that is
+// [ErrUndecidable] is a requester this node could not compose ([unattributed]).
 func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error) {
 	if d.Actor != nil {
 		return d.Actor(ctx, turn)
 	}
-	return pageActor(turn)
+	return pageActor(ctx, turn)
 }
 
 // SkillPage reports whether a page container is the tool-skills container, and
@@ -271,7 +280,7 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(ListPagesTool), nil
+		return unattributed(ListPagesTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfiguredKB(ListPagesTool), nil
@@ -369,7 +378,7 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(GetPageTool), nil
+		return unattributed(GetPageTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfiguredKB(GetPageTool), nil
@@ -518,7 +527,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(WritePageTool), nil
+		return unattributed(WritePageTool, err), nil
 	}
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
@@ -686,7 +695,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(SavePageTool), nil
+		return unattributed(SavePageTool, err), nil
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(SavePageTool), nil
@@ -919,7 +928,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(CommentOnPageTool), nil
+		return unattributed(CommentOnPageTool, err), nil
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(CommentOnPageTool), nil

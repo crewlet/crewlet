@@ -21,8 +21,8 @@ func init() {
 }
 
 // NotificationWriter is who wrote the record a FIRST-PARTY notification
-// announces — a change on Worklet or Doclet — as that
-// record names them.
+// announces (a change on Worklet, Doclet or Gitlet, or a message on Chatlet),
+// as that record names them, and whom an agent wrote it for.
 //
 // STATED BY THE PRODUCER, because nothing downstream can resolve it. A vendor
 // names its sender by an id in its own namespace (ExternalNotification.Sender),
@@ -60,6 +60,18 @@ type NotificationWriter struct {
 	// act on another node's wider grants. An operator writer carrying none —
 	// an older build's — is worked for as a stranger.
 	Apps []iam.Grant `json:"apps,omitempty"`
+
+	// WorkingFor is whom an AGENT'S write was made for (ADR-0109): whoever the
+	// turn that wrote it worked for, as its record carries it (Worklet's,
+	// Doclet's and Chatlet's MutationRecord.WorkingFor), and nil for every
+	// other writer and for an agent's write made for nobody else. The turn the
+	// write wakes works for them, composed again on the node that runs it as a
+	// colleague's ask's carrier is, and never for the writing seat, which holds
+	// every app; and since the partition splits on it (notify.KeyOf), every
+	// constituent of one turn carries the same. An older notify parser ignores
+	// it, and a turn it wakes then works for the writing seat until the roll
+	// completes.
+	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 
 // CoalescedMessage is one constituent inbound message inside a coalesced

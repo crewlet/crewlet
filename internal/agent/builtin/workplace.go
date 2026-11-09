@@ -124,7 +124,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(name), nil
+		return unattributed(name, err), nil
 	}
 	if t.deps.Placer == nil || t.deps.Reader == nil {
 		return unconfigured(name), nil

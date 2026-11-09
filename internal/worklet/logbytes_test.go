@@ -24,6 +24,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -1410,7 +1411,8 @@ func measureADay(t *testing.T, c corpus) gestures {
 	// and the record carries the turn and the delegation chain behind it.
 	at := time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 	seat := r.writer.As("backend-dev", worklet.AuthorAgent, worklet.Provenance{
-		TurnID: uuid.NewString(), Chain: []string{"cto", referenceLead}})
+		WrittenFor: types.ForTurn(nil),
+		TurnID:     uuid.NewString(), Chain: []string{"cto", referenceLead}})
 	chart := referenceChart{}
 	const repeats = 40
 	tasks := make([]string, repeats)
@@ -1485,7 +1487,7 @@ func measureADay(t *testing.T, c corpus) gestures {
 		// THE ENGINE'S CHARGE, written as the seat with the turn it charges
 		// and no chain, as the engine's own writer for it is built.
 		run := uuid.NewString()
-		charge := r.writer.As("backend-dev", worklet.AuthorAgent, worklet.Provenance{TurnID: run})
+		charge := r.writer.As("backend-dev", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: run})
 		if _, err := charge.RecordTurn(t.Context(), "turn/"+run+"/dispatch", worklet.TurnRecord{
 			Task: tasks[i], Seat: "backend-dev", TurnID: run, Trigger: "work_item",
 			Outcome: "done", Phases: []string{"execute", "review"},

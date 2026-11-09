@@ -1410,9 +1410,9 @@ type PendingRun struct {
 	RequesterLogin string      `json:"requester_login,omitempty"`
 	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
 
-	// WorkingFor is who the run's turn works for when a colleague's ask or
-	// an answer handed it on ([types.WorkingFor]), which its resumed turn
-	// works for too.
+	// WorkingFor is who the run's turn works for when a colleague's ask, an
+	// answer, or a colleague's write on Worklet, Doclet or Chatlet handed it
+	// on ([types.WorkingFor]), which its resumed turn works for too.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,

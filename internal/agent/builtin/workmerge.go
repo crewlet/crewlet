@@ -96,7 +96,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.MergeWorkItemTool), nil
+		return unattributed(worklet.MergeWorkItemTool, err), nil
 	}
 	if t.deps.Merges == nil || t.deps.Reader == nil {
 		return unconfigured(worklet.MergeWorkItemTool), nil

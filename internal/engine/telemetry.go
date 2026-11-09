@@ -1247,8 +1247,9 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 // ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
 // a colleague's ask carries whoever the asking turn worked for, and the
 // answer to this seat's own ask carries whoever the answering turn worked
-// for, which is who this seat worked for when it asked. Nil for any other
-// wake, and for one that carried nobody.
+// for, which is who this seat worked for when it asked; and an agent's write
+// on Worklet, Doclet or Chatlet carries whoever the writing turn worked for.
+// Nil for any other wake, and for one that carried nobody.
 func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {
 		if ev == nil {
@@ -1264,9 +1265,32 @@ func workingForIn(evs []*events.Event) *types.WorkingFor {
 		if pickup, ok := events.DataAs[*types.WorkPickup](ev); ok && pickup != nil {
 			return pickup.WorkingFor
 		}
+		// A WRITE IS WORKED FOR WHOM IT WAS WRITTEN FOR (ADR-0109).
+		if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+			return writtenForIn(n)
+		}
 		return nil
 	}
 	return nil
+}
+
+// writtenForIn is whom the agent's write a notification announces was made
+// for ([types.NotificationWriter.WorkingFor]): its FIRST constituent's, since
+// the partition splits on it (notify.KeyOf) and every constituent of one turn
+// carries the same, or the notification's own where nothing was coalesced.
+// Nil for a vendor's notification, which states no writer, and for any writer
+// that is no agent: a person, a credential and the engine write for nobody
+// but themselves, and a carrier read off one of them would have the turn work
+// for somebody that writer never spoke for.
+func writtenForIn(n *types.ExternalNotification) *types.WorkingFor {
+	w := n.Writer
+	if len(n.Messages) > 0 {
+		w = n.Messages[0].Writer
+	}
+	if w == nil || w.Kind != iam.ActorAgent {
+		return nil
+	}
+	return w.WorkingFor.Clone()
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

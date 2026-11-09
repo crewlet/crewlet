@@ -222,7 +222,7 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	actor, err := work.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
-		return notInATurn(WithdrawAskTool), nil
+		return unattributed(WithdrawAskTool, err), nil
 	}
 	actor, denied := work.bindOperation(actor, WithdrawAskTool, args)
 	if denied != "" {

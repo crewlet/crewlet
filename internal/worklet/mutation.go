@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -45,7 +46,9 @@ import (
 // awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
 // Version 4 is a history row that keeps its writer's apps
 // ([MutationRecord.ActorAppsKept]).
-const RecordVersion = 4
+// Version 5 is whom an agent's record that wakes somebody was written for
+// ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 5
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -97,6 +100,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
 	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
 	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
+	{Name: "MutationRecord.WorkingFor", Since: 5, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -797,6 +801,17 @@ type MutationRecord struct {
 	// so a record older than the rule keeps an empty column on every node.
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
 
+	// WorkingFor is whom an [AuthorAgent] record that wakes somebody was
+	// written for (ADR-0109): whoever the turn that wrote it worked for,
+	// composed from that turn's own bound ceiling, and absent on every other
+	// record: an agent's write made for nobody else, every other author's,
+	// and one that wakes nobody (a gate among them). NOT APPLIED to any row:
+	// the change feed reads it, and the turn the record wakes works for them
+	// (notify.FirstPartyWriter), never for the writing seat, which holds every
+	// app. Version 5: an older build retains a record carrying it rather than
+	// waking a seat for the writing agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -927,8 +942,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "operator_id",
-	"turn_id", "chain", "kind", "notify",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "working_for",
+	"operator_id", "turn_id", "chain", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

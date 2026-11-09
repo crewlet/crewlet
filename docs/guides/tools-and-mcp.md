@@ -227,9 +227,9 @@ The exception is an artifact the agent owns, which anybody who uses the app
 and can message the agent may ask it to edit, as with all other agent work;
 reading and sharing are never exempt. A turn woken by somebody the company
 does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's, and it
-follows the turn's asks: a colleague it asks and the turn the answer wakes read
-for the same somebody, while a colleague its writes wake reads for the agent,
-and what the agent already knows is no read
+follows the turn's work: a colleague it asks, the turn the answer wakes, and a
+colleague its writes on Worklet, Doclet or Chatlet wake all read for the same
+somebody, and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own

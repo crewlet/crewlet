@@ -89,7 +89,7 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.ListWorkViewsTool), nil
+		return unattributed(worklet.ListWorkViewsTool, err), nil
 	}
 	if t.deps.Reader == nil {
 		return unconfigured(worklet.ListWorkViewsTool), nil
@@ -222,7 +222,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.SaveWorkViewTool), nil
+		return unattributed(worklet.SaveWorkViewTool, err), nil
 	}
 	if t.deps.ViewWriter == nil {
 		return unconfigured(worklet.SaveWorkViewTool), nil
