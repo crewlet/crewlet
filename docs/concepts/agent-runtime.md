@@ -539,7 +539,9 @@ depends on: a person resuming the seat ends it, and so does an apply that
 changes those settings (the seat's sandbox and the company's, or its models
 and the company's), which lifts it as the engine. If the failure still holds,
 the seat pauses again on its second time
-([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)).
+([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)). A person who pauses a seat the engine paused makes the pause theirs: it
+loses its failure, takes their stop if they ask for one, and ends only when
+somebody resumes it.
 Any other failure is retried on a backoff that doubles from one second to
 thirty, each wait spread by a fifth either way.
 
