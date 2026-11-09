@@ -32,7 +32,7 @@ export interface AdvisorFix {
   sentence: string;
   unchanged?: string;
   options: AdvisorOption[];
-  /** The document path an `open_setting` fix opens. */
+  /** The document path an `open_setting` fix opens, or an external step's integration. */
   setting?: string;
   /** Where an `external_step` is taken, where one was named. */
   url?: string;
@@ -40,7 +40,7 @@ export interface AdvisorFix {
 
 /** The one thing a finding is about. */
 export interface AdvisorSubject {
-  kind: "company" | "seat" | "schedule" | (string & {});
+  kind: "company" | "seat" | "schedule" | "integration" | (string & {});
   seat?: string;
   unit?: string;
   schedule?: string;
@@ -52,7 +52,7 @@ export interface AdvisorFinding {
   class: string;
   severity: AdvisorSeverity;
   actor: AdvisorActor;
-  source: "static" | "evidence";
+  source: "static" | "evidence" | "reconcile";
   area: string;
   subject: AdvisorSubject;
   title: string;
@@ -66,4 +66,6 @@ export interface AdvisorFinding {
 export interface AdvisorAnswer {
   revision: string;
   findings: AdvisorFinding[];
+  /** What the answer could not read (`integrations`), so a short list never reads as all clear. */
+  unread: string[];
 }

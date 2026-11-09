@@ -134,7 +134,7 @@ afterEach(() => {
 });
 
 test("the owner's findings are listed, and the engine's never as the owner's to-do", async () => {
-  await mount({ revision: "r1", findings: [HEALTH, ENGINE] });
+  await mount({ revision: "r1", findings: [HEALTH, ENGINE], unread: [] });
   expect(screen.getByText(HEALTH.title)).toBeTruthy();
   expect(screen.getByText("What to change")).toBeTruthy();
   expect(screen.getByText("What the engine is handling")).toBeTruthy();
@@ -142,12 +142,12 @@ test("the owner's findings are listed, and the engine's never as the owner's to-
 });
 
 test("a company with nothing to change says so", async () => {
-  await mount({ revision: "r1", findings: [] });
+  await mount({ revision: "r1", findings: [], unread: [] });
   expect(screen.getByText("Nothing to change")).toBeTruthy();
 });
 
 test("the preview is the engine's dry run of the entity the change writes", async () => {
-  await mount({ revision: "r1", findings: [HEALTH] });
+  await mount({ revision: "r1", findings: [HEALTH], unread: [] });
   await reviewSre();
   expect(getEntity).toHaveBeenCalledWith("roles", "sre", expect.anything());
   const sent = dryRunEntity.mock.calls.map((call) => call[2] as Record<string, unknown>);
@@ -166,14 +166,14 @@ test("only the warnings the change adds are shown", async () => {
   dryRunEntity
     .mockResolvedValueOnce({ ...VALID, warnings: [old] })
     .mockResolvedValueOnce({ ...VALID, warnings: [old, added] });
-  await mount({ revision: "r1", findings: [HEALTH] });
+  await mount({ revision: "r1", findings: [HEALTH], unread: [] });
   await reviewSre();
   expect(screen.getByText("The change adds this.")).toBeTruthy();
   expect(screen.queryByText("Already there.")).toBeNull();
 });
 
 test("apply writes that entity under its own tag, with the change's summary", async () => {
-  await mount({ revision: "r1", findings: [HEALTH] });
+  await mount({ revision: "r1", findings: [HEALTH], unread: [] });
   await reviewSre();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -192,7 +192,7 @@ test("apply writes that entity under its own tag, with the change's summary", as
 
 test("a refused write is said, and the dialog stays open", async () => {
   putEntity.mockResolvedValue({ kind: "conflict", reason: "stale", currentRevisionId: "r9" });
-  await mount({ revision: "r1", findings: [HEALTH] });
+  await mount({ revision: "r1", findings: [HEALTH], unread: [] });
   await reviewSre();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -208,7 +208,7 @@ test("a reader who may not write cannot apply", async () => {
     block: "grant",
     reason: "Only an administrator can change this.",
   });
-  await mount({ revision: "r1", findings: [HEALTH] });
+  await mount({ revision: "r1", findings: [HEALTH], unread: [] });
   await reviewSre();
   expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText("Only an administrator can change this.")).toBeTruthy();
@@ -230,7 +230,7 @@ const BACKUP: AdvisorFinding = {
 };
 
 test("a step outside the engine says what to do on the row, and offers no change", async () => {
-  await mount({ revision: "r1", findings: [BACKUP] });
+  await mount({ revision: "r1", findings: [BACKUP], unread: [] });
   expect(screen.getByText(BACKUP.fix.sentence)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Review the change" })).toBeNull();
 });
@@ -238,6 +238,39 @@ test("a step outside the engine says what to do on the row, and offers no change
 test("two findings of one class about two seats sharing a name are two rows", async () => {
   const pm = { ...HEALTH, subject: { kind: "seat", seat: "pm", name: "Engineer" } };
   const qa = { ...HEALTH, subject: { kind: "seat", seat: "qa", name: "Engineer" } };
-  await mount({ revision: "r1", findings: [pm, qa] });
+  await mount({ revision: "r1", findings: [pm, qa], unread: [] });
   expect(screen.getAllByText(HEALTH.title)).toHaveLength(2);
+});
+
+const APPROVAL: AdvisorFinding = {
+  class: "integration.approval_required",
+  severity: "blocks",
+  actor: "owner",
+  source: "reconcile",
+  area: "integrations",
+  subject: { kind: "integration", name: "GitHub" },
+  title: "GitHub is waiting for you to approve the app's permissions.",
+  why: "Until you do, the agents' GitHub tools stay off.",
+  path: "integrations.github",
+  evidence: [],
+  fix: {
+    kind: "external_step",
+    sentence: "Accept the new permissions on GitHub.",
+    options: [],
+    setting: "github",
+    url: "https://github.com/settings/installations/1",
+  },
+};
+
+test("a step outside the engine says what to do and links where to do it", async () => {
+  await mount({ revision: "r1", findings: [APPROVAL], unread: [] });
+  expect(screen.getByText("Accept the new permissions on GitHub.")).toBeTruthy();
+  const link = screen.getByRole("link", { name: /Open GitHub/ });
+  expect(link.getAttribute("href")).toBe("https://github.com/settings/installations/1");
+  expect(screen.queryByRole("button", { name: "Review the change" })).toBeNull();
+});
+
+test("integrations the server couldn't read are said, so a short list is not all clear", async () => {
+  await mount({ revision: "r1", findings: [], unread: ["integrations"] });
+  expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
 });

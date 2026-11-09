@@ -1,11 +1,15 @@
 package queries
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"maps"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // advisor answers `advisor`: every finding about the fleet's company at the
@@ -18,10 +22,18 @@ import (
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return advisor.Answer{Findings: []advisor.Finding{}}, nil
+		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
 	}
 	if err != nil {
 		return nil, revisionRefusal("advisor", err)
 	}
-	return advisor.Read(company.Redact(), revision), nil
+	in := advisor.Inputs{Company: company.Redact(), Revision: revision}
+	// THE INTEGRATIONS' LAST RECONCILE, from the read the integrations answer
+	// makes; nil where this node cannot say, which the answer names as unread.
+	if states, known := s.reconcileStates(ctx); known {
+		in.Integrations = slices.SortedFunc(maps.Values(states), func(a, b integration.State) int {
+			return cmp.Compare(a.Kind, b.Kind)
+		})
+	}
+	return advisor.Read(in), nil
 }

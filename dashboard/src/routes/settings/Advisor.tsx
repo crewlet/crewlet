@@ -70,6 +70,12 @@ export function Advisor() {
         every change before it is made; the engine never makes one on its own.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
+        {data && data.unread.includes("integrations") && (
+          <Callout variant="warning" title="Some of the setup couldn't be read">
+            This server couldn&rsquo;t read the integrations&rsquo; last check, so anything they
+            need from you is missing below.
+          </Callout>
+        )}
         {data &&
           (owner.length === 0 ? (
             <EmptyState
@@ -121,6 +127,13 @@ function findingItem(f: AdvisorFinding, review: (() => void) | null): AttentionI
     action = (
       <Link href={href(["settings", "config"])} size="caption">
         Open the settings
+      </Link>
+    );
+  } else if (review && f.fix.kind === "external_step" && f.subject.kind === "integration") {
+    // AN INTEGRATION'S STEP WITH NO PAGE NAMED is taken from its own screen.
+    action = (
+      <Link href={href(["company", "integrations"])} size="caption">
+        Open integrations
       </Link>
     );
   }

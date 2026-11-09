@@ -26,6 +26,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Class names what a finding is about. Each has one entry in [catalogue].
@@ -78,6 +79,8 @@ type Source string
 const (
 	SourceStatic   Source = "static"
 	SourceEvidence Source = "evidence"
+	// SourceReconcile is an integration's last reconcile report.
+	SourceReconcile Source = "reconcile"
 )
 
 // Area groups findings the way an owner thinks of their setup.
@@ -85,10 +88,11 @@ type Area string
 
 // The areas a finding is grouped under.
 const (
-	AreaAccess    Area = "access"
-	AreaLearning  Area = "learning"
-	AreaSchedules Area = "schedules"
-	AreaSetup     Area = "setup"
+	AreaAccess       Area = "access"
+	AreaIntegrations Area = "integrations"
+	AreaLearning     Area = "learning"
+	AreaSchedules    Area = "schedules"
+	AreaSetup        Area = "setup"
 )
 
 // SubjectKind is what a finding is about.
@@ -96,9 +100,10 @@ type SubjectKind string
 
 // What a finding can be about.
 const (
-	SubjectCompany  SubjectKind = "company"
-	SubjectSeat     SubjectKind = "seat"
-	SubjectSchedule SubjectKind = "schedule"
+	SubjectCompany     SubjectKind = "company"
+	SubjectIntegration SubjectKind = "integration"
+	SubjectSeat        SubjectKind = "seat"
+	SubjectSchedule    SubjectKind = "schedule"
 )
 
 // Subject is the one thing a finding is about.
@@ -140,18 +145,38 @@ type Finding struct {
 }
 
 // Answer is every finding about the company at one revision, the most costly
-// first. Revision is the one the findings were read at.
+// first. Revision is the one the findings were read at. Unread names what this
+// answer could not read, so a list missing it never reads as all clear.
 type Answer struct {
 	Revision string    `json:"revision"`
 	Findings []Finding `json:"findings"`
+	Unread   []string  `json:"unread"`
 }
 
-// Read is every finding the company document at revision raises.
-func Read(c *config.Company, revision string) Answer {
+// UnreadIntegrations is [Answer.Unread]'s word for integrations whose last
+// reconcile this node could not read.
+const UnreadIntegrations = "integrations"
+
+// Inputs is what one answer is read from.
+type Inputs struct {
+	Company  *config.Company
+	Revision string
+	// Integrations is each surface's last reconcile, nil where this node
+	// could not read them (an empty list is a real answer: none reported).
+	Integrations []integration.State
+}
+
+// Read is every finding the company document and its integrations raise.
+func Read(in Inputs) Answer {
 	findings := []Finding{}
-	for _, w := range c.Warnings() {
-		findings = append(findings, fromWarning(c, w))
+	for _, w := range in.Company.Warnings() {
+		findings = append(findings, fromWarning(in.Company, w))
 	}
+	unread := []string{}
+	if in.Integrations == nil {
+		unread = append(unread, UnreadIntegrations)
+	}
+	findings = append(findings, FromIntegrations(in.Integrations)...)
 	slices.SortStableFunc(findings, func(a, b Finding) int {
 		return cmp.Or(
 			cmp.Compare(a.Severity.rank(), b.Severity.rank()),
@@ -160,7 +185,7 @@ func Read(c *config.Company, revision string) Answer {
 			cmp.Compare(a.Path, b.Path),
 		)
 	})
-	return Answer{Revision: revision, Findings: findings}
+	return Answer{Revision: in.Revision, Findings: findings, Unread: unread}
 }
 
 // fromWarning is w as a finding, in its class's words and with its fix.

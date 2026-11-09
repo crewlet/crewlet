@@ -19,6 +19,11 @@ const (
 	// FixOpenSetting is the setting the finding is located at, opened for
 	// the administrator to edit: what the engine cannot build a change for.
 	FixOpenSetting FixKind = "open_setting"
+	// FixExternalStep is a step only a person can take outside the engine
+	// (approve an app, replace a credential), with where to take it.
+	FixExternalStep FixKind = "external_step"
+	// FixNone is the engine's or a vendor's own work: nothing for a person.
+	FixNone FixKind = "none"
 )
 
 // Fix is what fixes a finding. Options is always a list, empty for a fix
@@ -31,8 +36,11 @@ type Fix struct {
 	// no saying.
 	Unchanged string   `json:"unchanged,omitempty"`
 	Options   []Option `json:"options"`
-	// Setting is the path an open_setting fix opens.
+	// Setting is the path an open_setting fix opens, or the integration an
+	// external_step is about.
 	Setting string `json:"setting,omitempty"`
+	// URL is where an external_step is taken, where the vendor named one.
+	URL string `json:"url,omitempty"`
 }
 
 // Option is one choice of a config change.

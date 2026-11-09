@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 func company(t *testing.T, doc string) *config.Company {
@@ -20,6 +21,12 @@ func company(t *testing.T, doc string) *config.Company {
 		t.Fatalf("parse: %v", err)
 	}
 	return c
+}
+
+// read is the advisor's answer about c alone, with every integration read
+// and none reporting anything.
+func read(c *config.Company, revision string) advisor.Answer {
+	return advisor.Read(advisor.Inputs{Company: c, Revision: revision, Integrations: []integration.State{}})
 }
 
 func liveShape(t *testing.T) *config.Company {
@@ -50,7 +57,7 @@ func owned(a advisor.Answer) []string {
 
 func TestTheLiveShapeRaisesExactlyTheStaticClasses(t *testing.T) {
 	t.Parallel()
-	got := owned(advisor.Read(liveShape(t), "r1"))
+	got := owned(read(liveShape(t), "r1"))
 	want := []string{
 		"grant.health_unheld:",
 		"learning.auxiliary_model:app", "learning.auxiliary_model:backend",
@@ -66,7 +73,7 @@ func TestTheLiveShapeRaisesExactlyTheStaticClasses(t *testing.T) {
 
 func TestFindingsAreListedTheMostCostlyFirst(t *testing.T) {
 	t.Parallel()
-	a := advisor.Read(liveShape(t), "r1")
+	a := read(liveShape(t), "r1")
 	if len(a.Findings) == 0 || a.Findings[0].Class != advisor.ClassHealthUnheld {
 		t.Fatalf("first finding = %+v, want the costly health finding ahead of every note", a.Findings)
 	}
@@ -138,7 +145,7 @@ func apply(t *testing.T, c *config.Company, ch advisor.Change) {
 
 func TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule(t *testing.T) {
 	t.Parallel()
-	for _, f := range advisor.Read(liveShape(t), "r1").Findings {
+	for _, f := range read(liveShape(t), "r1").Findings {
 		if f.Fix.Kind != advisor.FixConfigChange {
 			continue
 		}
@@ -156,7 +163,7 @@ func TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule(t *testing.T) {
 				if o.Change.Summary == "" {
 					t.Error("the change carries no revision summary")
 				}
-				for _, g := range advisor.Read(c, "r2").Findings {
+				for _, g := range read(c, "r2").Findings {
 					if g.Class == f.Class && g.Subject == f.Subject {
 						t.Errorf("after the change the finding is still raised: %+v", g)
 					}
@@ -171,7 +178,7 @@ func TestEveryClassHasWordsAndAFix(t *testing.T) {
 	c := liveShape(t)
 	c.Roles[0].Manages = []string{"ghost"}
 	seen := map[advisor.Class]bool{}
-	for _, f := range advisor.Read(c, "r1").Findings {
+	for _, f := range read(c, "r1").Findings {
 		seen[f.Class] = true
 		if f.Title == "" || f.Why == "" || f.Fix.Sentence == "" || f.Fix.Kind == "" {
 			t.Errorf("%s: a finding without its words or fix: %+v", f.Class, f)
@@ -197,7 +204,7 @@ func TestEveryClassHasWordsAndAFix(t *testing.T) {
 
 func TestAHealthChangeIsOfferedForEveryAgentAndNoPerson(t *testing.T) {
 	t.Parallel()
-	for _, f := range advisor.Read(liveShape(t), "r1").Findings {
+	for _, f := range read(liveShape(t), "r1").Findings {
 		if f.Class != advisor.ClassHealthUnheld {
 			continue
 		}
@@ -218,7 +225,7 @@ func TestAHealthChangeIsOfferedForEveryAgentAndNoPerson(t *testing.T) {
 
 func TestALearningChangeIsNeverToTheModelItAlreadyRunsOn(t *testing.T) {
 	t.Parallel()
-	for _, f := range advisor.Read(liveShape(t), "r1").Findings {
+	for _, f := range read(liveShape(t), "r1").Findings {
 		if f.Class != advisor.ClassAuxiliaryModel {
 			continue
 		}
@@ -228,7 +235,7 @@ func TestALearningChangeIsNeverToTheModelItAlreadyRunsOn(t *testing.T) {
 	}
 	only := company(t, "name: Acme\nproviders:\n  llm:\n    default:\n      harness: claude-code\n"+
 		"      model: opus\nroles:\n  - name: PM\n    health_tools: true\n")
-	for _, f := range advisor.Read(only, "r1").Findings {
+	for _, f := range read(only, "r1").Findings {
 		if f.Class == advisor.ClassAuxiliaryModel &&
 			(f.Fix.Kind != advisor.FixOpenSetting || f.Fix.Setting != "providers.llm") {
 			t.Errorf("with one model the fix = %+v, want the models opened to add a smaller one", f.Fix)
@@ -241,7 +248,7 @@ func TestAUnitsScheduleIsChangedOnItsUnit(t *testing.T) {
 	c := company(t, "name: Acme\nunits:\n  - name: Ops\n    id: ops\n    children:\n      - name: Night\n"+
 		"        id: night\n        roles:\n          - name: SRE\n            health_tools: true\n"+
 		"        schedules:\n          - name: poll\n            cron: \"0 * * * 1-5\"\n            task: Look.\n")
-	for _, f := range advisor.Read(c, "r1").Findings {
+	for _, f := range read(c, "r1").Findings {
 		if f.Class != advisor.ClassScheduleFrequent {
 			continue
 		}

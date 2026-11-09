@@ -34,6 +34,8 @@ The advisor reads the same checks `crewlet validate`, every `/config` write and 
 
 Every other warning the document raises is listed too, in the words `crewlet validate` prints, with the setting to open (`config.advisory`, `config.reference`, `config.admission`).
 
+So is everything your integrations' last check reported (`integration.<kind>`, for example `integration.credential_rejected` or `integration.approval_required`), in the integration's own words. Who acts follows the integration's own verdict: a credential that was refused or is missing, an app waiting for you to approve its permissions, or a delivery path that cannot be set up is yours, with the step to take and, where the vendor names one, the page to take it on; an account the engine is still creating is listed apart as the engine's. If a server cannot read the integrations' state, the answer's `unread` names `integrations` and the screen says so, so a short list never reads as nothing to do.
+
 ## Previewing and applying a change
 
 A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace) and `summary`. To apply one:
@@ -56,4 +58,4 @@ The engine does not grant access, change a model, move or remove a schedule, edi
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.com/advisor
 ```
 
-The answer is `{"revision": "...", "findings": [...]}`, the most costly finding first. See the [API reference](../reference/api-endpoints.md).
+The answer is `{"revision": "...", "findings": [...], "unread": [...]}`, the most costly finding first. See the [API reference](../reference/api-endpoints.md).
