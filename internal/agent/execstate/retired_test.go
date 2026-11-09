@@ -1,6 +1,7 @@
 package execstate_test
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,6 +35,14 @@ func TestEveryStateVersionAReleaseWroteDecodesOrSettles(t *testing.T) {
 	}
 	if _, ok, err := execstate.Decode(golden); err != nil || !ok {
 		t.Fatalf("Decode(%s) = %v, %v; a blob this version wrote must read back", current, ok, err)
+	}
+	encoded, err := execstate.Encode(parked())
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !bytes.Equal(append(encoded, '\n'), golden) {
+		t.Fatalf("the state's encoding changed from %s. If any build could misread the new shape, "+
+			"bump Version and keep the old golden; otherwise rewrite it with -update", current)
 	}
 
 	for v := 0; v < execstate.Version; v++ {

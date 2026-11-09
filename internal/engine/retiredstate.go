@@ -40,8 +40,9 @@ func (e *Engine) retiredState(ctx context.Context, decoded error) (*sandbox.Unre
 		version.Found, execstate.Version)}, nil
 }
 
-// fleetReadsParkedState reports whether a live node may still read version: one
-// whose build reads it, or one that does not say which version it reads.
+// fleetReadsParkedState reports whether another live node may still read
+// version: one whose build reads it, or one that does not say which version it
+// reads. This node reads [execstate.Version] by construction, said or not.
 func (e *Engine) fleetReadsParkedState(ctx context.Context, version int) (bool, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return false, nil
@@ -50,7 +51,11 @@ func (e *Engine) fleetReadsParkedState(ctx context.Context, version int) (bool, 
 	if err != nil {
 		return false, fmt.Errorf("engine: reading the live nodes' builds: %w", err)
 	}
+	self := e.selfNode()
 	for _, lease := range leases {
+		if node, _ := coord.ClassNode.Name(lease.Resource); self != "" && node == self {
+			continue
+		}
 		status, ok := coord.StatusFromMeta(lease.Meta)
 		if !ok || status.ParkedStateVersion == 0 || status.ParkedStateVersion == version {
 			return true, nil

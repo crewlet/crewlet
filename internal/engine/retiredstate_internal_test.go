@@ -61,6 +61,21 @@ func TestARetiredParkedStateIsSettledOnlyOnceNoLiveNodeReadsIt(t *testing.T) {
 	}
 }
 
+// THIS NODE NEVER HOLDS ITS OWN SETTLE BACK: its build reads only the current
+// version, even while its own presence carries no status yet, as at boot.
+func TestANodeWhoseOwnPresenceSaysNothingYetSettlesARetiredState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backend := coordmem.New()
+	present(ctx, t, backend, "node-self", -1)
+	e := &Engine{backends: &Backends{Coord: backend}, testNode: "node-self"}
+	got, err := e.parkedRunUnresumable(ctx, runParkedAtVersion(t, execstate.Version-1))
+	if err != nil || got == nil {
+		t.Fatalf("judged %+v, %v; want the run settled by the only node, which reads only %d",
+			got, err, execstate.Version)
+	}
+}
+
 // A FLEET THAT CANNOT BE READ SETTLES NOTHING: the error is the answer, and
 // the run waits for its answer as before.
 func TestAnUnreadableFleetSettlesNoParkedRun(t *testing.T) {
