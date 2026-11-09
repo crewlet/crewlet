@@ -217,6 +217,7 @@ var floorless = map[string]string{
 	"usage.reads_elided":      "reads the usage domain, as usage.spend does",
 	"usage.server_tool_calls": "reads the usage domain, as usage.spend does",
 	"usage.tools_elided":      "reads the usage domain, as usage.spend does",
+	"usage.turn_ledger":       "reads the usage domain, as usage.spend does",
 	"usage.repo_reads":        "reads the usage domain, as usage.spend does",
 	"usage.repo_reads_elided": "reads the usage domain, as usage.spend does",
 }

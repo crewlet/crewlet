@@ -4,8 +4,8 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -21,6 +21,16 @@ type PatternsQuery struct {
 	// turn by its holder since QuietSince is idle.
 	Reviewers  []string
 	QuietSince time.Time
+	// People are the persons whose notices in the window are counted.
+	People []string
+}
+
+// NoticeLoad is how many notices one person was sent in the window, and how
+// many of them asked something of them.
+type NoticeLoad struct {
+	Handle    string `json:"handle"`
+	Notices   int    `json:"notices"`
+	Addressed int    `json:"addressed"`
 }
 
 // IdleReview is an item in review its agent holder has taken no turn on.
@@ -49,8 +59,21 @@ type WorkPatterns struct {
 	Superseded int      `json:"superseded"`
 	Moot       int      `json:"moot"`
 	Overtaken  []string `json:"overtaken"`
+	// Decisions tallies, per person and asking agent, the decisions the
+	// person answered with a choice and how many chose the recommended one.
+	Decisions []DecisionTally `json:"decisions"`
 	// IdleReviews are the reviewers' items in review idle since QuietSince.
 	IdleReviews []IdleReview `json:"idle_reviews"`
+	// Notices are the people's notice loads, in the order they were asked for.
+	Notices []NoticeLoad `json:"notices"`
+}
+
+// DecisionTally is one person's choices on one agent's decisions.
+type DecisionTally struct {
+	Person      string `json:"person"`
+	Asker       string `json:"asker"`
+	Decided     int    `json:"decided"`
+	Recommended int    `json:"recommended"`
 }
 
 // NamedWithoutAsk is one seat agents' comments named without a question.
@@ -87,7 +110,10 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
 			return err
 		}
-		return readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out)
+		if err := readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out); err != nil {
+			return err
+		}
+		return readNoticeLoads(ctx, tx, q.People, since, until, &out)
 	})
 	return out, err
 }
@@ -156,9 +182,13 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 }
 
 // patternAnswersStatement is every person's answer in the window to an agent's
-// question, with whether the item had finished first and whether the asker had
-// asked the same person again on it, still open when this answer came.
-const patternAnswersStatement = `SELECT a.id,
+// question, with whether the question carried a decision, its recommendation,
+// the answer's choice, whether the item had finished first and whether the
+// asker had asked the same person again on it, still open when this answer came.
+const patternAnswersStatement = `SELECT a.id, a.author, r.author,
+	json_type(a.document, '$.decision') = 'object',
+	COALESCE(json_extract(a.document, '$.decision.recommended'), ''),
+	COALESCE(json_extract(r.document, '$.choice'), ''),
 	t.finished_at IS NOT NULL AND t.finished_at <= r.created_at,
 	EXISTS (SELECT 1 FROM tracker_comments b
 		WHERE b.task_id = a.task_id AND b.author = a.author AND b.ask = a.ask
@@ -178,12 +208,18 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
 	}
 	out.Overtaken = []string{}
+	tallies := map[[2]string]*DecisionTally{}
 	for rows.Next() {
-		var ask string
+		var ask, asker, person, recommended, choice string
+		var decided sql.NullBool
 		var moot, superseded bool
-		if err := rows.Scan(&ask, &moot, &superseded); err != nil {
+		if err := rows.Scan(&ask, &asker, &person, &decided, &recommended, &choice,
+			&moot, &superseded); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an answer: %w", err)
+		}
+		if decided.Bool && choice != "" {
+			tallyDecision(tallies, asker, person, choice == recommended)
 		}
 		out.Answers++
 		switch {
@@ -201,7 +237,28 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
 	}
+	out.Decisions = []DecisionTally{}
+	for _, key := range slices.SortedFunc(maps.Keys(tallies), func(a, b [2]string) int {
+		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
+	}) {
+		out.Decisions = append(out.Decisions, *tallies[key])
+	}
 	return nil
+}
+
+// tallyDecision counts one answer that chose an option of a decision, and
+// whether the choice was the asker's recommendation.
+func tallyDecision(tallies map[[2]string]*DecisionTally, asker, person string, recommended bool) {
+	key := [2]string{person, asker}
+	t, ok := tallies[key]
+	if !ok {
+		t = &DecisionTally{Person: person, Asker: asker}
+		tallies[key] = t
+	}
+	t.Decided++
+	if recommended {
+		t.Recommended++
+	}
 }
 
 // patternIdleReviewsStatement is every item in review one reviewer holds, in
@@ -217,24 +274,19 @@ ORDER BY t.status_entered_at, t.id`
 func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet time.Time,
 	out *WorkPatterns) error {
 	out.IdleReviews = []IdleReview{}
-	at := store.EncodeTime(quiet)
 	for _, reviewer := range reviewers {
-		if err := readIdleReviewsOf(ctx, tx, reviewer, at, out); err != nil {
+		if err := readIdleReviewsOf(ctx, tx, reviewer, quiet, out); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// patternAssignedStatement is when an item last changed hands, a seek of its own
-// history; an item never reassigned has no row and was held from its filing.
-const patternAssignedStatement = `SELECT h.effective_at FROM tracker_history h
-	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
-	ORDER BY h.log_seq DESC LIMIT 1`
-
 // readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue,
 // leaving out one it was handed after the quiet instant: its wait starts then.
-func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int64, out *WorkPatterns) error {
+func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet time.Time,
+	out *WorkPatterns) error {
+	at := store.EncodeTime(quiet)
 	rows, err := tx.QueryContext(ctx, patternIdleReviewsStatement, reviewer,
 		string(StatusInReview.Group()), at, at)
 	if err != nil {
@@ -255,20 +307,35 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int6
 		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
 	}
 	for _, r := range candidates {
-		var assigned int64
-		err := tx.QueryRowContext(ctx, patternAssignedStatement, r.Task).Scan(&assigned)
+		handed, ok, err := readHandedOver(ctx, tx, r.Task)
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return fmt.Errorf("worklet: read when %s changed hands: %w", r.Task, err)
-		case assigned >= at:
+			return err
+		case ok && !handed.Before(quiet):
 			continue
-		default:
-			if t := store.DecodeTime(assigned); t.After(r.Since) {
-				r.Since = t
-			}
+		case ok && handed.After(r.Since):
+			r.Since = handed
 		}
 		out.IdleReviews = append(out.IdleReviews, r)
+	}
+	return nil
+}
+
+// patternNoticesStatement is one person's notices in the window, a seek of
+// their own rows, which the inbox horizon already bounds.
+const patternNoticesStatement = `SELECT COUNT(*), COALESCE(SUM(addressed), 0)
+FROM tracker_notifications
+WHERE recipient = ? AND created_at >= ? AND created_at < ?`
+
+func readNoticeLoads(ctx context.Context, tx *sql.Tx, people []string, since, until int64, out *WorkPatterns) error {
+	out.Notices = make([]NoticeLoad, 0, len(people))
+	for _, handle := range people {
+		load := NoticeLoad{Handle: handle}
+		if err := tx.QueryRowContext(ctx, patternNoticesStatement, handle, since, until).Scan(
+			&load.Notices, &load.Addressed); err != nil {
+			return fmt.Errorf("worklet: count %s's notices: %w", handle, err)
+		}
+		out.Notices = append(out.Notices, load)
 	}
 	return nil
 }

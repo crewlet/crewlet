@@ -1196,7 +1196,7 @@ A `holding_up` row is the task plus `blocks` (how many open items wait on it,
 directly or through another waiting item, each counted once; `blocks_capped`
 says the count is a floor, past 512 waiting items or past the 2,048 items one
 read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
-left out, at most eight) and `held_since` (when it was last assigned). It is
+left out, at most eight) and `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over). It is
 the one list about who waits on the reader rather than what waits for them, and
 it is the same for a person, whose dashboard shows it under My work. The list
 ranks the first 100 such items in the queue's own order: a person

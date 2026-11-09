@@ -20,6 +20,20 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { settled } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Advisor } from "./Advisor.tsx";
+import { AssistantControlContext, type AssistantControl } from "~/app/assistant/control.ts";
+
+/** An assistant the reader may ask, recording what it was asked. */
+const asked = vi.hoisted(() => vi.fn());
+const ASSISTANT: AssistantControl = {
+  open: false,
+  unavailable: null,
+  toggle: () => {},
+  ask: (question) => asked(question),
+};
+const NO_ASSISTANT: AssistantControl = {
+  ...ASSISTANT,
+  unavailable: { reason: "checking", short: "Checking whether you can ask.", title: "", body: "" },
+};
 
 const getEntity = vi.hoisted(() => vi.fn());
 const dryRunEntity = vi.hoisted(() => vi.fn());
@@ -82,7 +96,7 @@ const ENGINE: AdvisorFinding = {
 const SRE = { name: "SRE", handle: "sre", llm: "default" };
 const VALID = { kind: "valid", baseRevisionId: "r1", warnings: [], derived: null };
 
-async function mount(answer: AdvisorAnswer) {
+async function mount(answer: AdvisorAnswer, assistant: AssistantControl = NO_ASSISTANT) {
   location.hash = "#/settings/advisor";
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -93,7 +107,9 @@ async function mount(answer: AdvisorAnswer) {
       <SessionReading>
         <ViewerProvider>
           <Router>
-            <Advisor />
+            <AssistantControlContext.Provider value={assistant}>
+              <Advisor />
+            </AssistantControlContext.Provider>
           </Router>
         </ViewerProvider>
       </SessionReading>
@@ -273,6 +289,21 @@ test("a step outside the engine says what to do and links where to do it", async
 test("integrations the server couldn't read are said, so a short list is not all clear", async () => {
   await mount({ revision: "r1", findings: [], unread: ["integrations"] });
   expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
+  expect(screen.getByText(/integrations' last check couldn't be read/)).toBeTruthy();
+});
+
+// EVERY UNREAD SOURCE IS SAID IN ITS OWN WORDS, and while any is unread an empty
+// owner list never reads "Nothing to change": the source may hold the blocker.
+test.each([
+  ["work", /last 7 days of work couldn't be read/],
+  ["ledger", /agents' turns couldn't be read/],
+  ["alarms", /whether a backup is missing can't be said yet/],
+  ["future_source", /couldn't read future_source/],
+])("an unread %s source is said, and nothing reads as all clear", async (key, words) => {
+  await mount({ revision: "r1", findings: [ENGINE], unread: [key] });
+  expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
+  expect(screen.getByText(words)).toBeTruthy();
+  expect(screen.queryByText("Nothing to change")).toBeNull();
 });
 
 /** The go-live check's steps as drawn, label and state. */
@@ -298,4 +329,37 @@ test("a source the answer could not read leaves its steps unsaid, never done", a
   expect(steps[0]).toMatch(/Nothing that could be read blocks the company/);
   expect(steps[0]).toMatch(/Can't say yet/);
   expect(steps[0]).not.toMatch(/Done/);
+});
+
+const RUBBER_STAMP: AdvisorFinding = {
+  ...HEALTH,
+  class: "approval.rubber_stamp",
+  severity: "note",
+  source: "evidence",
+  area: "approvals",
+  subject: { kind: "seat", seat: "pm", name: "PM" },
+  title: "owner chose pm's recommendation in 19 of 20 decisions.",
+  path: "",
+  fix: {
+    kind: "draft_with_assistant",
+    sentence: "Draft a policy with Ask Crewlet, and review it before it is saved.",
+    options: [],
+    prompt: "Read those decisions and draft a policy. Show me the change before making it.",
+  },
+};
+
+test("a policy to draft is asked of Ask Crewlet, in the engine's words", async () => {
+  await mount({ revision: "r1", findings: [RUBBER_STAMP], unread: [] }, ASSISTANT);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Draft with Ask Crewlet" }));
+    await settled();
+  });
+  expect(asked).toHaveBeenCalledWith(RUBBER_STAMP.fix.prompt);
+  expect(putEntity).not.toHaveBeenCalled();
+});
+
+test("a reader who may not ask is told why, and offered no draft", async () => {
+  await mount({ revision: "r1", findings: [RUBBER_STAMP], unread: [] });
+  expect(screen.queryByRole("button", { name: "Draft with Ask Crewlet" })).toBeNull();
+  expect(screen.getByText("Checking whether you can ask.")).toBeTruthy();
 });
