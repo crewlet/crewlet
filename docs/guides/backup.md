@@ -89,10 +89,15 @@ Classify before you size the job:
 
 ## What `crewlet backup` produces
 
-A snapshot artefact is adopted **wholesale**, and so is a backup read back:
-the manifest names a position per domain, and a build that registers a domain
-the artefact never named refuses it rather than concluding it is caught up on
-that domain from a checkpoint the file has no rows for.
+**The manifest names every state-log domain the build registers**, each at the
+position its copy holds. A domain whose log nobody has written yet has no
+checkpoint in the copy and is named at position zero: a restore replays its log
+from the first record. The backup is refused rather than written when it cannot
+place a domain: the copy holds a checkpoint on a log this build does not
+register, or a log no longer holds the record after the copy's position (the
+assertion below, answered `log_gap`). So every domain the build
+registers is covered by every finished backup, and its `backup_age` alarm
+clears with it.
 
 One directory, and the **manifest is the claim**: a directory holding
 `manifest.json` is a complete backup, one without it is the debris of a run
@@ -367,7 +372,8 @@ are different kinds of thing:
 The manifest records the position **read from the copy itself**, not from the
 live database: the checkpoint commits with the rows, so the position inside a
 file is the only one that describes that file, and the applier ran throughout
-the copy.
+the copy. The hold and the assertion cover every registered domain, a domain
+at position zero included.
 
 **Every backup taken over `POST /backup` is audited.** Once the copy begins,
 the node writes a `backup_requested` event to its own event store — who asked
@@ -525,7 +531,8 @@ no replica count changes it. See [Retention](retention.md).
 
 **A finished backup announces itself to the fleet.** When the manifest is
 written, the taker publishes what the copy reaches — per stream, with the
-generation — so the trim's backup term can see it from whichever node holds the
+generation, for every domain the manifest names — so the trim's backup term and
+the `backup_age` alarm can see it from whichever node holds the
 duty. That node is often not the one that took the copy, and can never see a
 directory on another host. A backup that ran and announced nothing leaves a
 fleet with a working nightly schedule whose log grows for ever, so a failure to

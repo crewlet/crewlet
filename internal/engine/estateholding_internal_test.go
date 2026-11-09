@@ -46,10 +46,9 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 	}
 
 	fleet := memory.NewFleet()
-	svc, err := backup.New(backup.Options{
-		Store: e.backends.Store, Estate: backup.HoldingFor(HoldsEstate(e.boot)), NodeID: e.id,
-		Holds: fleet, Backups: fleet, Keyring: e.RecordKeyring(),
-	})
+	opts := e.BackupOptions()
+	opts.Holds, opts.Backups = fleet, fleet
+	svc, err := backup.New(opts)
 	if err != nil {
 		t.Fatalf("backup.New: %v", err)
 	}

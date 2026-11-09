@@ -1030,6 +1030,17 @@ func (s *stateLog) inboxFor(domain statelog.Domain) func([]inbox.Movement) {
 	return s.inboxMoved
 }
 
+// registeredLogs is every registered domain's stream, in the register's order:
+// what a backup's manifest names, a log with no checkpoint yet included.
+func registeredLogs() []string {
+	domains := registeredDomains()
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		out = append(out, d.Stream().Name)
+	}
+	return out
+}
+
 // registeredNames is every registered domain's name, in the register's order —
 // the same derivation, for the readers that key on the name alone.
 func registeredNames() []string {
