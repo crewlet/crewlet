@@ -67,6 +67,7 @@ func (u *Unresumable) Error() string {
 	return fmt.Sprintf("sandbox: no build will resume this run (%s): %s", u.Reason, u.Detail)
 }
 
+// Is matches [ErrResumeAbandoned]: no build will resume the run, so it ends.
 func (u *Unresumable) Is(target error) bool { return target == ErrResumeAbandoned }
 
 // note is what the run's ending announces.

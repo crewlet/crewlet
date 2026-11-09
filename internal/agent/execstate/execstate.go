@@ -388,6 +388,7 @@ func (e *VersionError) Error() string {
 // Retired reports a version no later build reads: every bump moves up.
 func (e *VersionError) Retired() bool { return e.Found < Version }
 
+// Is matches [ErrUnknownVersion], and [ErrRetired] for a retired version.
 func (e *VersionError) Is(target error) bool {
 	return target == ErrUnknownVersion || (target == ErrRetired && e.Retired())
 }
