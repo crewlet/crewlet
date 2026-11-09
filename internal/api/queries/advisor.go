@@ -25,12 +25,18 @@ import (
 // AN EMPTY LIST, not an error, when nothing is active: a deployment before
 // its first import has nothing to advise about.
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
+	return s.advisorRead(ctx)
+}
+
+// advisorRead is the advisor's answer, typed: what `advisor` answers and what
+// the insights sharer reads its findings from.
+func (s Sources) advisorRead(ctx context.Context) (advisor.Answer, error) {
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
 		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
 	}
 	if err != nil {
-		return nil, revisionRefusal("advisor", err)
+		return advisor.Answer{}, revisionRefusal("advisor", err)
 	}
 	in := advisor.Inputs{Company: company.Redact(), Revision: revision}
 	// THE INTEGRATIONS' LAST RECONCILE, from the read the integrations answer

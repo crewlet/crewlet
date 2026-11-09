@@ -2548,6 +2548,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// node owns the requester's seat, so a per-node read would
 			// draw a different set depending on which node answered.
 			Channels: e.Backends().Fleet,
+			// The fleet's record of the operating insights it shares (ADR-0119).
+			Insights: e.Backends().Fleet,
 			// The company's ONE knowledge backend, behind the same seam a
 			// seat's own turn searches through. Nil when none is
 			// configured, which leaves the question unregistered rather
