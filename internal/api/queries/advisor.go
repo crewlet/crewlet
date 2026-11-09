@@ -13,9 +13,20 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/notice"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
+
+// advisorAnswer is the advisor's findings with the platform notices they and
+// the fleet's alarms raise: what reaches the administrators' Inbox.
+type advisorAnswer struct {
+	advisor.Answer
+	Notices []notice.Notice `json:"notices"`
+}
 
 // advisor answers `advisor`: every finding about the fleet's company at the
 // revision it is, the revision each fix is sent under. One read of the fleet's
@@ -23,11 +34,13 @@ import (
 // off it, so no change a fix carries can hold a value redaction hides.
 //
 // AN EMPTY LIST, not an error, when nothing is active: a deployment before
-// its first import has nothing to advise about.
+// its first import has nothing to advise about, and its alarms are still noticed.
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
+	now := s.clock()
+	fleet, fleetKnown := s.fleetAlarms(ctx)
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
+		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, fleet, fleetKnown, now), nil
 	}
 	if err != nil {
 		return nil, revisionRefusal("advisor", err)
@@ -40,7 +53,17 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, s.clock())), nil
+	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), fleet, fleetKnown, now), nil
+}
+
+// noticed is the answer with the notices its findings and the fleet's alarms
+// raise. `alarms` is named unread once, whether this node's evaluation or the
+// fleet's marks could not be read.
+func noticed(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, now time.Time) advisorAnswer {
+	if !fleetKnown && !slices.Contains(a.Unread, advisor.UnreadAlarms) {
+		a.Unread = append(a.Unread, advisor.UnreadAlarms)
+	}
+	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, now)}
 }
 
 // advisorEvidence is what the company did in the week before now. A SOURCE THAT
@@ -56,12 +79,38 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		ev.WorkUnread = true
 	}
 	ev.Work = work
+	if ev.Ledger, err = s.advisorLedger(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_turn_ledger_unreadable", "error", err.Error())
+		ev.LedgerUnread = true
+	}
 	if s.AlarmsEvaluated == nil || !s.AlarmsEvaluated() {
 		ev.AlarmsUnread = true
 	} else {
 		ev.Backup = backupEvidence(s.latestAlarms())
 	}
 	return ev
+}
+
+// fleetAlarms is every live node's alarm marks as its last heartbeat carried
+// them, from the node whose table has run; false where the fleet cannot be read.
+func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
+	if s.Coord == nil {
+		return nil, false
+	}
+	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_fleet_alarms_unread", "error", err.Error())
+		return nil, false
+	}
+	var out []notice.NodeAlarms
+	for _, lease := range leases {
+		status, ok := coord.StatusFromMeta(lease.Meta)
+		if !ok || !status.AlarmsEvaluated {
+			continue
+		}
+		out = append(out, notice.NodeAlarms{Node: nameIn(coord.ClassNode, lease.Resource), Marks: status.Alarms})
+	}
+	return out, true
 }
 
 // backupEvidence is whether the latest evaluation holds the backup alarm, and
@@ -120,4 +169,24 @@ func accessKeyNames() []string {
 		out = append(out, string(k))
 	}
 	return out
+}
+
+// advisorLedger is the turn ledger over [advisor.LedgerDays], each seat named
+// by the chart's handle while the chart holds it.
+func (s Sources) advisorLedger(ctx context.Context, now time.Time) ([]usage.TurnLedgerRow, error) {
+	if s.Usage == nil {
+		return nil, errors.New("queries: no usage half to read the turn ledger from")
+	}
+	window := tokens.LastDays(advisor.LedgerDays, now, s.zone())
+	rows, err := s.Usage.TurnLedger(ctx, usage.SpendQuery{From: window.First.Label, To: window.Last.Label})
+	if err != nil {
+		return nil, err
+	}
+	chart := s.chartHandles()
+	for i := range rows {
+		if seat, ok := chart[rows[i].AgentID]; ok && seat.handle != "" {
+			rows[i].Handle = seat.handle
+		}
+	}
+	return rows, nil
 }

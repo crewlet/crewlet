@@ -1091,6 +1091,11 @@ func (u Usage) ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery
 	return call(ctx, u.r, opUsageServerToolCalls, nil, q)
 }
 
+// TurnLedger answers every seat's turns by what woke them and what they did.
+func (u Usage) TurnLedger(ctx context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
+	return call(ctx, u.r, opUsageTurnLedger, nil, q)
+}
+
 // ToolsElided answers how many (server, tool) entries the per-seat-day cap
 // dropped over a range of company days, on every node.
 func (u Usage) ToolsElided(ctx context.Context, from, to string) (int64, error) {

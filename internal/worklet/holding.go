@@ -41,8 +41,8 @@ type HoldingRow struct {
 	// Holders is who holds the waiting work, the person left out, sorted,
 	// at most [MaxHoldingHolders].
 	Holders []string `json:"holders"`
-	// HeldSince is when it was last assigned, or when it was filed where
-	// it was filed already assigned.
+	// HeldSince is when it last changed hands, whichever change moved its
+	// assignee ([readHandedOver]).
 	HeldSince time.Time `json:"held_since"`
 }
 
@@ -73,11 +73,12 @@ func holdingWaitersStatement() (string, []any) {
 		  AND u.status_group IN (` + placeholders(len(open)) + `)`, open
 }
 
-// holdingSinceStatement is an item's newest assignment, or failing one its
-// first record, which is its filing.
-const holdingSinceStatement = `SELECT h.created_at FROM tracker_history h
-	WHERE h.subject_id = ? AND h.kind IN ('assignee', 'created')
-	ORDER BY CASE h.kind WHEN 'assignee' THEN 0 ELSE 1 END, h.log_seq DESC LIMIT 1`
+// handedOverStatement is when an item last changed hands, by whichever change
+// moved its assignee (a filing, an assignment, a status change), a seek of its
+// own history at the fleet-agreed instant.
+const handedOverStatement = `SELECT h.effective_at FROM tracker_history h
+	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
+	ORDER BY h.log_seq DESC LIMIT 1`
 
 // MaxHoldingSteps bounds how many items one read asks for the waiters of,
 // across every candidate: the walks share what they learn, so a graph the
@@ -112,7 +113,7 @@ func readHolding(ctx context.Context, tx *sql.Tx, handle string,
 		if err != nil {
 			return nil, ClaimTotal{}, err
 		}
-		if row.HeldSince, err = readHeldSince(ctx, tx, task.ID); err != nil {
+		if row.HeldSince, _, err = readHandedOver(ctx, tx, task.ID); err != nil {
 			return nil, ClaimTotal{}, err
 		}
 		rows = append(rows, row)
@@ -210,16 +211,17 @@ func readWaiters(ctx context.Context, tx *sql.Tx, statement string, open []any, 
 	return out, nil
 }
 
-// readHeldSince is when an item was last assigned, or filed already assigned.
-func readHeldSince(ctx context.Context, tx *sql.Tx, id string) (time.Time, error) {
+// readHandedOver is when item id last changed hands; ok is false for an item
+// no change ever assigned. Holding up and the advisor read the one instant.
+func readHandedOver(ctx context.Context, tx *sql.Tx, id string) (at time.Time, ok bool, err error) {
 	var since int64
-	err := tx.QueryRowContext(ctx, holdingSinceStatement, id).Scan(&since)
+	err = tx.QueryRowContext(ctx, handedOverStatement, id).Scan(&since)
 	switch {
 	case err == nil:
-		return store.DecodeTime(since), nil
+		return store.DecodeTime(since), true, nil
 	case errors.Is(err, sql.ErrNoRows):
-		return time.Time{}, nil
+		return time.Time{}, false, nil
 	default:
-		return time.Time{}, fmt.Errorf("worklet: read when %s was assigned: %w", id, err)
+		return time.Time{}, false, fmt.Errorf("worklet: read when %s changed hands: %w", id, err)
 	}
 }

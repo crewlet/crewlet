@@ -24,6 +24,10 @@ const (
 	FixExternalStep FixKind = "external_step"
 	// FixNone is the engine's or a vendor's own work: nothing for a person.
 	FixNone FixKind = "none"
+	// FixDraftWithAssistant is prose the engine cannot build (a policy):
+	// Ask Crewlet drafts it from Prompt, and its own preview (ADR-0051)
+	// binds the person's approval.
+	FixDraftWithAssistant FixKind = "draft_with_assistant"
 )
 
 // Fix is what fixes a finding. Options is always a list, empty for a fix
@@ -41,6 +45,9 @@ type Fix struct {
 	Setting string `json:"setting,omitempty"`
 	// URL is where an external_step is taken, where the vendor named one.
 	URL string `json:"url,omitempty"`
+	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
+	// the engine's words: the evidence and the change to draft, nothing more.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // Option is one choice of a config change.

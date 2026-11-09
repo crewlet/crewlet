@@ -1352,7 +1352,12 @@ const (
 	// (+735, the entry -471), the one sheet +8 (the mark's colour rule) and the
 	// shell's chunks +29. The SSH drawing itself is in a lazy chunk, and no
 	// screen's module is in the entry. So it moved to 400 KiB, 2.18 seconds.
-	initialBudget = 400 << 10
+	// The administrators' platform notices and the advisor's unread sources in
+	// Needs you took it from 399.6 KiB to 400.1 KiB: the entry +523 bytes gzipped
+	// (the attention queue's notice rows and each unread source's sentence), the
+	// alarm words already in the shell's engine panel and no screen's module in
+	// the entry. So it moved to 401 KiB, 2.19 seconds.
+	initialBudget = 401 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2160,12 +2165,14 @@ const (
 	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
 	// 5690 KiB. The advisor's go-live check and its blockers in Needs you,
 	// merged on top of it, took it to 5691.1 KiB (5,827,714 bytes, +1,793, all
-	// script). The measured size's next KiB: 5692 KiB. An agent's access request
-	// (its grant previewed and applied before the answer, in the Advisor's change
-	// dialog) took it to 5692.7 KiB (5,829,360 bytes, +1,646, all script): 5693 KiB.
-	// A grant's button in the engine's words and a change's nested merge took
-	// it to 5693.5 KiB (5,830,109 bytes, +749, all script): 5694 KiB.
-	treeBudget = 5<<20 + 574<<10
+	// script). The measured size's next KiB: 5692 KiB. The administrators'
+	// platform notices in Needs you, the rubber-stamp finding's draft with Ask
+	// Crewlet and the advisor's every unread source, merged on top of it, took it
+	// to 5692.9 KiB (5,829,572 bytes, +1,858, all script). The measured size's
+	// next KiB: 5693 KiB. An agent's access request (its grant drawn in the
+	// engine's words, previewed and applied before the answer) took it to
+	// 5695.3 KiB (5,831,961 bytes, +2,389, all script): 5696 KiB.
+	treeBudget = 5<<20 + 576<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
