@@ -27,8 +27,8 @@ const (
 	// ClassAuxiliaryModel is an agent seat whose reflection and summaries
 	// run on the very model its executor runs on.
 	ClassAuxiliaryModel AdvisoryClass = "learning.auxiliary_model"
-	// ClassScheduleFrequent is a schedule that fires every
-	// [FrequentScheduleGap] or more often.
+	// ClassScheduleFrequent is a schedule that fires
+	// [FrequentScheduleFires] or more times in a day.
 	ClassScheduleFrequent AdvisoryClass = "schedule.frequent"
 )
 
@@ -38,11 +38,13 @@ var AdvisoryClasses = []AdvisoryClass{ClassHealthUnheld, ClassAuxiliaryModel, Cl
 // Valid reports whether c is one of [AdvisoryClasses].
 func (c AdvisoryClass) Valid() bool { return slices.Contains(AdvisoryClasses, c) }
 
-// FrequentScheduleGap is the shortest gap between two fires at which a
-// schedule is advised about. Polling checks every one or two hours were the
+// FrequentScheduleFires is how many fires in one day make a schedule advised
+// about: every two hours. Polling checks every one or two hours were the
 // schedules a live company found changed nothing on almost every fire; a
-// daily or weekday cadence is a routine and is never flagged.
-const FrequentScheduleGap = 2 * time.Hour
+// daily or weekday cadence, or a few fires a day, is a routine and is never
+// flagged. Counted per day rather than read off the shortest gap, because
+// the cost is turns, and two fires an hour apart once a day are two turns.
+const FrequentScheduleFires = 12
 
 // referenceWeek is the week a schedule's cadence is read over: fixed, so
 // the same document gets the same advice on every node and every run, and
@@ -139,23 +141,23 @@ func (c *Company) ExecutorChain(r *Role) []string {
 	return phase.Resolve(r.Seat(), phase.Execute, c.Providers.ProviderOrder())
 }
 
-// scheduleWarnings advises every enabled schedule that fires every
-// [FrequentScheduleGap] or more often. A fire starts a turn whether or not
-// anything changed, so a check that polls for an event (a deploy, a merge)
-// is better written as a work item dated for when to look.
+// scheduleWarnings advises every enabled schedule that fires
+// [FrequentScheduleFires] or more times in a day. A fire starts a turn
+// whether or not anything changed, so a check that polls for an event (a
+// deploy, a merge) is better written as a work item dated for when to look.
 func (c *Company) scheduleWarnings() []Warning {
 	var out []Warning
 	advise := func(schedules []org.Schedule, path Path, seat, unit string) {
 		for i, s := range schedules {
-			gap, ok := ScheduleGap(s)
-			if !ok || gap > FrequentScheduleGap {
+			fires, ok := ScheduleFiresPerDay(s)
+			if !ok || fires < FrequentScheduleFires {
 				continue
 			}
 			w := classed(ClassScheduleFrequent, at(idx(path, i), "cron"), fmt.Sprintf(
-				"schedule %q fires every %s, and each fire starts a turn whether or "+
+				"schedule %q fires %d times a day, and each fire starts a turn whether or "+
 					"not anything changed. If it checks for something that happens "+
 					"(a deploy, a merge), file a work item dated for when to look "+
-					"instead; otherwise run it less often", s.Name, EveryWords(gap)))
+					"instead; otherwise run it less often", s.Name, fires))
 			w.Seat, w.Unit = seat, unit
 			out = append(out, w)
 		}
@@ -175,10 +177,10 @@ func (c *Company) scheduleWarnings() []Warning {
 	return out
 }
 
-// ScheduleGap is the shortest gap between two consecutive fires of an
-// enabled schedule over [referenceWeek], and false for a disabled schedule,
-// one whose cron does not parse, or one that fires fewer than twice a week.
-func ScheduleGap(s org.Schedule) (time.Duration, bool) {
+// ScheduleFiresPerDay is how many times an enabled schedule fires on the
+// busiest day of [referenceWeek] (UTC days), and false for a disabled
+// schedule or one whose cron does not parse.
+func ScheduleFiresPerDay(s org.Schedule) (int, bool) {
 	if !s.IsEnabled() {
 		return 0, false
 	}
@@ -186,27 +188,12 @@ func ScheduleGap(s org.Schedule) (time.Duration, bool) {
 	if err != nil {
 		return 0, false
 	}
-	fires := expr.FireTimes(referenceWeek, referenceWeek.AddDate(0, 0, 7), time.UTC)
-	if len(fires) < 2 {
-		return 0, false
+	busiest := 0
+	for day := range 7 {
+		// FireTimes answers (after, until], so a day starts a minute early
+		// to count its own midnight.
+		from := referenceWeek.AddDate(0, 0, day).Add(-time.Minute)
+		busiest = max(busiest, len(expr.FireTimes(from, from.AddDate(0, 0, 1), time.UTC)))
 	}
-	gap := fires[1].Sub(fires[0])
-	for i := 2; i < len(fires); i++ {
-		gap = min(gap, fires[i].Sub(fires[i-1]))
-	}
-	return gap, true
-}
-
-// EveryWords is a gap as "every ..." finishes a sentence: "hour", "2 hours".
-func EveryWords(gap time.Duration) string {
-	switch {
-	case gap == time.Hour:
-		return "hour"
-	case gap%time.Hour == 0:
-		return fmt.Sprintf("%d hours", gap/time.Hour)
-	case gap == time.Minute:
-		return "minute"
-	default:
-		return fmt.Sprintf("%d minutes", gap/time.Minute)
-	}
+	return busiest, true
 }

@@ -48,8 +48,8 @@ var catalogue = map[Class]entry{
 		severity: SeverityNote, area: AreaSchedules,
 		words: func(_ *config.Company, p place, _ config.Warning) (string, string) {
 			s, _ := p.theSchedule()
-			gap, _ := config.ScheduleGap(s)
-			return fmt.Sprintf("%s runs every %s.", s.Name, config.EveryWords(gap)),
+			fires, _ := config.ScheduleFiresPerDay(s)
+			return fmt.Sprintf("%s runs %d times a day.", s.Name, fires),
 				"Each run starts a turn whether or not anything changed. A check that " +
 					"waits for something to happen, such as a deploy or a merge, is " +
 					"better as a work item dated for when to look."

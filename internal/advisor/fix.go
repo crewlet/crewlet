@@ -128,9 +128,9 @@ const dailyHour = 9
 // [dailyHour] on the days it runs now, or removed.
 func scheduleFix(_ *config.Company, p place, _ config.Warning) Fix {
 	s, _ := p.theSchedule()
-	entity, id := EntityRoles, ""
+	var entity, id string
 	if p.role != nil {
-		id = p.role.Seat().Handle()
+		entity, id = EntityRoles, p.role.Seat().Handle()
 	} else {
 		entity, id = EntityUnits, p.unit.ID
 	}

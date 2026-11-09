@@ -1589,8 +1589,8 @@ export interface ConfigWarning {
   /** Display text: what it names. */
   to: string;
   message: string;
-  /** What an advisory is about, for the setup advisor; empty on most warnings. */
-  class: string;
+  /** What an advisory is about, for the setup advisor; absent on most warnings. */
+  class?: string;
 }
 
 /** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */

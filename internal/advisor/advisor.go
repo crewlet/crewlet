@@ -64,6 +64,7 @@ func (s Severity) rank() int {
 // whose own work it is and which never reaches the owner as a to-do.
 type Actor string
 
+// The two actors.
 const (
 	ActorOwner  Actor = "owner"
 	ActorEngine Actor = "engine"
@@ -73,6 +74,7 @@ const (
 // the company has done.
 type Source string
 
+// The two sources.
 const (
 	SourceStatic   Source = "static"
 	SourceEvidence Source = "evidence"
@@ -81,6 +83,7 @@ const (
 // Area groups findings the way an owner thinks of their setup.
 type Area string
 
+// The areas a finding is grouped under.
 const (
 	AreaAccess    Area = "access"
 	AreaLearning  Area = "learning"
@@ -91,6 +94,7 @@ const (
 // SubjectKind is what a finding is about.
 type SubjectKind string
 
+// What a finding can be about.
 const (
 	SubjectCompany  SubjectKind = "company"
 	SubjectSeat     SubjectKind = "seat"
