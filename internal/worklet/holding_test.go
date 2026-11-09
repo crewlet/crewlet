@@ -3,7 +3,9 @@ package worklet_test
 import (
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -99,5 +101,37 @@ func TestAHeldItemNeverNamesItsHolderAsWaiting(t *testing.T) {
 	if first.ID != "mine" || first.Blocks != 2 || !slices.Equal(first.Holders, []string{"pm"}) {
 		t.Errorf("first row = %s blocking %d held by %v, want mine blocking 2, held by pm alone",
 			first.ID, first.Blocks, first.Holders)
+	}
+}
+
+// AN ITEM HANDED OVER IN A STATUS CHANGE IS HELD FROM THAT CHANGE, in Holding
+// up and in the advisor's idle reviews alike: both read one hand-over instant,
+// whichever change moved the assignee, and it is when the item entered review.
+func TestAHandOverInAStatusChangeIsOneInstantForEveryReader(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "a", "app")
+	assign(t, r, "b", "pm")
+	waitsOn(t, r, "b", "a")
+	review, owner := worklet.StatusInReview, "owner"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-a-review", "a", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Status: &review, Assignee: &owner}, worklet.ChangeStatus, nil); err != nil {
+		t.Fatalf("hand a over in review: %v", err)
+	}
+	r.drain()
+	entered := r.task(t, "a").Task.StatusEnteredAt
+	held := r.myWork("owner").HoldingUp
+	if len(held) != 1 || !held[0].HeldSince.Equal(entered) {
+		t.Fatalf("holding up is %+v, want a held since it entered review at %s", held, entered)
+	}
+	work, err := r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: entered.Add(-time.Hour), Until: entered.Add(time.Hour), Level: statelog.ReadStale,
+		Reviewers: []string{"owner"}, QuietSince: entered.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("WorkPatterns: %v", err)
+	}
+	if len(work.IdleReviews) != 1 || !work.IdleReviews[0].Since.Equal(held[0].HeldSince) {
+		t.Errorf("the idle review is %+v, want it waiting since %s, as Holding up reads it",
+			work.IdleReviews, held[0].HeldSince)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -232,24 +231,19 @@ ORDER BY t.status_entered_at, t.id`
 func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet time.Time,
 	out *WorkPatterns) error {
 	out.IdleReviews = []IdleReview{}
-	at := store.EncodeTime(quiet)
 	for _, reviewer := range reviewers {
-		if err := readIdleReviewsOf(ctx, tx, reviewer, at, out); err != nil {
+		if err := readIdleReviewsOf(ctx, tx, reviewer, quiet, out); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// patternAssignedStatement is when an item last changed hands, a seek of its own
-// history; an item never reassigned has no row and was held from its filing.
-const patternAssignedStatement = `SELECT h.effective_at FROM tracker_history h
-	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
-	ORDER BY h.log_seq DESC LIMIT 1`
-
 // readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue,
 // leaving out one it was handed after the quiet instant: its wait starts then.
-func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int64, out *WorkPatterns) error {
+func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet time.Time,
+	out *WorkPatterns) error {
+	at := store.EncodeTime(quiet)
 	rows, err := tx.QueryContext(ctx, patternIdleReviewsStatement, reviewer,
 		string(StatusInReview.Group()), at, at)
 	if err != nil {
@@ -270,18 +264,14 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int6
 		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
 	}
 	for _, r := range candidates {
-		var assigned int64
-		err := tx.QueryRowContext(ctx, patternAssignedStatement, r.Task).Scan(&assigned)
+		handed, ok, err := readHandedOver(ctx, tx, r.Task)
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return fmt.Errorf("worklet: read when %s changed hands: %w", r.Task, err)
-		case assigned >= at:
+			return err
+		case ok && !handed.Before(quiet):
 			continue
-		default:
-			if t := store.DecodeTime(assigned); t.After(r.Since) {
-				r.Since = t
-			}
+		case ok && handed.After(r.Since):
+			r.Since = handed
 		}
 		out.IdleReviews = append(out.IdleReviews, r)
 	}
