@@ -4,7 +4,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -87,7 +86,7 @@ func TestAHumanSeatIsNeverAdvisedAboutLearning(t *testing.T) {
 	}
 }
 
-func TestAScheduleEveryTwoHoursOrMoreOftenIsAdvised(t *testing.T) {
+func TestAScheduleThatRunsTwelveTimesADayIsAdvised(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		cron    string
@@ -96,8 +95,9 @@ func TestAScheduleEveryTwoHoursOrMoreOftenIsAdvised(t *testing.T) {
 	}{
 		{"0 * * * *", "", true},
 		{"0 */2 * * *", "", true},
-		{"0 9-17 * * 1-5", "", true},
 		{"*/30 * * * *", "", true},
+		{"0 9-17 * * 1-5", "", false},
+		{"0 9,10 * * 1-5", "", false},
 		{"0 */3 * * *", "", false},
 		{"30 9 * * 1-5", "", false},
 		{"0 9 1 * *", "", false},
@@ -130,21 +130,23 @@ func TestAUnitsScheduleIsAdvisedAboutItsUnit(t *testing.T) {
 	}
 }
 
-func TestAScheduleGapIsTheShortestBetweenTwoFires(t *testing.T) {
+func TestAScheduleIsCountedOnItsBusiestDay(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		cron string
-		want time.Duration
+		want int
 		ok   bool
 	}{
-		{"0 9-17 * * 1-5", time.Hour, true},
-		{"30 9 * * 1-5", 24 * time.Hour, true},
-		{"0 9 * * 1", 0, false},
+		{"0 * * * *", 24, true},
+		{"0 0 * * *", 1, true},
+		{"0 9-17 * * 1-5", 9, true},
+		{"0 9 * * 1", 1, true},
+		{"0 9 1 * *", 0, true},
 		{"not a cron", 0, false},
 	} {
-		got, ok := config.ScheduleGap(org.Schedule{Name: "s", Cron: tc.cron})
+		got, ok := config.ScheduleFiresPerDay(org.Schedule{Name: "s", Cron: tc.cron})
 		if got != tc.want || ok != tc.ok {
-			t.Errorf("ScheduleGap(%q) = %v, %v, want %v, %v", tc.cron, got, ok, tc.want, tc.ok)
+			t.Errorf("ScheduleFiresPerDay(%q) = %v, %v, want %v, %v", tc.cron, got, ok, tc.want, tc.ok)
 		}
 	}
 }

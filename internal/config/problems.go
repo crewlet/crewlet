@@ -477,7 +477,7 @@ type Warning struct {
 	Message  string `json:"message"`
 	// Class is what an advisory is about, for a reader that acts on it
 	// ([AdvisoryClass]); empty on every other kind and on most advisories.
-	Class AdvisoryClass `json:"class"`
+	Class AdvisoryClass `json:"class,omitempty"`
 }
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that
@@ -626,8 +626,8 @@ func (c *Company) ReferenceWarnings() []Warning {
 // surface, and a Chatlet company that gives no team a room. And the three a
 // setup advisor fixes, each with its [AdvisoryClass]: no agent seat holding
 // health_tools ([Company.healthWarnings]), learning on the executor's own
-// model ([Company.auxiliaryWarnings]) and a schedule that fires every two
-// hours or more often ([Company.scheduleWarnings]).
+// model ([Company.auxiliaryWarnings]) and a schedule that fires twelve or
+// more times a day ([Company.scheduleWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
