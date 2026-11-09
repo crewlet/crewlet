@@ -352,6 +352,10 @@ func (emptyWork) Search(context.Context, worklet.SearchQuery) (worklet.SearchAns
 	return worklet.SearchAnswer{}, nil
 }
 
+func (emptyWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return worklet.WorkPatterns{}, nil
+}
+
 func (emptyWork) Thread(context.Context, worklet.ThreadQuery, statelog.Freshness) (
 	worklet.ResolvedThread, error) {
 	return worklet.ResolvedThread{}, nil

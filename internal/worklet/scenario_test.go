@@ -1,11 +1,14 @@
 package worklet_test
 
 import (
+	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/scenario"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -20,6 +23,71 @@ func TestTheHealthyCompanyWakesEverySeatItsWorkNeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	playTimeline(t, tl)
+}
+
+// EVERY ENGINE DETECTOR FIRES ON ITS OWN PATTERN'S TIMELINE AND ON NO OTHER,
+// read from the records the timeline wrote; the healthy company raises none.
+func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
+	t.Parallel()
+	want := map[scenario.Pattern]advisor.Class{
+		scenario.PatternHealthyCompany:           "",
+		scenario.PatternAgentHandoffs:            "",
+		scenario.PatternAgentMentionsWithoutAsk:  "",
+		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
+		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
+		scenario.PatternReviewIdle:               advisor.ClassReviewIdle,
+	}
+	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
+	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
+	guarded := []advisor.Class{advisor.ClassAgentMentionsWithoutAsk}
+	for _, class := range advisor.WorkClasses() {
+		if !slices.Contains(slices.Collect(maps.Values(want)), class) && !slices.Contains(guarded, class) {
+			t.Errorf("detector %s has no timeline it must fire on", class)
+		}
+	}
+	all, err := scenario.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range all {
+		expected, ok := want[tl.Pattern]
+		if !ok {
+			t.Errorf("timeline %s's pattern %s names no detector, nor none", tl.Name, tl.Pattern)
+			continue
+		}
+		t.Run(tl.Name, func(t *testing.T) {
+			t.Parallel()
+			d := playTimeline(t, tl)
+			end := time.Now().UTC().Add(time.Microsecond)
+			var agents []string
+			for _, s := range tl.Seats {
+				if s.Kind == scenario.SeatAgent {
+					agents = append(agents, s.Handle)
+				}
+			}
+			work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+				Since: d.start, Until: end, Level: statelog.ReadStale,
+				Reviewers: agents, QuietSince: d.quietSince()})
+			if err != nil {
+				t.Fatalf("WorkPatterns: %v", err)
+			}
+			var raised []advisor.Class
+			for _, f := range advisor.Detect(advisor.Evidence{Until: end, Work: work}, d.kind) {
+				if !slices.Contains(raised, f.Class) {
+					raised = append(raised, f.Class)
+				}
+			}
+			if expected == "" && len(raised) != 0 || expected != "" && !slices.Equal(raised, []advisor.Class{expected}) {
+				t.Errorf("raised %v, want only %q; read %+v", raised, expected, work)
+			}
+		})
+	}
+}
+
+// playTimeline runs every step of tl and holds each to the seats it declares woken.
+func playTimeline(t *testing.T, tl scenario.Timeline) *timelineDriver {
+	t.Helper()
 	d := newTimelineDriver(t, tl)
 	for i, st := range tl.Steps {
 		got := d.run(i, st)
@@ -28,12 +96,44 @@ func TestTheHealthyCompanyWakesEverySeatItsWorkNeeds(t *testing.T) {
 				got, st.Expect.Woken)
 		}
 	}
+	return d
+}
+
+func (d *timelineDriver) agent(handle string) bool { return d.tl.Kind(handle) == scenario.SeatAgent }
+
+// kind is what a handle names in the timeline, in the advisor's terms.
+func (d *timelineDriver) kind(handle string) advisor.SeatKind {
+	switch d.tl.Kind(handle) {
+	case scenario.SeatAgent:
+		return advisor.SeatAgent
+	case scenario.SeatPerson:
+		return advisor.SeatPerson
+	}
+	return advisor.SeatUnknown
+}
+
+// quietSince is just after the last item still in review entered it. The
+// tracker stamps a status and a turn by the broker's clock, which a timeline's
+// offsets do not move, so the quiet instant is read off the records themselves.
+func (d *timelineDriver) quietSince() time.Time {
+	d.t.Helper()
+	var last time.Time
+	for _, id := range d.ids {
+		task := d.r.task(d.t, id).Task
+		if task.Status == worklet.StatusInReview && task.StatusEnteredAt.After(last) {
+			last = task.StatusEnteredAt
+		}
+	}
+	return last.Add(time.Microsecond)
 }
 
 // timelineDriver plays a timeline's steps as the tools do: the wake built from
 // the task before and after, the thread resolved by the reader.
 type timelineDriver struct {
-	t        *testing.T
+	t *testing.T
+	// start is the instant before the first step; every step is stamped with
+	// the clock the broker stamps its records by, its offset only ordering it.
+	start    time.Time
 	r        *roundTrip
 	tl       scenario.Timeline
 	ids      map[string]string
@@ -42,14 +142,15 @@ type timelineDriver struct {
 }
 
 func newTimelineDriver(t *testing.T, tl scenario.Timeline) *timelineDriver {
-	return &timelineDriver{t: t, r: newRoundTrip(t), tl: tl,
+	return &timelineDriver{t: t, r: newRoundTrip(t), tl: tl, start: time.Now().UTC(),
 		ids: map[string]string{}, comments: map[int]string{}}
 }
 
 // run applies step i and answers which agent seats its notice starts a turn for.
 func (d *timelineDriver) run(i int, st scenario.Step) []string {
 	d.t.Helper()
-	at := wednesday.Add(time.Duration(st.At) * time.Second)
+	at := time.Now().UTC()
+	d.r.at = at
 	kind := worklet.AuthorAgent
 	if d.tl.Kind(st.Actor) == scenario.SeatPerson {
 		kind = worklet.AuthorHuman
@@ -93,6 +194,13 @@ func (d *timelineDriver) update(i int, st scenario.Step, writer *worklet.Writer,
 	case scenario.VerbComment:
 		change = worklet.ChangeComment
 		patch, wake = d.comment(i, st, kind, id, current, at)
+	case scenario.VerbTurn:
+		if _, err := writer.RecordTurn(d.t.Context(), opID, worklet.TurnRecord{
+			Task: id, Seat: st.Actor, TurnID: fmt.Sprintf("run-%d", i), Trigger: "work_pickup",
+		}); err != nil {
+			d.t.Fatalf("step %d: turn on %s: %v", i, st.Item, err)
+		}
+		return
 	default:
 		d.t.Fatalf("step %d: verb %q has no driver here", i, st.Verb)
 	}
@@ -126,23 +234,150 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 	d.comments[i] = c.ID
 	patch := worklet.TaskPatch{Comment: c,
 		Watch: &worklet.WatchIntent{Handle: st.Actor, Watch: true, Auto: true}}
-	return patch, worklet.Wake{Before: current, Comment: c, Mentions: c.Mentions,
+	wake := worklet.Wake{Before: current, Comment: c, Mentions: c.Mentions,
 		Thread: thread.ThreadParties, AnswersDecision: thread.AnswersDecision}
+	if st.Asks != nil {
+		// AS THE COMMENT TOOL STATES IT: an ask asks by itself, and only the
+		// agents it names are told apart from the people.
+		asks := *st.Asks || c.Ask != ""
+		wake.Asks = &asks
+		for _, m := range c.Mentions {
+			if d.agent(m) {
+				wake.MentionedAgents = append(wake.MentionedAgents, m)
+			}
+		}
+	}
+	return patch, wake
 }
 
 // woken is every agent seat the notices after the first before start a turn
 // for, sorted, read off the log's records.
 func (d *timelineDriver) woken(before int, actor string) []string {
 	d.t.Helper()
-	agent := func(h string) bool { return d.tl.Kind(h) == scenario.SeatAgent }
 	out := []string{}
 	for _, n := range d.r.wakes(d.t)[before:] {
 		for _, c := range worklet.Route(worklet.Candidates(n), everyone, actor) {
-			if agent(c.Handle) && !slices.Contains(out, c.Handle) {
+			if d.agent(c.Handle) && !slices.Contains(out, c.Handle) {
 				out = append(out, c.Handle)
 			}
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// A COMMENT WHOSE AUTHOR STATED ASKS IS STAMPED AT THE VERSION THAT KEEPS IT, so
+// a node on a build before the rule retains it rather than applying it with no
+// statement, and two nodes never keep different notice rows for it.
+func TestAStatedCommentIsStampedSoAnOlderNodeRetainsIt(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"agent_handoffs", "agent_mentions_without_ask"} {
+		tl, err := scenario.Named(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := playTimeline(t, tl)
+		end, err := d.r.log.End(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stated, unstated := 0, 0
+		for seq := uint64(1); seq <= end; seq++ {
+			_, payload, _, ok, err := d.r.log.At(t.Context(), seq)
+			if err != nil || !ok {
+				t.Fatalf("read record %d: %v", seq, err)
+			}
+			rec, err := worklet.Decode(d.r.open(seq, payload))
+			if err != nil || rec.Notify == nil || rec.Notify.Kind != worklet.ChangeComment {
+				continue
+			}
+			switch rec.Notify.Snapshot.CommentAsks {
+			case nil:
+				unstated++
+				if rec.NoticeAsksKept || rec.V >= worklet.NoticeAsksVersion {
+					t.Errorf("%s: a comment that states nothing is version %d, kept %v; want below %d",
+						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
+				}
+			default:
+				stated++
+				if !rec.NoticeAsksKept || rec.V != worklet.NoticeAsksVersion {
+					t.Errorf("%s: a stated comment is version %d, kept %v; want %d, kept",
+						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
+				}
+			}
+		}
+		if stated == 0 || name == "agent_mentions_without_ask" && unstated == 0 {
+			t.Errorf("%s: read %d stated and %d unstated comments, want both kinds the timeline writes",
+				name, stated, unstated)
+		}
+	}
+}
+
+// A STATED REFERENCE THAT WOKE ITS SEAT IS COUNTED, AND AN UNKNOWN ONE IS NOT:
+// routing wakes no stated reference today, so the case writes the regression
+// by hand; a notice an older build kept no statement on is never counted.
+func TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot(t *testing.T) {
+	t.Parallel()
+	tl, err := scenario.Named("agent_mentions_without_ask")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := playTimeline(t, tl)
+	w, err := d.r.db.Writer(t.Context())
+	if err != nil {
+		t.Fatalf("take the writer: %v", err)
+	}
+	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_notifications SET addressed = 1
+			WHERE reason = 'mention' AND asks = 0`)
+		return err
+	}); err != nil {
+		t.Fatalf("wake the stated references by hand: %v", err)
+	}
+	_ = w.Close()
+	// EVERY INSTANT EITHER CLOCK STAMPS: the read is about the rows, not the window.
+	work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("WorkPatterns: %v", err)
+	}
+	woken, told, asked := 0, 0, 0
+	for _, n := range work.Named {
+		woken, told, asked = woken+n.Woken, told+n.Told, asked+n.Asked
+	}
+	if woken != 2 || asked != 0 || told != 8 {
+		t.Fatalf("read %d woken, %d asked of %d told; want the 2 stated references woken, "+
+			"and the 6 an older build wrote counted as neither", woken, asked, told)
+	}
+}
+
+// AN IDLE REVIEW IS ONE ITS HOLDER TOOK NO TURN ON SINCE: of two reviews held
+// by one agent, the one it turned to is not idle and the other is.
+func TestAnIdleReviewIsOneItsHolderLeftAlone(t *testing.T) {
+	t.Parallel()
+	tl, err := scenario.Named("review_idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := playTimeline(t, tl)
+	work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: d.start, Until: time.Now().UTC().Add(time.Microsecond), Level: statelog.ReadStale,
+		Reviewers: []string{"app", "qa"}, QuietSince: d.quietSince()})
+	if err != nil {
+		t.Fatalf("WorkPatterns: %v", err)
+	}
+	if len(work.IdleReviews) != 1 || work.IdleReviews[0].Task != d.ids["W-1"] ||
+		work.IdleReviews[0].Holder != "qa" {
+		t.Fatalf("idle reviews %+v, want only W-1, held by qa", work.IdleReviews)
+	}
+	// A QUIET INSTANT BEFORE ANY REVIEW BEGAN finds none idle: a review that
+	// has not waited the whole quiet period is not idle, however untouched.
+	early, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: d.start, Until: time.Now().UTC().Add(time.Microsecond), Level: statelog.ReadStale,
+		Reviewers: []string{"app", "qa"}, QuietSince: d.start})
+	if err != nil || len(early.IdleReviews) != 0 {
+		t.Fatalf("with the quiet instant before every review, idle reviews %+v (%v), want none",
+			early.IdleReviews, err)
+	}
 }

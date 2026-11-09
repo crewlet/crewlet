@@ -48,11 +48,17 @@ import (
 // Version 5 is an agent's comment stating whether it asks
 // ([Snapshot.CommentAsks]) and which seats it names are agents
 // ([Snapshot.MentionedAgents]).
-const RecordVersion = 5
+// Version 6 is a notice row that keeps that statement
+// ([MutationRecord.NoticeAsksKept]).
+const RecordVersion = 6
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
 const AppsKeptVersion = 4
+
+// NoticeAsksVersion is the version from which the applier keeps a comment
+// author's statement on its notice rows; every older record leaves it NULL.
+const NoticeAsksVersion = 6
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -102,6 +108,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
 	{Name: "Snapshot.CommentAsks", Since: 5, Path: []string{"notify", "snapshot", "comment_asks"}},
 	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
+	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -802,6 +809,11 @@ type MutationRecord struct {
 	// so a record older than the rule keeps an empty column on every node.
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
 
+	// NoticeAsksKept marks a record whose comment author's statement its notice
+	// rows keep (`tracker_notifications.asks`). Version 6, so a record older than
+	// the rule leaves the column NULL on every node.
+	NoticeAsksKept bool `json:"notice_asks_kept,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -932,8 +944,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "operator_id",
-	"turn_id", "chain", "kind", "notify",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
+	"notice_asks_kept", "operator_id", "turn_id", "chain", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

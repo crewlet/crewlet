@@ -405,6 +405,10 @@ func (stubWorkReader) TurnPlaces(context.Context, []string,
 	return map[string]worklet.TurnPlace{}, nil
 }
 
+func (stubWorkReader) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return worklet.WorkPatterns{}, nil
+}
+
 func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,
 	statelog.Freshness) (worklet.ResolvedThread, error) {
 	return worklet.ResolvedThread{}, nil

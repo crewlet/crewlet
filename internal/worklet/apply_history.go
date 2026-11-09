@@ -449,8 +449,8 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			INSERT INTO tracker_notifications
 				(record_id, recipient, subject_id, subject_key, task_id, kind,
 				 reason, addressed, fallback_only, fallback_rank, excerpt,
-				 created_at, log_seq, log_stream, log_generation)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 created_at, log_seq, log_stream, log_generation, asks)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
 			historyID(c), candidate.Handle, c.subject().ID,
 			inboxSubjectKey(subjectKey, notify), task,
@@ -458,7 +458,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
 			store.EncodeTime(c.authored()), c.packed, c.position.Stream,
-			c.position.Generation)
+			c.position.Generation, statedAsks(c.record))
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the inbox row for %s at %s: %w",
 				candidate.Handle, c.position, err)
@@ -521,4 +521,15 @@ func appsColumn(record MutationRecord) string {
 		return ""
 	}
 	return jsonOf(record.ActorApps)
+}
+
+// statedAsks is a comment author's statement as the notice row keeps it: 1 or
+// 0 from a record at [NoticeAsksVersion] or above that kept it, and NULL for
+// every other, so every node writes the same row.
+func statedAsks(record MutationRecord) any {
+	if record.V < NoticeAsksVersion || !record.NoticeAsksKept || record.Notify == nil ||
+		record.Notify.Snapshot.CommentAsks == nil {
+		return nil
+	}
+	return boolInt(*record.Notify.Snapshot.CommentAsks)
 }

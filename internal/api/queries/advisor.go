@@ -4,12 +4,14 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // advisor answers `advisor`: every finding about the fleet's company at the
@@ -35,5 +37,28 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return advisor.Read(in), nil
+	now := s.clock()
+	window := advisor.PatternsWindow(now, company)
+	window.Level = statelog.ReadStale
+	work, err := s.Work.WorkPatterns(ctx, window)
+	if err != nil {
+		return nil, fmt.Errorf("advisor: read the company's work patterns: %w", err)
+	}
+	return advisor.ReadWithEvidence(in, advisor.Evidence{Until: now, Work: work, Backup: backupEvidence(s.latestAlarms())}), nil
+}
+
+// backupEvidence is whether the latest evaluation holds the backup alarm, and
+// over how many logs.
+func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
+	for _, a := range alarms {
+		if a.Kind != statelog.KindBackupAge {
+			continue
+		}
+		logs := 0
+		for _, d := range a.Domains {
+			logs += len(d.Domains)
+		}
+		return advisor.Backup{Standing: true, Logs: logs}
+	}
+	return advisor.Backup{}
 }

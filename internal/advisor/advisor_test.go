@@ -29,6 +29,9 @@ func read(c *config.Company, revision string) advisor.Answer {
 	return advisor.Read(advisor.Inputs{Company: c, Revision: revision, Integrations: []integration.State{}})
 }
 
+// liveShape is a company shaped like one that ran two weeks: six agent seats and
+// one person, every phase on one model, no agent holding the health grant, and
+// three schedules that poll every one or two hours.
 func liveShape(t *testing.T) *config.Company {
 	t.Helper()
 	doc, err := os.ReadFile("testdata/live-shape.company.yaml")

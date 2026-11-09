@@ -98,13 +98,28 @@ func main() {
 		// errSilent has already said everything it has to say, on stdout,
 		// in the shape its caller asked for. Printing a second copy on
 		// stderr is what makes a machine consumer's log unreadable.
+		code := 1
+		var exit *exitError
+		if errors.As(err, &exit) {
+			code = exit.code
+		}
 		if errors.Is(err, errSilent) {
-			os.Exit(1)
+			os.Exit(code)
 		}
 		fmt.Fprintln(os.Stderr, "crewlet:", err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
+
+// exitError ends a command with a status of its own, for a script to tell a
+// result the command reports from a failure to ask.
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string { return e.err.Error() }
+func (e *exitError) Unwrap() error { return e.err }
 
 // run is main's testable body: it takes its arguments and streams rather
 // than reaching for globals, so the CLI surface can be exercised in tests —
@@ -267,6 +282,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runFleet(environ, rest, stdout, stderr)
 	case "feeds":
 		return runFeeds(environ, rest, stdout, stderr)
+	case "doctor":
+		return runDoctor(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
@@ -327,6 +344,9 @@ Usage:
   crewlet feeds <cmd>         The wake feeds' dead letters, records no node could
                               read: dead-letters lists them, and discard gives
                               one's wake up for good
+  crewlet doctor              The setup advisor's findings from a running node:
+                              classes, subjects by ordinal and counts (-words
+                              adds names and reasons); exits 2 when one blocks
   crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the

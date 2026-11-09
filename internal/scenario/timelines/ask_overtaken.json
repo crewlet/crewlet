@@ -1,0 +1,24 @@
+{
+  "name": "ask_overtaken",
+  "pattern": "ask_overtaken",
+  "seats": [
+    {"handle": "owner", "kind": "person"},
+    {"handle": "pm", "kind": "agent"},
+    {"handle": "qa", "kind": "agent"}
+  ],
+  "steps": [
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "pm", "expect": {"woken": ["pm"]}},
+    {"at": 10, "actor": "owner", "verb": "file", "item": "W-2", "assignee": "pm", "expect": {"woken": ["pm"]}},
+    {"at": 20, "actor": "owner", "verb": "file", "item": "W-3", "assignee": "pm", "expect": {"woken": ["pm"]}},
+    {"at": 60, "actor": "pm", "verb": "comment", "item": "W-1", "say": "question", "ask": "owner", "asks": true, "expect": {"woken": []}},
+    {"at": 3600, "actor": "pm", "verb": "comment", "item": "W-1", "say": "question", "ask": "owner", "asks": true, "expect": {"woken": []}},
+    {"at": 3660, "actor": "pm", "verb": "comment", "item": "W-2", "say": "question", "ask": "owner", "asks": true, "expect": {"woken": []}},
+    {"at": 3720, "actor": "pm", "verb": "comment", "item": "W-3", "say": "question", "ask": "owner", "asks": true, "expect": {"woken": []}},
+    {"at": 7200, "actor": "qa", "verb": "status", "item": "W-2", "status": "done", "expect": {"woken": ["pm"]}},
+    {"at": 7260, "actor": "qa", "verb": "status", "item": "W-3", "status": "done", "expect": {"woken": ["pm"]}},
+    {"at": 36000, "actor": "owner", "verb": "comment", "item": "W-1", "say": "answer", "answers": 3, "expect": {"woken": ["pm"]}},
+    {"at": 36060, "actor": "owner", "verb": "comment", "item": "W-1", "say": "answer", "answers": 4, "expect": {"woken": ["pm"]}},
+    {"at": 36120, "actor": "owner", "verb": "comment", "item": "W-2", "say": "answer", "answers": 5, "expect": {"woken": ["pm"]}},
+    {"at": 36180, "actor": "owner", "verb": "comment", "item": "W-3", "say": "answer", "answers": 6, "expect": {"woken": ["pm"]}}
+  ]
+}

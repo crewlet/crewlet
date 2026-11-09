@@ -90,6 +90,11 @@ func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
 	return call(ctx, w.r, opThread, nil, threadArgs{Query: q, Fresh: fresh})
 }
 
+// WorkPatterns answers what the company's comments and answers did in a window.
+func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return call(ctx, w.r, opWorkPatterns, nil, q)
+}
+
 // Activity answers what happened to a task or a project.
 func (w Work) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 	worklet.ActivityAnswer, error) {
