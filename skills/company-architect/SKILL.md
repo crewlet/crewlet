@@ -479,13 +479,13 @@ agent seat and a model; reading and reviewing code on a code host is MCP.
 code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
 `max_turns`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
-Where the company hosts its code on Gitlet, the engine's own git host (`code.native`),
+Where the company hosts its code on Gitlet, the engine's own git host (`code.backend: gitlet`),
 a seat's executors clone and push the company's repositories themselves:
 each run checks out what it needs with `code_checkout`, and each box reaches them at
 `/box/git/` with its run's own credential. That takes one line of every
 seat node's environment, not the company file: `CREWLET_BOX_GIT_URL`, the
-base a box dials, `/box/git` included, on a git node's public listener
-(its `api.public` port where Tier A sets one) or a balancer over the git
+base a box dials, `/box/git` included, on a Gitlet node's public listener
+(its `api.public` port where Tier A sets one) or a balancer over the Gitlet
 nodes — `https://` wherever the URL leaves the box's host, since each
 request carries the run's token. Without it a launch naming a
 repository is refused (`sandbox_git_url_unset`). Tell them so when they
@@ -598,7 +598,10 @@ crewlet run crewlet.yaml -company company.yaml
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
    way, by an administrator, with every app (Worklet, Doclet, Artifacts,
-   Chatlet) ticked by default, and Admin only for the people who run the company. See [How the first person
+   Chatlet, Gitlet) ticked by default, and Admin only for the people who run the company. Untick
+   Gitlet for somebody the company keeps off its code: it is every door to the
+   repositories, git included, and an agent works on code in a turn they woke
+   only if they hold it. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:

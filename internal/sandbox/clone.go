@@ -244,7 +244,7 @@ END { exit !(seen && ok) }`
 // coding box holds no cache to borrow from, and a remote one never can — and a
 // copy borrowed and dissociated costs the box a repack of the whole history,
 // 47.8 s against the recipe's 13.0 at a gigabyte (internal/code/host's
-// BenchmarkBoxDissociate). A check's box on a git node fetches its one commit
+// BenchmarkBoxDissociate). A check's box on a Gitlet node fetches its one commit
 // as a remote box does ([CloneSingleSHA]): a borrow read in place for a
 // check's run is unbuilt (crewlet/crewlet#496), its benchmark to come first.
 func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {

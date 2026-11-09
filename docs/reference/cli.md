@@ -27,15 +27,17 @@ subcommand below is served by it.
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
 | `crewlet gitlet status [config] [-repo NAME] [-json]` | [Gitlet's](../concepts/gitlet.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
-| `crewlet gitlet verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
+| `crewlet gitlet verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every Gitlet node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each Gitlet node |
 | `crewlet gitlet export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
-| `crewlet gitlet import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
+| `crewlet gitlet import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home Gitlet node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
 | `crewlet gitlet import <source-url> <name> -local [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into one that exists, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet gitlet purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
 | `crewlet gitlet credential [-token-env NAME] get` | git's credential helper for Gitlet: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
+| `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
+| `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -365,7 +367,7 @@ publishes](../concepts/control-plane.md#what-a-booting-node-publishes).
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since an executor run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `git` (serve the company's git repositories where it sets `code.native`; needs `ingress`), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all five — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory, chat and the code log included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `gitlet` (serve the company's git repositories where it sets `code.backend: gitlet`; needs `ingress`), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all five — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory, chat and the code log included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
@@ -903,7 +905,7 @@ optional. `seats` lists which seats are free.
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
 | `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every data node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every data node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
@@ -925,7 +927,7 @@ optional. `seats` lists which seats are free.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the node's answer as JSON rather than a table: every field and number as the node sent them, its text as written (`<`, `>` and `&` as themselves) and its keys sorted |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts` and `chatlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts`, `chatlet` and `gitlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -948,8 +950,8 @@ states.** On `grant` they are opposite intentions and an empty flag value
 cannot carry both, so the word is explicit — and it is the one spelling that
 could never be a permission. `-grants none` on a person is the
 [overview](../concepts/identity-and-access.md#everybodys-overview) alone: they
-see the org chart, what the agents are doing and the spend, and use neither
-app.
+see the org chart, what the agents are doing and the spend, and use no app —
+the company's code included, which takes `gitlet`.
 
 **A value shown once is shown once.** `invite`, a person's `create`,
 `reset-password` and `token` each print something nothing can read back: what
@@ -1619,13 +1621,19 @@ crewlet gitlet credential [-token-env NAME] get|store|erase
 the first two through its `/gitlet/` routes
 ([API Endpoints](api-endpoints.md#gitlet-git-and-gitlet)), the other two
 through the act transport — as whoever the
-token resolves to: the repositories are rows the data nodes keep, and a git
+token resolves to: the repositories are rows the data nodes keep, and a Gitlet
 node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they take the token from `$CREWLET_API_TOKEN`
 alone and find the node from the Tier A file's `api` block — `-api` overrides
 it, and with `-api` given no Tier A file is read. `export`, `import -local` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
+`status`, `import` and `purge-unreachable` need the token to carry the Gitlet
+permission (`gitlet`), as the git that `export`, `import -local` and
+`credential` serve does
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)):
+without it the node refuses before any repository is read. `verify` is the
+deployment's own control, and takes `admin`.
 
 `crewlet gitlet hook` is the engine's own: git starts it inside every push. Run
 by hand it says so and exits 2.
@@ -1700,7 +1708,7 @@ repository's first with `-repo` — for a script. What the command holds while i
 reads is what it prints: a page at a time with `-json`, and otherwise each
 repository's or each push's row of text. A repository nobody declared is
 refused in the node's words (`no repository named "web" is declared in
-code.repos`), and a company that hosts no code says `code.native is not set`;
+code.repos`), and a company that hosts no code says `code.backend is not gitlet`;
 either exits non-zero.
 
 ### `crewlet gitlet verify`
@@ -1716,10 +1724,10 @@ multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded —
 but a pack no row names, which leaves as the copy moves into its next
 directory, taking the multi-pack-index and the commit-graph built over it
 along, still with nothing downloaded ([When packs leave a
-copy](../concepts/gitlet.md#the-cache-on-a-git-node)).
+copy](../concepts/gitlet.md#the-cache-on-a-gitlet-node)).
 A pack missing or damaged, or an index failing its checksum, is **rebuilt**
 into a new copy (every pack found whole linked rather than downloaded again),
-and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-api`
+and so is whatever a repair in place leaves. Every Gitlet node keeps its own cache, so **verify each** (`-api`
 names the node); with requests routed by repository, a repository is cached on
 one or two of them. A verify is one of the deployment's own controls and takes
 **`admin`**, so the token in `CREWLET_API_TOKEN` must carry it: any other is
@@ -1736,7 +1744,7 @@ repository:
 
 ```
 web: ok (212 packs, 41 refs)
-docs: not held on this node — nothing here to check (verify the git nodes that serve it)
+docs: not held on this node — nothing here to check (verify the Gitlet nodes that serve it)
 api: 2 problem(s) (14 packs, 9 refs):
   pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
   fsck: error: inflate: data stream error (incorrect data check) (and 2 more)
@@ -1800,7 +1808,7 @@ wrong, not a repository.
 
 **Exits non-zero when any copy is not clean**, after verifying every one — a
 problem found, a check that failed, a name nobody declared — and zero when all
-are clean or not held: the hook for a cron on each git node. `-json` prints
+are clean or not held: the hook for a cron on each Gitlet node. `-json` prints
 each verification as the node answered it on stdout, and what it says in words
 on stderr — a company that declares none among them.
 
@@ -1855,12 +1863,12 @@ so the create is one record however it was asked.
 ```
 $ crewlet gitlet import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
 importing https://github.com/acme/web.git into web — importing, owned by unit:eng (at CREWLET_CODE_LOG@1:4821)
-  its home git node fetches the source now; `crewlet gitlet status -repo web` shows it importing until the fetch has landed
+  its home Gitlet node fetches the source now; `crewlet gitlet status -repo web` shows it importing until the fetch has landed
 ```
 
-**The node fetches, not this machine.** The repository's home git node fetches
+**The node fetches, not this machine.** The repository's home Gitlet node fetches
 the source's branches and tags over HTTPS — every address the host resolves to
-must be a public one unless Tier A's `git.import_allow_private` says otherwise,
+must be a public one unless Tier A's `gitlet.import_allow_private` says otherwise,
 and redirects are not followed — and lands them in chunks, packs before the
 refs that need them, so a history of any size goes in whatever
 `code.limits.max_push_bytes` says. The repository is `importing` until the last
@@ -1940,7 +1948,7 @@ In order:
    `code.limits` are the ones the node holds its pushes to. An archived or
    deleted repository takes no push, and is refused saying how to declare it;
    a name nobody declared is refused naming `code.repos`, and a company that
-   does not set `code.native` is refused saying so, in the node's words. The
+   does not set `code.backend: gitlet` is refused saying so, in the node's words. The
    import also asks the node who the token is (`GET /viewer`): every push's
    record names that person, so it is part of what one push may carry
    (step 6).
@@ -2059,7 +2067,7 @@ In order:
 the files its deltas cannot reach in the steps before it, so each file a step
 touches is stored again in full. Measured on this project's own history,
 34.0 MB as one pack: 68.5 MB in eleven steps and 78.6 MB in forty-two. What
-the repository stores is what the object store holds and what every git node
+the repository stores is what the object store holds and what every Gitlet node
 serving it caches, so run a large import with `code.limits.max_push_bytes` at
 its 1 GiB ceiling — the fewest, largest steps — and size
 `code.limits.repo_max_bytes` for the steps rather than for the source's own
@@ -2095,7 +2103,7 @@ ref that differs.
 
 ### `crewlet gitlet purge-unreachable`
 
-Asks the repository's maintainer — the git node that compacts and publishes
+Asks the repository's maintainer — the Gitlet node that compacts and publishes
 it — to drop every object no branch or tag reaches: the commit a leaked
 secret was force-pushed away from, the history a deleted branch left. It is
 the `code_purge_unreachable` tool your own assistant and a repository's
@@ -2283,6 +2291,64 @@ The key reaches every stream and bucket and never the system account —
 membership changes go through `remove` — and it grants nothing its holder
 lacks: whoever reads the node's Tier A holds the keyring. It is admitted for as
 long as its key is in `secrets.keys`; write it again after a rotation drops it.
+
+## `crewlet feeds`
+
+```
+crewlet feeds dead-letters [-json] [<config.yaml>] [-api URL]
+crewlet feeds discard <id> -confirm <id> [<config.yaml>] [-api URL]
+```
+
+The wake feeds' dead letters. A domain's wake feed hands a record it cannot read
+back for a node that can, and one no node has read within an hour of being
+stored is kept as a dead letter in `CREWLET_DLQ`, its sealed frame inside, and
+raises `feed_dead_lettered`; the first node whose feed starts able to read an
+entry replays it, and the stream's age bound lets one go after
+`stream.event_retention_hours`
+([Dead letters](../concepts/event-system.md#dead-letters)). Both commands talk
+to a running node, since the entries are kept in its broker, and every node
+serving the API answers alike. They are clients of the routes in the
+[API reference](api-endpoints.md#the-wake-feeds-dead-letters), and the token
+in `CREWLET_API_TOKEN` takes `admin`.
+
+### `crewlet feeds dead-letters`
+
+One row per entry, every feed's in turn: its **id**, the one `discard` names; its
+**feed** (`work`, `page`, `chat` or `code`); the **reason** no node read it
+(`newer_record`, `newer_envelope`, `unknown_key`, `untranslatable`, or
+`(unreadable)` for an entry a newer build kept, which this build cannot read
+past its id); where its **record** was delivered from, written as every
+operator surface writes a position (`CREWLET_TRACKER_LOG@1:1234`); its **key**;
+how long ago it was **kept** and when it **expires**, by the answering node's
+clock. Under the table, each entry's own words: what the node that gave up met,
+or why this build cannot read the entry. Feeds holding nothing say so.
+
+A feed whose dead letters the node could not list is named on stderr with its
+error, and the command **exits non-zero** — an unread feed is not an empty one.
+`-json` prints the node's answer as JSON for a script, its keys sorted, and
+exits the same way.
+
+### `crewlet feeds discard`
+
+Drops the entry `<id>` from whichever feed holds it, and prints the entry it
+dropped. **Its wake is lost for good: no node will ever derive it**, which is
+why `-confirm` must repeat the id. Discard an entry only once you have decided
+its wake can be lost — one no build will ever read, such as a record sealed
+under a key you have retired from every node's `secrets.keys`, which would
+otherwise keep `feed_dead_lettered` raised until the retention lets it go. An
+entry a newer build will read is not one: finish the roll instead, and the
+first node on that build replays it.
+
+The node takes the claim on the entry's going that its replay and the alarm's
+expiry count take, so no node counts a discarded entry as a wake the retention
+lost; it logs `changefeed_dead_letter_discarded` naming who pressed it and
+counts `crewlet.tracker.feed.dead_letter_discarded`. An id no feed holds — never
+an entry, one already replayed, expired or discarded, or a subscription's
+poison under another `dlq.` subject, which this never reaches — is refused as
+`no_dead_letter` and removes nothing. Where a feed could not be listed and no
+other holds the id, the node says so rather than "no such entry": run it again.
+A discard the node did not answer may have been made; `dead-letters` lists what
+the feeds still hold.
 
 ## `crewlet seats`
 
@@ -2762,6 +2828,7 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   chat: applied at CREWLET_CHAT_LOG 207714
   executor: applied at CREWLET_EXECUTOR_LOG 30870
   code: applied at CREWLET_CODE_LOG 2207
+  access: applied at CREWLET_ACCESS_LOG 4120
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
@@ -2924,7 +2991,7 @@ Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 `stream.usage_log_max_bytes`, `stream.artifacts_log_max_bytes`,
 `stream.artifact_data_log_max_bytes`, `stream.assistant_log_max_bytes`,
 `stream.chat_log_max_bytes`, `stream.executor_log_max_bytes`,
-`stream.code_log_max_bytes`) is not a live
+`stream.code_log_max_bytes`, `stream.access_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
@@ -3431,7 +3498,7 @@ One case per file:
 ```yaml
 name: spend-by-agent              # default: the file's name
 person:
-  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet
+  apps: [worklet]                 # admin, worklet, doclet, artifacts, chatlet, gitlet
   acts: [create_work_item]        # the act tools they may propose; default none
 page:                             # optional: the page chip, as the dashboard sends it
   screen: spend

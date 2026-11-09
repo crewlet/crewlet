@@ -160,7 +160,7 @@ type Role struct {
 	// of a repository it may do there. A GitHub App's
 	// access is its own permissions ([RoleGitHub.Permissions]). See
 	// [RoleCode].
-	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on Gitlet, the engine's own git host (code.native)."`
+	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on Gitlet, the engine's own git host (code.backend: gitlet)."`
 
 	// HealthTools gives this AGENT seat the deployment's health: the
 	// fleet_health and code_status tools, an administrator's reads, which its
@@ -450,6 +450,7 @@ type RoleIntegrations struct {
 	Scaleway     *RoleScaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
 	AWS          *RoleAWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"This seat's own IAM role: whether it is on and its level."`
 	GoogleCloud  *RoleGoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
+	SSH          *RoleSSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"This seat's SSH access: whether it is on, its level and its servers."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
@@ -457,7 +458,7 @@ func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
 		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil && r.Scaleway == nil && r.AWS == nil &&
-		r.GoogleCloud == nil
+		r.GoogleCloud == nil && r.SSH == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -557,14 +558,14 @@ func (g *RoleGitHub) validate(path Path) error {
 }
 
 // RoleCode is a seat's code access on Gitlet
-// (`code.native`): the tier Gitlet caps what the chart grants the
+// (`code.backend: gitlet`): the tier Gitlet caps what the chart grants the
 // seat by (internal/code's Tier).
 //
 // A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
 // permissions in GitHub's terms ([RoleGitHub.Permissions]), which the seat
 // path registers the App at; a tier is the vocabulary of a host whose
 // permissions the engine itself defines, and on GitHub the vendor defines
-// them. So this setting grants nothing on a company with no `code.native`.
+// them. So this setting grants nothing on a company with no `code.backend: gitlet`.
 //
 // An AGENT seat's setting. A person acts on Gitlet as their own
 // identity, with a token bound to them, so a tier on a human seat would cap
@@ -884,6 +885,9 @@ func (r *Role) Seat() *org.Role {
 		seat.CodeAccess = r.Code.Access
 	}
 	seat.HealthTools = r.HealthTools
+	if b := r.Integrations.SSH; b != nil && SeatAccessOn(b.Enabled) && len(b.Hosts) > 0 {
+		seat.SSHLevel = b.LevelOrDefault()
+	}
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

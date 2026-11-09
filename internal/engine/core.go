@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -149,6 +150,13 @@ type core struct {
 	executorReader *executordomain.Reader
 	executorWriter *executordomain.Writer
 
+	// accessReader and accessWriter are the access log's two sides, built on
+	// every data node for the same reason ([core.openAccess]).
+	accessReader *accessdomain.Reader
+	accessWriter *accessdomain.Writer
+	// accessSealer opens a command's text for the SSH audit: one per node.
+	accessSealer *accessdomain.Sealer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -246,6 +254,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		return err
 	}
 	if err = c.openExecutor(sl); err != nil {
+		return err
+	}
+	if err = c.openAccess(e, sl); err != nil {
 		return err
 	}
 

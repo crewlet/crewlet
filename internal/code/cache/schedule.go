@@ -35,6 +35,17 @@ import (
 // authority, the queues only an order, so a copy whose look says otherwise is
 // placed again and the pick goes on.
 //
+// A MARK IS TAKEN IN THE SAME HOLD OF THE COPY'S LOCK AS THE CHANGE IT
+// ANSWERS. Every input of the look (backfillDue) changes under the copy's
+// lock, and the mark goes with the change, so under that lock a copy's look
+// and its place in the schedule agree, or the copy is marked — at any moment,
+// a round, a scrub or a step half way through included. Marked once the
+// change's work was done instead — a drop's after its directory's sync, an
+// apply's after it returned — a look in between found a copy queued for work
+// it no longer had and unmarked, which is what BackfillAudit holds the
+// schedule to (crewlet#794). The pick never needed it: the look is its
+// authority. What needs it is any reading of the schedule beside the look.
+//
 // crewlet.code.cache.provenance.behind is the schedule's own count of the
 // copies it has placed as behind, moved as each is placed.
 //
@@ -76,8 +87,8 @@ type slot struct {
 }
 
 // backfillDirty marks e: its backfill work may have changed, so the next pick
-// looks at it again, and the backfill is woken for it. Taken under e.mu or
-// not, and never under the schedule's mu.
+// looks at it again, and the backfill is woken for it. Taken in the hold of
+// e.mu that made the change, and never under the schedule's mu.
 func (c *Cache) backfillDirty(e *entry) {
 	s := &c.sched
 	s.mu.Lock()
@@ -87,6 +98,16 @@ func (c *Cache) backfillDirty(e *entry) {
 	}
 	s.mu.Unlock()
 	c.kickBackfill()
+}
+
+// backfillReads reports whether the backfill's look at a copy reads the file
+// at rel, a path relative to its incarnation: a run of its index of pushes,
+// whose vouch, failed check and record the look reads (backfillDue). A
+// change to any other file's vouch or check is no change to the copy's
+// backfill, and marks nothing.
+func (c *Cache) backfillReads(rel string) bool {
+	i, _ := c.image.owner(rel)
+	return i >= 0 && c.image.set(DerivedProvenance)&(1<<i) != 0
 }
 
 // touch moves e in its due queue to its new last use; e.mu is held, and e is

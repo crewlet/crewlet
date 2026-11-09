@@ -117,6 +117,18 @@ func gated(deps builtin.Deps) builtin.Deps {
 	if deps.Authorize == nil {
 		deps.Authorize = builtin.Decide(authz.NoChart{})
 	}
+	// THE COMPOSER A FAMILY'S CASE WIRED, handed to the registry as a seat's
+	// registry is handed one (internal/engine's equip), so the gate binds the
+	// turn's ceiling from it and the family reads the same composition.
+	if deps.Requesters == nil {
+		for _, r := range []builtin.Requesters{deps.Artifacts.Requesters, deps.Code.Requesters,
+			deps.Health.Requesters} {
+			if r != nil {
+				deps.Requesters = r
+				break
+			}
+		}
+	}
 	return deps
 }
 
@@ -157,12 +169,17 @@ func personHolding(grants ...iam.Grant) context.Context {
 // turn: [iam.KindSeat] is what the authority table's own-record and colleague
 // classes compare against, and a fixture acting as a person would answer
 // differently on exactly the rules a seat's tools go through.
+//
+// OUTSIDE ANY TURN, SAID SO ([builtin.OutsideAnyTurn]): a seat's decision with
+// nothing bound is refused, so a case calling a tool directly states the
+// ceiling it means; a call through a gate with a turn binds the turn's own
+// over it.
 func callerHolding(grants ...iam.Grant) context.Context {
-	return iam.WithPrincipal(context.Background(), iam.Principal{
+	return builtin.OutsideAnyTurn(iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
 		Kind: iam.KindSeat, Seat: "tester", Stage: iam.StageActive,
 		Grants: grants,
-	})
+	}))
 }
 
 // --- registration --------------------------------------------------------- //
@@ -261,9 +278,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CreateWorkItemTool: true,
 		builtin.UpdateWorkItemTool: true,
 		builtin.CommentOnWorkTool:  true,
-		builtin.WritePageTool:      true,
-		builtin.SavePageTool:       true,
-		builtin.CommentOnPageTool:  true,
+		// A withdrawal posts its reason where the person asked reads it.
+		builtin.WithdrawAskTool:   true,
+		builtin.WritePageTool:     true,
+		builtin.SavePageTool:      true,
+		builtin.CommentOnPageTool: true,
 
 		// A project's own settings, which every seat holds for one
 		// facet: a declared tag is a filter on everybody's board.
@@ -384,6 +403,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// publishes, which a worker of a granted seat may be handed.
 		builtin.FleetHealthTool: false,
 		builtin.CodeStatusTool:  false,
+		// A server's read changes nothing; an operate command can change
+		// anything on a server, so a worker is never handed it.
+		builtin.SSHReadTool:    false,
+		builtin.SSHOperateTool: true,
 		// CHATLET. Its reads are reads; saying something and
 		// reacting are words on somebody else's screen; joining and
 		// leaving move only where this seat listens, which is its own.
@@ -1077,6 +1100,8 @@ func fullDeps(t *testing.T) builtin.Deps {
 		A2A: &asker{}, Skills: store, Refinable: store,
 		Episodes: &episodeStore{}, Diary: &diaryStore{},
 		Onboarding: &onboardingStore{},
+		// AND THE WITHDRAWAL, both its halves.
+		Withdraw: builtin.WithdrawDeps{Resolver: (&resolverFake{}).as, Desk: &deskFake{}},
 		// EVERY builtin, so a test that asks "is each one classified"
 		// is asking about the whole set rather than the subset this
 		// helper happened to wire.
@@ -1123,14 +1148,19 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// writes only where its writes are wired too: left out, every walk over
 		// this fixture met their authority rows as rules no registered tool
 		// answers.
-		Code: writeDeps(newCodeHost(), &codeWrites{}),
-		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
+		Code: writeDeps(newGitletHost(), &codeWrites{}),
+		// AND THE HEALTH TOOLS, over a lease table and the Gitlet nodes' status
 		// scatter, each with the requester ceiling's halves beside it —
 		// fleet_health's its own, code_status's code half wired as the code
 		// reads are: left out, their two rows read as rules no registered
 		// tool answers.
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(),
-			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newCodeHost())},
+			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newGitletHost())},
+		// AND THE SSH TOOLS, over a document that reaches no server, with the
+		// requester ceiling's halves beside them: left out, their two rows
+		// read as rules no registered tool answers.
+		SSH: builtin.SSHDeps{Servers: &fakeServers{cfg: &config.Company{}}, Requesters: codeRequesters(),
+			Chart: chartLeads},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

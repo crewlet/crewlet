@@ -97,8 +97,17 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// reorganised. [ChartAuthorityOf] holds the engine and asks it each
 	// time, three-valued.
 	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
+	// AND WHO EACH TURN IS ACTING FOR, which the gate binds to every call a
+	// seat makes in a turn somebody woke: every app verb is held to the apps
+	// that somebody uses (ADR-0109), and the relation families read the same
+	// composition. Left out, a seat would use every app for anybody.
+	deps.Requesters = turnRequesters{engine: e}
 	deps.Work = e.workDeps(c)
 	deps.Pages = e.pageDeps(c)
+	// AND WITHDRAWING A SEAT'S OWN QUESTION (ADR-0111): resolved as its
+	// author through the tracker's writer, and a run's answered through the
+	// desk every answer by turn is delivered by.
+	deps.Withdraw = e.withdrawDeps()
 	// THE ARTIFACTS TOOLS, over the same deps the operator catalogue is
 	// handed: every data node runs the artifacts domain, so these depend on
 	// the node taking uploads rather than on the company's native halves.
@@ -111,7 +120,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// Gitlet — read after the runtime this apply starts, as
 	// the native halves are: the same deps the operator catalogue builds
 	// per call, over the router, so a seat on a node without the code log or
-	// the `git` role reads and changes the company's repositories through
+	// the `gitlet` role reads and changes the company's repositories through
 	// the nodes that hold them. Registered for every seat; the code writes
 	// are offered only to a seat whose code tier writes, and left off every
 	// other seat's surfaces ([Company.withheldFrom]).
@@ -122,6 +131,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// table refuses every other seat, which is what leaves them off its
 	// surfaces ([Company.withheldFrom]).
 	deps.Health = HealthToolDeps(e)
+	// AND THE SSH TOOLS, the same way: registered for every seat, offered
+	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
+	deps.SSH = SSHToolDeps(e)
 	// AND THE ROOMS. Without this the nine chat tools were built,
 	// documented and registered against a zero [builtin.ChatDeps] — which
 	// gates every one of them off — so a company on `chat.backend: chatlet`

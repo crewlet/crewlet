@@ -29,8 +29,8 @@ import (
 // internal/queue/jetstream/brokertest's package doc has the history.
 //
 // So IN A TEST BINARY ([testbinary.Running]) a node that builds Gitlet with
-// git.cache_max_bytes or git.max_transfers unset REFUSES TO, naming them and
-// brokertest.CodeCacheIn, which declares both. A cache whose volume the case
+// gitlet.cache_max_bytes or gitlet.max_transfers unset REFUSES TO, naming them and
+// brokertest.GitletCacheIn, which declares both. A cache whose volume the case
 // stands in for itself ([Options.cacheDisk]) derives its budget from the
 // case's figures and is not asked for one. The one case that may leave them
 // to the machine is one whose SUBJECT is that derivation, booted under
@@ -38,7 +38,7 @@ import (
 // broker's own size is held the same way, by the broker
 // ([jetstream.ErrUndeclaredSize]).
 //
-// WHERE GITLET IS BUILT ([Engine.buildCodeHost]), at boot or at the
+// WHERE GITLET IS BUILT ([Engine.buildGitletHost]), at boot or at the
 // apply that first hosts code, rather than in the fixtures: every test that
 // boots Gitlet reaches it, through whatever fixture, so the rule needs no
 // list of them.
@@ -72,18 +72,18 @@ func (e *Engine) undeclaredCodeCache(boot *config.Bootstrap) error {
 		return nil
 	}
 	var unset []string
-	if boot.Git.CacheMaxBytes == 0 && e.cacheDisk == nil {
-		unset = append(unset, "git.cache_max_bytes")
+	if boot.Gitlet.CacheMaxBytes == 0 && e.cacheDisk == nil {
+		unset = append(unset, "gitlet.cache_max_bytes")
 	}
-	if boot.Git.MaxTransfers == 0 {
-		unset = append(unset, "git.max_transfers")
+	if boot.Gitlet.MaxTransfers == 0 {
+		unset = append(unset, "gitlet.max_transfers")
 	}
 	if len(unset) == 0 {
 		return nil
 	}
 	return fmt.Errorf("%w: this node hosts code with %s unset, so it would size them from the "+
 		"machine running the suite rather than from the case. Declare them — "+
-		"brokertest.CodeCacheIn for a node fixture whose broker brokertest.StoreIn sized — or, "+
+		"brokertest.GitletCacheIn for a node fixture whose broker brokertest.StoreIn sized — or, "+
 		"where the case is about that derivation, boot it under engine.SizedByTheMachine",
 		ErrUndeclaredCodeCache, words.And(unset))
 }

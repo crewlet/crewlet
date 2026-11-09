@@ -140,10 +140,11 @@ func reasonNames() []string {
 // hears about the changes they are asked to review. Then each source is read
 // only where its own permission holds: Worklet's notices where the company
 // runs Worklet and the caller holds the worklet permission on that record
-// ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's
-// where the company hosts code, each notice held by Gitlet to the
-// caller's grant on its repository. A source the caller may not read is not
-// asked, and the answer's `sources` says which were.
+// ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's where the
+// company hosts code and the caller holds the gitlet permission (ADR-0110),
+// each notice held by Gitlet to the caller's grant on its repository. A
+// source the caller may not read is not asked, and the answer's `sources`
+// says which were.
 //
 // # One floor per log
 //
@@ -203,7 +204,16 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 				now: s.clock()})
 		}
 	}
-	if s.Code != nil {
+	// THE CODE HALF IS GITLET'S, as the tracker's is Worklet's: a caller
+	// without the app is listed and counted no code notice (ADR-0110). Decided
+	// as Gitlet's rows are ([authz.ActionCodeRead]) — whose inbox it is was
+	// decided for the whole inbox above, so the app is all that is left.
+	codeHalf := authz.Decide(ctx, principal, authz.ActionCodeRead, authz.Object{}, s.Chart, s.clock())
+	if codeHalf.Unknown() {
+		return nil, fmt.Errorf("%w: this node cannot decide whether the caller uses Gitlet yet: %w",
+			ErrUnavailable, codeHalf.Err)
+	}
+	if s.Code != nil && codeHalf.Allowed {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		reads, err := s.Code.CodeReads()
 		var notFound *NotFound

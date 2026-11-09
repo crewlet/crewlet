@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -142,13 +143,13 @@ type native struct {
 	// codeStore and committer are Gitlet's WRITE side — the
 	// lifecycle store the repositories' reconcile and retention write
 	// through, and the committer a push is decided by — built only where
-	// the company that started this runtime set `code.native`
+	// the company that started this runtime set `code.backend: gitlet`
 	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
 	// register, but a committer exists only where somebody asked for pushes
 	// to be decided. Handed out only through [Engine.writeSide], so a node
 	// in a maintenance mode decides nothing. The committer is also READ, at
 	// each alarm evaluation, for what it refused busy for a backlog — on
-	// every data node that holds one, the git role or not — and its reading
+	// every data node that holds one, the gitlet role or not — and its reading
 	// is assigned field by field in [Engine.codeReading] itself, where the
 	// reading's producers gate finds each field written. changeWriter and
 	// checksWriter are the committer's siblings, built and handed out with
@@ -162,22 +163,22 @@ type native struct {
 	checksWriter *code.ChecksWriter
 	marks        *code.Marks
 
-	// codeHost is this node's git surface (internal/code/host) — its cache,
+	// gitletHost is this node's git surface (internal/code/host) — its cache,
 	// its git pool, the hook relay, and the engine writes it builds — built
-	// only where the company that started this runtime set `code.native` AND
-	// this node has the git role ([Engine.hostsGit]), nil otherwise. Read per
-	// request through [Engine.CodeHost], and as the writing half of this
+	// only where the company that started this runtime set `code.backend: gitlet` AND
+	// this node has the gitlet role ([Engine.hostsGit]), nil otherwise. Read per
+	// request through [Engine.GitletHost], and as the writing half of this
 	// node's git half through [Engine.localGit] ([gitHalf]), never captured.
-	codeHost *host.Server
+	gitletHost *host.Server
 
 	// gitReads is this node's server-side reads of a repository by object id
-	// (internal/code/query), built beside codeHost over the same cache and
+	// (internal/code/query), built beside gitletHost over the same cache and
 	// pool and nil where it is: what the estate's router and server ask of
-	// this node as a repository's home git node — the reading half of its git
-	// half, codeHost's engine writes the other ([gitHalf]) — through
+	// this node as a repository's home Gitlet node — the reading half of its git
+	// half, gitletHost's engine writes the other ([gitHalf]) — through
 	// [Engine.localGit], per request. It holds no goroutine, and
 	// Gitlet's stop stops it first, cutting its reads in flight before the
-	// cache they read ([native.stopCodeHost]).
+	// cache they read ([native.stopGitletHost]).
 	gitReads *query.Server
 
 	// mergePreviews is this node's merge previews (internal/code/home's
@@ -190,14 +191,14 @@ type native struct {
 	// cache they read.
 	mergePreviews *codehome.Previews
 
-	// gitCache is the cache codeHost serves from, built and stopped with it
+	// gitCache is the cache gitletHost serves from, built and stopped with it
 	// and nil where it is: held only to be READ, at each alarm evaluation
 	// ([Engine.codeReading]) — what a node's maintenance refused is no
 	// request's question, so no route reaches it through the host.
 	gitCache *cache.Cache
 
 	// compactor merges the packs of the repositories this node maintains and
-	// publishes their layers (internal/code/compact), built with codeHost
+	// publishes their layers (internal/code/compact), built with gitletHost
 	// and nil where it is, started with the native half's duties
 	// ([Engine.startNativeDuties]); stopped first in Gitlet's one
 	// bounded stop. A CONCRETE type, never an interface this package declares,
@@ -205,8 +206,8 @@ type native struct {
 	// through one ([Engine.codeReading]).
 	compactor *codecompact.Compactor
 
-	// home is the change work of the repositories this node is the home git
-	// node of (internal/code/home), built and started with codeHost and the
+	// home is the change work of the repositories this node is the home Gitlet
+	// node of (internal/code/home), built and started with gitletHost and the
 	// compactor, and nil where they are; stopped first in Gitlet's one
 	// bounded stop, before the compactor.
 	home *codehome.Loop
@@ -219,7 +220,7 @@ type native struct {
 
 	// checkRunner claims and runs the company's queued checks in boxes of
 	// this node's sandbox catalogue (internal/code/checkrun), built with
-	// codeHost and started with home, and nil where they are or where this
+	// gitletHost and started with home, and nil where they are or where this
 	// node sets no CREWLET_BOX_GIT_URL; stopped FIRST in Gitlet's one
 	// bounded stop. A concrete type, as the compactor is.
 	checkRunner *checkrun.Runner
@@ -229,12 +230,12 @@ type native struct {
 	// limit. Zero where there is no host.
 	gitCacheSize codeCacheSize
 
-	// codeHostStop is the one bounded stop the teardown and the shutdown
-	// share ([native.stopCodeHost]).
-	codeHostStop boundedStop
+	// gitletHostStop is the one bounded stop the teardown and the shutdown
+	// share ([native.stopGitletHost]).
+	gitletHostStop boundedStop
 
 	// withdrawCodeStatus withdraws this node as an answerer of
-	// Gitlet's status (codestatus.go), registered beside codeHost and nil where
+	// Gitlet's status (codestatus.go), registered beside gitletHost and nil where
 	// it is; Gitlet's stop runs it first.
 	withdrawCodeStatus queue.Unsubscribe
 	// withdrawCodeSearch withdraws this node as an answerer of the code
@@ -442,8 +443,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// to the epoch's code.scratch — and decided nowhere on a node
 				// confirmed behind the company's configuration, since every
 				// kind's "who may" reads the chart (Reconciler.Admits through
-				// SetAdmits).
+				// SetAdmits). A push mirror set as a person's seat is held to
+				// the person using Gitlet, composed as the requester ceiling
+				// composes a person (turnRequesters, ADR-0110).
 				SeatRules: e.codeSeatRules, Current: e.admits, Policy: e.codeLifecyclePolicy,
+				People: turnRequesters{engine: e},
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}
@@ -477,11 +481,14 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// conversation of on the same node: the same epoch's chart
 			// a reviewer and a seat are judged by, the same posture gate
 			// and the same retention its repo_deleted sentence names — and
-			// the same event stream a review it landed is announced on.
+			// the same event stream a review it landed is announced on. A
+			// person an ask names is asked only where they use Gitlet,
+			// composed as the requester ceiling composes a person
+			// (turnRequesters, ADR-0109 and ADR-0110).
 			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
-				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, People: turnRequesters{engine: e},
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)
@@ -507,17 +514,17 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				return fmt.Errorf("engine: code marks writer: %w", err)
 			}
 		}
-		// AND ITS GIT SURFACE, on a node with the git role: the cache it
+		// AND ITS GIT SURFACE, on a node with the gitlet role: the cache it
 		// serves persons' clones, fetches and pushes from, which reaches
 		// the rows and the committers through the estate's router like
 		// every other surface. Inside this function's failure path, whose
 		// shutdown stops it first.
 		if e.hostsGit(built) {
-			var parts codeHostParts
-			if parts, err = e.buildCodeHost(ctx, nodeID, boot, running); err != nil {
+			var parts gitletHostParts
+			if parts, err = e.buildGitletHost(ctx, nodeID, boot, running); err != nil {
 				return err
 			}
-			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
+			n.gitletHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
 			n.mergePreviews = parts.previews
 			n.compactor, n.home, n.mirrors, n.checkRunner = parts.compactor, parts.home, parts.mirrors, parts.checks
@@ -715,7 +722,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki, "chat", rooms, "code", built.runsCode(),
-		"git", n.codeHost != nil)
+		"git", n.gitletHost != nil)
 	return nil
 }
 
@@ -910,7 +917,7 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 // ([Engine.startChatRetention]), and, where the half hosts code, the purge of
 // deleted repositories ([Engine.startCodeRetention]) — and, where it serves
 // git, this node's own COMPACTOR and its HOME'S CHANGE WORK, which no lease
-// decides: every git node runs both, the compactor for the repositories it
+// decides: every Gitlet node runs both, the compactor for the repositories it
 // maintains and the change work for those it is home to. ONE CALL FOR BOTH
 // CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
 // be missing a duty a boot would have armed. The trim, the identity estate's
@@ -938,18 +945,18 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// repository removed from code.repos is deleted and never purged, and
 	// its name and its packs are held for ever.
 	e.startCodeRetention(ctx, c.nodeID, n)
-	// AND THE COMPACTOR, where the half serves git ([Engine.buildCodeHost]
+	// AND THE COMPACTOR, where the half serves git ([Engine.buildGitletHost]
 	// built it unstarted): its three loops, the compaction's, the publication's
 	// and the expunge's, started HERE for the two reasons both callers reach
 	// this past: the runtime it reads through is PUBLISHED — each loop's first
-	// pass runs at once this node is listed among the git nodes, and
+	// pass runs at once this node is listed among the Gitlet nodes, and
 	// this node's own copy answers its due listings from the published
 	// runtime, so a pass started before found its listing unserved — and the
 	// node's mode PUBLISHES: a compaction stores its outputs, and a
 	// publication its layer, in the object store and appends its record, and
 	// a node a capacity window restarted to write nothing must start nothing
 	// that writes on its own. Its stop is Gitlet's
-	// ([native.stopCodeHost]).
+	// ([native.stopGitletHost]).
 	if n.compactor != nil {
 		n.compactor.Start()
 	}
@@ -1012,13 +1019,13 @@ func (n *native) shutdown(ctx context.Context) {
 	}
 	// GITLET'S GIT SURFACE, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON,
 	// which the core stops after this. The teardown stopped both already,
-	// the host first, ahead of the estate subject ([Engine.stopCodeHost],
+	// the host first, ahead of the estate subject ([Engine.stopGitletHost],
 	// [Engine.stopCommitter]); these are the failure path's stops. A second
 	// one of either costs nothing: the host's stop runs once however many
 	// ask for it, so a first stop cut short by its bound is not waited for
-	// again ([native.stopCodeHost]), and the committer's first stop returns
+	// again ([native.stopGitletHost]), and the committer's first stop returns
 	// only once its batches have.
-	n.stopCodeHost(ctx)
+	n.stopGitletHost(ctx)
 	n.stopCommitter(ctx)
 	n.stop()
 	n.done.Wait()
@@ -1050,7 +1057,7 @@ type halves struct {
 	// company runs every half on a vendor.
 	tracker, wiki, chat bool
 	// code says the company hosts its repositories in the engine
-	// (`code.native`) and this node's runtime was built to serve them —
+	// (`code.backend: gitlet`) and this node's runtime was built to serve them —
 	// through its own copy and committer on a data node, through a data node
 	// on a node without `data`. Counted by the choice the runtime was built
 	// with rather than by a reader, because the code log's reader exists in
@@ -1222,10 +1229,16 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		if !e.joins(ctx, translator.Source().Group) {
 			continue
 		}
+		// AND THE QUEUE'S DEAD-LETTER STREAM, where the feed keeps a record
+		// it handed back for an hour and its start replays what it kept,
+		// through the ledger that accounts for every entry a replay drops,
+		// so the alarm reading never counts one as a lost wake
+		// (feeddeadletters.go).
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 			Metrics: e.metrics, Objectives: e.objectives,
+			DeadLetters: e.feedDeadLetters(),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
@@ -1288,7 +1301,8 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 }
 
 // nativeParsers is what the engine's own sources contribute to the inbound
-// edge: the native backends' parsers, and the alarms' (internal/alarmwake).
+// edge: the native backends' parsers, the alarms' (internal/alarmwake) and the
+// access reviews' (internal/accessreview).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
 // company-derived input is the org chart — the native backends' LEAD MAP, the
@@ -1307,6 +1321,11 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		Granted: orgchart.GrantedSeats(c.Org, authz.SeatGrantHealth),
 	})}
 	prompts := []notify.Prompt{alarmwake.Prompt{}}
+	// THE ACCESS REVIEWS, on every node too: a review names its seat, and
+	// the roster the delivery is routed against is all it reads
+	// (internal/accessreview).
+	parsers = append(parsers, accessreview.Parser{})
+	prompts = append(prompts, accessreview.Prompt{})
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
@@ -1953,6 +1972,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 // as one party.
 type trackerWriter interface {
 	builtin.WorkWriter
+	builtin.AskResolver
 	builtin.ProjectWriter
 	builtin.WorkDepender
 	builtin.WorkMerger

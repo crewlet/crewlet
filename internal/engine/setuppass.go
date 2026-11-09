@@ -82,6 +82,10 @@ import (
 // Google Cloud reaches its provisioner by federation and reads the levels'
 // roles and the identity project's accounts, and its access sync makes,
 // grants, disables and deletes one service account per agent.
+//
+// SSH checks that its certificate authority resolves to one the engine can
+// sign with; its access sync has nothing to take, since a seat's hosts and
+// level are the document alone.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&slackPass{engine: e},
@@ -97,6 +101,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&digitaloceanPass{engine: e},
 		&awsPass{engine: e},
 		&googleCloudPass{engine: e},
+		&sshPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }

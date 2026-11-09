@@ -29,7 +29,7 @@ import (
 )
 
 // THE HEALTH TOOLS: fleet_health, every live node as its own heartbeat states
-// it with the alarms its own table has firing, and code_status, the git nodes'
+// it with the alarms its own table has firing, and code_status, the Gitlet nodes'
 // caches and the repositories they served most, or one repository's state on
 // each — the deployment as an administrator reads it, as ONE list
 // ([HealthTools]) a seat's registry and the operator catalogue both take.
@@ -51,7 +51,7 @@ import (
 // and fleet_health reports those marks as the node gave them — kind and since
 // — beside the facts the heartbeat states, and nothing judged from them. A
 // node that has no table it evaluated says so (`alarms_evaluated: false`)
-// rather than reading as healthy. code_status reports each git node's own
+// rather than reading as healthy. code_status reports each Gitlet node's own
 // account (internal/code/host, Server.Status): its cache against its budget,
 // what it spent on its own account, and what it served most. Neither tool
 // ranks a node, flags a number or names a level; a seat that wants to know
@@ -63,7 +63,7 @@ import (
 // content or rows beyond its own repository grant (ADR-0088): code_status's
 // one-repository form resolves the name as the code tools do, refused
 // `not_permitted` where the seat may not read it, and the hottest repositories
-// a git node names are held to the same grant — a seat's answer leaves out
+// a Gitlet node names are held to the same grant — a seat's answer leaves out
 // every repository its grant does not read and says how many of those it left
 // out above the list's cut (`withheld`), judging them hottest first and only
 // as far as the cut, so what it reads is bounded by the answer and not by the
@@ -107,28 +107,28 @@ type LeaseLister interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
-// StatusAsker is the fleet's git nodes and what Gitlet on each says of itself
+// StatusAsker is the fleet's Gitlet nodes and what Gitlet on each says of itself
 // — internal/engine's roster off the presence leases and its scatter on
 // crewlet.code.status, declared by their consumer.
 type StatusAsker interface {
-	// GitNodes is every live git node by id, in no order promised: the keys
+	// GitletNodes is every live Gitlet node by id, in no order promised: the keys
 	// code_status pages by, once it has sorted them ([codeStatus.ask]).
-	GitNodes(ctx context.Context) ([]string, error)
-	// CodeStatus asks the git nodes ask names, and no other, and waits for
+	GitletNodes(ctx context.Context) ([]string, error)
+	// CodeStatus asks the Gitlet nodes ask names, and no other, and waits for
 	// those alone.
 	CodeStatus(ctx context.Context, ask CodeStatusAsk) (CodeStatusReport, error)
 }
 
-// CodeStatusAsk is one status question: which git nodes answer it, and what
+// CodeStatusAsk is one status question: which Gitlet nodes answer it, and what
 // each answer carries beside the node's cache.
 type CodeStatusAsk struct {
-	// Nodes is the git nodes asked, by id. The report covers these and no
+	// Nodes is the Gitlet nodes asked, by id. The report covers these and no
 	// other: a reply from a node it does not name is dropped — an older
 	// build's, which answers whatever the question names — and the ask
 	// ends once every one of them has answered.
 	Nodes []string
-	// Every says Nodes is every git node GitNodes listed, so the question
-	// names none and every git node answers it: the question stays the same
+	// Every says Nodes is every Gitlet node GitletNodes listed, so the question
+	// names none and every Gitlet node answers it: the question stays the same
 	// few bytes however large the fleet, where naming the whole roster would
 	// send every node the roster.
 	Every bool
@@ -139,8 +139,8 @@ type CodeStatusAsk struct {
 	Hot bool
 }
 
-// CodeStatusReport is the git nodes' answers to one status question, as the
-// node that asked heard them: each node's own account, and which of the git
+// CodeStatusReport is the Gitlet nodes' answers to one status question, as the
+// node that asked heard them: each node's own account, and which of the Gitlet
 // nodes it asked answered — the one coverage shape every fanned answer carries
 // (internal/eventfan), complete where every node asked answered.
 type CodeStatusReport struct {
@@ -171,9 +171,9 @@ type HealthDeps struct {
 	// clock.
 	Now func() time.Time
 
-	// Status asks the git nodes' status. Nil omits code_status, as do Code
+	// Status asks the Gitlet nodes' status. Nil omits code_status, as do Code
 	// deps that serve no code tool ([CodeDeps.serves]): a company that hosts
-	// no code has no git node to ask.
+	// no code has no Gitlet node to ask.
 	Status StatusAsker
 
 	// Code is the code tools' own deps: code_status names a repository by
@@ -237,6 +237,10 @@ func healthAnnotations(name string) (tools.Annotations, bool) {
 // ([ErrUndecidable]) offers the tool and the call decides it again, as every
 // call is; withholding on silence would hide a tool from a seat that holds it.
 // An MCP or agent-to-agent tool is no builtin and has no row to ask.
+//
+// OUTSIDE ANY TURN, as [Admits] says: what a seat is offered is its own
+// authority, asked before any turn exists, and whoever wakes a turn later
+// bounds each of its calls, never the offer.
 func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot) []string {
 	var out []string
 	for _, e := range snapshot.Entries() {
@@ -536,53 +540,103 @@ func sortedAfter[T any](rows []T, idOf func(T) string, cursor string) int {
 // no deputy, and a turn nobody woke — a schedule, an alarm's wake — reads for
 // nobody but the seat.
 func (t *fleetHealth) forRequester(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	return companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), requesterTerms{
+		action: authz.ActionFleetHealthRead, done: "the deployment's health is read", nothing: "Nothing was read.",
+	})
+}
+
+// requesterTerms are what [companyRequester] decides and says: the row a
+// requester must hold, what the tool does only for somebody of the company,
+// and what was not done.
+type requesterTerms struct {
+	action        authz.Action
+	done, nothing string
+}
+
+// companyRequester is nil where a seat's call may act for whoever its turn is
+// acting for ([ceilingOf]), decided by the authority table on terms.action,
+// and otherwise the refusal it is answered with. A stranger, or a person who
+// may not act in the company now, is refused; a colleague seat, a person of
+// the company, and a turn nobody woke are not. A requester this node could not
+// compose or decide is undecidable, never a turn nobody woke. A person's or a
+// token's own call is no deputy.
+//
+// A CREDENTIAL ACTING AS NO SEAT is refused too ([worksForACredential]): a
+// token or a service account is somebody of the company for the apps its
+// grants name alone (ADR-0109), its reach stated at its pin, and what these
+// tools read — the deployment's health, a server — is no app. So a turn a
+// `[worklet]` CI token woke reads neither, as it never could before it was a
+// requester at all, and neither does an `[admin]` token's, whose requester
+// carries apps and never admin.
+func companyRequester(ctx context.Context, turn *turnctx.Turn, requesters Requesters, chart authz.Chart,
+	tool string, terms requesterTerms) *tools.Result {
 	// WHO CALLS, as the gate decided them: the context's answer, or the
 	// turn's seat where nothing has answered (turnctx.WithPrincipal).
 	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
 	if p.Kind != iam.KindSeat {
 		return nil
 	}
-	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Requesters)
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, requesters)
 	if err != nil {
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
-			fmt.Sprintf("%s could not establish who this turn's work is for, and the deployment's health "+
-				"is read only for somebody of the company who may act. Nothing was read. Try again shortly.",
-				t.Name()))
+			fmt.Sprintf("%s could not establish who this turn's work is for, and %s only for somebody "+
+				"of the company who may act. %s Try again shortly.", tool, terms.done, terms.nothing))
 		return &r
 	}
 	if ceiling.Kind == authz.CeilingNone {
 		return nil
 	}
-	dec := authz.DecideWithin(ctx, p, ceiling, authz.ActionFleetHealthRead, authz.Object{}, t.deps.Chart,
-		time.Now().UTC())
+	if worksForACredential(ceiling) {
+		r := credentialRefused(tool, terms)
+		return &r
+	}
+	dec := authz.DecideWithin(ctx, p, ceiling, terms.action, authz.Object{}, chart, time.Now().UTC())
 	switch {
 	case dec.Unknown():
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
 			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may act in "+
-				"the company. Nothing was read. Try again shortly.", t.Name()))
+				"the company. %s Try again shortly.", tool, terms.nothing))
 		return &r
 	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
-		r.Output = healthCeilingRefused(t.Name(), ceiling.Kind)
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
+		r.Output = companyCeilingRefused(tool, ceiling.Kind, terms.done)
 		return &r
 	case !dec.Allowed:
-		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		r := authorityRefusal(tool, DecisionError(terms.action, dec))
 		return &r
 	}
 	return nil
 }
 
-// healthCeilingRefused is what a health tool refused for whoever its turn is
-// acting for is answered with, by who that is: a stranger, or a requester who
-// may not act in the company.
-func healthCeilingRefused(tool string, kind authz.CeilingKind) string {
+// worksForACredential reports a ceiling composed for a credential acting as no
+// seat ([credentialCeiling]): the requester a turn a token's or a service
+// account's write woke is worked for, as a machine principal.
+func worksForACredential(c authz.Ceiling) bool {
+	return c.Kind == authz.CeilingRequester && c.Principal.Kind == iam.KindMachine
+}
+
+// credentialRefused is a tool that acts only for a person or a seat of the
+// company, refused in a turn a credential acting as no seat woke
+// ([companyRequester]): the requester ceiling's reason, for a machine.
+func credentialRefused(tool string, terms requesterTerms) tools.Result {
+	r := authorityRefusal(tool, DecisionError(terms.action, authz.Decision{Reason: authz.ReasonCeiling,
+		Ceiling: authz.CeilingRequester, RequesterKind: iam.KindMachine}))
+	r.Output = fmt.Sprintf("%s didn't run: this turn is working for a credential acting as no seat, which "+
+		"reaches only the apps its grants name, and %s only for a person or a seat of the company. %s",
+		tool, terms.done, terms.nothing)
+	return r
+}
+
+// companyCeilingRefused is what a tool refused for whoever its turn is acting for is
+// answered with, by who that is: a stranger, or a requester who may not act in
+// the company.
+func companyCeilingRefused(tool string, kind authz.CeilingKind, done string) string {
 	if kind == authz.CeilingStranger {
 		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
-			"the deployment's health is read for nobody outside the company. A person or a seat of the "+
-			"company has to ask for it.", tool)
+			"%s for nobody outside the company. A person or a seat of the company has to ask for it.", tool, done)
 	}
 	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
-		"and the deployment's health is read only for somebody who may.", tool)
+		"and %s only for somebody who may.", tool, done)
 }
 
 // nodeHealthOf is one presence lease as fleet_health reports it.
@@ -629,31 +683,31 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 // only queue behind the estate answerer's slots every other caller shares.
 const codeStatusJudges = 8
 
-// The code_status pages: the git nodes by id, a page at a time.
+// The code_status pages: the Gitlet nodes by id, a page at a time.
 //
-// A FLEET'S GIT NODES OUTGROW ONE ANSWER. A git node's row is some two hundred
+// A FLEET'S GITLET NODES OUTGROW ONE ANSWER. A Gitlet node's row is some two hundred
 // and thirty bytes as it is sent — its cache's figures — and one repository's
 // state on a node some three hundred and fifty, each beside the node's part in
-// the coverage, so a couple of hundred git nodes read past ToolAnswerBytes whole
+// the coverage, so a couple of hundred Gitlet nodes read past ToolAnswerBytes whole
 // and the answer was refused, with nothing to narrow it by but the node list it
-// could not read. So both answers are PAGED, by node id, over the live git
-// nodes the presence leases list (StatusAsker.GitNodes) — a node that did not
+// could not read. So both answers are PAGED, by node id, over the live Gitlet
+// nodes the presence leases list (StatusAsker.GitletNodes) — a node that did not
 // answer is a page's row of coverage with no status beside it, so a page is
 // bounded by its count of nodes whoever answered — and every page is cut
 // whole-row at the answer as it is sent ([foreignRead.fit]), so no page passes
-// ToolAnswerBytes. `node` reads one git node.
+// ToolAnswerBytes. `node` reads one Gitlet node.
 //
 // AND THE PAGE IS WHAT IS ASKED, NOT ONLY WHAT IS SENT ([codeStatus.ask]): the
 // roster is read first — a read of the coordination store this node holds, no
-// git node asked — and the status question names the page's nodes alone, so a
+// Gitlet node asked — and the status question names the page's nodes alone, so a
 // node it does not name answers nothing and the ask ends once the page's nodes
 // have answered. A page costs its own nodes' answers, never the fleet's, and
 // waits on its own slowest node, never on one silent anywhere in the fleet:
-// asking the whole fleet for every page made walking N git nodes cost N²/limit
+// asking the whole fleet for every page made walking N Gitlet nodes cost N²/limit
 // answers, each with its node's hot list, and every page wait the whole
 // two-second budget on one silent node. A page's `coverage` lists its own
 // nodes' parts, and its `complete` says whether every one it lists answered —
-// on the fleet's first page, whether every git node did, its hot list being
+// on the fleet's first page, whether every Gitlet node did, its hot list being
 // drawn from all of them.
 //
 // A ROSTER THAT COULD NOT BE READ IS REFUSED, unavailable, as fleet_health
@@ -664,10 +718,10 @@ const codeStatusJudges = 8
 // the fleet with nodes missing that fleet_health declines to show.
 //
 // THE HOT LIST RIDES THE FIRST PAGE ALONE: it is the fleet's, already bounded by
-// cache.HotRepos a window however many git nodes there are (some fifteen KB at
+// cache.HotRepos a window however many Gitlet nodes there are (some fifteen KB at
 // most), and a seat's copy of it costs a read of Gitlet's rows for every
 // repository judged ([codeStatus.hottest]). So the fleet's first page is the one
-// question every git node answers, each with its hot list (host.StatusAsk.Hot);
+// question every Gitlet node answers, each with its hot list (host.StatusAsk.Hot);
 // every other question — a later page, a repository's, a `node` read of the
 // repository — asks no node for its list, which is the bulk of a status. With
 // `node` the first page's list is that node's own, asked of it alone.
@@ -689,17 +743,17 @@ var _ tools.SeatCallable = (*codeStatus)(nil)
 func (t *codeStatus) Name() string { return CodeStatusTool }
 
 func (t *codeStatus) Description() string {
-	return fmt.Sprintf("The company's git nodes as each states itself: its cache's bytes against "+
+	return fmt.Sprintf("The company's Gitlet nodes as each states itself: its cache's bytes against "+
 		"its budget, how many repositories it holds a copy of, the copies it evicted and repaired "+
 		"over the last hour and day, and the fleet's hottest repositories — each node's own count "+
 		"of the fetches, clones, pushes and bytes it served of one, and its copy there, the %d "+
-		"hottest of the hour and of the day. With `repo`, that one repository on every git node "+
-		"instead. Git nodes by id, a page at a time: pass `next` back as `cursor` until no `next` "+
-		"comes back; the hot list rides the first page. `node` reads one git node, with its own hot "+
-		"list. A page asks only its own git nodes. It reports what the nodes counted and judges "+
+		"hottest of the hour and of the day. With `repo`, that one repository on every Gitlet node "+
+		"instead. Gitlet nodes by id, a page at a time: pass `next` back as `cursor` until no `next` "+
+		"comes back; the hot list rides the first page. `node` reads one Gitlet node, with its own hot "+
+		"list. A page asks only its own Gitlet nodes. It reports what the nodes counted and judges "+
 		"nothing; `coverage` names a node of the page that did not answer, and its `complete` says "+
 		"whether every node the page lists answered — on the fleet's first page, whose hot list is "+
-		"every git node's, whether every git node did.", cache.HotRepos)
+		"every Gitlet node's, whether every Gitlet node did.", cache.HotRepos)
 }
 
 func (t *codeStatus) Parameters() map[string]any {
@@ -709,11 +763,11 @@ func (t *codeStatus) Parameters() map[string]any {
 			"repo": map[string]any{
 				"type": "string",
 				"description": "One repository's name, as " + CodeListReposTool + " lists it, " +
-					"to read on every git node; the fleet's hottest when left out.",
+					"to read on every Gitlet node; the fleet's hottest when left out.",
 			},
 			"node": map[string]any{
 				"type":        "string",
-				"description": "One git node's id, to read that node alone.",
+				"description": "One Gitlet node's id, to read that node alone.",
 			},
 			"cursor": map[string]any{
 				"type": "string",
@@ -722,7 +776,7 @@ func (t *codeStatus) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type": "integer",
-				"description": fmt.Sprintf("How many git nodes a page lists, 1 to %d; %d by default. A "+
+				"description": fmt.Sprintf("How many Gitlet nodes a page lists, 1 to %d; %d by default. A "+
 					"page that would outgrow one answer holds fewer, and says where the next begins.",
 					maxCodeStatusPage, defaultCodeStatusPage),
 			},
@@ -734,10 +788,35 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// codeStatusFleet is code_status's answer about the fleet's git nodes: one
+// forCompany is nil where code_status may read the deployment's view for
+// whoever its turn is acting for, and the refusal for a credential acting as no
+// seat ([worksForACredential]) — composed once and bound to the call, so the
+// code read decided after it on the same composition reads nothing again.
+func (t *codeStatus) forCompany(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
+	if p.Kind != iam.KindSeat {
+		return nil
+	}
+	terms := requesterTerms{action: authz.ActionCodeRead,
+		done: "the deployment's view is read", nothing: "Nothing was read."}
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Code.Requesters)
+	switch {
+	case err != nil:
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, and %s only for a person or a "+
+				"seat of the company. %s Try again shortly.", t.Name(), terms.done, terms.nothing))
+		return &r
+	case worksForACredential(ceiling):
+		r := credentialRefused(t.Name(), terms)
+		return &r
+	}
+	return nil
+}
+
+// codeStatusFleet is code_status's answer about the fleet's Gitlet nodes: one
 // page of them.
 type codeStatusFleet struct {
-	Nodes []gitNodeStatus `json:"nodes"`
+	Nodes []gitletNodeStatus `json:"nodes"`
 	// Hot is the hot list, on the first page alone — present there, empty or
 	// not — and absent on every later one.
 	Hot *[]hotOnNode `json:"hot,omitempty"`
@@ -752,21 +831,21 @@ type codeStatusFleet struct {
 	Coverage eventfan.Coverage `json:"coverage"`
 }
 
-// gitNodeStatus is one git node's account of its cache.
-type gitNodeStatus struct {
+// gitletNodeStatus is one Gitlet node's account of its cache.
+type gitletNodeStatus struct {
 	Node  string       `json:"node"`
 	At    time.Time    `json:"at"`
 	Cache cache.Status `json:"cache"`
 }
 
-// hotOnNode is one repository as one git node served it.
+// hotOnNode is one repository as one Gitlet node served it.
 type hotOnNode struct {
 	Node string `json:"node"`
 	host.RepoStatus
 }
 
 // codeStatusRepo is code_status's answer about one repository: one page of
-// the git nodes.
+// the Gitlet nodes.
 type codeStatusRepo struct {
 	Repo  string       `json:"repo"`
 	ID    string       `json:"id"`
@@ -776,7 +855,7 @@ type codeStatusRepo struct {
 	Coverage eventfan.Coverage `json:"coverage"`
 }
 
-// repoOnNode is one repository on one git node: what it served of it in each
+// repoOnNode is one repository on one Gitlet node: what it served of it in each
 // window and its copy there.
 type repoOnNode struct {
 	Node string    `json:"node"`
@@ -787,6 +866,17 @@ type repoOnNode struct {
 func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
+	// THE DEPLOYMENT'S VIEW FIRST — every Gitlet node's cache — which is the
+	// health grant's, read for a person or a seat of the company and never
+	// for a credential acting as no seat, whose reach is the apps its grants
+	// name ([companyRequester]). Its repository reads alone would bound
+	// nothing: such a credential reads every repository itself. And FIRST,
+	// because no app given to the credential would let it read the view: a
+	// refusal naming Gitlet would send an administrator to grant something
+	// that changes nothing.
+	if refusal := t.forCompany(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
 	// WHO IT READS AS, AND FOR: the code tools' one composition, with
 	// whoever woke the turn decided on Gitlet's read verb — the
 	// repository reads below are the requester ceiling's, the rest of the
@@ -840,11 +930,11 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	read := newForeignRead(turn, c.asker.Seat)
 	return t.cut(ctx, read, page, more, func(nodes []string, next string) any {
-		a := codeStatusFleet{Nodes: make([]gitNodeStatus, 0, len(nodes)), Hot: hot, Withheld: withheld,
+		a := codeStatusFleet{Nodes: make([]gitletNodeStatus, 0, len(nodes)), Hot: hot, Withheld: withheld,
 			Next: next, Coverage: coverageOf(report.Coverage, nodes, first && q.node == "")}
 		for _, id := range nodes {
 			if s, ok := statusOf[id]; ok {
-				a.Nodes = append(a.Nodes, gitNodeStatus{Node: s.Node, At: s.At, Cache: s.Cache})
+				a.Nodes = append(a.Nodes, gitletNodeStatus{Node: s.Node, At: s.At, Cache: s.Cache})
 			}
 		}
 		return a
@@ -869,27 +959,27 @@ func (t *codeStatus) query(args map[string]any) (codeStatusQuery, *tools.Result)
 		r := failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxCodeStatusPage))
 		return q, &r
 	case q.node != "" && (q.cursor != "" || args["limit"] != nil):
-		r := failed(fmt.Sprintf("%s: `node` reads that one git node, so it takes no `cursor` or "+
+		r := failed(fmt.Sprintf("%s: `node` reads that one Gitlet node, so it takes no `cursor` or "+
 			"`limit`.", t.Name()))
 		return q, &r
 	}
 	return q, nil
 }
 
-// ask is the page q asks for and the git nodes' answers to it: the page's git
-// nodes by id — the q.limit live git nodes after q.cursor, or q.node alone —
-// whether live git nodes follow it, and the report of a status question about
+// ask is the page q asks for and the Gitlet nodes' answers to it: the page's Gitlet
+// nodes by id — the q.limit live Gitlet nodes after q.cursor, or q.node alone —
+// whether live Gitlet nodes follow it, and the report of a status question about
 // the repository whose id is repoID ("" none) asked of the page's nodes alone,
-// or, where hot is set without q.node, of every git node with its hot list:
+// or, where hot is set without q.node, of every Gitlet node with its hot list:
 // the fleet's first page. Refused unavailable where the roster or the nodes
-// could not be read, and not found where q.node is no live git node — said at
+// could not be read, and not found where q.node is no live Gitlet node — said at
 // once, never waited out as a node that does not answer.
 func (t *codeStatus) ask(ctx context.Context, q codeStatusQuery, repoID string, hot bool) (
 	page []string, more bool, report CodeStatusReport, refusal *tools.Result) {
 
-	roster, err := t.deps.Status.GitNodes(ctx)
+	roster, err := t.deps.Status.GitletNodes(ctx)
 	if err != nil {
-		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not read the fleet's git "+
+		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not read the fleet's Gitlet "+
 			"nodes from the coordination store just now, so it says nothing rather than show a fleet "+
 			"with nodes missing. Try again shortly.")
 		return nil, false, CodeStatusReport{}, &r
@@ -901,8 +991,8 @@ func (t *codeStatus) ask(ctx context.Context, q codeStatusQuery, repoID string, 
 	roster = slices.Compact(roster)
 	if q.node != "" {
 		if _, found := slices.BinarySearch(roster, q.node); !found {
-			r := refused(tools.RefusalNotFound, fmt.Sprintf("%s: no git node is named %q — a git node is "+
-				"a live node with the git role. Leave `node` out to list them.", t.Name(), clip(q.node)))
+			r := refused(tools.RefusalNotFound, fmt.Sprintf("%s: no Gitlet node is named %q — a Gitlet node is "+
+				"a live node with the gitlet role. Leave `node` out to list them.", t.Name(), clip(q.node)))
 			return nil, false, CodeStatusReport{}, &r
 		}
 		page = []string{q.node}
@@ -912,13 +1002,13 @@ func (t *codeStatus) ask(ctx context.Context, q codeStatusQuery, repoID string, 
 	}
 	question := CodeStatusAsk{Nodes: page, Repo: repoID, Hot: hot}
 	if hot && q.node == "" {
-		// THE FLEET'S HOT LIST IS EVERY GIT NODE'S, so its page alone asks
+		// THE FLEET'S HOT LIST IS EVERY GITLET NODE'S, so its page alone asks
 		// them all.
 		question.Nodes, question.Every = roster, true
 	}
 	report, err = t.deps.Status.CodeStatus(ctx, question)
 	if err != nil {
-		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
+		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the Gitlet nodes "+
 			"just now. Try again shortly.")
 		return nil, false, CodeStatusReport{}, &r
 	}
@@ -928,7 +1018,7 @@ func (t *codeStatus) ask(ctx context.Context, q codeStatusQuery, repoID string, 
 // cut is the answer of the longest prefix of page that fits one tool answer as
 // it is sent: build makes the answer listing nodes, with next the id the
 // following page begins after — "" on the last, where nothing is left of page
-// and more says no live git node follows it. The listing is keyset by id, so
+// and more says no live Gitlet node follows it. The listing is keyset by id, so
 // the next page begins after the last node kept, whether limit or the
 // answer's size cut it.
 func (t *codeStatus) cut(ctx context.Context, read *foreignRead, page []string, more bool,
@@ -945,17 +1035,17 @@ func (t *codeStatus) cut(ctx context.Context, read *foreignRead, page []string, 
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(page) > 0:
-		return failed(fmt.Sprintf("%s: git node %q alone is past one answer — its id is that long — so "+
+		return failed(fmt.Sprintf("%s: Gitlet node %q alone is past one answer — its id is that long — so "+
 			"no page holds it whole. Pass %q as `cursor` to read the nodes after it.", t.Name(),
 			clip(page[0]), page[0])), nil
 	}
-	return compactAnswer(rendered, "Ask for fewer git nodes with `limit`, or for one with `node`.")
+	return compactAnswer(rendered, "Ask for fewer Gitlet nodes with `limit`, or for one with `node`.")
 }
 
 // coverageOf is cover's part for nodes — each node's own, in nodes' order, a
 // node cover does not name left out. Complete is, where whole, cover's own —
 // every node the question was asked of, which on the fleet's first page is
-// every git node its hot list was drawn from — and otherwise whether every node
+// every Gitlet node its hot list was drawn from — and otherwise whether every node
 // listed answered: a page's question asked a few nodes past what the answer
 // had room for, and those are the next page's to report.
 func coverageOf(cover eventfan.Coverage, nodes []string, whole bool) eventfan.Coverage {
@@ -977,7 +1067,7 @@ func coverageOf(cover eventfan.Coverage, nodes []string, whole bool) eventfan.Co
 	return out
 }
 
-// oneRepo is code_status about the repository args names, on the page of git
+// oneRepo is code_status about the repository args names, on the page of Gitlet
 // nodes q asks for.
 func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	args map[string]any, q codeStatusQuery) (tools.Result, error) {
@@ -1028,18 +1118,18 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 // answers) — and, in a turn a colleague seat woke, to that seat's too, judged
 // by the same node on the same read: a repository either may not read, one the
 // name no longer names, or one the name names under another id — renamed since
-// the git node counted it — is left out, never shown on a guess. A read that
+// the Gitlet node counted it — is left out, never shown on a guess. A read that
 // could not be made fails the call, unavailable, rather than leaving out what
 // it could not judge ([unjudged]).
 //
 // # Hottest first, and only to the cut
 //
 // The list keeps at most cache.HotRepos of each window however large the
-// fleet, and repository homes are spread over the git nodes by rendezvous, so
+// fleet, and repository homes are spread over the Gitlet nodes by rendezvous, so
 // the nodes' own lists are mostly disjoint and the fleet names some 2 ×
-// HotRepos repositories for every git node. Judging each of them was a
+// HotRepos repositories for every Gitlet node. Judging each of them was a
 // linearizable read apiece — a barrier on the code log for every wave of reads
-// — growing with the git nodes rather than with the answer: a hundred and
+// — growing with the Gitlet nodes rather than with the answer: a hundred and
 // twenty reads on three of them, four hundred on ten, for a list of forty. So
 // the list is cut as though every repository nobody has judged yet were
 // readable; the repositories it keeps that nobody has judged are judged in a
@@ -1119,7 +1209,7 @@ func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCall
 	}
 }
 
-// judgeWave is whether c may read each repository of wave, by the name a git
+// judgeWave is whether c may read each repository of wave, by the name a Gitlet
 // node counted it by ([codeStatus.readable]): every read of the wave at once,
 // the wave being at most codeStatusJudges long.
 //
@@ -1173,7 +1263,7 @@ func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCa
 // not be made: unavailable where Gitlet could not answer now — the
 // conditions [codeFailure] answers so — and a fault of this node otherwise.
 //
-// IT NAMES NO REPOSITORY. The read that failed was about one a git node named,
+// IT NAMES NO REPOSITORY. The read that failed was about one a Gitlet node named,
 // which the caller may well not read, and a failure that named it would tell a
 // seat the very name the answer exists to withhold.
 func unjudged(ctx context.Context, tool string, err error) tools.Result {
@@ -1186,19 +1276,19 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
 		why, transient = "no node holding Gitlet's rows could answer in time", true
 	case errors.As(err, &unserved) && unserved.Git:
-		why, transient = "none of the git nodes could answer in time", true
+		why, transient = "none of the Gitlet nodes could answer in time", true
 	}
 	if transient {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not check which of the "+
-			"repositories the git nodes named you may read (%s), so it answers nothing rather than name "+
+			"repositories the Gitlet nodes named you may read (%s), so it answers nothing rather than name "+
 			"one you may not. This is NOT an answer about the fleet: try again shortly.", tool, why))
 	}
-	return faulted(ctx, tool, err, fmt.Sprintf("%s could not check which of the repositories the git "+
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not check which of the repositories the Gitlet "+
 		"nodes named you may read: %s. This is NOT an answer about the fleet: say you could not read it.",
 		tool, faultSaid))
 }
 
-// readable reports whether c may read the repository a git node counted as id
+// readable reports whether c may read the repository a Gitlet node counted as id
 // by name: true where the code tools' resolution of the name admits the asker
 // — and whoever the call reads for — and names that id, false where it refuses
 // either or the name names no repository or another one now, and an error

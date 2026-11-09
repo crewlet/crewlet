@@ -77,6 +77,10 @@ type DataOptions struct {
 	// false is a node confirmed behind it, which decides neither; nil is
 	// current.
 	Current func() bool
+	// People answers who holds each human seat an ask for review names
+	// (code.ChangeWriterOptions.People); nil is every such seat held by an
+	// active person using every app (FixturePeople).
+	People code.People
 	// Clock is the fleet's clock as a case moves it (Shape.Clock): what the
 	// node's lifecycle stores decide by, and the broker's instant on every
 	// record its applier applies past a move; nil is the wall clock, moved
@@ -317,6 +321,10 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if seatRules == nil {
 		seatRules = FixtureSeatRules
 	}
+	people := d.o.People
+	if people == nil {
+		people = FixturePeople{}
+	}
 	// THE READER JUDGES BY THE CHART ITS WRITERS DECIDE BY, as a node reads
 	// and writes by one epoch's: a seat's grant, and every change's readiness
 	// whoever reads it — a reader holding none refuses a read of changes.
@@ -336,7 +344,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		DB:        p.estate.Reader(), NodeID: d.o.ID, Limits: limits,
 		Retention: func() time.Duration { return deletedRetention },
 		// THE CHART A SEAT'S PUSH IS DECIDED BY — an engine write's, a seat's
-		// own commit landed as a push — the one the git nodes judge it by
+		// own commit landed as a push — the one the Gitlet nodes judge it by
 		// before they build it; and the node's posture, which decides no
 		// seat's push while it is behind the company's configuration.
 		SeatRules: seatRules, Current: d.o.Current,
@@ -353,7 +361,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		// chart a seat's push is, and by no node confirmed behind the
 		// company's configuration, so a node of the suite decides what a node
 		// of the fleet does.
-		SeatRules: seatRules, Current: d.o.Current,
+		SeatRules: seatRules, Current: d.o.Current, People: people,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
 	}
@@ -383,7 +391,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		now = d.o.Clock.Now
 	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
-		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy}); err != nil {
+		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy,
+		People: people}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
 	}
 	if d.o.Operator != "" {
@@ -632,7 +641,17 @@ func (d *DataNode) gesture(t testing.TB, node string,
 	}
 	actor := code.Actor{ID: "ops", Kind: code.ActorOperator, OperatorID: "ops"}
 	res, err := op(s, t.Context(), actor, statelog.NewOpID(time.Now(), name), node)
-	if err != nil || res.Outcome != statelog.OutcomeApplied {
+	switch {
+	case err == nil && res.Outcome == statelog.OutcomePending:
+		// DURABLE AT ITS POSITION and unresolved here when the store stopped
+		// waiting for its own applier, which a loaded runner gives any write,
+		// and never a failure ([proposeLanded]): the node holds the gesture
+		// once it has applied every record the log held, this one among them.
+		if lerr := d.Level(t.Context()); lerr != nil {
+			t.Fatalf("codetest: %s %s through %s was answered pending at %s, and the node never reached it: %v",
+				name, node, d.o.ID, res.Position, lerr)
+		}
+	case err != nil || res.Outcome != statelog.OutcomeApplied:
 		t.Fatalf("codetest: %s %s through %s = (%+v, %v), want applied", name, node, d.o.ID, res, err)
 	}
 	return res.Position

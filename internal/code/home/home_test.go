@@ -88,7 +88,7 @@ func newEstate() *estate {
 
 // hold puts change n of repo on repo's due list, owing its facts alone, its
 // head head and its target main at tip, the facts its home reads of it f —
-// with the trees a git node reads beside them, where f names none and its
+// with the trees a Gitlet node reads beside them, where f names none and its
 // head is no merged one's.
 func (e *estate) hold(repo string, n int64, head, tip string, f code.RevisionFactsAnswer) code.ChangeDue {
 	e.mu.Lock()
@@ -628,7 +628,7 @@ func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
 	return n
 }
 
-// ONLY THE HOME WORKS A REPOSITORY: two git nodes' loops over one code log,
+// ONLY THE HOME WORKS A REPOSITORY: two Gitlet nodes' loops over one code log,
 // each home to one of two repositories with a change due, each work their own
 // and nothing of the other's — a pass lists both, and schedules only what its
 // placement says it is home to; a nudge for the other node's repository
@@ -796,7 +796,9 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 		t.Fatalf("the pass a gap asked read at %+v, none at the gap's position %s", floors, through)
 	}
 	// COUNTED AS THE TURN ENDS, after the write that emptied the deaf home's
-	// list (TestOnlyTheHomeWorksARepository says why).
+	// list (TestOnlyTheHomeWorksARepository says why), and WORKED HOWEVER LONG
+	// IT RAN: its work returned, which its twenty-millisecond bound on a
+	// loaded runner does not change (TestATurnWhoseWorkFinishesPastItsBoundDidIt).
 	waitTurns(t, rec, 1)
 	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got == 0 {
@@ -986,7 +988,7 @@ func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
 // THE HOME RECORDS THE CLASSES ITS GIT READ: what a revision's facts read
 // answered of its code — the trees of its base and its head, and its touched
 // paths' classes — rides the revise the home asks the change writer for, as
-// the git node read it: the home lexes nothing and judges nothing of it.
+// the Gitlet node read it: the home lexes nothing and judges nothing of it.
 //
 // Mutation: leave the classes out of the revise — the facts record none, red.
 func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
@@ -1078,7 +1080,7 @@ func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
 	}
 }
 
-// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY. A git node that ran its read's
+// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY. A Gitlet node that ran its read's
 // budget of git out before a revision's patch id, or before its classes, says
 // so apart from a bound's omission: the commits did not decide it, the node's
 // moment did, so the home records no such facts — a revise takes a revision's
@@ -1112,7 +1114,7 @@ func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the home never asked again for the facts its git node left short for time")
+			t.Fatal("the home never asked again for the facts its Gitlet node left short for time")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

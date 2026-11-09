@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 )
 
-// A GIT NODE'S IMPORTS AND MIRRORS (internal/code/mirror): a worker of its
-// home's loop on every git node, filling the repositories it is home to from
+// A GITLET NODE'S IMPORTS AND MIRRORS (internal/code/mirror): a worker of its
+// home's loop on every Gitlet node, filling the repositories it is home to from
 // the other hosts their rows name, and pushing their green tips to the hosts
 // their push mirrors name.
 
@@ -33,8 +33,8 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 
 	o := mirror.Options{
 		Estate: e.router.Code(), Cache: c, Git: pool, Objects: objects, NodeID: nodeID, Limits: e.codeLimits,
-		Dial: mirrorDial(boot.Git.ImportAllowPrivate, e.codeRemoteCredentials, e.LookupSecret), Roster: e.codeRoster,
-		Events: e.codeEvents(), Metrics: e.metrics,
+		Dial: mirrorDial(boot.Gitlet.ImportAllowPrivate, e.codeRemoteCredentials, e.LookupSecret), Roster: e.codeRoster,
+		People: turnRequesters{engine: e}, Events: e.codeEvents(), Metrics: e.metrics,
 	}
 	if e.mirrorSeams != nil {
 		o = e.mirrorSeams(o)
@@ -51,7 +51,7 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 
 // mirrorDial is the one outbound dial an import or a mirror makes
 // (M6-D18): the source's URL resolved and held to the public-address rule
-// unless Tier A git.import_allow_private lifts it (gitproc.ResolveRemote), and
+// unless Tier A gitlet.import_allow_private lifts it (gitproc.ResolveRemote), and
 // its credential — one whole ${VAR} reference, as the record carries it
 // (M6-D17) — resolved at the dial from the secret store and then the
 // environment (lookup: Engine.LookupSecret), never earlier and never kept.

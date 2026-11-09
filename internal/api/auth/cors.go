@@ -82,7 +82,7 @@ const CORSMaxAge = 10 * time.Minute
 // `Accept-Patch` a refused patch names the format it takes in, the `Allow` an
 // `OPTIONS` or a `405` lists the methods in, the `Content-Disposition` that
 // names a downloaded project file, the `Location` a started verification of a
-// git node's copy is read back at, and the request id a refused write is found
+// Gitlet node's copy is read back at, and the request id a refused write is found
 // in the log by. A CORS-safelisted header (`Content-Type`, `Content-Length`,
 // `Cache-Control`) is readable without being listed.
 //

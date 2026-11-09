@@ -35,7 +35,7 @@ type ServerOptions struct {
 	Local LocalBackends
 
 	// Git is this node's git half, resolved per request ([LocalGit]), on a
-	// node with the `git` role — every one of which holds data in this
+	// node with the `gitlet` role — every one of which holds data in this
 	// release — and nil on every other. Where it is set the node registers
 	// the two git lanes too, the reads' and the engine writes' ([gitLanes]:
 	// [laneGitReads], [laneGitWrites]), both from boot: until Gitlet
@@ -70,7 +70,7 @@ type ServerOptions struct {
 // EVERY LANE OR NONE: a lane that cannot be registered withdraws the ones
 // before it, because a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for, and cost
-// each one a whole write attempt before the runner-up — and a git node that
+// each one a whole write attempt before the runner-up — and a Gitlet node that
 // answered no git read would be every repository's silent home, as one that
 // answered no engine write would be to every write's walk. A node serving git
 // ([ServerOptions.Git]) registers the git lanes, the reads' and the writes'

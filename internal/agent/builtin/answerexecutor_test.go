@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -93,7 +94,7 @@ type executorAnswerRig struct {
 }
 
 func (r executorAnswerRig) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
-	return r.tool.Call(iam.WithPrincipal(ctx, r.caller), args)
+	return r.tool.Call(builtin.OutsideAnyTurn(iam.WithPrincipal(ctx, r.caller)), args)
 }
 
 func newAnswerExecutorRig(t *testing.T, desk *deskFake, caller iam.Principal,
@@ -215,12 +216,15 @@ func TestAnswerExecutorThatMayHaveLandedAnswersUnknown(t *testing.T) {
 // nothing delivered, and the refusal says how long it is — rounded up, so a
 // byte past the bound never reads as the bound itself — what the bound is, and
 // where the detail goes instead.
+//
+// Mutation: hold an answer to a byte past the page, and one a byte longer than
+// the longest question is delivered.
 func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
 	tool := answerExecutorTool(t, desk)
 	result, _ := tool.Call(t.Context(), map[string]any{
-		"turn_id": "t1", "launch_id": "launch-t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
+		"turn_id": "t1", "launch_id": "launch-t1", "answer": strings.Repeat("a", sandbox.MaxAnswerTextBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
 		t.Fatalf("answer_executor with an answer a byte past a page = %+v, want invalid", result)
@@ -229,8 +233,8 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 		t.Fatalf("an answer past the bound was delivered: %d bytes", len(desk.delivered[0].Answer))
 	}
 	for _, want := range []string{
-		fmt.Sprintf("That answer is %d KiB", builtin.MaxRunAnswerBytes>>10+1),
-		fmt.Sprintf("at most %d KiB", builtin.MaxRunAnswerBytes>>10),
+		fmt.Sprintf("That answer is %d KiB", sandbox.MaxAnswerTextBytes>>10+1),
+		fmt.Sprintf("at most %d KiB", sandbox.MaxAnswerTextBytes>>10),
 		"Put the detail on a page",
 	} {
 		if !strings.Contains(result.Output, want) {
@@ -238,7 +242,7 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 		}
 	}
 
-	page := strings.Repeat("a", builtin.MaxRunAnswerBytes)
+	page := strings.Repeat("a", sandbox.MaxAnswerTextBytes)
 	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": page})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_executor with an answer as long as a question may be = %+v, %v; "+
@@ -480,6 +484,9 @@ func TestAHeldCallIsNotAnsweredByAnswerExecutor(t *testing.T) {
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 		!strings.Contains(got.Output, "/mcp-approvals/"+run.HeldCall.ID) {
 		t.Fatalf("an answer to a held call = %+v, %v, want it refused naming the approval route", got, err)
+	}
+	if words := got.PersonRefusal.Person(); words != caveat.HeldCallAnswer().Person() {
+		t.Errorf("a person is told %q, want the held call's own answers named", words)
 	}
 	if len(desk.delivered) != 0 {
 		t.Fatalf("delivered %+v, want nothing", desk.delivered)

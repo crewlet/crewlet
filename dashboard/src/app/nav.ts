@@ -66,7 +66,7 @@
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
  * Worklet, its knowledge base, Doclet, its chat, Chatlet, or its git host,
- * Gitlet, for a company that sets `code.native`) names it
+ * Gitlet, for a company on `code.backend: gitlet`) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -104,7 +104,7 @@ export type Workspace =
  * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
  * work), `knowledge` is Doclet (spaces and pages), `chat` is Chatlet (rooms,
  * threads and direct messages), `code` is Gitlet, the engine's own git host
- * (the repositories a company that sets `code.native` keeps in it). Named here
+ * (the repositories a company on `code.backend: gitlet` keeps in it). Named here
  * because the navigation hides what reads one the company does not run.
  */
 export type Service = "tracker" | "knowledge" | "chat" | "code";
@@ -255,13 +255,14 @@ export interface WorkspaceRow {
   keep?: string[];
   /**
    * The permissions the whole workspace needs, as [Section.grants]: locked,
-   * never hidden. An APP's workspace names its app (My work and the Worklet
-   * workspace name Worklet, the Doclet workspace names Doclet, Chatlet names
-   * Chatlet), because every screen in it reads that app; the one address
-   * under one that the app does not gate is a work item somebody was ASKED
-   * about (`App.tsx`), which its own read decides. The Inbox names none: it
-   * is composed from every native domain's notices, each read under its own
-   * permission. Gitlet names none either: no app gates code.
+   * never hidden. An APP's workspace names its app (the Worklet workspace
+   * names Worklet, the Doclet workspace names Doclet, Chatlet names Chatlet,
+   * the Gitlet workspace names Gitlet), because every screen in it reads that
+   * app; the one address under one that the app does not gate is a work item
+   * somebody was ASKED about (`App.tsx`), which its own read decides. The
+   * Inbox names none: it is composed from every native domain's notices, each
+   * read under its own permission. Nor does My work, whose sections each name
+   * the app they read: Worklet's tabs Worklet, its Reviews Gitlet.
    */
   grants?: readonly Grant[];
   /** The reader's own, as [Section.personal]: the Account. */
@@ -428,10 +429,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     renderer: "none",
     // EVERY SIGNED-IN PERSON'S: the inbox is composed from every native
     // domain's notices (the engine's `inbox`), each read under its own
-    // permission — Worklet's with Worklet, Gitlet's held to each
-    // repository's grant — beside the seat and budget conditions waiting on
-    // a person. So it names no app: a person without Worklet still hears
-    // about the changes they are asked to review.
+    // permission — Worklet's with Worklet, Gitlet's with Gitlet and held to
+    // each repository's grant — beside the seat and budget conditions waiting
+    // on a person. So it names no app: a person without Worklet still hears
+    // about the changes they are asked to review, and one without Gitlet
+    // about the work they are asked about.
     sections: [],
   },
   {
@@ -448,8 +450,9 @@ export const WORKSPACES: WorkspaceRow[] = [
     // their attention from more than one service. Every tab but Reviews is a
     // question about somebody's work items, so EACH of those names Worklet —
     // locked without the Worklet permission, hidden where the company runs no
-    // Worklet — and Reviews names Gitlet, which no app gates
-    // (ADR-0088). A person without Worklet still has a day: the reviews asked
+    // Worklet — and Reviews asks Gitlet's listings of changes, so it names
+    // Gitlet both ways: the Gitlet permission (ADR-0110) and the service. A
+    // person holding Gitlet without Worklet still has a day: the reviews asked
     // of them, where the landing sends them ([landingPath]).
     sections: [
       {
@@ -524,6 +527,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["me", "reviews"],
         hint: "Changes waiting on their review, and their own waiting on a fix",
         keywords: ["review", "code review", "changes", "pull request"],
+        grants: ["gitlet"],
         service: "code",
       },
     ],
@@ -768,15 +772,17 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "g",
     place: "workspace",
     renderer: "tabs",
-    // GITLET'S: hidden, never locked, where the company does not set
-    // `code.native`.
-    //
-    // AND NO PERMISSION, because no app gates code (ADR-0033): every person
-    // reads every repository (ADR-0088), and the engine holds each answer to
-    // the asker's own grant on the repository, leaving out of a listing what
-    // a seat may not read. So nothing waits on the reader's access before a
-    // section mounts, and a write here carries its own reason where it is
-    // held.
+    // THE GITLET APP'S, every section (ADR-0110): each reads the code
+    // questions — the changes, the repositories, a search, the pushes, the
+    // queues, the checks — which the engine refuses a reader without it
+    // before reading anything, so the frame draws its one refusal in place of
+    // every Gitlet page for that reader. Holding it, the engine still holds
+    // each answer to the reader's own grant on the repository, leaving out of
+    // a listing what they may not read, and a write here carries its own
+    // reason where it is held.
+    grants: ["gitlet"],
+    // AND GITLET'S: hidden, never locked, where the company does not set
+    // `code.backend: gitlet`.
     service: "code",
     sections: [
       {
@@ -1636,9 +1642,10 @@ export function grantsMissing(
  *
  * ONLY THE SECTIONS THE COMPANY RUNS COUNT ([serviceShown]): a section hidden
  * for its service opens nothing, so it cannot keep a row unlocked. My work's
- * Reviews needs no permission, and where the engine hosts no code it is drawn
- * nowhere — counting it would leave the row open to a reader without Worklet
- * and land them on a refusal, where the row's lock names Worklet instead.
+ * Reviews opens for a reader holding Gitlet, and where the engine hosts no
+ * code it is drawn nowhere — counting it would leave the row open to a reader
+ * holding Gitlet without Worklet and land them on the Queue's refusal, where
+ * the row's lock names Worklet instead.
  */
 export function workspaceOpen(
   row: WorkspaceRow,
@@ -1673,9 +1680,10 @@ export function listsLanding(row: WorkspaceRow): boolean {
  * reader holding `held`: its own path, or, where that landing section is
  * closed to them or reads a service the company does not run, the first of
  * its sections they can open and the company runs. My work lands on its
- * Queue, Worklet's, and a company hosting code with no Worklet lands it on
- * Reviews. A landing closed to the reader sent them to a refusal although
- * other sections of the workspace were theirs. `held` null is a reader not yet read: the
+ * Queue, Worklet's, and on its Reviews, Gitlet's, for a reader holding Gitlet
+ * without Worklet or a company hosting code with no Worklet. A landing closed
+ * to the reader sent them to a refusal although other sections of the
+ * workspace were theirs. `held` null is a reader not yet read: the
  * workspace's own path, as the frame draws every lock only once it knows.
  */
 export function landingPath(

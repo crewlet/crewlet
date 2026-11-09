@@ -13,7 +13,7 @@
  * draws its own.
  */
 
-import type { McpApprovalAnswer } from "~/contract/mcp.ts";
+import type { McpApprovalAnswer, McpHeldWhole } from "~/contract/mcp.ts";
 import { pathSegment, rest } from "~/protocol/rest.ts";
 
 /** How a held call is answered: made once, made and its tool set to Always allow, or refused. */
@@ -25,11 +25,25 @@ export type HeldAnswer = "once" | "always" | "deny";
  * on), `403` where the reader is neither an administrator nor a lead of the
  * agent's team.
  */
-export async function answerHeldCall(id: string, answer: HeldAnswer): Promise<McpApprovalAnswer> {
+export async function answerHeldCall(
+  id: string,
+  answer: HeldAnswer,
+  argumentsSha256?: string,
+): Promise<McpApprovalAnswer> {
   const sent = await rest.request("POST", `/mcp-approvals/${pathSegment(id)}`, {
-    body: { answer },
+    body: argumentsSha256 ? { answer, arguments_sha256: argumentsSha256 } : { answer },
   });
   return sent.body as McpApprovalAnswer;
+}
+
+/**
+ * The held call `id` whole, as whoever may answer it reads it before Allow
+ * once of a call its tool asks about every time: every argument, and the
+ * digest the answer names.
+ */
+export async function readHeldCall(id: string): Promise<McpHeldWhole> {
+  const read = await rest.request("GET", `/mcp-approvals/${pathSegment(id)}`);
+  return read.body as McpHeldWhole;
 }
 
 /** What an answer did, in a sentence for the row it was given on. */

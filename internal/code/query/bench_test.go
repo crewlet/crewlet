@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkCodeRead is a seat's read by object id, timed whole through a git
+// BenchmarkCodeRead is a seat's read by object id, timed whole through a Gitlet
 // node's query server — its sync at the copy as it stands, the check of what
 // it names, its unit of the share and its kind's git — over a repository that
 // came to a host as one does: gittest.History pushed a session at a time, then
@@ -58,7 +58,7 @@ import (
 //     hold yet (a bound a byte narrower than the last read's, so a key of its
 //     own): a read cutting its page, and every page after it, and keeping
 //     them; cache=memo reads a page the memo holds, every read a hit;
-//     cache=cold reads a git node emptied before every iteration, whose first
+//     cache=cold reads a Gitlet node emptied before every iteration, whose first
 //     read waits statelog.ReadBudget on the download and answers what it can.
 //   - fresh is the FLOOR a read is sent with, over the root's listing from the
 //     memo on the copy that took every push — so the read itself costs a memo
@@ -287,7 +287,7 @@ func readTops(commits []string, files int) func(*bufio.Writer) error {
 	}
 }
 
-// readRig is BenchmarkCodeRead's fixture: a fleet of two git nodes holding a
+// readRig is BenchmarkCodeRead's fixture: a fleet of two Gitlet nodes holding a
 // source's repository, a query server over the first node, and one over the
 // same node with its memo hidden (unkept); p50 is each warm and miss arm's
 // p50, by its kind and arm, which the memo arm weighs its own against.
@@ -300,7 +300,7 @@ type readRig struct {
 	p50    map[string]time.Duration
 }
 
-// readCacheBytes is every rig's git node's cache budget: room for the
+// readCacheBytes is every rig's Gitlet node's cache budget: room for the
 // largest repository an arm builds, the gigabyte history under the 100 000-file
 // tree, twice over, so no figure is of a repository the budget evicted
 // between iterations — internal/code/host's benchmarks' budget.
@@ -311,7 +311,7 @@ const readCacheBytes = 4 << 30
 // it.
 func newReadRig(b *testing.B, src *readSource, objects objstore.Backend) *readRig {
 	b.Helper()
-	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects,
+	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}, Objects: objects,
 		People: []string{"ceo"}, CacheMaxBytes: readCacheBytes, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	p := codetest.NewPerson(b, f, "ceo")
@@ -530,7 +530,7 @@ func (r *readRig) server() *query.Server {
 func (r *readRig) cold(b *testing.B) {
 	var took []time.Duration
 	unreadies := 0
-	g := r.f.GitNode(1)
+	g := r.f.GitletNode(1)
 	for range b.N {
 		b.StopTimer()
 		dir := g.Node().CacheDir()

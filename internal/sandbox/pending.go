@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -407,6 +409,10 @@ type ColleagueAsk struct {
 	TraceID      string   `json:"trace_id,omitempty"`
 	SpanID       string   `json:"span_id,omitempty"`
 	ParentSpanID string   `json:"parent_span_id,omitempty"`
+	// WorkingFor is who the answering turn works for, and so who the
+	// answer back is worked for ([types.A2AMessage.WorkingFor]): the ask's
+	// own carrier, or the asking seat where the ask was its own work.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
 // RunStop is who ENDED a run by pausing its seat with a stop
@@ -666,14 +672,16 @@ type BridgeCall struct {
 	// ([BridgeAppend.Owed]) and the call a person approved, which the opening
 	// of the next job appends first ([BridgeLog.opened]).
 	//
-	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count its read
-	// of the log saw ([SessionCapture.Through]), and a call is after it exactly
-	// where Appended is past it: whatever its place (Seq) — a call in flight at
-	// the read is appended once its tool answers, after the read — and however
-	// many places the bound dropped below it, which a reading by place could
-	// not tell from a call still in flight. And the calls after a save point
-	// that the log dropped from its middle are counted exactly: every ordinal
-	// past the point the log does not list is one of them.
+	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count one read
+	// of the log saw ([SessionCapture.Through]) — its own read, or, where its
+	// harness may not have written every call it made, an earlier capture's
+	// (savepoint.go) — and a call is after it exactly where Appended is past
+	// it: whatever its place (Seq) — a call in flight at the read is appended
+	// once its tool answers, after the read — and however many places the
+	// bound dropped below it, which a reading by place could not tell from a
+	// call still in flight. And the calls after a save point that the log
+	// dropped from its middle are counted exactly: every ordinal past the
+	// point the log does not list is one of them.
 	//
 	// ZERO ON A CALL AN OLDER BUILD APPENDED, which numbered none, in a fleet
 	// mid-upgrade: read as after every save point, so a continuation is told it
@@ -988,8 +996,10 @@ type PendingRun struct {
 	// that LANDED, the one the executor log's row names; both nil until the
 	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
 	// relaunch: the turn's end reads them to say whether its newest attempt
-	// was kept, and names the attempt that was not ([unkeptOf]), so the log's
-	// row never goes on naming an older session as the turn's last.
+	// was kept, naming the attempt that was not ([unkeptOf]), whether the turn
+	// went on past the session the log's row names ([wentOnPast]) and, where
+	// that attempt was its last word, its place ([lastWordOf]), so the row never
+	// names an older session as the turn's last without saying so.
 	// Each is a section of its own with an Extra (wirekeys.go).
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
@@ -1218,6 +1228,44 @@ type PendingRun struct {
 	// took is never deleted ([ErrAnswerOwed]). See [RecordedAnswer].
 	Answer *RecordedAnswer `json:"answer,omitempty"`
 
+	// AnswerRefusal is set where the recorded answer is a REFUSAL: the reply
+	// the question was answered with was past what the row carries as an
+	// answer ([MaxAnswerBytes]), so what the row records as the question's
+	// outcome is that reply's figures, beside [PendingRun.Answer] naming its
+	// deliveries and when the newest was posted, and none of its words
+	// ([PendingStore.RecordRefusal], ADR-0114). Read through
+	// [PendingRun.Refused], which takes it only while it names the very
+	// deliveries the answer does; nil on every other row.
+	//
+	// A KEY OF ITS OWN AT THE TOP OF THE ROW rather than a field of
+	// [RecordedAnswer], for the reason [PendingRun.Stop] is one: the row is
+	// rewritten whole by every node that touches it, and a key a build does
+	// not know survives only at the top ([PendingRun.Extra]) or inside a
+	// section that carries its own (wirekeys.go) — which [RecordedAnswer]
+	// does not. Inside it, a build without this field would write the answer
+	// back without its refusal on its next lease or status flip, and the run
+	// would read an answer with no words where it was told its reply was too
+	// large. Written and cleared by the writes that write the answer:
+	// [PendingStore.RecordRefusal] sets it and every other write that records,
+	// lets go of or clears the answer clears it.
+	AnswerRefusal *AnswerRefusal `json:"answer_refusal,omitempty"`
+
+	// EndingReturnsRefusal is set with the run's ending ([PendingRun.Ending])
+	// where what the ending hands back to the seat is a reply too large for
+	// the run to take, whose refusal the run held untold
+	// ([PendingRun.AnswerRefusal]): its delivery, kept on the seat's inbox,
+	// goes back as the message it came in, and the ending's announcement
+	// says so rather than "the answer a person gave it" — the run was given
+	// none of it, and the refusal's own record said the run would be told.
+	// Decided in the ending's write, as [RecordedEnding.Returned] is, since
+	// the let-go clears the refusal before the announcement is made.
+	//
+	// A KEY OF ITS OWN AT THE TOP OF THE ROW, beside the ending, as
+	// [PendingRun.Stop] is: [RecordedEnding] carries no Extra of its own, so
+	// a field of it would be dropped by a build that does not know it on its
+	// next write of the row (wirekeys.go).
+	EndingReturnsRefusal bool `json:"ending_returns_refusal,omitempty"`
+
 	// DeclinedAnswers are the deliveries this question was recorded with
 	// and then let go of — every attempt to resume with them failed, so they
 	// went on to the seat's ordinary route instead (see
@@ -1343,6 +1391,29 @@ type PendingRun struct {
 	// A row without it resolves "requester" to the fallback, which is what
 	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
+
+	// RequesterLogin is the credential acting as no seat — a Tier A token, a
+	// service account — whose write woke the turn that launched this run,
+	// by its login and never its value, and RequesterApps the apps its
+	// writes carried, as the node that took them resolved them. Empty
+	// wherever [PendingRun.Requester] is set, and for a turn no credential
+	// woke.
+	//
+	// ON THE ROW because every segment that resumes the turn, and every call
+	// its box makes through the bridge after a takeover, is still worked for
+	// that credential: what each call may use for it is these apps and the
+	// running node's own resolution of the login, whichever is narrower
+	// (ADR-0109). A row without them — an older build's — reads the turn as
+	// a stranger's, which is what an older build's own turn did. Nobody is
+	// asked anything for a credential: a question addressed to "requester"
+	// resolves to the fallback, as a row naming no requester does.
+	RequesterLogin string      `json:"requester_login,omitempty"`
+	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
+
+	// WorkingFor is who the run's turn works for when a colleague's ask or
+	// an answer handed it on ([types.WorkingFor]), which its resumed turn
+	// works for too.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,
 	// nil for a turn no ask woke — see [ColleagueAsk].
@@ -1613,6 +1684,30 @@ type PendingRun struct {
 	// ([BridgeLog.CutFor]) — so an answer whose opening failed is still cut by
 	// the relaunch after it, and a cut already taken is never moved by one.
 	AnsweredJob string `json:"answered_job,omitempty"`
+
+	// RoundRefusals are the replies refused as too large for the questions
+	// the round's jobs asked ([AnswerRefusal]), oldest first, as the round's
+	// review reads them: the job whose question each answered, how many
+	// messages it was and its figures — never its words, nor its deliveries
+	// (ADR-0114). Appended by the relaunch that carries the round on from a
+	// refused question, in the write that clears the refusal itself
+	// ([CoordStore.resetLaunch]); cleared by a new round, as
+	// [PendingRun.AnsweredJob] is; held to [maxRoundRefusals], the newest
+	// kept.
+	//
+	// THE REVIEWER'S, because it judges the round from its calls alone, and
+	// in those calls a question asked again after its reply was refused reads
+	// as the same question sent twice — the duplicate it sends a round back
+	// for — and a run's word that a reply never reached it has nothing of the
+	// engine's to be held against. A key of its own at the top of the row,
+	// as [PendingRun.AnswerRefusal] is.
+	//
+	// AND THE ROW'S WORD THAT A TURN KEPT THE REFUSAL: only the turn that took
+	// it writes the relaunch that tells the run, so an entry naming the job a
+	// refusal was recorded for says the refused reply's delivery is spent,
+	// where the refusal itself is gone from the row and the completion ledger
+	// fails open ([PendingRun.carriedOnFromRefusal], [Coordinator.refusedReply]).
+	RoundRefusals []RoundRefusal `json:"round_refusals,omitempty"`
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
@@ -2595,21 +2690,56 @@ type PendingStore interface {
 	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
 	// capture of the box's session takes out by value. Kept BESIDE the
 	// record, never on it — up to [MaxHandedBytes] before sealing, which
-	// every read of the record would carry though only a capture and the
-	// next launch's opening read it — named for the job it was written for,
-	// written by the attach that names the job's command once that attach
-	// has landed ([PendingStore.AttachSandbox]), and replaced by the next
-	// job's attach, which carries it forward where that job continues in the
-	// same box, since the box still holds what the jobs before it were handed
-	// and the session it resumes holds their lines ([PriorBox.Handed]).
+	// every read of the record would carry though only a capture, the next
+	// launch's opening and the poll's record of a renewed token read it —
+	// named for the job it was written for, written by the attach that names
+	// the job's command once that attach has landed
+	// ([PendingStore.AttachSandbox]), GROWN by every token the completion
+	// poll renews in the job's box before it writes it there, or marked as
+	// holding less than the box ([PendingStore.AddHanded]), and replaced by
+	// the next job's attach, which carries it forward where that job
+	// continues in the same box, since the box still holds what the jobs
+	// before it were handed and the session it resumes holds their lines
+	// ([PriorBox.Handed]).
 	//
 	// "" WHERE THE JOB HAS NONE: a launch that could not seal them, an
 	// attach whose write of them did not land, or a set a later job's
 	// replaced — never another job's set, which would scrub a session of
 	// values its box was not handed and leave in the ones it was. Each
 	// refuses every capture of the job rather than keep a session scrubbed
-	// of less than its box was given. An error is the store's.
+	// of less than its box was given. [ErrHandedIncomplete], saying why,
+	// where the job's set was marked as holding less than its box does
+	// ([PendingStore.AddHanded]). Any other error is the store's.
 	Handed(ctx context.Context, run PendingRun) (string, error)
+
+	// AddHanded grows run's job's sealed set ([PendingStore.Handed]) by a
+	// token a refresh is about to write into the job's box, BEFORE it is
+	// written ([Coordinator.RecordHanded]): add is handed the set as it
+	// stands and answers the set to keep in its place — the same seal where
+	// it holds the token already, so nothing is written — or "" and why the
+	// set can no longer hold every value the box does (a seal the caller
+	// cannot open or seal again, a set the token takes past [MaxHandedBytes]),
+	// which MARKS IT INCOMPLETE: every later capture of the job is refused,
+	// as one of a launch past the bound is.
+	//
+	// TRUE IS A TOKEN THE REFRESH MAY WRITE: add's answer landed, needed no
+	// write, or the job's set refuses every capture of it already. A job
+	// with NO SET beside its row — its launch sealed none, or its write did
+	// not land — is marked so, add unasked: its captures are refused already,
+	// and a launch's own write that lands late can no longer land without the
+	// token. FALSE AND NO ERROR where the row does not hold run's job
+	// running, its ending undecided — gone, another job's, read back by a
+	// collection, lost, or ending — and where a later job's set is beside it:
+	// a poll a moment old, whose token is written nowhere. An error is the
+	// store's, and the token is not written either; the next poll asks again.
+	//
+	// ONE COMPARE-AND-SWAP OF THE PART decides the set, add asked again on
+	// every write it loses, after a read of the row that finds the job
+	// running: an opening that reads the set to carry it, or a capture that
+	// reads it once the job's ending is decided, never misses a token this
+	// recorded. Unfenced, like a code hold: what a box holds is true whoever
+	// holds the seat.
+	AddHanded(ctx context.Context, run PendingRun, add func(sealed string) (next, incomplete string)) (bool, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from
@@ -2744,10 +2874,46 @@ type PendingStore interface {
 	// AN ANSWER PAST ITS SHARE OF THE ROW ([MaxAnswerBytes]) is refused with
 	// [ErrAnswerTooLarge] before anything is written — as the row would hold
 	// it, or as the copies letting it go would owe the seat, which a decline
-	// cannot refuse to write. The reply is then not the run's answer, and
-	// goes its way as the ordinary message it is.
+	// cannot refuse to write — and ONLY WHERE THE ROW, AS THE WRITE FINDS IT,
+	// WOULD HAVE TAKEN THE ANSWER ([PendingRun.takesAnswer]). To a run
+	// answered another way, moved on to another question or ending since the
+	// caller matched it, it is false with no error, whatever it weighs, like
+	// any other answer the question no longer takes: the reply is the
+	// ordinary message a reply after an answer is, and never a refusal of a
+	// reply to a question no run is waiting on any more. What the
+	// coordinator records of a reply refused here is its REFUSAL
+	// ([PendingStore.RecordRefusal]).
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
 	) (PendingRun, bool, error)
+
+	// RecordRefusal records a reply too large to be the answer
+	// ([ErrAnswerTooLarge]) as the OUTCOME of the question a run is parked
+	// on: the run flips to [StatusAnswered] holding answer — the reply's
+	// deliveries by id, when the newest was posted, and a seal of who gave
+	// it and of the refusal, with none of its words ([AnswerWords.Refusal])
+	// — and refusal beside it ([PendingRun.AnswerRefusal]), in one write,
+	// and hands back the row IFF THIS CALL WON (ADR-0114).
+	//
+	// ON [PendingStore.RecordAnswer]'S TERMS EXACTLY: the same
+	// compare-and-set on the question still waiting, none of the reply's
+	// deliveries declined ([PendingRun.takesAnswer]); the same lease rule,
+	// refused with [ErrSeatNotHeld] where a newer lease owns the row; FALSE
+	// IS NOT AN ERROR. From the write on the refusal is the question's
+	// answer to every other write here — claimed, taken, revived, declined
+	// and let go of as one — because the run is owed a resume with it, and
+	// while it holds the question takes nothing written after it. Declined
+	// or let go of, the question waits again, as after an answer let go of.
+	//
+	// IT CARRIES NONE OF THE REPLY. An answer that carries any of its
+	// deliveries ([RecordedAnswer.Events]) is an error, never a record: they
+	// are the very bytes the row could not carry, and what goes back to the
+	// seat if the refusal is let go of is the delivery itself, kept on the
+	// seat's inbox until the refusal leaves the run ([AnswerRefused]). So is
+	// one that names no delivery, no valid route or carries no seal, as
+	// [PendingStore.RecordAnswer] refuses, and a refusal that names other
+	// deliveries than the answer or figures that are no reply past a share.
+	RecordRefusal(ctx context.Context, turnID, launch string, answer RecordedAnswer, refusal AnswerRefusal,
+		fence Fence) (PendingRun, bool, error)
 
 	// DeclineAnswer lets go of a recorded answer the run could not be
 	// resumed with, IN ONE WRITE: the run goes back to the status the record
@@ -3235,6 +3401,183 @@ type RecordedAnswer struct {
 // Taken reports whether a resumed turn took this answer — see
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
+
+// AnswerRefusal is what a run's row records of a reply to its question that
+// was past what the row carries as an answer ([MaxAnswerBytes]): which
+// deliveries it was made of and the figures it was refused on — never a word
+// of it (ADR-0114). Beside it, [PendingRun.Answer] names the same deliveries
+// and when the newest was posted, sealed with who gave them and this refusal
+// ([AnswerWords.Refusal]).
+//
+// THE QUESTION'S OUTCOME, RESUMED LIKE AN ANSWER. Refused and left waiting, as
+// it once was, the question took the person's next short message ("any
+// luck?") as its answer, and the reply went to the seat as a message nobody
+// had asked about. Recorded, the question waits no more: nothing written after
+// it qualifies, the run is resumed told — in the engine's words — that the
+// person replied and the reply did not reach it, and it asks again under a new
+// question of its own ([PendingRun.AskedAt]), or carries on without it. Every
+// guarantee the answered path gives an answer holds for it: recorded before
+// anything is done with it, taken once by a resumed turn, retried with the
+// seat's inbox held behind it, revived, or let go — and then the reply goes
+// back to the seat the way it came ([AnswerRefused]).
+//
+// AND LET GO OF, THE QUESTION WAITS AGAIN, as one whose answer was let go of
+// does: a refusal declined after its attempts, or whose seal does not open,
+// puts the run back on its question under the anchor it was asked at, with the
+// reply declined for it, and the next qualifying reply answers it — a short
+// message written since included. The guarantee that nothing written after the
+// refusal is taken for the answer holds while the refusal is the run's, which
+// is every case but that one, and the let-go is announced, so the record that
+// said the run would be told is not left standing
+// ([Coordinator.announceRefusalLetGo]).
+//
+// NO EXTRA OF ITS OWN, and none needed: a later build that grows what a
+// refusal records adds a key of its own at the top of the row, as this one
+// sits beside [RecordedAnswer] (wirekeys.go), rather than a field here, which
+// this build would drop on its next write of the row.
+type AnswerRefusal struct {
+	// EventIDs are the deliveries the reply was made of: the answer's own
+	// ([RecordedAnswer.EventIDs]), which bind the refusal to it. How many
+	// messages the reply was is how many there are.
+	EventIDs []string `json:"event_ids"`
+
+	// Bytes is what the reply weighed as the row would have held it as an
+	// answer — the larger of the answer and the copies letting it go would
+	// owe ([AnswerTooLargeError.Weighs]) — and MaxBytes what an answer may
+	// weigh there: the two figures the run, the record and the API state,
+	// Bytes rounded up (kept.SizeUp) so a reply past the share never reads
+	// as within it.
+	Bytes    int `json:"bytes"`
+	MaxBytes int `json:"max_bytes"`
+
+	// Address is where the reply was posted: the transport metadata of its
+	// newest message — the transport, the conversation and its thread, the
+	// message and its sender, as ids — and none of its words. What the
+	// resume this refusal drives raises its working indicator in
+	// ([AnswerRefusal.trigger]), as an answer's resume raises it off the
+	// deliveries the answer carries: without it the person whose reply was
+	// refused saw no sign in their conversation that anything was happening,
+	// on a vendor's chat where the engine posts nothing of its own. Nil where
+	// the message stamped none, or more than [MaxRefusalAddressBytes]; the
+	// resume then raises no indicator, and nothing else is lost.
+	Address map[string]string `json:"address,omitempty"`
+}
+
+// Messages is how many messages the refused reply was: one delivery each.
+func (r AnswerRefusal) Messages() int { return len(r.EventIDs) }
+
+// equal reports whether two refusals are the same, nil equal to nil alone.
+func (r *AnswerRefusal) equal(other *AnswerRefusal) bool {
+	if r == nil || other == nil {
+		return r == other
+	}
+	return r.Bytes == other.Bytes && r.MaxBytes == other.MaxBytes &&
+		slices.Equal(r.EventIDs, other.EventIDs) && maps.Equal(r.Address, other.Address)
+}
+
+// RoundRefusal is one refused reply as the round's record keeps it for its
+// review ([PendingRun.RoundRefusals]): the job whose question it answered, how
+// many messages it was and the figures it was refused on ([AnswerRefusal]) —
+// none of its words, and none of its deliveries.
+type RoundRefusal struct {
+	Job      string `json:"job"`
+	Messages int    `json:"messages"`
+	Bytes    int    `json:"bytes"`
+	MaxBytes int    `json:"max_bytes"`
+}
+
+// maxRoundRefusals bounds [PendingRun.RoundRefusals].
+//
+// EIGHT, each a person's reply past half a megabyte to one question of one
+// round, which the run was told of and asked about again: a round past that is
+// asking the same thing in a loop its review reads from the calls anyway, and
+// the newest eight say so. Eight entries of a job's id and three figures weigh
+// about a KiB on the row at their widest.
+const maxRoundRefusals = 8
+
+// withRoundRefusal is refusals with the refusal of the question job asked
+// appended — once, however often the relaunch that carries the round on from
+// it is written — and the oldest dropped past [maxRoundRefusals].
+func withRoundRefusal(refusals []RoundRefusal, job string, refusal AnswerRefusal) []RoundRefusal {
+	if slices.ContainsFunc(refusals, func(r RoundRefusal) bool { return r.Job == job }) {
+		return refusals
+	}
+	out := append(slices.Clone(refusals), RoundRefusal{Job: job, Messages: refusal.Messages(),
+		Bytes: refusal.Bytes, MaxBytes: refusal.MaxBytes})
+	if len(out) > maxRoundRefusals {
+		out = out[len(out)-maxRoundRefusals:]
+	}
+	return out
+}
+
+// carriedOnFromRefusal reports whether this run's round was carried on from
+// the question job asked by the relaunch that told the run that question's
+// reply was refused ([PendingRun.RoundRefusals]). Only a turn that TOOK the
+// refusal makes that relaunch — it is how the run is told — so it is the row's
+// own word that a turn kept the refusal, written in the very write that clears
+// the refusal from the row ([CoordStore.resetLaunch]) and readable on every
+// node whatever the completion ledger says ([Coordinator.refusedReply]).
+func (r PendingRun) carriedOnFromRefusal(job string) bool {
+	return slices.ContainsFunc(r.RoundRefusals, func(refused RoundRefusal) bool { return refused.Job == job })
+}
+
+// Refused is the refusal this run's recorded answer is, and whether it is one:
+// [PendingRun.AnswerRefusal] where the row holds an answer naming exactly the
+// deliveries it names.
+//
+// BOUND TO THE ANSWER, so no other answer is ever read as a refusal: a key a
+// build without this field kept at the top of the row (wirekeys.go) while it
+// let the answer go and recorded another names deliveries that answer does
+// not, and reads as no refusal at all.
+func (r PendingRun) Refused() (AnswerRefusal, bool) {
+	if r.Answer == nil || r.AnswerRefusal == nil || !slices.Equal(r.AnswerRefusal.EventIDs, r.Answer.EventIDs) {
+		return AnswerRefusal{}, false
+	}
+	return *r.AnswerRefusal, true
+}
+
+// refusal is [PendingRun.Refused] as a pointer, nil where the answer is none.
+func (r PendingRun) refusal() *AnswerRefusal {
+	refusal, ok := r.Refused()
+	if !ok {
+		return nil
+	}
+	return &refusal
+}
+
+// WaitsOn reports whether this run still waits on the question its job launch
+// asked: that job is the run's, it is parked on its question, no answer is
+// recorded on it, and its ending is undecided.
+//
+// THE ONE RULE for whether a question still waits, read by the store as it
+// records an answer ([PendingRun.takesAnswer]) and by the coordinator as it
+// matches a reply to a run ([Reply.Best]): so a reply is matched only to a
+// question the store would record it against.
+func (r PendingRun) WaitsOn(launch string) bool {
+	return r.LaunchID == launch && slices.Contains(Awaiting, r.Status) && r.Answer == nil && r.Ending == nil
+}
+
+// takesAnswer reports whether this run would record an answer made of the
+// deliveries ids as the answer to the question launch asked: it still waits on
+// that question ([PendingRun.WaitsOn]), and none of ids is a reply the question
+// let go of ([PendingRun.DeclinedAnswers]).
+//
+// THE ONE RULE for both halves of an answer's fate at the store: whether
+// [PendingStore.RecordAnswer] records it, and whether one past its share of
+// the row is refused as too large for the question or is the ordinary reply
+// to a question already answered — so a reply is never refused for its size
+// as the answer to a question the store would not have recorded it against.
+func (r PendingRun) takesAnswer(launch string, ids []string) bool {
+	if !r.WaitsOn(launch) {
+		return false
+	}
+	for _, id := range ids {
+		if slices.Contains(r.DeclinedAnswers, id) {
+			return false
+		}
+	}
+	return true
+}
 
 // HandedBack is one copy of a declined answer's delivery, owed to the seat's
 // inbox as the ordinary message it is — see [PendingRun.HandBack].

@@ -190,7 +190,7 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	boot.Stream.Leaf.Host, boot.Stream.Leaf.Port = "127.0.0.1", port
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
 	return &boot
@@ -361,7 +361,11 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 	p.agent.model.callOnExecute(worklet.CreateWorkItemTool, map[string]any{
 		"project": "ENG", "title": "filed from a node that holds nothing",
 	})
-	wakeWithMessage(t, p.agent, "ceo")
+	// FOR THE FOUNDER, employed on the data node: a stranger's turn files
+	// nothing, since an agent uses no app for somebody the company does not
+	// know (ADR-0109).
+	employFounder(t, p.data, p.agent)
+	wakeAsFounder(t, p.agent, "ceo")
 
 	var detail worklet.TaskDetail
 	waitFor(t, "the task on the data node", func() bool {
@@ -593,7 +597,8 @@ func TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener(t *testing.T) {
 	p.agent.model.callOnExecute(worklet.CreateWorkItemTool, map[string]any{
 		"project": "ENG", "title": "filed through its own node's listener",
 	})
-	wakeWithMessage(t, p.agent, "ceo")
+	employFounder(t, p.data, p.agent)
+	wakeAsFounder(t, p.agent, "ceo")
 	waitFor(t, "the task on the data node", func() bool {
 		got, err := p.data.engine.Tracker().Task(t.Context(), "ENG-1", worklet.DetailWants{},
 			statelog.Freshness{Level: statelog.ReadStale})
@@ -857,7 +862,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Node.Roles = tc.roles
 			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 			brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
-			brokertest.CodeCacheIn(&boot.Git)
+			brokertest.GitletCacheIn(&boot.Gitlet)
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
 			withKeyring(t, &boot)
 			n := bootNodeWith(t, engine.Options{

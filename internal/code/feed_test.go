@@ -3,6 +3,7 @@ package code_test
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -73,14 +74,15 @@ func woken(routed []notify.Routed) []string {
 // tells is never queue-woken: their notice row is written all the same, and
 // is where they read it. A record that tells nobody but its actor, or only
 // persons, is acknowledged with no delivery, as is a push that moves no
-// change and a record of a newer build.
+// change; a record of a newer build is deferred to a peer on that build.
 //
 // Mutation: drop the person filter in the parser → the open wakes founder;
 // relay a record whatever its routing tells (drop wakesASeat) → the ask of a
 // person alone, and the aside nobody hears, are relayed; derive the wake id
 // from the change rather than the record → the comment's wakes collapse into
 // the ask's; name no origin, or one reason for every recipient, → the ask's
-// and the comment's origins are wrong.
+// and the comment's origins are wrong; answer a newer build's record "no
+// wake" → it is not deferred, and the feed would acknowledge it fleet-wide.
 func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -187,7 +189,9 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	}
 
 	// A NEWER BUILD'S RECORD: the envelope reads, the payload's rules are not
-	// this build's, and it is handled rather than returned for ever.
+	// this build's, so it is DEFERRED to a peer on that build — never
+	// answered "no wake", which the feed would acknowledge for the whole
+	// fleet (#838).
 	future := feedRecord(t, n, askSeat.Position)
 	var body map[string]any
 	if err := json.Unmarshal(future.Payload, &body); err != nil {
@@ -197,8 +201,11 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	if future.Payload, err = json.Marshal(body); err != nil {
 		t.Fatal(err)
 	}
-	if _, relayed, err := code.NewTranslator().Translate(t.Context(), future); relayed || err != nil {
-		t.Errorf("a newer build's record is relayed (%v) or refused (%v), want it acknowledged", relayed, err)
+	_, relayed, err = code.NewTranslator().Translate(t.Context(), future)
+	var deferral *changefeed.Deferral
+	if relayed || !errors.As(err, &deferral) || deferral.Reason != changefeed.DeferNewerRecord {
+		t.Errorf("a newer build's record is relayed (%v) and answered %v, want it deferred "+
+			"to a newer peer (%s)", relayed, err, changefeed.DeferNewerRecord)
 	}
 	// AND BYTES THAT ARE NO RECORD are an error, which the feed returns
 	// rather than acknowledges: a record it cannot read is never decided.

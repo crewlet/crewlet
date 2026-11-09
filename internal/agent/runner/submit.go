@@ -133,6 +133,8 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 // hold it (its arguments as the engine records them and the log escapes them),
 // which is half what the log keeps — the run's own spelling of what the tool
 // reads in canonical form can only add to it, and never past the other half.
+// The size is stated rounded up (internal/kept's SizeUp), so a submission a
+// byte past the bound never reads as the bound itself.
 //
 // LIVE ONLY. The replay decodes without it: the submission is made, and one a
 // build before this bound recorded whole is replayed as it stands.
@@ -144,7 +146,7 @@ func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string
 				return workPayload{}, fmt.Errorf("this submission is %s as the run's record holds it, and "+
 					"the record keeps a submission whole up to %s: shorten the summary, the evidence or "+
 					"the open questions (the long form belongs where you delivered the work) and submit "+
-					"again", kept.Size(n), kept.Size(sandbox.MaxSubmissionBytes))
+					"again", kept.SizeUp(n), kept.Size(sandbox.MaxSubmissionBytes))
 			}
 		}
 		return decode(args)

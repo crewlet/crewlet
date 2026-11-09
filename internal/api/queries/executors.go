@@ -410,6 +410,7 @@ var runKeys = map[string]runShown{
 	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
 	"answered_by":         runStatus,
 	"answered_at":         runStatus,
+	"answer_refused":      runStatus, // a refused reply's figures and message count, never its words
 	"ending":              runStatus, // that the run is over and when, never what its turn did
 	"reply":               runBody,
 	"bridge_calls":        runBody,
@@ -567,12 +568,13 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for —
 		// neither, once an ending reclaims the box.
-		"box_exists":         run.SandboxID != "" && !reclaimed,
-		"paused_at":          isoOrEmpty(heldSince),
-		"pause_ttl_seconds":  run.PauseTTLSeconds,
-		"started_at":         isoOrEmpty(run.CreatedAt),
-		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		"box_exists":        run.SandboxID != "" && !reclaimed,
+		"paused_at":         isoOrEmpty(heldSince),
+		"pause_ttl_seconds": run.PauseTTLSeconds,
+		"started_at":        isoOrEmpty(run.CreatedAt),
+		"updated_at":        isoOrEmpty(run.UpdatedAt),
+		// NEVER A HELD CALL, which its approval answers alone.
+		"answerable_in_chat": answerableInChat(run.ConversationKey) && run.HeldCall == nil,
 		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
 		// arrived in (answer_executor answers it as `answer_id`): a person who
 		// answered is told from here that the run could not take their
@@ -587,6 +589,15 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		"answer_ids":  answerIDs(run.Answer),
 		"answered_by": answeredBy,
 		"answered_at": answeredAt(run.Answer),
+		// AND WHETHER THAT ANSWER IS A REFUSAL (ADR-0114): a reply too large
+		// for the run to take, recorded as the question's outcome in the
+		// answer's place, with what it came to and what an answer may and
+		// how many messages it was — none of its words, which no record of
+		// the run keeps. The ids, who and when above are that reply's. The
+		// run is resumed told the reply did not reach it, so a reader tells
+		// a reply refused from an answer the run carries on with by this
+		// alone. Null on every other row.
+		"answer_refused": answerRefused(run),
 		// THAT THE RUN IS OVER, though its record is not gone yet: its
 		// ending is decided ([sandbox.RecordedEnding]) and finishing — on a
 		// node that records every turn's end, waiting for the turn's
@@ -654,6 +665,9 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 		row["held_call"] = map[string]any{
 			"id": held.ID, "server": held.Server, "tool": held.Tool, "raw": held.Raw,
 			"digest": held.Digest, "held_at": isoOrEmpty(held.HeldAt),
+			// A CALL ITS TOOL ASKS ABOUT EVERY TIME, answered once or deny
+			// alone, and who answers it where not the seat's lead.
+			"fixed": held.Fixed, "approvers": held.Approvers,
 		}
 		row["held_arguments"] = opened.heldArgs
 	}
@@ -692,6 +706,22 @@ func answerIDs(answer *sandbox.RecordedAnswer) []string {
 // row to read instead.
 func (s Sources) answeredBy(run sandbox.PendingRun) string {
 	return sandbox.OpenedAnswerer(s.RunAnswers, run)
+}
+
+// answerRefused is the refusal run's recorded answer is, as a board reads it —
+// how many messages the reply was and its two figures — or nil where the
+// answer is none ([sandbox.PendingRun.Refused]): an untyped nil, so a reader of
+// the row finds no value at all rather than an empty object.
+func answerRefused(run sandbox.PendingRun) any {
+	refusal, refused := run.Refused()
+	if !refused {
+		return nil
+	}
+	return map[string]any{
+		"messages":  refusal.Messages(),
+		"bytes":     refusal.Bytes,
+		"max_bytes": refusal.MaxBytes,
+	}
 }
 
 func answeredAt(answer *sandbox.RecordedAnswer) string {

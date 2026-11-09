@@ -131,7 +131,7 @@ const (
 //  6. A layer that would weigh more than code.MaxLayerParts ×
 //     code.LayerPartBytes (layerEstimate) is TOO LARGE, refused before
 //     anything is built: its build would need more background memory than
-//     any git node this release sizes holds.
+//     any Gitlet node this release sizes holds.
 func planLayer(chain cache.Chain, live []code.PackRow, byteCap int64, b bounds, absorb int) (layerPlan,
 	layerVerdict) {
 

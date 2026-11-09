@@ -37,8 +37,8 @@ import (
 
 // ---- fixtures ------------------------------------------------------------ //
 
-// statusAsker is the git nodes' roster and status scatter as the health tools
-// see them, over one fleet: report is every git node's status and its part in
+// statusAsker is the Gitlet nodes' roster and status scatter as the health tools
+// see them, over one fleet: report is every Gitlet node's status and its part in
 // the coverage, the roster every node either names — listed in reverse and
 // twice, so a reader that does not sort it reads it wrong — and each question
 // is answered as the engine answers it, by the nodes it asks alone, each with
@@ -48,14 +48,14 @@ type statusAsker struct {
 	mu        sync.Mutex
 	report    builtin.CodeStatusReport
 	err       error // CodeStatus's
-	rosterErr error // GitNodes'
+	rosterErr error // GitletNodes'
 	asked     []string
 	asks      []builtin.CodeStatusAsk
 }
 
 var _ builtin.StatusAsker = (*statusAsker)(nil)
 
-func (s *statusAsker) GitNodes(context.Context) ([]string, error) {
+func (s *statusAsker) GitletNodes(context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.rosterErr != nil {
@@ -215,6 +215,12 @@ func healthRequesters() requesters {
 		"founder": founderPrincipal(iam.Apps...),
 		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
 			Stage: iam.StageRetired, Grants: iam.Apps},
+		// TWO CREDENTIALS ACTING AS NO SEAT, as this node resolves them: a
+		// pipeline's `[worklet]` token and an `[admin]` one.
+		"login:token:ci": {Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantWorklet}},
+		"login:token:ops": {Kind: iam.KindMachine, Login: "token:ops", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 }
 
@@ -292,6 +298,32 @@ func healthTools(deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Ca
 	return out
 }
 
+// seatHealthTools are the health tools over deps as a seat's registry offers
+// them, decided by chart, by name. A turn somebody woke reaches a seat's
+// registry alone, whose gate binds the turn's requester ceiling from the
+// composer the registry is handed (builtin.Deps.Requesters) — never the
+// operator catalogue, which no seat calls through — so a case about whoever
+// woke a turn takes its tool from here.
+func seatHealthTools(t *testing.T, deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Callable {
+	t.Helper()
+	composer := deps.Requesters
+	if composer == nil {
+		composer = deps.Code.Requesters
+	}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{Health: deps, Requesters: composer,
+		Authorize: builtin.Decide(chart)}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	out := map[string]tools.Callable{}
+	for _, name := range builtin.HealthToolNames() {
+		if entry, ok := reg.Lookup(name); ok {
+			out[name] = entry.Tool
+		}
+	}
+	return out
+}
+
 // healthAnswer is a tool's answer as a JSON object, failing on a refusal.
 func healthAnswer(t *testing.T, got tools.Result) map[string]any {
 	t.Helper()
@@ -325,7 +357,7 @@ func keysOf(t *testing.T, v any) []string {
 // evaluated as saying nothing, never as healthy; and beside the marks it
 // carries the heartbeat's facts and no judgement of its own: a node running a
 // thousand turns, draining and stuck on its config, with nothing firing, is
-// reported with nothing firing. code_status hands each git node's own account
+// reported with nothing firing. code_status hands each Gitlet node's own account
 // back as the node gave it — a cache past its budget is two numbers, not a
 // flag — with the coverage its asker heard. Every key either answer carries is
 // one the tool declares, so a verdict added beside the facts fails here.
@@ -337,7 +369,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
 	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
-	node(t, backend, "node-a", map[string]any{"roles": []string{"data", "git"}}, &coord.NodeStatus{
+	node(t, backend, "node-a", map[string]any{"roles": []string{"data", "gitlet"}}, &coord.NodeStatus{
 		InFlight: 3, AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
 			{Kind: "backup_age", Since: since}, {Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
 		}})
@@ -402,7 +434,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 		t.Errorf("this_node = %v, want node-a", got)
 	}
 
-	// code_status: each git node's own account, as the node gave it.
+	// code_status: each Gitlet node's own account, as the node gave it.
 	over := cache.Status{Since: since, Bytes: 9 << 30, Budget: 8 << 30, Warm: 3,
 		Hour: cache.Churn{Evictions: 7}}
 	heat := cache.RepoHeat{ID: siteID, Name: "site", Hour: cache.Use{Fetches: 40, Clones: 2, BytesOut: 1 << 20},
@@ -481,7 +513,10 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
 	deps.Health = healthFleet(backend, chart)
+	// THE SSH TOOLS' OWN GRANTS are their own test's: this chart grants none.
+	deps.SSH = builtin.SSHDeps{}
 	deps.Health.Status, deps.Health.Code = &statusAsker{}, deps.Code
+	deps.Requesters = deps.Health.Requesters
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, deps); err != nil {
 		t.Fatalf("register: %v", err)
@@ -555,7 +590,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 //
 // The health grant opens the deployment's view and never a repository the
 // seat's own grant does not read (ADR-0088): of the hottest repositories the
-// git nodes name, a seat's answer keeps those its grant reads, leaves out one
+// Gitlet nodes name, a seat's answer keeps those its grant reads, leaves out one
 // it may not read, one whose name now names nothing and one whose name now
 // names another repository, and says how many it left out; one repository
 // asked by name is refused the seat exactly as the code tools refuse it. A
@@ -616,7 +651,7 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 			refused.Output)
 	}
 	if slices.Contains(asker.asked, vaultID) {
-		t.Errorf("the git nodes were asked about a repository the seat was refused: %v", asker.asked)
+		t.Errorf("the Gitlet nodes were asked about a repository the seat was refused: %v", asker.asked)
 	}
 	one := healthAnswer(t, callTool(asSeat("sre"), t, tool, map[string]any{"repo": "site"}))
 	if one["id"] != siteID || one["repo"] != "site" {
@@ -624,11 +659,11 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 	}
 }
 
-// manyHotRepos is a report of nodes git nodes naming per repositories each,
+// manyHotRepos is a report of nodes Gitlet nodes naming per repositories each,
 // every repository on one node alone, as repository homes spread them: the
 // fleet's r-th is "repo-<r>" with the r-th smallest id, the hour's use falling
 // with r and the day's rising — so the hottest of the hour is the first and
-// the hottest of the day the last — and the git nodes take them in turn. And
+// the hottest of the day the last — and the Gitlet nodes take them in turn. And
 // every repository it names, by name, for Gitlet resolving them all.
 func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
 	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
@@ -678,7 +713,7 @@ func (*stalledGrants) FloorOf(string) statelog.Position { return statelog.Positi
 // A CODE STATUS JUDGEMENT ENDS AT ITS FIRST FAILED READ.
 //
 // A failure answers the whole call unavailable, so nothing read after it can
-// change the answer: with three git nodes naming forty repositories each, the
+// change the answer: with three Gitlet nodes naming forty repositories each, the
 // hottest one's grant read failing at once and every other read holding until
 // its context ends — the code log out of quorum, whose reads fail only once
 // their barrier's budget is spent — the call answers unavailable as soon as
@@ -743,9 +778,9 @@ func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
 // A CODE STATUS ANSWER COSTS THE READS IT ANSWERS, NOT THE FLEET'S.
 //
 // A seat's hot list keeps at most cache.HotRepos of each window, and judging
-// every repository the git nodes name made a grant read apiece — a barrier on
-// the code log a wave — that grew with the git nodes and not with the list. So
-// ten git nodes naming forty repositories each, four hundred in all, are
+// every repository the Gitlet nodes name made a grant read apiece — a barrier on
+// the code log a wave — that grew with the Gitlet nodes and not with the list. So
+// ten Gitlet nodes naming forty repositories each, four hundred in all, are
 // judged hottest first and only to the list's cut: the seat is answered
 // exactly the list a judgement of every repository answers — the twenty
 // hottest of the hour and of the day that it may read — having read only the
@@ -909,7 +944,7 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 // and the colleague may not — counted withheld beside the one the seat itself
 // may not read — and that repository asked by name is refused as the code
 // tools refuse a read above the ceiling, forbidden with the ceiling's reason
-// over code.ErrAboveCeiling, and never asked of the git nodes. A turn nobody
+// over code.ErrAboveCeiling, and never asked of the Gitlet nodes. A turn nobody
 // woke, and one a person woke, read for nobody but the seat — a person bounds
 // nothing, since every person reads every repository — and the person who
 // woke it need not hold admin: whoever woke the turn is decided on
@@ -948,7 +983,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 			refused: map[string]bool{"vault": true},
 			above:   map[string]bool{"infra": true},
 		}}
-		tool := healthTools(builtin.HealthDeps{Status: s.asker, Code: healthCode(s.repos, chart)},
+		tool := seatHealthTools(t, builtin.HealthDeps{Status: s.asker, Code: healthCode(s.repos, chart)},
 			chart)[builtin.CodeStatusTool]
 		seated, ok := tool.(tools.SeatCallable)
 		if !ok {
@@ -1022,7 +1057,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 			t.Errorf("the refusal's cause is %v, want the ceiling's reason over ErrAboveCeiling", got.Cause)
 		}
 		if len(s.asker.asked) != 0 {
-			t.Errorf("the git nodes were asked about %v for a repository refused the turn's colleague",
+			t.Errorf("the Gitlet nodes were asked about %v for a repository refused the turn's colleague",
 				s.asker.asked)
 		}
 	})
@@ -1051,7 +1086,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 				}
 			}
 			if s.repos.reads != 0 || len(s.asker.asked) != 0 {
-				t.Errorf("the refused calls read %d repositories and asked the git nodes %v, want nothing",
+				t.Errorf("the refused calls read %d repositories and asked the Gitlet nodes %v, want nothing",
 					s.repos.reads, s.asker.asked)
 			}
 		})
@@ -1115,7 +1150,7 @@ func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			leases := &countingLeases{LeaseLister: backend}
-			tool, ok := healthTools(healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
+			tool, ok := seatHealthTools(t, healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
 			if !ok {
 				t.Fatal("fleet_health is not seat-callable, so no turn's requester reaches it")
 			}
@@ -1306,33 +1341,33 @@ func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	}
 }
 
-// A FLEET OF GIT NODES PAST ONE ANSWER IS PAGED, NEVER REFUSED — code_status's
+// A FLEET OF GITLET NODES PAST ONE ANSWER IS PAGED, NEVER REFUSED — code_status's
 // answer about the fleet and its answer about one repository alike — AND A
-// PAGE ASKS ITS OWN GIT NODES ALONE.
+// PAGE ASKS ITS OWN GITLET NODES ALONE.
 //
-// Four hundred git nodes, half with ids long enough that a hundred rows outgrow
+// Four hundred Gitlet nodes, half with ids long enough that a hundred rows outgrow
 // one answer, and a tenth that did not answer: whole, either answer is far past
 // ToolAnswerBytes. Read a page at a time, every page fits one answer and goes
-// out compact; walking the pages by `next` lists every git node once and in id
+// out compact; walking the pages by `next` lists every Gitlet node once and in id
 // order — each answered node's row, and every node's part in the coverage, an
 // unanswered node's included — the roster sorted however it was listed; a
 // page of a hundred is cut whole-row; the hot list rides the fleet's first page
-// alone; `node` reads one git node, one that did not answer as its coverage;
+// alone; `node` reads one Gitlet node, one that did not answer as its coverage;
 // and arguments that cannot be read are refused.
 //
-// Every call asks the git nodes exactly one question, and only the fleet's
-// first page asks every git node, each for its hot list: a later page — and
+// Every call asks the Gitlet nodes exactly one question, and only the fleet's
+// first page asks every Gitlet node, each for its hot list: a later page — and
 // every page of a repository — asks the `limit` nodes after its cursor, and no
-// hot list, and `node` asks that node alone, so walking N git nodes costs the
+// hot list, and `node` asks that node alone, so walking N Gitlet nodes costs the
 // N answers of its pages plus one fleet-wide first page, never N answers a
 // page. A page's `complete` is whether every node it lists answered — on the
-// fleet's first page, whether every git node did, its hot list drawn from all
-// of them. A refused call, a node that is no live git node among them, asks
+// fleet's first page, whether every Gitlet node did, its hot list drawn from all
+// of them. A refused call, a node that is no live Gitlet node among them, asks
 // nobody; and a roster that cannot be read is refused, unavailable, before
 // anybody is asked.
 //
 // Mutation: send the page `limit` asks whole rather than cut to one answer,
-// ignore `cursor`, send the hot list on every page, ask every git node for
+// ignore `cursor`, send the hot list on every page, ask every Gitlet node for
 // every page, read the roster in the order it was listed, or give the fleet's
 // first page its listed nodes' `complete`, and a case is red.
 func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
@@ -1382,7 +1417,7 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	tool := healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)},
 		chart)[builtin.CodeStatusTool]
 
-	// question is the one question a call with args asks the git nodes.
+	// question is the one question a call with args asks the Gitlet nodes.
 	question := func(args map[string]any) builtin.CodeStatusAsk {
 		fleet, repo := args["repo"] == nil, ""
 		if !fleet {
@@ -1411,7 +1446,7 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 				got[i].Repo == want[i].Repo && got[i].Hot == want[i].Hot
 		}
 		if !same {
-			t.Errorf("%v asked the git nodes %s, want %s", args, describeAsks(got), describeAsks(want))
+			t.Errorf("%v asked the Gitlet nodes %s, want %s", args, describeAsks(got), describeAsks(want))
 		}
 	}
 
@@ -1487,7 +1522,7 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 			fleetFirst := pages == 0 && args["repo"] == nil
 			if want := listedAnswered(p) && !fleetFirst; p.Coverage.Complete != want {
 				t.Errorf("page %d of %v reads complete %v, want %v: whether every node it lists answered, "+
-					"and on the fleet's first page whether every git node did", pages, args,
+					"and on the fleet's first page whether every Gitlet node did", pages, args,
 					p.Coverage.Complete, want)
 			}
 			if (p.Hot != nil) != fleetFirst {
@@ -1514,8 +1549,8 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 		if form["repo"] == nil && (first.Hot == nil || len(*first.Hot) == 0) {
 			t.Errorf("the fleet's first page carries no hot list")
 		}
-		// THE FIRST TWO GIT NODES BOTH ANSWERED: the fleet's first page is
-		// still incomplete — its hot list is every git node's, and a tenth
+		// THE FIRST TWO GITLET NODES BOTH ANSWERED: the fleet's first page is
+		// still incomplete — its hot list is every Gitlet node's, and a tenth
 		// of them did not answer — and the repository's is complete.
 		if two := read(with(form, "limit", 2)); !slices.Equal(covered(two), all[:2]) ||
 			two.Coverage.Complete != (form["repo"] != nil) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
@@ -59,7 +60,7 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			tracker: true, wiki: true, code: true, walk: "walkDocletSkills"},
 		{name: "a data node hosting code alone", native: codeRuntime(own(false, false)), code: true},
 		{name: "a node without data hosting code alone",
-			remote: &remoteNative{built: builtWith{code: true}}, code: true},
+			remote: &remoteNative{built: builtWith{code: config.CodeGitlet}}, code: true},
 		{name: "a node running no native runtime"},
 		{name: "a data node running both halves", native: own(true, true),
 			tracker: true, wiki: true, walk: "walkDocletSkills"},
@@ -113,7 +114,8 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			}
 			// THE ALARMS' WAKES ROUTE ON EVERY NODE, whatever halves it
 			// runs: a transition is routed by the chart alone.
-			want := []string{alarmwake.Source}
+			// AND THE ACCESS REVIEWS, which name their seat and read no row.
+			want := []string{alarmwake.Source, accessreview.Source}
 			if tc.tracker {
 				want = append(want, worklet.Source)
 			}
@@ -166,7 +168,7 @@ func halvesRouter(t *testing.T) *estate.Router {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitNodes{},
+		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitletNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: routerEnvelopes(t),
 	})
 	if err != nil {
@@ -199,9 +201,9 @@ func chatRuntime(n *native) *native {
 }
 
 // codeRuntime is n built for a company that hosts its repositories in the
-// engine (`code.native`).
+// engine (`code.backend: gitlet`).
 func codeRuntime(n *native) *native {
-	n.built.code = true
+	n.built.code = config.CodeGitlet
 	return n
 }
 

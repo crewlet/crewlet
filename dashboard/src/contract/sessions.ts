@@ -10,7 +10,8 @@
  * member declared here is a key an answer carries, every key an answer carries
  * is declared, the six unions are the engine's own closed sets — so a screen
  * keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for every value
- * the engine sends — and a schedule's key is known by the engine's own prefix.
+ * the engine sends — a schedule's key is known by the engine's own prefix, and
+ * a session in progress kept since it was read is said in the engine's words.
  *
  * Every text a harness, a model or a person wrote — an entry's text, the ask's
  * excerpt, an ending's prose — reaches the client REDACTED: the engine runs its
@@ -26,6 +27,15 @@ import type { LogPosition } from "./positions.ts";
  * segment (`notify.ScheduleConversation`) — which a row prints decoded.
  */
 export const SCHEDULE_CONVERSATION_PREFIX = "schedule/";
+
+/**
+ * What the engine tells a reader of a turn that has not ended whose row names a
+ * newer capture than the one they read (`executorread.LiveKept`): that it has
+ * not ended, and its runs have kept its session — "again since", where its
+ * refusal of a later page's cursor says it of a session a page was read from.
+ * The screen's banners say it in the same words, of the transcript on screen.
+ */
+export const LIVE_KEPT = "has not ended, and its runs have kept its session";
 
 /** How a turn ended, in the engine's four words (`executorkeep.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
@@ -89,9 +99,20 @@ interface SessionEnding {
   stop_reason?: string;
   /** The engine's account of the guard, the budget or the loss that ended it. */
   failure?: string;
-  /** The turn's newest capture of its session, where it is not the one its
-   *  row names: the row then names none of the turn's. */
+  /** The turn's newest capture of its session, where it is newer than the
+   *  one its row names: the row then names an older one its turn went on
+   *  past (`went_on`), or none of the turn's. */
   unkept?: SessionUnkept;
+  /** The turn went on past the session its row names: its last word was not
+   *  kept, so that session, where the row names one, was kept while the turn
+   *  still worked and holds what the turn did up to there, not after. Not
+   *  sent where the row holds the `last_word` its end named. */
+  went_on?: boolean;
+  /** The turn's last word — the final capture of its last launch that ran a
+   *  job — where its end said it went on and that capture was its newest. Sent
+   *  without `went_on` where the row holds it after all, its record taken by
+   *  the log although the run's own record held it refused. */
+  last_word?: { launch_seq: number; capture_seq: number };
   /** The sessions a launch of the turn ran out of its model's context in. No
    *  launch continues any of them. */
   exhausted?: string[];
@@ -116,6 +137,28 @@ export interface ExecutorSessionRow {
   /** The row still names a session's object, of `object_bytes` sealed. */
   kept: boolean;
   object_bytes: number;
+  /**
+   * The row names the session of a turn that has not ended: the newest its
+   * runs have kept, which its run may have gone on past
+   * (`executordomain.Session.InProgress`).
+   */
+  in_progress: boolean;
+  /**
+   * What the engine tells every reader of a session in progress, in its own
+   * sentence (`executordomain.Session.InProgressNote`): that the turn has not
+   * ended, that this is the newest session its runs have kept and when it was
+   * captured, that its run may have gone on past it, and that its last call may
+   * have no result yet. The engine's words alone. Absent on any other row.
+   */
+  in_progress_note?: string;
+  /**
+   * What the engine tells every reader of an ended turn's row kept up to a
+   * session it went on past, or of a turn that was lost, in its own sentence
+   * (`executordomain.Session.WentOnNote`): that, and which newer capture was
+   * not kept and why where its end names one — that reason redacted. Absent on
+   * any other row.
+   */
+  kept_note?: string;
   /**
    * The ended turn whose session this turn's first launch was handed to
    * continue: its conversation's head as the turn's dispatch read it, the one

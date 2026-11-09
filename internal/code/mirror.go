@@ -182,16 +182,23 @@ func remoteInvalid(url, credential string, needCredential bool) string {
 
 // MirrorSeatRefusal is why the seat as may not be the one a push mirror of
 // repo pushes as, or "": a seat roster holds that reads the repository — a
-// PERSON'S seat reads every one (ADR-0088), and an agent's what its grant on it
-// reads ([GrantOf]), judged on repo as it stands, its owner and its visibility.
+// PERSON'S seat reads every one where the person holding it uses Gitlet
+// (ADR-0088, ADR-0110), and an agent's what its grant on it reads ([GrantOf]),
+// judged on repo as it stands, its owner and its visibility. noGitlet is the
+// identity directory's answer for a person's seat, read by the caller before
+// it decides: the seat is held by nobody, by a person who may not act, or by
+// one not given the gitlet app — whose code a mirror pushing as them would
+// publish under an identity the company withheld it from.
 //
 // THE ONE JUDGEMENT of a push mirror's seat: a person's settings change and a
 // person's create judge it here, a repository code.repos declares is held to
 // it by the configuration's own reading of the same rule (config's
-// CodeRepo.mirrorSeatReads, which the engine holds to this one), and a push
-// mirror asks it again before each push, of the chart it then holds, since a
-// later revision of the chart may take the seat's read away.
-func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
+// CodeRepo.mirrorSeatReads, which the engine holds to this one — for the
+// chart alone, since a configuration reads no identity directory), and a push
+// mirror asks it again before each push, of the chart and the directory it
+// then reads, since a later revision of the chart may take the seat's read
+// away and an administrator may take the person's app.
+func MirrorSeatRefusal(as string, repo RepoRef, roster Roster, noGitlet bool) string {
 	if roster == nil {
 		return "this node holds no chart to judge a push mirror's seat by"
 	}
@@ -200,6 +207,11 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
 	case !ok:
 		return fmt.Sprintf("mirror_to.as: %s is no seat of the chart, and a push mirror pushes as a seat's own "+
 			"identity at the other host", as)
+	case s.Human && noGitlet:
+		return fmt.Sprintf("mirror_to.as: nobody holding %s uses Gitlet now — the person holding it is not "+
+			"given the gitlet permission or may not act, or nobody holds it — and a push mirror publishes only "+
+			"what the seat it pushes as reads (ADR-0110): an administrator gives them Gitlet, or the mirror "+
+			"names a seat that reads %s", as, repo.Name)
 	case s.Human:
 		return ""
 	}
@@ -216,7 +228,7 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
 // every remote a request carries a credential for, whoever asks it.
 //
 // GITLET SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
-// the repository's home git node from the secret store and then that node's
+// the repository's home Gitlet node from the secret store and then that node's
 // environment, so a reference nothing bounded would let whoever may create a
 // repository — every member of the company — have that node send any value
 // it can resolve to a host of their choosing. An administrator declares which

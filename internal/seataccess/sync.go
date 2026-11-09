@@ -980,6 +980,8 @@ func LaneName(lane Lane) string {
 		return "AWS"
 	case LaneGoogleCloud:
 		return "Google Cloud"
+	case LaneSSH:
+		return "SSH"
 	default:
 		return string(lane)
 	}

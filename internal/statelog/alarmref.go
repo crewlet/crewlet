@@ -131,8 +131,18 @@ var alarmMeaning = map[Kind]string{
 		"below the floor on this corpus with or without the index.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
 		"recoverable by nothing.",
-	KindFeedUnreadable: "A change record no build on this node can read. It " +
-		"redelivers for ever, so every wake behind it is waiting too.",
+	KindFeedUnreadable: "A change record no build on this node can read. It is " +
+		"handed back for a node that can, with a backoff, and dead-lettered once " +
+		"it is an hour old, so its wake waits until a build that reads it runs.",
+	KindFeedDeadLettered: "A log's wake feed holds a dead letter: a record no node " +
+		"could read in the hour it was handed back — a roll that outlasted the " +
+		"hour, a key no node holds, or a record no build translates — kept whole " +
+		"in `CREWLET_DLQ`. Each is a wake nobody has had. The first node whose feed " +
+		"starts able to read an entry derives its wake and drops it; an operator " +
+		"can discard one whose wake they have decided to lose; one nothing replays " +
+		"or discards expires after `stream.event_retention_hours`, and its wake " +
+		"with it. One alarm names every such log, leading with the one whose " +
+		"oldest entry expires soonest.",
 	KindFeedStopped: "A change feed on this node has held no consumer for " +
 		"longer than the one-minute stall grace, so this node publishes no " +
 		"wake from it. It opens its group again on its own and is handed every " +
@@ -217,9 +227,9 @@ var alarmMeaning = map[Kind]string{
 		"without a bitmap and served more slowly: a clone walks their history. " +
 		"A repository this node maintains whose next published layer it cannot " +
 		"write counts too — its layer's bitmap is 600 bytes an object of the " +
-		"repository — since no git node then publishes it, and every git node " +
+		"repository — since no Gitlet node then publishes it, and every Gitlet node " +
 		"serves the packs pushed since its last publication outside every bitmap.",
-	KindCodeCompactionBehind: "Repositories this node maintains — the git node " +
+	KindCodeCompactionBehind: "Repositories this node maintains — the Gitlet node " +
 		"that merges their packs and publishes their layers, the first in each " +
 		"repository's order whose background budget holds its publication — " +
 		"hold the most live packs a repository may, so every push carrying " +
@@ -244,7 +254,7 @@ var alarmMeaning = map[Kind]string{
 		"to run — so a change whose head they check waits on them past anything " +
 		"its checks file planned for. Measured from the code log's rows by every " +
 		"data node, in the order the attempts fell overdue, so it stands even " +
-		"where no git node runs checks at all; past a thousand it says there " +
+		"where no Gitlet node runs checks at all; past a thousand it says there " +
 		"are more rather than how many. A deleted repository's queued attempts " +
 		"are not counted: no runner may claim them, and its purge removes them.",
 	KindCodeMergeRateOver: "Merge queues this node is home to — " +
@@ -254,7 +264,7 @@ var alarmMeaning = map[Kind]string{
 		"changes a round at the mean round their trains took, the round " +
 		"timed by this node from a train's build to its landing (a train " +
 		"still testing counts at its age once it outlasts the mean). " +
-		"Raised by the repository's home git node alone, for as long as " +
+		"Raised by the repository's home Gitlet node alone, for as long as " +
 		"the hour's enqueues stay past the capacity; a node that has timed " +
 		"no round of a queue yet — a home new to it — judges it from its " +
 		"first train.",
@@ -276,7 +286,7 @@ var alarmMeaning = map[Kind]string{
 		"the company published that long ago, or less (a protected branch " +
 		"there no newer than the last green commit the mirror pushed); a " +
 		"pull mirror holds what its source held that long ago. Raised by " +
-		"the home git node alone, from its own memory of its attempts: a " +
+		"the home Gitlet node alone, from its own memory of its attempts: a " +
 		"node that stops being a repository's home stops counting its " +
 		"mirrors, and a node that restarts counts from the first pass that " +
 		"asks it for each mirror. A mirror whose attempt waits behind " +

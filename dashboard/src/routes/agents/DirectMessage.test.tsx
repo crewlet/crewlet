@@ -36,6 +36,7 @@ const ADA: ViewerState = {
   worklet: false,
   doclet: false,
   chatlet: true,
+  gitlet: false,
   handle: "ada",
   owner: "ada",
   name: "Ada",
@@ -58,7 +59,7 @@ const CHATLET: OrgServices = {
   tracker: "worklet",
   knowledge: "doclet",
   chat: "chatlet",
-  code: "native",
+  code: "gitlet",
 };
 
 beforeEach(() => {

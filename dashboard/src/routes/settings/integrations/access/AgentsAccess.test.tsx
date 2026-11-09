@@ -62,6 +62,8 @@ const calls = vi.hoisted(() => ({
   plans: null as unknown[] | null,
   /** The body of a refusal the plan answers instead, once set. */
   planRefusal: null as Record<string, unknown> | null,
+  /** The agents the plan names to review their open work, where a case names them. */
+  reviews: null as unknown[] | null,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -80,6 +82,7 @@ vi.mock("./api.ts", async (actual) => {
           kind,
           revision: calls.planRevision,
           ...(calls.stepUp ? { step_up: true } : {}),
+          ...(calls.reviews ? { reviews: calls.reviews } : {}),
           plans: calls.plans ?? [
             {
               handle: "qa",
@@ -148,6 +151,7 @@ beforeEach(() => {
   calls.install = [];
   calls.credential = [];
   calls.stepUp = false;
+  calls.reviews = null;
   calls.stale = false;
   calls.planRevision = "rev-7";
   calls.plans = null;
@@ -617,6 +621,30 @@ test("where the engine's plan asks for a step-up, the review names who gets admi
       "QA gets administration access at Datadog. Saving asks you to confirm it is you.",
     ),
   ).toBeTruthy();
+});
+
+// THE SAVE SAYS WHO WILL REVIEW WHAT. An agent whose access the draft changes,
+// with open work raised under its access now, is named with its count before
+// the save, as the tab names it. Mutation: drop the callout and the review says
+// nothing of the questions the change makes stale.
+test("the review names each agent that will review its open work after the save", async () => {
+  calls.reviews = [{ handle: "qa", open: 3, changes: ["Datadog: its role is now Read Only."] }];
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      "3 open items from QA were raised under its current access; it will review them after you save.",
+    ),
+  ).toBeTruthy();
+});
+
+test("a plan naming nobody to review says nothing of open work", async () => {
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
+  expect(screen.queryByText("Open work to review")).toBeNull();
 });
 
 // A ROW WITH NOTHING TO SAY HAS NOTHING UNDER IT. The message was handed to

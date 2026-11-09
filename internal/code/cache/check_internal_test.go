@@ -26,6 +26,13 @@ import (
 // as it found them (the fourth).
 func TestOnlyDamageAtAnotherIdentityReplacesAFinding(t *testing.T) {
 	t.Parallel()
+	// The build's declarations, as Open takes them: a finding's file is
+	// told apart by them from a run of the index of pushes, whose finding
+	// the backfill's look reads (backfillReads).
+	im, err := newImage(DerivedFiles())
+	if err != nil {
+		t.Fatalf("the build's declarations: %v", err)
+	}
 	rel := packFileRel(placeLive, strings.Repeat("5e", hashTrailer), ".rev")
 	at := func(ino uint64) fileID { return fileID{present: true, dev: 1, ino: ino, size: 1068, modified: 1} }
 	scrubbed := checkedFile{kind: fileRev, rel: rel, id: at(1), trigger: triggerReport, scrubbed: true}
@@ -53,7 +60,7 @@ func TestOnlyDamageAtAnotherIdentityReplacesAFinding(t *testing.T) {
 			}
 			inc.repair.found = map[string]checkedFile{rel: tc.held}
 			inc.repair.forces = 1
-			handed := (&Cache{}).recordCheck(e, inc, 1, []checkedFile{tc.found})
+			handed := (&Cache{image: im}).recordCheck(e, inc, 1, []checkedFile{tc.found})
 			if have := inc.repair.found[rel]; len(inc.repair.found) != 1 || have != tc.want {
 				t.Errorf("the repair mark holds %+v, want %+v alone", inc.repair.found, tc.want)
 			}

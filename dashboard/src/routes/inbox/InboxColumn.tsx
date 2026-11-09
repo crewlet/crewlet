@@ -1,6 +1,8 @@
 /**
- * The Inbox's list: Needs you, then Updates, then the two quiet links to what
- * was snoozed and what was read already.
+ * The Inbox's list: Needs you, then the closed, counted Updates and Answered
+ * groups, then the two quiet links to what was snoozed and what was read
+ * already. Updates is closed on every visit, so what waits on the reader is
+ * what they see first.
  *
  * AN ANSWER IS SAID, NEVER STRUCK. A row answered here leaves Needs you, its
  * height closing so the rows under it slide up (the kit's group draws it on
@@ -38,6 +40,7 @@ import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
+import { accessNote } from "~/lib/decisions.ts";
 import { firstLine } from "~/lib/format.ts";
 import { TokenScope } from "~/components/InlineToken.tsx";
 import { renderTokens } from "~/lib/markdown.ts";
@@ -92,7 +95,14 @@ export interface AnsweredGroup {
   arrived?: string | undefined;
 }
 
-/** What the list holds beyond its two groups, read only when opened. */
+/** The closed group of what reached the reader and is not read yet. */
+export interface UpdatesGroup {
+  rows: readonly InboxRow[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/** What the list holds beyond its groups, read only when opened. */
 export interface Later {
   /** The rows, or null until the read answers. */
   rows: InboxRow[] | null;
@@ -125,7 +135,8 @@ export function InboxColumn({
   elsewhere = null,
 }: {
   needs: readonly InboxRow[];
-  updates: readonly InboxRow[];
+  /** What reached the reader and is not read yet, in its closed group. */
+  updates: UpdatesGroup;
   snoozed: Later;
   /** How many notices are snoozed, as a count and whether it is a floor; null until read. */
   snoozedCount: { count: number; floor: boolean } | null;
@@ -207,8 +218,18 @@ export function InboxColumn({
           {elsewhere}
         </Text>
       )}
-      {updates.length > 0 && (
-        <InboxGroup label="Updates">{updates.map((row) => item(row))}</InboxGroup>
+      {updates.rows.length > 0 && (
+        // CLOSED UNTIL OPENED, and counted, on every visit: notices are many,
+        // and what still waits on the reader comes before them.
+        <InboxGroup
+          label="Updates"
+          count={updates.rows.length}
+          collapsible
+          open={updates.open}
+          onOpenChange={updates.onOpenChange}
+        >
+          {updates.rows.map((row) => item(row))}
+        </InboxGroup>
       )}
       {answered.rows.length > 0 && (
         // CLOSED UNTIL OPENED, and counted: what a reader decided is there to
@@ -229,7 +250,7 @@ export function InboxColumn({
         // AFTER THE LAST ROW HAS CLOSED, never under it as it closes.
         <EmptyState size="compact" title={quiet.title} description={quiet.hint} />
       )}
-      {more && (
+      {more && updates.open && (
         <Text as="p" variant="caption" className="inbox-note">
           More unread below. Read these to see them.
         </Text>
@@ -468,6 +489,8 @@ const InboxItem = memo(function InboxItem({
         ) : undefined
       }
       leading={<Badge row={row} who={who} />}
+      // ASKED BEFORE THE AGENT'S ACCESS CHANGED, said on its own quiet line.
+      context={row.kind === "decision" ? accessNote(row.subject) : undefined}
       // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
       // swatches and never a link of its own (`renderTokens`).
       excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}

@@ -204,7 +204,7 @@ func everyRune(table *unicode.RangeTable) []rune {
 // the engine's own environment names another identity, another date and an
 // encoding that would add a header of its own, and the pool's HOME another
 // identity and that encoding. Run on both of the node's gits: what reaches
-// git from either is a claim about every git a git node may run.
+// git from either is a claim about every git a Gitlet node may run.
 //
 // Not parallel, because the environment it plants is the process's
 // (t.Setenv); its two arms run beside each other once it returns, before the

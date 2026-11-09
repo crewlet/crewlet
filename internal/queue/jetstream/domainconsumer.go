@@ -1215,6 +1215,11 @@ type DomainDelivery struct {
 	Seq      uint64
 	StoredAt time.Time
 
+	// Delivered is how many times the broker has delivered this record to
+	// the group, this delivery included: what a record handed back for a
+	// peer backs off by (changefeed.DeferDelay).
+	Delivered uint64
+
 	Payload []byte
 
 	// Ack marks the record handled, and Nak returns it for redelivery
@@ -1346,7 +1351,7 @@ func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
 	}
 	return &DomainDelivery{
 		Subject: msg.Subject(), Seq: meta.Sequence.Stream,
-		StoredAt: meta.Timestamp, Payload: msg.Data(),
+		StoredAt: meta.Timestamp, Delivered: meta.NumDelivered, Payload: msg.Data(),
 		Ack: msg.Ack,
 		Nak: func(delay time.Duration) error { return msg.NakWithDelay(delay) },
 	}, nil

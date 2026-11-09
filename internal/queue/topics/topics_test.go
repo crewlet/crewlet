@@ -506,6 +506,38 @@ func TestDeadLetterKeepsTheTopicGreppable(t *testing.T) {
 	}
 }
 
+// A TOPIC'S DEAD LETTERS LIE UNDER ITS HEAD'S SUBTREE, AND NO OTHER TOPIC'S
+// DO.
+//
+// A reader counts every dead letter of the topics under one head — the wake
+// feeds' `changefeed.…` — by that subtree alone, so each topic under the head
+// lands under it, rewritten as DeadLetter rewrites the topic, and a topic
+// whose first segment merely begins like the head does not.
+//
+// Mutation: build the subtree from the head unrewritten, and the head holding
+// a space is red.
+func TestATopicsDeadLettersLieUnderItsHeadsSubtree(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		head, topic string
+		under       bool
+	}{
+		{"changefeed", "changefeed.work", true},
+		{"changefeed", "changefeed.page.x", true},
+		{"a b", "a b.c", true},
+		{"changefeed", "changefeedx.work", false},
+		{"changefeed", "crewlet.agent.ana.inbox", false},
+	} {
+		tree := topics.DeadLettersUnder(tc.head)
+		requirePublishableSubject(t, tree)
+		subject := topics.DeadLetter(tc.topic, "grp")
+		if got := topics.Match(tree+".>", subject); got != tc.under {
+			t.Errorf("the dead letter %q of %q is under %q: %v, want %v", subject, tc.topic, tree,
+				got, tc.under)
+		}
+	}
+}
+
 // requirePublishableSubject asserts the checks every backend applies to a
 // subject on the way in. A dead letter that trips one cannot be published at
 // all, and it is the one message whose loss costs the only evidence.

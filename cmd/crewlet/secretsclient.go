@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -283,6 +284,7 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 		Moved      []string                     `json:"moved"`
 		EngineKeys int                          `json:"engine_keys_moved"`
 		Identity   *secretsapi.IdentityResealed `json:"identity"`
+		Access     *secretsapi.AccessResealed   `json:"access"`
 	}
 	err := c.callWithin(ctx, http.MethodPost,
 		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), "", nil, &body, maxListingBytes,
@@ -292,25 +294,27 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 	}
 	return rotation{
 		Rekeyed:  fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys},
-		Identity: body.Identity,
+		Identity: body.Identity, Access: body.Access,
 	}, nil
 }
 
 // EngineKeys reads the counts the node's listing carries beside the operator's
 // names: the engine's own keys, the identity estate's values, the assistant's
-// and the executor sessions', per keyring key, none of them named.
+// the executor sessions' and the access log's commands, per keyring key, none
+// of them named.
 func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 	var body struct {
 		EngineKeys secrets.EngineKeys           `json:"engine_keys"`
 		Identity   *iamdomain.SealedCount       `json:"identity_values"`
 		Assistant  *assistantdomain.SealedCount `json:"assistant_values"`
 		Executor   *executordomain.SealedCount  `json:"executor_values"`
+		Access     *accessdomain.SealedCount    `json:"access_values"`
 	}
 	if err := c.listing(ctx, &body); err != nil {
 		return engineHeld{}, err
 	}
 	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity,
-		Assistant: body.Assistant, Executor: body.Executor}, nil
+		Assistant: body.Assistant, Executor: body.Executor, Access: body.Access}, nil
 }
 
 // call performs one request whose body, where it has one, is a credential, and

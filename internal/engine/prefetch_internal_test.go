@@ -200,10 +200,10 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 
 	onChat := notification("chat", "Tech Lead",
 		map[string]string{notify.ActorField: "U-lead"}, false)
-	onCodeHost := notification("gitlab", "lead-bot",
+	onGitletHost := notification("gitlab", "lead-bot",
 		map[string]string{notify.ActorField: "lead-bot"}, false)
 
-	for _, ev := range []*events.Event{onChat, onCodeHost} {
+	for _, ev := range []*events.Event{onChat, onGitletHost} {
 		got := sendersOf(reg, []*events.Event{ev})
 		if len(got) != 1 {
 			t.Fatalf("senders = %v", got)
@@ -301,7 +301,7 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		WorkKey: "work-1",
 		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
 	}
-	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"}, provenance.NewBoundary())
+	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"}, provenance.NewBoundary(), nil)
 
 	select {
 	case summary := <-got:
@@ -392,7 +392,7 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
 		}, true)},
 	}
-	e.prefetchFor(t.Context(), company, req, "+1", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn}, provenance.NewBoundary())
+	e.prefetchFor(t.Context(), company, req, "+1", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn}, provenance.NewBoundary(), nil)
 
 	select {
 	case summary := <-got:
@@ -516,7 +516,7 @@ func TestPrefetchSummaryIsTimed(t *testing.T) {
 		Handle: "lead", RunID: "run-4", WorkKey: "work-4",
 		Events: []*events.Event{notification("gitlab", "dev", nil, true)},
 	}
-	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"}, provenance.NewBoundary())
+	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"}, provenance.NewBoundary(), nil)
 	after := time.Now().UTC()
 
 	select {

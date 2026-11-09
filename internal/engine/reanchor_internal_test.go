@@ -1081,7 +1081,7 @@ func TestAReanchorOfTheExecutorLogIsItsOwn(t *testing.T) {
 // THROUGH THE NODE GATE'S EVICTION, the one code write that needs no
 // repository and no grant: what is under test is the log and its generation,
 // and an eviction is a record on it like any other.
-func TestAReanchorOfTheCodeLogIsTheCodeHostsOwn(t *testing.T) {
+func TestAReanchorOfTheCodeLogIsGitletsOwn(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	rt := e.core.Load()
@@ -1425,7 +1425,7 @@ func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	}
 	record, err := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: opID, Subject: subject,
+			V: worklet.GateRecordVersion, OpID: opID, Subject: subject,
 			Op: worklet.OpEviction, CreatedAt: time.Now().UTC(),
 			Scope: worklet.ScopeSet{Subject: true}, Gen: gen, Writer: writer,
 		},

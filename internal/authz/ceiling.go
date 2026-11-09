@@ -27,9 +27,10 @@ const (
 	CeilingRequester CeilingKind = "requester"
 
 	// CeilingStranger is a turn somebody the company does not know woke: a
-	// sender on a chat surface no seat or person maps to. A stranger opens
-	// no artifact at all, so an agent acting for one reaches only the edits
-	// it makes to its own work.
+	// sender on a chat surface no seat or person maps to. A stranger uses no
+	// app and opens no artifact, so an agent acting for one takes no app's
+	// verb for them at all, and reaches only the edits to its own work that
+	// no app gates (ADR-0109).
 	CeilingStranger CeilingKind = "stranger"
 )
 
@@ -45,14 +46,15 @@ type Ceiling struct {
 	Kind CeilingKind
 
 	// Principal is the requester, for [CeilingRequester] alone: a person as
-	// the identity directory composes them, or a colleague seat as its own
-	// turn would. Ignored for every other kind.
+	// the identity directory composes them — the apps their grants name,
+	// never admin — or a colleague seat as its own turn would. Ignored for
+	// every other kind.
 	Principal iam.Principal
 }
 
 // DecideWithin answers whether agent p may do a to o INSIDE A TURN somebody
 // woke: [Decide] for p, and then the same question for the principal the turn
-// is acting for.
+// is acting for — the app first ([DecideWithinApps]), then the relation.
 //
 // # The confused deputy, closed
 //
@@ -69,27 +71,87 @@ type Ceiling struct {
 // THE CEILING IS THE TURN'S, and ends with it, because it is composed from
 // what woke that turn alone: a colleague the agent asks answers in a turn the
 // agent woke, and the answer wakes the agent in a turn of its own work, so
-// neither is decided for whoever woke the first. Nor does it reach what the
-// agent already knows. It bounds what a turn does for its requester, not what
-// an agent may go on to tell them.
+// neither is decided for whoever woke the first. That hop is the ceiling's
+// edge, which crewlet#798's second piece closes by carrying the requester on
+// the ask. Nor does it reach what the agent already knows. It bounds what a
+// turn does for its requester, not what an agent may go on to tell them.
 //
 // # Except the edits an agent makes to its own work
 //
 // A verb whose row is steerable ([rule.steerable]) on an object the agent
-// OWNS skips the requester: anybody who can message an agent steers its own
-// work, as they steer every other piece of work an agent owns, and applying
-// the ceiling there would refuse "please fix the typo in your table" from a
-// colleague who only views it. Reads are never steerable, and neither is
-// sharing, so an agent's private artifact still never reaches a requester who
-// could not open it. A create names the agent as the object's owner: the
-// artifact it makes is its own.
+// OWNS skips the requester's RELATION: anybody who can message an agent
+// steers its own work, as they steer every other piece of work an agent owns,
+// and applying the ceiling there would refuse "please fix the typo in your
+// table" from a colleague who only views it. Reads are never steerable, and
+// neither is sharing, so an agent's private artifact still never reaches a
+// requester who could not open it. A create names the agent as the object's
+// owner: the artifact it makes is its own.
+//
+// THE APP IS ASKED BEFORE THE SPARE: steering an agent's own work in an app
+// is using the app, so a requester who does not use it steers nothing there
+// (ADR-0109). The spare decides relations among the app's users, never
+// whether somebody uses the app at all.
 //
 // ONE DECISION OF THE SAME TABLE, ASKED TWICE: the requester is decided by
 // [Decide] exactly as they would be if they asked themselves, so the ceiling
 // cannot drift from the rules it bounds. A refusal of the requester is
-// [ReasonCeiling], naming no grant, because nothing the agent could hold
-// would change it; a requester this node cannot decide is UNKNOWN.
+// [ReasonCeiling], naming no grant of the caller's, because nothing the agent
+// could hold would change it; a requester this node cannot decide is UNKNOWN.
 func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o Object,
+	chart Chart, now time.Time) Decision {
+
+	d := DecideWithinApps(ctx, p, c, a, o, chart, now)
+	if d.Unknown() || !d.Allowed || c.Kind == CeilingNone {
+		return d
+	}
+	if steerable, _ := SteerableOf(a); steerable && ownedBy(p, o) {
+		return d
+	}
+	if c.Kind == CeilingStranger {
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingStranger}
+	}
+	req := Decide(ctx, c.Principal, a, o, chart, now)
+	switch {
+	case req.Unknown():
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, Err: req.Err}
+	case !req.Allowed:
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingRequester, RequesterReason: req.Reason,
+			RequesterKind: c.Principal.Kind}
+	}
+	return d
+}
+
+// DecideWithinApps answers whether agent p may do a to o INSIDE A TURN
+// somebody woke, as far as the APPS go: [Decide] for p, and then whether the
+// principal the turn is acting for uses the app a's row names (ADR-0109).
+//
+// # Every app, for every family
+//
+// An agent holds every app (ADR-0033). Somebody the company kept off Worklet,
+// Doclet, Chatlet or authoring artifacts could still message an agent and
+// have it use the app for them — so inside a turn somebody woke, every verb
+// whose row names an app is admitted only when the requester holds that app:
+// any one of a [ClassAnyApp] row's set, and on a row that admits without the
+// app ([ClassAppOrAsked]) the requester an open ask names, on the terms the
+// row admits them asking for themselves. It is what the one authorizer every
+// builtin passes decides for a seat's call; [DecideWithin] asks it first and
+// then decides the requester's relation too, for the families whose objects
+// carry one.
+//
+// THE ROW'S APP AND NOTHING ELSE OF IT. The requester's other relations to
+// the object — their own record, their lead, a comment's authorship, the
+// container — stay the agent's own: decided for the requester, they would
+// refuse an agent its own inbox and its own priorities in every turn a person
+// woke, since those rows are decided on the agent's record, which the
+// requester is not.
+//
+// A stranger uses no app. A requester who may not act uses none. A turn
+// nobody woke is bounded by nothing beyond p's own authority, and a ceiling
+// nobody filled in is refused rather than read as one. A refusal is
+// [ReasonCeiling], with why the requester is refused in
+// [Decision.RequesterReason] and, where an app would admit them, the apps in
+// [Decision.RequesterGrants].
+func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action, o Object,
 	chart Chart, now time.Time) Decision {
 
 	d := Decide(ctx, p, a, o, chart, now)
@@ -105,20 +167,58 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 		// turn nobody woke: the zero must be the closed end.
 		return Decision{Reason: ReasonCeiling}
 	}
-	if steerable, _ := SteerableOf(a); steerable && ownedBy(p, o) {
+	r := rules[a]
+	apps := r.anyOf
+	if r.app != "" {
+		apps = []iam.Grant{r.app}
+	}
+	if len(apps) == 0 {
+		// A ROW NAMING NO APP is not this half's to bound: whatever bounds
+		// it for the requester is the relation [DecideWithin] decides.
 		return d
 	}
 	if c.Kind == CeilingStranger {
-		return Decision{Reason: ReasonCeiling}
+		return Decision{Reason: ReasonCeiling, Ceiling: CeilingStranger}
 	}
-	req := Decide(ctx, c.Principal, a, o, chart, now)
-	switch {
-	case req.Unknown():
-		return Decision{Reason: ReasonCeiling, Err: req.Err}
-	case !req.Allowed:
-		return Decision{Reason: ReasonCeiling}
+	q := c.Principal
+	if !q.Stage.MayAct() {
+		// THEIR STAGE REFUSES THEM, and no app would change that: a
+		// requester who may not act is told as one, never sent to ask for
+		// an app.
+		return Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterReason: ReasonStage,
+			RequesterKind: q.Kind}
 	}
-	return d
+	refused := Decision{Reason: ReasonCeiling, Ceiling: c.Kind, RequesterGrants: slices.Clone(apps),
+		RequesterReason: ReasonNoGrant, RequesterKind: q.Kind}
+	for _, app := range apps {
+		if q.Can(app) {
+			return d
+		}
+	}
+	if r.class == ClassAppOrAsked {
+		// THE PERSON ASKED, as the row admits them asking themselves: by the
+		// seat they hold or the login they act under.
+		if o.Asked != "" && (q.Seat != "" && q.Seat == o.Asked || q.Login != "" && q.Login == o.Asked) {
+			return d
+		}
+		if o.Unresolved {
+			// NOBODY HAS READ THE ITEM YET, so nobody knows whether an open
+			// ask on it names the requester: read it, resolve its asks, and
+			// decide again on the row.
+			refused.Err = ErrUnresolved
+			return refused
+		}
+	}
+	return refused
+}
+
+// NamesApp reports whether a's row names an app — the rows the app half of
+// the requester ceiling bounds ([DecideWithinApps]). It is what a caller that
+// composes a turn's requester only when it is needed asks first: a verb no
+// app gates asks nothing of the requester's apps, so it costs no read of them.
+func NamesApp(a Action) bool {
+	r := rules[a]
+	return r.app != "" || len(r.anyOf) > 0
 }
 
 // ownedBy reports whether p is o's owner, by the login it acts under or the

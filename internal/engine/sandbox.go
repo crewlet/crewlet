@@ -1048,7 +1048,24 @@ func runRecordOf(run sandbox.PendingRun, account runAccount) runner.RunRecord {
 		Pushed:        account.Pushed,
 		PushedElided:  account.PushedElided,
 		PushedUnread:  account.PushedUnread,
+		// AND THE REPLIES ITS ROUND'S QUESTIONS GOT THAT WERE REFUSED as too
+		// large to hand the run, for the round's reviewer, which reads the
+		// round from its calls and finds none of them there (ADR-0114).
+		RefusedReplies: refusedRepliesOf(run.RoundRefusals),
 	}
+}
+
+// refusedRepliesOf is the round's refused replies as the runner carries them to
+// its reviewer: figures alone, as the row keeps them.
+func refusedRepliesOf(refusals []sandbox.RoundRefusal) []turn.RefusedReply {
+	if len(refusals) == 0 {
+		return nil
+	}
+	out := make([]turn.RefusedReply, 0, len(refusals))
+	for _, r := range refusals {
+		out = append(out, turn.RefusedReply{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes})
+	}
+	return out
 }
 
 // resumedTurn is the turn a parked run is re-entered as.
@@ -1659,7 +1676,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
@@ -1761,18 +1778,27 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label,
+		Label: asked.Label, Withdrawn: asked.Withdrawn,
+	}
+	if refused := asked.Refused; refused != nil {
+		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
+		// not reach it, with its figures, in the engine's words (ADR-0114).
+		out.Refused = &runner.RefusedReply{Messages: refused.Messages(), Bytes: refused.Bytes,
+			MaxBytes: refused.MaxBytes}
 	}
 	if held := asked.Held; held != nil {
 		call := held.Call
 		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
-			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
+			Choice: held.Choice, Approver: held.By, HeldID: call.ID, Fixed: call.Fixed, Binding: call.Binding,
+			Commit: heldCommit{held: held, seal: seal}}
 		// A CALL AN EARLIER ATTEMPT MARKED KEEPS ITS ARGUMENTS SEALED: it is
 		// answered from its mark and never made again
 		// ([runner.HeldCommit.Marked]), so nothing would run them, and a seal
 		// this node cannot open is no reason to say anything about a call it
 		// will not make.
-		if sandbox.HeldMakes(held.Choice) && !call.Calling() {
+		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
+		// arguments, so they are opened for a deny as well.
+		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
 			args, err := seal.OpenArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
@@ -2349,7 +2375,11 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		WorkItem: t.WorkItem,
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
-		Requester: t.Requester,
+		Requester: t.Requester, WorkingFor: t.WorkingFor,
+		// OR THE CREDENTIAL that did, which a resumed segment's every call
+		// is still bounded by — see [sandbox.PendingRun.RequesterLogin].
+		RequesterLogin: t.RequesterLogin,
+		RequesterApps:  slices.Clone(t.RequesterApps),
 		// AND WHEN THE TURN'S CAP ENDS, for the poll to end a run that
 		// outlasts it — see [sandbox.PendingRun.Deadline].
 		Deadline: t.Deadline,
@@ -3065,6 +3095,10 @@ func (e *Engine) sandboxWaiterOptions(
 		Node:     e.id,
 		Interval: interval,
 		Refresh:  e.refreshRunTokens,
+		// AND WHERE THE REFRESH RECORDS EACH TOKEN BEFORE IT WRITES IT: the
+		// job's sealed set beside its row, which every capture of the job's
+		// session is scrubbed by (issued.go, "Recorded before it is written").
+		Record: rt.coordinator.RecordHanded,
 	}
 }
 

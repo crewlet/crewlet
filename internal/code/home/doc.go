@@ -1,5 +1,5 @@
-// Package home is a repository's HOME git node at work on its changes: the
-// first git node of the repository's rendezvous order over the live git nodes
+// Package home is a repository's HOME Gitlet node at work on its changes: the
+// first Gitlet node of the repository's rendezvous order over the live Gitlet nodes
 // (ADR-0089), the node its git reads are asked of first, is the one that owes
 // its CHANGE WORK — reading each change's head revision against its target
 // and recording what it found (internal/code's Revise), merging it into its
@@ -17,7 +17,7 @@
 //
 // # One loop, and the workers that register with it
 //
-// A [Loop] runs on every git node and schedules REPOSITORIES — a (worker,
+// A [Loop] runs on every Gitlet node and schedules REPOSITORIES — a (worker,
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
 // for every [Worker] registered with it: the changes worker
 // ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
@@ -82,9 +82,9 @@
 // the tip the home read; or matches the touched paths against the path owners
 // (code.MatchOwners) and asks the change writer to record the facts — the
 // trees of the base and the head and the touched paths' classes among them,
-// as the git node read them — the owners matched and the digest of the owners
+// as the Gitlet node read them — the owners matched and the digest of the owners
 // matched against. Only FINAL facts are recorded
-// (code.RevisionFactsAnswer.Final): a git node that ran its read's budget out
+// (code.RevisionFactsAnswer.Final): a Gitlet node that ran its read's budget out
 // before the patch id or the classes says so apart from a bound's omission,
 // and such facts measure the node's moment, not the commits — recorded, they
 // would hold for good, since a revise takes a revision's facts against a tip
@@ -163,7 +163,7 @@
 // # Merge previews, beside the loop
 //
 // The same merge answers a comparison's MERGE PREVIEW ([Previews]): a read a
-// principal makes of a repository's git nodes, served beside the node's git
+// principal makes of a repository's Gitlet nodes, served beside the node's git
 // reads from exactly their inputs and answered as they are, so a preview and
 // the change it would open say one thing. It shares the merge with the loop
 // and nothing else.

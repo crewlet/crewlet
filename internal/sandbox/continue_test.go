@@ -238,7 +238,7 @@ func TestAJobContinuedInItsKeptBoxStartsOnRefreshedFiles(t *testing.T) {
 			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
 			// The rig's clock, which dated the kept box ([KeptBoxMaxAge]).
 			Now: func() time.Time { return rig.now },
-			Refresh: func(_ context.Context, m *Manager, run PendingRun, box Sandbox) {
+			Refresh: func(_ context.Context, m *Manager, run PendingRun, box Sandbox, _ RecordHanded) {
 				if m != rig.manager {
 					t.Error("the refresh was handed a manager other than the launch's")
 				}

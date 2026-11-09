@@ -102,6 +102,13 @@ func (w Work) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
+// ReadyWork answers what one seat could start now: the work pickup's read
+// (ADR-0112), from whichever data node serves the tracker.
+func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
+	worklet.ReadyWork, error) {
+	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
@@ -384,6 +391,17 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 	out, err := call(ctx, w.r, opEditTaskComment, &w.actor, editCommentOnTaskArgs{
 		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Body: body,
 		Notify: notify,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// ResolveComment resolves the writer's own remark on a work item: an open
+// question its asker withdraws.
+func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
+	out, err := call(ctx, w.r, opResolveTaskComment, &w.actor, resolveCommentOnTaskArgs{
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -857,13 +875,15 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
-// SeatHolder answers who holds one seat, and whether anybody does, read in one
-// snapshot on the node that answered — [Identity.SeatHolders]' answer for that
-// seat alone, as two seeks rather than the whole directory. An error is
-// UNKNOWN, never a seat nobody holds.
-func (i Identity) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
-	out, err := call(ctx, i.r, opSeatHolder, nil, seatArgs{Seat: seat})
-	return out.Holder, out.Held, err
+// Requester answers who holds one seat, with the holder's grants, and whether
+// anybody does, read in one snapshot on the node that answered —
+// [Identity.SeatHolders]' answer for that seat alone, as two seeks rather than
+// the whole directory, and the person a seat's turn is acting for is composed
+// from it. An error is UNKNOWN, never a seat nobody holds; a node that does not
+// know the question leaves it unserved, and none that answers is an error.
+func (i Identity) Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error) {
+	out, err := call(ctx, i.r, opRequester, nil, seatArgs{Seat: seat})
+	return out.Requester, out.Held, err
 }
 
 // MachineToken answers the row a presented machine token is checked against —
@@ -1136,7 +1156,7 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // beside it, and the reads the host's admission, a cache's sync and the
 // REST routes make — each answered by a data node whose copy of the code log
 // serves, this one where it does — and a repository's read by object id and its
-// engine write, each asked of the repository's home git node ([GitCopy]). Its
+// engine write, each asked of the repository's home Gitlet node ([GitCopy]). Its
 // consumers declare what they call of it.
 //
 // ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
@@ -1150,7 +1170,7 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // rule too. Each such write raises two floors: the session's, on the whole
 // code log, which every operation this node routes to a data node carries;
 // and the floor of the REPOSITORY it wrote ([CodeSeam.FloorOf]), which a read
-// of that repository's content by object id carries to its git node — and a
+// of that repository's content by object id carries to its Gitlet node — and a
 // read of any other repository does not. A conversation's write and a check's
 // move no git content, and raise the session's alone.
 type CodeSeam struct{ r *Router }
@@ -1257,7 +1277,7 @@ func (c CodeSeam) Merge(ctx context.Context, p code.MergeProposal) (code.MergeRe
 // change's conversation, and raises this node's SESSION floor past the record
 // it landed in — this node's own write, which its next read of the change
 // must see on whichever node answers it. NEVER THE REPOSITORY'S OWN FLOOR,
-// which a read of the repository's git objects carries as its git node's sync
+// which a read of the repository's git objects carries as its Gitlet node's sync
 // level: a conversation moves no ref and no pack, and raising it would make
 // that node sync for nothing on the repository's next read. A write answered
 // UNCHANGED landed no record, and raises nothing.
@@ -1354,7 +1374,7 @@ func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnsw
 	return call(ctx, c.r, opCodeResolveRef, nil, q)
 }
 
-// GitRead asks the repository's home git node for one read of its content by
+// GitRead asks the repository's home Gitlet node for one read of its content by
 // object id, and its runner-up when the home cannot answer (ADR-0089). Its
 // floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.FloorOf]
 // supplies where the reader's own writes must be in the copy it reads.
@@ -1362,7 +1382,7 @@ func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 	return call(ctx, c.r, opCodeGitRead, nil, q)
 }
 
-// MergePreview asks the repository's home git node what merging q.Head into
+// MergePreview asks the repository's home Gitlet node what merging q.Head into
 // q.Base would do — by the merge the home records a change's mergeability by
 // — and its runner-up when the home cannot answer (ADR-0089), as a read by
 // object id is asked. Its floor is the query's own
@@ -1373,15 +1393,15 @@ func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (c
 	return call(ctx, c.r, opCodeMergePreview, nil, q)
 }
 
-// GitWrite asks the repository's home git node to build one engine write and
+// GitWrite asks the repository's home Gitlet node to build one engine write and
 // land it as a push (ADR-0092), and its runner-up with the same write — the
 // same push — where the home ran nothing or went silent (ADR-0089). Its floor
 // is the write's own (code.EngineWrite.Fresh), as a read's is.
 //
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
 // does (code.EngineWrite.Validate): one it refuses is code.ErrInvalid, naming
-// the field, before any git node is asked — never a round trip, a sync and a
-// slot of a git node's lane for an answer every node would give alike.
+// the field, before any Gitlet node is asked — never a round trip, a sync and a
+// slot of a Gitlet node's lane for an answer every node would give alike.
 //
 // It raises this node's floors past the push's record where the write APPLIED
 // or is PENDING — this node's own write, which its next read of the

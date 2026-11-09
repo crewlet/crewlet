@@ -126,6 +126,8 @@ func richExecutorInput() ExecutorInput {
 		PersonalMemory:      "# Diary\n- Ana likes threads",
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
+		Access: "## Your access\nWhat you can reach with your own credentials now.\n" +
+			"- GitHub (acme/api): Contents Read and write. Not granted: Workflows.",
 	}
 }
 
@@ -137,6 +139,7 @@ func richReviewInput() ReviewInput {
 		OpenQuestions:     "Which channel next week? 🤔",
 		Produced:          producedReport,
 		ToolLog:           "- `slack_post` → success",
+		RefusedReplies:    RefusedReplies([]RefusedReply{{Messages: 2, Bytes: 600 << 10, MaxBytes: 512 << 10}}),
 		EarlierIterations: iterationLedger,
 		Delivered:         DeliveredRefs([]string{"acme/api#41 — fix the flake 🧪"}, 2),
 		OffersA2A:         true,
@@ -162,5 +165,7 @@ func richUserMessage() UserMessage {
 		PriorWork:       iterationLedger,
 		Endings: endingsHeader + "\n\n### Turn t-1, which ended 2026-10-01T09:00:00Z\nIt completed.\n" +
 			"What its reviewer said landed:\n\"## Done ✅\"",
+		CapabilityChanges: "## What changed since your last turn\nYour access changed.\n" +
+			"- Cloudflare: your level is now Secure (was Operate).",
 	}
 }

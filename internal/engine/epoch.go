@@ -530,6 +530,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	if e.node != nil && seatsMoved(previous, next) {
 		e.node.Host().Resweep()
 	}
+	// AND THE SEATS THIS NODE HOLDS ARE MEASURED FOR AN ACCESS REVIEW once
+	// the applies go quiet (accessreview.go): a run of saves is one review.
+	e.kickAccessReviews()
 	return configplane.StatusOK, applied, nil
 }
 

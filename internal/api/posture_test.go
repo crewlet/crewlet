@@ -335,6 +335,14 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, absent}},
 		{"re-anchoring a log", "POST", "/worklet/retention/reanchor", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
+		// THE RECORDS NO NODE COULD READ are the deployment's to read,
+		// whatever app a caller holds: a read, so a stale proof is served.
+		{"the wake feeds' dead letters", "GET", "/feeds/dead-letters", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, ok}},
+		// ADMITTED AS A 404: this fixture's feeds hold no dead letter, which
+		// is the handler speaking after the authority layer let it through.
+		{"discarding a dead letter", "POST", "/feeds/dead-letters/7/discard?confirm=7", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, stepUp}},
 
 		// --- the company's credentials: admin ------------------------ //
 		{"which credentials the company holds", "GET", "/secrets", "",

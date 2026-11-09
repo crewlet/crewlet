@@ -154,6 +154,13 @@ type Config struct {
 	Task    string
 	Endings string
 
+	// Access is the seat's "## Your access" section and CapabilityChanges what
+	// changed since it was last told (internal/capability), rendered at the
+	// turn's dispatch and frozen with Endings: every launch carries the same
+	// bytes, and both are empty with [Config.Resume].
+	Access            string
+	CapabilityChanges string
+
 	// Reply says who is waiting for this turn, so the executor's own
 	// submission can be checked against a fact the model does not control.
 	// See [turn.Reply].
@@ -446,9 +453,9 @@ type BridgedCall struct {
 	// Appended is the call's place in the order the round's log TOOK its
 	// calls, from 1 (sandbox.BridgeCall.Appended): what a continued session's
 	// save point is read against ([SessionBasis.Through]), since a call the
-	// log took after the read that placed the save is one the session had not
-	// been answered, whatever its place in the order above. Zero on a call an
-	// older build appended, which every save point reads as after it.
+	// log took after the read that placed the save is one the session may not
+	// have been answered, whatever its place in the order above. Zero on a
+	// call an older build appended, which every save point reads as after it.
 	Appended int
 
 	// StartedAt is when the call was handed to the seat's surface, and
@@ -547,6 +554,11 @@ type RunRecord struct {
 	// more than once, so it is what tells one collected run's record from
 	// the next.
 	LaunchID string
+
+	// RefusedReplies are the replies the round's questions got that the
+	// engine refused as too large to hand the run ([turn.Work.RefusedReplies],
+	// sandbox.PendingRun.RoundRefusals), carried to the round's reviewer.
+	RefusedReplies []turn.RefusedReply
 }
 
 // Sandboxed reports whether the record names the run's harness or its box: whether
@@ -643,7 +655,7 @@ func New(cfg Config) (_ *Runner, err error) {
 		return nil, fmt.Errorf("runner: no executor launcher (Config.Launcher) — " +
 			"every seat's executor is its harness's own run, and the " +
 			"assembler must supply what launches it")
-	case cfg.Resume != nil && frozen(cfg.Context, cfg.Endings) != (execstate.Frozen{}):
+	case cfg.Resume != nil && frozen(cfg.Context, cfg.dispatched()) != (execstate.Frozen{}):
 		// TWO SOURCES FOR ONE FROZEN THING, and no honest way to pick: the
 		// parked state is what the turn's first launch was built from, and
 		// a context fetched again for the resume is a second answer to the
@@ -651,10 +663,12 @@ func New(cfg Config) (_ *Runner, err error) {
 		// them silently dropped.
 		return nil, fmt.Errorf("runner: a resumed turn's context is the one its parked " +
 			"state froze at the turn's start — leave Config.Context and " +
-			"Config.Endings empty with Config.Resume")
+			"Config.Endings, Config.Access and Config.CapabilityChanges empty with Config.Resume")
 	}
 	if cfg.Resume != nil {
-		cfg.Context, cfg.Endings = thawed(cfg.Resume.State.Context)
+		var d dispatched
+		cfg.Context, d = thawed(cfg.Resume.State.Context)
+		cfg.Endings, cfg.Access, cfg.CapabilityChanges = d.endings, d.access, d.changes
 	}
 	return &Runner{cfg: cfg}, nil
 }
@@ -734,6 +748,7 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		Workers:             r.workerCatalogue(),
+		Access:              r.cfg.Access,
 	})
 }
 
@@ -749,6 +764,9 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// at its dispatch: every brief of the turn, fresh or reseeded, on
 		// whatever segment, tells the same account.
 		Endings: r.cfg.Endings,
+		// AND WHAT CHANGED IN THE SEAT'S ACCESS since it was last told, frozen
+		// at the dispatch beside the endings.
+		CapabilityChanges: r.cfg.CapabilityChanges,
 		// EVERY NOTE THE TURN HAS READ, so a run launched after a person
 		// corrected the turn starts from the turn as corrected — and then
 		// the notes this brief is the first to read. The run is a fresh
@@ -846,7 +864,10 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Calls:         calls(w.surface),
 		Refs:          w.run.DeliveredRefs,
 		RefsElided:    w.run.RefsElided,
-		Rescued:       !submitted,
+		// AND WHAT THE RUN WAS NEVER GIVEN, for its reviewer: a reply
+		// refused as too large is in no call of the round's.
+		RefusedReplies: w.run.RefusedReplies,
+		Rescued:        !submitted,
 	}, describe(w.surface)
 }
 
@@ -893,6 +914,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
 		ToolLog:           reviewLog(w, r.cfg.SkipNames),
+		RefusedReplies:    refusedReplies(w.RefusedReplies),
 		Delivered:         prompts.DeliveredRefs(w.Refs, w.RefsElided),
 		EarlierIterations: r.priorWork(ctx, history),
 		OffersA2A:         offersA2A,
@@ -1967,6 +1989,16 @@ func reviewLog(w turn.Work, skip []string) string {
 		text += "\n" + elided
 	}
 	return text
+}
+
+// refusedReplies is the round's refused replies as the review prompt renders
+// them ([prompts.RefusedReplies]).
+func refusedReplies(replies []turn.RefusedReply) string {
+	out := make([]prompts.RefusedReply, 0, len(replies))
+	for _, r := range replies {
+		out = append(out, prompts.RefusedReply{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes})
+	}
+	return prompts.RefusedReplies(out)
 }
 
 // calls converts a surface's record into ledger calls.

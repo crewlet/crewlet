@@ -33,7 +33,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh"}
 }
 
 // SeatScope is the key and the entries of r's scope at lane: the containers
@@ -70,6 +70,10 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 		if in.GoogleCloud != nil {
 			return "projects", in.GoogleCloud.Projects
 		}
+	case "ssh":
+		if in.SSH != nil {
+			return "hosts", in.SSH.Hosts
+		}
 	}
 	return "", nil
 }
@@ -82,9 +86,9 @@ func SeatScopeRequired(lane string) bool { return slices.Contains(scopeRequiredL
 
 // scopeRequiredLanes is every lane whose agents must name a scope entry:
 // Scaleway's, whose policy names its projects and grants nothing without one,
-// and Google Cloud's, whose roles are granted per project and so on none
-// without one.
-var scopeRequiredLanes = []string{"scaleway", "google_cloud"}
+// Google Cloud's, whose roles are granted per project and so on none without
+// one, and SSH's, whose certificates name one principal per host.
+var scopeRequiredLanes = []string{"scaleway", "google_cloud", "ssh"}
 
 // checkScopeChosen refuses an agent turned on at lane with no scope entry
 // where required says the lane needs one.
@@ -156,6 +160,10 @@ func (r *Role) seatEnabled(lane string) (*bool, bool) {
 		if in.GoogleCloud != nil {
 			return in.GoogleCloud.Enabled, true
 		}
+	case "ssh":
+		if in.SSH != nil {
+			return in.SSH.Enabled, true
+		}
 	}
 	return nil, false
 }
@@ -172,6 +180,19 @@ const (
 
 // Valid reports whether a is a grant GitHub knows.
 func (a GitHubAccess) Valid() bool { return a == GitHubRead || a == GitHubWrite }
+
+// Label is a grant as GitHub's settings page names it: "Read-only", "Read and
+// write", or "No access" for an absent grant.
+func (a GitHubAccess) Label() string {
+	switch a {
+	case GitHubRead:
+		return "Read-only"
+	case GitHubWrite:
+		return "Read and write"
+	default:
+		return "No access"
+	}
+}
 
 // Rank is a grant's place in GitHub's order: no access, read, write.
 func (a GitHubAccess) Rank() int {

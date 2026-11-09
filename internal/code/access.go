@@ -271,7 +271,7 @@ func (g Grant) Within(run Access) Grant {
 // PendingRun.CodeCeiling) — and the decide never reads it; the launch's
 // precheck reads it too, so a run that could never deliver is refused before a
 // box costs anything. A seat's ENGINE WRITE carries its ceiling on the write
-// itself ([EngineWrite.Ceiling]), which the git node that builds it judges
+// itself ([EngineWrite.Ceiling]), which the Gitlet node that builds it judges
 // through this, beside the seat's own grant and from the same chart and row.
 func (g Grant) Under(ceiling Grant) Grant {
 	ceiling.ceiling = nil
@@ -348,7 +348,7 @@ func AccessOf(p Principal, repo RepoRef, r Roster) Access { return GrantOf(p, re
 // seat's reads nothing of it, else nil.
 //
 // THE ONE JUDGMENT OF A READ, every reader's — the data node's listing,
-// detail, history, refs and resolve, and the git node's read by object id —
+// detail, history, refs and resolve, and the Gitlet node's read by object id —
 // so the two principals are judged by one chart and one row in one place, and
 // no reader can judge the asker and forget whom it reads for. The asker
 // first: an asker that reads nothing is told so about ITSELF, which is the
@@ -640,7 +640,7 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 // or any command in a repository its seat owns — which a scratch repository
 // always is, and a project repository a seat owns is until it is handed on.
 // Judged on the row the grant was read from, so a repository handed to a
-// unit since is the unit's, and steered no more. EXPORTED for the git node's
+// unit since is the unit's, and steered no more. EXPORTED for the Gitlet node's
 // merge (internal/code/host's merge.go), which holds a seat's merge to its
 // ceiling itself: a merge moves its target by a merge record, never by a
 // command [Grant.RefRule] judges, and its authority is the merge gate's.
@@ -663,9 +663,11 @@ const (
 	// is decided again as that seat would be asking it itself.
 	WriteCeilingSeat WriteCeilingKind = "seat"
 	// WriteCeilingNobody is a requester who may change nothing of the
-	// company's code: a stranger the company does not know, or a person who
+	// company's code: a stranger the company does not know, a person who
 	// may not act in it now (authz.DecideWithin refused them the tool's own
-	// row). Only the seat's own work is steered for them.
+	// row), or a credential acting as no seat, which holds no seat a write is
+	// judged as and reads alone ([GrantOf]). Only the seat's own work is
+	// steered for them.
 	WriteCeilingNobody WriteCeilingKind = "nobody"
 )
 
@@ -683,7 +685,7 @@ func (k WriteCeilingKind) Valid() bool { return slices.Contains(WriteCeilingKind
 // A write carries it ([EngineWrite.Ceiling], [LifecycleRequest.Ceiling],
 // [ChangeProposal.Ceiling], [ConversationWrite.Ceiling]) and the node that
 // DECIDES the write judges it, beside the seat's own grant and from the same
-// chart and row — the git node for an engine write ([Grant.Under]), the data
+// chart and row — the Gitlet node for an engine write ([Grant.Under]), the data
 // node for a lifecycle request and for a change's writes
 // ([WriteCeiling.changeRefusal]) — never the node
 // the turn runs on against a repository it resolved once, which would keep

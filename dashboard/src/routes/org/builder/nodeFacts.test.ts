@@ -167,9 +167,9 @@ describe("integrations", () => {
     const github: CompanyDocument = { integrations: { github: { enabled: true } } };
     expect(isConnected(github, "github")).toBe(true);
     expect(readsCodeAccess(github)).toBe(false);
-    expect(readsCodeAccess({ ...github, code: { native: true } })).toBe(true);
-    expect(readsCodeAccess({ code: { native: true } })).toBe(true);
-    expect(readsCodeAccess({ code: { native: false } })).toBe(false);
+    expect(readsCodeAccess({ ...github, code: { backend: "gitlet" } })).toBe(true);
+    expect(readsCodeAccess({ code: { backend: "gitlet" } })).toBe(true);
+    expect(readsCodeAccess({ code: { backend: "none" } })).toBe(false);
   });
 
   // A provisioner acts only where the document names a secret store entry, and
@@ -406,6 +406,26 @@ describe("credentials", () => {
     const offSeat = locate(off.draft, "seat:sre");
     if (offSeat?.kind !== "seat") throw new Error("seat:sre");
     expect(vendorIdentities(off, offSeat.node)).toEqual([]);
+  });
+
+  // AN SSH SEAT LEAVES NOTHING BEHIND: it holds only certificates the engine
+  // signs for minutes, and nothing is made on a server for it.
+  test("an SSH seat names nothing to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      ssh: {
+        enabled: true,
+        provisioning: { certificate_authority: "${SSH_CERTIFICATE_AUTHORITY}" },
+      },
+    };
+    const role = doc.units![0]!.children![0]!.roles![0]!;
+    role.integrations = { ssh: { enabled: true, level: "operate", hosts: ["api-1"] } };
+    const on = keyedState(doc);
+    const sre = locate(on.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(TOOL_NAMES.ssh).toBe("SSH");
+    expect(vendorIdentities(on, sre.node)).toEqual([]);
   });
 
   // The labels are a map, which the fact once printed as "[object Object]".

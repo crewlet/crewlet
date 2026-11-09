@@ -30,10 +30,10 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. SEVEN exist, the
-	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
-	// a read of the rows; query.Options.Roster, a read by object id on a git
-	// node; host.Options.Roster, an engine write a git node builds;
+	// configuration REFUSES it rather than answers it last. NINE exist. Seven
+	// are the chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
+	// a read of the rows; query.Options.Roster, a read by object id on a Gitlet
+	// node; host.Options.Roster, an engine write a Gitlet node builds;
 	// code.CommitterOptions.SeatRules, a seat's push on the committer that
 	// decides it; code.ChangeWriterOptions.SeatRules, a seat's write of a
 	// change's conversation, and every reviewer an ask names, on the change
@@ -42,7 +42,12 @@ const (
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
 	// refused there by its own gate, code.StoreOptions.Current, and by the
-	// estate's declaration on code.lifecycle. The git node's own gates,
+	// estate's declaration on code.lifecycle. The other two are whether the
+	// PERSON holding a human seat uses Gitlet (ADR-0110), read through the
+	// identity directory and that chart: code.ChangeWriterOptions.People, for
+	// every human reviewer an ask names, and code.StoreOptions.People, for the
+	// seat a push mirror pushes as, each refused by the gates of the seat rules
+	// beside it. The Gitlet node's own gates,
 	// query.Options.Current and host.Options.Current, refuse a seat's read
 	// and a seat's write there themselves (unready, behind_config) rather
 	// than judging them; the committer's, the change writer's and the checks
@@ -97,7 +102,7 @@ func (c seamClass) valid() bool {
 // read as arguments, which their Backend rows name.) A Backend row that only
 // named its half would see nothing added to the options behind it: the
 // knowledge searcher read the epoch's skills container and embedding model
-// through options no row covered. And a GIT node's query server's options and
+// through options no row covered. And a GITLET node's query server's options and
 // its git surface's: it serves a seat's read of a repository by object id, and
 // builds a seat's engine write, from its own epoch's chart, which is the same
 // question a serving decide's grant is.
@@ -180,6 +185,9 @@ var classified = map[string]struct {
 	"estate.Backend.Executor": {seamNone, "the executor sessions' reader and writer, built over " +
 		"executordomain.WriterDeps, over the copy's rows and its log; a capture's budget and a retired " +
 		"seat are stated by the asking node, which has already judged the fleet's revision"},
+	"estate.Backend.Access": {seamNone, "the access log's reader and writer, built over " +
+		"accessdomain.WriterDeps, over the copy's rows and its log; every record carries its whole " +
+		"values from the asking node, which has already judged the fleet's revision"},
 	"estate.Backend.Reached": {seamNone, "the applier's position"},
 	"estate.Backend.Answers": {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":  {seamNone, "the copy's establishment, for a seat's admission"},
@@ -221,6 +229,10 @@ var classified = map[string]struct {
 	"code.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a write the chart judges behind it is handed to the repository's next committing node, decided " +
 		"nowhere here"},
+	"code.ChangeWriterOptions.People": {seamGrant, "whether the person holding a human reviewer's seat " +
+		"uses Gitlet now (ADR-0110), read through the identity directory and the serving node's chart: " +
+		"refused on a node behind the configuration by code.ChangeWriterOptions.Current, as the seat " +
+		"rules beside it are"},
 	"code.ChangeWriterOptions.Now":    {seamNone, "the decide's clock"},
 	"code.ChangeWriterOptions.Events": {seamNone, "the node's event stream a review it landed is announced on"},
 	"code.ChangeWriterOptions.AgentIDs": {seamNone, "the agent ids a review's announcement names its reviewer " +
@@ -247,6 +259,10 @@ var classified = map[string]struct {
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
 	"code.StoreOptions.NodeID":    {seamNone, "the deciding node"},
 	"code.StoreOptions.Now":       {seamNone, "the clock"},
+	"code.StoreOptions.People": {seamGrant, "whether the person holding the human seat a push mirror " +
+		"pushes as uses Gitlet now (ADR-0110), read through the identity directory and the serving " +
+		"node's chart: refused there by code.StoreOptions.Current and the estate's declaration on " +
+		"code.lifecycle, as the seat rules beside it are"},
 	"code.StoreOptions.SeatRules": {seamGrant, "the chart a tool's lifecycle request is judged by: who " +
 		"may create, rename, change, archive, delete, restore or protect a repository, a create's owner, " +
 		"and what a seat may hold"},
@@ -271,7 +287,7 @@ var classified = map[string]struct {
 	"query.Options.Resyncs": {seamNone, "the node's buckets of its seats' tools' re-syncs at the " +
 		"code log's head, a fixed rate no revision moves: spent by a read, never configuration it reads"},
 	"query.Options.Roster": {seamGrant, "the chart a seat's read of a repository by object id is " +
-		"judged by on the git node that answers it"},
+		"judged by on the Gitlet node that answers it"},
 	"query.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
 		"seat's read behind it is answered unready, behind_config, and judged nowhere here"},
 	"query.Options.Fetched": {seamNone, "where a read the node answered of a visibility: unit " +
@@ -290,8 +306,8 @@ var classified = map[string]struct {
 	"host.Options.Limits": {seamValue, "the size limits a push and an engine write are landed under: " +
 		"a write landed under a bound a revision then lowered leaves the same rows"},
 	"host.Options.DeletedRetention": {seamValue, "the instant a repo_deleted refusal names"},
-	"host.Options.Roster": {seamGrant, "the chart a seat's engine write is judged by on the git " +
-		"node that builds it, and a coding box's seat by the git node it dials"},
+	"host.Options.Roster": {seamGrant, "the chart a seat's engine write is judged by on the Gitlet " +
+		"node that builds it, and a coding box's seat by the Gitlet node it dials"},
 	"host.Options.Signer": {seamValue, "the epoch's names an engine-built commit carries: a seat's " +
 		"role name and address and the identity domain — a revision renaming a seat just after " +
 		"the write leaves the same commit — and the engine's committer a coding box's pack may " +

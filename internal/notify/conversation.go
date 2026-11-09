@@ -29,6 +29,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // THE TWO KEYS, AND WHICH QUESTION EACH ANSWERS.
@@ -80,6 +81,18 @@ import (
 // conversation nobody can reply into ([Derived]): every fire of a schedule
 // carries it, so a fire read as a reply would be taken for the answer to the
 // question the last fire's run parked on.
+//
+// THE PARTITION FUNCTION SPLITS THE STAMPED KEY BY WRITER ([KeyOf]), in memory,
+// where a seat's drain is grouped into turns. A turn works for the one
+// principal who woke it, held to the apps they use (ADR-0109), so two people
+// in one thread, or a person and a stranger, are two partitions and two turns,
+// each bounded by its own writer, never one turn working for both. The writer
+// is read from fields every producer already sends (a first-party notice's
+// writer, the actor every parser stamps, the sender), so the queue learns no
+// integration and an older producer's events split too. The STAMPED key stays
+// thread-grained ([KeyOfAll]): it is the conversation a merged event carries
+// and a parked run's batch, which a later writer's reply in the same thread
+// must still find.
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -235,24 +248,86 @@ func Namespaced(source, local string) string {
 	return source + ":" + local
 }
 
-// KeyOf is the partition function: the partition key an event carries, or its
-// fallback.
+// KeyOf is the partition function: the partition key an event carries, split
+// by the event's writer ([WriterSeparator], writerOf), or its fallback.
+//
+// ONE TURN WORKS FOR ONE WRITER (see "THE PARTITION FUNCTION SPLITS THE STAMPED
+// KEY BY WRITER" above): a person's four messages in a thread are one turn, and
+// a second person's message in the same thread is a turn of its own. Only an
+// external notification names a writer; an A2A ask, a task assignment and a
+// schedule's fire partition by their stamped key as before. A per-event
+// fallback is a partition of one already, and gets no writer.
 func KeyOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
 	}
-	if key, _ := ev.Payload[PartitionField].(string); key != "" {
-		return key
+	key, _ := ev.Payload[PartitionField].(string)
+	if key == "" {
+		return Fallback(ev.ID.String())
 	}
-	return Fallback(ev.ID.String())
+	if writer := writerOf(ev); writer != "" {
+		return key + WriterSeparator + writer
+	}
+	return key
 }
 
-// KeyOfAll is the partition key for a whole partition.
+// WriterSeparator joins a stamped partition key to its writer in [KeyOf]. A
+// writer is escaped (url.PathEscape), so it can hold no space and the
+// separator is never part of one; a stamped key holds no writer at all.
+const WriterSeparator = " by "
+
+// writerOf is who wrote ev, as the partition function splits on it: a
+// first-party notice's writer by the kind its record names (a seat by its
+// handle, a credential acting as no seat by its login, the engine as itself),
+// and anything else by the actor every parser stamps ([ActorField]), else its
+// sender. Empty for an event that is no external notification.
 //
-// Every event in a partition shares a partition key by construction — that is
-// what the broker's partition function guarantees — so a later event naming a
+// THE SAME IDENTITY THE TURN IS THEN WORKED FOR: the requester a turn's reads
+// are decided for is composed from these fields (the engine's turnRequesters,
+// writerSubject), so a partition never holds two principals the turn would
+// have to work for at once.
+func writerOf(ev *events.Event) string {
+	n, ok := events.DataAs[*types.ExternalNotification](ev)
+	if !ok || n == nil {
+		return ""
+	}
+	if w := n.Writer; w != nil {
+		switch w.Kind {
+		case iam.ActorAgent, iam.ActorHuman:
+			if seat := strings.TrimSpace(w.Seat); seat != "" {
+				return "seat:" + url.PathEscape(seat)
+			}
+		case iam.ActorOperator:
+			if login := strings.TrimSpace(w.Login); login != "" {
+				return "login:" + url.PathEscape(login)
+			}
+		case iam.ActorSystem:
+			return "system"
+		}
+	}
+	if actor := strings.TrimSpace(n.Metadata[ActorField]); actor != "" {
+		return "actor:" + url.PathEscape(actor)
+	}
+	if sender := strings.TrimSpace(n.Sender); sender != "" {
+		return "sender:" + url.PathEscape(sender)
+	}
+	return ""
+}
+
+// KeyOfAll is the partition key for a whole partition: the key its events
+// were STAMPED with, thread-grained, never [KeyOf]'s writer split.
+//
+// Every event in a partition shares a stamped key by construction — the
+// partition function only ever refines it — so a later event naming a
 // different one is a routing bug. Taking the FIRST keeps the answer stable
 // rather than letting it depend on which event happened to sort last.
+//
+// THE STAMPED KEY, because it is what outlives the drain: the coalescer stamps
+// it on the merged event (so KeyOf reads the merged event back into the same
+// partition, by the same writer), a parked run's row carries it as the batch a
+// reply is matched against, and the turn's telemetry names it. A writer in it
+// would hide a parked run from every reply but its own writer's, which is the
+// answer route's decision to make, not the key's.
 func KeyOfAll(evs []*events.Event) string {
 	for _, ev := range evs {
 		if ev == nil {

@@ -54,6 +54,24 @@ type estate struct {
 	readErr   error
 	closeNext bool
 	stops     int
+
+	// reopen is how this estate reads a dead letter's frame again
+	// ([changefeed.Records.Reopen]); nil reads every frame as the record
+	// whose payload it is, which is what a node able to read it does.
+	reopen func(frame []byte, at changefeed.Record) (*changefeed.Message, error)
+}
+
+// Reopen reads a kept frame, as the case set it to or as a readable record.
+func (e *estate) Reopen(frame []byte, at changefeed.Record) (*changefeed.Message, error) {
+	e.mu.Lock()
+	reopen := e.reopen
+	e.mu.Unlock()
+	if reopen != nil {
+		return reopen(frame, at)
+	}
+	rec := at
+	rec.Payload = frame
+	return &changefeed.Message{Record: rec, Frame: frame}, nil
 }
 
 // nakRedeliveries is how many times this fixture hands a naked record back.

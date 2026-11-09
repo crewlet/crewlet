@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -33,7 +34,7 @@ import (
 // source is a repository at another host: a bare repository served over
 // smart HTTP — git's own http-backend, as a forge serves one — behind TLS,
 // and a work tree its history is made in. The process's SSL_CERT_FILE names
-// the authority that signed the server's certificate, which is how a git
+// the authority that signed the server's certificate, which is how a Gitlet
 // node's git trusts a source (gitproc.ResolveRemote), so no case using one
 // runs in parallel.
 type source struct {
@@ -188,7 +189,7 @@ func (a *announced) all() []types.CodeMirrorPushed {
 	return slices.Clone(a.pushed)
 }
 
-// harness is one data node and its git node, a source at another host, and
+// harness is one data node and its Gitlet node, a source at another host, and
 // the clock its workers read.
 type harness struct {
 	t      *testing.T
@@ -199,10 +200,14 @@ type harness struct {
 	limits code.Limits
 	events announced
 	// dial is what the workers dial a URL with: nil for the source's own
-	// dial, as Tier A's git.import_allow_private lets a node dial loopback.
+	// dial, as Tier A's gitlet.import_allow_private lets a node dial loopback.
 	dial mirror.Dial
-	// git is the git pool the workers run in: nil for the git node's own.
+	// git is the git pool the workers run in: nil for the Gitlet node's own.
 	git mirror.Pool
+	// people is the identity directory the workers ask who holds the person's
+	// seat a push mirror pushes as: nil for every seat held by an active
+	// person using every app (codetest.FixturePeople).
+	people code.People
 
 	mu  sync.Mutex
 	now time.Time
@@ -234,10 +239,10 @@ func (h *harness) advance(d time.Duration) {
 	h.mu.Unlock()
 }
 
-// mirrors is the git node's worker as the engine builds it — the fleet's
-// one git node's cache and pool, the fleet's object store, the fixture chart
+// mirrors is the Gitlet node's worker as the engine builds it — the fleet's
+// one Gitlet node's cache and pool, the fleet's object store, the fixture chart
 // a push mirror's seat is judged against and the stream its pushes are
-// announced on — dialing the source as Tier A's git.import_allow_private lets
+// announced on — dialing the source as Tier A's gitlet.import_allow_private lets
 // a node dial loopback, or as the case's dial does. Each call is a fresh
 // worker: what it knows of a repository is the rows'.
 func (h *harness) mirrors() *mirror.Mirrors {
@@ -257,9 +262,13 @@ func (h *harness) mirrors() *mirror.Mirrors {
 	if h.git != nil {
 		git = h.git
 	}
+	var people code.People = codetest.FixturePeople{}
+	if h.people != nil {
+		people = h.people
+	}
 	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: git, Objects: objects,
 		Dial: dial, NodeID: n.ID(), Limits: func() code.Limits { return h.limits },
-		Roster: codetest.FixtureRoster, Events: &h.events, Faults: h.faults, Now: h.clock})
+		Roster: codetest.FixtureRoster, People: people, Events: &h.events, Faults: h.faults, Now: h.clock})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -1158,7 +1167,7 @@ func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
 	}
 }
 
-// busyLane is the git node's pool with every refusal of a maintenance slot
+// busyLane is the Gitlet node's pool with every refusal of a maintenance slot
 // told on refused: the moment an attempt's cut finds the lane full.
 type busyLane struct {
 	*gitproc.Pool
@@ -1387,5 +1396,46 @@ func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
 	if got, want := mirror.FailingPastThePromise(turns), mirror.MaxAttempts+1; got != want {
 		t.Fatalf("%d attempts running and a mirror queued behind them for %v count %d failing; want %d",
 			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want)
+	}
+}
+
+// gitletless is the identity directory with every seat held by an active
+// person who is given every app but Gitlet until given — what a push mirror
+// pushing as a person asks before each push.
+type gitletless struct{ given atomic.Bool }
+
+func (g *gitletless) Requester(_ context.Context, seat string) (iam.Principal, error) {
+	grants := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet, iam.GrantArtifacts, iam.GrantChatlet}
+	if g.given.Load() {
+		grants = append(grants, iam.GrantGitlet)
+	}
+	return iam.Principal{Kind: iam.KindPerson, Seat: seat, Stage: iam.StageActive, Grants: grants}, nil
+}
+
+// A PUSH MIRROR PUSHES AS A PERSON ONLY WHILE THEY USE GITLET (ADR-0110): a
+// push mirror publishes only what the seat it pushes as reads, and a person
+// reads only through Gitlet, so while the directory says pat — the person the
+// fixture's mirror pushes as — is not given it, an attempt publishes nothing
+// at the other host; once pat is given it, the next attempt publishes main.
+// The directory is read before every push, so an administrator taking the
+// app away stops the next one.
+//
+// Mutation: hand code.MirrorSeatRefusal false in the push, and the other host
+// gets main while pat holds no Gitlet.
+func TestAPushMirrorPushesAsAPersonOnlyWhileTheyUseGitlet(t *testing.T) {
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings { return mirroredTo(url) })
+	people := &gitletless{}
+	h.people = people
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main")
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != "" {
+		t.Fatalf("the other host's main is %q while pat holds no Gitlet; want nothing published", got)
+	}
+	people.given.Store(true)
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != a {
+		t.Fatalf("the other host's main is %q once pat holds Gitlet; want %s", got, a)
 	}
 }

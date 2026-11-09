@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -332,6 +333,9 @@ type removedSecret struct {
 type rotation struct {
 	fleetsecrets.Rekeyed
 	Identity *secretsapi.IdentityResealed
+	// Access is the access log's SSH commands, counted; nil where nothing
+	// moved them, as Identity is.
+	Access *secretsapi.AccessResealed
 }
 
 // engineHeld is what the keyring seals that no command names: the engine's own
@@ -347,6 +351,10 @@ type engineHeld struct {
 	// Executor is the seats' sealed executor sessions, waited out the same
 	// way; nil where the backend holds none.
 	Executor *executordomain.SealedCount
+
+	// Access is the access log's sealed SSH commands, which a rekey moves;
+	// nil where the backend holds none.
+	Access *accessdomain.SealedCount
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -1038,14 +1046,21 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 					"(sealed under another key)\n", identityStale)
 			}
 		}
+		accessStale := 0
+		if held.Access != nil {
+			accessStale = held.Access.Outside(active)
+			if accessStale > 0 {
+				fmt.Fprintf(stdout, "  %d recorded SSH commands (sealed under another key)\n", accessStale)
+			}
+		}
 		waitOut(stdout, held, active)
-		if stale == 0 && engineStale == 0 && identityStale == 0 {
+		if stale == 0 && engineStale == 0 && identityStale == 0 && accessStale == 0 {
 			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 			noIdentityHere(stdout, sv, held.Identity == nil)
 			return nil
 		}
-		fmt.Fprintf(stdout, "%d secrets, %d engine keys and %d personal values "+
-			"would be re-sealed under %s\n", stale, engineStale, identityStale, active)
+		fmt.Fprintf(stdout, "%d secrets, %d engine keys, %d personal values and %d SSH commands "+
+			"would be re-sealed under %s\n", stale, engineStale, identityStale, accessStale, active)
 		noIdentityHere(stdout, sv, held.Identity == nil)
 		return nil
 	}
@@ -1053,11 +1068,14 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	if err != nil {
 		return err
 	}
-	identityMoved := 0
+	identityMoved, accessMoved := 0, 0
 	if rekeyed.Identity != nil {
 		identityMoved = rekeyed.Identity.Values
 	}
-	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 && identityMoved == 0 {
+	if rekeyed.Access != nil {
+		accessMoved = rekeyed.Access.Commands
+	}
+	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 && identityMoved == 0 && accessMoved == 0 {
 		fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 	} else {
 		// THE NAMES, not a count: a pass that moved 12 of 13 rows raises
@@ -1075,6 +1093,9 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 		if identityMoved > 0 {
 			fmt.Fprintf(stdout, "and %d personal values of %d people in the "+
 				"identity estate\n", identityMoved, rekeyed.Identity.People)
+		}
+		if accessMoved > 0 {
+			fmt.Fprintf(stdout, "and %d recorded SSH commands\n", accessMoved)
 		}
 	}
 	noIdentityHere(stdout, sv, rekeyed.Identity == nil)

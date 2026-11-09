@@ -135,6 +135,24 @@ func FinishExpunge(ctx context.Context, c *Compactor, cand code.ExpungeCandidate
 	return c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace, floor: cand.Version})
 }
 
+// Listed is repository id as a pass of c lists it now — the `expunge_due`
+// listing's two arms, its weekly one asked from c's clock less
+// code.ExpungeInterval, every page, as [Compactor.ExpungePass] reads them — and
+// whether the listing names it at all: what a case asks an expunge of again
+// after a cycle answered busy, as the next pass would.
+func Listed(ctx context.Context, c *Compactor, id string) (code.ExpungeCandidate, bool, error) {
+	listed, err := c.listExpunges(ctx, c.now().Add(-code.ExpungeInterval))
+	if err != nil {
+		return code.ExpungeCandidate{}, false, err
+	}
+	for _, cand := range listed {
+		if cand.ID == id {
+			return cand, true, nil
+		}
+	}
+	return code.ExpungeCandidate{}, false, nil
+}
+
 // ExpungeFrom has c's expunges on its own schedule due from n unreachable bytes
 // rather than code.ExpungeMinBytes: what a case's repository of kilobytes is
 // expunged at.

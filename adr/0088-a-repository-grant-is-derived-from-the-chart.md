@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/code.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/code.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/code.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitletNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/code.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/code.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/code.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -30,7 +30,7 @@ at most half of the repository's refs and bytes (`code.OutsideSeatShare`), so it
 CONFIRMED behind the company's configuration — shed or stuck, never lag alone — judges no seat's grant at all,
 even as the last node left to ask, since the revision it failed to apply may be the one that revoked it: a data
 node answers such a read `behind_config` (the estate's `judgesGrant` declaration, on every operation whose asker
-is a seat), a git node answers it unready and a committer hands a seat's push to the repository's next committer
+is a seat), a Gitlet node answers it unready and a committer hands a seat's push to the repository's next committer
 (`code.CommitterOptions.Current`), so a current node answers instead, or nobody does, while a person's read and
 push consult no chart and are answered there as before. The window in which a stale chart can still judge is the
 control plane's confirmation of the lag: about a minute after an activation at worst.
@@ -61,7 +61,7 @@ grants a view of the deployment that the ceiling does not bound.
 
 A seat's WRITE made inside a turn somebody woke is decided again for them too (`code.WriteCeiling`), on the
 repository's grant at the relation the write needs, by the node that decides the write and from the same chart
-and row: an engine write by its git node, the seat's grant held to the requester's (`code.Grant.Under`), and a
+and row: an engine write by its Gitlet node, the seat's grant held to the requester's (`code.Grant.Under`), and a
 lifecycle request by its data node, asked again as the colleague asking it itself. The tool's own row is decided
 for the requester first, and a requester it refuses — a stranger, a person who may not act now — is a ceiling of
 NOBODY rather than a refusal there, because the seat's OWN WORK stays steerable by whoever woke it, as
@@ -92,3 +92,27 @@ past its turn: a colleague a seat asks answers
 in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is
 decided for whoever woke it and never for whoever woke the asker — as the artifacts tools' ceiling is — and
 nothing here bounds what a seat already knows, from its memory or a read made in a turn nobody woke.
+
+## Amendment: the requester's apps bound a seat's verbs
+
+A person still bounds no repository relation: a person maintains everywhere.
+Since [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), the requester's apps bound every app verb a seat takes in a
+turn they woke. The code verbs name no app yet. Once Gitlet is an app (piece
+5 of crewlet#733), a turn woken by a person without it reaches no repository,
+and its executor is given none.
+
+## Amendment: a person reaches a repository through the gitlet app
+
+Since [ADR-0110](0110-reaching-a-repository-takes-the-gitlet-permission.md), the two clauses above
+about principals who are not seats hold behind the `gitlet` app:
+- a person maintains every repository;
+- a credential bound to no seat reads every repository.
+
+A principal without the app is refused at the authority table before any repository is read, and a
+turn a person or a credential without it woke reaches none, its executor given none. A stranger, a
+person who may not act, and a person or a credential without the app use no app, so no write is made
+for them, the seat's own work included. The ceiling of nobody stays for the one requester left that
+uses the app and pushes to no repository itself, a credential bound to no seat
+([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)): its turn steers the seat's
+own work alone. Everything else this record decides is unchanged: the derivation for seats,
+`visibility`, the reserved namespace, protections and a colleague seat's ceiling.

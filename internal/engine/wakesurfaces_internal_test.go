@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
@@ -139,6 +140,10 @@ func wakeSurfaces() map[string]wakeSurface {
 				alarmwake.AlarmField: "census_drift", alarmwake.NodeField: "n-1",
 				alarmwake.ChangeField: string(statelog.TransitionFired),
 			}), provenance.SourceAlert},
+		// A REVIEW NAMES NOBODY, and a body a later build writes is a note
+		// about a change somebody made.
+		accessreview.Source: {accessreview.Prompt{}, routedWake(accessreview.Source,
+			accessreview.Prompt{}, accessreview.EventType, nil), provenance.SourceChangeNote},
 		promptlessSource: {notify.Generic{}, routedWake(promptlessSource, notify.Generic{},
 			"something_happened", nil), provenance.SourceNotification},
 	}
@@ -172,7 +177,7 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 	// THE ALARMS' SOURCE IS THE ENGINE'S TOO, and no first-party surface:
 	// a node's alarm transition names no sender (internal/alarmwake), so it
 	// is no namespace of handles, and is listed here by itself.
-	want := map[string]bool{promptlessSource: true, alarmwake.Source: true}
+	want := map[string]bool{promptlessSource: true, alarmwake.Source: true, accessreview.Source: true}
 	for _, source := range firstPartySources {
 		want[source] = true
 	}

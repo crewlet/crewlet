@@ -23,14 +23,17 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -116,6 +119,10 @@ type App struct {
 	// fleetBroker reads and changes the fleet broker's membership. See
 	// fleetbroker.go.
 	fleetBroker FleetBrokerControl
+
+	// deadLetters lists and discards the wake feeds' dead letters. See
+	// feeddeadletters.go. Never nil: see [Options.DeadLetters].
+	deadLetters FeedDeadLetters
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
@@ -309,8 +316,8 @@ type guardedMounter interface {
 // Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Retention, Code, Capacity, FleetBroker, Backup, Nodes, AuthEvents and
-// Audit are REQUIRED, and [New] refuses a missing one by name.
+// Setup, Retention, Code, Capacity, FleetBroker, DeadLetters, Backup, Nodes,
+// AuthEvents and Audit are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -687,7 +694,7 @@ type Options struct {
 	Nodes NodeGate
 
 	// Code is Gitlet — smart HTTP under /git/ on a node
-	// whose roles name git, and a coding box's under /box/git/ — and the
+	// whose roles name gitlet, and a coding box's under /box/git/ — and the
 	// code domain's reads under /gitlet/ on every node, asked of the engine on
 	// every request, with the box tokens a box route on a node not serving
 	// Gitlet verifies by before it says why: see [CodeSurface]. /git/
@@ -701,6 +708,15 @@ type Options struct {
 	// FleetBroker reads and changes the fleet broker's membership — see
 	// [FleetBrokerControl].
 	FleetBroker FleetBrokerControl
+
+	// DeadLetters lists and discards the wake feeds' dead letters — see
+	// [FeedDeadLetters].
+	//
+	// REQUIRED, for [Options]' reason: every engine [engine.New] builds
+	// keeps its feeds' dead letters through one ledger over its queue, and
+	// the entries are the broker's, so a node serving the API answers for
+	// every feed whether or not its own logs are running.
+	DeadLetters FeedDeadLetters
 
 	// Backup copies this node's durable state to a path an operator
 	// names.
@@ -956,7 +972,7 @@ func New(opts Options) (*App, error) {
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
-		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(),
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), HeldCalls: sources.HeldCalls,
 		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.
@@ -1023,6 +1039,7 @@ func New(opts Options) (*App, error) {
 	a.listens = opts.OperatorListens
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
+	a.deadLetters = opts.DeadLetters
 
 	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
 	mux := &routeTable{mux: http.NewServeMux()}
@@ -1033,13 +1050,13 @@ func New(opts Options) (*App, error) {
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
 	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures,
-	// the capacity window and the fleet broker's membership — each mounted
-	// with the grant it takes, and failing the boot where a policy is
-	// missing.
+	// the capacity window, the fleet broker's membership and the wake
+	// feeds' dead letters — each mounted with the grant it takes, and
+	// failing the boot where a policy is missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	// Gitlet and its reads: git on a node with the git
+	// Gitlet and its reads: git on a node with the gitlet
 	// role — a person's routes each on the verb it is decided by, failing
 	// the boot where a policy is missing, and a coding box's on the table
 	// itself, admitted by its run — and the reads on every node. See code.go.
@@ -1382,6 +1399,7 @@ func (o Options) missing() error {
 		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
+		{"DeadLetters", o.DeadLetters == nil},
 		{"Backup", o.Backup == nil},
 		{"Objects", o.Objects == nil},
 		{"Nodes", o.Nodes == nil},
@@ -1401,10 +1419,11 @@ func (o Options) missing() error {
 }
 
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
-// than the company: the backup, the retention gestures, the capacity window
-// and the fleet broker's membership. Every one is admin's ([iam.GrantAdmin]),
-// through the authority table's [authz.ActionFleetOperate] for a write and
-// [authz.ActionFleetRead] for a read, stated where it is mounted.
+// than the company: the backup, the retention gestures, the capacity window,
+// the fleet broker's membership and the wake feeds' dead letters. Every one is
+// admin's ([iam.GrantAdmin]), through the authority table's
+// [authz.ActionFleetOperate] for a write and [authz.ActionFleetRead] for a
+// read, stated where it is mounted.
 //
 // # They decided nothing, and the guard in front of them decides nothing either
 //
@@ -1420,23 +1439,31 @@ func (o Options) missing() error {
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO (the maintenance status and the reanchor confirmation value),
+// THE READS TOO. The maintenance status and the reanchor confirmation value,
 // because `/worklet/retention*` is the deployment's surface whole, which is
-// what the `retention` question already declares: a map of which machine
-// holds what, and the value a reanchor must echo, are not the company's
-// working state.
+// what the `retention` question already declares: a map of which machine holds
+// what, and the value a reanchor must echo, are not the company's working
+// state. And the wake feeds' dead letters, for a reason of their own: each
+// entry is what a roll or a retired key left behind, a record no node could
+// read in the hour its feed handed it back, and the listing is read by the
+// operator who decides whether to give its wake up for good. It names each
+// record by the header its feed kept (where it was delivered from, its key and
+// operation id, why no node read it and what that node met), never its frame;
+// and those keys and details are a tracker, page, chat or code record's, so
+// the listing is admin's as the company-wide trail is.
 //
 // # A write asks for a recent proof of identity, and a read does not
 //
 // The two verbs ask the same permission and differ in the step-up alone: every
 // write here changes what the deployment does for everybody on it, so it asks
-// for a proof inside `api.auth.session.step_up`, while the two reads — the
-// maintenance window's status and the value a reanchor must echo — change
-// nothing, and a status an operator cannot see without re-proving who they
-// are is one they stop checking. The METHOD picks the verb, because that is
-// the one fact about a route this surface already treats as its read/write
-// line (the session table's columns are keyed on it too), and a second list
-// of which patterns read would be the thing that drifts.
+// for a proof inside `api.auth.session.step_up`, while the three reads — the
+// maintenance window's status, the value a reanchor must echo and the dead
+// letters' listing — change nothing, and a status an operator cannot see
+// without re-proving who they are is one they stop checking. The METHOD picks
+// the verb, because that is the one fact about a route this surface already
+// treats as its read/write line (the session table's columns are keyed on it
+// too), and a second list of which patterns read would be the thing that
+// drifts.
 func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
@@ -1476,6 +1503,10 @@ func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc
 	// election runs on. The listing beside it is the `fleet_broker`
 	// question, a named read. See fleetbroker.go.
 	a.mountFleetBroker(mount)
+	// The wake feeds' dead letters: the listing, and an operator's discard
+	// of an entry whose wake they have decided to lose. See
+	// feeddeadletters.go.
+	a.mountFeedDeadLetters(mount)
 }
 
 // deploymentPolicy is the verb one deployment route is decided under: a read
@@ -1593,7 +1624,7 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: m.Reason, Stored: m.At,
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: inboxApp(m.Source),
 		})
 	}
 }
@@ -1601,7 +1632,22 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 // pushInboxGap tells every watched inbox to read itself again: the engine
 // switched where this node's movements of source come from, and what moved in
 // the gap is not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source) }
+func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source, inboxApp(source)) }
+
+// inboxApp is the app whose half of a person's inbox a domain's movements are
+// about — the tracker's is Worklet's, the code log's Gitlet's (ADR-0110) — or
+// "" for a domain that keeps none, whose movement then reaches nobody
+// ([stream.InboxChange.ForReader]). Named by each domain's own state log name,
+// which is what an [inbox.Movement] carries.
+func inboxApp(source string) iam.Grant {
+	switch source {
+	case worklet.Domain{}.Name():
+		return iam.GrantWorklet
+	case code.Domain{}.Name():
+		return iam.GrantGitlet
+	}
+	return ""
+}
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }

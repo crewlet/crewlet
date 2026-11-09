@@ -54,6 +54,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -262,6 +263,28 @@ type Turn struct {
 	// who that is on the run's row. A handle is immutable (ADR-0013), so the
 	// row names the same seat for as long as the seat exists.
 	Requester string
+
+	// RequesterLogin is the credential acting as no seat — a Tier A token, a
+	// service account — whose write woke this turn, by its login, and
+	// RequesterApps the apps every one of its writes in the trigger carried,
+	// as the node that took them resolved them. Empty wherever Requester is
+	// set, and for a turn no credential woke.
+	//
+	// NOT Requester: that is a seat a question is put to, and a credential is
+	// nobody to ask. What it is for is the turn's ceiling (ADR-0109): every
+	// call is decided for the credential too, with these apps narrowed again
+	// by what the node running the call resolves the login to — so a token
+	// narrowed or removed after it wrote narrows the turn at its next call,
+	// and one a node's Tier A gives wider grants never widens it.
+	RequesterLogin string
+	RequesterApps  []iam.Grant
+
+	// WorkingFor is who the turn works for when a colleague's ask, or the
+	// answer to this seat's own ask, handed it on ([types.WorkingFor]): the
+	// requester ceiling is theirs whoever asked or answered, read before
+	// Requester. Nil for a turn no hand-on woke. Carried on the run's row
+	// with Requester.
+	WorkingFor *types.WorkingFor
 
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke — the same people the turn-start memory filter was told about,

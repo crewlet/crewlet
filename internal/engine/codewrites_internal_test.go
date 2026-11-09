@@ -174,6 +174,11 @@ func (noRequester) Requester(_ context.Context, handle string) (iam.Principal, e
 	return iam.Principal{}, fmt.Errorf("no requester is composed here, and %q was asked for", handle)
 }
 
+// Credential composes nobody either.
+func (noRequester) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, fmt.Errorf("no requester is composed here, and %q was asked for", login)
+}
+
 // codeTool is the real code tool named name, over host's reads and writes.
 func codeTool(t *testing.T, host *codeWriteHost, name string) tools.Callable {
 	t.Helper()

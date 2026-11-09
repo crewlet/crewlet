@@ -172,6 +172,15 @@ there reaches anybody, so
 the configuration warns about it at the seat's `contact` — and the review lists
 that warning with the others — until an id on that workspace is added.
 
+**A contact identity is where a message goes, never what a person may do.** A
+human seat with contacts and no person on it is somebody agents hear from and
+act for with no app at all: the apps an agent uses in a turn a person woke are
+that person's permissions, and a seat nobody holds carries none. Put the person
+on the seat, with **Add person** and the apps they use, and their agents act
+for them from then on; they need never sign in ([An agent uses only the apps of
+the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
 creates the company with `PUT /config` and `If-None-Match: *`, which is
@@ -853,7 +862,7 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 An agent seat's **Code** section, first on its **Integrations** tab, holds its
 code access (`code.access`): read only (the default), review or full access.
 It is [Gitlet](gitlet.md)'s alone: it caps what the chart grants the seat
-there, so it is drawn when the company sets `code.native`, and not otherwise.
+there, so it is drawn when the company sets `code.backend: gitlet`, and not otherwise.
 GitHub never reads it. What a seat's app may do is its own permissions
 (`integrations.github.permissions`), which GitHub's **Agents** tab on the
 **Integrations** screen sets in GitHub's own terms, and which says what a raise

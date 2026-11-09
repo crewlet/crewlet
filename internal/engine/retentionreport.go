@@ -100,6 +100,13 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// for a log whose census counts readers of its own, by the ceiling the
 	// stream read below finds its stream HOLDING.
 	census := r.census(held)
+	// WHAT EACH LOG'S WAKE FEED GAVE UP ON, read once for every feed on every
+	// report — the beat's above all — so each entry's age and the time it
+	// has left are now's, and an entry that vanished at its expiry is counted
+	// as the wake it lost (feeddeadletters.go): one count of every feed's
+	// entries from the broker, and a listing of a feed's only when that count
+	// moved. A read that failed carries the last listing that answered.
+	feedLetters := r.feedLetters.read(ctx, r.feedSources, now)
 	for _, running := range held {
 		name := running.domain.Name()
 		d := statelog.DomainInputs{
@@ -191,6 +198,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// than taken, because its age is an interval between observations —
 		// one taken per poll would make it whatever the poll rate is.
 		d.FloorUnknownFor, d.FloorUnknownCause = r.floors.of(name)
+		d.FeedDeadLetters = feedLetters[name]
 		// AT THE CEILING THE STREAM READ ABOVE FOUND IT HOLDING: a log whose
 		// census counts readers of its own and whose stream this pass could
 		// not read is left uncounted rather than judged without them, where

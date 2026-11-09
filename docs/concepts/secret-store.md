@@ -181,7 +181,10 @@ node it counts Ask Crewlet's sealed conversations per key as well
 (`assistant_values`, each file a conversation keeps counted by the key its
 content is sealed under in the object store), and the seats' executor sessions
 (`executor_values`, each session a turn's row names counted by the key its
-object is sealed under), neither of which a rekey moves. A dry run counts
+object is sealed under), neither of which a rekey moves, and the SSH commands
+the access log recorded (`access_values`, each command's text counted by the
+key it is sealed under), which a rekey moves with a record per command, as it
+moves the identity estate's values. A dry run counts
 whatever it reached still under an old key, so an operator is never told
 "nothing to move" while the address index's key, every person's name,
 somebody's conversation or a seat's session is still sealed under the key they

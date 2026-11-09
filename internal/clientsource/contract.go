@@ -245,6 +245,7 @@ var contract = []Entry{
 	{"McpHeldCall", ReadInterface, "internal/api/queries.TestTheInboxReadsWhatAHeldCallSends"},
 	{"McpApprovalAnswer", ReadInterface, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
 	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpHeldWhole", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheHeldCallReadSends"},
 	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
 
 	// tools.ts
@@ -403,6 +404,7 @@ var contract = []Entry{
 	{"SessionContinuedBy", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SCHEDULE_CONVERSATION_PREFIX", ReadScalar,
 		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"LIVE_KEPT", ReadScalar, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
@@ -442,7 +444,7 @@ var contract = []Entry{
 	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"ChatBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
-	{"CodeHost", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"CodeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
@@ -798,6 +800,7 @@ var contract = []Entry{
 	{"AccessDraftRequest", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessPlanAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatPlan", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSeatReview", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessInstallLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessRefusal", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessLaneKey", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},

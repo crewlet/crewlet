@@ -251,16 +251,22 @@ func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seat
 	if err != nil {
 		return seataccess.Options{}, err
 	}
+	scope, names := d.offered()
+	return seataccess.Options{
+		Lane: lane, Levels: seataccess.OfferGaps(accessVendor{}.FixedLevels(lane), gaps),
+		Scope: scope, ScopeNames: names, ScopeLive: true, Scoped: true, ScopeRequired: true,
+		ActionURL: IAMURL,
+	}, nil
+}
+
+// FixedLevels is Google Cloud's levels, least access first
+// ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	out := make([]seataccess.Level, 0, len(levels))
 	for _, l := range levels {
 		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note, Administers: l.administers})
 	}
-	scope, names := d.offered()
-	return seataccess.Options{
-		Lane: lane, Levels: seataccess.OfferGaps(out, gaps),
-		Scope: scope, ScopeNames: names, ScopeLive: true, Scoped: true, ScopeRequired: true,
-		ActionURL: IAMURL,
-	}, nil
+	return out
 }
 
 // Observe reads back the account the ledger records for each seat, by unique

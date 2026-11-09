@@ -71,6 +71,12 @@ type StoreOptions struct {
 	// Policy is the epoch's code.scratch and the repository bound
 	// ([ScratchOf]), read once a create.
 	Policy func() LifecyclePolicy
+	// People answers who holds a human seat and with which apps ([People]):
+	// what a create or a settings change that sets a push mirror pushing as
+	// a person's seat is judged by, since the mirror publishes only what that
+	// seat reads and a person reads only through Gitlet (ADR-0110). A store
+	// without it answers such a request [ErrNotServing].
+	People People
 }
 
 // Store is Gitlet's lifecycle write path.
@@ -83,6 +89,7 @@ type Store struct {
 	seatRules func() (SeatRules, bool)
 	current   func() bool
 	policy    func() LifecyclePolicy
+	people    People
 }
 
 // NewStore builds the lifecycle store, refusing what it cannot work without.
@@ -99,7 +106,7 @@ func NewStore(o StoreOptions) (*Store, error) {
 			"configuration or system record names as its actor")
 	}
 	s := &Store{publisher: o.Publisher, db: o.DB, nodeID: o.NodeID, now: o.Now, seatRules: o.SeatRules,
-		current: o.Current, policy: o.Policy}
+		current: o.Current, policy: o.Policy, people: o.People}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -1339,7 +1346,7 @@ func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, e
 // decide, which reads them in the snapshot that holds a reader connection —
 // so none reads what it decides nothing by: a repository's gates are up to
 // [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, which every git
-// request's admission and every page of a git node's sync would decode, ship
+// request's admission and every page of a Gitlet node's sync would decode, ship
 // and keep for nothing, and every round would decode while every other
 // replicated read on the node waited for the connection — the cost
 // [verdicts.formBefore] keeps out of the snapshot.

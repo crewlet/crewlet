@@ -20,7 +20,7 @@ import (
 )
 
 // THE CHECKS A REPOSITORY DEFINES: `.crewlet/checks.yaml` at the root of its
-// tree, read as the one grammar every reader of it shares — the home git node
+// tree, read as the one grammar every reader of it shares — the home Gitlet node
 // that queues a change's checks from it, the runner that runs one, and
 // `crewlet validate -tier checks` on a laptop before anything is pushed.
 //
@@ -50,7 +50,7 @@ import (
 //
 // # Why a parse costs the file's bound, never more
 //
-// The home git node reads the file on every change it dispatches, so a file a
+// The home Gitlet node reads the file on every change it dispatches, so a file a
 // person can write costs that node no more than its bound: a LIST PAST ITS
 // BOUND IS REFUSED BY ITS COUNT ALONE, before any item of it is read
 // ([checkList]) — a 64 KiB file can hold some eleven thousand items, which
@@ -188,7 +188,7 @@ func (l checkList) over(n int) (string, bool) {
 
 // CheckCell is the kind of box a check runs in.
 //
-// TWO OF THE SANDBOX'S THREE PLACEMENTS: a container on a git node, or a remote
+// TWO OF THE SANDBOX'S THREE PLACEMENTS: a container on a Gitlet node, or a remote
 // E2B box — config.CodeCheckCells, the one list the company's code.checks is
 // held to as well, so a file can name no cell the company could not allow and
 // the company allow none a file could not name. A check runs a change's own
@@ -198,7 +198,7 @@ func (l checkList) over(n int) (string, bool) {
 type CheckCell string
 
 const (
-	// CellContainer is a container on a git node, which holds the
+	// CellContainer is a container on a Gitlet node, which holds the
 	// repository's cache beside it.
 	CellContainer = CheckCell(config.PlacementContainer)
 	// CellE2B is a remote E2B box, which clones the one commit it checks.

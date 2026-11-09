@@ -23,7 +23,7 @@ import (
 )
 
 // Poll is the interval between two passes of the COMPACTION loop: one indexed
-// listing a git node a minute (master §3.8). BenchmarkCompact's steady arm
+// listing a Gitlet node a minute (master §3.8). BenchmarkCompact's steady arm
 // confirms it — pushes at three hundred a minute, one pass a simulated minute:
 // the repository held 304 live packs at the most, under
 // code.CompactTargetPacks plus a minute's pushes (350), every pass merging the
@@ -44,8 +44,8 @@ type Estate interface {
 }
 
 // Maintainers answers which of many repositories this node MAINTAINS, each
-// for work charged at its own charge of a git node's background budget — the
-// first git node of the repository's rendezvous order over the live git nodes
+// for work charged at its own charge of a Gitlet node's background budget — the
+// first Gitlet node of the repository's rendezvous order over the live Gitlet nodes
 // whose ADVERTISED budget holds the charge, the home on a fleet of alike nodes
 // (internal/estate's Router.MaintainerOf, ADR-0091) — every one judged against
 // ONE LISTING of who serves git and what each advertises: the set this node
@@ -63,7 +63,7 @@ type Estate interface {
 // ([Compactor.claimCompaction]) and no publication builds beside an expunge
 // ([Compactor.claimExpunge]).
 //
-// Listed is whether this node is among the git nodes the placement lists —
+// Listed is whether this node is among the Gitlet nodes the placement lists —
 // the only nodes a maintainer is chosen from (internal/estate's
 // Router.Listed), three-valued as MaintainerOf is: what every loop waits on
 // before its first pass ([Compactor.Start]).
@@ -73,7 +73,7 @@ type Maintainers interface {
 }
 
 // ListedRecheck is how often a loop that has not passed yet asks whether this
-// node is listed among the git nodes ([Maintainers.Listed]).
+// node is listed among the Gitlet nodes ([Maintainers.Listed]).
 //
 // A SECOND: the presence view hears a node's first beat and lists it within
 // about one (coord.LeaseView watches the presence leases), and the question
@@ -284,7 +284,7 @@ type holds struct {
 	fullAt time.Time
 }
 
-// Compactor is one git node's maintenance of the repositories it MAINTAINS:
+// Compactor is one Gitlet node's maintenance of the repositories it MAINTAINS:
 // three loops, each a pass every minute — COMPACTION, which merges a
 // repository's small packs ([Compactor.Poll]); PUBLICATION, which writes its
 // next published layer ([Compactor.PublishPass]); and EXPUNGE, which drops what
@@ -459,7 +459,7 @@ func runInSlot(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitp
 
 // Start runs the three loops, each on a goroutine of its own, until
 // [Compactor.Stop]: a pass of each AT ONCE once this node is LISTED among the
-// git nodes ([Compactor.awaitListed]) — so a node that comes up beside a
+// Gitlet nodes ([Compactor.awaitListed]) — so a node that comes up beside a
 // repository at the pack bound starts merging it, and names it in its alarm
 // reading, at the first listing that can place it rather than a minute later,
 // and one that comes up beside an expunge a crash left open finishes it —
@@ -521,7 +521,7 @@ func (c *Compactor) loop(running *sync.WaitGroup, every time.Duration, failed st
 	}
 }
 
-// awaitListed waits until this node is listed among the git nodes
+// awaitListed waits until this node is listed among the Gitlet nodes
 // ([Maintainers.Listed]), asking every [ListedRecheck], and reports whether it
 // is — false where the compactor's life ended first.
 //

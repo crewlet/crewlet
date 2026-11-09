@@ -52,6 +52,7 @@ func ActorOf(p iam.Principal) Actor {
 	a := iam.ActorFor(p)
 	return Actor{
 		Handle: a.Name, Kind: worklet.AuthorKind(a.Kind), OperatorID: a.OperatorID,
+		Apps: iam.ActorApps(p),
 	}
 }
 
@@ -69,7 +70,8 @@ func PageActorOf(p iam.Principal) (doclet.Actor, error) {
 		return doclet.Actor{}, fmt.Errorf("builtin: a %s cannot author a page; "+
 			"Doclet records agents, people and operators", a.Kind)
 	}
-	return doclet.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
+	return doclet.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID,
+		Apps: iam.ActorApps(p)}, nil
 }
 
 // ChatActorOf is [ActorOf] for chat, which records the SAME author under the

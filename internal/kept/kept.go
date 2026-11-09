@@ -133,6 +133,26 @@ func Size(n int) string {
 	}
 }
 
+// SizeUp is n bytes in [Size]'s units, ROUNDED UP: the figure a refusal states
+// for what is past a bound, beside the bound in [Size]'s.
+//
+// UP, because [Size] rounds whole KiB down, and a value one byte past a bound
+// of whole KiB then reads as the bound itself — "16 KiB, and one may be at
+// most 16 KiB" — which tells its reader nothing was wrong. Up, a value past a
+// bound always reads past it, by at most a unit, and a value within one never
+// reads past it. Bytes under a KiB are exact, as [Size] states them; a figure
+// that rounds up to a whole MiB is stated in MiB, so no figure reads 1024 KiB.
+func SizeUp(n int) string {
+	switch {
+	case n > 1<<20-1<<10:
+		return fmt.Sprintf("%.1f MiB", float64((n*10+1<<20-1)>>20)/10)
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KiB", (n+1<<10-1)>>10)
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
+
 // LeftOut is the marker a value of a call's arguments is replaced by when the
 // record does not keep it: its size as written (raw, its JSON text) and four
 // bytes of that text's SHA-256, so two left-out values are told apart.

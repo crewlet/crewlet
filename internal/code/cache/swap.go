@@ -27,7 +27,7 @@ import (
 // THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
 // THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0090). A compaction retires packs — the
 // code domain moves their rows into code_packs_retired, the outputs holding
-// every object of them — and each git node's cache learns it from a round: a
+// every object of them — and each Gitlet node's cache learns it from a round: a
 // delta's retired phase, or the retirements a full answer serves above the
 // caller's position. Its pack files then leave the copy. They cannot leave IN
 // PLACE: git opens a pack lazily, part way through a run, so a clone reading
@@ -60,7 +60,7 @@ import (
 // nothing in it is read before the rename makes it an incarnation, and a
 // crash before the rename leaves it in scratch/, which the boot moves aside.
 // Synced step by step, a swap made up to eleven, every one a journal commit
-// while the round holds the repository, on every git node at every
+// while the round holds the repository, on every Gitlet node at every
 // compaction.
 //
 // WHAT LEAVES, AND WHAT IT TAKES WITH IT. The live set (entry.go's live) is
@@ -725,7 +725,7 @@ func (s *swapping) stopRun() {
 // whole — the memo's tree — is never linked: it MOVES into the next
 // incarnation as that is promoted, one rename (promote's carryMemo, SeedMove),
 // where linked an entry at a time it would cost a stat and a link an answer
-// inside the round that holds the repository, on every git node holding it at
+// inside the round that holds the repository, on every Gitlet node holding it at
 // every compaction. The directories its links land in are synced with the
 // rest of the staging, once each (syncStaged).
 func (s *swapping) carryDerived() error {
@@ -769,7 +769,7 @@ func (s *swapping) carryDerived() error {
 // makes it an incarnation, and a crash before the rename leaves it in
 // scratch/, which every boot moves aside, so the staging needs its files
 // durable once, at the end, and never step by step: each sync more is a
-// journal commit while the round holds the repository, on every git node at
+// journal commit while the round holds the repository, on every Gitlet node at
 // every compaction, which can wait out the data other rounds are writing, the
 // readers waiting on the round with it.
 func (s *swapping) syncStaged() error {

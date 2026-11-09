@@ -99,6 +99,7 @@ import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { DOCLET_SEARCH_BACKEND, useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { GITLET, needsWords } from "~/lib/access.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
 import { repoPath } from "~/lib/code.ts";
 import { groupHits, hitAt } from "~/lib/codeSearch.ts";
@@ -348,14 +349,21 @@ export function CommandPalette({
     { enabled: wantsArtifacts },
   );
   // CODE IN ITS OWN SCOPE ONLY, and asked once the term has rested: a code
-  // search is a signed request to every git node holding a repository the
+  // search is a signed request to every Gitlet node holding a repository the
   // reader reads, so a word being typed asks nothing (`useQuiet`) — and a
   // reconnect asks again only a search that never reached the engine: its
   // answer names the commits it read, so asking again only repeats it.
+  //
+  // AND ONLY OF A READER HOLDING GITLET (ADR-0110), which the engine refuses
+  // the search to anybody else: the scope stays, as Tasks and Pages stay for
+  // a reader without their apps, and says what would open it
+  // (`codeWithheld`) rather than that no line matched.
   const codeTerm = useQuiet(term);
+  const codeWithheld = !viewer.loading && !viewer.gitlet ? needsWords("Search", [GITLET]) : null;
   const wantsCode =
     served &&
     ask.code &&
+    viewer.gitlet &&
     !picking &&
     scope === "code" &&
     codeTerm.length >= CODE_SEARCH_MIN &&
@@ -1229,6 +1237,9 @@ export function CommandPalette({
       return `No artifact you can open matches “${term}”.`;
     }
     if (scope === "code") {
+      // WITHHELD FIRST, as Tasks and Pages are: no term a reader without
+      // Gitlet types finds a line.
+      if (codeWithheld) return codeWithheld;
       if (term.length < CODE_SEARCH_MIN) return "Type three or more characters.";
       if (codeAnswer.error) return "Code search did not run.";
       if (!codeAnswer.data) return "Searching…";

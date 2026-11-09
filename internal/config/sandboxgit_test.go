@@ -109,7 +109,7 @@ providers:
   sandbox:
     fake: true
 code:
-  native: true
+  backend: gitlet
   checks:
     env: {%s: "x"}
 `, "code.checks.env.%s"},
@@ -146,7 +146,7 @@ roles:
     sandbox:
       env: {GITLAB_TOKEN: "x", CREWLET_GIT_PROXY: "y", GIT_CONFIG_COUNT: "0"}
 code:
-  native: true
+  backend: gitlet
   checks:
     env: {NPM_TOKEN: "x", CREWLET_CHECKS_PROXY: "y"}
 `)
@@ -184,7 +184,7 @@ units:
 `
 	if native {
 		doc += `code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {unit: Engineering}
@@ -208,13 +208,13 @@ func directWarnings(c *Company) []Warning {
 
 // A DIRECT SEAT IN A COMPANY THAT HOSTS CODE IS WARNED, whatever its
 // repositories' visibility: a `direct` box runs as the engine's user, so it
-// reads every repository a git node caches and the keyring that mints any live
+// reads every repository a Gitlet node caches and the keyring that mints any live
 // run's token — at the launching providers.llm entry's run_in where it names
 // the cell (a seat names none of its own), and once at the default for the
 // entries that take it. No warning where the company hosts no code, nor for a
 // `container` entry.
 //
-// Mutation: drop the code.native term → the company hosting no code warns,
+// Mutation: drop the code.backend term → the company hosting no code warns,
 // red.
 func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 	t.Parallel()

@@ -667,7 +667,7 @@ describe("personal access tokens", () => {
   // purpose or not at all. The apps an admin holds start ticked as anybody's
   // do. Mutation: drop the Admin exception and Admin starts ticked.
   test("an admin's own token starts with their apps and never Admin", async () => {
-    const grants = ["admin", "worklet", "doclet", "artifacts", "chatlet"];
+    const grants = ["admin", "worklet", "doclet", "artifacts", "chatlet", "gitlet"];
     engine({ session: { ...PERSON, grants }, row: { ...ROW, grants } });
     mount();
     await screen.findByText("ada@example.com");
@@ -677,7 +677,7 @@ describe("personal access tokens", () => {
       "checked",
       false,
     );
-    for (const name of ["Worklet", "Doclet", "Artifacts", "Chatlet"]) {
+    for (const name of ["Worklet", "Doclet", "Artifacts", "Chatlet", "Gitlet"]) {
       expect(within(dialog).getByRole("checkbox", { name })).toHaveProperty("checked", true);
     }
   });

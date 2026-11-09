@@ -31,6 +31,25 @@
 // write's method a read grant may send, so the assistant's preview asks the
 // route before the person is shown a change.
 //
+// A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY USE: ADR-0109, whose authority
+// this package is. Inside such a turn every verb whose row names an app is
+// decided for the requester's app too ([DecideWithinApps]) — the app read off
+// the same row, any one of a [ClassAnyApp] row's set, the asked arm as the row
+// admits the requester, none for a stranger or a requester who may not act —
+// and [DecideWithin] asks it before the relation and before its steerable
+// spare. A refusal names the requester's missing app in
+// [Decision.RequesterGrants], never in the caller's Grants.
+//
+// REACHING A REPOSITORY TAKES THE GITLET PERMISSION: ADR-0110, whose authority
+// this package is too. Every code verb of the table names [iam.GrantGitlet] —
+// the routes, the git transport, the read and write tools, the review and
+// merge verbs, a check's report, an import, a purge and the inbox's code
+// marks — so a principal without it is refused here before any repository is
+// read, and the repository's grant (code.GrantOf, ADR-0088) decides among the
+// holders; who read a repository and the Gitlet nodes' caches stay admin's.
+// A repository and a change are Gitlet's kinds ([AppFor]), so a cross-app
+// answer shows neither to a reader without the app.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -334,12 +353,25 @@ const (
 	// KindMessage is one chat message; its [Object.Author] is the seat that
 	// said it.
 	KindMessage ObjectKind = "message"
+	// KindRepository is one of the company's repositories on Gitlet, and
+	// everything read as it: its refs, its files and history, its pushes, its
+	// merge queues and its checks. WHICH repository is the grant the serving
+	// node derives (code.GrantOf, ADR-0088), never this table's; the kind is
+	// here so an answer that mixes apps holds a repository's rows to Gitlet
+	// ([AppFor]).
+	KindRepository ObjectKind = "repository"
+	// KindChange is one change on Gitlet — one branch proposed into another —
+	// and its conversation: its reviews, findings and comments. Gitlet's, as
+	// its repository is: a turn a change woke names it as its origin, and a
+	// reader without the app is shown no such origin.
+	KindChange ObjectKind = "change"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
 	KindView, KindCompany, KindArtifact, KindArtifactFolder, KindChannel, KindMessage,
+	KindRepository, KindChange,
 }
 
 // Valid reports whether a kind is one this build knows.
@@ -429,6 +461,11 @@ type Object struct {
 	// anybody who typed their own name. Empty means nobody is asked, or
 	// nobody has looked.
 	Asked string
+
+	// Named are the seat handles the company document names for a
+	// [ClassNamed] gesture (integrations.ssh.approvers), read from the
+	// document by the caller, never from an argument.
+	Named []string
 
 	// Container is the project a task is filed under, the container a page
 	// sits in, or the UNIT a unit's chat room belongs to. It is what the
@@ -575,6 +612,39 @@ type Decision struct {
 	// a read admitted this way is the one a surface writes an elevated-read
 	// record for, and a write admitted this way is stamped elevated.
 	Elevated bool
+
+	// RequesterGrants are the apps the turn's REQUESTER would need, any ONE
+	// of which admits them: set on a [ReasonCeiling] refusal of the app half
+	// of the requester ceiling ([DecideWithinApps], [DecideWithin]) and on
+	// nothing else — a row's app, or every app of a [ClassAnyApp] row's set.
+	// Never [Decision.Grants], which name what the CALLER lacks: the agent
+	// holds the app, and what changes the answer is an administrator giving
+	// the requester one. Never set where no app would: a stranger's refusal,
+	// and a requester's whose stage is what refuses them
+	// ([Decision.RequesterReason]).
+	RequesterGrants []iam.Grant
+
+	// RequesterReason is why the REQUESTER themselves would be refused, on a
+	// [ReasonCeiling] refusal of somebody the company knows:
+	// [ReasonStage] for one who may not act at all, [ReasonNoGrant] for one
+	// who does not use the row's app ([Decision.RequesterGrants]), and the
+	// relation's own reason where their relation to the object refuses
+	// them. What a surface tells the agent turns on it: a person who may not
+	// act is not told to ask for an app, and one who lacks an app is.
+	RequesterReason Reason
+
+	// RequesterKind is what kind of principal that requester is — a person,
+	// a seat, or a credential acting as no seat (a machine) — set beside
+	// [Decision.RequesterReason] and on nothing else, so a surface tells the
+	// agent about the right somebody: a person is somebody to tell what they
+	// lack, a pipeline's token is not.
+	RequesterKind iam.Kind
+
+	// Ceiling is who a [ReasonCeiling] refusal was decided for — the
+	// requester a principal woke the turn as, or a stranger — set on that
+	// refusal and on nothing else, so what a surface says of it is about the
+	// right somebody.
+	Ceiling CeilingKind
 }
 
 // Unknown reports a decision this node could not reach.
@@ -660,7 +730,9 @@ const (
 	// verb is part of everybody's overview ([ClassEverybody]).
 	ReasonEverybody Reason = "everybody"
 	// ReasonAsked is an admission on being ASKED: an open ask on the work
-	// item names the caller ([ClassAppOrAsked], [Object.Asked]).
+	// item names the caller ([ClassAppOrAsked], [Object.Asked]), or the
+	// company document names them for the gesture ([ClassNamed],
+	// [Object.Named]).
 	ReasonAsked Reason = "asked"
 	// ReasonSeatOnly is a refusal a person or a credential gets and an
 	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).
@@ -685,8 +757,10 @@ const (
 	ReasonRole Reason = "role"
 	// ReasonCeiling is a refusal an agent gets inside a turn somebody woke:
 	// the agent may take the verb, and the person whose request it is
-	// acting on could not ([DecideWithin]). It names no permission, because
-	// none the agent could hold would change it.
+	// acting on could not ([DecideWithin], [DecideWithinApps]). It names no
+	// permission of the caller's, because none the agent could hold would
+	// change it; an app the requester lacks rides in
+	// [Decision.RequesterGrants], and who was refused in [Decision.Ceiling].
 	ReasonCeiling Reason = "ceiling"
 	// ReasonSeatGrant is an admission on a ROLE GRANT: the verb's row names
 	// one ([rule.seatGrant]) and the agent's role carries it, which

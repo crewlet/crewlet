@@ -170,7 +170,13 @@ its group `crewlet-chat-feed` on `CREWLET_CHAT_LOG`, and its group
 records tell ([How a seat is woken](../concepts/gitlet.md#how-a-seat-is-woken))
 — because a record that feed has not acknowledged is one nobody has been woken
 for yet. So a feed that has stopped holds back its own log and no other, and
-`blocked_by: feed_ack_floor` on a domain names that domain's feed.
+`blocked_by: feed_ack_floor` on a domain names that domain's feed. A record no
+node could read yet — one a newer build wrote, during a roll — is handed back
+rather than acknowledged, so it holds its log's floor too, until its first
+delivery after it is an hour old, when the feed keeps it whole as a dead letter
+and acknowledges it ([Dead letters](../concepts/event-system.md#dead-letters)):
+the log can then trim it, since the dead letter needs nothing of the log to be
+replayed.
 
 A feed whose consumer fails (a broker that misses a heartbeat, a host that
 slept, a consumer the broker refuses) opens its group again on its own, waiting
@@ -287,12 +293,13 @@ Two policies decide which copies count:
   acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
   `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-  `CREWLET_EXECUTOR_LOG` and `CREWLET_CODE_LOG`, each grow until their own
-  ceiling refuses writes — a full identity log refuses every sign-in, a full
-  Ask Crewlet log every question Ask Crewlet is asked, a full chat log every
-  message, a full executor log every session a turn would keep for its
-  conversation's next, and a full code log every push and every record of a
-  change — while the two compacted logs,
+  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG` and `CREWLET_ACCESS_LOG`, each
+  grow until their own ceiling refuses writes — a full identity log refuses
+  every sign-in, a full Ask Crewlet log every question Ask Crewlet is asked, a
+  full chat log every message, a full executor log every session a turn would
+  keep for its conversation's next, a full code log every push and every
+  record of a change, and a full access log every SSH command and every change
+  of access a seat would be told — while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -1329,6 +1336,7 @@ So the reserve is the larger of two terms:
 | Ask Crewlet | 2 MiB | 64 MiB | 15 MiB plus 28 KiB (the fleet term) | 49 MiB less 28 KiB |
 | chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | executor | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| access | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1345,7 +1353,7 @@ A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`, `stream.code_log_max_bytes`,
 `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
 `stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`,
-`stream.executor_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
+`stream.executor_log_max_bytes`, `stream.access_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -2309,6 +2317,19 @@ the same retention. A person's removal does not reach the sessions: what they
 said to a seat stays in the sessions of the turns that read it until each row
 goes by one of the ways above, the retention at the latest.
 
+The **access history** (what each seat was told about its own access, and
+every SSH certificate the engine signed and command it ran or a person denied,
+on `CREWLET_ACCESS_LOG`) is kept for the company's
+`access_history.retention_days`, **400 days** by default and settable from 90
+to 3650. The trash reaper expires it an hour at a time, by one record each
+hour that every node applies by the broker instants its rows hold, so every
+copy deletes the same rows. Each seat's newest told record stays whatever its
+age: it is what the seat's next turn is diffed against. A seat the company
+removes has its told records forgotten at the reaper's next pass, by a record
+that also keeps a turn racing the removal from being told into it; its
+certificates and commands stay to their retention, since they are the audit
+trail.
+
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
@@ -2543,7 +2564,7 @@ reached, in the first year, every push priced as a box's, the most a seat's
 push leaves, since which of a company's seats push from their boxes and which
 through their tools is no figure the reference company has (369 MB priced as
 a tool's, as this line was before a box's push was measured) — and its pack's
-row of about 588, kept while the pack is live. A repository's home git node looks
+row of about 588, kept while the pack is live. A repository's home Gitlet node looks
 at it every minute and merges its small packs once sixteen have gathered — a
 busy repository's at every look, the minute's pushes taking it past them
 ([Compaction](../concepts/gitlet.md#compaction)) — so a repository holds at
@@ -2557,13 +2578,13 @@ reaches its horizon — where it grew by about 644 MB of pack rows a year while 
 merged a repository's packs — measured in `internal/code`'s "What a push
 costs, measured", and set out with the code log's share, a seat's one counter
 row and a larger company's figures under
-[What every data node holds for Gitlet](../concepts/scaling.md#git-nodes).
+[What every data node holds for Gitlet](../concepts/scaling.md#gitlet-nodes).
 The bytes of the packs are not here: they are the
-[object store's](../concepts/object-store.md). Nor is a git node's cache: its
+[object store's](../concepts/object-store.md). Nor is a Gitlet node's cache: its
 copies of the repositories, the index of which push introduced each commit
 and the memo of its seats' read answers — at most a sixteenth of the budget
 ([The memo](../concepts/gitlet.md#the-memo)) — are disposable files inside
-`git.cache_max_bytes`, derived again from the rows and the object store, which
+`gitlet.cache_max_bytes`, derived again from the rows and the object store, which
 no retention keeps and no backup copies.
 
 **Chat is forecast separately, and it is the reason the horizon exists.** At
@@ -2691,17 +2712,17 @@ log's head for an object its home's copy lacks — are counted in its 125 a day,
 as every log's are, and are no part of that term; nor are its coding boxes',
 which read at their run's floor. The ones a seat's work can repeat at will —
 a box's read past its run's floor, a tool's look at the head, an engine
-write's second judgement there — are held to that 125 on each git node,
+write's second judgement there — are held to that 125 on each Gitlet node,
 together, 16 at once and one every 11.5 minutes after: one bucket of the seat
-on each git node, which its boxes and its turns' tools both pay. Past it they
+on each Gitlet node, which its boxes and its turns' tools both pay. Past it they
 are answered at the seat's floor
 ([a box's re-syncs](../concepts/gitlet.md#a-boxs-re-syncs-and-requests-in-flight)).
 A check's box's re-syncs are bounded the same way, by its repository's
 checks rather than by a seat — 16 at once and 125 a day for each repository
-on each git node, its transfers and its reads together — and are in neither
+on each Gitlet node, its transfers and its reads together — and are in neither
 term: a looping checks file adds at most that to the log.
 That term belongs to the log rather than to the company's current
-configuration, so it is counted whether or not `code.native` is set: the log
+configuration, so it is counted whether or not `code.backend: gitlet` is set: the log
 keeps its ceiling either way, and the rate it is held against is every node's
 over the last day — which still holds a day of git reads after Gitlet is
 turned off, and the peers' reads while a rolling restart turns it on. Where
@@ -2723,13 +2744,13 @@ only on a small volume:
    17 MB per agent seat per year of history, 8.46 GB (7.88 GiB) for the
    reference company in its fifth year. That bottoms the vector log's
    headroom at about 51 % at the 16 GiB a 64 GiB volume asks for, and at
-   about 88 % at the 64 GiB a volume of about 652 GiB or more gets. The alarm
+   about 88 % at the 64 GiB a volume of about 653 GiB or more gets. The alarm
    threshold is 10 %, clear of each. But the one budget scales every log to
-   fit the broker: the eleven logs' asks are scaled down to the share they
+   fit the broker: the twelve logs' asks are scaled down to the share they
    divide, five eighths of what the broker can grant once the object store's
    `nats` bucket has its quarter. So a first boot with every field unset
    leaves about 59 % of the 19.1 GiB a 200 GiB volume creates it with, about
-   33 % of the 11.8 GiB a 128 GiB volume does and about 13 % of the 9.1 GiB a
+   33 % of the 11.7 GiB a 128 GiB volume does and about 13 % of the 9.1 GiB a
    100 GiB volume does; and a 64 GiB volume creates the log at 5.6 GiB, too
    small to hold that re-embedding at all: below about 97 GiB free, set
    `stream.tracker_vectors_max_bytes` to at least 9 GiB. The alarm fires

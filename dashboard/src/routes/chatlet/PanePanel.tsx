@@ -16,7 +16,10 @@ import { ListDetailBack, SidePanel } from "@crewlethq/ui";
 /** The class every pane's panel carries, which the frame lays out by. */
 export const PANE_CLASS = "chat-pane";
 
-/** The class a pane carries where it is a list's detail (Activity, Direct messages). */
+/**
+ * The class a pane carries where it is a list's detail (Activity): a handle
+ * the suites find it by. The kit's `fill` sizes it; no rule here does.
+ */
 export const DETAIL_PANE_CLASS = "chat-detail-pane";
 
 /**
@@ -67,6 +70,9 @@ export function ChatSidePanel({
   return (
     <SidePanel
       className={detail ? DETAIL_PANE_CLASS : PANE_CLASS}
+      // AS A LIST'S DETAIL IT FILLS ITS COLUMN by the kit's own rule: a rule
+      // here would lose to the kit's sheet, which a built page links last.
+      fill={detail !== null}
       leading={detail ? <ListDetailBack label={detail.back} onClick={onClose} /> : undefined}
       title={title}
       subtitle={subtitle}

@@ -89,6 +89,7 @@ import {
 import { spellPosition } from "~/protocol/session.ts";
 import { REPO_PARAM } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * How often the newest page is read again: a MINUTE, the cadence this
@@ -123,9 +124,9 @@ export function Pushes() {
 
   return (
     <>
-      <div className="toolbar">
-        <RepoPicker repo={repo} onChoose={setRepo} />
-      </div>
+      <PageToolbar>
+        <RepoPicker size="sm" repo={repo} onChoose={setRepo} />
+      </PageToolbar>
 
       {repo === "" ? (
         <EmptyState

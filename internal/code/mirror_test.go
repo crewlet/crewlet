@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -644,4 +645,62 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	requireMergeRefused(t, n, before, res, err, code.MergeRefusalRepoImporting, code.ImportingDetail("web"))
 	queued, err = c.ProposeQueue(ctx, enqueueing(api, other.ChangeID, ada, oidOf("R")))
 	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoImporting, code.ImportingDetail("api"))
+}
+
+// A PUSH MIRROR PUSHES AS A PERSON ONLY WHERE THEY USE GITLET (ADR-0110).
+//
+// A push mirror publishes only what the seat it pushes as reads, and a person
+// reads only through Gitlet, so a person's create, and a person's settings
+// change, that sets a push mirror pushing as the founder's seat is refused
+// not_permitted naming the seat and the permission while the identity
+// directory says the founder is not given Gitlet — nothing appended, the
+// directory asked about that seat alone — and lands once they are. An owner
+// change under a mirror already set asks the directory nothing: it moves no
+// person's app, and the push asks again before every push.
+//
+// Mutation: hand MirrorSeatRefusal false whatever the directory says — the
+// founder's mirror lands without Gitlet, red.
+func TestAPushMirrorPushesAsAPersonOnlyWhereTheyUseGitlet(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	n.people.grants["founder"] = others
+	id := n.made(lcPerson, "web", unitOwned("eng"))
+	as := func() *code.MirrorTarget {
+		return &code.MirrorTarget{URL: "https://forge.example.com/b/web.git", Credential: "${FOUNDER_FORGE_TOKEN}",
+			As: "founder"}
+	}
+	create := withCreate(lcCreate(lcPerson, "mirrored", unitOwned("eng")),
+		func(r *code.LifecycleRequest) { r.Create.MirrorTo = as() })
+	set := lcSettings(lcPerson, id, code.RepoChange{MirrorTo: as()})
+	before := n.end()
+	for what, req := range map[string]code.LifecycleRequest{"a create": create, "a settings change": set} {
+		got := n.life(req)
+		if got.Refusal != code.LifecycleNotPermitted || !strings.Contains(got.Detail, "nobody holding founder") ||
+			!strings.Contains(got.Detail, "Gitlet") {
+			t.Errorf("%s pushing as the founder without Gitlet: %+v, want not_permitted naming them", what, got)
+		}
+	}
+	if end := n.end(); end != before {
+		t.Fatalf("the refused requests appended %d records, want none", end-before)
+	}
+	if got := n.people.seats(); len(got) != 2 || got[0] != "founder" || got[1] != "founder" {
+		t.Errorf("the directory was asked about %v, want the founder's seat once a request", got)
+	}
+
+	n.people.grants["founder"] = []iam.Grant{iam.GrantGitlet}
+	n.lands(create)
+	n.lands(set)
+	asked := len(n.people.seats())
+	plat := unitOwned("plat")
+	n.lands(lcSettings(lcPerson, id, code.RepoChange{Owner: &plat}))
+	if got := len(n.people.seats()); got != asked {
+		t.Errorf("an owner change under a mirror already set asked the directory %d time(s), want none", got-asked)
+	}
 }

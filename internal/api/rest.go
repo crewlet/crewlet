@@ -296,7 +296,7 @@ var namedRoutes = []struct {
 	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
 	// history, a file's blame, a diff, a comparison with its merge preview
 	// and one commit with the changes it belongs to — each read by object id
-	// of the repository's home git node, and decided per repository as the
+	// of the repository's home Gitlet node, and decided per repository as the
 	// rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
@@ -318,7 +318,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
-	// by the git node that answers it.
+	// by the Gitlet node that answers it.
 	{method: "GET", pattern: "/gitlet/search", what: "code_search"},
 }
 
@@ -430,14 +430,36 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 // writeAnswer renders a question's answer, SHARED by every named route and the
 // generic form for [writeQueryError]'s reason: as JSON, and — for an answer
 // that is a function of the object ids its question named
-// ([queries.Immutable]) — with the entity tag and the caching that say it never
-// changes, answered `304` to a caller that already holds it
-// ([httpjson.Immutable]). The socket sends the same answer as JSON alone:
-// [queries.Immutable] encodes as what it wraps.
+// ([queries.Immutable]), asked by a request that names who it is for — with
+// the entity tag and the caching that say it never changes, answered `304` to a
+// caller that already holds it ([httpjson.Immutable]). The socket sends the
+// same answer as JSON alone: [queries.Immutable] encodes as what it wraps.
+//
+// A REQUEST THAT NAMES NOBODY IS KEPT BY NO CACHE. A browser keys a kept answer
+// on what its `Vary` names (the bearer, the dashboard's reader), so a tab that
+// opened the route itself, its session cookie alone, would keep it under one
+// key for everybody who signs in on that browser next — and a read of the
+// company's code is not the same for every person: one without the gitlet app
+// is answered none of it (ADR-0110), and would be served the last holder's
+// from the cache, never asking the node. So such a request is answered the
+// value itself, `no-store`.
 func writeAnswer(w http.ResponseWriter, r *http.Request, data any) {
 	if answer, ok := data.(queries.Immutable); ok {
+		if !namesItsReader(r) {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, answer.Answer)
+			return
+		}
 		httpjson.Immutable(w, r, answer.Answer)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
+}
+
+// namesItsReader reports whether r says who its answer is for in what a
+// browser keys a kept answer on: a bearer in `Authorization`, or the
+// dashboard's reader ([httpjson.ReaderHeader]), which the guard holds to the
+// session it rides beside, so neither can name somebody the request is not.
+func namesItsReader(r *http.Request) bool {
+	return r.Header.Get("Authorization") != "" || r.Header.Get(httpjson.ReaderHeader) != ""
 }

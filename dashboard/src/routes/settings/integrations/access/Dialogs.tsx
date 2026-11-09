@@ -30,6 +30,7 @@ import {
   Card,
   ChangeList,
   DescriptionList,
+  List,
   Modal,
   SegmentedControl,
   Spinner,
@@ -80,6 +81,7 @@ import {
   lanesOf,
   levelName,
   levelsHeading,
+  reviewWords,
   scopeApplies,
   scopeWords,
   takesAccessAway,
@@ -371,6 +373,17 @@ export function ReviewDialog({
     ({ seat, lane }) =>
       plan?.plans.find((p) => p.handle === seat.handle && p.lane === lane.key)?.step_up,
   );
+  // THE AGENTS WHOSE OPEN WORK THE SAVE ASKS THEM TO REVIEW, named as the tab
+  // names them: the engine counts, per agent whose access the draft changes,
+  // what it raised under its access now.
+  const reviews = (plan?.reviews ?? []).map((review) => ({
+    handle: review.handle,
+    words: reviewWords(
+      review.open,
+      data.seats.find((seat) => seat.handle === review.handle)?.name ?? handleLabel(review.handle),
+      review.at_least,
+    ),
+  }));
 
   return (
     <Modal
@@ -428,6 +441,19 @@ export function ReviewDialog({
             {raises.length > 0
               ? `${raises.map(({ seat }) => seat.name).join(", ")} ${raises.length === 1 ? "gets" : "get"} administration access at ${name}. Saving asks you to confirm it is you.`
               : `This change grants administration access at ${name}. Saving asks you to confirm it is you.`}
+          </Callout>
+        )}
+        {reviews.length > 0 && (
+          <Callout variant="info" title="Open work to review">
+            {reviews.length === 1 ? (
+              reviews[0]?.words
+            ) : (
+              <List variant="bulleted" density="compact">
+                {reviews.map((review) => (
+                  <List.Item key={review.handle}>{review.words}</List.Item>
+                ))}
+              </List>
+            )}
           </Callout>
         )}
         {changed.map(({ seat, lane, from, to }) => (

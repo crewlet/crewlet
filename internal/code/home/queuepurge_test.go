@@ -15,11 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's git node is
+// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's Gitlet node is
 // home to codetest.RepoName, whose main is a queue target, and the
 // home's three workers — its change work, its check work and its queue — are
 // turned one at a time over the fleet's own estate, its cache and its pool,
-// the train built by the git node's own chain builder: every record but a
+// the train built by the Gitlet node's own chain builder: every record but a
 // runner's claim and ending of a check — the case's, as no runner runs here —
 // is the one production asks for, decided by the data node's committer.
 
@@ -101,7 +101,7 @@ func (h *gitHome) passCheck(key code.CheckKey) {
 	}
 }
 
-// purged asks the repository's purge as queuePat and serves it with the git
+// purged asks the repository's purge as queuePat and serves it with the Gitlet
 // node's compactor, the maintainer of every repository of a solo fleet, until
 // the expunge listing names the repository no more.
 func (h *gitHome) purged() {
@@ -115,27 +115,35 @@ func (h *gitHome) purged() {
 		h.t.Fatalf("the purge request: %+v, %v", res, err)
 	}
 	for range 12 {
-		a, err := served.Read(ctx, code.ReadQuery{Kind: code.ReadExpungeDue, Fresh: codetest.Linearizable})
-		if err != nil {
-			h.t.Fatalf("the expunge listing: %v", err)
-		}
-		i := slices.IndexFunc(a.Expunge, func(c code.ExpungeCandidate) bool { return c.Name == codetest.RepoName })
-		if i < 0 {
-			return
-		}
 		// THE NODE'S MAINTAINER keeps the one slot of the maintenance lane an
 		// expunge's build may take for a moment at a time: a busy answer is
-		// asked again, for a minute at the most.
+		// asked again, for a minute at the most — of what the listing names
+		// then, as the next pass asks it. A cycle's busy answer may come after
+		// its begin has applied, and the listing names that expunge open from
+		// then on: a cycle of the candidate read before it, which names none,
+		// would plan over a copy whose every live pack the begin dated at its
+		// scan, find the purge in hand and answer not_due (#840).
 		deadline := time.Now().Add(time.Minute)
-		out, err := h.node().Compactor().Expunge(ctx, a.Expunge[i])
-		for out == compact.OutcomeBusy && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-			out, err = h.node().Compactor().Expunge(ctx, a.Expunge[i])
-		}
-		switch out {
-		case compact.OutcomeApplied, compact.OutcomePending, compact.OutcomeUnknown:
-		default:
-			h.t.Fatalf("an expunge of %s answered %s, %v", codetest.RepoName, out, err)
+		for {
+			a, err := served.Read(ctx, code.ReadQuery{Kind: code.ReadExpungeDue, Fresh: codetest.Linearizable})
+			if err != nil {
+				h.t.Fatalf("the expunge listing: %v", err)
+			}
+			i := slices.IndexFunc(a.Expunge, func(c code.ExpungeCandidate) bool { return c.Name == codetest.RepoName })
+			if i < 0 {
+				return
+			}
+			out, err := h.node().Compactor().Expunge(ctx, a.Expunge[i])
+			if out == compact.OutcomeBusy && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+			switch out {
+			case compact.OutcomeApplied, compact.OutcomePending, compact.OutcomeUnknown:
+			default:
+				h.t.Fatalf("an expunge of %s answered %s, %v", codetest.RepoName, out, err)
+			}
+			break
 		}
 	}
 	h.t.Fatalf("a dozen expunges left %s's purge unserved", codetest.RepoName)

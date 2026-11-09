@@ -44,6 +44,12 @@ type CanonicalIdentity struct {
 	ExternalID  string `json:"external_id"`
 	Platform    string `json:"platform"`
 	DisplayName string `json:"display_name"`
+	// Login is the credential's login where the sender is a credential acting
+	// as no seat that a first-party record names (NotificationWriter.Login),
+	// and empty otherwise: the requester a turn it woke is worked for
+	// (ADR-0109), resolved again by the node running the turn. ExternalID
+	// holds the same login, so a worker keyed on it reads it unchanged.
+	Login string `json:"login,omitempty"`
 }
 
 // InboundInteraction is one inbound message that triggered a turn.

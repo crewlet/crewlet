@@ -140,7 +140,7 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 // header the answer's `Vary` names is the same in both (RFC 9111 §4.1), so an
 // answer keyed on `Cookie` stopped matching at the first re-issue, and every
 // page a person went back to was asked of the node again — a read on the
-// repository's home git node per page, per person, every five minutes: the
+// repository's home Gitlet node per page, per person, every five minutes: the
 // read a year-long cache exists to save. So the key holds who the answer is
 // for, the bearer a client sets (`Authorization`) and the reader a dashboard
 // tab names (httpjson.ReaderHeader), and never the cookie; the re-issue that
@@ -148,12 +148,19 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 //
 // Through the whole app, the way a browser arrives: the request that fills the
 // cache is one the guard re-issues on, and the browser's next request for the
-// page — presenting the re-issued cookie — is answered from what it kept.
+// page — presenting the re-issued cookie and the same reader — is answered from
+// what it kept.
+//
+// A REQUEST THAT NAMES NOBODY IS KEPT BY NO CACHE: the cookie alone, with no
+// reader and no bearer, is the key every person who signs in on that browser
+// shares, and a read of the company's code is not the same for every person
+// (ADR-0110), so it is answered the value itself, `no-store`, with no tag.
 //
 // Mutation: add `Vary: Cookie` back to httpjson.Immutable → the request after
 // the re-issue misses the kept answer, red; empty the cache on a re-issue
 // (session.Issue sending Clear-Site-Data) → red; drop the reader from the Vary
-// → the next person's tab is answered from the last one's, red.
+// → the next person's tab is answered from the last one's, red; mark a request
+// naming nobody immutable again → the cookie's own request is kept, red.
 func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -178,10 +185,11 @@ func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	filled := ask(held)
 	kept := httptest.NewRecorder()
 	a.ServeHTTP(kept, filled)
-	if kept.Code != http.StatusOK || kept.Header().Get("Cache-Control") != httpjson.ImmutableCacheControl {
-		t.Fatalf("the oid answer was %d with Cache-Control %q, want 200 and %q: there is nothing "+
-			"kept for this case to hold", kept.Code, kept.Header().Get("Cache-Control"),
-			httpjson.ImmutableCacheControl)
+	if kept.Code != http.StatusOK || kept.Header().Get("Cache-Control") != "no-store" ||
+		kept.Header().Get("ETag") != "" {
+		t.Fatalf("an oid answer to a request naming nobody was %d with Cache-Control %q and ETag %q, want "+
+			"200, no-store and no tag: it would be kept for whoever signs in on the browser next",
+			kept.Code, kept.Header().Get("Cache-Control"), kept.Header().Get("ETag"))
 	}
 	var reissued *http.Cookie
 	for _, c := range kept.Result().Cookies() {
@@ -198,24 +206,10 @@ func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 			"answer it kept once every five minutes of use", v)
 	}
 
-	// THE BROWSER'S NEXT REQUEST FOR THE PAGE presents the cookie it was
-	// just re-issued, and is answered from what it kept.
-	if !reusable(kept.Header(), filled, ask(reissued)) {
-		t.Errorf("Vary %q keeps the answer from the request after the re-issue: the browser "+
-			"asks the node again for every page it kept", varied(kept.Header()))
-	}
-	// AND A BEARER IS STILL ITS OWN KEY: a request presenting a token is
-	// never answered from what the session's requests kept.
-	tokened := ask(reissued)
-	tokened.Header.Set("Authorization", "Bearer "+fixtureToken)
-	if reusable(kept.Header(), filled, tokened) {
-		t.Errorf("Vary %q lets a request presenting a token be answered from what a session "+
-			"kept", varied(kept.Header()))
-	}
-
 	// A DASHBOARD TAB NAMES ITS READER, and keeps what it was answered past
-	// the re-issue as well: the reader does not move while the person stays
-	// signed in.
+	// the re-issue: the reader does not move while the person stays signed
+	// in, and the browser's next request for the page — presenting the
+	// cookie it was just re-issued — is answered from what it kept.
 	read := func(cookie *http.Cookie, reader string) *http.Request {
 		r := ask(cookie)
 		r.Header.Set(httpjson.ReaderHeader, reader)
@@ -231,6 +225,14 @@ func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	if !reusable(tabKept.Header(), tabFilled, read(reissued, signedIn.person)) {
 		t.Errorf("Vary %q keeps the tab's answer from its request after the re-issue",
 			varied(tabKept.Header()))
+	}
+	// AND A BEARER IS STILL ITS OWN KEY: a request presenting a token is
+	// never answered from what the session's tab kept.
+	tokened := read(reissued, signedIn.person)
+	tokened.Header.Set("Authorization", "Bearer "+fixtureToken)
+	if reusable(tabKept.Header(), tabFilled, tokened) {
+		t.Errorf("Vary %q lets a request presenting a token be answered from what a session "+
+			"kept", varied(tabKept.Header()))
 	}
 	// AND THE NEXT PERSON IN THE BROWSER IS A KEY OF THEIR OWN: a tab read by
 	// somebody else is never answered from what this one kept, so nothing

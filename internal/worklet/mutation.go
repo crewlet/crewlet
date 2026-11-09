@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,10 +40,16 @@ import (
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// Every field the tracker writes is in the base format today, so the table is
-// empty and this is 1: the next field this build's successor adds is the first
-// to take a version of its own.
-const RecordVersion = 1
+// Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
+// Version 3 is a comment thread's stakes: who owes an answer in it and who
+// awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
+// Version 4 is a history row that keeps its writer's apps
+// ([MutationRecord.ActorAppsKept]).
+const RecordVersion = 4
+
+// AppsKeptVersion is the version from which the applier keeps a record's
+// apps on its history row; every older record keeps an empty column.
+const AppsKeptVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -60,8 +67,6 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-//
-// EMPTY, because the base format is everything this build writes.
 //
 // # Adding a field to any record, payload or document is adding a row here
 //
@@ -87,7 +92,12 @@ const baseRecordVersion = 1
 // A field that no tag has shipped is still a field two builds of one rolling
 // upgrade disagree about, so "nothing has been released" does not exempt a new
 // field from its row.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
+	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
+	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
+}
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -772,6 +782,21 @@ type MutationRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
+	// ActorApps are the apps the credential behind an [AuthorOperator]
+	// record that wakes somebody used when the node that took the write
+	// resolved it (iam.ActorApps), and absent on every other record — one
+	// that wakes nobody included, a gate among them. The change feed reads
+	// it, and a turn the record wakes uses no app outside it (ADR-0109,
+	// notify.FirstPartyWriter). Version 2: an older build retains a record
+	// carrying it rather than waking a seat for a credential it would read as
+	// a stranger.
+	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
+
+	// ActorAppsKept marks a record whose [MutationRecord.ActorApps] its
+	// history row keeps (`tracker_history.actor_apps`, ADR-0112). Version 4,
+	// so a record older than the rule keeps an empty column on every node.
+	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -902,7 +927,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "operator_id",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "operator_id",
 	"turn_id", "chain", "kind", "notify",
 }
 
@@ -1269,6 +1294,13 @@ type Snapshot struct {
 	// only on a reply.
 	ThreadParticipants []string `json:"thread_participants,omitempty"`
 
+	// ThreadOwing are the handles an open ask in this thread is addressed
+	// to, and ThreadAwaiting the authors of those asks: a stake in the
+	// thread, which any reply by somebody else wakes (ADR-0113). Set only
+	// on a reply.
+	ThreadOwing    []string `json:"thread_owing,omitempty"`
+	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
+
 	// RemovedWatchers are the handles a watchers commit dropped. They go
 	// to the INBOX only: a human learns that a lead removed her watch, and
 	// an agent is not woken about a decision that was not its own.
@@ -1528,6 +1560,8 @@ func (n *Notify) checkSnapshot() error {
 		{"unblocked", len(n.Snapshot.Unblocked), MaxDependents},
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
+		{"thread_owing", len(n.Snapshot.ThreadOwing), MaxThreadParticipants},
+		{"thread_awaiting", len(n.Snapshot.ThreadAwaiting), MaxThreadParticipants},
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {

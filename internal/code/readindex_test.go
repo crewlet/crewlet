@@ -24,7 +24,7 @@ import (
 // # Why it is held rather than reviewed
 //
 // Every data node applies every record of the code log on the one write lane
-// every other domain's applier waits behind, and every read a git node, a seat
+// every other domain's applier waits behind, and every read a Gitlet node, a seat
 // or a person makes is answered from one of those copies: a statement that
 // scans a code table costs what the largest repository holds, on every node,
 // at every call, and it shows as a slow push or a stalled lane, never as a

@@ -208,7 +208,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	brokertest.StoreIn(&boot.Stream, streamDir)
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	addr := ""
 	if host != nil {
 		host.ring.hold(&boot)
@@ -448,6 +448,11 @@ func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS AND ANSWERS HOLDS THEIR SEAT: a reply in the
+	// conversation answers the run's question only from a seat it was put to
+	// whose holder may act now, and the founder's is the run's requester
+	// (ADR-0077's amendment).
+	employFounder(t, n.node)
 	// IN A DM THREAD, which is the shape that stranded every clarification:
 	// the run parks under the thread it was asked in, and a person answering
 	// on the DM line arrives in a different batch entirely. Matched on the
@@ -636,7 +641,7 @@ func withBoxRepo(doc string) string {
 	}
 	doc = strings.Replace(doc, seat, seat+"    code: {access: full_access}\n", 1)
 	return doc + `code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {seat: swe}
@@ -685,6 +690,10 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS HOLDS THEIR SEAT, with Gitlet among their apps: the
+	// turn is worked for whoever woke it (ADR-0109), and a turn a person
+	// without Gitlet woke checks no repository out (ADR-0110).
+	employFounder(t, n.node)
 	n.wakeInDirectThread(t, "swe", "the web test is failing, please fix it", codingConversation, codingThread)
 
 	// THE ROW, WHILE THE RUN HOLDS IT: the stand-in waits for the release
@@ -1196,6 +1205,9 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
+	// THE FOUNDER WHO ASKS AND ANSWERS HOLDS THEIR SEAT, as in
+	// TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer.
+	employFounder(t, n.node)
 	// ON A CONVERSATION, which is what a person's answer is matched on.
 	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 

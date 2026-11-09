@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -258,5 +259,88 @@ func TestTheQueuesOwnFallbackSharesThisNamespace(t *testing.T) {
 	if notify.Derived(parts[0].Key) {
 		t.Fatal("the queue's fallback reads as a real conversation, so a parked run " +
 			"would be offered as answerable in a thread nobody can reach")
+	}
+}
+
+// threadNotice is a notification on the thread chat:C1:1718.003 written as n
+// names its writer.
+func threadNotice(t *testing.T, n types.ExternalNotification) *events.Event {
+	t.Helper()
+	n.NotificationSource = "chat"
+	ev := events.New(n, events.TraceContext{})
+	notify.Stamp(ev, "chat:C1:1718.003", "chat:C1")
+	return ev
+}
+
+// ONE TURN WORKS FOR ONE WRITER (ADR-0109): the partition function splits a
+// thread's stamped key by who wrote each message, so one person's burst is
+// one turn and a second person's message in the same thread is a turn of its
+// own, each held to its own writer. The stamped key stays the thread's: a
+// merged event carries it, and a parked run's batch is matched against it.
+//
+// Mutation: drop the writer from KeyOf, and the second person's message joins
+// the first person's turn.
+func TestOneTurnWorksForOneWriter(t *testing.T) {
+	jane := func() *events.Event {
+		return threadNotice(t, types.ExternalNotification{Sender: "Jane",
+			Metadata: map[string]string{notify.ActorField: "U0JANE"}})
+	}
+	sam := threadNotice(t, types.ExternalNotification{Sender: "Sam",
+		Metadata: map[string]string{notify.ActorField: "U0SAM"}})
+	drain := []*events.Event{jane(), jane(), sam, jane(), jane()}
+	parts := queue.PartitionByKey(drain, notify.KeyOf, func(e *events.Event) *events.Event { return e })
+	if len(parts) != 2 || len(parts[0].Items) != 4 || len(parts[1].Items) != 1 || parts[1].Items[0] != sam {
+		t.Fatalf("Jane's four messages and Sam's one made %d partitions, want Jane's four as one turn "+
+			"and Sam's as another", len(parts))
+	}
+	if parts[0].Key == parts[1].Key {
+		t.Fatalf("both writers partition on %q", parts[0].Key)
+	}
+	for _, part := range parts {
+		if got := notify.KeyOfAll(part.Items); got != "chat:C1:1718.003" {
+			t.Errorf("the stamped key of %s's turn is %q, want the thread's", part.Key, got)
+		}
+	}
+}
+
+// EVERY WRITER IS NAMED BY THE IDENTITY ITS TURN IS WORKED FOR: a first-party
+// notice's by the kind its record names (a seat by its handle, a credential
+// acting as no seat by its login, the engine as itself), and a vendor's by the
+// actor its parser stamped, else its sender. Each is a partition of its own,
+// and no writer can spell another's key: a writer is escaped, so it never
+// holds the separator. An event that is no external notification, and an event
+// with no stamped key, are not split at all.
+func TestEveryWriterIsAPartitionOfItsOwn(t *testing.T) {
+	writers := map[string]types.ExternalNotification{
+		"a seat":                 {Writer: &types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto"}},
+		"a person as their seat": {Writer: &types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
+		"a credential": {Writer: &types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantWorklet}}},
+		"the engine":       {Writer: &types.NotificationWriter{Kind: iam.ActorSystem}},
+		"a vendor's actor": {Sender: "Jane", Metadata: map[string]string{notify.ActorField: "U0JANE"}},
+		"a sender alone":   {Sender: "jane by token:ci"},
+	}
+	seen := map[string]string{}
+	for name, n := range writers {
+		key := notify.KeyOf(threadNotice(t, n))
+		writer, split := strings.CutPrefix(key, "chat:C1:1718.003"+notify.WriterSeparator)
+		if !split || writer == "" || strings.Contains(writer, " ") {
+			t.Errorf("%s: KeyOf = %q, want the thread's key split by one escaped writer", name, key)
+		}
+		if other, taken := seen[key]; taken {
+			t.Errorf("%s and %s share the partition %q", name, other, key)
+		}
+		seen[key] = name
+	}
+
+	ask := events.New(types.A2ARequest{Requester: "cto"}, events.TraceContext{})
+	notify.Stamp(ask, "a2a:cto", "a2a:cto")
+	if got := notify.KeyOf(ask); got != "a2a:cto" {
+		t.Errorf("a colleague's ask partitions on %q, want its stamped key unsplit", got)
+	}
+	unstamped := events.New(types.ExternalNotification{NotificationSource: "chat", Sender: "Jane"},
+		events.TraceContext{})
+	if got, want := notify.KeyOf(unstamped), notify.Fallback(unstamped.ID.String()); got != want {
+		t.Errorf("an event with no stamped key partitions on %q, want its own fallback %q unsplit", got, want)
 	}
 }

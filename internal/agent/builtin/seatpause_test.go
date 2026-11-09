@@ -117,7 +117,7 @@ func newPauseRig(t *testing.T, store builtin.SeatPauseStore, caller iam.Principa
 	}
 	pub := &announced{}
 	rig := &pauseRig{pub: pub, tools: map[string]tools.Callable{},
-		caller: iam.WithPrincipal(context.Background(), caller), cto: cto}
+		caller: builtin.OutsideAnyTurn(iam.WithPrincipal(context.Background(), caller)), cto: cto}
 	if s, ok := store.(coord.SeatPauses); ok {
 		rig.store = s
 	}

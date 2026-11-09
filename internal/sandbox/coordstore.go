@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -300,8 +302,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		switch {
 		case !run.Continues:
 			existing.Round, existing.AnsweredJob = run.LaunchID, ""
+			existing.RoundRefusals = nil
 		case existing.asked():
 			existing.AnsweredJob = existing.LaunchID
+			// AND A REFUSAL THE ROUND IS CARRIED ON FROM is kept for the
+			// round's review, in the write that clears it below: its
+			// reviewer reads the round from its calls, where the run's
+			// question asked again reads as the same one sent twice
+			// ([PendingRun.RoundRefusals]).
+			if refusal, refused := existing.Refused(); refused {
+				existing.RoundRefusals = withRoundRefusal(existing.RoundRefusals, existing.LaunchID, refusal)
+			}
 		}
 		// THE CALL A PERSON APPROVED IN THE REPLACED JOB, which the reset
 		// clears with its held call below, is carried to the opening in
@@ -389,6 +400,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// one question declined may be exactly what the next one is
 		// waiting for.
 		existing.AskedAt, existing.Answer, existing.DeclinedAnswers = time.Time{}, nil, nil
+		existing.AnswerRefusal = nil
 		// AND ITS COST: a parked job's tokens are paid by the resume its
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
@@ -923,7 +935,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// recorded against it and nothing yet declined: an answer and the
 		// replies let go of belong to the question they were matched to.
 		run.AskedAt = q.AskedAt
-		run.Answer, run.DeclinedAnswers = nil, nil
+		run.Answer, run.DeclinedAnswers, run.AnswerRefusal = nil, nil, nil
 		// And what condensing the collection that parked it cost, onto the
 		// record of the job the row holds — see [LaunchRecord.Condensed].
 		run.Launch.Condensed = q.Condensed
@@ -936,6 +948,50 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 // the recording node's lease. See the contract on [PendingStore].
 func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
 	fence Fence,
+) (PendingRun, bool, error) {
+	return s.recordOutcome(ctx, turnID, launch, answer, nil, fence)
+}
+
+// RecordRefusal records a reply too large to be the answer as the outcome of a
+// parked run's question, under the recording node's lease. See the contract on
+// [PendingStore].
+func (s *CoordStore) RecordRefusal(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	refusal AnswerRefusal, fence Fence,
+) (PendingRun, bool, error) {
+	if len(answer.Events) > 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: the refusal of a reply to run %s carries %d of "+
+			"its deliveries, which are the bytes the row could not carry", turnID, len(answer.Events))
+	}
+	if err := refusal.check(answer.EventIDs); err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: the refusal of a reply to run %s: %w", turnID, err)
+	}
+	return s.recordOutcome(ctx, turnID, launch, answer, &refusal, fence)
+}
+
+// check reports what is wrong with a refusal as one recorded against the
+// answer naming answer's deliveries: it names exactly those, and its figures
+// are a reply past a share.
+func (r AnswerRefusal) check(answer []string) error {
+	switch {
+	case len(r.EventIDs) == 0 || !slices.Equal(r.EventIDs, answer):
+		return fmt.Errorf("it names deliveries %s, and its answer names %s",
+			words.And(r.EventIDs), words.And(answer))
+	case r.MaxBytes <= 0 || r.Bytes <= r.MaxBytes:
+		return fmt.Errorf("it states a reply of %d bytes against a share of %d, which is no refusal",
+			r.Bytes, r.MaxBytes)
+	}
+	if n := addressBytes(r.Address); n > MaxRefusalAddressBytes {
+		return fmt.Errorf("its address weighs %s on the row, and a refusal's may weigh %s",
+			kept.SizeUp(n), kept.Size(MaxRefusalAddressBytes))
+	}
+	return nil
+}
+
+// recordOutcome is [CoordStore.RecordAnswer] and [CoordStore.RecordRefusal]:
+// one compare-and-set recording answer as the question's outcome, the refusal
+// it is beside it where refusal is set, and no refusal where it is not.
+func (s *CoordStore) recordOutcome(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	refusal *AnswerRefusal, fence Fence,
 ) (PendingRun, bool, error) {
 	if len(answer.EventIDs) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no delivery", turnID)
@@ -953,34 +1009,56 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		answer.RecordedAt = s.clock()
 	}
 	// HELD TO ITS SHARE OF THE ROW, as written and as its decline would owe
-	// it, before anything is written: see [MaxAnswerBytes].
-	if err := answerFits(turnID, answer); err != nil {
-		return PendingRun{}, false, err
+	// it, before anything is written: see [MaxAnswerBytes]. MEASURED ONCE,
+	// here, since what it weighs is the answer's alone, and REFUSED INSIDE
+	// THE WRITE, only once the row as it stands is found still waiting on the
+	// question ([PendingRun.takesAnswer]): a reply to a run answered another
+	// way, moved on or ending since the caller matched it is that run's
+	// ordinary loss whatever it weighs. Refused before the row was read, it
+	// was announced as a reply too large for a question nobody was waiting
+	// on any more.
+	fits := answerFits(turnID, answer)
+	if fits != nil && !errors.Is(fits, ErrAnswerTooLarge) {
+		return PendingRun{}, false, fits
 	}
 	ownedBy := int64(0)
+	var refused error
 	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		// EVERY ATTEMPT DECIDES AFRESH: the store re-reads and re-decides a
+		// lost race, and a refusal the last read did not make is no answer.
+		refused = nil
 		if superseded(*run, fence) {
 			ownedBy = run.OwnerEpoch
 			return false
 		}
 		ownedBy = 0
-		if run.LaunchID != launch || !slices.Contains(Awaiting, run.Status) || run.Answer != nil {
+		if !run.takesAnswer(launch, answer.EventIDs) {
 			return false
 		}
-		for _, id := range answer.EventIDs {
-			if slices.Contains(run.DeclinedAnswers, id) {
-				return false
-			}
+		if fits != nil {
+			refused = fits
+			return false
 		}
 		recorded := answer
 		recorded.From = run.Status
 		run.Status = StatusAnswered
 		run.Answer = &recorded
+		// THE REFUSAL IN THE SAME WRITE, and none beside an answer: a row
+		// never holds an answer half recorded as a refusal ([PendingRun.Refused]).
+		run.AnswerRefusal = nil
+		if refusal != nil {
+			kept := *refusal
+			kept.EventIDs, kept.Address = slices.Clone(refusal.EventIDs), maps.Clone(refusal.Address)
+			run.AnswerRefusal = &kept
+		}
 		return true
 	})
-	if err == nil && ownedBy > 0 {
+	switch {
+	case err == nil && ownedBy > 0:
 		err = fmt.Errorf("sandbox: recording an answer to run %s, which a newer lease (epoch %d) "+
 			"than the recording node's (%d) owns: %w", turnID, ownedBy, fence.Epoch, ErrSeatNotHeld)
+	case err == nil && refused != nil:
+		return PendingRun{}, false, refused
 	}
 	return recorded, won, err
 }
@@ -1007,7 +1085,7 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 			ids = append(ids, copied.ID)
 		}
 		run.Status = run.Answer.declinedTo()
-		run.Answer = nil
+		run.Answer, run.AnswerRefusal = nil, nil
 		run.DeclinedAnswers = boundedDeclined(run.DeclinedAnswers, ids)
 		run.HandBack = slices.Clone(handBack)
 		return true
@@ -1179,7 +1257,7 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 			owing = *run
 			return false
 		}
-		run.Answer = nil
+		run.Answer, run.AnswerRefusal = nil, nil
 		run.HandBack = nil
 		if len(letGo.HandBack) > 0 {
 			run.HandBack = slices.Clone(letGo.HandBack)
@@ -1271,9 +1349,14 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 		}
 		// WHAT GOES BACK TO THE SEAT, settled with the ending: copies the
 		// row already owes, and the answer it holds if that is owed — with
-		// a copy to hand back.
+		// a copy to hand back, or a refusal, whose reply goes back as the
+		// delivery it came in, kept on the seat's inbox until the refusal
+		// leaves the run ([AnswerRefused]).
+		_, refused := run.Refused()
+		owedRefusal := run.answerOwed() && refused
 		ending.Returned = len(run.HandBack) > 0 ||
-			(run.answerOwed() && len(run.Answer.Events) > 0)
+			(run.answerOwed() && len(run.Answer.Events) > 0) || owedRefusal
+		run.EndingReturnsRefusal = owedRefusal
 		return true
 	})
 	switch {
@@ -1522,13 +1605,17 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 
 // handedSet is the part kept beside a run's row holding what its job's box
 // was handed, sealed ([CoordStore.Handed]), named for the job it was written
-// for.
+// for: by its launch, and every token the completion poll renewed in the box
+// since ([CoordStore.AddHanded]).
 //
 // BESIDE THE ROW, NEVER ON IT ([coord.RunHanded]): up to [MaxHandedBytes]
 // before sealing — a launch whose environment holds a large file comes near
 // it — which every read of the row would carry, every git request of a coding
-// box and every listing among them, though only a capture of the job's
-// session and the next launch's opening read it.
+// box and every listing among them, though only three read it: a capture of
+// the job's session, to scrub it out; the next launch's opening, to carry it
+// into a box it continues in; and the poll's record of a token it renews in
+// the box, which reads the part and grows it by one compare-and-swap, or marks
+// it ([handedSet.Incomplete]).
 type handedSet struct {
 	// Launch is the job the set was written for ([PendingRun.LaunchID]): a
 	// set read for another job is none.
@@ -1539,6 +1626,21 @@ type handedSet struct {
 	LaunchSeq int64 `json:"launch_seq"`
 	// Sealed is the set as [SessionKeep.SealHanded] sealed it.
 	Sealed string `json:"sealed"`
+	// Incomplete is why the job's set no longer holds every value its box
+	// holds, where a refresh could not add a token it wrote there
+	// ([PendingStore.AddHanded]); Sealed is then empty. Words of the
+	// engine's, never a value, since it sits unsealed. AN EMPTY SEAL IS WHAT
+	// REFUSES, so an older build, which reads none of this, takes the job as
+	// one that keeps nothing and refuses its captures as this build does —
+	// and a later job continuing in the box carries nothing of it, and
+	// refuses its own ([Coordinator.carryHanded]).
+	Incomplete string `json:"incomplete,omitempty"`
+
+	// Extra is every key of the part this build does not know, kept
+	// verbatim through a renewal's write of it (wirekeys.go), and dropped
+	// with the job's set by the next job's attach, which replaces it whole.
+	// Filled by the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // of is the sealed set where it was written for launch, and "" otherwise.
@@ -1547,6 +1649,15 @@ func (h handedSet) of(launch string) string {
 		return ""
 	}
 	return h.Sealed
+}
+
+// incompleteFor is why launch's set holds less than its box does, or "" where
+// the set is not launch's or not marked so.
+func (h handedSet) incompleteFor(launch string) string {
+	if launch == "" || h.Launch != launch {
+		return ""
+	}
+	return h.Incomplete
 }
 
 // readHanded reads the handed set beside turnID's run — the zero set where
@@ -1572,7 +1683,11 @@ func (s *CoordStore) readHanded(ctx context.Context, turnID string) (handedSet, 
 // what the box the row still names was handed, and carried forward in place
 // of what that box does hold.
 //
-// NEVER OVER A LATER JOB'S: a set a later launch wrote is left as it is.
+// NEVER OVER A LATER JOB'S: a set a later launch wrote is left as it is. NOR
+// OVER ITS OWN JOB'S MARK ([handedSet.Incomplete]): only a poll of the running
+// job writes one, after a token it wrote into the box found no set to join,
+// so a write of the job's own set that reaches the store after it — applied
+// once its asker had given up — would hold none of that token.
 //
 // A FAILURE IS LOGGED, NOT RETURNED: the attach has landed and its job runs,
 // and an attach answered as refused would abandon a box the row names. A job
@@ -1587,7 +1702,8 @@ func (s *CoordStore) writeHanded(ctx context.Context, turnID string, job handedS
 			func(current coord.Record, found bool) ([]byte, error) {
 				if found {
 					var held handedSet
-					if json.Unmarshal(current.Value, &held) == nil && held.LaunchSeq > job.LaunchSeq {
+					if json.Unmarshal(current.Value, &held) == nil && (held.LaunchSeq > job.LaunchSeq ||
+						held.incompleteFor(job.Launch) != "") {
 						return nil, nil
 					}
 				}
@@ -1609,7 +1725,88 @@ func (s *CoordStore) Handed(ctx context.Context, run PendingRun) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("sandbox: %w", err)
 	}
+	if why := held.incompleteFor(run.LaunchID); why != "" {
+		return "", fmt.Errorf("%w: %s", ErrHandedIncomplete, why)
+	}
 	return held.of(run.LaunchID), nil
+}
+
+// AddHanded hands run's job's sealed set to add before a refresh writes a
+// token into the job's box. See the contract on [PendingStore].
+//
+// THE ROW FIRST, THEN THE PART. The part's own compare-and-swap decides the
+// set (the job's, by its launch, as [handedSet.of] reads it), and the read of
+// the row before it refuses a poll whose listing is older than the job's end:
+// a relaunch's opening reads the set before it resets the row
+// ([CoordStore.resetLaunch]) and a stop's or a loss's capture reads it after
+// the ending's decision, so a token recorded after either would be in a set
+// nobody reads again. Between the two reads is one round trip, which no claim,
+// collection and relaunch fits in.
+func (s *CoordStore) AddHanded(ctx context.Context, run PendingRun,
+	add func(sealed string) (next, incomplete string)) (bool, error) {
+
+	current, found, err := s.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: read run %s to record what its box is handed: %w", run.TurnID, err)
+	case !found || current.LaunchID != run.LaunchID || current.LaunchSeq != run.LaunchSeq ||
+		current.Status != StatusRunning || current.Launch.Collected || current.Lost != nil ||
+		current.endDecided():
+		return false, nil
+	}
+	// SET ON EVERY ASK OF decide, which runs again on a lost race.
+	later, wrote := false, false
+	_, changed, err := s.runs.MutateSandboxRunPart(ctx, run.TurnID, coord.RunHanded,
+		func(record coord.Record, found bool) ([]byte, error) {
+			later, wrote = false, false
+			var held handedSet
+			if found && json.Unmarshal(record.Value, &held) != nil {
+				// A SET THAT DOES NOT DECODE is none the job's captures
+				// could read either: marked below, like a set never written.
+				held = handedSet{}
+			}
+			switch {
+			case held.Launch == run.LaunchID && held.Sealed == "":
+				// MARKED ALREADY, or kept empty: every capture of the job
+				// is refused, so the token adds nothing to keep.
+				return nil, nil
+			case held.Launch == run.LaunchID:
+				// THE JOB'S OWN PART, written back with the keys a later
+				// build put in it (wirekeys.go): a renewal changes the seal
+				// and the mark, and nothing else of it.
+				next, why := add(held.Sealed)
+				if next == held.Sealed {
+					return nil, nil
+				}
+				held.Sealed, held.Incomplete = next, ""
+				if next == "" {
+					held.Incomplete = why
+				}
+			case held.LaunchSeq > run.LaunchSeq:
+				// A LATER JOB'S SET: this job is over, whatever the row read
+				// a moment ago said.
+				later = true
+				return nil, nil
+			default:
+				// NONE FOR THE JOB — its launch sealed none, or its write
+				// did not land — MARKED as the job's, refusing every
+				// capture of it as its captures are refused already, so a
+				// write of the launch's own set that lands late, its answer
+				// lost, cannot land without this token in it.
+				held = handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Incomplete: handedUnkept}
+			}
+			wrote = true
+			return json.Marshal(held)
+		})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: record what run %s's box is handed: %w", run.TurnID, err)
+	case later, wrote && !changed:
+		// A LATER JOB'S SET, or a run that ended under the write, which the
+		// store undid.
+		return false, nil
+	}
+	return true, nil
 }
 
 // MarkBoxPaused stamps the box as snapshotted, with the instant the pause TTL

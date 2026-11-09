@@ -265,6 +265,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runGitlet(environ, rest, stdout, stderr)
 	case "fleet":
 		return runFleet(environ, rest, stdout, stderr)
+	case "feeds":
+		return runFeeds(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
@@ -322,6 +324,9 @@ Usage:
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
+  crewlet feeds <cmd>         The wake feeds' dead letters, records no node could
+                              read: dead-letters lists them, and discard gives
+                              one's wake up for good
   crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
@@ -802,7 +807,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 	}
 
 	if res.Tier == TierChecks {
-		// A REPOSITORY'S CHECKS FILE, read as the home git node reads it
+		// A REPOSITORY'S CHECKS FILE, read as the home Gitlet node reads it
 		// from the target branch it governs — one parser, so a file that
 		// passes here is one Gitlet runs, and every fault is
 		// located at its field and its line as a config's is.
@@ -2168,7 +2173,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		CompanyWriters: boot.API.Auth.CompanyWriters,
 		// AND WHAT A COMPANY DOES BESIDE THIS NODE'S TIER A, carried in a
 		// write's answer ([configapi.Options.TierWarnings]): a person
-		// turning code.native on reads the cross-tier consequence where they
+		// turning Gitlet on reads the cross-tier consequence where they
 		// made the change. The explicit budgets only ([config.TierWarnings]),
 		// as `crewlet validate` compares them — what this node RESOLVED is
 		// the apply's log line ([config.NodeTierWarnings]).
@@ -2324,13 +2329,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, errors.New("api: the engine opened no executor estate: " +
 			"engine.New opens it beside the identity estate on every node holding the estate")
 	}
+	accessValues := e.AccessKeyring()
+	if accessValues == nil {
+		return nil, errors.New("api: the engine opened no access estate: " +
+			"engine.New opens it beside the identity estate on every node holding the estate")
+	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
-		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
-		// record can move, and the assistant's and the executor sessions',
-		// which a rotation waits out.
+		// AND THE IDENTITY ESTATE'S HALF of a rotation and the access log's
+		// commands, which only a record can move, and the assistant's and the
+		// executor sessions', which a rotation waits out.
 		Identity: keyring, Assistant: assistantValues, Executor: executorValues,
+		Access: accessValues,
 		// AND THE CONFIG SURFACE, so a write of a value the company reads
 		// re-activates the revision that reads it (ADR-0070), through the
 		// same Reload `POST /config/reload` performs.
@@ -2614,6 +2625,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
+			// EACH ASKING AGENT'S PENDING ACCESS REVIEW (ADR-0111).
+			Access: e,
 			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
 			// seal says: opened under this node's fleet keyring.
 			RunAnswers: e.AnswerSeal(),
@@ -2673,7 +2686,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// GITLET AND THE CODE READS, ASKED PER REQUEST:
 		// Gitlet is built with the native runtime, which a company
 		// applied after boot brings up after this line ran. The git routes
-		// are mounted where this node's roles name git; the reads on every
+		// are mounted where this node's roles name gitlet; the reads on every
 		// node, through the estate router.
 		Code: api.EngineCode(e),
 		// The capacity window. The engine itself refuses the verb when
@@ -2687,6 +2700,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// and the removal of one gone for good through a member's system
 		// account — which is reachable only from inside a member.
 		FleetBroker: e.FleetBroker(),
+		// THE WAKE FEEDS' DEAD LETTERS, listed and discarded through the
+		// engine's one ledger over its queue, so a discard takes the claim
+		// every node's expiry count reads: kept in the broker's dead-letter
+		// stream, which binds no socket on the default topology.
+		DeadLetters: feedDeadLetters(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -3806,6 +3824,17 @@ func (w engineConfigWriter) SetSeat(
 func nodeGate(e *engine.Engine) api.NodeGate {
 	if g := e.NodeGate(); g != nil {
 		return g
+	}
+	return nil
+}
+
+// feedDeadLetters is the wake feeds' dead letters as the engine lists and
+// discards them — through its one ledger over the node's queue — or an UNTYPED
+// nil where the engine keeps none, which [api.New] then refuses by name. A
+// typed nil would pass its check and panic on the first read.
+func feedDeadLetters(e *engine.Engine) api.FeedDeadLetters {
+	if d := e.FeedDeadLetters(); d != nil {
+		return d
 	}
 	return nil
 }

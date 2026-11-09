@@ -51,6 +51,11 @@ func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, 
 	return iam.Principal{}, fmt.Errorf("the operator surface composes no requester, and was asked for %q", handle)
 }
 
+// Credential composes nobody either.
+func (noRequesters) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, fmt.Errorf("the operator surface composes no requester, and was asked for %q", login)
+}
+
 func (h *listingHost) askers() []code.Principal {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -59,7 +64,7 @@ func (h *listingHost) askers() []code.Principal {
 
 // THE CODE TOOLS ARE SERVED PER CALL, AND A CALL TO ONE IS A READ. The
 // catalogue holds the eleven exactly while the call's company hosts code — so a
-// revision that turns `code.native` on serves them from the next call and one
+// revision that turns Gitlet on serves them from the next call and one
 // that turns it off withdraws them from the next — each advertised as the
 // proven read it is; and a call to one is answered as the request's person,
 // bound to their seat, and leaves no `operator_acted` record, as no read does.

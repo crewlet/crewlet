@@ -81,7 +81,7 @@ units:
         llm: zulu
         code: {access: full_access}
 code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {unit: Engineering}
@@ -459,6 +459,11 @@ func (colleagues) Requester(_ context.Context, handle string) (iam.Principal, er
 	return iam.Principal{Kind: iam.KindSeat, Seat: handle, Stage: iam.StageActive, Grants: iam.Apps}, nil
 }
 
+// Credential places no credential: no rig's turn is a token's.
+func (colleagues) Credential(context.Context, string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, nil
+}
+
 // A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write
 // half for an executor): a checkout in a turn a colleague seat woke names that seat
 // on the run's row, which Gitlet's box admission reads back
@@ -508,6 +513,57 @@ func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
+// withoutGitlet composes whoever woke a rig's turn as colleagues does, but for
+// the contractor, a person holding every app except Gitlet.
+type withoutGitlet struct{ colleagues }
+
+func (w withoutGitlet) Requester(ctx context.Context, handle string) (iam.Principal, error) {
+	if handle != "contractor" {
+		return w.colleagues.Requester(ctx, handle)
+	}
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	return iam.Principal{Kind: iam.KindPerson, Login: "contractor@example.com", Seat: handle,
+		Stage: iam.StageActive, Grants: others}, nil
+}
+
+// A RUN A PERSON WITHOUT GITLET WOKE IS GIVEN NO REPOSITORY (ADR-0110): a
+// run's repositories are resolved through the code read for whoever its turn
+// works for, and a person not given Gitlet reaches no repository, so the
+// launch is refused for them — forbidden, naming Gitlet — before anything is
+// read, and the box is given nothing to clone. The CONTROL is the founder,
+// who holds Gitlet: the same request is resolved.
+//
+// Mutation: put code.read back on ClassEverybody, and the contractor's run is
+// given web.
+func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
+	t.Parallel()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	rig.requesters = withoutGitlet{}
+	rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+		map[string]string{"refs/heads/main": mainHead})
+
+	turn := rig.turn(t, "swe", nil)
+	turn.Requester = "contractor"
+	row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"})
+	var refused *builtin.RefusedCheckout
+	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
+		!strings.Contains(refused.Result.Output, "does not use Gitlet") || len(row.repos) != 0 {
+		t.Fatalf("a run the contractor woke answered %+v, %v; want a forbidden refusal naming Gitlet, and "+
+			"no repository", row.repos, err)
+	}
+
+	person := rig.turn(t, "swe", nil)
+	person.Requester = "founder"
+	if row, err = rig.launch(t, person, builtin.RepoRequest{Repo: "web"}); err != nil || len(row.repos) != 1 {
+		t.Fatalf("a run the founder woke answered %+v, %v; want web", row.repos, err)
+	}
+}
+
 // A CHECKOUT NEEDS THE BOX URL: a node with no CREWLET_BOX_GIT_URL refuses a
 // checkout, naming the variable, before anything
 // is read or written — a box would be given a repository and no address to
@@ -529,12 +585,12 @@ func TestACheckoutNeedsTheBoxURL(t *testing.T) {
 // A CHECKOUT NEEDS CODE.NATIVE: a company that hosts no code is told so and
 // pointed at the other host's credentials; one that does, on a node whose runtime does not
 // serve it yet, is told why — a restart owed — rather than that it hosts none.
-func TestACheckoutNeedsCodeNative(t *testing.T) {
+func TestACheckoutNeedsGitlet(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
-	noCode := strings.Split(launchReposDoc, "code:\n  native: true")[0]
+	noCode := strings.Split(launchReposDoc, "code:\n  backend: gitlet")[0]
 	for _, tc := range []struct{ name, doc, says string }{
-		{"a company hosting no code", noCode, "this company hosts no repositories (code.native is not set)"},
+		{"a company hosting no code", noCode, "this company hosts no repositories (code.backend is not gitlet)"},
 		{"a node not serving it yet", launchReposDoc, "native_backend_needs_restart"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -866,7 +922,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 // no node that serves code → "serving code" given no git, red (what left the
 // executor of internal/e2e's A1 case cloning from an empty base); drop the
 // served check → "hosting none" given git, red.
-func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
+func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
 	withBase := config.MapSource{sandbox.BoxGitURLVar: base}
@@ -876,9 +932,9 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 		env     config.Source
 		given   bool
 	}{
-		{"serving code", codeHostCompany, withBase, true},
+		{"serving code", gitletHostCompany, withBase, true},
 		{"hosting none", nativeCleanupCompany, withBase, false},
-		{"no box base", codeHostCompany, nil, false},
+		{"no box base", gitletHostCompany, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

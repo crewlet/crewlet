@@ -107,7 +107,7 @@ func TestARevisionsFilesAreReadFromTheBaseItsFactsRecord(t *testing.T) {
 		},
 	} {
 		if q, err := read(); !errors.Is(err, code.ErrInvalid) {
-			t.Errorf("%s is read as %+v (%v), want refused before any git node is asked", name, q, err)
+			t.Errorf("%s is read as %+v (%v), want refused before any Gitlet node is asked", name, q, err)
 		}
 	}
 }
@@ -214,16 +214,16 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 	}
 }
 
-// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a git node's re-anchoring
+// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a Gitlet node's re-anchoring
 // places at most code.MaxReanchors anchors, and the reader serves a page of up
 // to code.MaxFindingsPerPage findings, every one of which may need one — so a
-// page past one read is cut into reads that each pass the git node's own
+// page past one read is cut into reads that each pass the Gitlet node's own
 // check, that together ask every anchor once, and that keep the anchors of
 // one pair of blobs in one read wherever the page allows; and every read's
 // answer is folded in, however the reads interleave, while a read that is
 // refused answers that refusal — the first in the reads' order.
 //
-// Mutations: one read of every anchor → the read the git node refuses, red;
+// Mutations: one read of every anchor → the read the Gitlet node refuses, red;
 // cut the page in its own order → a pair split across reads, red; fold in only
 // the first read's answer → findings unplaced, red; answer the last refusal →
 // the wrong refusal, red.
@@ -254,7 +254,7 @@ func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
 		if err := (code.GitQuery{Kind: code.GitReanchor, RepoID: "01920000-0000-7000-8000-000000000001",
 			Asker:    code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"},
 			Reanchor: q}).Validate(); err != nil {
-			t.Errorf("re-anchoring %d is one no git node takes: %v", i, err)
+			t.Errorf("re-anchoring %d is one no Gitlet node takes: %v", i, err)
 		}
 		for _, a := range q.Anchors {
 			asked[a.ID]++

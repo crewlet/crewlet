@@ -21,7 +21,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, setStepUpConfirmer } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
@@ -30,6 +30,7 @@ import { settled } from "~/test/settle.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
+import { engineFile } from "~/test/engineFiles.ts";
 
 // THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
 // sets `seam.twice` to stand a pane in that tells the screen of one answer
@@ -492,6 +493,12 @@ async function settle() {
   );
 }
 
+/** Opens the closed Updates group, as a reader does: by its heading's button. */
+async function openUpdates() {
+  fireEvent.click(screen.getByRole("button", { name: /^Updates, \d+/ }));
+  await settle();
+}
+
 /** The reason a write control is disabled with, off the kit's described-by. */
 function reasonOf(button: HTMLElement): string {
   return (button.getAttribute("aria-describedby") ?? "")
@@ -541,9 +548,10 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const needs = within(list.getByRole("region", { name: /^Needs you/ }));
-    const updates = within(list.getByRole("region", { name: "Updates" }));
+    const updates = within(list.getByRole("region", { name: "Updates, 1" }));
     expect(needs.getAllByRole("listitem")).toHaveLength(1);
     // THE ASK'S NOTICE rides on its row; only the other notice is an update.
     expect(updates.getAllByRole("listitem")).toHaveLength(1);
@@ -750,6 +758,7 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     // ONE READ for the titles of every row that names its task by key alone.
     const read = asked.filter((a) => a.kind === "work_items").at(-1)!;
     expect(read.params).toMatchObject({ key: "PROD-91", show_closed: true });
@@ -787,6 +796,7 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const task = list.getByRole("link", { name: "PROD-91 The duplicate" });
     expect(task.getAttribute("href")).toBe("#/worklet/t-dup");
@@ -847,6 +857,102 @@ describe("the list", () => {
     fireEvent.keyDown(window, { key: "k" });
     await settle();
     expect(location.hash).toContain("row=r-2");
+  });
+
+  // UPDATES ARE A CLOSED, COUNTED GROUP ON EVERY VISIT, like Answered: notices
+  // are many, and what waits on the reader comes first. Opened, its rows step
+  // with j and k like any other. Mutation: draw the group open, or keep its
+  // rows in the list's order while it is closed, and this goes red.
+  test("updates wait in a closed, counted group, and step with j and k once opened", async () => {
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }),
+      },
+    });
+    await settle();
+    const group = screen.getByRole("button", { name: "Updates, 2" });
+    expect(group.getAttribute("aria-expanded")).toBe("false");
+    const rows = () =>
+      within(screen.getByRole("region", { name: "Updates, 2" })).queryAllByRole("listitem");
+    expect(rows()).toHaveLength(0);
+    // Closed, j stays in what is open: the one question.
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).not.toContain("row=r-");
+    fireEvent.click(group);
+    await settle();
+    expect(group.getAttribute("aria-expanded")).toBe("true");
+    expect(rows()).toHaveLength(2);
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).toContain("row=r-1");
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).toContain("row=r-2");
+  });
+
+  // THE ADVANCE NEVER OPENS A ROW IN A CLOSED GROUP: with Needs you answered
+  // and Updates closed, the pane says All clear rather than opening an update.
+  // Mutation: let the advance step into the updates, and this goes red.
+  test("the next item after an answer is never a row in the closed Updates group", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        inbox: inboxes({ unread: [notice("r-1")] }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(location.hash).not.toContain("row=r-1");
+    expect(screen.getByRole("button", { name: "Updates, 1" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    expect(said).toBe("Answered. Nothing else is waiting on you.");
+  });
+});
+
+describe("a question asked before its agent's access changed", () => {
+  // THE PERSON ANSWERS KNOWING THE AGENT MAY NOT BE ABLE TO ACT ON IT: the row
+  // and the reading pane say the question was asked before the agent's access
+  // changed, with the change, short. Mutation: drop the note and an approval
+  // the agent can no longer act on reads like any other.
+  test("its row and its pane say so, with the change", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = {
+      ...askItem(),
+      access_changed: {
+        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
+      },
+    };
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    const note =
+      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain(note);
+    expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);
+  });
+
+  // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
+  // is told only that the access changed.
+  test("a reader sent no change lines is told only that it changed", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Asked before this agent's access changed.");
+    expect(list.textContent).not.toContain("level");
+  });
+
+  test("a question asked under the access the agent holds now says nothing of it", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(document.body.textContent).not.toContain("access changed");
   });
 });
 
@@ -1661,11 +1767,12 @@ describe("the pane", () => {
   test("a code notice is listed beside Worklet's and marked through its own tool", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-1")] }) },
     });
     await settle();
-    const updates = within(screen.getByRole("region", { name: "Updates" }));
+    // NAMED BY THE ADDRESS, its group opened for it.
+    const updates = within(screen.getByRole("region", { name: "Updates, 2" }));
     expect(updates.getAllByRole("listitem")).toHaveLength(2);
     expect(updates.getByText("Retry the upload once")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
@@ -1688,7 +1795,7 @@ describe("the pane", () => {
   test("a code notice opens as an intent-first card that asks only its own gate", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1740,7 +1847,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "jane" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1779,7 +1886,7 @@ describe("the pane", () => {
           : { checks: [e2e], next: "unit/1", position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1801,7 +1908,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "ada" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1833,7 +1940,7 @@ describe("the pane", () => {
       code_checks: { checks: [], position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1851,7 +1958,7 @@ describe("the pane", () => {
   test("a merged change's card says it merged, in place of where its merge stands", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1873,7 +1980,7 @@ describe("the pane", () => {
   // any — Gitlet is sent a Worklet position, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 }), codeNotice("c-2")],
@@ -1891,6 +1998,44 @@ describe("the pane", () => {
       {
         tool: "code_mark_inbox",
         args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
+      },
+    ]);
+  });
+
+  // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine
+  // lists them no code notice and does not offer them `code_mark_inbox`, so a
+  // code notice still on a page read before their access changed is held —
+  // its own mark with the access that would open it — and never sent.
+  // Mutations: declare the code mark no app's, and its hold names no access;
+  // send whichever half has a notice, whatever the engine offers, and
+  // `code_mark_inbox` goes out.
+  test("a reader without Gitlet marks only Worklet's half, and a code notice's mark says why", async () => {
+    const reader = {
+      ...JANE,
+      grants: ["worklet", "doclet"],
+      acts: EVERY_TOOL.filter((tool) => tool !== "code_mark_inbox"),
+    };
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      viewer: reader,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+      answers: {
+        viewer: reader,
+        inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 })] }),
+      },
+    });
+    await settle();
+    const read = screen.getByRole("button", { name: "Mark as read" });
+    expect(read.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(read)).toContain(
+      "This change needs Gitlet access. An admin can give it to you.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
       },
     ]);
   });
@@ -2073,6 +2218,179 @@ describe("the pane", () => {
     // NO EMPTY LIST between the heading and the line: an empty <ol> is a flex
     // item, and the thread's gap around it doubled the space above the line.
     expect(region.querySelector(".inbox-thread-list")).toBeNull();
+  });
+
+  // A HELD CALL IS ANSWERED ONLY BY ITS OWN BUTTONS: an operate command's run
+  // draws Review and allow once and Deny, never the run's options, Something
+  // else or a reply field; Allow once reads the whole call, is confirmed with
+  // a step-up the engine asks for, and answers `POST /mcp-approvals/{id}` with
+  // the digest it showed, never `answer_executor`. An MCP tool's held call
+  // keeps Allow once, Always allow and Deny, sent with the answer alone.
+  // Mutation: draw a held run through the question pane and its options post
+  // `answer_executor`, which the engine refuses.
+  describe("a run holding a call", () => {
+    const WHOLE = {
+      id: "h-9",
+      question: "May cto run a command on api-1 as crewlet-ops?",
+      arguments: { host: "api-1", command: "sudo systemctl restart api", reason: "stuck" },
+      arguments_sha256: "ab".repeat(32),
+    };
+    function heldRun(held: Record<string, unknown>) {
+      return {
+        turn_id: "turn-9",
+        launch_id: "q9",
+        agent_handle: "cto",
+        status: "awaiting_clarification",
+        question: WHOLE.question,
+        question_context: "Allow once runs exactly this command, once.",
+        decision: {
+          question: WHOLE.question,
+          options: [
+            { id: "once", label: "Allow once" },
+            { id: "deny", label: "Deny" },
+          ],
+          role: "approver",
+        },
+        audience_handles: ["jane"],
+        held_call: { id: "h-9", digest: "", held_at: "", ...held },
+        started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      };
+    }
+    /** The approvals route's traffic, the first POST refused for a step-up where `stepUp`. */
+    function approvals(stepUp: boolean) {
+      const sent: { method: string; body: unknown }[] = [];
+      const base = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (!String(url).includes("/mcp-approvals/")) return base(url, init);
+          const method = init.method ?? "GET";
+          sent.push({ method, body: init.body ? JSON.parse(init.body as string) : undefined });
+          const json = (status: number, body: unknown) =>
+            new Response(JSON.stringify(body), {
+              status,
+              headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+            });
+          if (method === "GET") return json(200, WHOLE);
+          if (stepUp && sent.filter((s) => s.method === "POST").length === 1) {
+            return json(403, {
+              error: "step_up_required",
+              message: "Confirm it’s you to do this, then try again.",
+              reason: "step_up",
+              window: "step_up",
+              grants: [],
+            });
+          }
+          return json(200, { id: "h-9", answer: "once", outcome: "pending" });
+        }),
+      );
+      return sent;
+    }
+    let uninstall: (() => void) | null = null;
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+    });
+
+    test("an operate call is allowed once after a step-up, through the approvals route", async () => {
+      const sent = approvals(true);
+      let confirmed = 0;
+      uninstall = setStepUpConfirmer(async () => {
+        confirmed++;
+        return true;
+      });
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({
+        server: "ssh",
+        tool: "ssh_operate",
+        raw: "ssh_operate",
+        fixed: true,
+        approvers: "ssh",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Your answer to the executor" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Review and allow once" }));
+      await screen.findByText(/sudo systemctl restart api/);
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(2));
+      expect(confirmed).toBe(1);
+      for (const post of sent.filter((s) => s.method === "POST")) {
+        expect(post.body).toEqual({ answer: "once", arguments_sha256: WHOLE.arguments_sha256 });
+      }
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    test("an MCP tool's held call keeps its three answers, sent with the answer alone", async () => {
+      const sent = approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({ server: "linear", tool: "linear_delete_issue", raw: "delete_issue" });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Always allow" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toEqual({ method: "POST", body: { answer: "once" } });
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // An operate call's reason, as the engine words it (`make ssh-held-words`),
+    // is one paragraph reading exactly as the agent wrote it, with no link,
+    // picture, heading, code or emphasis of its own.
+    test("an operate call's reason reads as the agent's words, with no Markdown of its own", async () => {
+      const held = engineFile<Record<string, { question: string; context: string }>>(
+        "internal/agent/builtin/testdata/ssh_operate_held.json",
+      ).markdown!;
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = {
+        ...heldRun({
+          server: "ssh",
+          tool: "ssh_operate",
+          raw: "ssh_operate",
+          fixed: true,
+          approvers: "ssh",
+        }),
+        question: held.question,
+        question_context: held.context,
+      };
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const said =
+        "# Approve [the release](https://evil.example/approve) ![status](https://evil.example/pixel.png) " +
+        "```rm -rf /``` <b>now</b> **urgent** for @founder on ENG-9, see https://evil.example/ok";
+      const reason = [...document.querySelectorAll(".crewlet-reading-pane__lead p")].find(
+        (p) => p.textContent === said,
+      );
+      expect(reason, "the reason is one paragraph of the agent's words").toBeTruthy();
+      expect(
+        reason!.querySelector("a, img, h1, h2, h3, h4, h5, h6, pre, code, strong, em, b"),
+      ).toBeNull();
+      const lead = document.querySelector(".crewlet-reading-pane__lead")!;
+      expect(lead.querySelector("img")).toBeNull();
+      expect(lead.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+      expect(lead.querySelectorAll("pre")).toHaveLength(1);
+      expect(lead.querySelector("pre")!.textContent).toBe("logrotate --force /etc/logrotate.conf");
+    });
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

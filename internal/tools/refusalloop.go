@@ -89,7 +89,7 @@ type streakKey struct{ tool, target string }
 // NEVER A SILENT CAP. The call ran and its refusal is answered whole; the
 // guard adds the sentence a model needs to stop and refuses nothing itself,
 // so a model that does fix the version on its fifth attempt still publishes.
-func (s *Surface) settle(c Call, ann Annotations, target string) (Call, int) {
+func (s *Surface) settle(c Call, ann Annotations, target string, unkept bool) (Call, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run := 0
@@ -109,7 +109,11 @@ func (s *Surface) settle(c Call, ann Annotations, target string) (Call, int) {
 	if run >= PolicyRefusalLimit {
 		c.Output += stopRetrying(c.Name, target, run)
 	}
-	s.called = append(s.called, c)
+	stored := c
+	if unkept {
+		stored.Output = UnkeptOutput(c.Output)
+	}
+	s.called = append(s.called, stored)
 	return c, run
 }
 

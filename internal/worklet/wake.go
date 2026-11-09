@@ -130,6 +130,11 @@ type ThreadParties struct {
 	// now owes an answer to.
 	Asked string
 
+	// Owing are the handles an open ask in this thread is addressed to, and
+	// Awaiting the authors of those asks, each capped like the participants.
+	Owing    []string
+	Awaiting []string
+
 	// AnsweredAuthor is the author of the comment this one ANSWERS.
 	//
 	// The author of the answering comment is the ANSWERER, so routing off
@@ -350,6 +355,9 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		snapshot.AnsweredAuthor = w.Thread.AnsweredAuthor
 		snapshot.ThreadParticipants = capHandles(
 			w.Thread.Participants, MaxThreadParticipants)
+		// CAPPED AND DEDUPED BY THE READ ([Reader.Thread]); Validate refuses more.
+		snapshot.ThreadOwing = slices.Clone(w.Thread.Owing)
+		snapshot.ThreadAwaiting = slices.Clone(w.Thread.Awaiting)
 	}
 	return snapshot
 }

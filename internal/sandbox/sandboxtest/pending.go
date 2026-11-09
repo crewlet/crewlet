@@ -181,6 +181,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, askCases...)
 	cases = append(cases, heldCases...)
 	cases = append(cases, bytesCases...)
+	cases = append(cases, refusalCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -219,7 +220,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		Harness: "claude-code", TaskDescription: "fix the flake",
+		Harness: "claude-code", TaskDescription: "fix the flake", Requester: requester,
 		// THE TWO CONVERSATION VALUES OF A DIRECT MESSAGE, which is the
 		// one shape where they differ — a reply in the thread this run's
 		// question was asked in partitions on the thread while the
@@ -233,9 +234,10 @@ func run(turnID string) sandbox.PendingRun {
 
 // findAwaiting is the answer match as the coordinator makes it: the seat's runs
 // as this store lists them, judged by [sandbox.Reply.Best] for a reply posted
-// now — after every question the case parked. The rule is a value's
-// ([sandbox.ConversationRef.Best]); what the store is certified on is handing
-// over every candidate, and nothing else.
+// now — after every question the case parked — by the runs' requester, whom
+// every question is put to. The rule is a value's
+// ([sandbox.ConversationRef.Best], [sandbox.Reply.Best]); what the store is
+// certified on is handing over every candidate, and nothing else.
 func findAwaiting(ctx context.Context, s sandbox.PendingStore, handle string,
 	conv sandbox.ConversationRef,
 ) (sandbox.PendingRun, bool, error) {
@@ -244,9 +246,13 @@ func findAwaiting(ctx context.Context, s sandbox.PendingStore, handle string,
 		return sandbox.PendingRun{}, false, err
 	}
 	reply := events.New(types.ExternalNotification{Body: "use main"}, events.TraceContext{})
-	got, ok := sandbox.Reply{Conv: conv, Events: []*events.Event{reply}}.Best(runs)
+	got, ok := sandbox.Reply{Conv: conv, Events: []*events.Event{reply}, Writer: requester}.Best(runs)
 	return got, ok, nil
 }
+
+// requester is the seat whose wake started every run this suite parks
+// ([run]), and so whom each of its questions is put to.
+const requester = "founder"
 
 // answerOnTheDM is the reply to the question [run] parked on: the same DM
 // line, in the same thread. BOTH VALUES, because a store is free to read

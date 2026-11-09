@@ -349,6 +349,11 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail: "Agents whose role holds Chatlet access, in the rooms they are in.",
   },
   artifacts: { label: "Artifacts access", detail: "Agents whose role holds Artifacts access." },
+  gitlet: {
+    label: "Gitlet access",
+    detail:
+      "Agents whose role holds Gitlet access. What each may do to a repository is its own grant there.",
+  },
   artifact_viewer: {
     label: "Its viewers",
     detail: "Anyone the artifact is shared with, as a viewer or above.",
@@ -362,6 +367,15 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     label: "Health grant",
     detail:
       "Agents whose role carries the health_tools grant: the deployment's health is an admin's read.",
+  },
+  ssh_read: {
+    label: "SSH access",
+    detail: "Agents whose SSH access is on with a server: allowlisted reads, with no approval.",
+  },
+  ssh_operate: {
+    label: "SSH operate",
+    detail:
+      "Agents whose SSH access is at operate. Every call waits for an admin or a named approver.",
   },
 };
 

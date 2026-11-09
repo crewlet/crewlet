@@ -149,7 +149,7 @@ import (
 //
 // # A compaction waits in the same queue, and is decided alone
 //
-// A repository's COMPACTION — proposed by the git node that built one
+// A repository's COMPACTION — proposed by the Gitlet node that built one
 // ([Committer.ProposeCompaction]) — waits in the repository's ONE queue beside
 // its pushes, in the order they arrived, held to its bounds and the node's like
 // any proposal and to the same deadline rules, and is decided as a batch of its
@@ -1067,6 +1067,26 @@ func (c *Committer) dequeued(rc *repoCommitter, q *queued) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rc.queued -= q.bytes
+}
+
+// Queued is how many proposals repoID's queue on this node holds now: every
+// one sent to it that the repository's goroutine has not yet taken off, so a
+// batch in flight holds none of its own, and a proposal its caller withdrew
+// counts until the goroutine meets it.
+//
+// THE ONE READING OF A QUEUE, which a case that holds a batch waits on before
+// it lets the batch go: the next batch takes what is queued when the held one
+// ends and nothing that arrives after it — without linger — so a batch let go
+// before its followers had all queued would carry them in several, and a wait
+// of any length would only make that unlikely. The committer's own suite and
+// internal/code/codetest's F19 read it for that.
+func (c *Committer) Queued(repoID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if rc := c.repos[repoID]; rc != nil {
+		return len(rc.inbox)
+	}
+	return 0
 }
 
 // refuseQueued answers what is carried and everything still queued

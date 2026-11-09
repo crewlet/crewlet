@@ -95,6 +95,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
+	told []prefetch.ToldChange,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -117,6 +118,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// described, so the judgements and the turn's record of what it was
 		// asked carry one answer about who wrote it.
 		Ask: ask,
+		// THE ACCESS CHANGES THE SEAT WAS TOLD, which mark its notes written
+		// before them (capability.go).
+		Told: told,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -616,6 +620,9 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 		Sender: types.CanonicalIdentity{
 			Handle: subject.Handle, ExternalID: subject.ExternalID,
 			Platform: subject.Platform, DisplayName: subject.Name,
+			// A CREDENTIAL ACTING AS NO SEAT, by its login: the requester a
+			// turn it woke is worked for (ADR-0109).
+			Login: credentialLogin(writer),
 		},
 		Body:       body,
 		Provenance: label,
@@ -626,6 +633,16 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 		RawEventType:  rawType,
 		RequiresRecon: requiresRecon,
 	}
+}
+
+// credentialLogin is the login a first-party writer names where it is a
+// credential acting as no seat, and "" for every other writer and for a
+// vendor's sender, which names no writer at all.
+func credentialLogin(w *types.NotificationWriter) string {
+	if w == nil || w.Kind != iam.ActorOperator {
+		return ""
+	}
+	return strings.TrimSpace(w.Login)
 }
 
 // salientBody is the raw inbound message, never the enriched prompt.

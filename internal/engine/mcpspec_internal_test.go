@@ -255,6 +255,9 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		// An agent's AWS session is issued at use for 15 minutes through the
 		// broker, never sealed by a pass.
 		integration.KindAWS: "no pass mints a seat's AWS credential",
+		// An agent's SSH certificate is signed at use for minutes, never
+		// sealed by a pass.
+		integration.KindSSH: "no pass mints a seat's SSH credential",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

@@ -57,6 +57,7 @@ import (
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [SeatPauses] a person set, the [ModelRetries] and
 // [MCPRestarts] a person asked for, each server's latest test ([MCPChecks]),
+// each SSH server's latest Test connection ([SSHTests]),
 // each engine defect the company reported ([IssueReports]),
 // each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
 // ([MCPSignIns]), the definition each MCP tool's level was decided on
@@ -1276,11 +1277,14 @@ type SandboxRunUpdate struct {
 //     moved it through the bucket's stream leader; kept beside it, the
 //     record is a few kilobytes and only the log's own readers and its
 //     appends move the log.
-//   - [RunHanded], the secrets a job's box was handed, sealed — up to
-//     internal/sandbox's bound of 64 KiB before sealing, which on the record
-//     would have put a launch whose environment holds a large file on every
-//     one of those reads, though only a capture of the job's session and the
-//     next launch's opening read it.
+//   - [RunHanded], the secrets a job's box was handed, sealed — by its
+//     launch, and every token the completion poll renewed in the box since —
+//     up to internal/sandbox's bound of 64 KiB before sealing, which on the
+//     record would have put a launch whose environment holds a large file on
+//     every one of those reads, though only a capture of the job's session,
+//     the next launch's opening and the poll's record of a token it renews
+//     in the box read it, the last growing it by one compare-and-swap of the
+//     part.
 //
 // A PART LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
 // what holds that: a part is written only beside a run that has a record
@@ -1796,6 +1800,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	SeatAccess
+	AccessReviews
 	Mailboxes
 	ObjectStores
 	TrashReaps
@@ -1805,6 +1810,7 @@ type Fleet interface {
 	MCPListings
 	MCPRestarts
 	MCPChecks
+	SSHTests
 	IssueReports
 	MCPGrants
 	MCPSignIns

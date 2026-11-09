@@ -158,7 +158,11 @@ function mount(node: React.ReactNode) {
  * chat is `chat` (the org projection's `services`): the one fact about the
  * company it reads.
  */
-async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
+async function reach(
+  node: React.ReactNode,
+  chat: OrgServices["chat"],
+  code: OrgServices["code"] = "gitlet",
+) {
   const viewer = {
     login: "ada.admin",
     owner: "ada",
@@ -178,7 +182,7 @@ async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
     withDerived({
       name: "Acme",
       roles: [],
-      services: { tracker: "worklet", knowledge: "doclet", chat, code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat, code },
     }),
   );
   const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
@@ -423,7 +427,7 @@ describe("an invitation onto a seat", () => {
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
     // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
     // every app unless somebody says otherwise.
-    for (const app of ["Worklet", "Doclet", "Artifacts", "Chatlet"]) {
+    for (const app of ["Worklet", "Doclet", "Artifacts", "Chatlet", "Gitlet"]) {
       expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
     }
     expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
@@ -441,7 +445,7 @@ describe("an invitation onto a seat", () => {
     expect(sent?.key).toMatch(UUID7);
     expect(sent?.body).toEqual({
       email: "dee@example.com",
-      grants: ["worklet", "artifacts", "chatlet"],
+      grants: ["worklet", "artifacts", "chatlet", "gitlet"],
       seat: "sam",
     });
     expect(
@@ -467,6 +471,8 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Artifacts" }));
     expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Chatlet" }));
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Gitlet" }));
     expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
     expect(within(dialog).queryByText(/Without Worklet/)).toBeNull();
   });
@@ -531,7 +537,7 @@ describe("an invitation onto a seat", () => {
     const [first, second] = eng.writes();
     expect(second?.body).toEqual({
       email: "jane@example.com",
-      grants: ["worklet", "doclet", "artifacts", "chatlet"],
+      grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
       seat: "sam",
     });
     expect(second?.key).toMatch(UUID7);
@@ -608,7 +614,7 @@ describe("a person created on a seat", () => {
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["worklet", "doclet", "artifacts", "chatlet"],
+      grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
@@ -648,7 +654,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: ["worklet", "doclet", "artifacts", "chatlet"],
+        grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
       },
     ]);
   });
@@ -833,12 +839,14 @@ describe("the access picker", () => {
     expect(box("Artifacts").disabled).toBe(true);
     expect(box("Chatlet").checked).toBe(true);
     expect(box("Chatlet").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(4);
-    expect(value()).toBe("admin,worklet,doclet,artifacts,chatlet");
+    expect(box("Gitlet").checked).toBe(true);
+    expect(box("Gitlet").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(5);
+    expect(value()).toBe("admin,worklet,doclet,artifacts,chatlet,gitlet");
     fireEvent.click(box("Admin"));
     expect(box("Worklet").disabled).toBe(false);
     expect(box("Worklet").checked).toBe(true);
-    expect(value()).toBe("worklet,doclet,artifacts,chatlet");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -846,7 +854,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Worklet").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("worklet,doclet,artifacts,chatlet");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {
@@ -886,6 +894,30 @@ test.each([
     cleanup();
     await reach(<AppReachNote grants={["doclet"]} />, backend);
     expect(document.body.textContent).toMatch(/Without Worklet/);
+  },
+);
+
+// WITHOUT GITLET, NO CHANGE IS PUT TO THEM, on a company hosting its code in
+// Gitlet, and only there (ADR-0110): a review is asked only of a person who
+// uses it. The tracker's and the chat's notes come first where they are
+// missing too. Mutations: drop the services check and the "none" row goes red;
+// drop the note and the "gitlet" row does; put it before the chat's and the
+// last line of the case does.
+test.each([
+  ["gitlet", true],
+  ["none", false],
+] as const)(
+  "on a company whose code is %j, a person without Gitlet is told so: %s",
+  async (backend, said) => {
+    await reach(<AppReachNote grants={["worklet", "chatlet"]} />, "chatlet", backend);
+    expect(
+      /Without Gitlet, agents can’t ask them to review their changes/.test(
+        document.body.textContent ?? "",
+      ),
+    ).toBe(said);
+    cleanup();
+    await reach(<AppReachNote grants={["worklet"]} />, "chatlet", backend);
+    expect(document.body.textContent).toMatch(/Without Chatlet/);
   },
 );
 

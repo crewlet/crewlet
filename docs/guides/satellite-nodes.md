@@ -40,11 +40,11 @@ its seats need a data node to answer — see
 > broker. If that is not possible from where you want the agent, this is
 > not the mechanism you want.
 
-**A stateless satellite cannot serve git in this release.** The `git` role
+**A stateless satellite cannot serve git in this release.** The `gitlet` role
 serves the company's repositories on the API listener, so it needs `ingress`,
-and `ingress` needs `data` — a node without `data` that names `git` is refused
+and `ingress` needs `data` — a node without `data` that names `gitlet` is refused
 at validation. Serve git from the core nodes; a satellite that holds data can
-take `[data, git, ingress, seats]` like any core node.
+take `[data, gitlet, ingress, seats]` like any core node.
 
 ---
 
@@ -431,7 +431,7 @@ HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code access]"
 ```
 
 ---

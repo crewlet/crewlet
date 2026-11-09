@@ -40,6 +40,17 @@
 //     (ListSubscriptions). A mailbox outlives everything that knew its name,
 //     a removed seat's handle included, so the broker has to be able to say
 //     which mailboxes exist or a leaked one can never be found again.
+//   - DEAD LETTERS ARE ONE PLACE with one retention, whoever gives up on a
+//     message: a subscription's backend when its budget runs out, or a
+//     reader that settles its own deliveries and keeps what it gives up on
+//     (KeepDeadLetter — a wake feed, which reads a state log's consumer
+//     rather than a subscription). An entry is a BODY and a one-line
+//     HEADER kept apart, so a reader that only needs to know what is kept
+//     never moves what it keeps: a subject's entries are listed by their
+//     headers alone (DeadLettersOn), one entry's body is read by its
+//     sequence (DeadLetterFrame), what a whole subtree of subjects holds is
+//     counted without listing it (DeadLetterMarks), and an entry is removed
+//     one at a time (DropDeadLetter).
 //   - A failed verb is MARKED with one of three sentinels when the failure is
 //     one a caller acts on, and nothing else about it may be branched on:
 //     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
@@ -278,7 +289,9 @@ const (
 	DeferHoldRefused DeferCause = "hold_refused"
 	// DeferParked is a seat parked on its token budget or its models' limit.
 	DeferParked DeferCause = "parked"
-	// DeferAnswerOwed is a delivery whose answer a parked run is still owed.
+	// DeferAnswerOwed is a delivery whose answer a parked run is still owed,
+	// or a reply too large to be one, kept while the refusal recorded for it
+	// is still its run's.
 	DeferAnswerOwed DeferCause = "answer_owed"
 )
 
@@ -423,7 +436,17 @@ func LiteralSubject(subject string) error {
 	return nil
 }
 
-// Unsubscribe cancels a stream subscription and releases backend resources.
+// Unsubscribe withdraws a registration, a stream subscription, an answerer
+// ([EventQueue.Serve]) or a listener ([EventQueue.Listen]), and releases its
+// backend resources.
+//
+// ONE A QUEUE RETURNS MAY BE CALLED AGAIN. Only the first call withdraws; a
+// later one finds the registration withdrawn, which is all it asks, and
+// answers nil once nothing the verb's withdrawal waits for is still running.
+// A broker that reports the registration already gone is reporting what the
+// first call made true, not a failure. So a deferred withdrawal beside an
+// explicit one, or a teardown that runs twice, hears the same from every
+// backend, and the conformance suite holds each to it (#777).
 type Unsubscribe func(ctx context.Context) error
 
 // BatchKeyFunc derives the PARTITION KEY an event is handled under: which
@@ -463,6 +486,110 @@ type Subscription struct {
 	// mailboxes treats a partial one as missing; a reader that retires them
 	// treats it as present, because its retained mail is still somebody's.
 	Partial bool
+}
+
+// Kept is one entry a dead-letter subject holds, as [EventQueue.DeadLettersOn]
+// lists it: everything the backend and the keeper say of the entry, and never
+// the body it was kept with ([EventQueue.DeadLetterFrame] reads that).
+type Kept struct {
+	// Seq is the entry's identity: what [EventQueue.DropDeadLetter] and
+	// [EventQueue.DeadLetterFrame] name. It is the backend's own sequence,
+	// unique across every dead-letter subject of one broker and never
+	// reused, so a seq read off one subject can name nothing on another.
+	Seq uint64
+
+	// StoredAt is when the backend kept the entry, on the backend's own
+	// clock, which every node reads alike.
+	StoredAt time.Time
+
+	// Expires is when the backend lets the entry go: StoredAt plus the
+	// backend's dead-letter retention. AN INSTANT RATHER THAN THE RETENTION,
+	// because the retention is a backend's setting the caller has no other
+	// way to read — the JetStream backend's is the event stream's own age
+	// bound (`stream.event_retention_hours`), a safety field every node of a
+	// fleet holds equal — and what a caller acts on is how long this entry
+	// has left.
+	Expires time.Time
+
+	// Header is the line the keeper kept the entry under, exactly as it was
+	// handed to [EventQueue.KeepDeadLetter]; empty for an entry kept with
+	// none — a subscription's poison, which its backend keeps as the
+	// message's own bytes and nothing beside them.
+	Header []byte
+}
+
+// Marks is what a subtree of the dead-letter namespace holds, as
+// [EventQueue.DeadLetterMarks] counts it: enough for a reader that keeps a
+// listing to tell whether it is still what the backend holds, without
+// listing anything.
+//
+// TWO FACTS, because a count alone cannot tell one entry from another: an
+// entry kept on a subject and another let go from it in the same moment leave
+// the subject's count where it was. Last moves with every keep and with
+// nothing else, so a reader holding a listing taken at Last knows it can
+// only have LOST entries since — each of which lowers its subject's count —
+// while Last stands still.
+type Marks struct {
+	// Counts is each subject under the subtree that holds an entry, with
+	// how many it holds. A subject holding none is absent.
+	Counts map[string]uint64
+
+	// Last is the last sequence the backend gave any dead letter, under the
+	// subtree or anywhere else in the dead-letter namespace: the identity
+	// the next keep exceeds, and zero for a backend that has kept none.
+	Last uint64
+}
+
+// LetterFraming is the most a backend spends carrying one dead letter beside
+// its header's and its body's own bytes, and so what the transport's ceiling
+// is held to for a keep: [EventQueue.KeepDeadLetter] refuses an entry whose
+// header and body come within LetterFraming of [MaxPayloadBytes], with
+// [ErrTooLarge], on every backend alike.
+//
+// A CONTRACT NUMBER, so the twin refuses exactly what the broker does. The
+// JetStream backend carries the header as a header of the message, so the
+// message on the wire is the body and a header block — `NATS/1.0`, the
+// expected stream the keep is checked against, the dead-letter header's own
+// name and the blank line that ends them, 70 bytes around the header's own
+// (internal/queue/jetstream holds that under this with its own test). Before
+// this bound a twin that counted the body alone kept an entry within those
+// bytes of the ceiling that the broker refused — the one direction a twin must
+// never be wrong in.
+//
+// A QUARTER KIBIBYTE, which a header name or a stream renamed by a later build
+// still fits in, and which costs a keeper nothing it needs: a wake feed's
+// largest entry leaves over three kibibytes of the transport between its
+// frame and the ceiling (internal/changefeed's deadLetterDetailBytes).
+const LetterFraming = 256
+
+// LetterHeader reports why header cannot be kept beside a dead letter, or nil
+// when it can: one line of printable ASCII — every byte from the space to the
+// tilde — that neither begins nor ends with a space. An empty header is no
+// header at all, and is kept as one.
+//
+// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS, and the transport's: NATS
+// carries a header's value as one line of ASCII (its ADR-4), and the pinned
+// client writes what is not into something else — a carriage return or a line
+// feed as a space, a space at either end trimmed off (nats.go v1.55.0,
+// nats.go:1025-1037, `writeHeaderValue`). A header kept that way would be
+// listed as bytes other than the ones handed over, so a backend refuses it
+// before anything is kept, as the caller's mistake, and the twin refuses
+// exactly the same headers.
+func LetterHeader(header []byte) error {
+	if len(header) == 0 {
+		return nil
+	}
+	for i, b := range header {
+		if b < ' ' || b > '~' {
+			return fmt.Errorf("queue: a dead letter's header holds the byte %#02x at %d, "+
+				"and a header is one line of printable ASCII", b, i)
+		}
+	}
+	if header[0] == ' ' || header[len(header)-1] == ' ' {
+		return errors.New("queue: a dead letter's header begins or ends with a space, " +
+			"which the transport trims")
+	}
+	return nil
 }
 
 // Publisher is the write half of the queue.
@@ -835,6 +962,87 @@ type EventQueue interface {
 	// and no more, exactly as for Serve.
 	Listen(ctx context.Context, pattern string, h ListenFunc) (Unsubscribe, error)
 
+	// KeepDeadLetter keeps body on subject under header, which must be a
+	// literal subject in the dead-letter namespace (topics.DeadLetter names
+	// one; any other is refused, unmarked, as the caller's mistake), until
+	// the backend's dead-letter retention lets it go ([Kept.Expires]) or
+	// DropDeadLetter removes it.
+	//
+	// FOR A READER THAT SETTLES ITS OWN DELIVERIES, never for a subscription
+	// of this contract: a subscription is dead-lettered by its backend, whose
+	// delivery budget decides it. A wake feed reads a state log's own durable
+	// consumer and decides for itself when a record has circled long enough
+	// (internal/changefeed), so what it gives up on is kept here — in the
+	// same place, under the same retention, as every other dead letter, and
+	// listed by the same verb.
+	//
+	// THE HEADER AND THE BODY ARE KEPT APART: the header is what every
+	// listing answers ([Kept.Header]) and the body what only
+	// DeadLetterFrame reads, so a keeper puts in the header what a reader
+	// decides by — a line of printable ASCII ([LetterHeader]; any other is
+	// refused, unmarked) — and in the body the bytes only a reader acting
+	// on one entry needs. Both are the caller's bytes, verbatim, never an
+	// event: no publish listener hears them and no event-store row is
+	// written for them. RETURNING MEANS IT IS DURABLE, as for Publish, and
+	// a header and body the transport cannot carry together
+	// ([LetterFraming]) are refused with ErrTooLarge, which no retry
+	// changes.
+	KeepDeadLetter(ctx context.Context, subject string, header, body []byte) error
+
+	// DeadLettersOn lists every entry subject holds, oldest first —
+	// whoever kept it, a subscription's backend or a KeepDeadLetter — each
+	// with the sequence DropDeadLetter names it by, when it was kept, when
+	// the backend lets it go and the header it was kept under: NEVER ITS
+	// BODY, which moves for no listing, however large. An empty answer
+	// with no error is a subject that holds none.
+	//
+	// A COPY'S ANSWER, which may be BEHIND the broker's own: a broker that
+	// keeps several copies of the dead letters may list them from any one,
+	// so a listing can miss an entry kept a moment ago or still show one
+	// dropped a moment ago — though it never hides an entry the copy it
+	// read holds. A reader that has to know its listing is current holds it
+	// to DeadLetterMarks, which is the broker's own: a listing whose count
+	// of a subject is the marks' count is the subject as the broker holds it.
+	DeadLettersOn(ctx context.Context, subject string) ([]Kept, error)
+
+	// DeadLetterFrame is the body the entry seq of subject was kept with,
+	// exactly as it was handed to KeepDeadLetter — for a wake feed's entry,
+	// the record's sealed frame — and whether subject holds the entry at
+	// all.
+	//
+	// THE ONE VERB THAT MOVES A BODY, for the one reader that needs it: the
+	// reader acting on that entry, as a feed's replay reopens one record.
+	// It reads what the broker holds now, never a copy behind it.
+	//
+	// AN ENTRY ALREADY GONE is answered as not held, with no error —
+	// dropped by a peer, or let go by the retention since it was listed.
+	// A seq holding an entry on ANOTHER subject is refused, unmarked, and
+	// answers nothing of it, as DropDeadLetter refuses it; so is a seq of
+	// zero.
+	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
+
+	// DeadLetterMarks counts what every dead-letter subject under under
+	// holds — under is a literal subject in the dead-letter namespace, and
+	// the subtree every subject `under.…` — and answers beside the counts
+	// the last sequence the backend gave any dead letter ([Marks]).
+	//
+	// THE BROKER'S OWN ANSWER, READ-YOUR-OWN-WRITE on every client: an entry
+	// whose KeepDeadLetter returned is counted and has moved Last, and one
+	// whose DropDeadLetter returned is not counted. It costs one request
+	// however many entries the subtree holds, so a reader that keeps a
+	// listing asks it on every beat and lists again only when it moved.
+	DeadLetterMarks(ctx context.Context, under string) (Marks, error)
+
+	// DropDeadLetter removes the entry seq from subject.
+	//
+	// AN ENTRY ALREADY GONE IS NO ERROR — dropped by a peer, or let go by
+	// the retention — because what the caller asks is that it be gone: two
+	// nodes that both finished with one entry both succeed. A seq holding an
+	// entry on ANOTHER subject is refused, unmarked, and removes nothing, so
+	// a caller that names the wrong subject cannot drop somebody else's; so
+	// is a seq of zero, which names no entry on any backend.
+	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
+
 	// Start connects the backend and begins consuming.
 	//
 	// WHETHER A BACKEND REQUIRES IT IS ITS OWN ANSWER, and both shipped
@@ -844,14 +1052,15 @@ type EventQueue interface {
 	// client live.
 	//
 	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all sixteen of the publish, subscription, attachment and
-	// ephemeral verbs must give the same answer: Publish, Subscribe,
-	// SubscribeBatch, Quiesce, Unquiesce, Detach, EnsureSubscription,
-	// DeleteSubscription, ListSubscriptions, SubscribeStream, PauseTopic,
-	// ResumeTopic, Serve, Ask, Broadcast and Listen. Either they all
-	// refuse, or none of them require it. Capabilities.RequiresStart says
-	// which, and queuetest sends all sixteen to hold a backend to one
-	// answer.
+	// Start, all twenty-one of the publish, subscription, attachment,
+	// ephemeral and dead-letter verbs must give the same answer: Publish,
+	// Subscribe, SubscribeBatch, Quiesce, Unquiesce, Detach,
+	// EnsureSubscription, DeleteSubscription, ListSubscriptions,
+	// SubscribeStream, PauseTopic, ResumeTopic, Serve, Ask, Broadcast,
+	// Listen, KeepDeadLetter, DeadLettersOn, DeadLetterFrame,
+	// DeadLetterMarks and DropDeadLetter. Either they all refuse, or none
+	// of them require it. Capabilities.RequiresStart says which, and
+	// queuetest sends all twenty-one to hold a backend to one answer.
 	//
 	// A caller cannot reason about a lifecycle whose rules change per
 	// method, and this is not hypothetical: a twin that refused Publish
@@ -907,7 +1116,7 @@ type EventQueue interface {
 
 	// Stop closes the connection.
 	//
-	// AFTERWARDS EVERY ONE OF THE SIXTEEN VERBS REFUSES. A requirement
+	// AFTERWARDS EVERY ONE OF THE TWENTY-ONE VERBS REFUSES. A requirement
 	// rather than a capability, and the asymmetry with the pre-Start rule
 	// is the point: "not connected yet" is a state a backend may
 	// legitimately not have — JetStream's Open connects, so there is

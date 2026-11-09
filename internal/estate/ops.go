@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
@@ -58,6 +59,8 @@ type TrackerReader interface {
 		worklet.ActivityAnswer, error)
 	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 		loc *time.Location) (worklet.MyWork, error)
+	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
+		worklet.ReadyWork, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -129,6 +132,8 @@ type TrackerWriter interface {
 	WritePins(ctx context.Context, opID, handle string, gesture worklet.PinGesture,
 		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
+		notify *worklet.Notify) (worklet.WriteResult, error)
+	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
 		notify *worklet.Notify) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error)
@@ -244,7 +249,7 @@ type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
-	SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error)
+	Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error)
 	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
 }
 
@@ -417,6 +422,10 @@ type Backend struct {
 	// ([ExecutorHalf]).
 	Executor ExecutorHalf
 
+	// Access is the access log, which every data node runs from boot, on the
+	// executor log's terms ([AccessHalf]).
+	Access AccessHalf
+
 	// Reached waits until this node's applier of the floor's log has reached
 	// a position — the floor every request carries, the node's own included:
 	// every record through it that writes a row committed, and every barrier
@@ -565,16 +574,17 @@ const SeatCopy = ""
 // declaration. An operation's floor is on its OWN domain's log and no other:
 // see [ready].
 //
-// THE NINE DOMAINS AN OPERATION READS OR WRITES, and not the other two the
+// THE TEN DOMAINS AN OPERATION READS OR WRITES, and not the other two the
 // estate carries: the vectors are written by a fleet duty, never through an
 // operation, and no operation reads their rows at a position — the searches
 // that rank by them read them as an index, which carries no floor at all — and
 // the Dashboard Assistant's conversations are read and written only where the
 // API runs, on a data node, from that node's own copy, so no request carries
-// them across the router. The executor log is among the nine though no
-// surface writes it: the engine records a seat's executor session wherever
-// the seat's box ran, a node without `data` included, and only a data node
-// publishes ([originEngine], executor.go).
+// them across the router. The executor and access logs are among the ten
+// though no surface writes either: the engine records a seat's executor
+// session and what it told the seat wherever the seat runs, a node without
+// `data` included, and only a data node publishes ([originEngine],
+// executor.go, access.go).
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
@@ -585,6 +595,7 @@ var (
 	artifactDataDomain = artifactdata.Domain{}.Name()
 	chatDomain         = chatlet.Domain{}.Name()
 	executorDomain     = executordomain.Domain{}.Name()
+	accessDomain       = accessdomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -596,6 +607,7 @@ var (
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 		chatDomain:         chatlet.Domain{}.Stream().Name,
 		executorDomain:     executordomain.Domain{}.Stream().Name,
+		accessDomain:       accessdomain.Domain{}.Stream().Name,
 	}
 )
 
@@ -776,6 +788,19 @@ var opMyWork = define("tracker.my_work", opRead, trackerDomain, false,
 			return worklet.MyWork{}, err
 		}
 		return b.Tracker.MyWork(ctx, a.Query, a.Now, loc)
+	})
+
+type readyWorkArgs struct {
+	Query worklet.ReadyWorkQuery
+	Now   time.Time
+}
+
+var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a readyWorkArgs) (worklet.ReadyWork, error) {
+		if b.Tracker == nil {
+			return worklet.ReadyWork{}, errNoHalf
+		}
+		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,
@@ -1426,6 +1451,25 @@ var opEditTaskComment = define("tracker.edit_comment", opIdempotentWrite, tracke
 		return w.EditComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Body, a.Notify)
 	})
 
+type resolveCommentOnTaskArgs struct {
+	OpID      string
+	TaskID    string
+	Project   string
+	CommentID string
+	Notify    *worklet.Notify
+}
+
+// RESOLVING ONE'S OWN REMARK, a question its asker withdraws: the author is
+// decided against the SIGNED actor ([worklet.ErrNotAuthor]), as an edit's is.
+var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a resolveCommentOnTaskArgs) (worklet.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return worklet.WriteResult{}, err
+		}
+		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Notify)
+	})
+
 type removeTaskArgs struct {
 	OpID    string
 	ID      string
@@ -1998,7 +2042,9 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 // presented — and a verifier on the broker is a value the asker has no use for
 // and an observer would. So the serving node narrows the row before it answers,
 // and this type is what makes that narrowing a property of the wire rather than
-// of every caller's restraint.
+// of every caller's restraint. The one question whose answer carries grants is
+// a seat's requester ([opRequester]): the asking node decides a turn's ceiling
+// on them, so they are what it asks for — and still never a verifier.
 type Binding struct {
 	ID    string
 	Kind  iam.Kind
@@ -2059,31 +2105,39 @@ type seatArgs struct {
 	Seat string
 }
 
-// heldSeat is who holds one seat, and whether anybody does: the directory's
-// three-valued answer with its error crossing apart, as every error does.
-type heldSeat struct {
-	Holder iamdomain.SeatHolder
-	Held   bool
+// heldRequester is who holds one seat, with the holder's grants, and whether
+// anybody does: the directory's three-valued answer with its error crossing
+// apart, as every error does.
+type heldRequester struct {
+	Requester iamdomain.Requester
+	Held      bool
 }
 
-// WHO HOLDS ONE HUMAN SEAT — [opSeatHolders]' answer for that seat alone, by
-// the same rule, read as two seeks on the serving node
-// ([iamdomain.Reader.SeatHolder]). It is what a seat's turn composes the
-// person it acts for from on every call of a tool that reads or writes for
-// somebody, so it must cost the same however many people the company has hired
-// or removed, where the whole set grows with both. An error is UNKNOWN and
-// crosses as one, never "nobody holds it", which a turn would read as a seat
-// the chart alone speaks for.
-var opSeatHolder = define("identity.seat_holder", opRead, identityDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldSeat, error) {
+// WHO HOLDS ONE HUMAN SEAT, AND WITH WHAT GRANTS — [opSeatHolders]' answer for
+// that seat alone, by the same rule, with the holder's grants beside it, read
+// as two seeks and one document's decode on the serving node
+// ([iamdomain.Reader.Requester]). It is what a seat's turn composes the person
+// it acts for from, at most once per call of a tool that decides an app or a
+// relation for somebody (the requester ceiling), so it must cost the same
+// however many people the company has hired or removed, where the whole set
+// grows with both. An error is UNKNOWN and crosses as one, never "nobody holds
+// it", which a turn would read as a seat the chart alone speaks for.
+//
+// A NEW NAME, NEVER A RESHAPED ANSWER: the seat's holder alone was asked as
+// identity.seat_holder, and this answers more. A node that does not know this
+// name leaves it unserved and the asker moves on to one that does — an answer
+// with no grants is never decoded as a person who holds none, nor as one who
+// holds every app — and a later change to what it means takes another name.
+var opRequester = define("identity.requester", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldRequester, error) {
 		if b.Identity == nil {
-			return heldSeat{}, errNoHalf
+			return heldRequester{}, errNoHalf
 		}
-		holder, held, err := b.Identity.SeatHolder(ctx, a.Seat)
+		requester, held, err := b.Identity.Requester(ctx, a.Seat)
 		if err != nil {
-			return heldSeat{}, err
+			return heldRequester{}, err
 		}
-		return heldSeat{Holder: holder, Held: held}, nil
+		return heldRequester{Requester: requester, Held: held}, nil
 	})
 
 // WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot —

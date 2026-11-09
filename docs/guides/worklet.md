@@ -1622,10 +1622,11 @@ drawn for everybody and held with that reason for anybody without it.
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/worklet/history`) is the change log over a window you choose,
-  narrowed from one bar: the window, then **Kind** and **By** pickers whose
-  options are what the pages loaded hold, with how many of each
-  (said once: the counts are over the changes loaded) — and it says "Showing
-  the latest N" beside **Load older**. Every row is a change: re-applying an
+  narrowed from one bar, the work list's row: the window, then **Kind** and
+  **By**, quiet pickers with their captions inside ("Kind Any kind"), whose
+  options are what the pages loaded hold, with how many of each, and at the
+  far end what is loaded: "Counts are over the changes loaded · Showing the
+  latest N", then **Load older**. Every row is a change: re-applying an
   activation that already landed writes nothing, and a new activation that
   leaves a project's name, purpose and unit as they were is one quiet "org
   chart re-applied" row per project, naming the activation it moved to.
@@ -2113,6 +2114,20 @@ a seat — and lets through the same one reason, read off the copy each person
 was sent rather than off the kind of change, since every copy of one status
 change is the same kind.
 
+**A pipeline's token bounds what agents do for its work.** A task a CI token or
+a service account files, assigns or comments on wakes its seats in turns worked
+for that credential: the agent uses only the apps the token holds, so a
+`[worklet]` token's task has the agent comment on it, update it and file
+follow-ups, and never read or write a page or an artifact for it. The apps the
+token held where it wrote ride with the task's record, and the node running the
+turn holds the agent to whichever of those and its own answer for the token is
+narrower — so give a pipeline's token the apps its agents should use for it,
+and declare it the same on every node
+([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+A token another node declares and this node does not, like a credential nobody
+can place, is worked for as a stranger.
+
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
 and every turn a seat takes on a task serves that task's
@@ -2181,21 +2196,27 @@ would answer `not_found`.
 Every seat a change names gets its notice, in the inbox it reads when it next
 opens the task, and counts as somebody who heard the change when the engine
 decides whether a lead must hear it instead. Whether the notice also starts a
-turn follows its reason and, for five reasons, whether the change asks
-something of the seat that holds it:
+turn follows its reason and, for six reasons, whether the change asks
+something of the seat that holds it
+([ADR-0113](../../adr/0113-an-agents-words-wake-only-the-seats-they-address.md)):
 
 | Reason | Starts a turn |
 |---|---|
-| `mention`, `prioritised`, `asked`, `answered`, `thread` | always: the change was put to this seat, or replies to something it wrote |
+| `mention`, `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
-| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment and a change to who watches the task |
-| `watcher` | for a person's comment only |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
+| `watcher` | for a person's comment that names nobody |
+| `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker (an agent or a person) whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |
 
-So **a person's comment wakes everyone on the task**: a person writing on a
-task speaks to whoever follows it, without naming anybody. **Another agent's
-comment wakes only the seats it names**: by @-mention, with `ask`, by replying
-in a thread they wrote in, or by answering their question. An agent that needs
+So **a person's comment that names nobody wakes everyone on the task**: a
+person writing on a task speaks to whoever follows it. **A comment that names
+somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
+seats it names, and everyone else on the task reads it in their inbox.
+**Another agent's comment wakes only the seats it names**: by @-mention, with
+`ask`, or by answering their question; a reply in a thread wakes only the
+seats with a stake there, the asker of an open ask and the seat that owes it,
+so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so
 in its description and warns when a comment reaches the assignee's inbox and
 no further. A **reporter** hears of its task finishing or reopening, being

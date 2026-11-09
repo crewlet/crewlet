@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 }
 
 // fixture is one solo fleet holding codetest.RepoName, a person pushing to it
-// from a work tree, and what a case's own compactor is built over: the git
+// from a work tree, and what a case's own compactor is built over: the Gitlet
 // node's cache and the fleet's object store, the data node's reads and its
 // committer.
 type fixture struct {
@@ -115,7 +115,7 @@ func (x *fixture) pushN(n int, sizes ...int) {
 	}
 }
 
-// node is the fleet's one git node.
+// node is the fleet's one Gitlet node.
 func (x *fixture) node() codetest.Node { return x.fleet.Nodes()[0] }
 
 // rows are the repository's rows, read linearizable.
@@ -161,7 +161,7 @@ func (s served) Expunge(ctx context.Context, p code.ExpungeProposal) (code.Expun
 // maintainers answers every question of which repositories this node
 // maintains with maintains for every one asked, or err, and records the
 // charges it was asked by, in the order of the ids they were asked for; and
-// this node is listed among the git nodes, whatever it answers.
+// this node is listed among the Gitlet nodes, whatever it answers.
 type maintainers struct {
 	maintains bool
 	err       error
@@ -222,7 +222,7 @@ func (m *askedMaintainers) setMaintains(maintains bool) {
 	m.maintains = maintains
 }
 
-// compactorOf builds a compactor over x's git node's cache and the fleet's
+// compactorOf builds a compactor over x's Gitlet node's cache and the fleet's
 // store, listing and proposing through the data node, the maintainer of every
 // repository — each of which edit may replace before New.
 func (x *fixture) compactorOf(edit func(*compact.Options)) (*compact.Compactor, *metrics.Recorder, *logs) {
@@ -351,6 +351,9 @@ type counted struct {
 	admit func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	// publish, where set, answers every publication's admission.
 	publish func(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission, error)
+	// expunge, where set, answers every admission of an expunge's builds —
+	// its kept and dropping packs', and its rescue's.
+	expunge func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	// superseded, where set, answers every read of the live packs as the cache
 	// answers one of a copy a swap replaced after the sync pinned it.
 	superseded bool
@@ -398,6 +401,16 @@ func (c *counted) AdmitPublication(s cache.Synced, base int, layerObjects, repac
 	return c.Cache.AdmitPublication(s, base, layerObjects, repackObjects, limits)
 }
 
+func (c *counted) AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error) {
+	c.mu.Lock()
+	expunge := c.expunge
+	c.mu.Unlock()
+	if expunge != nil {
+		return expunge(s, objects, limits)
+	}
+	return c.Cache.AdmitExpunge(s, objects, limits)
+}
+
 // answerAdmissions has every later compaction's admission answered by admit;
 // nil asks the cache.
 func (c *counted) answerAdmissions(admit func(cache.Synced, int64, code.Limits) (*cache.Admission, error)) {
@@ -413,6 +426,14 @@ func (c *counted) answerPublications(publish func(cache.Synced, int64, int64, co
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.publish = publish
+}
+
+// answerExpunges has every later admission of an expunge's builds answered by
+// expunge; nil asks the cache.
+func (c *counted) answerExpunges(expunge func(cache.Synced, int64, code.Limits) (*cache.Admission, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expunge = expunge
 }
 
 // counts is the syncs and plans so far.

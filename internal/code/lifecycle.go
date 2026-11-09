@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1260,18 +1261,59 @@ func (s *Store) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleR
 			ErrNotServing)
 	}
 	policy := s.policy()
+	noGitlet, err := s.mirrorPerson(ctx, req, rules.Roster)
+	if err != nil {
+		return LifecycleResult{}, err
+	}
 	switch req.Kind {
 	case LifecycleCreate:
-		return s.lifecycleCreate(ctx, req, rules.Roster, policy)
+		return s.lifecycleCreate(ctx, req, rules.Roster, policy, noGitlet)
 	case LifecycleRename:
 		return s.lifecycleRename(ctx, req, rules.Roster)
 	}
-	return s.lifecycleRepo(ctx, req, rules.Roster, policy)
+	return s.lifecycleRepo(ctx, req, rules.Roster, policy, noGitlet)
 }
 
-// lifecycleCreate decides a tool's create, on the NAME's subject.
+// mirrorPerson is whether the person a push mirror req sets would push as
+// uses no Gitlet — read from the identity directory BEFORE the decide, which
+// reads nothing but its snapshot ([MirrorSeatRefusal], ADR-0110) — for a
+// create or a settings change that sets a push mirror as a HUMAN seat of the
+// chart, and false for every other request: a mirror's seat this request does
+// not choose is judged by the chart alone here, since an owner or a
+// visibility changed under it moves no person's app, and the push holds the
+// seat to the directory again before every push. A directory that cannot
+// answer is [ErrNotServing], so the router asks the next data node rather
+// than refuse somebody who may well use the app.
+func (s *Store) mirrorPerson(ctx context.Context, req LifecycleRequest, roster Roster) (bool, error) {
+	var as string
+	switch {
+	case req.Kind == LifecycleCreate && req.Create != nil && req.Create.MirrorTo != nil:
+		as = req.Create.MirrorTo.As
+	case req.Kind == LifecycleSettings && req.Change != nil && req.Change.MirrorTo != nil:
+		as = req.Change.MirrorTo.As
+	}
+	if as == "" {
+		return false, nil
+	}
+	if seat, ok := roster.Seat(as); !ok || !seat.Human {
+		return false, nil
+	}
+	if s.people == nil {
+		return false, fmt.Errorf("%w: this node's code store reads no identity directory, which a push mirror "+
+			"pushing as a person's seat is judged by", ErrNotServing)
+	}
+	p, err := s.people.Requester(ctx, as)
+	if err != nil {
+		return false, fmt.Errorf("%w: the identity directory could not say whether the person holding %q uses "+
+			"Gitlet, which a push mirror pushing as their seat is judged by: %w", ErrNotServing, as, err)
+	}
+	return !p.Can(iam.GrantGitlet), nil
+}
+
+// lifecycleCreate decides a tool's create, on the NAME's subject; noGitlet is
+// [Store.mirrorPerson]'s answer for the push mirror it sets.
 func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roster Roster,
-	policy LifecyclePolicy) (LifecycleResult, error) {
+	policy LifecyclePolicy, noGitlet bool) (LifecycleResult, error) {
 
 	id, _ := RepoIDOf(req.OpID)
 	token := NameToken(req.Name)
@@ -1330,7 +1372,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				return statelog.Decision{}, nil
 			}
 			if m := settings.MirrorTo; m != nil {
-				if why := MirrorSeatRefusal(m.As, made, roster); why != "" {
+				if why := MirrorSeatRefusal(m.As, made, roster, noGitlet); why != "" {
 					d.refuse(LifecycleNotPermitted, "%s", why)
 					return statelog.Decision{}, nil
 				}
@@ -1493,7 +1535,7 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 // settings change, an archive or unarchive, a delete, a restore, a protection
 // and a hold, under the epoch's lifecycle policy.
 func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster Roster,
-	policy LifecyclePolicy) (LifecycleResult, error) {
+	policy LifecyclePolicy, noGitlet bool) (LifecycleResult, error) {
 
 	subject := RepoSubject(req.RepoID)
 	scope := []string{RepoPath(req.RepoID)}
@@ -1543,7 +1585,7 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 			if req.Kind == LifecycleHold {
 				payload, op, err = decideHold(ctx, tx, req, v.ref, roster, &d)
 			} else {
-				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, remotes, roster, policy, &d)
+				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, remotes, roster, policy, noGitlet, &d)
 			}
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
@@ -1568,7 +1610,8 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 // or nil where the request is refused (d says why) or writes nothing. An error
 // is the request's own fault.
 func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection, owners []PathOwner,
-	remotes repoRemotes, roster Roster, policy LifecyclePolicy, d *lifecycleDecision) (any, OpKind, error) {
+	remotes repoRemotes, roster Roster, policy LifecyclePolicy, noGitlet bool,
+	d *lifecycleDecision) (any, OpKind, error) {
 
 	// A DELETED REPOSITORY IS A DELETE'S AND A RESTORE'S TO ANSWER: the one
 	// answers it from the row, the other brings it back. Every other kind is
@@ -1620,7 +1663,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		if c.Search != nil {
 			// A SCRATCH REPOSITORY IS SEARCHED WITH GREP, whoever asks — a
 			// person included: an index of a seat's experiment would be built
-			// and kept on every git node holding one for a repository that is
+			// and kept on every Gitlet node holding one for a repository that is
 			// deleted once idle. Refused here, naming why, before the
 			// settings' own validation would refuse the record as invalid.
 			if v.Kind == RepoScratch && *c.Search == SearchIndexed {
@@ -1690,7 +1733,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 	// seat may not read.
 	if c := req.Change; req.Kind == LifecycleSettings && next.MirrorTo != nil &&
 		(c.MirrorTo != nil || c.Owner != nil || c.Visibility != nil) {
-		if why := MirrorSeatRefusal(next.MirrorTo.As, nextRef, roster); why != "" {
+		if why := MirrorSeatRefusal(next.MirrorTo.As, nextRef, roster, noGitlet && c.MirrorTo != nil); why != "" {
 			d.refuse(LifecycleNotPermitted, "%s", why)
 			return nil, "", nil
 		}

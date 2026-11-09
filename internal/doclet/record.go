@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -30,7 +31,8 @@ import (
 //
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
-const RecordVersion = 1
+//   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -55,7 +57,9 @@ const baseRecordVersion = 1
 // framework's ([statelog.VersionedField]). A field no tag has shipped is still
 // a field two builds of one rolling upgrade disagree about, so "nothing has
 // been released" does not exempt a new field from its row.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -243,6 +247,16 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 	TurnID     string     `json:"turn_id,omitempty"`
 	Chain      []string   `json:"chain,omitempty"`
+
+	// ActorApps are the apps the credential behind an [AuthorOperator]
+	// record that wakes somebody used when the node that took the write
+	// resolved it (iam.ActorApps), and absent on every other record — one
+	// that wakes nobody included, a gate among them. NOT APPLIED to any
+	// row: the change feed reads it, and a turn the record wakes uses no app
+	// outside it (ADR-0109, notify.FirstPartyWriter). Version 2: an older
+	// build retains a record carrying it rather than waking a seat for a
+	// credential it would read as a stranger.
+	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.

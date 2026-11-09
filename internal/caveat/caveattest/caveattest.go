@@ -114,9 +114,9 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// branch a merge or an entry targets and the state it reached, the commit
 	// a check ran on and the branch it was checked for, the change a revert
 	// reverts and the class a change it could not open was refused under, and
-	// a purge's request by its id with the git nodes that serve and hold it.
+	// a purge's request by its id with the Gitlet nodes that serve and hold it.
 	"entry_id", "target", "state", "sha", "checked_for", "reverts", "change_refusal",
-	"request", "maintainer", "git_nodes"}
+	"request", "maintainer", "gitlet_nodes"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

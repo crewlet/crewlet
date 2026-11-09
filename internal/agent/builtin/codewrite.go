@@ -26,7 +26,7 @@ import (
 // company's own repositories, made through a tool rather than a clone — five
 // that change a branch (code_commit_files, code_revert, code_cherry_pick,
 // code_create_branch, code_delete_branch), each an ENGINE WRITE Gitlet
-// builds on the repository's git node and lands as one push (ADR-0092), and
+// builds on the repository's Gitlet node and lands as one push (ADR-0092), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
 // LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
@@ -39,7 +39,7 @@ import (
 // The gate admits every principal (`authz.ClassEverybody`), as it admits a
 // push at the git transport: whether a caller may move a branch or change a
 // repository is its GRANT on that repository (ADR-0088), which the node that
-// decides judges from its own chart — the git node and the repository's
+// decides judges from its own chart — the Gitlet node and the repository's
 // committer for an engine write, the data node for a lifecycle request — and
 // which no row keyed on the verb can answer before the repository is read. A
 // person writes as the human seat they hold, through their own credential; a
@@ -200,7 +200,7 @@ var belowWriteNeeds = map[string]code.Access{
 
 // CodeWriter is Gitlet's writes as these tools ask them —
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
-// the repository's home git node, a lifecycle request asked of a data node,
+// the repository's home Gitlet node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
 // committer, its conversation of the change writer beside it — and a person's
 // marks over their own code notices, asked of any data node — and a write of
@@ -252,19 +252,23 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // authority row is decided for the requester first ([authz.DecideWithin],
 // over no object, since the repository is not read yet): a requester this
 // node cannot compose or decide is answered unavailable, never as a turn
-// nobody woke; one the row refuses — a stranger, a person who may not act in
-// the company now — becomes a ceiling of NOBODY rather than a refusal here,
-// because the seat's own work stays steerable by whoever woke it, and only
-// the node that decides the write reads whether that is what it is; a
-// colleague SEAT rides on the write as its ceiling, and on every read the call
-// makes too ([codeCaller.ceiling]), so nothing a write tool reads is shown for
-// a colleague who could not read it; and a PERSON bounds nothing, since a
-// person maintains every repository (ADR-0085).
+// nobody woke; one the row refuses is refused — though the gate every
+// builtin passes has refused them already, since every code verb names the
+// gitlet app, which a stranger, a person who may not act in the company now
+// and a person not given it do not use (ADR-0109, ADR-0110), and the app
+// holds before the seat's own work is steered; a colleague SEAT rides on the
+// write as its ceiling, and on every read the call makes too
+// ([codeCaller.ceiling]), so nothing a write tool reads is shown for a
+// colleague who could not read it; a CREDENTIAL acting as no seat that holds
+// the app rides as a ceiling of NOBODY, since it pushes to no repository
+// itself, so only the seat's own work is steered for it; and a PERSON holding
+// the app bounds nothing, since a person maintains every repository
+// (ADR-0085).
 //
 // JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
 // request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a
 // change's [code.ChangeProposal.Ceiling] and [code.ConversationWrite.Ceiling])
-// to the git node and the data node that judge the seat's own grant, from the
+// to the Gitlet node and the data node that judge the seat's own grant, from the
 // same chart and row (code.WriteCeiling), so an activation that takes a
 // colleague out of the owning unit stops the next write made for it. A
 // change's write holds a colleague at the access [changeToolNeeds] names for
@@ -302,14 +306,19 @@ func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool stri
 			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may "+
 				"change the company's code. Nothing was written. Try again shortly.", tool))
 		return codeCaller{}, &r
-	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
-		c.write = &code.WriteCeiling{Kind: code.WriteCeilingNobody}
 	case !dec.Allowed:
 		r := authorityRefusal(tool, DecisionError(action, dec))
 		return codeCaller{}, &r
 	case ceiling.Kind == authz.CeilingRequester && ceiling.Principal.Kind == iam.KindSeat:
 		c.ceiling = ceiling.Principal.Seat
 		c.write = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: ceiling.Principal.Seat}
+	case ceiling.Kind == authz.CeilingRequester && ceiling.Principal.Kind == iam.KindMachine:
+		// A CREDENTIAL ACTING AS NO SEAT changes nothing of the company's
+		// code itself — it holds no seat a write is judged as, and its grant
+		// is read (code.GrantOf) — so a write made for it is held to the
+		// seat's own work, as a stranger's is (ADR-0109). Its reads are
+		// bounded by nothing: it reads every repository itself.
+		c.write = &code.WriteCeiling{Kind: code.WriteCeilingNobody}
 	}
 	return c, nil
 }
@@ -337,9 +346,9 @@ func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) code.Principa
 // turn's own read of it (the resolution's position), and where every ref the
 // turn has resolved on it last moved ([refsRead]) — this call's own revisions
 // among them, resolved before the floor is read, as [CodeDeps.gitFresh] floors
-// a read at them — so the git node's copy holds what the turn has seen: the
+// a read at them — so the Gitlet node's copy holds what the turn has seen: the
 // head it writes onto, read by code_resolve after the head moved, and every
-// commit it names by a ref. Floored short of them, the git node answers a
+// commit it names by a ref. Floored short of them, the Gitlet node answers a
 // session sync from a copy that lacks them, finds the head stale or the commit
 // absent, and pays the write's re-judgement at the log's head — a barrier and
 // a second sync, and before it, for a stale head, a data node's read of the
@@ -528,7 +537,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return t.answer(ctx, turn, c, repo, w, res)
 }
 
-// revArgs are a write's revision arguments the git node takes by whole id: a
+// revArgs are a write's revision arguments the Gitlet node takes by whole id: a
 // commit_files create's base, a revert's or a cherry-pick's commit, and a
 // create_branch's target — each resolved where it names a ref.
 type revArgs struct{ base, commit string }
@@ -654,7 +663,7 @@ type codeBranchAnswer struct {
 	Detail        string           `json:"detail,omitempty"`
 	Conflicts     []code.Conflict  `json:"conflicts,omitempty"`
 	// ConflictsOmitted counts the conflicted paths this answer leaves out:
-	// those past the git node's page and those past one tool answer.
+	// those past the Gitlet node's page and those past one tool answer.
 	ConflictsOmitted int    `json:"conflicts_omitted,omitempty"`
 	OpID             string `json:"op_id,omitempty"`
 }

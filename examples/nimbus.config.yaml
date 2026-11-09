@@ -113,9 +113,9 @@ store:
   path: "./nimbus-data/nimbus.db"
   # Turso is the database and the only one, so there is no driver to pick.
 
-# Gitlet's disposable copies of the company's repositories (code.native in
+# Gitlet's disposable copies of the company's repositories (code.backend: gitlet in
 # nimbus.company.yaml). Relative to the store's directory; in production, a volume of its own.
-git:
+gitlet:
   cache_dir: git
 
 # ── Seat ownership ────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ coordination:
 # member a distinct, stable one.
 node:
   id: "${CREWLET_NODE_ID}"
-  # roles: [data, git, ingress, seats, workers]   # omit for all five; a node
+  # roles: [data, gitlet, ingress, seats, workers]   # omit for all five; a node
                                        #   without data keeps nothing durable
                                        #   and needs store.scratch plus
                                        #   stream.leaf.urls — see
@@ -270,11 +270,12 @@ api:
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         # What this credential may do: `admin`, `worklet`, `doclet`,
-        # `artifacts`, `chatlet`.
+        # `artifacts`, `chatlet`, `gitlet`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only
-        # files work would be `[worklet]`.
+        # files work would be `[worklet]`, and a CI runner that only
+        # fetches the company's code `[gitlet]`.
         grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────

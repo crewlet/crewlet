@@ -328,7 +328,7 @@ func (d ArtifactDeps) decideFiling(ctx context.Context, c artifactCaller, tool s
 	r := authorityRefusal(tool, DecisionError(authz.ActionArtifactFolderFile, dec))
 	switch dec.Reason {
 	case authz.ReasonCeiling:
-		r.Output = fmt.Sprintf("%s didn't run: the person this turn is working for may not "+
+		r.Output = fmt.Sprintf("%s didn't run: whoever this turn is working for may not "+
 			"file in %q themselves, so you may not file there for them. Leave it at the top "+
 			"level, or tell them who owns the folder (%s).", tool, p, f.Owner)
 	default:

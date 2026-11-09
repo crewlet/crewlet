@@ -984,7 +984,7 @@ describe("seat fields", () => {
   test("a human seat shows contact and availability, and no agent-only field", () => {
     const doc = fixtureCompany();
     // Hosting its own code, so an agent seat here would be offered a code access.
-    doc.code = { native: true };
+    doc.code = { backend: "gitlet" };
     doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
     edit(keyedState(doc), "seat:dev");
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
@@ -1233,7 +1233,7 @@ describe("integrations", () => {
   // naming a repository writes the block, and that does.
   test("a code access writes the seat's own code block, and only a repository enrols it in GitHub", () => {
     const doc = connected();
-    doc.code = { native: true };
+    doc.code = { backend: "gitlet" };
     const view = edit(keyedState(doc), "seat:sre");
     tab("Integrations");
     choose("Code access", "Review");
@@ -1255,7 +1255,7 @@ describe("integrations", () => {
   // grant by its tier, so the field is there with GitHub not connected.
   test("a company hosting its own code offers a seat's code access without GitHub", () => {
     const doc = fixtureCompany();
-    doc.code = { native: true };
+    doc.code = { backend: "gitlet" };
     const view = edit(keyedState(doc), "seat:dev");
     tab("Integrations");
     expect(screen.getByText("GitHub, Slack and Mattermost: not in use.")).toBeDefined();

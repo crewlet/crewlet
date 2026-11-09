@@ -13,7 +13,7 @@ import (
 // is about (attrs: the revision and the epoch it was applied at).
 //
 // PER NODE, because one of the two documents is this node's own: the same
-// company is a warning on a git node and none on a node that serves no git —
+// company is a warning on a Gitlet node and none on a node that serves no git —
 // and the cache budget compared is the one THIS node derived from its volume,
 // which neither document holds.
 //
@@ -42,7 +42,7 @@ func warnTiers(ctx context.Context, logger *slog.Logger, boot *config.Bootstrap,
 // Gitlet, zero where it did not — read at each apply, after the runtime
 // it may have just built is published.
 func (e *Engine) codeCacheBudget() config.CacheBudget {
-	if n := e.native.Load(); n != nil && n.codeHost != nil {
+	if n := e.native.Load(); n != nil && n.gitletHost != nil {
 		return n.gitCacheSize.cacheBudget()
 	}
 	return config.CacheBudget{}

@@ -19,19 +19,23 @@ import (
 // `code_pushes`, one repository's push history. Each is decided PER
 // REPOSITORY, by the grant the serving node derives from its chart
 // (code.GrantOf, ADR-0088) — a listing leaves out what the asker may not read,
-// and a read of one such repository is refused [NotPermitted] — so each is
-// registered [DecidedBy] the authority table's `code.read`, which admits
-// everybody the guard resolved and decides nothing a repository's grant does.
+// and a read of one such repository is refused [NotPermitted] — BEHIND THE
+// GITLET APP: each is registered [Requires] [iam.GrantGitlet], which the
+// registry asks of every caller before an answer runs, so a principal without
+// it is refused with the app's own refusal and no repository is read for them
+// (ADR-0110). Registered [DecidedBy] `code.read`, as they once were, they
+// claimed a decision no answer made: none of them asks the authority table,
+// so the row could name the app and gate neither REST nor the socket.
 //
 // AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
 // `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
-// `code_compare` and `code_commit`, decided per repository alike — the git
+// `code_compare` and `code_commit`, decided per repository alike — the Gitlet
 // node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
 // (codechecks.go): `code_queue`, `code_checks`, `code_check` and
 // `code_check_log`, decided per repository alike; AND A SEARCH OF ITS LINES
-// (codesearch.go): `code_search`, decided per repository alike by every git
+// (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
 // answers at the tip it names.
 //
@@ -62,7 +66,7 @@ import (
 // # Found per question
 //
 // The code reads come up with the native runtime, at boot or at the first
-// apply whose company sets code.native — after the API was assembled on a node
+// apply whose company sets code.backend: gitlet — after the API was assembled on a node
 // that booted with no company — so the source ([CodeSource]) is asked for them
 // on every question, and answers, where this node serves none now, WHY, in
 // this surface's own vocabulary: a company hosting no code is [NotFound]
@@ -77,7 +81,7 @@ import (
 //   - ReasonNotDeclared — nobody declared a repository of that name:
 //     declaring one in code.repos, and waiting for the activation, is what
 //     makes it;
-//   - ReasonNotHosted — the company hosts no code at all (code.native is not
+//   - ReasonNotHosted — the company hosts no code at all (code.backend is not gitlet
 //     set): declaring a repository changes nothing until it does.
 //
 // The git routes say the same in git's one text/plain line, where nothing
@@ -94,7 +98,7 @@ func RepoNotDeclared(name string) string {
 }
 
 // CodeReads is the code domain's read, wherever its rows are served, and a
-// read of a repository's content by object id, asked of its home git node;
+// read of a repository's content by object id, asked of its home Gitlet node;
 // estate.CodeSeam satisfies it.
 type CodeReads interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
@@ -103,7 +107,7 @@ type CodeReads interface {
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 	// MergePreview is what merging one commit into another would do, asked
-	// of the repository's home git node by the merge its mergeability is
+	// of the repository's home Gitlet node by the merge its mergeability is
 	// recorded by (code.merge_preview): a comparison's preview.
 	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
 	// FloorOf is this node's own floor on a repository — the furthest of
@@ -136,7 +140,7 @@ type CodeSource interface {
 	// name it.
 	CheckLogs() (CheckLogs, error)
 
-	// CodeSearcher is the code search over the fleet's git nodes
+	// CodeSearcher is the code search over the fleet's Gitlet nodes
 	// (codesearch.go), or why this node serves none, on CodeReads' terms
 	// and in the same vocabulary: a search reads what the code reads do.
 	CodeSearcher() (CodeSearcher, error)
@@ -182,8 +186,9 @@ func (s Sources) codeRead(kind code.ReadKind, what string) Answer {
 // ([builtin.CodeAskerOf], the one conversion) — the credential it came
 // through, and the human seat it holds, a person's own or the one the
 // identity directory binds a token to, or none. Every principal a person
-// presents reads every repository (ADR-0088), so the answer a person gets is
-// the whole listing; what the asker buys here is that the reader judges every
+// presents reads every repository once the registry has admitted it on the
+// gitlet app (ADR-0088, ADR-0110), so the answer a person gets is the whole
+// listing; what the asker buys here is that the reader judges every
 // read by who asked it, so a seat's read cannot be answered as a person's, nor
 // a person's question and their assistant's tool call as two people.
 func codeAsker(p iam.Principal) code.Principal {
@@ -331,7 +336,7 @@ func askedFor(p Params, key string) (bool, error) {
 // and so is a change it holds no such number of (`no_change`), an attempt of
 // a check it holds no row of (`no_check`), a ref no live
 // ref holds (`no_ref`) and an object or a path a revision does not hold
-// (`no_object`); no git node able to answer now is [ErrUnavailable];
+// (`no_object`); no Gitlet node able to answer now is [ErrUnavailable];
 // a repository the asker's grant does not cover is [NotPermitted] with the
 // reader's own sentence; a level, a cursor or a parameter the reader refuses
 // is [ErrBadParams] with the reader's own sentence; and everything else — a
@@ -363,7 +368,7 @@ func codeRefusal(repo string, err error) error {
 		errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrSliceTooLarge):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	case errors.As(err, new(*code.ErrGitUnready)), errors.Is(err, code.ErrNotServing):
-		// NO GIT NODE COULD ANSWER NOW — none holding the repository in
+		// NO GITLET NODE COULD ANSWER NOW — none holding the repository in
 		// time, every one behind its configuration or stopping — which is
 		// never an answer about the repository: a wait clears it.
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -455,28 +460,29 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 // doc, codechange.go's for a change's, codegit.go's for a repository's
 // content, codechecks.go's for its merge queues and its checks and
 // codesearch.go's for a search of its lines, for what each answers and why
-// each is decided by the verb it is.
+// each is asked under the posture it is.
 func registerCode(r *Registry, s Sources) {
-	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
-	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
-	r.Register("code_pushes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadPushes, "code_pushes"))
+	gitlet := Requires(iam.GrantGitlet)
+	r.Register("code_repos", gitlet, s.codeRead(code.ReadRepos, "code_repos"))
+	r.Register("code_repo", gitlet, s.codeRead(code.ReadRepo, "code_repo"))
+	r.Register("code_pushes", gitlet, s.codeRead(code.ReadPushes, "code_pushes"))
 	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
-	r.Register("code_changes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadChanges, "code_changes"))
-	r.Register("code_change", DecidedBy(authz.ActionCodeRead), s.codeChange)
-	r.Register("code_change_routing", DecidedBy(authz.ActionCodeRead),
+	r.Register("code_changes", gitlet, s.codeRead(code.ReadChanges, "code_changes"))
+	r.Register("code_change", gitlet, s.codeChange)
+	r.Register("code_change_routing", gitlet,
 		s.codeRead(code.ReadChangeRouting, "code_change_routing"))
-	r.Register("code_reviews", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadReviews, "code_reviews"))
-	r.Register("code_refs", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRefs, "code_refs"))
-	r.Register("code_tree", DecidedBy(authz.ActionCodeRead), s.codeTree)
-	r.Register("code_blob", DecidedBy(authz.ActionCodeRead), s.codeBlob)
-	r.Register("code_log", DecidedBy(authz.ActionCodeRead), s.codeLog)
-	r.Register("code_blame", DecidedBy(authz.ActionCodeRead), s.codeBlame)
-	r.Register("code_diff", DecidedBy(authz.ActionCodeRead), s.codeDiff)
-	r.Register("code_compare", DecidedBy(authz.ActionCodeRead), s.codeCompare)
-	r.Register("code_commit", DecidedBy(authz.ActionCodeRead), s.codeCommit)
-	r.Register("code_queue", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadQueue, "code_queue"))
-	r.Register("code_checks", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadChecks, "code_checks"))
-	r.Register("code_check", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadCheck, "code_check"))
-	r.Register("code_check_log", DecidedBy(authz.ActionCodeRead), s.codeCheckLog)
-	r.Register("code_search", DecidedBy(authz.ActionCodeRead), s.codeSearch)
+	r.Register("code_reviews", gitlet, s.codeRead(code.ReadReviews, "code_reviews"))
+	r.Register("code_refs", gitlet, s.codeRead(code.ReadRefs, "code_refs"))
+	r.Register("code_tree", gitlet, s.codeTree)
+	r.Register("code_blob", gitlet, s.codeBlob)
+	r.Register("code_log", gitlet, s.codeLog)
+	r.Register("code_blame", gitlet, s.codeBlame)
+	r.Register("code_diff", gitlet, s.codeDiff)
+	r.Register("code_compare", gitlet, s.codeCompare)
+	r.Register("code_commit", gitlet, s.codeCommit)
+	r.Register("code_queue", gitlet, s.codeRead(code.ReadQueue, "code_queue"))
+	r.Register("code_checks", gitlet, s.codeRead(code.ReadChecks, "code_checks"))
+	r.Register("code_check", gitlet, s.codeRead(code.ReadCheck, "code_check"))
+	r.Register("code_check_log", gitlet, s.codeCheckLog)
+	r.Register("code_search", gitlet, s.codeSearch)
 }

@@ -15,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -618,6 +620,66 @@ type DecisionItem struct {
 
 	Ask *worklet.AskRow `json:"ask,omitempty"`
 	Run map[string]any  `json:"run,omitempty"`
+
+	// AccessChanged is set on a question its agent asked before an access
+	// change it has not reviewed yet (ADR-0111).
+	AccessChanged *AccessChanged `json:"access_changed,omitempty"`
+}
+
+// AccessChanged notes a question asked before an access change its agent has
+// not reviewed yet; Lines go only to a caller who may read the setup.
+type AccessChanged struct {
+	Lines []string `json:"lines"`
+}
+
+// AccessReviews is each agent seat's access change waiting on its review
+// (ADR-0111), one read per seat.
+type AccessReviews interface {
+	PendingAccessReview(ctx context.Context, handle string) (accessreview.Pending, bool, error)
+}
+
+// accessChanges answers, per asking seat, whether a question it asked waits on
+// a review of its access, reading each seat's record once per answer.
+type accessChanges struct {
+	reviews AccessReviews
+	// detailed is whether the caller may read the company's setup.
+	detailed bool
+	read     map[string]*accessreview.Pending
+}
+
+// newAccessChanges is the per-answer reader for the caller in ctx.
+func newAccessChanges(ctx context.Context, reviews AccessReviews) *accessChanges {
+	principal, how := iam.From(ctx)
+	detailed := how == iam.Resolved && authz.Decide(ctx, principal, authz.ActionSetupRead,
+		authz.Object{}, authz.NoChart{}, authz.DecidedAt(ctx)).Allowed
+	return &accessChanges{reviews: reviews, detailed: detailed, read: map[string]*accessreview.Pending{}}
+}
+
+// of is the note on a question seat handle asked at asked, nil for none. A
+// record that cannot be read notes nothing, said in the log.
+func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) *AccessChanged {
+	if a.reviews == nil || handle == "" {
+		return nil
+	}
+	pending, ok := a.read[handle]
+	if !ok {
+		p, found, err := a.reviews.PendingAccessReview(ctx, handle)
+		if err != nil {
+			log.WarnContext(ctx, "decisions_access_review_unread", "agent", handle,
+				"error", err.Error(), "detail", "this seat's open questions show no access note")
+		}
+		if found && err == nil {
+			pending = &p
+		}
+		a.read[handle] = pending
+	}
+	if pending == nil || !pending.Stale(asked) {
+		return nil
+	}
+	if !a.detailed {
+		return &AccessChanged{Lines: []string{}}
+	}
+	return &AccessChanged{Lines: append([]string{}, pending.Lines...)}
 }
 
 // decisions answers what is waiting on one person — the open asks put to
@@ -649,6 +711,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	var items []DecisionItem
 	total, capped := 0, false
 	var oldest *time.Time
+	// A QUESTION ASKED BEFORE AN UNREVIEWED ACCESS CHANGE SAYS SO (ADR-0111).
+	changes := newAccessChanges(ctx, s.Access)
 	older := func(at time.Time) {
 		if oldest == nil || at.Before(*oldest) {
 			oldest = &at
@@ -679,7 +743,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		for i := range asks.Asks {
 			ask := asks.Asks[i]
-			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask})
+			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask,
+				AccessChanged: changes.of(ctx, ask.AskedBy, ask.AskedAt)})
 		}
 		total += asks.Total.Total
 		capped = asks.Total.Capped
@@ -710,7 +775,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				return nil, err
 			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, calls, r, s.opened(run))})
+				Run:           serialiseRun(run, calls, r, s.opened(run)),
+				AccessChanged: changes.of(ctx, run.AgentHandle, askedAt(run))})
 			total++
 			older(at)
 		}
@@ -841,6 +907,15 @@ func newestAnswered(asks []worklet.AnsweredAsk, runs []AnsweredRunAsk, limit int
 
 // waitingSince is when a parked run began waiting on its question: when its
 // box was held, or — for a run whose hold was never stamped — its last update.
+// askedAt is when a waiting run raised what it waits on: its held call, or its
+// question.
+func askedAt(run sandbox.PendingRun) time.Time {
+	if run.HeldCall != nil && !run.HeldCall.HeldAt.IsZero() {
+		return run.HeldCall.HeldAt
+	}
+	return run.AskedAt
+}
+
 func waitingSince(run sandbox.PendingRun) time.Time {
 	if held, ok := run.HeldSince(); ok {
 		return held

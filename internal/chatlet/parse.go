@@ -208,6 +208,14 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// snapshot the recipients were resolved in is what keeps this a
 	// function of one value.
 	routed := Route(Candidates(n), rosterOf(reg), n.Author)
+	if len(n.Held) > 0 {
+		// WHAT THE QUIET RULE KEPT FROM WAKING (ADR-0113), once per
+		// record: the seats still read the message in the room.
+		log.InfoContext(ctx, "chat_wakes_held", "message", n.MessageID,
+			"channel", n.ChannelID, "author", n.Author,
+			"author_kind", string(n.AuthorKind), "asks", n.Asks,
+			"held", len(n.Held), "woken", len(routed))
+	}
 	if len(routed) == 0 {
 		return nil, nil
 	}

@@ -29,7 +29,7 @@ import (
 //
 // # Every data node commits
 //
-// A company that sets `code.native` gets a committer and a lifecycle store on
+// A company that sets `code.backend: gitlet` gets a committer and a lifecycle store on
 // every data node ([Engine.startNative]), served to the estate router beside
 // the code log's reader ([Engine.estateBackend], [code.Served]); a push is
 // asked of its repository's committer — the first node rendezvous ranks for
@@ -165,11 +165,11 @@ func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
 
 // carriedCode is Gitlet's settings in force at next, installed over
 // prev ([Engine.installEpoch]): next's own `code` block where it sets
-// `code.native`, and otherwise prev's in force.
+// `code.backend: gitlet`, and otherwise prev's in force.
 //
 // CARRIED, because the revision that turns the host off cannot hold its
 // settings — `code.limits` and `code.deleted_retention_days` without
-// `code.native` are refused, since after a restart they would read as live
+// `code.backend: gitlet` are refused, since after a restart they would read as live
 // while governing nothing — and a node whose runtime was built with the host
 // keeps serving it until that restart ([backendSwitches]). Read off that
 // revision, every push the still-running committer decided was held to the
@@ -179,7 +179,7 @@ func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
 // repository the company had chosen to keep restorable for a year — a purge
 // has no undo. A revision that hosts code again brings its own.
 func carriedCode(next, prev *Company) *config.Code {
-	if next.Config != nil && next.Config.Code.Native {
+	if next.Config != nil && next.Config.CodeBackendFor() == config.CodeGitlet {
 		in := next.Config.Code
 		return &in
 	}
@@ -191,7 +191,7 @@ func carriedCode(next, prev *Company) *config.Code {
 
 // OperatorCode is Gitlet's estate seam as the API's routes and the host
 // reach it — the router's, on every node, for [OperatorWork]'s reason — or
-// false where this node's RUNNING runtime was not built with `code.native`: a
+// false where this node's RUNNING runtime was not built with `code.backend: gitlet`: a
 // company that does not host code, one that turned it on and has not
 // restarted, and a node that runs no native runtime yet. Which halves a node
 // runs is [Engine.nativeHalves]' one answer, so Gitlet is handed out
@@ -342,7 +342,7 @@ type clientTerm func(holds int64, minAge time.Duration) int
 // EVERY node applied over the alarm's day ([retention.census]) — the fleet's
 // reads, never this node's. Keyed on this node's runtime instead, the term
 // judged a fleet's git reads against the seats' term alone in two places: on
-// every node restarted after a revision turned `code.native` off, while up to
+// every node restarted after a revision turned Gitlet off, while up to
 // a day of git barriers from before the switch were still in the window; and,
 // during the rolling restart after a revision turned it on, on every node not
 // yet restarted, while its peers served git. A healthy host fired
@@ -420,7 +420,7 @@ func (e *Engine) codeReposSides(c *Company, activatedAt time.Time) (*code.Store,
 	n := e.native.Load()
 	store := e.writeSide().code
 	if n == nil || n.codeReader == nil || store == nil || c == nil || c.Config == nil ||
-		activatedAt.IsZero() || !c.Config.Code.Native {
+		activatedAt.IsZero() || c.Config.CodeBackendFor() != config.CodeGitlet {
 		return nil, nil, false
 	}
 	return store, n.codeReader, true
@@ -1206,7 +1206,7 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 func (e *Engine) redeclareCode(ctx context.Context, name string) error {
 	c := e.Company()
 	store := e.writeSide().code
-	if c == nil || c.Config == nil || c.ActivatedAt.IsZero() || !c.Config.Code.Native || store == nil {
+	if c == nil || c.Config == nil || c.ActivatedAt.IsZero() || c.Config.CodeBackendFor() != config.CodeGitlet || store == nil {
 		return nil
 	}
 	i := slices.IndexFunc(c.Config.Code.Repos, func(r config.CodeRepo) bool { return r.Name == name })

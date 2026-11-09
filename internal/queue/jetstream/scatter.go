@@ -145,7 +145,12 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		stopped.Store(true)
 		q.unanswer(subject, gate)
 		var unsubErr error
-		if err := sub.Unsubscribe(); err != nil && !q.isClosed() {
+		// A SUBSCRIPTION ALREADY GONE IS NO FAILURE: a second withdrawal
+		// finds the one the first closed (nats.ErrBadSubscription), which
+		// is what that call made true ([queue.Unsubscribe]), and Listen's
+		// withdrawal passes over the same answer.
+		if err := sub.Unsubscribe(); err != nil && !q.isClosed() &&
+			!errors.Is(err, nats.ErrBadSubscription) {
 			unsubErr = fmt.Errorf("stop serving %s: %w", subject, err)
 		}
 		// CANCELLED BEFORE THE WAIT, so an answer watching its context

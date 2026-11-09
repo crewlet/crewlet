@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -61,13 +63,14 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	o := firstPartyChart(t)
 	e := &Engine{}
 	e.remote.Store(&remoteNative{tracker: true, wiki: true, chat: true,
-		built: builtWith{code: true}})
+		built: builtWith{code: config.CodeGitlet}})
 	registered, _ := e.nativeParsers(&Company{Org: o})
 	// THE ALARMS' PARSER IS NO HALF, and names no sender at all: a node's
 	// alarm transition is routed by the health grant alone, with no actor
 	// (internal/alarmwake), so nobody on it is a person to resolve.
 	parsers := slices.DeleteFunc(slices.Clone(registered), func(p notify.Parser) bool {
-		return p.Source() == alarmwake.Source
+		// NOR THE ACCESS REVIEWS', which name their seat and no sender.
+		return p.Source() == alarmwake.Source || p.Source() == accessreview.Source
 	})
 	if len(parsers) != 4 {
 		t.Fatalf("a company running every half natively registered %d parsers beside "+
@@ -197,7 +200,7 @@ func trackerCommentWake(t *testing.T, author string) *events.Event {
 	}
 	record := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: "op-" + author,
+			OpID:    "op-" + author,
 			Subject: worklet.TaskSubject("t-1"), Op: worklet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 			Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
@@ -216,7 +219,7 @@ func pageCommentWake(t *testing.T, author string) *events.Event {
 	t.Helper()
 	record := doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
-			V: doclet.RecordVersion, OpID: "op-" + author,
+			OpID:    "op-" + author,
 			Subject: doclet.PageSubject("p-1"), Op: doclet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
 		},
@@ -407,7 +410,8 @@ func readSharedArtifact(t *testing.T, o *org.Organization, turn *turnctx.Turn,
 			Limits: func() artifacts.Limits { return artifacts.Limits{} },
 			Now:    func() time.Time { return at },
 		},
-		Authorize: builtin.Decide(orgchart.Of(o)),
+		Requesters: personSeats(people),
+		Authorize:  builtin.Decide(orgchart.Of(o)),
 	}); err != nil {
 		t.Fatalf("register the artifact tools: %v", err)
 	}
@@ -482,4 +486,10 @@ func (p personSeats) Requester(_ context.Context, handle string) (iam.Principal,
 	}
 	return iam.Principal{Kind: iam.KindSeat, Seat: handle, Stage: iam.StageActive,
 		Grants: iam.Apps}, nil
+}
+
+// Credential places a credential by the entry keyed "login:" and its login.
+func (p personSeats) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	principal, ok := p["login:"+login]
+	return principal, ok, nil
 }

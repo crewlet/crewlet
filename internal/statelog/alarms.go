@@ -13,6 +13,7 @@ package statelog
 // failure inside one package: one rule, written twice, disagreeing.
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -402,11 +403,11 @@ type Census struct {
 	// append at will are HELD to the seats' term, not merely counted in it: a
 	// box's, a turn's code tools' second look and an engine write's
 	// re-judgement each draw on a bucket of its run or its turn and on its
-	// seat's ONE bucket of the git node that answers, which all three pay —
+	// seat's ONE bucket of the Gitlet node that answers, which all three pay —
 	// LinearizableReadsPerSeatDay a day, after a burst of code.ResyncBurst
 	// (internal/code's NewResyncs) — and past it are answered at the seat's
 	// floor with no barrier. A check's box's re-syncs are no seat's and no
-	// client's: bounded alike by its repository's checks on each git node,
+	// client's: bounded alike by its repository's checks on each Gitlet node,
 	// and counted in no term here.
 	Clients int
 }
@@ -477,6 +478,7 @@ const (
 	KindIVFRecallBelowFloor Kind = "ivf_recall_below_floor"
 	KindRecordsGated        Kind = "records_gated"
 	KindFeedUnreadable      Kind = "feed_unreadable"
+	KindFeedDeadLettered    Kind = "feed_dead_lettered"
 	KindFeedStopped         Kind = "feed_stopped"
 	KindMaintenanceOpen     Kind = "maintenance_open"
 	KindVolumeLow           Kind = "volume_low"
@@ -489,7 +491,7 @@ const (
 	KindObjectiveBurn            Kind = "objective_burn"
 	KindClockSkew                Kind = "clock_skew"
 
-	// Gitlet's: a git node's own work, beside the logs', and the
+	// Gitlet's: a Gitlet node's own work, beside the logs', and the
 	// committer's on the data node that decides a repository's pushes.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
@@ -698,8 +700,22 @@ type Reading struct {
 	// RecordsGated and FeedUnreadable are counts over the last day. Any
 	// value above zero is an alarm: a gated record is recoverable by
 	// nothing, and a change record no build could translate is a wake
-	// circling for ever behind everything queued after it.
+	// nobody gets until a build that reads it runs.
 	RecordsGated, FeedUnreadable int
+
+	// FeedDeadLetters is every record one log's wake feed has
+	// dead-lettered, as this node last read the dead-letter stream: how
+	// long ago each was kept and how long until the stream's retention lets
+	// it go, the oldest first. Per DOMAIN, like HeadroomFraction, filled by
+	// the report from [DomainInputs]: each domain's feed keeps its own
+	// subject (internal/changefeed's DeadLetterSubject). Empty while it
+	// holds none.
+	//
+	// EVERY ENTRY IS A WAKE NOBODY HAS HAD: a record its feed handed back
+	// for an hour and no node could read, kept whole — its sealed frame
+	// inside — until a node whose feed starts able to read it replays it,
+	// or the retention lets it go and the wake is lost with it.
+	FeedDeadLetters []FeedDeadLetter
 
 	// FeedsDown is every change feed on this node that holds no consumer:
 	// which feed, how long for, how many attempts to bring it back have
@@ -880,7 +896,7 @@ type Reading struct {
 	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 
 	// CodeCompactionBehind is how many of the repositories this node
-	// maintains — as their MAINTAINER, the git node that merges their packs
+	// maintains — as their MAINTAINER, the Gitlet node that merges their packs
 	// and publishes their layers — its compactor found at the most live packs
 	// a repository may hold on its last pass, so every push carrying a pack
 	// into them is refused `compaction_behind` until a compaction lands;
@@ -937,7 +953,7 @@ type Reading struct {
 	// commit, the branch it is checked for, its check and its attempt.
 	//
 	// MEASURED FROM THE ROWS by every data node, never by a runner: a fleet
-	// whose every git node is gone runs no check at all, and is the case the
+	// whose every Gitlet node is gone runs no check at all, and is the case the
 	// alarm must not miss. EACH ATTEMPT WAS JUDGED AT ITS OWN TIMEOUT, which
 	// this framework does not import, so the alarm borrows it (ADR-0015) and
 	// fires at any count. All zero on a node holding no code log's rows — no
@@ -966,8 +982,8 @@ type Reading struct {
 	// depth and the batch its gate lands under and the rounds its home
 	// timed, judged by the home's queue worker, so the alarm fires at any
 	// count and never at a rate of its own. Raised by the repository's HOME
-	// git node, the one node that builds and times its trains. All zero on
-	// a node that is home to no queue — no git role, or a company that hosts
+	// Gitlet node, the one node that builds and times its trains. All zero on
+	// a node that is home to no queue — no gitlet role, or a company that hosts
 	// no code — and on one whose every queue keeps up.
 	CodeMergeRateOver         int
 	CodeMergeRateOverTarget   string
@@ -993,7 +1009,7 @@ type Reading struct {
 	//
 	// EACH REPOSITORY WAS ALREADY JUDGED AT THOSE TWO DECISIONS, so the alarm
 	// borrows them whole (ADR-0015) and fires at any count. Measured from the
-	// rows by every data node on the trim's quarter-hour tick, never by a git
+	// rows by every data node on the trim's quarter-hour tick, never by a Gitlet
 	// node: every data node holds the rows and reports the same repositories.
 	// All zero on a node holding no code log's rows — no data role, or a
 	// company that hosts no code — on one whose trim has not ticked or whose
@@ -1007,7 +1023,7 @@ type Reading struct {
 
 	// CodeMirrorFailing is how many mirrors of repositories this node is
 	// home to — a pull mirror's syncs from its source, a push mirror's
-	// pushes to its target, each the git node that runs them — have not been
+	// pushes to its target, each the Gitlet node that runs them — have not been
 	// brought level for longer than their own refresh promise:
 	// code.MirrorInterval, how often a home brings a mirror level, plus
 	// internal/code/mirror's AttemptDeadline, the grace an attempt in flight
@@ -1053,6 +1069,18 @@ type Reading struct {
 	// alarm reads the same whichever node a person asks.
 	MCPServers   []MCPServerCondition
 	MCPServersAt time.Time
+}
+
+// FeedDeadLetter is one record a log's wake feed dead-lettered, as the alarm
+// reads it.
+type FeedDeadLetter struct {
+	// Age is how long ago the dead-letter stream kept it.
+	Age time.Duration
+
+	// ExpiresIn is how long until the stream's retention
+	// (`stream.event_retention_hours`) lets it go, its wake with it: zero
+	// or less once it is due.
+	ExpiresIn time.Duration
 }
 
 // FeedOutage is one change feed that holds no consumer.
@@ -1775,23 +1803,60 @@ var table = []rule{
 			"that wrote it); this is worth reading today.",
 	},
 	{
-		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
-		// NOT HAVE. Every domain feed's consumer sets `MaxDeliver: -1`
-		// deliberately — a record nobody can handle yet is a retry
-		// rather than a poison message, and a delivery budget that ran
-		// out would drop a wake silently — so nothing ever reaches a
-		// dead letter and an alarm counting them could never fire. What
-		// an operator actually has to know about is the state that
-		// decision creates: a record circling for ever, at the head of a
-		// consumer, with everything behind it waiting.
+		// A RECORD THIS BUILD'S TRANSLATOR FAILS ON, counted on the node
+		// that met it. Every domain feed's consumer sets `MaxDeliver: -1`
+		// deliberately — a delivery budget that ran out would drop a wake
+		// silently, as a poison message — so it is the FEED that bounds
+		// such a record: handed back with a backoff from two seconds to
+		// thirty, and once it is an hour old kept as a dead letter and let
+		// go (`feed_dead_lettered` below, internal/changefeed's
+		// DeadLetterAge), so it never holds a slot of the consumer's
+		// pending set for ever. This names the build that cannot read it,
+		// while a peer that can is still being given the chance.
 		kind: KindFeedUnreadable,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d change record(s) could not be translated in the "+
 				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
 		},
-		remedy: "A record no build on this node can read. It redelivers for ever " +
-			"rather than being dropped, so the wakes behind it are waiting too. " +
-			"Upgrade the node past it, or the feed stops moving.",
+		remedy: "A record no build on this node can read. It is handed back for a " +
+			"node that can, with a backoff, and dead-lettered once it is an hour old " +
+			"(`feed_dead_lettered`): its wake waits until then and is lost if nothing " +
+			"ever reads it. Upgrade the node past it; each attempt's " +
+			"`changefeed_untranslatable` log line names the record and the error.",
+	},
+	{
+		// A WAKE NO NODE COULD DERIVE, KEPT RATHER THAN LOST: a record its
+		// feed handed back for an hour — a roll that outlasted it, a key
+		// no node holds, a record no build here can translate — kept in
+		// CREWLET_DLQ, sealed frame and all, until the first node whose
+		// feed starts able to read it replays it, an operator discards it,
+		// or the stream's retention lets it go.
+		//
+		// RAISED FROM THE FIRST ENTRY, PER LOG: each domain's feed keeps
+		// its own subject, and a single entry is a wake somebody has not
+		// had. Its count of what expires within a day is the reading's,
+		// taken on every beat, so it moves as the entries age rather than
+		// only when a feed starts and replays them.
+		kind:   KindFeedDeadLettered,
+		perLog: true,
+		fires: func(r Reading) (string, bool) {
+			if len(r.FeedDeadLetters) == 0 {
+				return "", false
+			}
+			return feedDeadLetterDetail(r.FeedDeadLetters), true
+		},
+		remedy: "Each entry is a wake nobody has had; `crewlet feeds dead-letters` " +
+			"lists them by id, each with its record and why no node read it. Bring a " +
+			"node that can read the records up — the build they need, or the keyring: " +
+			"a key in `secrets.keys` on every node and a restart — and the first node " +
+			"whose feed starts able to read an entry derives its wake, once, and drops " +
+			"the entry. A record no build reads needs a build that fixes it. An entry no " +
+			"node will ever read, such as one sealed under a key retired from every node, " +
+			"is given up with `crewlet feeds discard <id> -confirm <id>`, its wake lost for good " +
+			"(`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays " +
+			"or discards expires after `stream.event_retention_hours` and its wake is " +
+			"lost (`crewlet.tracker.feed.dead_letter_expired`). Each entry's " +
+			"`changefeed_record_dead_lettered` log line names the record and why.",
 	},
 	{
 		// THE FEED THAT IS NOT RUNNING, beside the feed that is stuck:
@@ -2101,29 +2166,29 @@ var table = []rule{
 			"is a repository served from its packs' own indexes; a step " +
 			"`publish` is a repository this node maintains whose next published " +
 			"layer it cannot write, at 600 bytes an object of the repository, " +
-			"which falls to this node because no git node advertises a budget " +
-			"that holds it — give one git node that memory, and it becomes the " +
-			"repository's maintainer: docs/guides/deployment.md, Sizing git " +
+			"which falls to this node because no Gitlet node advertises a budget " +
+			"that holds it — give one Gitlet node that memory, and it becomes the " +
+			"repository's maintainer: docs/guides/deployment.md, Sizing Gitlet " +
 			"nodes). The budget is " +
 			"the node's memory (its cgroup's limit where one is set, read again " +
 			"every ten seconds) less what it keeps for its git lanes, the " +
 			"store, the broker and the engine, on the `code_cache_opened` line. " +
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
-			"git.max_transfers is set, give it fewer transfers. What the node " +
+			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
 			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
-			"memory backs at 2 GiB a core. An unset git.max_transfers is sized " +
+			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
 			"to the memory, no more than one for every 512 MiB, and leaves the " +
 			"background work 256 MiB for each backed core; a figure set by hand " +
 			"is kept as written, and leaves it nothing once its transfers' " +
 			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
 			"little as 56% of the transfers the memory holds at 224 MiB each, " +
 			"where the node has a core for every 2 GiB of it or more. A budget " +
-			"of zero clears when git.max_transfers is lowered or unset, or when " +
+			"of zero clears when gitlet.max_transfers is lowered or unset, or when " +
 			"the node is given memory past what it keeps, in place or at a " +
 			"boot. A restart alone keeps the same lanes over the same memory, " +
-			"and clears it only where git.max_transfers is unset and the memory " +
+			"and clears it only where gitlet.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
 			"to what it has. See docs/concepts/gitlet.md.",
 	},
@@ -2232,7 +2297,7 @@ var table = []rule{
 		// on a one-minute lint stuck for an hour. This framework imports no
 		// Gitlet package, so the reader judges each attempt at its own
 		// timeout and the rule fires at any count. Raised by every data node
-		// from its rows, never by a runner: a fleet with no live git node
+		// from its rows, never by a runner: a fleet with no live Gitlet node
 		// runs no check, and still raises it.
 		kind: KindCodeChecksBacklog,
 		fires: func(r Reading) (string, bool) {
@@ -2247,18 +2312,18 @@ var table = []rule{
 					count, r.CodeChecksBacklogCheck, spoken(r.CodeChecksBacklogOldest)),
 				r.CodeChecksBacklog > 0
 		},
-		remedy: "A queued attempt waits for a git node that runs checks to " +
-			"claim it, so the backlog is no git node claiming — the fleet's git " +
+		remedy: "A queued attempt waits for a Gitlet node that runs checks to " +
+			"claim it, so the backlog is no Gitlet node claiming — the fleet's Gitlet " +
 			"nodes gone, stopped or failing their checks' boxes, or none setting " +
 			"CREWLET_BOX_GIT_URL (`code_checks_not_run`) — or every cell a check " +
-			"may run in busy: a git node's own container cells, `git.max_checks` " +
+			"may run in busy: a Gitlet node's own container cells, `gitlet.max_checks` " +
 			"of them (`crewlet.code.checks.running` pinned there), and the remote " +
 			"cells, as many at once and for as long a day as the company allows. " +
-			"Read the git nodes' logs and " +
+			"Read the Gitlet nodes' logs and " +
 			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
 			"racing for the same attempts, which is no backlog. Against the " +
 			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +
-			"wait is capacity: more git nodes, or more cells allowed to run at " +
+			"wait is capacity: more Gitlet nodes, or more cells allowed to run at " +
 			"once. Nothing is lost while it waits: a change whose required " +
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
@@ -2272,7 +2337,7 @@ var table = []rule{
 		// worker judges each queue against its own capacity and the rule
 		// fires at any count — never at a rate of its own, which would fire
 		// on every deep queue's ordinary day and never on a depth-one queue
-		// with hour-long checks. Raised by each queue's home git node, the
+		// with hour-long checks. Raised by each queue's home Gitlet node, the
 		// one node that builds its trains and so the one that times them.
 		kind: KindCodeMergeRateOver,
 		fires: func(r Reading) (string, bool) {
@@ -2437,20 +2502,24 @@ var table = []rule{
 			"mirror's source, `push` to a push mirror's target) and why it " +
 			"failed. A host that " +
 			"cannot be reached, or whose address is private while Tier A's " +
-			"git.import_allow_private is off, is the network's or the " +
+			"gitlet.import_allow_private is off, is the network's or the " +
 			"configuration's to mend; a credential the other host refuses is " +
 			"the variable the mirror's `credential` names, set with `crewlet " +
 			"secrets set`; a ref the other host rejects is a protection or a " +
 			"hook there refusing a force-push or a deletion the mirror needs; " +
 			"a seat named by `as` that no longer reads the repository is " +
 			"refused before any push: name another in the repository's " +
-			"mirror_to. A mirror is tried a minute after a failure, longer " +
+			"mirror_to — and a person's seat whose holder does not use " +
+			"Gitlet (not given the gitlet permission, unable to act, or " +
+			"nobody at all) is refused the same way until an administrator " +
+			"gives them Gitlet or mirror_to names another seat. A mirror is " +
+			"tried a minute after a failure, longer " +
 			"after each one in a row, and at least once an interval, and the " +
 			"alarm clears once it is brought level. A mirror with no such " +
 			"line has waited behind the node's other attempts: a node runs " +
 			"two at once and queues the rest, so one home to more mirrors " +
 			"than two attempts at a time bring level within the interval " +
-			"falls behind, and more git nodes spread the repositories' homes. " +
+			"falls behind, and more Gitlet nodes spread the repositories' homes. " +
 			"See docs/concepts/gitlet.md, " +
 			"\"Mirrors and imports\".",
 	},
@@ -2656,6 +2725,60 @@ func feedOutageDetail(f FeedOutage) string {
 	return fmt.Sprintf("the %s change feed has held no consumer for %s, after "+
 		"%d failed attempt(s), the latest: %s", f.Source, spoken(f.For),
 		f.Failures, f.Cause)
+}
+
+// feedDeadLetterNamed is how many of a log's dead letters the alarm's detail
+// names one by one, the soonest to expire first.
+//
+// FIVE: the detail is one log line and one row on a screen, and the entries
+// an operator acts on first are the ones with the least time left; the count
+// beside them says how many more there are and how many expire within a day,
+// which is what a thousand entries named one by one would bury.
+const feedDeadLetterNamed = 5
+
+// feedDeadLetterDetail is feed_dead_lettered's measurement on one log: how many
+// entries, how many expire within a day, and the soonest to expire, each by its
+// age and the time it has left.
+func feedDeadLetterDetail(letters []FeedDeadLetter) string {
+	letters = slices.Clone(letters)
+	slices.SortStableFunc(letters, func(a, b FeedDeadLetter) int {
+		return cmp.Compare(a.ExpiresIn, b.ExpiresIn)
+	})
+	soon := 0
+	for _, l := range letters {
+		if l.ExpiresIn <= day {
+			soon++
+		}
+	}
+	named := make([]string, 0, min(len(letters), feedDeadLetterNamed))
+	for _, l := range letters[:cap(named)] {
+		left := "due to expire now"
+		if l.ExpiresIn > 0 {
+			left = "expiring in " + spokenSpan(l.ExpiresIn)
+		}
+		named = append(named, fmt.Sprintf("one kept %s ago, %s", spokenSpan(l.Age), left))
+	}
+	detail := fmt.Sprintf("this log's wake feed holds %d dead letter(s), wakes no node could "+
+		"derive within the hour their records were handed back, %d of them expiring within "+
+		"a day: %s", len(letters), soon, strings.Join(named, "; "))
+	if more := len(letters) - len(named); more > 0 {
+		detail += fmt.Sprintf("; and %d more", more)
+	}
+	return detail
+}
+
+// spokenSpan is a span that may run to days in days and hours — a dead letter
+// thirty days from expiring reads "29d 23h", where spoken's "719h 0m" makes the
+// reader divide — and any shorter one in spoken's form.
+func spokenSpan(d time.Duration) string {
+	if d < 2*day {
+		return spoken(d)
+	}
+	hours := int64(d.Round(time.Hour) / time.Hour)
+	if hours%24 == 0 {
+		return fmt.Sprintf("%dd", hours/24)
+	}
+	return fmt.Sprintf("%dd %dh", hours/24, hours%24)
 }
 
 // mcpRemedy is an MCP alarm's remedy, ending with where a person reads the
@@ -2912,6 +3035,13 @@ func Kinds() []Kind {
 // (`fmtDuration`, lib/format.ts), so a figure and the sentence beside it
 // agree. Never a bare count of seconds.
 func Spoken(d time.Duration) string { return spoken(d) }
+
+// SpokenSpan is a span that may run to days in days and hours ("29d 23h") and
+// any shorter one as [Spoken] says it: a dead letter's age and the time it has
+// left, as `feed_dead_lettered` names each entry, for a surface outside this
+// package that lists the same entries — `crewlet feeds dead-letters` — so the
+// alarm and the listing an operator reads beside it say one entry alike.
+func SpokenSpan(d time.Duration) string { return spokenSpan(d) }
 
 // SpokenWait is a WAIT a person is told to sit out ("retry in about 22h
 // 33m"): the largest two units, ROUNDED UP at every magnitude, so a wait never

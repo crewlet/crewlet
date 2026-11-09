@@ -223,6 +223,7 @@ function sessionRow(over: Record<string, unknown> = {}) {
     ask_excerpt: "Fix the flaky provisioner test.",
     kept: true,
     object_bytes: 41234,
+    in_progress: false,
     continued_by: "next_turn",
     continuable: true,
     continues_in: "any_box",
@@ -329,12 +330,15 @@ const DEFAULTS: Record<string, unknown> = {
 let asked: { what: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 let reply: { status: number; body: unknown };
+/** The path of every REST read the page sent: the code questions go over REST. */
+let fetched: string[];
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   keptInView.length = 0;
   asked = [];
   posted = [];
+  fetched = [];
   reply = { status: 200, body: { tool: "pause_seat", outcome: "applied" } };
   vi.stubGlobal(
     "fetch",
@@ -345,6 +349,7 @@ beforeEach(() => {
       // failed read while every case here passed by accident.
       if ((init?.method ?? "GET").toUpperCase() === "GET") {
         const path = new URL(String(url), "http://engine.test").pathname;
+        fetched.push(path);
         return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
           status: path === "/iam/seats" ? 200 : 404,
           headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
@@ -1827,6 +1832,47 @@ test("the work tab asks for every row filtered on its own", async () => {
   expect(screen.getByText("Nothing open is assigned to them")).toBeTruthy();
 });
 
+// THE WORK TAB'S CODE IS GITLET'S (ADR-0110), as its work is Worklet's: a
+// reader without the app is asked none of the seat's changes or reviews —
+// the engine refuses both — and is told which access would open them; a
+// reader holding it reads them. Mutation: mount the code block whatever the
+// reader holds, and the first reader's page asks `code_changes`; lock it
+// whatever they hold, and the second is told to ask for access they have.
+test("the work tab's code is locked, and asks nothing, for a reader without Gitlet", async () => {
+  const codeReads = () => fetched.filter((path) => path.startsWith("/query/code_"));
+  mount("#/company/org/seats/swe?tab=work", {
+    answers: {
+      viewer: { login: "t-cto", grants: ["worklet"], handle: "cto", owner: "cto", acts: [] },
+    },
+  });
+  expect(await screen.findByText("You need Gitlet access")).toBeTruthy();
+  await settled(
+    () => asked.length,
+    () => fetched.length,
+  );
+  expect(codeReads()).toEqual([]);
+  expect(screen.queryByRole("heading", { name: "Open changes" })).toBeNull();
+  // ITS WORK IS STILL DRAWN: the lock is the code block's alone.
+  expect(screen.getByText("Nothing open is assigned to them")).toBeTruthy();
+  cleanup();
+  asked = [];
+  fetched = [];
+  mount("#/company/org/seats/swe?tab=work", {
+    answers: {
+      viewer: {
+        login: "t-cto",
+        grants: ["worklet", "gitlet"],
+        handle: "cto",
+        owner: "cto",
+        acts: [],
+      },
+    },
+  });
+  expect(await screen.findByRole("heading", { name: "Open changes" })).toBeTruthy();
+  await waitFor(() => expect(codeReads()).toContain("/query/code_changes"));
+  expect(screen.queryByText("You need Gitlet access")).toBeNull();
+});
+
 // THE TURN LIST IS THIS SEAT'S. It asked with `role`, which the engine does not
 // read, so the tab listed every seat's turns under one seat's name.
 test("the turns tab asks for this seat's turns by its handle", async () => {
@@ -2748,6 +2794,126 @@ test("a newer capture of the open session is offered from its start", async () =
   expect(await screen.findByText("What the newer capture holds.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Read the newer capture" })).toBeNull();
   expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Transcript" }));
+});
+
+/** A live turn's row as the engine sends it: not ended, in progress — with the
+ *  engine's sentence for one, of when its session was captured — its kept
+ *  session one a relaunch decides, with `over` laid on top. */
+function liveRow(over: Record<string, unknown> = {}) {
+  const captured = (over.captured_at as string | undefined) ?? sessionRow().captured_at;
+  return sessionRow({
+    ending: null,
+    ended_at: null,
+    in_progress: true,
+    in_progress_note:
+      `This turn has not ended: this is the newest session its runs have kept, captured at ` +
+      `${captured}; its run may have gone on past it, and its last call may have no result yet.`,
+    continued_by: "relaunch",
+    ...over,
+  });
+}
+
+// A LIVE SESSION KEPT AGAIN SINCE ITS TRANSCRIPT WAS READ IS TOLD IN ITS RUNS'
+// WORDS, on screen: the list's newer capture of a turn that has not ended, and
+// the page the engine refuses because it no longer follows on, each say its
+// runs have kept its session again — the engine's own spelling of it — never
+// that the session was captured again as an ended turn's, nor that a run saved
+// it.
+//
+// Mutation: draw either banner in an ended turn's words, or key its words on a
+// row that is not the turn's, and a line here is not drawn.
+test("a live session kept again since its transcript was read says so in its runs' words", async () => {
+  const later = "2026-09-21T09:55:00Z";
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([liveRow({ captured_at: later })]),
+      executor_session: (p: Record<string, unknown>) => {
+        if (p.cursor) throw new Error("bad_params");
+        return transcriptPage({
+          session: liveRow(),
+          entries: [said("The first page.")],
+          cut: "entries",
+          next_cursor: "k.1.1",
+        });
+      },
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  expect(
+    await screen.findByText(
+      "This turn has not ended, and its runs have kept its session again since this " +
+        "transcript was read.",
+    ),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(
+    await screen.findByText(
+      "Its later pages no longer follow on from those read: the turn has not ended, and its " +
+        "runs have kept its session again since, or a node running another release answered.",
+    ),
+  ).toBeTruthy();
+  expect(transcriptCard().textContent).not.toMatch(/captured again|sav(e|ed|ing)/i);
+});
+
+// A TRANSCRIPT READ WHILE ITS TURN RAN, ITS TURN SINCE ENDED, IS TOLD IN AN
+// ENDED TURN'S WORDS: the list's row, which its poll keeps current, says how the
+// turn stands now — its final capture landed and then its end — while the first
+// page, read once, still says it had not ended; and the newer capture is said
+// of the turn as it is.
+//
+// Mutation: word the banner off the first page's row rather than the list's,
+// and the ended turn is told it has not ended.
+test("a session captured again once its turn ended is told so in an ended turn's words", async () => {
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow({ captured_at: "2026-09-21T09:55:00Z" })]),
+      executor_session: transcriptPage({
+        session: liveRow(),
+        entries: [said("Running the tests first.")],
+      }),
+    },
+  });
+  expect(await screen.findByText("Running the tests first.")).toBeTruthy();
+  expect(
+    await screen.findByText("This session was captured again since this transcript was read."),
+  ).toBeTruthy();
+  expect(transcriptCard().textContent).not.toMatch(/has not ended/);
+});
+
+// A TURN'S FIRST CAPTURE SINCE ITS TRANSCRIPT READ NONE IS NOT ONE KEPT AGAIN:
+// a transcript opened while its turn had captured nothing read no session, so
+// the capture the list's poll then shows is said as its runs having kept its
+// session since — never "again", which would claim a session the screen never
+// read.
+//
+// Mutation: say "again" whatever the transcript read, and the line is not drawn.
+test("a turn's first capture since its transcript read none is told without again", async () => {
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([liveRow()]),
+      executor_session: transcriptPage({
+        session: liveRow({
+          captured_at: null,
+          kept: false,
+          object_bytes: 0,
+          in_progress: false,
+          in_progress_note: undefined,
+        }),
+        state: "none",
+        why: "nothing of this turn's session has been captured yet",
+      }),
+    },
+  });
+  expect(
+    await screen.findByText(
+      "This turn has not ended, and its runs have kept its session since this transcript " +
+        "was read.",
+    ),
+  ).toBeTruthy();
+  expect(transcriptCard().textContent).not.toMatch(/again/);
 });
 
 /** The transcript's own card: the account, the entries and what is said

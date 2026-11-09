@@ -301,7 +301,7 @@ What the binding buys:
   each speaker by seat and its members are seats. Your messages carry the
   seat's handle with author kind `human`, like every other write.
 - **Your git pushes are yours.** A company that hosts its repositories in the
-  engine ([`code.native`](gitlet.md)) is cloned, fetched and pushed to over
+  engine ([`code.backend: gitlet`](gitlet.md)) is cloned, fetched and pushed to over
   HTTPS with a token as git's password — your own machine token (`crewlet iam
   token -login` mints one for you), or a Tier A token the directory binds to a
   seat. git is one more way a person acts, beside the dashboard's act route,
@@ -512,9 +512,13 @@ on where the work lives:
   whose inbox it is is the composed question's own rule, your own or a
   report's you lead, with no app. Each domain's notices are then read under
   that domain's own permission: Worklet's with the `worklet` app (the
-  `work_inbox` question, which stays Worklet's own), Gitlet's held
-  to your grant on each change's repository — which every person holds on
-  every repository. Somebody without Worklet still sees a question a
+  `work_inbox` question, which stays Worklet's own), Gitlet's with the
+  `gitlet` app and held to your grant on each change's repository — which a
+  person holding the app holds on every repository. Somebody without Gitlet is
+  listed, counted and pushed no code notice, and marks none, though the
+  notices are written and appear once an administrator gives them Gitlet
+  ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+  Somebody without Worklet still sees a question a
   colleague put to them on a work item, among their decisions, and may open
   that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
@@ -587,9 +591,11 @@ sequenceDiagram
 - **A watch is decided like the inbox itself.** You may watch your own seat;
   a lead may watch a seat they lead; an administrator may watch any, with no
   app, since a watch is decided as the composed inbox's own read, whose frames
-  announce Gitlet's notices beside Worklet's. The
-  frame itself asks nothing more: it reaches exactly the sockets whose watch
-  of the seat was allowed. A watch
+  announce Gitlet's notices beside Worklet's. Each frame then asks the app of
+  the half that moved: it reaches the sockets whose watch of the seat was
+  allowed and whose reader holds `worklet` for a `tracker` frame or `gitlet`
+  for a `code` one, so a frame never tells a reader of a notice their inbox
+  does not list them. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not
@@ -619,7 +625,8 @@ record can tell you about several changes — and is refused naming it when
 that notice is somebody else's; its `read_through` is a position on the code log
 (`CREWLET_CODE_LOG@<generation>:<sequence>`). The dashboard's **Mark all
 read** sends both, each reading its own domain through the newest of its
-notices on the page.
+notices on the page (Worklet's alone to a reader without Gitlet, who is
+listed no code notice to mark).
 
 A page of the composed inbox is fifty notices, newest first across both
 domains, and its `next_cursor` carries one position per domain — where that
@@ -643,8 +650,9 @@ credential's own login when the directory binds it to none. First comes
 **Needs you** — the questions agents put to them, the executors parked on a
 question to them, a seat stopped on its budget, the conditions a person
 decides — then **Updates**, what reached them and is not read yet, and the
-item they open is read in full beside the list with the answer to it right
-there.
+item they open is read in full beside the list, from its head, with the
+answer to it right there. Updates is a closed, counted group, which they open
+when they choose.
 Nothing on the screen names whose queue to read: there is no way to ask for
 somebody else's from it, and a lead reading a report's queue does so by name,
 decided by the [authority table](identity-and-access.md#the-authority-table-one-function-decides).

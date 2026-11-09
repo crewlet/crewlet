@@ -44,8 +44,8 @@ func (d tokenDirectory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, er
 	return nil, d.err
 }
 
-func (d tokenDirectory) SeatHolder(context.Context, string) (iamdomain.SeatHolder, bool, error) {
-	return iamdomain.SeatHolder{}, false, d.err
+func (d tokenDirectory) Requester(context.Context, string) (iamdomain.Requester, bool, error) {
+	return iamdomain.Requester{}, false, d.err
 }
 
 func (d tokenDirectory) MachineToken(_ context.Context, id string) (credential.TokenRow, error) {
@@ -100,7 +100,7 @@ func statelessWithDirectory(t *testing.T, served *directoryCopy) *Engine {
 	}
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "git-1", Queue: started(), Placement: oneDataNode{}, Git: noGitNodes{},
+		Self: "git-1", Queue: started(), Placement: oneDataNode{}, Git: noGitletNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: envelopes,
 	})
 	if err != nil {

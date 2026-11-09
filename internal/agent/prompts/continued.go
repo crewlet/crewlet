@@ -20,8 +20,10 @@ import (
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
-// asked, and a turn that ended. So its run is told where the turn boundary is
-// and what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
+// asked, and a turn that ended — or, where that turn went on past the session,
+// what it did up to where the session was kept. So its run is told where the
+// turn boundary is, where the session ends where that is not the boundary, and
+// what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
 // brief, the account of how the conversation's earlier turns ended among it.
 
 // sentBackHeader opens a reviewer's send-back to the session that did the round.
@@ -84,10 +86,16 @@ func BuildContinuedRound(m ContinuedRound) Prompt {
 // InterruptedSession tells a run that continues a session its harness was cut
 // off in that the session above may end in the middle of a call: a tool call
 // with no result, which may or may not have run.
+//
+// TRUE OF EVERY CUT-OFF CAPTURE, whatever packed it: one taken while its
+// harness still worked — a job its box would not end, packed as it stood — and
+// one taken as or after its harness was stopped, by a stop, a loss, its turn's
+// cap or its own death. Said as only the second, it told a run continuing the
+// first that its harness had been stopped when it never was.
 const InterruptedSession = "## The session above was cut off" +
-	"\nIt was saved while, or after, its harness was stopped, so it may end in the middle of a" +
-	" call — a tool call with no result, which may or may not have run. Check what such a call" +
-	" was meant to do before doing it again."
+	"\nIt was saved while its harness was still working, or as or after it was stopped, so it may" +
+	" end in the middle of a call — a tool call with no result, which may or may not have run." +
+	" Check what such a call was meant to do before doing it again."
 
 // calledAfterHeader introduces the calls a session's run made through the seat's
 // tools after the point the session was saved at.
@@ -96,6 +104,19 @@ const calledAfterHeader = "## Calls made after the session above was saved" +
 	" session above ends, so they are not in it. They happened, and their outcomes stand: a" +
 	" call marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked" +
 	" `→ error` did not take effect."
+
+// calledSinceHeader introduces the calls a session CUT OFF had its run make
+// through the seat's tools after the newest point it is known to hold
+// ([AfterSave.Interrupted]), which is not where it ends: the session may show
+// some of them, so they are never said to be missing from it, and a call shown
+// in both places is said to be one call, so a model reading it twice does not
+// take it for a second one.
+const calledSinceHeader = "## Calls this run made that the session above may not show" +
+	"\nThe session above was cut off, so it may show some of these calls and not others: they are" +
+	" every call the run working in it made through your tools since the last point the engine" +
+	" knows it reached. A call shown both above and here is ONE call, made once, not two. They" +
+	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
+	" write among them again; one marked `→ error` did not take effect."
 
 // AfterSave is what a session's run did through the seat's tools after the
 // session was saved, as a run that continues the session is told it
@@ -121,24 +142,36 @@ type AfterSave struct {
 	// Dropped's calls were, by tool, beside calls the session holds. Said
 	// only beside a Dropped it accounts for.
 	Tally string
+
+	// Interrupted says the session was cut off ([InterruptedSession]), so the
+	// point its calls are told from is the newest one its launch is known to
+	// hold, not where it ends (internal/sandbox's savepoint.go): some of the
+	// calls may be in it as well. They are told under [calledSinceHeader],
+	// never as calls it lacks, and the dropped ones counted since that point.
+	Interrupted bool
 }
 
 // CalledAfter is the section telling a run that continues a session what its
 // run did through the seat's tools after the session was saved: the calls the
 // record lists, then how many more it kept only in a tally and that tally, the
-// way every other reader of a long run's calls is told what was dropped. ""
+// way every other reader of a long run's calls is told what was dropped — of a
+// session cut off, as calls it may already show ([AfterSave.Interrupted]). ""
 // where the run did nothing after the save.
 func CalledAfter(after AfterSave) string {
 	calls := strings.TrimSpace(after.Calls)
 	if calls == "" && after.Dropped <= 0 {
 		return ""
 	}
-	parts := []string{calledAfterHeader}
+	header := calledAfterHeader
+	if after.Interrupted {
+		header = calledSinceHeader
+	}
+	parts := []string{header}
 	if calls != "" {
 		parts = append(parts, calls)
 	}
 	if after.Dropped > 0 {
-		parts = append(parts, droppedAfter(after.Dropped))
+		parts = append(parts, droppedAfter(after.Dropped, after.Interrupted))
 		if tally := strings.TrimSpace(after.Tally); tally != "" {
 			parts = append(parts, tally)
 		}
@@ -149,15 +182,20 @@ func CalledAfter(after AfterSave) string {
 // droppedAfter says that n of the calls a session's run made after it was
 // saved are counted only in its record's tally, which says what they were
 // beside calls the session holds, and what a call counted only there asks of
-// the run: it has no outcome to go by.
-func droppedAfter(n int) string {
+// the run: it has no outcome to go by. Of a session cut off (interrupted),
+// they are the calls since the point its section says, not since a save.
+func droppedAfter(n int, interrupted bool) string {
 	calls := "calls"
 	if n == 1 {
 		calls = "call"
 	}
-	return "(+" + strconv.Itoa(n) + " further " + calls + " this run made after the session above was saved," +
+	since, before := "after the session above was saved", "before the save"
+	if interrupted {
+		since, before = "since that point", "before that point"
+	}
+	return "(+" + strconv.Itoa(n) + " further " + calls + " this run made " + since + "," +
 		" which its record did not keep one by one: past two hundred calls a run's record keeps its first and" +
-		" last and only a tally of those between. The tally below counts calls made before the save as well." +
+		" last and only a tally of those between. The tally below counts calls made " + before + " as well." +
 		" A call counted only in the tally has no outcome here: check whether its tool already did what it" +
 		" was for before doing it again.)"
 }
@@ -290,6 +328,18 @@ type NextTurn struct {
 	Interrupted bool
 	Checkout    string
 
+	// WentOn says the session's turn went on past it, as that turn's end said:
+	// the session was kept while the turn still worked, at CapturedAt (zero
+	// where its row recorded no instant), so it ends there and not where the
+	// turn did. Lost says the turn ended lost — the engine, not the turn,
+	// ended it, or its end was never recorded (internal/executorkeep's
+	// OutcomeLost) — so, where its end did not say WentOn, the session may
+	// still not hold the last of what it did, which the engine cannot say more
+	// of (internal/executorkeep's TurnRow.WentOn).
+	WentOn     bool
+	Lost       bool
+	CapturedAt time.Time
+
 	// Fire says the conversation is a schedule's, each of its turns a fire
 	// (internal/notify's Scheduled): the run is told that the schedule has
 	// fired again and that the session above is its last fire's.
@@ -311,6 +361,15 @@ func nextTurnWordsFor(m NextTurn) nextTurnWords {
 	return nextTurnWords{turn: "turn", whole: "conversation", woke: "A new message has woken you"}
 }
 
+// named is how the lead names the turn whose session it continues: by its id,
+// where the engine's record of the session names one.
+func (w nextTurnWords) named(turn string) string {
+	if turn == "" {
+		return "your last " + w.turn
+	}
+	return w.turn + " `" + turn + "`"
+}
+
 // BuildNextTurn is the lead of a run that continues the session its
 // conversation's last turn left: the turn boundary the transcript cannot know,
 // that what the session read may be stale and what it set up is set up anew,
@@ -328,18 +387,52 @@ func nextTurnWordsFor(m NextTurn) nextTurnWords {
 // NOT THE SAME-TURN LEAD ([BuildContinuedRound]), which says "the same turn,
 // and the same session": the session above is another turn's, which ended, and
 // this turn's task is none of what it read.
+//
+// AND NEVER "THROUGH" A TURN THAT WENT ON PAST ITS SESSION ([NextTurn.WentOn]):
+// that session was kept while the turn still worked, so the lead says it ends
+// where it was kept, that what the turn did after it is not above, and that how
+// the turn ended is told below — saying too, of a turn that was then lost, that
+// it was. Told it ran through the turn's end, the run would take the turn's
+// last state for the session's, and redo or contradict what the turn did after
+// it. A turn that was lost ([NextTurn.Lost]) and whose end did not say it went
+// on is told through, which is as far as the engine knows the session runs,
+// and that the session may not hold the last of what it did: no frame of that
+// turn saw it end.
 func BuildNextTurn(m NextTurn) string {
 	words := nextTurnWordsFor(m)
 	var w strings.Builder
 	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
 		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
-	if m.BaseTurn != "" {
-		w.WriteString(", through " + words.turn + " `" + m.BaseTurn + "`")
+	ended := "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
+	switch {
+	case m.WentOn:
+		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
+		if !m.CapturedAt.IsZero() {
+			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
+		}
+		w.WriteString(": what that " + words.turn + " did after it is not above")
+		if m.Lost {
+			w.WriteString(", and that " + words.turn + " was lost")
+		}
+		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
+			words.turn + "s, is told below."
+	case m.Lost:
+		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost")
+		if !m.EndedAt.IsZero() {
+			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+		}
+		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
+		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
+			words.turn + "s, is told below."
+	default:
+		if m.BaseTurn != "" {
+			w.WriteString(", through " + words.named(m.BaseTurn))
+		}
+		if !m.EndedAt.IsZero() {
+			w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+		}
 	}
-	if !m.EndedAt.IsZero() {
-		w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
-	}
-	w.WriteString(". How the " + words.whole + "'s earlier " + words.turn + "s ended is told below. " +
+	w.WriteString(". " + ended + " " +
 		words.woke + ", and the task below is this " + words.turn + "'s." +
 		"\n- **What you read above may be stale:** read it again before relying on it." +
 		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +

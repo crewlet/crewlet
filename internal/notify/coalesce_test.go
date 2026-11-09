@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -354,8 +355,8 @@ func TestAddressedSurvivesAMergeWithUnaddressedTraffic(t *testing.T) {
 // senders are read per constituent: carried on the flat fields alone, every
 // earlier writer of the burst would read as the latest one.
 func TestEachConstituentKeepsItsOwnWriter(t *testing.T) {
-	ana := notify.FirstPartyWriter(iam.ActorHuman, "ana")
-	bo := notify.FirstPartyWriter(iam.ActorAgent, "bo")
+	ana := notify.FirstPartyWriter(iam.ActorHuman, "ana", nil)
+	bo := notify.FirstPartyWriter(iam.ActorAgent, "bo", nil)
 	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
 		note("ana", "first", "comment", func(n *types.ExternalNotification) { n.Writer = ana }),
 		note("bo", "latest", "comment", func(n *types.ExternalNotification) { n.Writer = bo }),
@@ -364,11 +365,11 @@ func TestEachConstituentKeepsItsOwnWriter(t *testing.T) {
 		t.Fatalf("%d constituents survived, want 2", len(merged.Messages))
 	}
 	for i, want := range []*types.NotificationWriter{ana, bo} {
-		if got := merged.Messages[i].Writer; got == nil || *got != *want {
+		if got := merged.Messages[i].Writer; got == nil || !reflect.DeepEqual(*got, *want) {
 			t.Errorf("constituent %d was written by %+v, want %+v", i, got, want)
 		}
 	}
-	if merged.Writer == nil || *merged.Writer != *bo {
+	if merged.Writer == nil || !reflect.DeepEqual(*merged.Writer, *bo) {
 		t.Errorf("the merged event's writer is %+v, want the latest constituent's %+v",
 			merged.Writer, bo)
 	}

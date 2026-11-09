@@ -41,18 +41,18 @@ const (
 
 	// DefaultCodeMaxBlobBytes is an unset code.limits.max_blob_bytes:
 	// 50 MiB. A larger binary belongs in Worklet's files, and the bound is
-	// what sizes pack-objects' window memory on a git node.
+	// what sizes pack-objects' window memory on a Gitlet node.
 	DefaultCodeMaxBlobBytes int64 = 50 << 20
 
 	// DefaultCodeRepoMaxBytes is an unset code.limits.repo_max_bytes:
 	// 20 GiB — the large reference model's 12 GB monorepo with two thirds
-	// of headroom. Every git node serving a repository caches it whole, so
+	// of headroom. Every Gitlet node serving a repository caches it whole, so
 	// this is also what one repository may take of each such node's disk.
 	// And of ONE node's memory: a repository's bitmap is written once for
-	// the fleet, by the first git node whose background budget holds its
+	// the fleet, by the first Gitlet node whose background budget holds its
 	// publication — internal/code/cache's PublishBytesPerObject an object
 	// with a clone's room beside it, 840 bytes measured on the node pin —
-	// some 50 GB at this size's 60 million objects, which the large git node
+	// some 50 GB at this size's 60 million objects, which the large Gitlet node
 	// docs/guides/deployment.md names (96 GiB and 16 cores, about 68 GiB of
 	// background budget) holds. So the size is KEPT when weighed against
 	// memory as well: one such node gives the whole fleet the bitmap, and a
@@ -225,7 +225,7 @@ const (
 	CodeDefaultRemoteMaxRunning = 16
 
 	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running
-	// takes: 1 024 boxes at once, the bound git.max_checks holds a node's
+	// takes: 1 024 boxes at once, the bound gitlet.max_checks holds a node's
 	// container cells to — past any provider's concurrency a company buys,
 	// and each one a lease the runner scans for a free one among.
 	CodeMaxRemoteMaxRunning = 1_024
@@ -329,7 +329,7 @@ const (
 
 	// CodeMaxRepoBytesCeiling is the most code.limits.repo_max_bytes may
 	// say: 1 TiB, a typo guard two orders of magnitude past the large
-	// reference model's 12 GB monorepo. Every git node serving a repository
+	// reference model's 12 GB monorepo. Every Gitlet node serving a repository
 	// caches it whole, so a ceiling past any one node's volume is not a
 	// setting anybody can run.
 	CodeMaxRepoBytesCeiling int64 = 1 << 40
@@ -404,21 +404,21 @@ const (
 	CodeMaxIdentityDomainBytes = 254 - len("@") - iam.MaxLogin
 )
 
-// Code is Gitlet, the engine's own git host: whether the company hosts its
-// repositories in the engine, the limits a push is held to, and the
+// Code is the company's code: which git host it runs — Gitlet, the engine's
+// own, or none — and on Gitlet the limits a push is held to and the
 // repositories it declares (docs/concepts/gitlet.md).
 //
-// NATIVE IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: the
+// THE BACKEND IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: the
 // committer and the lifecycle store are built with it, once per process, from
 // the first company the node runs, whatever backends that company names. On a
 // node that has run no company yet — one that booted with none — the
-// activation that hands it a company setting it starts that runtime, Gitlet
+// activation that hands it a company on Gitlet starts that runtime, Gitlet
 // in it, with no restart. On every other node, a company on vendors for
-// every half included, a revision that turns it on or off activates normally
-// and takes effect at the node's restart, which the node says once per
-// activation (native_backend_needs_restart). The LIMITS are the
+// every half included, a revision that moves between gitlet and none
+// activates normally and takes effect at the node's restart, which the node
+// says once per activation (native_backend_needs_restart). The LIMITS are the
 // epoch's, read at every decision, so a revision that moves one holds from its
-// activation; a revision that turns the host off, which must drop them,
+// activation; a revision that turns Gitlet off, which must drop them,
 // leaves a node still serving it the limits of the last revision that hosted
 // code until that restart.
 //
@@ -426,11 +426,11 @@ const (
 // at every activation and every boot — a declared name is created, or its
 // settings settled; a configuration-managed repository no longer declared is
 // deleted, restorably for deleted_retention_days, and purged after it.
-// Nothing deletes a repository because the HOST was turned off: that revision
+// Nothing deletes a repository because Gitlet was turned off: that revision
 // changes nothing on a running node until its restart, and after the restart
 // nothing reconciles at all.
 type Code struct {
-	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts Gitlet at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
+	Backend              CodeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=gitlet|none" desc:"Which git host the company runs: gitlet, the engine's own, which hosts its repositories on the engine's own state log, every data node committing their pushes; or none. Empty is none. A node that has run no company yet starts Gitlet at the activation that hands it a company on it; on every other node, whatever backends its first company named, a move between the two takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
 	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
@@ -448,6 +448,45 @@ type Code struct {
 	// (coderemotes.go). The EPOCH'S, read at every decide and every dial.
 	RemoteCredentials CodeRemoteCredentials `yaml:"remote_credentials,omitempty" json:"remote_credentials,omitempty" desc:"The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and Gitlet dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token."`
 	Repos             []CodeRepo            `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+}
+
+// CodeBackend is which git host a company runs.
+type CodeBackend string
+
+// The git hosts.
+const (
+	// CodeGitlet is Gitlet, the engine's own git host: the company's
+	// repositories hosted on the engine's own code log, every data node
+	// committing their pushes, and served over git by the nodes with the
+	// `gitlet` role. See internal/code.
+	CodeGitlet CodeBackend = "gitlet"
+
+	// CodeNone is a company that hosts no repositories in the engine: what
+	// unset reads as. Its seats may still work on a GitHub or GitLab they
+	// are connected to; those are integrations the seats call, never a host
+	// the engine runs in Gitlet's place, so this axis names no vendor.
+	CodeNone CodeBackend = "none"
+)
+
+// CodeBackends is the closed set, read by the validator, the schema generator
+// and the org projection's `services`, so an editor's enum, the engine's
+// refusal and the dashboard's copy cannot drift apart.
+var CodeBackends = []CodeBackend{CodeGitlet, CodeNone}
+
+// Valid reports whether b is a git host this build serves. Unset is not a
+// member: [Company.CodeBackendFor] resolves it to none before anything reads
+// it, and the validator lets it through as the default.
+func (b CodeBackend) Valid() bool { return slices.Contains(CodeBackends, b) }
+
+// CodeBackendFor resolves the git host: the backend the document names, else
+// none. Nothing derives Gitlet from another block, unlike the tracker, the
+// knowledge base and chat, whose vendors' blocks name their backend: a GitHub
+// or GitLab integration is not a host the engine runs.
+func (c *Company) CodeBackendFor() CodeBackend {
+	if c.Code.Backend != "" {
+		return c.Code.Backend
+	}
+	return CodeNone
 }
 
 // CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
@@ -523,7 +562,7 @@ type CodeChecks struct {
 	// RunIn is the cell a check whose file names none runs in: one of
 	// [CodeCheckCells]. Unset is providers.sandbox's own default where that is
 	// one of them, else no cell ([Company.CheckRunIn]).
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a Gitlet node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host."`
 
 	// AllowRunIn are the cells a repository's checks file may name in a
 	// check's own run_in. Unset is the one RunIn resolves to; set, it holds
@@ -546,9 +585,9 @@ type CodeChecks struct {
 
 	// Remote caps the checks the company runs in REMOTE (e2b) cells, whose
 	// boxes run on a provider's machines and are billed by the company's
-	// account there — company-wide, however many git nodes run checks.
-	// Container cells are each git node's own, bounded by its Tier A
-	// git.max_checks instead.
+	// account there — company-wide, however many Gitlet nodes run checks.
+	// Container cells are each Gitlet node's own, bounded by its Tier A
+	// gitlet.max_checks instead.
 	Remote CodeChecksRemote `yaml:"remote,omitempty" json:"remote,omitzero"`
 }
 
@@ -566,7 +605,7 @@ type CodeChecksRemote struct {
 	// A POINTER because 0 is a setting — no check runs remotely, each one
 	// naming e2b waiting queued — and unset is the default
 	// ([CodeDefaultRemoteMaxRunning]).
-	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
+	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever Gitlet node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
 
 	// BoxHoursPerDay is how many hours of remote box time the company starts
 	// in a UTC day, each box charged a minute at a time from its start to
@@ -677,21 +716,21 @@ func (k CodeChecks) validate(path Path) error {
 }
 
 // NeedsRole reports whether the company needs a node role at all: every role
-// but git always, and git exactly where the company hosts its repositories in
-// the engine (code.native) — a git node serves nothing for a company that does
-// not. Nil-safe: no company needs every role but git.
+// but gitlet always, and gitlet exactly where the company runs Gitlet
+// (code.backend: gitlet) — a Gitlet node serves nothing for a company that does
+// not. Nil-safe: no company needs every role but gitlet.
 //
 // THE ONE STATEMENT OF THE RULE, read by the fleet's unmanned-role check on
 // every node (the engine's seat.Config.RoleNeeded) and by the fleet view's
 // unmanned_roles, so a warning in one node's log and the screen an operator
 // reads can never disagree about whether the fleet is missing a role. Each
 // held its own copy once, and the screen's — a role nobody declared — named
-// git missing on every fleet that hosts no code and lists its nodes' roles.
+// gitlet missing on every fleet that hosts no code and lists its nodes' roles.
 func (c *Company) NeedsRole(role placement.NodeRole) bool {
-	if role != placement.RoleGit {
+	if role != placement.RoleGitlet {
 		return true
 	}
-	return c != nil && c.Code.Native
+	return c != nil && c.CodeBackendFor() == CodeGitlet
 }
 
 // DeletedRetention is code.deleted_retention_days as a duration, its default
@@ -800,7 +839,7 @@ func ValidCodeCheckEnvName(name string) bool {
 }
 
 // CodeCheckCells are the cells a check runs in, in this order: TWO OF THE
-// SANDBOX'S THREE PLACEMENTS ([Placements]) — a container on a git node, which
+// SANDBOX'S THREE PLACEMENTS ([Placements]) — a container on a Gitlet node, which
 // holds the repository's copy beside it, or a remote e2b box, which fetches
 // the one commit it checks. A check runs a change's own code — its build, its
 // tests, whatever its author put there — so it never runs where that code
@@ -1297,7 +1336,7 @@ func (c CodeChangeClass) Valid() bool { return slices.Contains(CodeChangeClasses
 type CodeLimits struct {
 	MaxPushBytes int64 `yaml:"max_push_bytes,omitempty" json:"max_push_bytes,omitempty" js:"min=1048576;max=1073741824" desc:"The largest pack one push may send; unset is 1 GiB, the most it may be."`
 	MaxBlobBytes int64 `yaml:"max_blob_bytes,omitempty" json:"max_blob_bytes,omitempty" js:"min=1024;max=1073741824" desc:"The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in Worklet's files."`
-	RepoMaxBytes int64 `yaml:"repo_max_bytes,omitempty" json:"repo_max_bytes,omitempty" js:"min=1048576;max=1099511627776" desc:"The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole."`
+	RepoMaxBytes int64 `yaml:"repo_max_bytes,omitempty" json:"repo_max_bytes,omitempty" js:"min=1048576;max=1099511627776" desc:"The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every Gitlet node serving a repository caches it whole."`
 	// PushesPerSeatDay is how many pushes one seat may land in one company
 	// day, every repository together; 0 is unset, the default
 	// ([DefaultCodePushesPerSeatDay]). Persons are never counted.
@@ -1344,53 +1383,63 @@ func (l CodeLimits) zero() bool { return l == CodeLimits{} }
 // either.
 func (c Code) validate(path Path, o *org.Organization) error {
 	var p problems
-	if !c.Native {
+	// AN UNKNOWN BACKEND IS THE ONE THING SAID about the rest of the block:
+	// whether the settings below have a host to configure turns on a value
+	// nobody can read yet, and seven refusals naming a backend the author
+	// misspelled bury the one line that fixes them all.
+	known := c.Backend == "" || c.Backend.Valid()
+	if !known {
+		p.add(at(path, "backend"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			c.Backend, words.Or(CodeBackends), CodeNone)
+	}
+	unhosted := known && c.Backend != CodeGitlet
+	if unhosted {
 		// NOTHING HOSTS ANY OF IT, so each would read as live and do
 		// nothing: limits holding no push, a retention purging nothing,
 		// repositories nobody creates.
 		if !c.Limits.zero() {
 			p.add(at(path, "limits"), ErrConflict,
-				"nothing hosts code on this company: set code.native, or remove code.limits")
+				"nothing hosts code on this company: set code.backend: gitlet, or remove code.limits")
 		}
 		if c.DeletedRetentionDays != 0 {
 			p.add(at(path, "deleted_retention_days"), ErrConflict,
-				"nothing hosts code on this company: set code.native, or remove "+
+				"nothing hosts code on this company: set code.backend: gitlet, or remove "+
 					"code.deleted_retention_days")
 		}
 		if c.IdentityDomain != "" {
 			p.add(at(path, "identity_domain"), ErrConflict,
 				"nothing hosts code on this company, so no commit is built to name it: set "+
-					"code.native, or remove code.identity_domain")
+					"code.backend: gitlet, or remove code.identity_domain")
 		}
 		if len(c.Repos) > 0 {
 			p.add(at(path, "repos"), ErrConflict,
 				"nothing hosts code on this company, so none of these %d repositories "+
-					"would be created: set code.native, or remove code.repos", len(c.Repos))
+					"would be created: set code.backend: gitlet, or remove code.repos", len(c.Repos))
 		}
 		if !c.Scratch.zero() {
 			p.add(at(path, "scratch"), ErrConflict,
 				"code.scratch configures Gitlet, and nothing hosts code on this "+
-					"company: set code.native: true, or remove code.scratch")
+					"company: set code.backend: gitlet, or remove code.scratch")
 		}
 		if !c.Checks.zero() {
 			p.add(at(path, "checks"), ErrConflict,
 				"nothing hosts code on this company, so no repository defines a check to run: set "+
-					"code.native, or remove code.checks")
+					"code.backend: gitlet, or remove code.checks")
 		}
 		if !c.RemoteCredentials.zero() {
 			p.add(at(path, "remote_credentials"), ErrConflict,
 				"nothing hosts code on this company, so no mirror or import is dialed with these: set "+
-					"code.native, or remove code.remote_credentials")
+					"code.backend: gitlet, or remove code.remote_credentials")
 		}
 	}
 	switch {
 	case !c.MergeByFloor.Valid():
 		p.add(at(path, "merge_by_floor"), ErrUnknownValue, "%q (want %s, or unset for %s)",
 			c.MergeByFloor, words.Or(CodeMergeBys), CodeMergeByWriters)
-	case !c.Native && c.MergeByFloor != "":
+	case unhosted && c.MergeByFloor != "":
 		p.add(at(path, "merge_by_floor"), ErrConflict,
-			"nothing hosts code on this company, so no merge is held to it: set code.native, or remove "+
-				"code.merge_by_floor")
+			"nothing hosts code on this company, so no merge is held to it: set code.backend: gitlet, "+
+				"or remove code.merge_by_floor")
 	}
 	if d := c.DeletedRetentionDays; d < 0 || d > codeMaxHeldRetentionDays {
 		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
@@ -1748,7 +1797,10 @@ func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *
 
 // mirrorSeatReads reports whether seat reads the repository r, as the code
 // domain grants a read (internal/code's GrantOf, ADR-0088): a PERSON'S seat
-// reads every repository, and an agent's every one visible to the company —
+// reads every repository as far as the chart goes — whether the person holding
+// it uses Gitlet (ADR-0110) is the identity directory's to say, which no
+// configuration reads, so a push mirror asks it at a person's create and
+// settings change and before every push — and an agent's every one visible to the company —
 // every tier this document can spell reads, so no tier narrows it — and one
 // visible to its owner's unit alone where the chart relates the seat to the
 // owner: a seat in the owning unit or a unit below it, a lead over it (the
@@ -2253,7 +2305,7 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 // a normalised chart at every validate and every apply for nothing.
 func (c *Company) codeWarnings() []Warning {
 	out := c.roleCodeWarnings()
-	if !c.Code.Native {
+	if c.CodeBackendFor() != CodeGitlet {
 		return out
 	}
 	out = append(out, c.directBoxWarnings()...)
@@ -2315,7 +2367,7 @@ func (c *Company) codeWarnings() []Warning {
 // to.
 //
 // WHAT IT SAYS IS WHAT THE CELL IS: a `direct` box runs as the engine's own
-// user, so it reads every repository a git node's cache holds and, on ANY
+// user, so it reads every repository a Gitlet node's cache holds and, on ANY
 // node, the Tier A keyring every run token's key is derived from — so it can
 // mint the token of any live executor run and push as that run's seat. Neither
 // a repository's `visibility: unit` nor a run's grants bind it. Said whatever
@@ -2323,7 +2375,7 @@ func (c *Company) codeWarnings() []Warning {
 // company whose every repository is `company`.
 //
 // A WARNING, NOT A REFUSAL (M3-decisions U1 a): refusing a `direct` run given
-// repositories on a git node would close none of those reads — the cache and
+// repositories on a Gitlet node would close none of those reads — the cache and
 // the keyring are files of the engine's user with or without repositories,
 // and the keyring is on every node — while it took every single-node
 // deployment, whose node holds every role, its `direct` cell. The boundary is
@@ -2336,7 +2388,7 @@ func (c *Company) directBoxWarnings() []Warning {
 		return nil
 	}
 	const reads = "a `direct` box runs as the engine's own user: it can read every repository cached on a " +
-		"git node and, on any node, the Tier A keyring that signs run tokens, so it can mint the token of " +
+		"Gitlet node and, on any node, the Tier A keyring that signs run tokens, so it can mint the token of " +
 		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
@@ -2543,7 +2595,7 @@ func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 }
 
 // roleCodeWarnings is every agent seat whose `code.access` nothing reads: the
-// company hosts no code of its own (`code.native` unset), and Gitlet
+// company hosts no code of its own (`code.backend` is not gitlet), and Gitlet
 // is the only thing a tier caps. Valid, since a company may write its
 // seats' tiers before it turns on Gitlet, and worth knowing, because
 // the line reads as a grant. Located at the field, the seat's code.access.
@@ -2558,7 +2610,8 @@ func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 // refusal of its own ([Company.validateHumanSeatCode]), the line to read, as
 // is a tier validation refuses.
 func (c *Company) roleCodeWarnings() []Warning {
-	if c.Code.Native {
+	backend := c.CodeBackendFor()
+	if backend == CodeGitlet {
 		return nil
 	}
 	var out []Warning
@@ -2568,11 +2621,11 @@ func (c *Company) roleCodeWarnings() []Warning {
 			continue
 		}
 		w := advisory(at(path, "code.access"), fmt.Sprintf(
-			"code.access %s grants nothing: this company hosts no code (code.native is unset), "+
+			"code.access %s grants nothing: this company hosts no code (code.backend is %s), "+
 				"and Gitlet is the only place a tier caps what a seat may do. "+
-				"A GitHub App's access is its integrations.github.permissions. Set code.native, "+
+				"A GitHub App's access is its integrations.github.permissions. Set code.backend: gitlet, "+
 				"or remove code",
-			role.Code.Access))
+			role.Code.Access, backend))
 		w.Seat = role.Seat().Handle()
 		out = append(out, w)
 	}

@@ -128,7 +128,15 @@ const (
 	CommentOnWorkItem = "comment_on_work_item"
 	// CreateWorkItem files a work item, an ask among them.
 	CreateWorkItem = "create_work_item"
+	// GetWorkItem reads one work item whole. Here because the work
+	// pickup's brief (internal/events/types) names it, and the tracker
+	// imports that package.
+	GetWorkItem = "get_work_item"
 )
+
+// WithdrawAsk withdraws a seat's own question or held call; here because the
+// access review (internal/accessreview), below the builtins, names it.
+const WithdrawAsk = "withdraw_ask"
 
 // WriteProject is the tracker's one project write a seat holds. The tracker
 // owns it, and it is here because internal/caveat, which the tracker imports,

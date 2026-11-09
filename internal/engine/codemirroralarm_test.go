@@ -18,7 +18,10 @@ import (
 )
 
 // mirrorCompany is gitCompany with its one repository pushed to a mirror at
-// another host, as the founder.
+// another host, as the agent seat that owns it. A person's seat would push only
+// while its holder uses Gitlet (ADR-0110), which this case's identity directory
+// holds nobody for, and the alarm, not who a mirror may push as, is its
+// subject (internal/code's and internal/code/mirror's own suites hold that).
 const mirrorCompany = `
 name: Nimbus
 tracker:
@@ -26,16 +29,16 @@ tracker:
 knowledge:
   backend: none
 code:
-  native: true
+  backend: gitlet
   remote_credentials:
     WEB_MIRROR_TOKEN: {hosts: [mirror.example.com]}
   repos:
     - name: web
-      owner: {seat: founder}
+      owner: {seat: swe}
       mirror_to:
         url: https://mirror.example.com/web.git
         credential: "${WEB_MIRROR_TOKEN}"
-        as: founder
+        as: swe
 roles:
   - name: SWE
     handle: swe
@@ -45,7 +48,7 @@ roles:
 `
 
 // THE MIRROR ALARM FIRES ON ITS HOME (M6-D16, ADR-0015), through the wiring a
-// running node has: a STARTED git node, alone the home of every repository,
+// running node has: a STARTED Gitlet node, alone the home of every repository,
 // whose push mirror's every dial is refused — so its home loop's mirrors
 // worker tries it at its first pass and again once its retry is due, each
 // attempt failing at the dial — raises nothing while the mirror is inside its
@@ -60,7 +63,7 @@ roles:
 // attempt, or at the interval alone, and it fires inside its promise.
 func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	t.Parallel()
-	b := gitNodeBootstrap(t, nil)
+	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, mirrorCompany))
 	var offset atomic.Int64
 	clock := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }

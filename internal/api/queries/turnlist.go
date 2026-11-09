@@ -235,7 +235,8 @@ func turnsFor(turns []store.Turn, p iam.Principal) []store.Turn {
 		}
 		// WHAT STARTED IT, withheld by the same rule from whoever its
 		// object's app does not show: a work item's key is the tracker's,
-		// and which chat message woke a seat is the chat's.
+		// which chat message woke a seat is the chat's, and which change
+		// woke it is Gitlet's.
 		if turn.Origin != nil && !authz.Shows(p, originObject(store.OriginRef(
 			turn.Origin.Kind, turn.Origin.ID))) {
 			turn.Origin = nil
@@ -263,7 +264,9 @@ func originParam(p Params) (string, error) {
 
 // originObject is the kind of row an origin names, as the authority table
 // decides who is shown it: a work item is the tracker's task, a chat message
-// is a message, and a schedule or a colleague's ask is the trail's own.
+// is a message, a change on Gitlet is Gitlet's change (ADR-0110: which change
+// woke a seat names it, and its repository, to whoever reads the turn), and a
+// schedule or a colleague's ask is the trail's own.
 func originObject(origin string) authz.ObjectKind {
 	kind, _, _ := strings.Cut(origin, ":")
 	switch kind {
@@ -271,6 +274,8 @@ func originObject(origin string) authz.ObjectKind {
 		return authz.KindTask
 	case types.OriginChatMessage:
 		return authz.KindMessage
+	case types.OriginCodeChange:
+		return authz.KindChange
 	}
 	return ""
 }

@@ -122,7 +122,7 @@ type Company struct {
 	// codeInForce is Gitlet's settings IN FORCE at this epoch — its
 	// limits and its deleted retention — stamped when it is installed
 	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
-	// sets `code.native`, and otherwise that of the newest earlier epoch
+	// sets `code.backend: gitlet`, and otherwise that of the newest earlier epoch
 	// that did, which a committer and a retention duty still running from
 	// it decide with until a restart. Nil on an epoch never installed, or
 	// one with no hosting epoch before it, which is held to its own
@@ -378,14 +378,18 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
-		Task:      in.Task,
-		Context:   in.Context,
-		Reply:     in.Reply,
-		Endings:   in.Endings,
-		Skills:    in.Skills,
-		SkipNames: toolname.Discovery(),
-		Publisher: in.Publisher,
-		Turn:      in.Turn,
+		Task:    in.Task,
+		Context: in.Context,
+		Reply:   in.Reply,
+		Endings: in.Endings,
+		// THE SEAT'S ACCESS AND WHAT CHANGED IN IT, rendered at the dispatch
+		// beside the endings and frozen with them (capability.go).
+		Access:            in.Access,
+		CapabilityChanges: in.CapabilityChanges,
+		Skills:            in.Skills,
+		SkipNames:         toolname.Discovery(),
+		Publisher:         in.Publisher,
+		Turn:              in.Turn,
 		// The working indicator's phase hook, threaded per turn like the
 		// publisher beside it: which turn's indicator a phase moves is the
 		// caller's answer, not the epoch's.
@@ -426,6 +430,12 @@ type RunnerInput struct {
 	// one its first segment froze.
 	Task    string
 	Endings string
+
+	// Access is the seat's "## Your access" section and CapabilityChanges what
+	// changed in it since the seat was last told, rendered at the dispatch
+	// ([Engine.capabilityFor]) and frozen with Endings.
+	Access            string
+	CapabilityChanges string
 
 	// Metrics is the node's recorder, which every surface of the turn
 	// counts into ([runner.Config.Metrics], where it is copied): its

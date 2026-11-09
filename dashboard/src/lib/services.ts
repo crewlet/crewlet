@@ -8,7 +8,7 @@
  * at all; Doclet (the engine's own knowledge base: spaces and pages) or
  * Confluence, or none; Chatlet (the engine's own rooms) or the Mattermost or
  * Slack it declares, or none; and it hosts its git repositories in Gitlet
- * (the engine's own git host, `code.native`) or does not. The engine resolves which
+ * (the engine's own git host, `code.backend: gitlet`) or does not. The engine resolves which
  * from the company document and hands it to every reader on the org
  * projection (`services`, `contract/services.ts`): the socket's first frame,
  * every `org` push and `GET /org`. So nothing here probes for it, and a
@@ -84,7 +84,7 @@ export function servicesRun(services: OrgServices | null | undefined): ServicesR
     services.tracker === "worklet",
     services.knowledge === "doclet",
     services.chat === "chatlet",
-    services.code === "native",
+    services.code === "gitlet",
   );
 }
 

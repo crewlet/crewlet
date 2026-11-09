@@ -97,7 +97,7 @@ type Pool interface {
 
 // Dial is the one outbound dial, as the engine builds it: the source's URL
 // resolved and judged by the public-address rule (gitproc.ResolveRemote,
-// Tier A git.import_allow_private its one escape), and the header carrying the
+// Tier A gitlet.import_allow_private its one escape), and the header carrying the
 // credential its ${VAR} reference resolves to — "" for a source fetched
 // anonymously — added (gitproc.Remote.WithHeader). An error is the attempt's.
 type Dial func(ctx context.Context, url, credential string) (gitproc.Remote, error)
@@ -175,6 +175,12 @@ type Options struct {
 	// (code.MirrorSeatRefusal), since a later revision of the chart may take
 	// the seat's read away.
 	Roster func() code.Roster
+	// People answers who holds a human seat and with which apps
+	// (code.People), read at every push of a push mirror pushing as a
+	// person's seat: the mirror publishes only what that seat reads, and a
+	// person reads only through Gitlet (ADR-0110), which an administrator may
+	// take away after the mirror was set.
+	People code.People
 	// Events is this node's event stream, which a push's account
 	// (code_mirror_pushed) and an import's end (code_imported) are published
 	// on; nil publishes none.
@@ -303,6 +309,7 @@ func New(o Options) (*Mirrors, error) {
 	for name, absent := range map[string]bool{
 		"Estate": o.Estate == nil, "Cache": o.Cache == nil, "Git": o.Git == nil, "Objects": o.Objects == nil,
 		"Dial": o.Dial == nil, "NodeID": o.NodeID == "", "Limits": o.Limits == nil, "Roster": o.Roster == nil,
+		"People": o.People == nil,
 	} {
 		if absent {
 			missing = append(missing, name)
@@ -441,7 +448,7 @@ func (m *Mirrors) remember(key mirrorKey, l listed) {
 // running — what a listing said of it, its attempts' memory, its health, what
 // its push last left the other host level with and its queued attempt — is
 // dropped. So the worker holds what its last whole
-// listing named — the company's imports and mirrors, as every git node lists
+// listing named — the company's imports and mirrors, as every Gitlet node lists
 // them before its placement says which are its own — never every repository
 // any listing ever named: one deleted, one whose mirror went, an import that
 // ended. A pull mirror past the listing's stop, synced within its interval, is

@@ -598,14 +598,10 @@
 }
 
 /* Activity: the list is the whole view until an item opens, then half of it
-   beside the item (`ListDetail`'s half split, flush at the hairline). The
-   rows run full bleed and inset themselves on the conversation's side line
-   (the kit's chat density), so the list draws no inset of its own. */
-.chat-activity {
-  flex: 1;
-  min-height: 0;
-}
-
+   beside the item (`ListDetail`'s half split, flush at the hairline, filling
+   the view by the kit's own rules). The rows run full bleed and inset
+   themselves on the conversation's side line (the kit's chat density), so the
+   list draws no inset of its own. */
 /* The list starts the shared step under the tab bar, as every tabbed panel
    does, inside the list's own column, so the hairline beside it still meets
    the bar. */
@@ -624,11 +620,10 @@
 }
 
 /* Direct messages: the conversations, a column as wide as a roomy sidebar,
-   beside the open one. The rows are the kit's chat density, as Activity's. */
+   beside the open one. The rows are the kit's chat density, as Activity's.
+   The width is the kit's own variable; nothing here sizes the kit's boxes. */
 .chat-dms-split {
   --crewlet-list-detail-list: clamp(18rem, 38%, 28rem);
-  flex: 1;
-  min-height: 0;
 }
 
 .chat-dms-list {
@@ -651,6 +646,8 @@
   padding: var(--spacing-2) var(--spacing-3) 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
 }
 
+/* The list's title, its words inside the kit's button (a rule on the button
+   itself would lose to the kit's sheet in a built page). */
 .chat-dms-title {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);

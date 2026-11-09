@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -153,6 +154,10 @@ type Dispatcher struct {
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
+
+	// ReviewSettled reports an access review with nothing left to tell
+	// ([Engine.AccessReviewSettled]), acked without a turn. Nil settles nothing.
+	ReviewSettled func(ctx context.Context, handle string) bool
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -570,6 +575,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
+	// AN ACCESS REVIEW WITH NOTHING LEFT TO TELL, acked unrun: the turn that
+	// told the change already asked for the review (internal/accessreview).
+	if d.ReviewSettled != nil && accessReviewsOnly(surviving) && d.ReviewSettled(ctx, handle) {
+		log.InfoContext(ctx, "access_review_settled", "seat", handle, "events", len(surviving),
+			"detail", "the seat was already told its access as it stands; no review turn runs")
+		return queue.Ack()
+	}
 
 	// THE ANSWER IS CLAIMED BEFORE ANYTHING ELSE EATS IT.
 	//
@@ -625,6 +637,24 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				d.NoteDeferred(handle)
 			}
 			return queue.Defer(queue.DeferAnswerOwed, answerOwedReason(handle, cause))
+		case sandbox.AnswerRefused:
+			// A REPLY TOO LARGE TO BE ITS RUN'S ANSWER, whose REFUSAL is
+			// recorded on the run in the answer's place and resumes it
+			// told so (ADR-0114). No turn runs on it: the seat answering
+			// it as a new message is the defect the refusal ends.
+			//
+			// KEPT, NOT SPENT: deferred at the head of the inbox, behind
+			// the hold the owed refusal keeps on it, and never recorded as
+			// worked here. The run's row carries none of the reply, so
+			// this delivery is its one copy: a turn that takes the
+			// refusal records it as worked, and it is dropped when it
+			// comes round; a refusal let go of leaves it unspent, and it
+			// comes round as the ordinary message it is — the way it
+			// came. Acked, a refusal let go of would lose the reply.
+			if d.NoteDeferred != nil {
+				d.NoteDeferred(handle)
+			}
+			return queue.Defer(queue.DeferAnswerOwed, refusedReplyReason(handle))
 		}
 	}
 
@@ -1244,6 +1274,9 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // working it, with a deferral that keeps its place: a NAK would return it
 // BEHIND its conversation's newer mail (queue.OutcomeNak), where the person's
 // next message could reach the question first and be taken as its answer.
+// [sandbox.AnswerRefused] is a reply too large to be the answer, whose refusal
+// the run now holds in the answer's place (ADR-0114): returned the same way,
+// unspent, since the delivery is the only copy of the reply there is.
 //
 // THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
 // beside it to tell apart runs one conversation admits. The rule — "the
@@ -1323,6 +1356,15 @@ func answerOwedReason(handle string, cause error) string {
 		return fmt.Sprintf("%s is still owed this answer", handle)
 	}
 	return fmt.Sprintf("%s is still owed this answer: %s", handle, cause)
+}
+
+// refusedReplyReason is the deferral reason a reply too large for its run is
+// kept with while the refusal recorded for it is the run's
+// ([sandbox.AnswerRefused]).
+func refusedReplyReason(handle string) string {
+	return fmt.Sprintf("a run of %s holds this reply's refusal, which a resumed turn has not taken yet; "+
+		"the reply is kept until it does, or comes back as an ordinary message if the refusal is let go of",
+		handle)
 }
 
 // AnswerWorked reports whether an answer by turn's delivery is recorded as
@@ -1911,7 +1953,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// exhaustion.
 			owed = turn.EngineReply()
 
-		case types.TaskAssigned{}.EventType():
+		case types.TaskAssigned{}.EventType(), types.WorkPickupType:
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
 			//
@@ -1982,4 +2024,15 @@ var replyRank = map[turn.ReplyKind]int{
 	turn.ReplyNone:   1,
 	turn.ReplyEngine: 2,
 	turn.ReplyTool:   3,
+}
+
+// accessReviewsOnly reports a delivery made only of access reviews.
+func accessReviewsOnly(evs []*events.Event) bool {
+	for _, ev := range evs {
+		n, ok := events.DataAs[*types.ExternalNotification](ev)
+		if !ok || n == nil || n.NotificationSource != accessreview.Source {
+			return false
+		}
+	}
+	return len(evs) > 0
 }

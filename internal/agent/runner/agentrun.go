@@ -281,10 +281,12 @@ type SessionBasis struct {
 
 	// Through and NoteCursor are what the session accounts for, so the brief
 	// that continues it carries what came after: its save point — how many of
-	// the round's calls the run's log had taken when the capture read it
-	// (sandbox.SessionCapture.Through), every call the log took after it
-	// ([BridgedCall.Appended] past it) being one the session had not been
-	// answered — and the last note read. Zero holds none of the round's calls.
+	// the round's calls the run's log had taken at the read the capture was
+	// placed by, its own or, where its harness may not have written every call
+	// it made, an earlier capture's (sandbox.SessionCapture.Through), every
+	// call the log took after it ([BridgedCall.Appended] past it) being one the
+	// session may not have been answered — and the last note read. Zero holds
+	// none of the round's calls.
 	Through    int
 	NoteCursor int
 
@@ -338,13 +340,19 @@ func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base 
 // continues it tells its run: the ended turn it is, where that session was last
 // worked, whether its harness was cut off when it was saved, what its last
 // request carried — which the launch's floor is made of — and when that turn
-// ended, which is where the new turn begins.
+// ended, which is where the new turn begins; where that turn's end said it went
+// on past the session (WentOn), when the session was kept, which is where the
+// session above ends instead; and whether the turn was lost (Lost), so the
+// session may not hold the last of what it did.
 type BaseBasis struct {
 	Turn          string
 	Home          string
 	Interrupted   bool
 	ContextTokens int64
 	EndedAt       time.Time
+	CapturedAt    time.Time
+	WentOn        bool
+	Lost          bool
 }
 
 // SessionProber is an [AgentLauncher] that says, before a launch writes its
@@ -796,7 +804,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 		Task:       r.cfg.Task,
 		// AND WHAT THE TURN STARTED WITH, for the launches after it. See
 		// [execstate.State.Context].
-		Context: frozen(r.cfg.Context, r.cfg.Endings),
+		Context: frozen(r.cfg.Context, r.cfg.dispatched()),
 	}
 	if err := state.Validate(); err != nil {
 		// Not recorded, and the absence is what the engine reports: a run
@@ -961,11 +969,20 @@ func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
 	}
 }
 
+// dispatched is what a turn's dispatch rendered once for every launch of it:
+// how the conversation's earlier turns ended, the seat's access, and what
+// changed in it since the seat was last told.
+type dispatched struct{ endings, access, changes string }
+
+// dispatched is the config's dispatch-rendered sections.
+func (c Config) dispatched() dispatched {
+	return dispatched{endings: c.Endings, access: c.Access, changes: c.CapabilityChanges}
+}
+
 // frozen is the turn-start context a runner builds every launch's prompt from,
-// as a park carries it: the blocks' rendered text and how the conversation's
-// earlier turns ended — what [Runner.executorPrompt] reads of them, and
-// nothing else.
-func frozen(blocks prefetch.Blocks, endings string) execstate.Frozen {
+// as a park carries it: the blocks' rendered text and what the dispatch
+// rendered, what [Runner.executorPrompt] reads of them and nothing else.
+func frozen(blocks prefetch.Blocks, d dispatched) execstate.Frozen {
 	return execstate.Frozen{
 		ThreadContext:       blocks.ThreadContext,
 		PersonalMemory:      blocks.PersonalMemory,
@@ -973,13 +990,15 @@ func frozen(blocks prefetch.Blocks, endings string) execstate.Frozen {
 		EpisodeRecall:       blocks.EpisodeRecall,
 		CounterpartyProfile: blocks.CounterpartyProfile,
 		SynthesizedSkills:   blocks.SynthesizedSkills,
-		Endings:             endings,
+		Endings:             d.endings,
+		Access:              d.access,
+		CapabilityChanges:   d.changes,
 	}
 }
 
 // thawed is a parked turn's frozen context back in the shape a runner's
-// prompts read — the inverse of [frozen].
-func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
+// prompts read: the inverse of [frozen].
+func thawed(f execstate.Frozen) (prefetch.Blocks, dispatched) {
 	return prefetch.Blocks{
 		ThreadContext:       f.ThreadContext,
 		PersonalMemory:      f.PersonalMemory,
@@ -987,7 +1006,7 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 		EpisodeRecall:       f.EpisodeRecall,
 		CounterpartyProfile: f.CounterpartyProfile,
 		SynthesizedSkills:   f.SynthesizedSkills,
-	}, f.Endings
+	}, dispatched{endings: f.Endings, access: f.Access, changes: f.CapabilityChanges}
 }
 
 // resumeAgentRun turns a finished agentic run into the turn's Work.

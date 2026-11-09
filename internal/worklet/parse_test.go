@@ -2,6 +2,7 @@ package worklet_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,14 +27,17 @@ import (
 func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind:     worklet.ChangeComment,
-		Excerpt:  "can you look at this",
-		Mentions: []string{"bo"},
+		Kind:    worklet.ChangeComment,
+		Excerpt: "can you look at this",
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", Title: "wire it",
 			Status: worklet.StatusInProgress, Assignee: "cy",
 			CommentAuthorKind:  worklet.AuthorHuman,
 			ThreadParticipants: []string{"di"},
+			// A WATCHER, so a person's comment that names nobody reaches
+			// three seats under three reasons (ADR-0113: one naming
+			// somebody would wake that somebody alone).
+			Watchers: []string{"bo"},
 		},
 	})
 
@@ -54,7 +58,7 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"bo": string(worklet.ReasonMention),
+		"bo": string(worklet.ReasonWatcher),
 		"cy": string(worklet.ReasonAssignee),
 		"di": string(worklet.ReasonThread),
 	}
@@ -83,13 +87,18 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 	for _, c := range []struct {
 		actor string
 		kind  worklet.AuthorKind
+		apps  []iam.Grant
 		want  types.NotificationWriter
 	}{
-		{"ana", worklet.AuthorHuman, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
-		{"bo", worklet.AuthorAgent, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
-		{"token:ci", worklet.AuthorOperator, types.NotificationWriter{Kind: iam.ActorOperator}},
+		{"ana", worklet.AuthorHuman, nil, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
+		{"bo", worklet.AuthorAgent, nil, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
+		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
+		// node that took its write recorded for it (ADR-0109).
+		{"token:ci", worklet.AuthorOperator, []iam.Grant{iam.GrantWorklet},
+			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantWorklet}}},
 		// A NODE NAMED LIKE A SEAT is still the engine.
-		{"bo", worklet.AuthorSystem, types.NotificationWriter{Kind: iam.ActorSystem}},
+		{"bo", worklet.AuthorSystem, nil, types.NotificationWriter{Kind: iam.ActorSystem}},
 	} {
 		// THE COMMENT NAMES cy, so it wakes cy whoever wrote it: unnamed,
 		// only a person's comment asks the assignee anything (ownerAsked),
@@ -100,13 +109,13 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 			Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy",
 				CommentAuthorKind: c.kind},
 		})
-		record.Actor, record.ActorKind = c.actor, c.kind
+		record.Actor, record.ActorKind, record.ActorApps = c.actor, c.kind, c.apps
 		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
 			t.Context(), delivery(t, record), registry(t, "ana", "bo", "cy"))
 		if err != nil || len(routed) != 1 {
 			t.Fatalf("Parse = (%d, %v), want cy's one wake", len(routed), err)
 		}
-		if got := routed[0].Writer; got == nil || *got != c.want {
+		if got := routed[0].Writer; got == nil || !reflect.DeepEqual(*got, c.want) {
 			t.Errorf("a %s write by %s names its writer %+v, want %+v",
 				c.kind, c.actor, got, c.want)
 		}
@@ -158,6 +167,7 @@ func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
+			CommentAuthorKind: worklet.AuthorHuman,
 		},
 	})
 	parser := worklet.NewParser(worklet.ParserOptions{})
@@ -199,6 +209,7 @@ func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
+			CommentAuthorKind: worklet.AuthorHuman,
 		},
 	})
 	routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(t.Context(),

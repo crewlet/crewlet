@@ -255,9 +255,11 @@ const (
 	// is in it only because its watch of the seat was decided as a read of
 	// that person's inbox ([watching]) and stays decided — so, as for an
 	// artifact's room, no grant stands in front of the kind itself. The
-	// frame is no one app's: it names the domain whose half of the inbox
+	// kind is no one app's: it names the domain whose half of the inbox
 	// moved, and every domain that keeps one pushes it, so a grant here
-	// would be one domain's permission in front of another's news.
+	// would be one domain's permission in front of another's news. WHICH
+	// watcher a frame reaches is that half's app's, decided per reader by
+	// the frame itself ([InboxChange.ForReader]).
 	NeedInbox Need = "inbox"
 
 	// NeedArtifact is an artifact room's: decided PER ARTIFACT, by the

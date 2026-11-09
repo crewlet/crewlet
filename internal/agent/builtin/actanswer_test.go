@@ -65,9 +65,9 @@ var everyWriteCall = map[string]map[string]any{
 	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
 	// THE CHAT GESTURES, every one the dashboard makes — the read-state
 	// flush included, which appends nothing ([appendsNoRecord]).
-	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved"},
-	builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": "ok"},
-	builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": "a word"},
+	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved", "asks": false},
+	builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": "ok", "asks": false},
+	builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": "a word", "asks": false},
 	builtin.ReactToMessageTool: {"channel": chatRoomID, "message_id": "m1",
 		"emoji": ":+1:"},
 	builtin.JoinChannelTool:  {"channel": chatRoomID},

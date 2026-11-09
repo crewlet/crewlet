@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
@@ -127,9 +128,9 @@ var sentinels = []sentinel{
 	// GITLET'S, every one of them — ErrBadBundle, ErrBadLayer,
 	// ErrSuperseded, ErrAnswerDue and ErrMisplaced included, though none is
 	// answered across the wire today (a bad bundle never leaves the receiving
-	// node, nor a bad layer the git node that checked it; a superseded
+	// node, nor a bad layer the Gitlet node that checked it; a superseded
 	// reconcile is the deciding node's own; a read whose answer fell due is
-	// answered unready by the git node it fell due on; a re-anchoring answer
+	// answered unready by the Gitlet node it fell due on; a re-anchoring answer
 	// placing another set than its anchors is refused on the node that asked
 	// for it, as that node's own fault) — for the reason the list is complete
 	// at all.
@@ -200,7 +201,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
 	// THE IDENTITY DIRECTORY'S, which a node holding no data reads through
-	// a data node ([opIdentityBinding], [opSeatHolders], [opSeatHolder]) —
+	// a data node ([opIdentityBinding], [opSeatHolders], [opRequester]) —
 	// and the identity vocabulary's and the session's, which the questions a
 	// person verb is decided on answer in ([iam.Holders],
 	// [session.ResolveSeat]).
@@ -295,12 +296,21 @@ var sentinels = []sentinel{
 	{"executordomain.ErrTurnEnded", executordomain.ErrTurnEnded},
 	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
 	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
+
+	// THE ACCESS LOG'S, answered by a data node for the engine on a node
+	// holding no data ([AccessReads], [AccessWrites]): a record already made,
+	// an expiry no longer due, a command that does not open as its record's.
+	{"accessdomain.ErrConflict", accessdomain.ErrConflict},
+	{"accessdomain.ErrInvalid", accessdomain.ErrInvalid},
+	{"accessdomain.ErrNotDue", accessdomain.ErrNotDue},
+	{"accessdomain.ErrRecorded", accessdomain.ErrRecorded},
+	{"accessdomain.ErrUnreadable", accessdomain.ErrUnreadable},
 	// And the session's bound the log refuses a capture past, which is
 	// internal/executorkeep's: the sandbox that takes a session stops at it too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
-	{"estate.ErrNoGitNode", ErrNoGitNode},
+	{"estate.ErrNoGitletNode", ErrNoGitletNode},
 }
 
 // typedKind is one error type whose value crosses the wire.
@@ -388,6 +398,7 @@ var typedKinds = []typedKind{
 	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
+	{"accessdomain.ErrFutureVersion", reflect.TypeFor[*accessdomain.ErrFutureVersion]()},
 	{"executordomain.ErrFutureVersion", reflect.TypeFor[*executordomain.ErrFutureVersion]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},

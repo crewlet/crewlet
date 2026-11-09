@@ -159,7 +159,7 @@ func TestADamagedRefsFileIsRewrittenWhole(t *testing.T) {
 	}
 }
 
-// A DELTA'S MERGE ALLOCATES FOR WHAT MOVED, NEVER FOR THE FILE: every git node
+// A DELTA'S MERGE ALLOCATES FOR WHAT MOVED, NEVER FOR THE FILE: every Gitlet node
 // merges every push that moves a ref into a packed-refs of up to
 // code.MaxRefsPerRepo lines, so a line carried is checked and copied straight
 // from the read buffer — and moving one ref in a file twenty times larger

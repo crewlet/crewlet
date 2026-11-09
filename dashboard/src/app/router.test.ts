@@ -383,15 +383,17 @@ describe("the navigation grammar", () => {
   // EVERY PLACE IS THE OVERVIEW'S, ONE APP'S, OR ADMIN'S — and the table says
   // which, so the sidebar, the palette and the frame's lock read one answer.
   // Worklet's screens open with Worklet (or Admin, which includes it) and
-  // nothing else; Doclet's with Doclet; the company-wide
+  // nothing else; Doclet's with Doclet; Chatlet's with Chatlet; Gitlet's with
+  // Gitlet; the company-wide
   // transcripts and every Settings page but You and General with Admin; and
   // the overview — Home, the agents' status, what is running, spend — with
   // nothing at all. Mutation: drop a row's permission, or give a transcript
   // an app's, and the matching line here goes red.
   //
-  // (The tracker's screens: Inbox, My work, Work and Settings › Expensive
-  // tasks. Admin's: the company-wide transcripts, Company › Integrations, and
-  // every Settings page but Spend's readings and Models.)
+  // (The tracker's screens: My work but its Reviews, Work and Settings ›
+  // Expensive tasks. Gitlet's: the Gitlet workspace and My work's Reviews.
+  // Admin's: the company-wide transcripts, and every Settings page but
+  // Spend's readings, Models and MCP & tools.)
   test("nav gates by app", () => {
     const at = (...path: string[]) => sectionOf(path) ?? workspaceRow(workspaceOf(path))!;
     const opens = (path: string[], held: string[]) => {
@@ -429,6 +431,28 @@ describe("the navigation grammar", () => {
       expect(opens(path, ["worklet", "doclet"]), path.join("/")).toBe(false);
       expect(opens(path, []), path.join("/")).toBe(false);
     }
+    // GITLET IS ITS APP'S (ADR-0110), every section and every repository, and
+    // so is My work's Reviews: each reads the code questions, which the engine
+    // refuses a reader without it, and no other app — nor the overview —
+    // opens them. Mutation: drop the workspace's or Reviews' `grants` and the
+    // last two lines go red for that path.
+    const CODE_ONLY = [
+      ["gitlet"],
+      ["gitlet", "repos"],
+      ["gitlet", "repos", "web"],
+      ["gitlet", "repos", "web", "changes", "42"],
+      ["gitlet", "search"],
+      ["gitlet", "pushes"],
+      ["gitlet", "queue"],
+      ["gitlet", "checks"],
+      ["me", "reviews"],
+    ];
+    for (const path of CODE_ONLY) {
+      expect(opens(path, ["gitlet"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["worklet", "doclet", "chatlet"]), path.join("/")).toBe(false);
+      expect(opens(path, []), path.join("/")).toBe(false);
+    }
     const ADMIN_ONLY = [
       ["live", "turns"],
       ["live", "a2a"],
@@ -452,16 +476,8 @@ describe("the navigation grammar", () => {
       // the apps' state and connecting stay an Admin's, on the page itself.
       ["company", "integrations"],
       ["company", "budgets"],
-      // NO APP GATES CODE (ADR-0033): every person reads every repository,
-      // and the engine holds each answer to the reader's own grant.
-      ["gitlet"],
-      ["gitlet", "repos"],
-      ["gitlet", "search"],
-      ["gitlet", "pushes"],
-      ["gitlet", "queue"],
-      ["gitlet", "checks"],
-      // NOR THE INBOX: it is composed from every native domain's notices,
-      // each read under its own permission on the engine's side.
+      // THE INBOX: it is composed from every native domain's notices, each
+      // read under its own permission on the engine's side.
       ["inbox"],
       ["live"],
       ["live", "executors"],

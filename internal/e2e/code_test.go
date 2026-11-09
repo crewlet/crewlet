@@ -41,13 +41,13 @@ const (
 )
 
 // withDevCredential adds the developer's token to boot, beside the fixture's
-// ([withCredential]). It carries the tracker's grant only because Tier A
-// refuses a token that states none: nothing a push does reads it, since what a
-// person may do to a repository is their standing on it (ADR-0088), never a
-// grant a token carries.
+// ([withCredential]). It carries Gitlet, without which the token reaches no
+// repository at all (ADR-0110); what a person holding it may do to a
+// repository is their standing on it (ADR-0088), never a grant a token
+// carries.
 func withDevCredential(boot *config.Bootstrap) {
 	boot.API.Auth.Tokens = append(boot.API.Auth.Tokens,
-		config.APIToken{ID: e2eDevID, Token: e2eDevToken, Grants: []iam.Grant{iam.GrantWorklet}})
+		config.APIToken{ID: e2eDevID, Token: e2eDevToken, Grants: []iam.Grant{iam.GrantGitlet}})
 }
 
 // bindDev binds the developer's token to the developer's human seat through
@@ -102,7 +102,7 @@ func codeCompany(repo string, archived bool) func(doc string) string {
 `
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+seat, 1)
 		return doc + fmt.Sprintf(`code:
-  native: true
+  backend: gitlet
   repos:
     - name: %s
       owner: {unit: Engineering}

@@ -82,12 +82,23 @@
 //     as a turn with no row does not.
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
-//     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
-//     answered) and the row names an older one, the row's object goes: that
-//     session does not hold what the turn did after it, so the row names no
-//     session of the turn rather than one older than its last, and its end
-//     says why. Each session it names as having run out of context goes too
-//     (see "A session that ran out of context is retired").
+//     last word was not kept — its newest capture NOT KEPT
+//     ([executorkeep.Ending.Unkept]: refused, or never answered), or the turn
+//     going on past what it kept in any other way, a stop or a loss whose box
+//     was gone taking nothing more — the end says the turn WENT ON PAST the
+//     session its row names ([executorkeep.Ending.WentOn], record version 4),
+//     and the row KEEPS whatever it names: a prefix of what the turn did, told
+//     as one, holds more than the conversation's previous head or a fresh
+//     session would, and the row says it is not the turn's last word
+//     ([Session.WentOn]), which the conversation's next turn is told — unless
+//     its place is the last word the end names ([executorkeep.Ending.LastWord]):
+//     a capture the run's record held refused whose record the log took before
+//     the end all the same, which the row reads as all the turn did. An end
+//     stamped below version 4 is applied by the rule it was written under,
+//     which takes that older session off the row and absorbs nothing: a
+//     record's meaning is fixed by its stamp ([wentOnVersion]). Each session it
+//     names as having run out of context goes too (see "A session that ran out
+//     of context is retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -239,6 +250,26 @@
 // its begin — with no run of it live (internal/engine's executor source). A
 // person's removal does not reach these rows in this release, as it did not
 // reach the conversation ledger they replace (ADR-0073).
+//
+// # What a reader is told of the session a row keeps
+//
+// Beside a row's fields, a reader is told one thing more of the session it
+// keeps, in the domain's words and asked of the row's one shown form
+// ([Session.Redacted]), so every surface — a person's read surface, a seat's
+// own reads and searches of its sessions — tells it alike. A row naming the
+// session of a turn that has not ended is IN PROGRESS ([Session.InProgress]):
+// the newest session its runs have kept, which its run may have gone on past
+// and whose last call may have no result yet, read as the turn's session and
+// never as an ended turn's, in the engine's words alone
+// ([Session.InProgressNote]); whether a relaunch continues it is the
+// relaunch's own decision, since a relaunch continues only the job it follows.
+// An ended row kept up to a session its turn went on past, or whose turn was
+// lost — at its last word or not — says so ([Session.WentOnNote]), with the
+// newer capture that was not kept and why, which quotes what refused it. The
+// two are carried apart, the first as the engine's and the second as words
+// somebody else wrote in part. Both are read off the row alone: nothing on the
+// log says what kind of capture landed a row, and no reader of it reads the
+// turn's run record.
 //
 // # A seat searches its own rows by their words
 //

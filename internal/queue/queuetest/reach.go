@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // reachWithin is the deadline every verb is sent with once its broker has gone.
@@ -40,7 +41,7 @@ const reachWithin = 500 * time.Millisecond
 //
 // THE WHOLE MATRIX, for the reason lifecycleVerbs gives: a case that sent the
 // two verbs somebody thought of — Publish and Ask, the two a tool sends — would
-// certify those two and leave the other fourteen to whatever their backend
+// certify those two and leave the other seventeen to whatever their backend
 // happened to do.
 func (s *suite) runReachability(t *testing.T) {
 	ctx := t.Context()
@@ -217,10 +218,11 @@ func deadlineState(err error) string {
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and
 // under ctx, and reports what each answered. The complement of the attachment
-// verbs runReachability sends itself, and together with them the sixteen
+// verbs runReachability sends itself, and together with them the twenty-one
 // lifecycleVerbs sends.
 func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
 	topic := ns + ".broker"
+	letters := topics.DeadLetter(topic, "g")
 	ack := func(context.Context, *events.Event) queue.Result { return queue.Ack() }
 	sends := []struct {
 		name string
@@ -264,6 +266,13 @@ func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResul
 			}
 			return err
 		}},
+		{"KeepDeadLetter", func() error { return q.KeepDeadLetter(ctx, letters, []byte("reach"), []byte("reach")) }},
+		{"DeadLettersOn", func() error { return keptErr(q.DeadLettersOn(ctx, letters)) }},
+		{"DeadLetterFrame", func() error { return frameErr(q.DeadLetterFrame(ctx, letters, absentLetter)) }},
+		{"DeadLetterMarks", func() error {
+			return marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))
+		}},
+		{"DropDeadLetter", func() error { return q.DropDeadLetter(ctx, letters, absentLetter) }},
 	}
 	out := make([]verbResult, len(sends))
 	var wg sync.WaitGroup

@@ -445,7 +445,8 @@ func TestAPersonsChannelAddressIsARequestAndAnAgentsIsNews(t *testing.T) {
 		t.Run(string(tc.author), func(t *testing.T) {
 			t.Parallel()
 			routing := chatlet.Routing{ChannelKind: chatlet.KindPublic,
-				AuthorKind: tc.author, Members: members(seats...), Collective: true}
+				AuthorKind: tc.author, Members: members(seats...), Collective: true,
+				Asks: tc.author == chatlet.AuthorAgent}
 			candidates, _ := chatlet.Resolve(routing)
 			rec := aPost()
 			rec.ActorKind = tc.author

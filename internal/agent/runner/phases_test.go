@@ -315,6 +315,10 @@ type buildOpts struct {
 	// ([collect]).
 	context prefetch.Blocks
 	endings string
+	// access and changes are the seat's "Your access" section and what
+	// changed in it, frozen at the dispatch beside the endings.
+	access  string
+	changes string
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
 	// register adds tools beyond the fixture's standard catalogue, for a
@@ -432,27 +436,29 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		launcher = &playLauncher{}
 	}
 	r, err := runner.New(runner.Config{
-		Seat:      prompts.Seat{Org: organization, Role: role},
-		Registry:  reg,
-		Models:    models,
-		Context:   opts.context,
-		Endings:   opts.endings,
-		Task:      task,
-		Reply:     waiting,
-		Launcher:  launcher,
-		Resume:    opts.resume,
-		Fence:     opts.fence,
-		Publisher: opts.pub,
-		OnPhase:   opts.onPhase,
-		Steer:     opts.steer,
-		Subagent:  opts.subagent,
-		Ask:       opts.ask,
-		Checkout:  opts.checkout,
-		Turn:      runTurn,
-		Budget:    opts.budget,
-		Compact:   opts.compact,
-		Sessions:  sessions,
-		Withheld:  opts.withheld,
+		Seat:              prompts.Seat{Org: organization, Role: role},
+		Registry:          reg,
+		Models:            models,
+		Context:           opts.context,
+		Endings:           opts.endings,
+		Access:            opts.access,
+		CapabilityChanges: opts.changes,
+		Task:              task,
+		Reply:             waiting,
+		Launcher:          launcher,
+		Resume:            opts.resume,
+		Fence:             opts.fence,
+		Publisher:         opts.pub,
+		OnPhase:           opts.onPhase,
+		Steer:             opts.steer,
+		Subagent:          opts.subagent,
+		Ask:               opts.ask,
+		Checkout:          opts.checkout,
+		Turn:              runTurn,
+		Budget:            opts.budget,
+		Compact:           opts.compact,
+		Sessions:          sessions,
+		Withheld:          opts.withheld,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

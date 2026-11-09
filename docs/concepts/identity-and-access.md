@@ -148,9 +148,9 @@ taken.
 
 What a principal may do comes from two things: the **permissions** it carries,
 and its **relations** in the org chart — the seat it holds, the team it leads,
-the work it wrote. There are five permissions, because there are five things
+the work it wrote. There are six permissions, because there are six things
 a company actually decides about somebody who joins it: whether they **run**
-it, and which of its four apps they **use**.
+it, and which of its five apps they **use**.
 
 | Permission | On the dashboard | What it is |
 |---|---|---|
@@ -159,16 +159,17 @@ it, and which of its four apps they **use**.
 | `doclet` | **Doclet** | Uses Doclet, the engine's own [knowledge base](knowledge-system.md): reads it and writes it |
 | `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
 | `chatlet` | **Chatlet** | Uses the company's own [chat](chatlet.md): reads its rooms and talks in them |
+| `gitlet` | **Gitlet** | Uses [Gitlet](gitlet.md), the engine's own git host: reads, searches and reviews the company's code, and clones, fetches and pushes with git. Without it a principal reaches no repository through any door ([below](#what-each-app-opens)) |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
-dashboard calls the concept **Access**. `worklet`, `doclet`, `artifacts` and
-`chatlet` are the **apps**, and `iam.Apps` is the one place an app is declared: an
+dashboard calls the concept **Access**. `worklet`, `doclet`, `artifacts`,
+`chatlet` and `gitlet` are the **apps**, and `iam.Apps` is the one place an app is declared: an
 agent seat's own set, the dashboard's picker, the live socket's reader and the
 authority table's checks all read it, so a new app is a new member there and a
 new set of rows, and the build fails until both are in place — which is how
-`chatlet` arrived, appended last so the order every list is drawn in kept its
-first three members.
+`chatlet` and then `gitlet` arrived, each appended last so the order every list
+is drawn in kept its earlier members.
 
 **Admin includes every app.** One function, `iam.Expand`, reads a set as it is
 compared — its own members, plus every app when it holds `admin` — and every
@@ -181,7 +182,11 @@ app this build knows, so taking admin away later leaves the person their apps.
 
 **Everything else is everybody's.** Somebody holding no permission at all still
 sees [the overview](#everybodys-overview) and manages their own account; what
-a permission adds is an app to use or a company to run. What a **lead** may do
+a permission adds is an app to use or a company to run. The company's code is
+not part of the overview: reaching a repository takes `gitlet`, as reading a
+work item takes `worklet`
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+What a **lead** may do
 in their own team, an **author** to their own work and a **person** to their
 own record are relations the [authority
 table](#the-authority-table-one-function-decides) asks the chart about, and so
@@ -263,7 +268,8 @@ permission is needed to take ([Your own account](#your-own-account-is-account)).
 
 **An answer that crosses apps is filtered row by row**, through one helper
 (`authz.Shows`) that asks which app a row belongs to: a work row needs
-`worklet`, a page row `doclet`, and anything else nothing. So the Home
+`worklet`, a page row `doclet`, a chat row `chatlet`, a repository or a change
+`gitlet`, and anything else nothing. So the Home
 feed carries only the rows its reader may see — an explicit `kinds=` entry
 they may not see is dropped rather than refused, since a refusal would confirm
 what exists; the decisions list carries a work item's ask only to a `worklet`
@@ -285,10 +291,11 @@ hands an administrator private titles by that override.
 
 | App | What it opens |
 |---|---|
-| `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox**, **My work** (every section but Reviews, which lists changes on Gitlet and needs no app) and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
+| `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox** (its Worklet half: the code half is `gitlet`'s), **My work** (every section but Reviews, which lists changes on Gitlet and needs `gitlet`) and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push of Worklet's half |
 | `doclet` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
 | `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`), changing its datastore's schema (`set_artifact_schema`) and filing it in a folder (`move_artifact`, beside contributor on the folder); creating a folder inside one they may file in (`create_artifact_folder`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
 | `chatlet` | Every room a person may read and every word they say in one, where the company runs Chatlet: listing their rooms, reading and searching them (`list_channels`, `read_channel`, `search_messages`); posting, replying, a direct message, a reaction and moving their own membership (`post_message`, `reply_in_thread`, `send_dm`, `react_to_message`, `join_channel`, `leave_channel`); and a person's own gestures: making a room, opening a conversation, a room's settings, adding people to it and its whole membership, editing and taking back their own messages and their read state (`create_channel`, `open_dm`, `update_channel`, `add_channel_members`, `set_channel_members`, `edit_message`, `delete_message`, `mark_chat_read`). WHICH room is the chat's own rule: a private room is its members', and one a person cannot read answers as if it did not exist. Archiving a room is its creator's, its unit's lead's or an administrator's, and taking back somebody else's message is an administrator's, as moderation, which reaches a room the moderator is not in without showing it to them. The `chat_*` questions (`GET /chatlet/…`) and the `chat_*` pushes on the live socket |
+| `gitlet` | Every door to the company's code, where the company runs Gitlet (`code.backend: gitlet`): the Gitlet workspace and every place the dashboard shows code; Gitlet's reads under `/gitlet/` and the `code_*` questions, on REST and the socket alike; cloning, fetching and pushing with git over `/git/`; every code tool a person's assistant calls — reading, searching, committing, a change's lifecycle, its reviews and its merge — and a person's own `code_report_check`, `code_import_repo` and `code_purge_unreachable`; being asked to review a change; the code half of a person's **Inbox** — their code notices, listed, counted and marked (`code_mark_inbox`) — and its `inbox_changed` push; **My work › Reviews**; and which change woke a turn, on the trail. Somebody without it is refused before any repository is read, so no answer, count or line of git tells them what one holds. WHICH repository, and what they may do on it, is the repository's grant ([Who may read and push](gitlet.md#who-may-read-and-push)): a person holding the app maintains every repository, a credential bound to no seat that holds it reads every repository and never pushes, and a seat holds the lower of its `code.access` tier and its relation on the chart. Who read a repository (`code_repo_readers`), the Gitlet nodes' cache report (`code_status`) and Settings › Gitlet stay admin's |
 
 **A relation asks the app beside it.** Leading a project, being the owner of an
 inbox, having written a comment, owning a saved view: each is a relation, and
@@ -420,8 +427,9 @@ work an agent owns. Reading its own artifact back, and sharing it, are never
 exempt, and neither is what such an edit hands back: the live files a stale
 publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
-edits, and so does one a credential acting as no seat woke with a change on a
-work item or a page, since no seat stands behind it; a turn nobody woke (a
+edits. One a credential acting as no seat woke with a change on a work item or
+a page is decided for that credential: it opens what is shared with it or that
+it owns, and nothing else; a turn nobody woke (a
 schedule, a watch, the engine's own notice, the outcome of the agent's own act
 such as a workflow its own push failed) is bounded by the agent alone. The
 bound is the turn's and no later one's: a colleague the agent asks reads for
@@ -538,6 +546,96 @@ on work it does not own, and inside a turn somebody woke it is bounded by that
 person too ([An artifact is opened by its
 shares](#an-artifact-is-opened-by-its-shares)).
 
+### An agent uses only the apps of the person it works for
+
+Inside a turn somebody woke — a person's message, their assignment of a work
+item, their comment, a colleague seat's ask, a pipeline's token filing work —
+an agent uses **only the apps that somebody uses**. Every verb whose row names an app is decided twice: once
+for the agent, which holds every app, and once for the app of whoever woke the
+turn ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+A person kept off Worklet cannot have an agent create, read or close work
+items for them; one kept off Doclet cannot have it read or write pages; one
+kept off Chatlet cannot have it post in a room; one without `artifacts` cannot
+have it author an artifact; and one without `gitlet` cannot have it read,
+search, review or change a repository, and an executor the agent launches in
+their turn is given no repository to check out
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+The agent is told which app the person lacks, and that an administrator can
+give it to them.
+
+| The turn was woken by | The apps the agent uses in it |
+|---|---|
+| nobody: a schedule, a watch, the agent's own work | every app |
+| a colleague agent seat working for nobody but itself | every app |
+| a colleague agent seat's ask, or the answer to the agent's own ask, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask and answer |
+| a person of the company | the apps their permissions name (`admin` includes every app) |
+| a person who may not act now: invited and not yet enrolled, suspended or removed | none |
+| a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
+| a credential acting as no seat, with a change on a work item or a page: a Tier A token, or a service account bound to no seat | the apps its permissions name (`admin` includes every app), on the node that took the write and on the node running the turn alike: only an app both give it |
+| a credential the node running the turn cannot place: a Tier A token that node's configuration does not declare, a service account removed, suspended or bound to a seat | none |
+| somebody the company does not know: a chat sender no seat or person maps to | none |
+
+**A token's work is held to the token.** A pipeline's token that files or
+comments on a work item, or writes a page, wakes the agents it names in turns
+worked for that token, by its login and never by its value. The apps it used
+when the node it wrote through resolved it travel with the write, and each call
+uses only an app that those name and that the node running the turn gives the
+login now, so a token narrowed after it wrote, or declared narrower on one node
+than another, never acts wider than the narrower answer. A `token:` login is
+placed by that node's own `api.auth.tokens` and nothing else, and any other
+login by the identity directory alone. Nobody is asked anything for a
+credential: a question its turn's executor addresses to the requester goes to
+the seat's lead chain instead, as one in a turn nobody woke does. And what no
+app gates stays out of its reach: a token's turn reads no fleet health and
+reaches no server (`fleet_health`, `code_status`, `ssh_read`, `ssh_operate`),
+an `admin` token's included.
+
+**A colleague's ask works for whoever the asking turn worked for.** An agent
+that asks a colleague with `a2a_ask` hands the colleague who its own turn
+works for: the person, the credential at the apps it was held to, or the
+stranger, which the engine composes from the asking turn's own ceiling and
+never from the ask's words. The colleague's turn uses only what they use,
+composed again on its own node, so a person revoked since the ask uses
+nothing and a credential is narrowed again, never widened. The answer wakes
+the asking agent in a turn worked for them too, through every ask of a chain.
+What an agent writes that wakes another agent (a work item, a comment, a page
+or a chat message) still wakes it in a turn worked for the writing agent;
+crewlet#798's fourth piece carries the requester through those too.
+
+- **The person asked still answers.** A work item's open ask lets the person it
+  names read the item and answer without Worklet
+  ([The sixteen rules](#the-sixteen-rules)), and an agent they wake may do the
+  same for them.
+- **An agent's own work is no exception.** Steering an agent's edits to its own
+  artifact still takes the artifacts app, and its own branches and repositories
+  take `gitlet`: the app is decided before the rule that lets anybody steer an
+  agent's own work. So for a person without `gitlet`, a person who may not act
+  and a stranger, a seat changes nothing of the company's code, its own work
+  included.
+- **What no app gates stays open.** Asking a colleague, the agent's own memory,
+  and filling in the agent's own data name no app, so they are unaffected.
+- **Relations are not added.** An agent's own record, priorities and inbox stay
+  its own; only the app is decided for the person. Where a family holds a
+  relation for whoever woke the turn as well — an artifact's shares, a
+  colleague seat's grant on a repository — it does so as before ([Reads made
+  for somebody else](gitlet.md#reads-made-for-somebody-else)).
+
+**To have agents act for somebody, they need a person in the directory.** A
+human seat the chart knows only by its contacts (a Slack id, a Mattermost
+account) holds no permission, so agents use no app for its messages. An
+administrator creates the person on that seat with the apps they use
+(Settings › People, or `crewlet iam create -email … -seat … -grants …`,
+[`crewlet iam`](../reference/cli.md#crewlet-iam)). The create lands them active
+with a first password link, and they need never sign in for their agents to act
+for them.
+
+**Each call reads the person afresh.** Which apps somebody uses is read from
+the identity directory once per tool call, never once per turn, so an
+administrator who takes an app away stops the turn's very next call. A node
+that cannot read the directory refuses the call and says to try again; it never
+guesses. The bound is the turn's own: a colleague the agent asks answers in a
+turn the agent woke, and what the agent already knows it may still say.
+
 ### Nobody confers what they do not hold
 
 A caller may not confer a permission they do not hold — on anybody, themselves
@@ -614,7 +712,20 @@ deploy. A writer may **remove** an unknown name from a row and never **add**
 one; a whole-set edit that restates one the row already carries adds nothing
 and is allowed. Tier A is stricter, because a file an operator wrote is a typo
 rather than an upgrade: an unknown name in an `api.auth.tokens` entry is
-refused, naming the five.
+refused, naming the six.
+
+**`gitlet` is such a name on a node older than the app.** Until every node runs
+a build that knows it, an older node keeps it, ignores it and answers the code
+requests it serves under the rule it was built with, where everybody of the
+company reaches code. The narrowing holds fleet-wide once the roll completes
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+Nothing is migrated: an administrator holds `gitlet` at once through `admin`,
+everybody else who uses Gitlet needs it ticked (Settings › People, or
+`crewlet iam grant ID -grants` restating what they hold with `gitlet` added,
+since the flag is the whole set), and a Tier A token that fetches the
+company's code needs `gitlet` in its `grants`. A person's machine token carries
+the grants it was minted with, so one minted before `gitlet` existed lacks it,
+unless it carries `admin`, and is minted again to reach code.
 
 ---
 
@@ -1337,8 +1448,8 @@ would make it one. Because it is judged when the link is issued, **an edit that 
 person a permission revokes their outstanding link** in the same record: that
 permission was never judged against whoever holds the link, so they ask for
 another, judged against the new set — and storing `[admin]` as `[admin,
-worklet, doclet, artifacts, chatlet]` adds nothing, since the comparison
-expands both sides.
+worklet, doclet, artifacts, chatlet, gitlet]` adds nothing, since the
+comparison expands both sides.
 Taking a permission away revokes nothing. What
 the issue does not follow is the *issuer*: an administrator demoted after
 issuing a link still holds one that opens, as an invitation they issued still
@@ -2064,11 +2175,14 @@ every app ticked and Admin not; a **new service account** opens with nothing
 ticked; and **Create token** for a service account opens with the account's own
 permissions that the minter holds too — the account exists to act with them —
 while a person's own **New token** opens with nothing ticked. A note under
-the picker says what an unticked app costs: with **Worklet** unticked a person
-receives no work from their agents, who send work through Worklet; on a
-company whose chat is the engine's own, with **Chatlet** unticked nothing agents
-say to them in a room or a direct message reaches them; and with nothing ticked
-they have the overview only. What each gesture ends is the
+the picker says what an unticked app costs, the first that applies of: with
+**Worklet** unticked a person receives no work from their agents, who send work
+through Worklet; on a company whose chat is the engine's own, with **Chatlet**
+unticked nothing agents say to them in a room or a direct message reaches them;
+on a company that hosts its code in Gitlet, with **Gitlet** unticked agents
+cannot ask them to review their changes and the company's code is closed to
+them; and with nothing ticked they have the overview only ("Overview only: no
+tasks, pages, chat or code."). What each gesture ends is the
 route's:
 
 | Gesture | What it does, and what it ends |
@@ -2424,12 +2538,12 @@ unlocks.
 
 | Rule | Covers | Decided by |
 |---|---|---|
-| **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; Gitlet's reads (`code.read`), its git transport (`code.git`) and the thirteen code tools a seat and a person's assistant read it through (`code_list_repos`, `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`, `code_landed_in`, `code_log`, `code_blame`, a repository's changes, `code_list_changes` and `code_get_change`, a commit's checks, `code_get_check_failures`, and a search across every repository, `code_search`, which leaves each repository's decision to the git node that answers it), which admit the request and leave the decision to the repository's grant once the repository is read, on the node that answers it ([Who may read and push](gitlet.md#who-may-read-and-push)) — and, inside a turn somebody woke, to that requester's too ([Reads made for somebody else](gitlet.md#reads-made-for-somebody-else)); the ten code tools that change a branch or a repository (`code_commit_files`, `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`, `code_create_repo`, `code_update_repo`, `code_delete_repo`, `code_restore_repo`, `code_protect_branch`), on the git transport's footing: they admit every principal — a seat commits, and a token bound to nobody is refused by the tool before anything is routed — and leave the decision to the repository's grant where the change is decided, the git node and the repository's committer for a commit, the data node for a repository's lifecycle ([Engine-built commits](gitlet.md#engine-built-commits), [Repositories made by tools](gitlet.md#repositories-made-by-tools)) — and, inside a turn somebody woke, to that requester's too, but for the seat's own work ([Writes made for somebody else](gitlet.md#writes-made-for-somebody-else)); the code tools that write a repository's changes (`code_open_change`, `code_update_change`, `code_close_change`), on the same footing, each decided by the repository's committer from its own chart — whoever may push a branch opens a change from it, and its owner, a maintainer or any person steers it ([Opening, editing and closing a change](gitlet.md#opening-editing-and-closing-a-change)) — and their conversation (`code_request_review`, `code_review_change`, `code_comment_on_change`, `code_resolve_finding`, `code_apply_suggestions`, an engine write onto the change's branch judged as every engine write, `code_rebase_change`, a forced push of it judged the same, and `code_revert_change`, a new branch undoing a merged change whose push opens the revert's own change, judged the same; and `code_merge_change` and `code_dequeue_change`, a merge and a queue's entry decided by the committer from the target's gate), decided by the data node that commits the repository: who reviews the repository and did not write the change reviews it, an author answers a finding and its raiser, a maintainer or a person dismisses one ([Reviews and findings](gitlet.md#reviews-and-findings)) — each of those change writes, inside a turn somebody woke, held to that requester too, at the access the write needs and but for the seat's own work ([Writes made for somebody else](gitlet.md#writes-made-for-somebody-else)); a commit's checks — what one said (`code_get_check_failures`, decided as the code reads are) and an attempt run again (`code_rerun_checks`), decided by the repository's checks writer from its own chart: a person reruns any ended attempt, a seat only one its infrastructure ended and only where it may write the repository or wrote the change ([Who records a check](gitlet.md#who-records-a-check)) — and a person's own CI's report of a check (`code_report_check`), marked **human-only** beside the class, since a seat runs no CI whose result it could report; a repository created from one at another host (`code_import_repo`), **human-only** too, since an import has Gitlet dial another host for the company — the grant is no question there, every person creating a project for any owner the chart holds; the deployment's health read for whoever woke a granted seat's turn (`fleet.health.read`), which `fleet_health` asks of them before it reads anything, so a seat whose role carries the health grant reads it for anybody of the company who may act and for nobody else; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
-| **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages. And using the chat: reading and searching rooms, saying something in one, reacting and moving one's own membership, and, a person's, making a room, opening a conversation, a room's topic, purpose and whole membership | The row's app (`worklet`, `doclet` or `chatlet`), which an administrator holds through `Expand`. WHICH room is the chat's own rule, decided where the write lands: a private room is its members' |
+| **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; the deployment's health read for whoever woke a granted seat's turn (`fleet.health.read`), which `fleet_health` asks of them before it reads anything, so a seat whose role carries the health grant reads it for anybody of the company who may act and for nobody else; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
+| **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages. And using the chat: reading and searching rooms, saying something in one, reacting and moving one's own membership, and, a person's, making a room, opening a conversation, a room's topic, purpose and whole membership. And reaching the company's code ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)): Gitlet's reads (`code.read`), its git transport (`code.git`) and the thirteen code tools a seat and a person's assistant read it through (`code_list_repos`, `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`, `code_landed_in`, `code_log`, `code_blame`, a repository's changes, `code_list_changes` and `code_get_change`, a commit's checks, `code_get_check_failures`, and a search across every repository, `code_search`, which leaves each repository's decision to the Gitlet node that answers it), which admit a holder of the app and leave the decision to the repository's grant once the repository is read, on the node that answers it ([Who may read and push](gitlet.md#who-may-read-and-push)) — and, inside a turn a colleague seat woke, to that colleague's grant too ([Reads made for somebody else](gitlet.md#reads-made-for-somebody-else)); the ten code tools that change a branch or a repository (`code_commit_files`, `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`, `code_create_repo`, `code_update_repo`, `code_delete_repo`, `code_restore_repo`, `code_protect_branch`), on the git transport's footing: they admit every holder of the app — a seat commits, and a token bound to nobody is refused by the tool before anything is routed — and leave the decision to the repository's grant where the change is decided, the Gitlet node and the repository's committer for a commit, the data node for a repository's lifecycle ([Engine-built commits](gitlet.md#engine-built-commits), [Repositories made by tools](gitlet.md#repositories-made-by-tools)) — and, inside a turn a colleague seat woke, to that colleague's grant too, but for the seat's own work ([Writes made for somebody else](gitlet.md#writes-made-for-somebody-else)); the code tools that write a repository's changes (`code_open_change`, `code_update_change`, `code_close_change`), on the same footing, each decided by the repository's committer from its own chart — whoever may push a branch opens a change from it, and its owner, a maintainer or any person steers it ([Opening, editing and closing a change](gitlet.md#opening-editing-and-closing-a-change)) — and their conversation (`code_request_review`, `code_review_change`, `code_comment_on_change`, `code_resolve_finding`, `code_apply_suggestions`, an engine write onto the change's branch judged as every engine write, `code_rebase_change`, a forced push of it judged the same, and `code_revert_change`, a new branch undoing a merged change whose push opens the revert's own change, judged the same; and `code_merge_change` and `code_dequeue_change`, a merge and a queue's entry decided by the committer from the target's gate), decided by the data node that commits the repository: who reviews the repository and did not write the change reviews it, a person is asked to review only where they hold the app, an author answers a finding and its raiser, a maintainer or a person dismisses one ([Reviews and findings](gitlet.md#reviews-and-findings)) — each of those change writes, inside a turn a colleague seat woke, held to that colleague too, at the access the write needs and but for the seat's own work ([Writes made for somebody else](gitlet.md#writes-made-for-somebody-else)); a commit's checks — what one said (`code_get_check_failures`, decided as the code reads are) and an attempt run again (`code_rerun_checks`), decided by the repository's checks writer from its own chart: a person reruns any ended attempt, a seat only one its infrastructure ended and only where it may write the repository or wrote the change ([Who records a check](gitlet.md#who-records-a-check)) — and a person's own CI's report of a check (`code_report_check`), marked **human-only** beside the class, since a seat runs no CI whose result it could report; a repository created from one at another host (`code_import_repo`), **human-only** too, since an import has Gitlet dial another host for the company — the grant is no question there, every person holding the app creating a project for any owner the chart holds; and a repository's unreachable objects purged (`code_purge_unreachable`), **human-only** and asking a recent proof, by whoever maintains the repository | The row's app (`worklet`, `doclet`, `chatlet` or `gitlet`), which an administrator holds through `Expand`. WHICH room is the chat's own rule, decided where the write lands: a private room is its members'. WHICH repository, and what on it, is the repository's grant, decided where the repository is read or the write is decided: a person holding `gitlet` maintains every repository, a credential bound to no seat reads every one, and a seat holds the lower of its `code.access` tier and its relation on the chart. Inside a turn somebody woke, the app is decided for them too ([An agent uses only the apps of the person it works for](#an-agent-uses-only-the-apps-of-the-person-it-works-for)) |
 | **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names (here `worklet` or `doclet`, and no other): the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker, and an agent seat's own executor sessions (`list_sessions`, `read_session`) | The caller, and **nobody else** — not even admin |
-| **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) | The owner, or admin, with the row's app |
+| **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) and the marks over their own code notices (`code_mark_inbox`) | The owner, or admin, with the row's app |
 | **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question an executor parked on (`answer_executor`); and reading one seat's own trail (`audit.seat.read`: its memory, its turns, its executor's live output and its executor sessions with their transcripts) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose executor is in its box, the seat the executor's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)); for an executor's question it is its **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the executor's seat, so nobody who merely leads the requester answers a question the executor put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
@@ -2437,7 +2551,7 @@ unlocks.
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
 | **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin, with `worklet` |
 | **Authored** | Editing and removing a comment, on a page or a work item; editing and taking back a chat message (`edit_message`, `delete_message`) | Whoever wrote it, or admin — with the remark's app. Admin is decided on the remark **unread**: a moderator takes a chat message down in a room they cannot read without being shown it, and anybody else reads it and is decided again on its author. An edit is still its author's alone — the chat's writer refuses anybody else one, because an edit puts words in somebody's mouth where a take-down only removes them |
-| **Admin** | Configuration, secrets, integrations, the deployment (a verify of a git node's cache among it, and its health read through `fleet_health` and `code_status` — which an agent seat reads by its role's grant instead, below), the company-wide trail, who read a `visibility: unit` repository (`code_repo_readers`, the operator tool and `GET /gitlet/repos/{name}/readers` alike — not the owning unit's leads, who read the repository itself: [Who read it](gitlet.md#who-read-it)), the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), what the company's artifacts hold against their quotas, and a public chat room taking in everybody the company takes on (`chat.channel.autojoin`, asked inside `update_channel`) | `admin` |
+| **Admin** | Configuration, secrets, integrations, the deployment (a verify of a Gitlet node's cache among it, and its health read through `fleet_health` and `code_status` — which an agent seat reads by its role's grant instead, below), the company-wide trail, who read a `visibility: unit` repository (`code_repo_readers`, the operator tool and `GET /gitlet/repos/{name}/readers` alike — not the owning unit's leads, who read the repository itself: [Who read it](gitlet.md#who-read-it)), the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), what the company's artifacts hold against their quotas, and a public chat room taking in everybody the company takes on (`chat.channel.autojoin`, asked inside `update_channel`) | `admin` |
 | **Shared** | One artifact: reading it and its data, writing its data, publishing it, renaming it, its assets and schema, sharing it, trashing and restoring it, a forced publish, a transfer, a pin and an export | The caller's **role** on the artifact, the best of owning it, a share naming their seat, a unit they sit in or the whole company, and leading the agent that owns it; the verb names the least role it admits, and an authoring verb asks the `artifacts` app beside it. No relation is "not found". Admin through the admin path, marked elevated where nothing else admitted. An agent holds at most `contributor` on work it does not own unless the company allows more ([An artifact is opened by its shares](#an-artifact-is-opened-by-its-shares)) |
 | **Directory** | One person's directory row and what hangs off it — reading it, their credentials and sessions, minting and revoking their machine tokens, ending their sessions, changing how they prove who they are — and the directory's own listings: the people, the open invitations, `GET /iam/check` and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, by their **ID**, or admin |
 
@@ -2496,10 +2610,20 @@ field is admin's to set, even on a seat inside a team the writer leads
 ([A lead edits their own team](#a-lead-edits-their-own-team)), and no row
 names a grant beside either mark. In a turn somebody woke, the seat reads the
 two for that somebody only where they may act in the company: whoever woke it
-is decided on `fleet.health.read` (`fleet_health`) or `code.read`
-(`code_status`), rows everybody of the company holds, and never on the grant's
-own row, which no requester holds — so a turn a stranger woke is answered
-nothing. See [The health tools](../guides/fleet.md#the-health-tools).
+is decided on `fleet.health.read` (`fleet_health`), a row everybody of the
+company holds, or on `code.read` (`code_status`), which takes `gitlet`, and
+never on the grant's own row, which no requester holds — so a turn a stranger
+woke is answered nothing by either, and one a person without Gitlet woke
+nothing by `code_status`. See [The health tools](../guides/fleet.md#the-health-tools).
+
+**And the SSH tools the same way.** `ssh_read` and `ssh_operate` are admin's,
+and their rows name the seat grants an agent's SSH block carries: `ssh_read`
+where the block is on with a server, `ssh_operate` where it is at `operate`.
+In a turn somebody woke, whoever woke it is decided on `ssh.requester.read`, a row
+everybody of the company holds, so a turn a stranger woke reaches no server.
+Answering an `ssh_operate` call is `ssh.operate.approve`, **human-only**: an
+administrator, or a person `integrations.ssh.approvers` names, at a fresh
+step-up. See [SSH](../integrations/ssh.md#the-agents-tools).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
@@ -2693,7 +2817,7 @@ verb asks for one:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work, knowledge, artifact and chat verb but the three purges and chat's three destructions, and every code tool but a repository's purge; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a backup, the object store's migration, the retention and capacity gestures, the fleet broker's removals, discarding a wake feed's dead letter, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -3426,7 +3550,8 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`); `admin`, whether
+  the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`,
+  `gitlet` — a CI runner that fetches the company's code needs `gitlet`); `admin`, whether
   this node [serves admin](#access-admin-and-one-permission-per-app) at all
   (`serve` or `refuse`); what a password
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and

@@ -401,6 +401,13 @@ type Actor struct {
 	// answers "what did this credential do".
 	OperatorID string
 
+	// Apps are the apps an OPERATOR — a credential acting as no seat — used
+	// when this node resolved it (iam.ActorApps), and nil for every other
+	// author: carried on the records it writes that wake somebody, so a turn
+	// one of them wakes is worked for the credential no wider than this node
+	// resolved it (ADR-0109). Set by [ActorOf] alone.
+	Apps []iam.Grant
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
@@ -660,7 +667,7 @@ func threadOf(turn *turnctx.Turn) *worklet.Origin {
 func (a Actor) Provenance() worklet.Provenance {
 	provenance := worklet.Provenance{
 		OperatorID: a.OperatorID, TurnID: a.TurnID, Chain: a.Chain,
-		Origin: a.Thread,
+		Origin: a.Thread, Apps: slices.Clone(a.Apps),
 	}
 	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
 	// reports into nothing, and the writer would do the work of naming an
@@ -3749,8 +3756,8 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment,
 	// WHETHER IT WAKES THEM, AND ASKS THEM, is the routing's answer for this
 	// record: a person's comment on the task is the ask and needs no
 	// warning; another agent's reaches the assignee's inbox and starts no
-	// turn, unless it is a reply in a thread they wrote in, which wakes them
-	// without asking them anything.
+	// turn, unless it is a reply in a thread where they still owe an answer,
+	// which wakes them without asking them anything (ADR-0113).
 	heard, ok := worklet.CandidateFor(notify, task.Assignee)
 	if !ok || heard.Addressed {
 		return caveat.Caveat{}

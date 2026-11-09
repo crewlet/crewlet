@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // carriedByServer is every field an operation's types hold that the wire does
@@ -194,14 +196,14 @@ var floorless = map[string]string{
 		"bodies it has read, which no log position describes",
 	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
 		"gate, not whether it has reached the asker's writes",
-	"code.git_read": "reads a git node's cache, not a domain's copy (GitCopy): the asker's " +
+	"code.git_read": "reads a Gitlet node's cache, not a domain's copy (GitCopy): the asker's " +
 		"floor travels in the query, as the cache's sync level, and an object id names " +
 		"the same object at every position",
-	"code.git_write": "builds over a git node's cache, not a domain's copy (GitCopy): the " +
+	"code.git_write": "builds over a Gitlet node's cache, not a domain's copy (GitCopy): the " +
 		"asker's floor travels in the write, as the cache's sync level, and the push it " +
 		"lands is decided by the repository's committer, whose proposal carries the floor " +
 		"its builder read",
-	"code.merge_preview": "merges two commits in a scratch beside a git node's cache, not a " +
+	"code.merge_preview": "merges two commits in a scratch beside a Gitlet node's cache, not a " +
 		"domain's copy (GitCopy): the asker's floor travels in the query, as the cache's sync " +
 		"level, and two object ids name the same two commits at every position",
 
@@ -224,7 +226,8 @@ var floorless = map[string]string{
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, Gitlet's
 // CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
-// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG or the artifacts
+// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG, the access log's
+// CREWLET_ACCESS_LOG or the artifacts
 // estate's and its datastore's, each named as its domain declares it. One that
 // waited on none would carry no floor at all, and one that named another
 // domain's would wait on an applier it does not depend on ([ready]).
@@ -239,6 +242,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 		chatDomain:         "CREWLET_CHAT_LOG",
 		executorDomain:     "CREWLET_EXECUTOR_LOG",
+		accessDomain:       "CREWLET_ACCESS_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -282,13 +286,13 @@ var seatCopyOps = map[string]string{
 // (ADR-0079). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read. The one copy that
-// is no domain's is a git node's git half ([GitCopy]), which a git operation
-// alone names — one keyed on the git nodes and answered on a git lane — and no
+// is no domain's is a Gitlet node's git half ([GitCopy]), which a git operation
+// alone names — one keyed on the Gitlet nodes and answered on a git lane — and no
 // data operation may.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
-		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain}
+		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain, accessDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
@@ -357,8 +361,9 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 }
 
 // THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, one asked again
-// after a node refused it, a reply that answers it, admission's ping and a
-// copy out of service. A field added to the
+// after a node refused it, a write by a seat and one by a credential with the
+// apps it uses, a reply that answers it, admission's ping and a copy out of
+// service. A field added to the
 // envelope, renamed or made to send its zero value changes what every node of
 // a fleet reads of every other, and this is where that shows — rather than in
 // a router that silently reads a field its peer stopped sending. What is pinned
@@ -399,6 +404,18 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 				`"provenance":{"OperatorID":"","TurnID":"","Chain":null,"Origin":null}},` +
 				`"deadline":"2026-10-04T12:00:00Z","accept_lagging":true}`,
 		},
+		// A CREDENTIAL'S WRITE CARRIES THE APPS IT USES, which hold the turn
+		// the write wakes (ADR-0109); a write that carries none, as the
+		// seat's above, sends no key for them at all.
+		"a credential's write": {
+			value: request{ID: "r-6", Op: opCreateTask.spec.name, Actor: &Actor{
+				Handle: "token:ci", Kind: worklet.AuthorOperator,
+				Provenance: worklet.Provenance{OperatorID: "token:ci", Apps: []iam.Grant{iam.GrantWorklet}},
+			}, Deadline: envelopeInstant},
+			want: `{"id":"r-6","op":"tracker.create_task","actor":{"handle":"token:ci","kind":"operator",` +
+				`"provenance":{"OperatorID":"token:ci","TurnID":"","Chain":null,"Origin":null,` +
+				`"Apps":["worklet"]}},"deadline":"2026-10-04T12:00:00Z"}`,
+		},
 		"admission's ping": {
 			value: pingEnvelope,
 			want: `{"id":"r-3","op":"estate.ping","args":{},` +
@@ -421,7 +438,7 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			value: reply{Node: "data-a", Request: "r-1", Unserved: unservedOutOfService, Detail: "wrong"},
 			want:  `{"node":"data-a","request":"r-1","unserved":"out_of_service","detail":"wrong"}`,
 		},
-		"a git node that cannot answer": {
+		"a Gitlet node that cannot answer": {
 			value: reply{Node: "git-a", Request: "r-5", Unserved: unservedBehind, Detail: "syncing",
 				Unready: code.UnreadySyncing},
 			want: `{"node":"git-a","request":"r-5","unserved":"behind","detail":"syncing","unready":"syncing"}`,

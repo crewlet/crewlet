@@ -269,7 +269,7 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 	default:
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: %s's session %s could not be packed "+
 			"(exit %d): %s", r.harness.Name(), rec.id, res.ExitCode,
-			firstLine(strings.TrimSpace(res.Stderr), transcriptDetailLimit))
+			firstLine(strings.TrimSpace(res.Stderr), packDetailLimit))
 	}
 	archive, body, err := r.OpenCapture(ctx, box)
 	if err == nil && body == nil {
@@ -278,6 +278,18 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 	}
 	return archive, body, err
 }
+
+// packDetailLimit is how much of the first line of a failed pack's error stream
+// its error carries.
+//
+// FIVE HUNDRED AND TWELVE BYTES: the line names the session, and then why —
+// tar's own word, naming a file under the session's directories, where a
+// subagent's thread, nested, runs past a hundred bytes — which a cut at a
+// transcript line's [transcriptDetailLimit] left off behind the engine's own
+// hundred; and the error is stamped on the capture inside the 1 KiB its reason
+// is held to (executorkeep.UnkeptReasonMaxBytes), with the engine's own words
+// around it, which half of that leaves room for.
+const packDetailLimit = 512
 
 // The exits a pack made on demand ends with ([carrier.Pack]) beside 0, the
 // session packed: packNothing, a session there is nothing of to pack — no
