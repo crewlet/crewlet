@@ -23,7 +23,8 @@ func TestEveryCommittedChangeKindHasAnOutcomeClass(t *testing.T) {
 		{nil, types.OutcomeNothing},
 		{[]types.CommittedChange{types.CommittedChat, types.CommittedComment}, types.OutcomeWords},
 		{[]types.CommittedChange{types.CommittedComment, types.CommittedItem}, types.OutcomeMoved},
-		{[]types.CommittedChange{types.CommittedAnswer}, types.OutcomeMoved},
+		{[]types.CommittedChange{types.CommittedAnswer}, types.OutcomeWords},
+		{[]types.CommittedChange{types.CommittedAnswer, types.CommittedChat}, types.OutcomeWords},
 		{[]types.CommittedChange{types.CommittedCode}, types.OutcomeMoved},
 		{[]types.CommittedChange{types.CommittedPage}, types.OutcomeMoved},
 	} {

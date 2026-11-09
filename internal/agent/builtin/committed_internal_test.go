@@ -17,6 +17,7 @@ func TestARefusedOrFailedWriteIsNotMoved(t *testing.T) {
 	t.Parallel()
 	turn := &turnctx.Turn{Written: &turnctx.Written{}}
 	commit(turn, statelog.OutcomeUnknown, types.CommittedItem)
+	commit(turn, statelog.OutcomeUnknown, types.CommittedPage)
 	commit(turn, "", types.CommittedCode)
 	if got := turn.Written.Outcome(); got != types.OutcomeNothing {
 		t.Fatalf("outcome %q after writes that appended nothing, want nothing", got)

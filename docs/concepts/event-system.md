@@ -425,8 +425,8 @@ turn_completed             # the record that ends a turn; its `turn` tally
                            # waking event's type), `outcome` (`moved`, `words`
                            # or `nothing`, read from the kinds of change its
                            # committed writes recorded: an item moved, a page
-                           # saved, code pushed, merged or reviewed, or an ask
-                           # answered is moved; only comments and chat posts
+                           # saved, or code pushed, merged or reviewed is
+                           # moved; comments, answers to asks and chat posts
                            # are words) and `tokens` (its model spend, and its
                            # in-turn auxiliary calls apart)
 episode_written, persist_decider_completed

@@ -653,6 +653,9 @@ type TurnTally struct {
 	// Tokens is what the turn's model calls and its in-turn auxiliary calls
 	// spent, every segment's summed.
 	Tokens TurnTokens `json:"tokens,omitzero"`
+	// Refusals is the turn's refused calls, the engine's own tools included,
+	// per (server, tool, refusal class).
+	Refusals []RefusalTally `json:"refusals,omitempty"`
 }
 
 // ToolTally is one MCP tool's calls in one turn: how many the turn made and

@@ -118,9 +118,8 @@ func TestAWriterWithNoLogStillWrites(t *testing.T) {
 }
 
 // A TURN'S WRITER REPORTS WHAT KIND OF CHANGE EACH COMMITTED RECORD WAS, read
-// off the record: a create or a status move moves the item, a comment is
-// words, a comment answering an ask is an answer, and who watches it moves
-// nothing. A write that published nothing reports nothing.
+// off the record: a create moves the item, a comment is words, a comment
+// answering an ask is an answer (words too), and who watches it moves nothing.
 func TestTheWriterRecordsTheKindOfChangeEachRecordCommitted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -731,7 +731,8 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		whole := t.measured(spend, ended)
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted,
-			Tools: whole.Tools, Wake: whole.Wake, Outcome: t.written.Outcome(), Tokens: whole.Tokens}
+			Tools: whole.Tools, Wake: whole.Wake, Outcome: t.written.Outcome(), Tokens: whole.Tokens,
+			Refusals: whole.Refusals}
 	}
 	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)
@@ -765,6 +766,7 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 		SentBack:   spend.SentBack,
 		Unaccepted: spend.Unaccepted,
 		Tools:      types.SumToolTallies(spend.Tools),
+		Refusals:   types.SumRefusals(spend.Refusals),
 		Wake:       types.WakeOf(t.trigger),
 		Tokens: types.TurnTokens{
 			Input:     spend.InputTokens + spend.WorkerInput + spend.JudgeInput,
@@ -779,6 +781,7 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 		out.SentBack += t.soFar.SentBack
 		out.Unaccepted += t.soFar.Unaccepted
 		out.Tools = types.SumToolTallies(t.soFar.Tools, spend.Tools)
+		out.Refusals = types.SumRefusals(t.soFar.Refusals, spend.Refusals)
 		out.Tokens = t.soFar.Tokens.Plus(out.Tokens)
 		// THE WAKE IS THE FIRST SEGMENT'S: a resume is woken by an answer
 		// or a completion, never by what started the turn.

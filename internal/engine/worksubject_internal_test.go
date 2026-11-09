@@ -459,7 +459,8 @@ func TestTheLedgerFiguresBeforeAParkCountAtTheEnd(t *testing.T) {
 	e, p := starting(t, refusingModels(t))
 	company := e.Company()
 	carried := execstate.TurnSoFar{Wake: "work_item:assignee",
-		Tokens: types.TurnTokens{Input: 1_000, Output: 200, AuxInput: 50}}
+		Tokens:   types.TurnTokens{Input: 1_000, Output: 200, AuxInput: 50},
+		Refusals: []types.RefusalTally{{Tool: "merge_change", Class: "forbidden", Calls: 2}}}
 	if err := e.resumeTurn(t.Context(), resumeInput{
 		Company: company,
 		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
@@ -482,6 +483,8 @@ func TestTheLedgerFiguresBeforeAParkCountAtTheEnd(t *testing.T) {
 		t.Errorf("outcome %q, want words: the comment committed before the park", done.Turn.Outcome)
 	case done.Turn.Tokens.Input < carried.Tokens.Input || done.Turn.Tokens.AuxInput < carried.Tokens.AuxInput:
 		t.Errorf("tokens %+v, want at least the %+v spent before the park", done.Turn.Tokens, carried.Tokens)
+	case !reflect.DeepEqual(done.Turn.Refusals, carried.Refusals):
+		t.Errorf("refusals %+v, want the %+v refused before the park", done.Turn.Refusals, carried.Refusals)
 	}
 }
 

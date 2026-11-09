@@ -368,6 +368,8 @@ type TurnSoFar struct {
 	// segments' spend: what the ending record's ledger figures carry.
 	Wake   string           `json:"wake,omitempty"`
 	Tokens types.TurnTokens `json:"tokens,omitzero"`
+	// Refusals is the earlier segments' refused calls ([types.TurnTally.Refusals]).
+	Refusals []types.RefusalTally `json:"refusals,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.
