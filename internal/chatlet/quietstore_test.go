@@ -152,3 +152,74 @@ func TestATopLevelAnswerInANamedRoomReachesItsAsker(t *testing.T) {
 		t.Fatalf("a's next remark woke %v, want nobody: the ask was answered", got)
 	}
 }
+
+// A CO-ASKER'S REPLY DOES NOT WAKE THE OTHER ASKER (ADR-0113): two agents
+// awaiting one addressee are not each other's stake, while the addressee
+// still hears it and a reply by anybody else wakes both.
+func TestACoAskersReplyLeavesTheOtherAskerAsleep(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents())
+	room := r.room(seat("b", "run-0"), "launch", "a", "b", "c", "d")
+	ask, err := r.store.Post(t.Context(), keyed(seat("b", "run-1"), requested("k-b")),
+		room.Channel.ID, chatlet.NewMessage{Body: "@a is the deploy done?",
+			Mentions: []string{"a"}, Asks: true})
+	if err != nil {
+		t.Fatalf("b's ask: %v", err)
+	}
+	r.drain()
+	reply := func(actor chatlet.Actor, key string, msg chatlet.NewMessage) map[string]chatlet.Reason {
+		t.Helper()
+		if _, err := r.store.Reply(t.Context(), keyed(actor, requested(key)),
+			room.Channel.ID, ask.Message.ID, msg); err != nil {
+			t.Fatalf("reply %q: %v", msg.Body, err)
+		}
+		r.drain()
+		return wokenBy(r)
+	}
+	reply(seat("c", "run-2"), "k-c", chatlet.NewMessage{Body: "@a and the notes?",
+		Mentions: []string{"a"}, Asks: true})
+	if got := reply(seat("c", "run-3"), "k-c2", chatlet.NewMessage{Body: "any word?"}); len(got) != 1 ||
+		got["a"] != chatlet.ReasonOwing {
+		t.Fatalf("c's nudge woke %v, want a alone, which owes it", got)
+	}
+	if got := reply(seat("d", "run-4"), "k-d", chatlet.NewMessage{Body: "the build is green"}); got["b"] != chatlet.ReasonAwaiting ||
+		got["c"] != chatlet.ReasonAwaiting {
+		t.Fatalf("d's reply woke %v, want b and c, both awaiting", got)
+	}
+}
+
+// A TOP-LEVEL POST ANSWERS ONLY THE NEWEST ASK each agent holds of its author
+// in a named room: the older ask stays open until a later post answers it.
+func TestATopLevelPostAnswersOnlyTheNewestAsk(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents())
+	room := r.room(seat("b", "run-0"), "platform", "a", "b")
+	for i, body := range []string{"@a is the migration done?", "@a and the backfill?"} {
+		if _, err := r.store.Post(t.Context(), keyed(seat("b", "run-b"+string(rune('1'+i))),
+			requested("k-ask"+string(rune('1'+i)))), room.Channel.ID, chatlet.NewMessage{Body: body,
+			Mentions: []string{"a"}, Asks: true}); err != nil {
+			t.Fatalf("ask %q: %v", body, err)
+		}
+		r.drain()
+	}
+	say := func(key, body string) map[string]chatlet.Reason {
+		t.Helper()
+		if _, err := r.store.Post(t.Context(), keyed(seat("a", "run-"+key), requested(key)),
+			room.Channel.ID, chatlet.NewMessage{Body: body}); err != nil {
+			t.Fatalf("post %q: %v", body, err)
+		}
+		r.drain()
+		return wokenBy(r)
+	}
+	if got := say("k-backfill", "The backfill is running."); got["b"] != chatlet.ReasonAnswer ||
+		len(r.lastRecord().Notify.Answering) != 1 {
+		t.Fatalf("a's first post woke %v answering %v, want b, for the newest ask alone",
+			got, r.lastRecord().Notify.Answering)
+	}
+	if got := say("k-migration", "The migration is done."); got["b"] != chatlet.ReasonAnswer {
+		t.Fatalf("a's second post woke %v, want b: the older ask was still open", got)
+	}
+	if got := say("k-more", "Also cleaned the old tables."); len(got) != 0 {
+		t.Fatalf("a's third post woke %v, want nobody: both asks were answered", got)
+	}
+}

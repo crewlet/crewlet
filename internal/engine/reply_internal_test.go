@@ -35,6 +35,9 @@ func wake(t *testing.T, kind string) *events.Event {
 		}, events.TraceContext{})
 	case types.TaskAssigned{}.EventType():
 		return events.New(types.TaskAssigned{Description: "ship it"}, events.TraceContext{})
+	case types.WorkPickupType:
+		return events.New(types.WorkPickup{Item: "t-1", Key: "ENG-1", Status: "todo"},
+			events.TraceContext{})
 	case types.ExternalNotification{}.EventType():
 		return inbound(false)
 	}
@@ -64,6 +67,7 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 		types.A2ARequestType:                     turn.ReplyEngine,
 		types.A2AMessageType:                     turn.ReplyNone,
 		types.TaskAssigned{}.EventType():         turn.ReplyTool,
+		types.WorkPickupType:                     turn.ReplyTool,
 		types.ExternalNotification{}.EventType(): turn.ReplyNone,
 	}
 	for _, kind := range inbox.LedgeredTypes() {

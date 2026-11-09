@@ -838,9 +838,9 @@ func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMes
 func asksParam() map[string]any {
 	return map[string]any{
 		"type": "boolean",
-		"description": "Required of an agent. true when the message asks the named people for " +
-			"an answer or an action: a question, a request, a hand-off. They, or " +
-			"the other side of a direct conversation, must then answer. false for " +
+		"description": "Required of an agent. true when the message asks someone for an " +
+			"answer or an action: a question, a request, a hand-off. Whoever it " +
+			"asks, or the other side of a direct conversation, must then answer. false for " +
 			"news, status notes, acknowledgements and thanks: it wakes only the " +
 			"colleagues you @-mention, told it asks nothing, whoever's question it " +
 			"answers, and anyone with an open question in the thread.",
@@ -854,8 +854,8 @@ func asksParam() map[string]any {
 func asksOf(tool string, args map[string]any, author chatlet.AuthorKind) (bool, *tools.Result) {
 	asks, typed := argval.Bool(args["asks"])
 	if !typed && author == chatlet.AuthorAgent {
-		refused := failed(tool + " needs `asks`: true when the message asks the named " +
-			"people for an answer or an action, false otherwise.")
+		refused := failed(tool + " needs `asks`: true when the message asks someone " +
+			"for an answer or an action, false otherwise.")
 		return false, &refused
 	}
 	return asks, nil

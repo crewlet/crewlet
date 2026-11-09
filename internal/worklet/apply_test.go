@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -1220,5 +1221,45 @@ func TestARemovalRecordWritesNothing(t *testing.T) {
 	}
 	if answeredBy.Valid {
 		t.Errorf("a removal record closed cm-2 as answered by %q", answeredBy.String)
+	}
+}
+
+// A HISTORY ROW KEEPS ITS WRITER'S APPS ONLY FROM THE VERSION THAT SAYS SO
+// (ADR-0112), on the rule a field the applier already copies is held to: a
+// record older than the marker keeps an empty column whichever build applies
+// it, so no two data nodes disagree about who an item's work is for.
+//
+// Mutation: fill the column from any record carrying apps, and the version-2
+// record below keeps them here while a node that applied it on the previous
+// build holds none.
+func TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	for _, c := range []struct {
+		id   string
+		v    int
+		kept bool
+		want string
+	}{
+		{"older", 2, false, ""},
+		{"marked", worklet.AppsKeptVersion, true, `["worklet"]`},
+	} {
+		rec := taskRecord(c.id, worklet.OpCreate, newTask(c.id), nil)
+		rec.V, rec.Actor, rec.ActorKind, rec.OperatorID = c.v, "token:ci", worklet.AuthorOperator, "token:ci"
+		rec.ActorApps, rec.ActorAppsKept = []iam.Grant{iam.GrantWorklet}, c.kept
+		if _, err := h.apply(rec, at); err != nil {
+			t.Fatalf("%s: apply: %v", c.id, err)
+		}
+		var got string
+		if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), `SELECT actor_apps FROM tracker_history
+				WHERE subject_id = ?`, c.id).Scan(&got)
+		}); err != nil {
+			t.Fatalf("%s: read the history row: %v", c.id, err)
+		}
+		if got != c.want {
+			t.Errorf("a version-%d record's history row keeps apps %q, want %q", c.v, got, c.want)
+		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 // new trigger type means adding it here and not merely publishing it.
 var ledgeredTypes = map[string]bool{
 	types.TaskAssigned{}.EventType():         true,
+	types.WorkPickupType:                     true,
 	types.ExternalNotification{}.EventType(): true,
 	types.A2ARequestType:                     true,
 	types.A2AMessageType:                     true,

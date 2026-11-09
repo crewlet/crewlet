@@ -1923,7 +1923,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// exhaustion.
 			owed = turn.EngineReply()
 
-		case types.TaskAssigned{}.EventType():
+		case types.TaskAssigned{}.EventType(), types.WorkPickupType:
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
 			//

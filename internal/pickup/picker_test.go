@@ -87,9 +87,9 @@ func (f *fleet) turnOn(ev *events.Event) {
 }
 
 func pickupWorkKey(ev *events.Event) string {
-	assigned, _ := events.DataAs[*types.TaskAssigned](ev)
-	return pickup.Key{Seat: seat, Item: assigned.Pickup.Item, Moved: assigned.Pickup.Moved,
-		Status: assigned.Pickup.Status, Progressed: assigned.Pickup.Progressed}.WorkKey()
+	assigned, _ := events.DataAs[*types.WorkPickup](ev)
+	return pickup.Key{Seat: seat, Item: assigned.Item, Moved: assigned.Moved,
+		Status: assigned.Status, Progressed: assigned.Progressed}.WorkKey()
 }
 
 // tracker is the seat's ready work, as the read answers it, page by page.
@@ -383,5 +383,52 @@ func TestTheCooldownCeilingIsTheFleetsLongestClaim(t *testing.T) {
 	t.Parallel()
 	if got := time.Duration(config.MaxWorkPickupCooldownSeconds) * time.Second; got != coord.MaxClaimTTL {
 		t.Errorf("the cooldown ceiling is %s and the longest fleet claim %s", got, coord.MaxClaimTTL)
+	}
+}
+
+// THE SEAT'S OWN PROGRESS HANDS A STARTED ITEM BACK ONCE PER COOLDOWN: a new
+// key for progress alone waits out the cooldown, so a turn answering every
+// pickup with a write cannot be handed the item every two minutes.
+//
+// Mutation: drop the progress claim, and the item is handed back on the next
+// pass after every write.
+func TestProgressHandsAStartedItemBackOncePerCooldown(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	tr := &tracker{items: []worklet.ReadyItem{item("a", worklet.StatusInProgress, 40)}}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken {
+		t.Fatalf("the started item = %+v, want it handed over", out)
+	}
+	f.turnOn(in.got[0])
+	tr.mu.Lock()
+	tr.items[0].Progressed = 55
+	tr.mu.Unlock()
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipCooldown {
+		t.Fatalf("after progress inside the cooldown = %+v, want the cooldown", out)
+	}
+	f.advance(10 * time.Minute)
+	if out := pass(p); !out.Woken || in.count() != 2 {
+		t.Errorf("after progress past the cooldown = %+v, want the item handed back", out)
+	}
+}
+
+// A REQUESTER THE ORGANISATION NO LONGER HOLDS IS WORKED FOR AS A STRANGER,
+// never as a seat the turn's every decision would fail to resolve.
+func TestARequesterNoLongerHeldIsWorkedForAsAStranger(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	it := item("a", worklet.StatusTodo, 40)
+	it.For = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "gone"}
+	p := node(f, &tracker{items: []worklet.ReadyItem{it}}, in, idleHolder())
+	p.Holds = func(handle string) bool { return handle != "gone" }
+	pass(p)
+	if out := pass(p); !out.Woken {
+		t.Fatalf("the item = %+v, want it handed over", out)
+	}
+	assigned, _ := events.DataAs[*types.WorkPickup](in.got[0])
+	if w := assigned.WorkingFor; w == nil || w.Kind != types.WorkingForStranger {
+		t.Errorf("the pickup is worked for %+v, want a stranger", w)
 	}
 }

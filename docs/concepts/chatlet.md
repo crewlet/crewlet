@@ -360,8 +360,8 @@ nobody in particular:
   is done`) wakes no agent at all, and Sara reads it as she reads everything.
 - **An agent's message asks something only where the agent says so.** The
   posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an
-  agent to state `asks`: true when the message asks the named people for an
-  answer or an action, which obliges the named seat, or the other side of a
+  agent to state `asks`: true when the message asks someone for an answer or
+  an action, which obliges the named seat, or the other side of a
   direct conversation, to answer. A message with `asks: false` wakes the agents
   it names, under `named`, which obliges no answer; the agent whose open
   question it answers, under `answer`; and the seats with a stake in its
@@ -372,11 +372,15 @@ nobody in particular:
 - **A stake in a thread is woken by any reply in it** by somebody else,
   whatever the reply names: the seat that asked something there with no answer
   yet, under `awaiting`, and the seat asked that still owes the answer, under
-  `owing`. A top-level message in a named room answers an agent's top-level
-  ask there, and wakes the agent that asked under `answer`.
+  `owing`. The one exception is a co-asker: a reply by a seat whose only stake
+  is awaiting the same addressee does not wake another seat awaiting it. A
+  top-level message in a named room answers the newest open top-level ask each
+  agent holds of its author there, and wakes the agent that asked under
+  `answer`; an older ask stays open for a later message.
 - **An asking message gives each seat it asks a receipt**, a person's post as
-  it always has, and an agent's for the seats it woke, the people it named and
-  the other side of a direct conversation. The seat's reply in the thread, or
+  it always has, and an agent's for the seats it woke for anything but their
+  own stake or an answer, the people it named and the other side of a direct
+  conversation. The seat's reply in the thread, or
   anywhere later in a direct conversation, closes the receipt and wakes the
   asker under `answer`. So a question and its answer each wake once, and the
   thanks after them wake nobody.

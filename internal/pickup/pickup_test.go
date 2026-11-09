@@ -76,11 +76,11 @@ func TestAPickupEventNamesItsItem(t *testing.T) {
 	if got := notify.KeyOf(ev); got != worklet.ItemConversation("a") {
 		t.Errorf("partition = %q, want the item's own", got)
 	}
-	assigned, ok := events.DataAs[*types.TaskAssigned](ev)
-	if !ok || assigned.Pickup == nil || assigned.Pickup.Key != "WRK-a" || assigned.Pickup.Ready != 3 {
-		t.Fatalf("payload = %+v, want a pickup of WRK-a among 3 ready", assigned)
+	assigned, ok := events.DataAs[*types.WorkPickup](ev)
+	if !ok || ev.Type != types.WorkPickupType || assigned.Key != "WRK-a" || assigned.Ready != 3 {
+		t.Fatalf("%s payload = %+v, want a pickup of WRK-a among 3 ready", ev.Type, assigned)
 	}
-	if w := assigned.Pickup.WorkingFor; w == nil || w.Seat != "ada" {
+	if w := assigned.WorkingFor; w == nil || w.Seat != "ada" {
 		t.Errorf("the pickup is worked for %+v, want ada, whom the item is for", w)
 	}
 	origin := assigned.TriggerOrigin()
@@ -101,7 +101,7 @@ func TestABriefPastTheReadCountSaysAtLeast(t *testing.T) {
 	t.Parallel()
 	it := item("a", worklet.StatusTodo, 40)
 	ev := pickup.Event(seat, "engineer", it, pickup.KeyOf(seat, it), 400, true, events.TraceContext{})
-	assigned, _ := events.DataAs[*types.TaskAssigned](ev)
+	assigned, _ := events.DataAs[*types.WorkPickup](ev)
 	if brief := assigned.Brief(); !strings.Contains(brief, "at least 400 ready items") {
 		t.Errorf("a capped count reads as exact:\n%s", brief)
 	}

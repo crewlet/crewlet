@@ -157,17 +157,27 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 }
 
 // READY WORK SAYS WHOM EACH ITEM'S WORK IS FOR (ADR-0109): the writer of its
-// last assignment by somebody else, a credential with the apps it wrote under,
-// else its reporter; nobody for the seat's own work.
+// last assignment by somebody else, else the writer that filed it, a
+// credential with the apps it wrote under; nobody for the seat's own work.
+//
+// Mutation: read the reporter column, and the item a token filed already
+// assigned is for a seat named `token:ci` that no directory holds.
 func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
-	file := func(id, reporter string) {
+	token := r.writer.As("token:ci", worklet.AuthorOperator,
+		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	file := func(w *worklet.Writer, id, assignee string) {
 		t.Helper()
 		task := newTask(id)
-		task.Reporter = reporter
-		if _, err := pm.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+		task.Assignee = assignee
+		var n *worklet.Notify
+		if assignee != "" {
+			n = &worklet.Notify{Kind: worklet.ChangeCreated, Snapshot: worklet.Snapshot{Assignee: assignee}}
+		}
+		if _, err := w.CreateTask(t.Context(), "op-"+id, task, n); err != nil {
 			t.Fatalf("CreateTask %s: %v", id, err)
 		}
 		r.drain()
@@ -183,23 +193,24 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 		}
 		r.drain()
 	}
-	file("by-token", "pm")
-	assign(r.writer.As("token:ci", worklet.AuthorOperator,
-		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}}), "by-token")
-	file("reported", "lead")
-	assign(r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}), "reported")
-	file("own", "ana")
-	assign(r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}), "own")
+	file(pm, "by-token", "")
+	assign(token, "by-token")
+	file(token, "filed-by-token", "ana")
+	file(pm, "filed-by-pm", "")
+	assign(ana, "filed-by-pm")
+	file(ana, "own", "ana")
 
 	got := map[string]*types.WorkingFor{}
 	for _, item := range r.readyWork("ana").Items {
 		got[item.ID] = item.For
 	}
+	credential := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantWorklet}}
 	want := map[string]*types.WorkingFor{
-		"by-token": {Kind: types.WorkingForCredential, Login: "token:ci",
-			Apps: []iam.Grant{iam.GrantWorklet}},
-		"reported": {Kind: types.WorkingForSeat, Seat: "lead"},
-		"own":      nil,
+		"by-token":       credential,
+		"filed-by-token": credential,
+		"filed-by-pm":    {Kind: types.WorkingForSeat, Seat: "pm"},
+		"own":            nil,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the work is for %+v, want %+v", got, want)
@@ -229,6 +240,17 @@ func TestReadyWorkTimesAndProgressFollowTheKey(t *testing.T) {
 	if !commented.MovedAt.Equal(first.MovedAt) || commented.Progressed != first.Progressed {
 		t.Errorf("the seat's comment moved the instant %s -> %s or the progress %d -> %d",
 			first.MovedAt, commented.MovedAt, first.Progressed, commented.Progressed)
+	}
+	// A WRITE THAT CHANGES NOTHING IS NO PROGRESS.
+	low := worklet.PriorityLow
+	if _, err := ana.UpdateTask(t.Context(), "op-same", "started", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Priority: &low}, worklet.ChangeFields, nil); err != nil {
+		t.Fatalf("set the same priority: %v", err)
+	}
+	r.drain()
+	if same := r.readyWork("ana").Items[0]; same.Progressed != commented.Progressed {
+		t.Errorf("a write that changed nothing moved the progress %d -> %d",
+			commented.Progressed, same.Progressed)
 	}
 	high := worklet.PriorityHigh
 	if _, err := ana.UpdateTask(t.Context(), "op-p", "started", "ENG", worklet.NoIfMatch,

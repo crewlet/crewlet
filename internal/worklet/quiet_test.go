@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -83,6 +84,46 @@ func TestTheAskerOfAnOpenAskIsWokenByAnyReply(t *testing.T) {
 		woken := handles(worklet.Route(worklet.Candidates(&n), everyone, "lead"))
 		if !slices.Contains(woken, "backend-engineer") || !slices.Contains(woken, "designer") {
 			t.Errorf("%s woke %v, want the asker and the seat it asked", name, woken)
+		}
+	}
+}
+
+// A CO-ASKER'S REPLY DOES NOT WAKE THE OTHER ASKER (ADR-0113): two seats
+// awaiting one addressee in a thread are not each other's stake, while the
+// addressee's reply, or anybody else's, still wakes both.
+func TestACoAskersReplyLeavesTheOtherAskerAsleep(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("ship or hold")
+	post := func(op string, c worklet.Comment) {
+		t.Helper()
+		c.Task, c.CreatedAt, c.AuthorKind = created.ID, wednesday, worklet.AuthorAgent
+		if _, err := r.writer.UpdateTask(t.Context(), op, created.ID, "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, nil); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+		r.drain()
+	}
+	root := "c-dev"
+	post("op-dev", worklet.Comment{ID: root, Author: "dev", Body: "Friday?", Ask: "ana"})
+	post("op-qa", worklet.Comment{ID: "c-qa", Author: "qa", Body: "and the notes?",
+		Ask: "ana", ReplyTo: &root})
+	for author, want := range map[string][]string{
+		"qa":   {"qa"},
+		"dev":  {"dev"},
+		"ana":  {"dev", "qa"},
+		"lead": {"dev", "qa"},
+	} {
+		q := worklet.ThreadQuery{Task: created.ID, ReplyTo: root, Author: author}
+		if author == "ana" {
+			q.Answers = "c-qa"
+		}
+		got, err := r.reader.Thread(t.Context(), q, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("read the thread as %s: %v", author, err)
+		}
+		if !slices.Equal(got.Awaiting, want) {
+			t.Errorf("a reply by %s has %v awaiting, want %v", author, got.Awaiting, want)
 		}
 	}
 }

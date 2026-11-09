@@ -216,7 +216,10 @@ var categories = map[string]placement{
 	// task object Worklet replaced, and none of them ever had a
 	// publisher. Work's own record is the tracker's log, its history rows
 	// and its change feed.
-	"task_assigned":     {"task", RateAuthenticated},
+	"task_assigned": {"task", RateAuthenticated},
+	// The work pickup's wake: one per idle seat, item and version, on the
+	// engine's own loop.
+	"work_pickup":       {"task", RateEngine},
 	"executor_launched": {"task", RateEngine},
 	"executor_asked":    {"task", RateEngine},
 	"executor_finished": {"task", RateEngine},

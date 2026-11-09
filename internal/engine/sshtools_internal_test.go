@@ -153,36 +153,3 @@ func TestAnAnswerIsWorkedForWhoeverItsAskWasWorkedFor(t *testing.T) {
 		}
 	}
 }
-
-// A PICKUP IS WORKED FOR WHOM ITS ITEM IS FOR (ADR-0109, ADR-0112): the turn
-// reads it off the pickup as an answering turn reads it off the ask, so the
-// item a person assigned is held to that person's apps however it reaches the
-// seat; a schedule's fire and a pickup of the seat's own work carry nobody.
-//
-// Mutation: read only the colleague hand-ons, and the pickup turn works with
-// the seat's every app.
-func TestAPickupIsWorkedForWhomItsItemIsFor(t *testing.T) {
-	t.Parallel()
-	pickup := func(w *types.WorkingFor) []*events.Event {
-		return []*events.Event{events.New(types.TaskAssigned{Agent: "a1", RoleName: "Engineer",
-			Pickup: &types.WorkPickup{Item: "t-1", Key: "ENG-1", Status: "todo",
-				WorkingFor: w}}, events.TraceContext{})}
-	}
-	person := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
-	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
-		Apps: []iam.Grant{iam.GrantWorklet}}
-	for name, tc := range map[string]struct {
-		evs  []*events.Event
-		want *types.WorkingFor
-	}{
-		"an item a person assigned":     {pickup(person), person},
-		"an item a credential assigned": {pickup(token), token},
-		"the seat's own item":           {pickup(nil), nil},
-		"a schedule's fire": {[]*events.Event{events.New(types.TaskAssigned{
-			Schedule: "standup", Description: "Post the standup."}, events.TraceContext{})}, nil},
-	} {
-		if got := workingForIn(tc.evs); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s: the turn works for %+v, want %+v", name, got, tc.want)
-		}
-	}
-}

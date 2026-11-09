@@ -84,25 +84,29 @@ func (k Key) WorkKey() string { return workkey.Derive([]string{k.WakeID().String
 // while its first copy waits for its turn.
 func (k Key) ClaimKey() string { return "pickup|item|" + k.WakeID().String() }
 
+// ProgressKey is the fleet claim that spaces a pickup handed again for the
+// seat's own progress alone: the key without the progress.
+func (k Key) ProgressKey() string {
+	base := k
+	base.Progressed = 0
+	return "pickup|progress|" + base.WakeID().String()
+}
+
 // CooldownKey is the fleet claim that spaces one seat's pickups.
 func CooldownKey(seat uuid.UUID) string { return "pickup|seat|" + seat.String() }
 
-// Event is the pickup's wake: a [types.TaskAssigned] naming the item and
-// whom its work is for, under the derived id and the instant of the change
-// the key names, filed under the item's own conversation.
+// Event is the pickup's wake: a [types.WorkPickup] naming the item and whom
+// its work is for, under the derived id and the instant of the change the key
+// names, filed under the item's own conversation.
 func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready int,
 	capped bool, trace events.TraceContext) *events.Event {
 
-	ev := events.New(types.TaskAssigned{
-		TaskID:   "pickup:" + key.WakeID().String(),
-		Agent:    seat.String(),
-		RoleName: role,
-		Pickup: &types.WorkPickup{
-			// THE ADDRESS: the id where another task claimed the key first.
-			Item: item.ID, Key: worklet.ItemAddress(item.ID, item.Key, item.KeyCollision),
-			Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
-			Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
-		},
+	ev := events.New(types.WorkPickup{
+		Agent: seat.String(), RoleName: role,
+		// THE ADDRESS: the id where another task claimed the key first.
+		Item: item.ID, Key: worklet.ItemAddress(item.ID, item.Key, item.KeyCollision),
+		Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
+		Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
 	}, trace)
 	ev.ID = key.WakeID()
 	if !item.MovedAt.IsZero() {

@@ -2,6 +2,7 @@ package pickup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -91,6 +93,10 @@ type Picker struct {
 
 	// Cooldown is the least time between two pickups of one seat.
 	Cooldown time.Duration
+
+	// Holds reports whether the organisation still holds a seat: a requester
+	// it no longer holds is worked for as a stranger. Nil holds every seat.
+	Holds func(handle string) bool
 
 	mu   sync.Mutex
 	idle map[uuid.UUID]bool
@@ -200,18 +206,30 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 		out.Skip, out.Err = skip, err
 		return out
 	}
+	// THE SEAT'S OWN PROGRESS HANDS A STARTED ITEM BACK once per cooldown,
+	// so a turn answering every pickup with a write cannot loop.
+	if skip, err := p.claim(ctx, key.ProgressKey(), p.Cooldown, now, SkipCooldown); skip != "" {
+		if rerr := p.Claims.Release(context.WithoutCancel(ctx), key.ClaimKey()); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+		out.Skip, out.Err = skip, err
+		return out
+	}
 	var trace events.TraceContext
 	if p.Trace != nil {
 		trace = p.Trace(ctx)
 	}
 	item := pick.item
+	if w := item.For; w != nil && w.Kind == types.WorkingForSeat && p.Holds != nil && !p.Holds(w.Seat) {
+		item.For = &types.WorkingFor{Kind: types.WorkingForStranger}
+	}
 	ev := Event(seat.ID, seat.Role, item, key, out.Ready, pick.capped, trace)
 	if err := p.Publisher.Publish(ctx, topics.AgentInbox(seat.ID), ev); err != nil {
 		// NOTHING WAS SPENT THAT A RETRY CANNOT TAKE AGAIN: a copy that
 		// landed after all carries the same id, which the inbox and the
 		// ledger collapse, so both claims are given back for the next pass.
 		release := context.WithoutCancel(ctx)
-		claims := []string{key.ClaimKey()}
+		claims := []string{key.ClaimKey(), key.ProgressKey()}
 		if pick.passed {
 			claims = append(claims, CooldownKey(seat.ID))
 		}

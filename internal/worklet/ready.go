@@ -201,9 +201,9 @@ func fingerprintOf(items []ReadyItem) string {
 }
 
 // readyProgressArm is one started item's last change by the seat itself that
-// is not a comment.
+// changed a field: a comment or a write that changed nothing is no progress.
 const readyProgressArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
-	WHERE h.subject_id = ? AND h.actor = ?
+	WHERE h.subject_id = ? AND h.actor = ? AND h.fields_json <> '{}'
 	  AND h.kind NOT IN ('comment', 'comment_edited', 'comment_resolved', 'comment_removed')
 	ORDER BY h.log_seq DESC LIMIT 1`
 
@@ -282,10 +282,13 @@ const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_ap
 	  AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq DESC LIMIT 1`
 
-// readyReporterStatement is each item's reporter.
-func readyReporterStatement(n int) string {
-	return `SELECT t.id, t.reporter FROM tracker_tasks t WHERE t.id IN (` + placeholders(n) + `)`
-}
+// readyCreatedArm is one item's creation by a person, a colleague or a
+// credential other than the seat: whom work filed already assigned is for.
+const readyCreatedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
+	FROM tracker_history h
+	WHERE h.subject_id = ? AND h.kind = 'created' AND h.actor <> ?
+	  AND h.actor_kind <> 'system'
+	ORDER BY h.log_seq LIMIT 1`
 
 // loadMoved stamps each item with the last change somebody other than handle
 // made to it, and that change's instant; an item only the seat ever changed
@@ -349,60 +352,52 @@ func seqAt(ctx context.Context, tx *sql.Tx, query string, args []any) (map[strin
 }
 
 // loadFor stamps each item with whom its work is for: the writer of its last
-// assignment by somebody else, a credential with the apps it wrote under, else
-// its reporter; nil where that is the seat itself or nobody.
+// assignment by somebody else, else the writer that filed it, each a seat or a
+// credential with the apps it wrote under; nil for the seat's own work.
 func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
 	if len(items) == 0 {
 		return nil
 	}
 	args := make([]any, 0, 2*len(items))
-	ids := make([]any, 0, len(items))
 	for _, item := range items {
 		args = append(args, item.ID, handle)
-		ids = append(ids, item.ID)
 	}
-	assigned := map[string]*types.WorkingFor{}
-	rows, err := tx.QueryContext(ctx, arms(len(items), readyAssignedArm), args...)
+	assigned, err := writersOf(ctx, tx, arms(len(items), readyAssignedArm), args)
 	if err != nil {
 		return fmt.Errorf("worklet: read who assigned %s's ready work: %w", handle, err)
 	}
+	filed, err := writersOf(ctx, tx, arms(len(items), readyCreatedArm), args)
+	if err != nil {
+		return fmt.Errorf("worklet: read who filed %s's ready work: %w", handle, err)
+	}
+	for i := range items {
+		if w, ok := assigned[items[i].ID]; ok {
+			items[i].For = w
+		} else {
+			items[i].For = filed[items[i].ID]
+		}
+	}
+	return nil
+}
+
+// writersOf runs one statement of writer arms and reads each item's writer.
+func writersOf(ctx context.Context, tx *sql.Tx, query string, args []any) (
+	map[string]*types.WorkingFor, error) {
+
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*types.WorkingFor{}
 	for rows.Next() {
 		var id, actor, kind, apps string
 		if serr := rows.Scan(&id, &actor, &kind, &apps); serr != nil {
 			_ = rows.Close()
-			return serr
+			return nil, serr
 		}
-		assigned[id] = workingForWriter(AuthorKind(kind), actor, apps)
+		out[id] = workingForWriter(AuthorKind(kind), actor, apps)
 	}
-	if cerr := closeRows(rows); cerr != nil {
-		return cerr
-	}
-	reporters := map[string]string{}
-	rows, err = tx.QueryContext(ctx, readyReporterStatement(len(ids)), ids...)
-	if err != nil {
-		return fmt.Errorf("worklet: read who reported %s's ready work: %w", handle, err)
-	}
-	for rows.Next() {
-		var id, reporter string
-		if err := rows.Scan(&id, &reporter); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		reporters[id] = reporter
-	}
-	if err := closeRows(rows); err != nil {
-		return err
-	}
-	for i := range items {
-		switch w, ok := assigned[items[i].ID]; {
-		case ok:
-			items[i].For = w
-		case reporters[items[i].ID] != "" && reporters[items[i].ID] != handle:
-			items[i].For = &types.WorkingFor{Kind: types.WorkingForSeat,
-				Seat: reporters[items[i].ID]}
-		}
-	}
-	return nil
+	return out, closeRows(rows)
 }
 
 // closeRows closes rows and answers the error its walk ended on.

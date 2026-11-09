@@ -9,7 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// The seat's WAKE, and it is the only task event left.
+// The seat's own WAKES, a schedule's fire and a work pickup, and the only
+// task events left.
 //
 // It carries the agent's seat as `agent_id` and `role` — its id, which the live
 // projection keys an agent by, and its name, which the event store tags a
@@ -30,19 +31,18 @@ import (
 // event stream would be a second answer to "what happened to this item", and
 // the two would disagree the first time one of them was not published.
 //
-// This one is not a lifecycle event at all. It is what the scheduler puts
-// into an INBOX, which is why it survives them.
+// These are not lifecycle events at all. They are what the scheduler and the
+// work pickup put into an INBOX, which is why they survive them.
 
 func init() {
 	events.Register[TaskAssigned]()
+	events.Register[WorkPickup]()
 }
 
-// TaskAssigned hands a seat work of its own: a schedule's task, or its next
-// ready work item. It is the agent's wake for both, and it has TWO producers:
-// the scheduler, which fills [TaskAssigned.Description] and
-// [TaskAssigned.Schedule], and the work pickup (ADR-0112), which fills
-// [TaskAssigned.Pickup] alone. A hand-off between seats is a tracker
-// assignment or a colleague's ask, each with a wake of its own.
+// TaskAssigned hands a seat a schedule's task: the agent's wake for a fire,
+// published by the scheduler. A hand-off between seats is a tracker assignment
+// or a colleague's ask, and an idle seat's next ready item a [WorkPickup],
+// each with a wake of its own.
 type TaskAssigned struct {
 	// TaskID is the fire's run id — scope, schedule, instant and runner —
 	// kept for telemetry and the feed's detail. It names one FIRE and no
@@ -102,14 +102,15 @@ type TaskAssigned struct {
 	// seat is told it is catching up once rather than handed the same duty
 	// once per missed tick.
 	Missed []MissedFire `json:"missed,omitempty"`
-	// Pickup is the work item the work pickup hands an idle seat, and why
-	// it chose that one; nil on a schedule's fire.
-	Pickup *WorkPickup `json:"pickup,omitempty"`
 }
 
-// WorkPickup is the item a pickup names, and whom its work is for. Every
-// field is the tracker's own value, never anybody's prose.
+// WorkPickup hands an idle agent seat its next ready work item (ADR-0112). A
+// type of its own, so a build that does not know it never reads it as a
+// schedule's fire. Every field is the tracker's own value, never prose.
 type WorkPickup struct {
+	// Agent and RoleName are the seat, as [TaskAssigned] carries it.
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
 	// Item is the task's id, Key its address and Status where it stands.
 	Item   string `json:"item"`
 	Key    string `json:"key"`
@@ -178,18 +179,11 @@ type MissedFire struct {
 // TriggerOrigin is the schedule that fired ([Originated]), or nothing for a
 // task no schedule names.
 func (e TaskAssigned) TriggerOrigin() TriggerOrigin {
-	if p := e.Pickup; p != nil {
-		return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
-	}
 	if e.Schedule == "" {
 		return TriggerOrigin{}
 	}
 	return TriggerOrigin{Kind: OriginSchedule, ID: e.Schedule}
 }
-
-// PickupReason is the origin reason a pickup's turn is started under, beside
-// the tracker's own routing reasons.
-const PickupReason = "pickup"
 
 // EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
 // is what the scheduler publishes to start a turn.
@@ -213,9 +207,6 @@ func (e TaskAssigned) AgentID() string { return e.Agent }
 // the turn's ask it made two fires of one schedule unalike to every
 // similarity search, by the one part that differs on every fire.
 func (e TaskAssigned) Brief() string {
-	if p := e.Pickup; p != nil {
-		return p.brief()
-	}
 	var b strings.Builder
 	if e.Schedule != "" {
 		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
@@ -270,18 +261,41 @@ func (e TaskAssigned) missedLine() string {
 // to a similarity search by the one part that differs on every fire. The id
 // stays on the payload, where telemetry and the feed's detail read it.
 func (e TaskAssigned) SummaryFor(actor string) string {
-	if p := e.Pickup; p != nil {
-		return lead(actor, "was handed its next ready work item "+p.Key)
-	}
 	if e.Schedule != "" {
 		return lead(actor, "was assigned scheduled work "+e.Schedule)
 	}
 	return lead(actor, "was assigned a task")
 }
 
-// brief is the pickup's ask: which item, why, and the four honest answers,
+// PickupReason is the origin reason a pickup's turn is started under, beside
+// the tracker's own routing reasons.
+const PickupReason = "pickup"
+
+// WorkPickupType is the "work_pickup" wire type, an inbox WAKE.
+const WorkPickupType = "work_pickup"
+
+// EventType is [WorkPickupType].
+func (WorkPickup) EventType() string { return WorkPickupType }
+
+// Role is the seat handed the item.
+func (p WorkPickup) Role() string { return p.RoleName }
+
+// AgentID is the instance holding that seat.
+func (p WorkPickup) AgentID() string { return p.Agent }
+
+// TriggerOrigin files the turn on the item ([Originated]).
+func (p WorkPickup) TriggerOrigin() TriggerOrigin {
+	return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
+}
+
+// SummaryFor names the item handed over.
+func (p WorkPickup) SummaryFor(actor string) string {
+	return lead(actor, "was handed its next ready work item "+p.Key)
+}
+
+// Brief is the pickup's ask: which item, why, and the four honest answers,
 // named because a promise that changes nothing is never reminded.
-func (p WorkPickup) brief() string {
+func (p WorkPickup) Brief() string {
 	var b strings.Builder
 	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
 	b.WriteString("Your next item is " + p.Key + " (" + p.Status + ").")

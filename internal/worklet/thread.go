@@ -199,7 +199,7 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 			if err != nil {
 				return err
 			}
-			owing, awaiting, err := threadStakes(ctx, tx, q.Task, q.ReplyTo)
+			owing, awaiting, err := threadStakes(ctx, tx, q.Task, q.ReplyTo, q.Author)
 			if err != nil {
 				return err
 			}
@@ -293,9 +293,10 @@ func threadParticipants(ctx context.Context, tx *sql.Tx, task, replyTo string) (
 
 // threadStakes is who has a stake in ONE thread (ADR-0113): the handles its
 // open asks are addressed to (owing) and the authors of those asks (awaiting),
-// each cut at [MaxThreadParticipants].
-func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo string) (owing, awaiting []string,
-	err error) {
+// less a co-asker of author's when author owes nothing there, each cut at
+// [MaxThreadParticipants].
+func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo, author string) (owing,
+	awaiting []string, err error) {
 
 	rows, err := tx.QueryContext(ctx, `
 		WITH root AS (
@@ -312,19 +313,41 @@ func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo string) (owing,
 		return nil, nil, fmt.Errorf("worklet: read the open asks under %s: %w", replyTo, err)
 	}
 	defer func() { _ = rows.Close() }()
+	asked := map[string][]string{}
+	var askers []string
 	for rows.Next() {
-		var ask, author string
-		if err := rows.Scan(&ask, &author); err != nil {
+		var ask, asker string
+		if err := rows.Scan(&ask, &asker); err != nil {
 			return nil, nil, err
 		}
 		if !slices.Contains(owing, ask) && len(owing) < MaxThreadParticipants {
 			owing = append(owing, ask)
 		}
-		if author != "" && !slices.Contains(awaiting, author) && len(awaiting) < MaxThreadParticipants {
-			awaiting = append(awaiting, author)
+		if asker == "" {
+			continue
 		}
+		if _, seen := asked[asker]; !seen {
+			askers = append(askers, asker)
+		}
+		asked[asker] = append(asked[asker], ask)
 	}
-	return owing, awaiting, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	owes := slices.Contains(owing, author)
+	for _, asker := range askers {
+		if len(awaiting) == MaxThreadParticipants {
+			break
+		}
+		// A CO-ASKER'S CHATTER: an author whose only stake is awaiting the
+		// addressee this asker awaits does not wake it.
+		if author != "" && asker != author && !owes && slices.ContainsFunc(asked[asker],
+			func(a string) bool { return slices.Contains(asked[author], a) }) {
+			continue
+		}
+		awaiting = append(awaiting, asker)
+	}
+	return owing, awaiting, nil
 }
 
 // inferAnswer is the one open ask addressed to this author, or nothing.

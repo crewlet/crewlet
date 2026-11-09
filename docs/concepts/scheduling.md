@@ -637,9 +637,10 @@ the last word anybody said about that item.
   remembers it for seven days whichever node holds the seat, and a fleet claim
   keeps two nodes from both sending it during a move. A seat that declines an
   item, comments on it or records a blocker on it is not handed it again until
-  somebody else changes it or its status moves; started work the seat makes
-  progress on is handed back when it is idle again, and a turn that changed
-  nothing does not bring it back.
+  somebody else changes it or its status moves. Started work the seat makes
+  progress on (a field it changes, never a write of the value already there)
+  is handed back when it is idle again, at most once per cooldown, and a turn
+  that changed nothing does not bring it back.
 - **Past the first page.** Ready work is read twenty items at a time, so item
   twenty-one onwards is handed over once the first twenty were, and a seat
   whose whole ready set was handed over already is not asked about again until
@@ -650,11 +651,14 @@ the last word anybody said about that item.
   offered the next at most once per cooldown, and a seat that finishes an item
   is handed the next at once.
 - **Worked for whom the item is for.** The turn is held to the apps of the
-  writer of the item's last assignment by somebody else, else its reporter,
-  and a credential to the apps it wrote under, exactly as the turn its
-  assignment woke ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+  writer of the item's last assignment by somebody else, else of whoever
+  filed it, and a credential to the apps it wrote under, exactly as the turn
+  its assignment woke ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+  A seat the organisation no longer holds is worked for as a stranger, and a
+  write an older build recorded carries no apps. Work the seat filed for
+  itself is worked as its own.
 
-The wake is a `task_assigned` naming the item, its status and why it was
+The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under
 the item's own conversation so the turn continues the item's session. Its brief names the four honest answers: start or continue
 the work, record the blocker, hand the item back, or say on the item why it

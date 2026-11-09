@@ -114,6 +114,10 @@ func (e *Engine) picker() *pickup.Picker {
 			Publisher: e.wakes(),
 			Trace:     tracing.TraceOf,
 			Now:       e.now,
+			Holds: func(handle string) bool {
+				c := e.Company()
+				return c != nil && c.Org != nil && c.Org.SeatByHandle(handle) != nil
+			},
 		}
 	}
 	return e.pickup.picker

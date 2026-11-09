@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -104,7 +103,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
 		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation),
-		appsColumn(c.record.ActorApps))
+		appsColumn(c.record))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the history row at %s: %w", c.position, err)
 	}
@@ -515,10 +514,11 @@ func statedDeltas(c applyContext) map[string]Delta {
 }
 
 // appsColumn is a writer's apps as `tracker_history.actor_apps` holds them: a
-// JSON list, or ” for a writer that carried none.
-func appsColumn(apps []iam.Grant) string {
-	if len(apps) == 0 {
+// JSON list from a record at [AppsKeptVersion] or above that kept them, and
+// empty for every other, so every node writes the same row.
+func appsColumn(record MutationRecord) string {
+	if record.V < AppsKeptVersion || !record.ActorAppsKept || len(record.ActorApps) == 0 {
 		return ""
 	}
-	return jsonOf(apps)
+	return jsonOf(record.ActorApps)
 }

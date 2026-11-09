@@ -3064,10 +3064,11 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 }
 
 // askedOf is whom an AGENT'S asking message asked ([Notify.Asked]): the seats
-// it woke, the people it named and, in a direct conversation, everybody else
-// in it. Each gets a receipt, so the answer wakes the asker. Nil for a
-// person's message, whose receipts are its reach, and for an agent's message
-// that asks nothing, which no answer is owed.
+// it woke for anything but their own stake or an answer, the people it named
+// and, in a direct conversation, everybody else in it. Each gets a receipt, so
+// the answer wakes the asker. Nil for a person's message, whose receipts are
+// its reach, and for an agent's message that asks nothing, which no answer is
+// owed.
 func askedOf(room Channel, actor Actor, routing Routing, woken []Candidate) []string {
 	if actor.Kind != AuthorAgent || !routing.Asks {
 		return nil
@@ -3081,7 +3082,9 @@ func askedOf(room Channel, actor Actor, routing Routing, woken []Candidate) []st
 		}
 	}
 	for _, c := range woken {
-		add(c.Handle)
+		if !c.Reason.Stake() {
+			add(c.Handle)
+		}
 	}
 	for _, handle := range routing.mentioned() {
 		add(handle)
@@ -3096,8 +3099,8 @@ func askedOf(room Channel, actor Actor, routing Routing, woken []Candidate) []st
 
 // answersTx is the authors of the asks this message answers ([ReasonAnswer]):
 // the author's open receipts in its thread, or anywhere in a direct
-// conversation; and for a top-level post in a named room, an agent's top-level
-// asks there, whose ids it returns for the applier to mark answered.
+// conversation; and for a top-level post in a named room, each agent's newest
+// top-level ask there, whose id it returns for the applier to mark answered.
 func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author string) (
 	askers, answering []string, err error) {
 
@@ -3119,7 +3122,7 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 		query += ` AND m.thread_root = '' AND m.author_kind = ?`
 		args = append(args, string(AuthorAgent))
 	}
-	query += ` ORDER BY m.author_handle, r.message_id LIMIT ?`
+	query += ` ORDER BY m.author_handle, m.channel_seq DESC LIMIT ?`
 	args = append(args, MaxThreadParticipants)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -3131,9 +3134,11 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 		if err := rows.Scan(&message, &asker); err != nil {
 			return nil, nil, err
 		}
-		if !slices.Contains(askers, asker) {
-			askers = append(askers, asker)
+		if slices.Contains(askers, asker) {
+			// A TOP-LEVEL POST ANSWERS EACH ASKER'S NEWEST ASK ALONE.
+			continue
 		}
+		askers = append(askers, asker)
 		if top {
 			answering = append(answering, message)
 		}
@@ -3142,18 +3147,61 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 }
 
 // awaitingTx is the agents that asked something in this thread, other than
-// the author, with no answer yet ([ReasonAwaiting]).
+// the author, with no answer yet ([ReasonAwaiting]), less a co-asker's: an
+// author whose only stake is awaiting an addressee does not wake another seat
+// awaiting the same one.
 func awaitingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string) (
 	[]string, error) {
 
-	return handlesTx(ctx, tx, `
-		SELECT DISTINCT m.author_handle
+	rows, err := tx.QueryContext(ctx, `
+		SELECT m.author_handle, r.handle
 		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
 		  JOIN chat_messages m ON m.id = r.message_id
 		 WHERE r.channel_id = ? AND r.thread_key = ? AND r.answer_id = ''
-		   AND m.author_kind = ? AND m.author_handle <> ? AND m.deleted_at IS NULL
-		 ORDER BY m.author_handle LIMIT ?`,
-		channelID, root, string(AuthorAgent), author, MaxThreadParticipants)
+		   AND m.author_kind = ? AND m.deleted_at IS NULL
+		 ORDER BY m.author_handle, r.handle LIMIT ?`,
+		channelID, root, string(AuthorAgent), MaxThreadParticipants*MaxThreadParticipants)
+	if err != nil {
+		return nil, fmt.Errorf("chatlet: read the open asks of thread %s: %w", root, err)
+	}
+	defer func() { _ = rows.Close() }()
+	asked := map[string][]string{}
+	var askers []string
+	owes := false
+	for rows.Next() {
+		var asker, addressee string
+		if err := rows.Scan(&asker, &addressee); err != nil {
+			return nil, err
+		}
+		owes = owes || addressee == author
+		if _, seen := asked[asker]; !seen {
+			askers = append(askers, asker)
+		}
+		asked[asker] = append(asked[asker], addressee)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return coAskersOut(askers, asked, author, owes), nil
+}
+
+// coAskersOut is the askers a reply by author wakes: every one but the author,
+// less those awaiting an addressee the author awaits too when the author owes
+// nothing in the thread. Capped at [MaxThreadParticipants].
+func coAskersOut(askers []string, asked map[string][]string, author string, owes bool) []string {
+	var out []string
+	for _, asker := range askers {
+		if asker == author || len(out) == MaxThreadParticipants {
+			continue
+		}
+		if !owes && slices.ContainsFunc(asked[asker], func(a string) bool {
+			return slices.Contains(asked[author], a)
+		}) {
+			continue
+		}
+		out = append(out, asker)
+	}
+	return out
 }
 
 // owingTx is the seats asked something in this thread, other than the author,

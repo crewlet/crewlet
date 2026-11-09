@@ -387,6 +387,12 @@ func (r Reason) Addressed() bool {
 	return false
 }
 
+// Stake reports a wake for the recipient's own stake in the thread or an
+// answer to it: the message reached it without asking it anything.
+func (r Reason) Stake() bool {
+	return r == ReasonOwing || r == ReasonAwaiting || r == ReasonAnswer
+}
+
 // Recipient is one seat this message wakes, and why.
 //
 // THE REASON RIDES THE RECORD beside the handle rather than being recomputed
