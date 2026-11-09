@@ -524,9 +524,9 @@ stateDiagram-v2
   gate's refusal, the stamp a refused charge would have written
   ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
-  the engine (an MCP write, a colleague ask, an executor's launch), in which case the
-  trigger is recorded and acked, because running it again after the reset would
-  repeat those writes.
+  the engine (a delivery, a colleague ask, a reaction — never a call the engine
+  knows is a read), in which case the trigger is recorded and acked, because
+  running it again after the reset would repeat those writes.
 
 **Why a park and not a retry.** Before the park, a wake reaching a spent seat
 ran a turn that was refused on its first charge, and a refusal proves nothing

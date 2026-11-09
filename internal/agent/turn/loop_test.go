@@ -1411,6 +1411,51 @@ func TestARoundThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
 	}
 }
 
+// A ROUND THAT ONLY READ THE WORLD COMES BACK. A web search and an SSH read
+// both reach outside the process, and neither changes anything a redelivery
+// would repeat, so a round that made only those and broke keeps its retry —
+// while the same round that also asked a colleague is given up, since a
+// redelivery would ask again.
+//
+// Mutation: drop the read-only clause from Acted, and the reading round is
+// given up as one that wrote.
+func TestABrokenRoundThatOnlyReadTheWorldComesBack(t *testing.T) {
+	t.Parallel()
+	surface := turn.Surface{
+		Catalogue:      []string{"web_search", "ssh_read", "a2a_ask"},
+		KnownReads:     []string{"web_search", "ssh_read"},
+		KnownOpenWorld: []string{"web_search", "ssh_read", "a2a_ask"},
+	}
+	read := []ledger.Call{{Name: "web_search"}, {Name: "ssh_read"}}
+	for name, tc := range map[string]struct {
+		calls   []ledger.Call
+		abandon bool
+	}{
+		"it only read":         {calls: read},
+		"it asked a colleague": {calls: append(slices.Clone(read), ledger.Call{Name: "a2a_ask"}), abandon: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:    []turn.Work{{Calls: tc.calls}},
+				surfaces: []turn.Surface{surface},
+				workErr:  errors.New("the provider went away mid-loop"),
+			}
+			res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3},
+				turn.Input{RunID: "t1", Reply: turn.NoReply()})
+			if err == nil {
+				t.Fatal("Run returned no error for a broken phase")
+			}
+			if res.Acted != tc.abandon {
+				t.Errorf("Acted = %v, want %v", res.Acted, tc.abandon)
+			}
+			if _, abandon := turn.Abandon(res, err); abandon != tc.abandon {
+				t.Errorf("Abandon = %v, want %v", abandon, tc.abandon)
+			}
+		})
+	}
+}
+
 // A REVIEW FAILURE IS THE WORST CASE, and the one an executor-shaped fix
 // misses: the executor phase completed IN FULL — every write landed — and the
 // break is one frame later. The record is the executor's Work, which this

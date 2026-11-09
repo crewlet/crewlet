@@ -1409,9 +1409,11 @@ var underAnnotatedReads = map[string][]string{
 // The engine reads a tool's hints off the wire and trusts only an explicit
 // one, so an unannotated tool is not proven read-only, and the delivery check
 // counts every such tool as a possible delivery: a turn that only searched the
-// web can pass it as one that reached somebody. The server will not say, so
-// each documented entry for it must, under the tool's own name or with the
-// entry's tool_prefix — the two spellings an override is matched by.
+// web can pass it as one that reached somebody. Every such call counts as
+// having acted too, so a turn that broke after only searching is given up
+// rather than redelivered. The server will not say, so each documented entry
+// for it must, under the tool's own name or with the entry's tool_prefix — the
+// two spellings an override is matched by.
 func TestEveryUnderAnnotatedServerHasItsReadsMarked(t *testing.T) {
 	t.Parallel()
 	entries := 0

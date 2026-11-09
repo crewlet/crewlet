@@ -166,12 +166,13 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 		wantReason string
 	}{
 		{"a turn that did not break", turn.Result{Acted: true}, nil, false, ""},
-		{"a broken turn that proved nothing", turn.Result{}, provider, false, ""},
+		{"a broken turn whose record shows no act", turn.Result{}, provider, false, ""},
 		{"a broken turn that wrote outside", turn.Result{Acted: true}, provider, true, turn.AbandonedActed},
-		{"a panic that proved nothing", turn.Result{}, panicked, true, turn.AbandonedPanicked},
+		{"a panic in a turn whose record shows no act", turn.Result{}, panicked, true, turn.AbandonedPanicked},
 		{"a panic after a write names the panic", turn.Result{Acted: true}, panicked, true, turn.AbandonedPanicked},
-		{"a provider's fatal that proved nothing keeps its retry", turn.Result{}, fatal, false, ""},
-		{"a refusal a retry meets again proved nothing", turn.Result{}, permanent, true, turn.AbandonedPermanent},
+		{"a provider's fatal in a turn whose record shows no act keeps its retry", turn.Result{}, fatal, false, ""},
+		{"a refusal a retry meets again in a turn whose record shows no act", turn.Result{}, permanent, true,
+			turn.AbandonedPermanent},
 		{"a permanent refusal after a write names the refusal", turn.Result{Acted: true}, permanent, true,
 			turn.AbandonedPermanent},
 	}

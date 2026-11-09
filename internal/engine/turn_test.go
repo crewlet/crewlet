@@ -440,19 +440,19 @@ func TestAFailedTurnIsStillRecordedAsWorked(t *testing.T) {
 
 // THE TRANSIENT CASE KEEPS ITS RETRY, and this is the test a wrong fix breaks.
 //
-// A broken phase that proved nothing reached outside the engine is the case
-// the dispatcher's old comment described for EVERY failure: nothing was
-// recorded, so a redelivery genuinely does run it cleanly. A provider that
-// never answered, a runner that could not be built and a refused budget all
-// land here — none of them proves a write, and every one of them is worth
-// trying again. A seat handed to another node mid-turn is worth trying again
-// too, and gets the cheaper verb: see the deferral test below.
-func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
+// A broken phase whose record shows no act is the case the dispatcher's old
+// comment described for EVERY failure: nothing was recorded, so a redelivery
+// genuinely does run it cleanly. A provider that never answered, a runner
+// that could not be built and a refused budget all land here — none of them
+// shows a write, and every one of them is worth trying again. A seat handed
+// to another node mid-turn is worth trying again too, and gets the cheaper
+// verb: see the deferral test below.
+func TestABrokenPhaseWhoseRecordShowsNoActStillNAKsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
 	a := ev("notification")
-	// Acted is false: the zero Result is a turn that proved nothing, which
-	// is the safe answer and the one every pre-effect failure produces.
+	// Acted is false: the zero Result is a turn whose record shows no act,
+	// which is the safe answer and the one every pre-effect failure produces.
 	r := &recorder{err: errors.New("provider unreachable")}
 	d := dispatcher(t, r)
 	d.Completions = completions
@@ -575,9 +575,9 @@ func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) 
 	}
 }
 
-// A PANICKED TURN IS RECORDED, even though its record proves no write.
+// A PANICKED TURN IS RECORDED, even though its record shows no write.
 //
-// The proof rule above keeps a retry for a turn that proved nothing, because
+// The rule above keeps a retry for a turn whose record shows no act, because
 // such a turn may succeed next time. A panic will not: the redelivery runs the
 // same code on the same input. Before the loop recovered panics this reached
 // the queue backend's own guard, which NAKs, and the trigger came back up to
@@ -587,9 +587,9 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 	completions := ledgerstore.NewMemoryCompletions()
 	a := ev("notification")
 	r := &recorder{
-		// What turn.Run hands back for a panicking phase: no proven
-		// write, the unhandled-exception guard, and the panic as the
-		// error.
+		// What turn.Run hands back for a panicking phase: a record
+		// showing no write, the unhandled-exception guard, and the
+		// panic as the error.
 		result: turn.Result{Decision: phase.Failed, Breach: &turn.Breach{
 			Kind: types.GuardUnhandledException, Detail: "panic: nil map",
 		}},

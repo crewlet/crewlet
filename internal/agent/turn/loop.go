@@ -158,7 +158,9 @@ type Surface struct {
 	// first, and answering the first is how a seat closed out a founder's
 	// chat thread by writing a row in the tracker.
 	Deliveries map[string]string
-	// KnownReads is every tool POSITIVELY annotated read-only.
+	// KnownReads is every tool POSITIVELY annotated read-only. An MCP-served
+	// one never delivers ([Deliverable]), and one open-world as well is no
+	// act ([Acted]) unless it delivers: it reads the world.
 	KnownReads []string
 	// KnownOpenWorld is every tool POSITIVELY annotated open-world — one
 	// whose own annotations say it reaches outside this process.
@@ -167,6 +169,10 @@ type Surface struct {
 	// the same question and neither contains the other: a deliverable is a
 	// tool whose call reaches somebody WAITING on this turn, and `a2a_ask`
 	// leaves the process without answering anybody — it wakes a colleague.
+	//
+	// NOT EVERY ONE OF THEM ACTS: one also in KnownReads — a web search,
+	// `ssh_read` — reads the world and changes nothing in it, so [Acted]
+	// leaves it out unless it delivers.
 	KnownOpenWorld []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
@@ -391,21 +397,21 @@ type Result struct {
 	// Suspended marks a turn parked on its executor's run.
 	Suspended bool
 
-	// Acted reports that this attempt's own record PROVES it already
+	// Acted reports that this attempt's own record shows it already
 	// reached outside the engine (see [Acted]): what a retry of THIS attempt
 	// would repeat. A resumed attempt answers for its own calls, never for
 	// those its executor's run made before the segment that collects it
 	// ([Work.Inherited]).
 	//
 	// It exists for the callers that have to tell a turn which broke
-	// having done nothing from one which broke having already posted,
-	// asked a colleague or started a box. Those are two different facts
-	// and a redelivery is right for exactly one of them; the dispatcher
-	// used to have only `err != nil`, which is neither. Both callers read
-	// it through [Abandon] rather than directly.
+	// having done nothing from one which broke having already posted or
+	// asked a colleague. Those are two different facts and a redelivery is
+	// right for exactly one of them; the dispatcher used to have only
+	// `err != nil`, which is neither. Both callers read it through
+	// [Abandon] rather than directly.
 	//
-	// The zero value is the safe answer and the honest one: a turn that
-	// proved nothing gets today's behaviour, which is to come back. Set
+	// The zero value is the safe answer and the honest one: a turn whose
+	// record shows no act gets today's behaviour, which is to come back. Set
 	// wherever the loop holds a round's record — never in a defer, because
 	// [Run]'s results are unnamed and a deferred write to `res` would be
 	// discarded at every `return res, …` in this file.

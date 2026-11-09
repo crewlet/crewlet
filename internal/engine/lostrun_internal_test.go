@@ -82,7 +82,7 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 // that would carry it on once more refuses (runner.ErrRoundLost) — and that
 // refusal is permanent: every retry of the resume carries the same losses and
 // is refused the same way. So the run is settled, its turn ended on that
-// resume, whatever its jobs' calls proved. These jobs made no call at all, which
+// resume, whatever its jobs' calls showed. These jobs made no call at all, which
 // is the case that used to be handed back: refused again on every announcement
 // of its completion, and given up only once its resume had failed for half an
 // hour, the seat held behind it throughout.

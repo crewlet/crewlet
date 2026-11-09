@@ -448,38 +448,52 @@ func DeliverersFor(s Surface, reply Reply) []string {
 	return out
 }
 
-// Acted reports whether this round's record PROVES the turn already reached
-// outside the engine — that re-running it would repeat something it cannot
-// take back.
+// Acted reports whether this record shows the turn already reached outside
+// the engine: that re-running it would repeat something it cannot take back.
 //
 // A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
 // Delivered asks whether an answer could have reached somebody, so it counts
 // only the tools that can carry one: an MCP write, or a first-party tool the
 // engine registered as reaching a surface — a work-item comment does, a diary
 // write never does however much it writes. This asks whether anything
-// irreversible happened at all, so a builtin that wakes a colleague or starts
-// a billed box counts exactly as much as a Jira comment does.
+// irreversible happened at all, so a builtin that wakes a colleague counts
+// exactly as much as a Jira comment does.
 //
-// PROOF, NOT SUSPICION, and that asymmetry is the whole design. Its caller
-// spends a trigger on a true answer — a redelivery that would have re-run this
-// turn is given up instead — so a false positive discards work that never left
-// the process, while a false negative merely leaves today's behaviour in place.
-// Both halves are therefore positive: an MCP-backed call not proven read-only
-// (the rule [Deliverable] has survived two incidents on), or a tool whose own
-// annotations say open-world. A tool nobody classified proves nothing and is
-// not counted.
+// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. Its caller spends a trigger on a
+// true answer — a redelivery that would have re-run this turn is given up
+// instead — so a false positive discards work that never left the process,
+// while a false negative merely leaves today's behaviour in place. So the half
+// this rule adds counts PROOF alone: a call whose own annotations say
+// open-world and do not say read-only, and a first-party tool nobody
+// classified proves nothing and is not counted. The other half is the delivery
+// check's ([Deliverable]): a first-party tool registered as reaching somebody,
+// or an MCP-served tool not proven read-only, which FAILS CLOSED, the rule
+// that has survived two incidents, so an MCP tool that no hint marks as a read
+// or as a write, from its server or from an operator's override, counts though
+// nothing says it wrote.
+//
+// A READ OF THE WORLD IS NOT AN ACT. A web search or `ssh_read` is open-world
+// — it reaches outside the process — and read-only: it changes nothing anybody
+// sees, so a retry repeats nothing and there is nothing to report. Counted, a
+// turn that broke after a search was given up as one that had written. The
+// exclusion is on the open-world half alone: a delivery is always an act, so
+// nothing [Delivered] counts can read as no act here.
 //
 // SUCCESSFUL calls only, like Delivered: a post that failed did not post.
 func Acted(calls []ledger.Call, s Surface) bool {
-	for _, c := range calls {
-		if c.Failed {
-			continue
-		}
-		if Deliverable(c.Name, s) || slices.Contains(s.KnownOpenWorld, c.Name) {
-			return true
-		}
+	return slices.ContainsFunc(calls, func(c ledger.Call) bool { return actsOutside(c, s) })
+}
+
+// actsOutside is [Acted]'s rule for one call.
+func actsOutside(c ledger.Call, s Surface) bool {
+	switch {
+	case c.Failed:
+		return false
+	case Deliverable(c.Name, s):
+		return true
+	default:
+		return slices.Contains(s.KnownOpenWorld, c.Name) && !slices.Contains(s.KnownReads, c.Name)
 	}
-	return false
 }
 
 // Verdict is what the engine concludes about a round before the reviewer sees

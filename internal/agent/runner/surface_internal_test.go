@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -171,12 +172,14 @@ func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) (Launched, 
 // THE OPEN-WORLD HALF OF THE PREDICATE REACHES THE TURN, or it is dead code.
 //
 // [turn.Acted] decides whether a broken turn's trigger is given up rather than
-// redelivered, and its two halves come from different places: MCP-backing off
-// `MCPTools`, and a first-party tool that leaves the process off
-// `KnownOpenWorld`. Only `a2a_ask` carries that annotation among the builtins, so
-// if `describe` stops filling the field the engine silently loses the ability
-// to tell "this turn woke a colleague" from "this turn did nothing" — and
-// every such failure goes back to replaying its ask twenty-five times.
+// redelivered, and its two halves come from different places: a delivery off
+// `Deliveries`, and a tool whose own annotations say it leaves the process off
+// `KnownOpenWorld` — a colleague ask, a reaction, a published artifact, none of
+// them a delivery — less the reads of the world off `KnownReads`. If `describe`
+// stops filling either set, the engine silently loses the ability to tell "this
+// turn woke a colleague" from "this turn did nothing", and every such failure
+// goes back to replaying its ask twenty-five times; or it reads a turn that
+// only searched as one that wrote, and gives up a trigger worth retrying.
 func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -188,17 +191,30 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 		tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
 		t.Fatal(err)
 	}
+	// A READ OF THE WORLD: open-world, and positively read-only — in BOTH
+	// sets, which is what Acted reads the exclusion from.
+	if err := reg.RegisterWith(stubTool("search"), tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.Yes, OpenWorld: mcp.Yes}); err != nil {
+		t.Fatal(err)
+	}
 	// The shape that matters most: a tool nobody classified. It must appear
 	// in NEITHER list, so it proves nothing in either direction.
 	if err := reg.RegisterWith(stubTool("submit_work"), tools.OriginBuiltin,
 		tools.Annotations{}); err != nil {
 		t.Fatal(err)
 	}
-	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"ask", "recall", "submit_work"})
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"ask", "recall", "search", "submit_work"})
 
 	got := describe(surface)
 	if !slices.Contains(got.KnownOpenWorld, "ask") {
 		t.Errorf("KnownOpenWorld = %v, want the open-world builtin in it", got.KnownOpenWorld)
+	}
+	if !slices.Contains(got.KnownOpenWorld, "search") || !slices.Contains(got.KnownReads, "search") {
+		t.Errorf("KnownOpenWorld = %v, KnownReads = %v; want the read of the world in both",
+			got.KnownOpenWorld, got.KnownReads)
+	}
+	if turn.Acted([]ledger.Call{{Name: "search"}}, got) || !turn.Acted([]ledger.Call{{Name: "ask"}}, got) {
+		t.Error("the surface handed to the turn does not tell a read of the world from a colleague ask")
 	}
 	if slices.Contains(got.KnownOpenWorld, "recall") {
 		t.Error("a positively read-only tool was reported as leaving the process")

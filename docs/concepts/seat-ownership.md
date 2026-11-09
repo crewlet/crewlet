@@ -208,7 +208,7 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 
 **The same fence carries a person's stop.** A pause that asked for the running turn to stop closes it the same way, at its next tool call, with `turn.ErrStoppedByPerson` — ownership is checked first, since a turn on a seat that moved is the successor's to stop or not. That turn is not deferred: the trigger is recorded in the completion ledger and acked, because the person stopped it so that it would not go on. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
-A turn the fence stops because the seat moved is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record proves it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
+A turn the fence stops because the seat moved is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record shows it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
@@ -603,23 +603,31 @@ second apart**, each one a real comment on a real issue.
 A broken turn is now one of the cases below, and the engine tells them apart
 from its own record and from what broke, rather than from `err != nil`:
 
-| what the turn's record proves | what happens |
+| what the turn's record shows | what happens |
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
 | a resumed turn broke before writing anything new | **retried**, whatever was written before it, unless it panicked or was refused for good (below). The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
-| the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
-| its executor's round was lost with its host past its [limit](code-sandbox.md#durability-completion-and-observability) | **recorded and acked**, whatever the record proves: a retry carries the same losses and is refused the same way, so the turn ends on the resume that refused to carry the round on, saying how often the round was lost. That refusal used to be handed back unless the round's jobs had written outside, refused again on every announcement of the run's completion, and given up only once the resume had failed for half an hour, the seat held behind it throughout. |
+| the turn panicked | **recorded and acked**, whatever the record shows. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
+| its executor's round was lost with its host past its [limit](code-sandbox.md#durability-completion-and-observability) | **recorded and acked**, whatever the record shows: a retry carries the same losses and is refused the same way, so the turn ends on the resume that refused to carry the round on, saying how often the round was lost. That refusal used to be handed back unless the round's jobs had written outside, refused again on every announcement of the run's completion, and given up only once the resume had failed for half an hour, the seat held behind it throughout. |
 
-The proof is deliberately narrow, because a true answer *spends* a trigger.
-A call counts only when it is MCP-backed and not positively annotated
-read-only — the same rule the [delivery gate](turn-engine.md) has always used —
-or when the tool's own annotations say it is open-world, which is how
-`a2a_ask` counts despite being first-party. A tool nobody
-classified proves nothing. In particular the executor's own `submit_work`, the
-discovery pair and the sub-agent spawner carry no annotations at all, so they
-cannot trip it; a predicate written as "not proven read-only" would fire on
-every turn that closed a single round.
+The rule is deliberately narrow, because a true answer *spends* a trigger.
+A call counts only when it delivers — an MCP-served tool not positively
+annotated read-only, or a first-party tool the engine registered as one that
+reaches somebody: the rule the
+[delivery check](turn-engine.md#three-checks-in-increasing-cost) uses, which
+fails closed, so an MCP tool that no hint marks as a read or as a write, from
+its server or from a `tool_annotations` override, counts though nothing says it
+wrote — or when the tool's own annotations say it is open-world and do not say
+it is read-only, which is how `a2a_ask` counts despite being first-party. A read
+of the world is not a write: `ssh_read`, or a web search annotated `read_only`
+and `open_world`, reaches outside the process and leaves nothing a redelivery
+would repeat. A first-party tool nobody classified proves nothing, nor does the
+turn's own machinery: the discovery pair is annotated read-only and
+closed-world, the sub-agent spawner closed-world, and the executor's own
+`submit_work` carries no annotations at all, so they cannot trip it; a predicate
+written as "not proven read-only" would fire on every turn that closed a single
+round.
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
@@ -640,8 +648,8 @@ therefore keeps its claim, which is what stops a retry winning the flip, and
 its run is settled like one that finished: the box is reclaimed and the seat is
 free for its next turn. Every other resume failure still un-claims and comes
 back, because the run's collected work is the expensive thing there and a
-resume that proved nothing, and that a retry may get past, has lost nothing by
-trying again.
+resume whose record shows no act, and that a retry may get past, has lost
+nothing by trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

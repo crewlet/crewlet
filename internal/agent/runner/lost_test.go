@@ -113,7 +113,7 @@ func TestALostJobThatHadSubmittedIsCollected(t *testing.T) {
 // work on it — down again with each relaunch. The phase the round opened is
 // closed failed, saying why, and the turn ends with it: the refusal is one
 // every retry would meet again, so the turn is given up whatever the round's
-// calls proved, rather than handed back to be refused once more.
+// calls showed, rather than handed back to be refused once more.
 //
 // Mutation: drop the refusal, and a run that kills its host is relaunched for
 // ever; drop turn.ErrPermanent from it, and a round whose jobs wrote nothing

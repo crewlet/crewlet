@@ -48,25 +48,30 @@ func TestDeliveredIgnoresFailedCalls(t *testing.T) {
 	}
 }
 
-// PROOF, NOT SUSPICION. Acted decides whether a broken turn's trigger is
-// given up rather than redelivered, so a true answer SPENDS the work — and the
-// tools that must not trip it are the ones a turn calls on every single round.
+// A TURN'S OWN MACHINERY IS NO ACT. Acted decides whether a broken turn's
+// trigger is given up rather than redelivered, so a true answer SPENDS the
+// work — and the tools that must not trip it are the ones a turn calls on
+// every single round.
 //
-// This is the case that kills the obvious implementation. `submit_work`, the
-// discovery pair and the sub-agent spawner are all registered with NO
-// annotations at all (internal/agent/runner/phases.go), so any predicate of
-// the form "not proven read-only" reads true for the executor's own
-// terminator — and every turn that closed a round would then be abandoned.
-func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
+// This is the case that kills the obvious implementation. `submit_work` is
+// registered with NO annotations at all (internal/agent/runner/phases.go), so
+// any predicate of the form "not proven read-only" reads true for the
+// executor's own terminator — and every turn that closed a round would then
+// be abandoned. The rest of that machinery is annotated, none of it
+// open-world: the discovery pair is read-only and closed-world, and the
+// sub-agent spawner and `reflect_and_persist` are closed-world writes, so
+// none of it trips the rule either.
+func TestATurnsOwnMachineryIsNoAct(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
 		Catalogue: []string{
 			"slack_post", "slack_history", "tracker_do", "submit_work",
 			"activate_tool", "reflect_and_persist", "a2a_ask", "github_open_pr",
+			"web_search",
 		},
 		Deliveries:     map[string]string{"slack_post": "test", "tracker_do": "test"},
-		KnownReads:     []string{"slack_history"},
-		KnownOpenWorld: []string{"a2a_ask", "github_open_pr"},
+		KnownReads:     []string{"slack_history", "web_search"},
+		KnownOpenWorld: []string{"a2a_ask", "github_open_pr", "web_search"},
 	}
 	for name, want := range map[string]bool{
 		"slack_post":     true,  // a declared deliverable reached a person
@@ -74,10 +79,14 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 		"a2a_ask":        true,  // a builtin, but it woke a colleague
 		"github_open_pr": true,  // no delivery, but a pull request others see
 		"slack_history":  false, // positively read-only
+		"web_search":     false, // open-world AND positively read-only: a read of the world
 		// The three that make this predicate different from
-		// !ReadOnlyProven, and the reason it is not written that way:
-		// every one of them is unannotated in-engine plumbing that a
-		// healthy turn calls constantly.
+		// !ReadOnlyProven, and the reason it is not written that way: a
+		// healthy turn calls them constantly. None delivers or says
+		// open-world — submit_work carries no annotations at all, and the
+		// discovery pair and the diary are annotated closed-world — so none
+		// trips the rule, which these cases assert by leaving all three
+		// unclassified here.
 		"submit_work":         false,
 		"activate_tool":       false,
 		"reflect_and_persist": false, // an agent's own diary is not the world
@@ -129,6 +138,42 @@ func TestActedAndDeliveredDisagreeOnPurpose(t *testing.T) {
 	// and spend another of their turns.
 	if !turn.Acted(ask, s) {
 		t.Error("a colleague ask counted as nothing having happened")
+	}
+}
+
+// A READ OF THE WORLD IS NOT AN ACT, AND A DELIVERY ALWAYS IS. A web search or
+// `ssh_read` reaches outside the process and changes nothing anybody sees, so
+// a broken turn that only read comes back rather than being given up as one
+// that wrote. The exclusion is the open-world half's alone: a first-party tool
+// registered as delivering is an act even where it was also annotated
+// read-only, so nothing Delivered counts can read as no act.
+//
+// Mutation: drop the read-only clause, and the searches count as acts; apply
+// it to the delivery half too, and the misfiled post reads as no act.
+func TestAReadOfTheWorldIsNoActButADeliveryAlwaysIs(t *testing.T) {
+	t.Parallel()
+	s := worldSurface()
+	// A FIRST-PARTY TOOL DECLARED BOTH WAYS: registered as reaching a
+	// surface, and annotated read-only all the same.
+	s.Catalogue = append(s.Catalogue, "misfiled_post")
+	s.Deliveries["misfiled_post"] = "chat"
+	s.KnownReads = append(s.KnownReads, "misfiled_post")
+	for name, want := range map[string]bool{
+		"web_search":           false, // reads the world
+		"ssh_read":             false, // reads a server
+		"get_work_item":        false, // reads the tracker
+		"a2a_ask":              true,  // wakes a colleague
+		"react_to_message":     true,  // a reaction the room sees
+		"comment_on_work_item": true,  // delivers on the tracker
+		"misfiled_post":        true,  // delivers, however it was annotated
+	} {
+		calls := []ledger.Call{{Name: name}}
+		if got := turn.Acted(calls, s); got != want {
+			t.Errorf("Acted(%q) = %v, want %v", name, got, want)
+		}
+		if turn.Delivered(calls, s) && !turn.Acted(calls, s) {
+			t.Errorf("%q delivered and did not act", name)
+		}
 	}
 }
 
@@ -323,6 +368,19 @@ func trackerSurface() turn.Surface {
 		KnownReads:   []string{"get_work_item"},
 		Discoverable: []string{"mattermost_post_message"},
 	}
+}
+
+// worldSurface is [trackerSurface] with the seat's other tools as the engine
+// annotates them: two reads of the world (a web search, and `ssh_read`), each
+// read-only AND open-world; a colleague ask and a reaction, open-world and no
+// delivery; and the tracker's writes open-world as well as delivering.
+func worldSurface() turn.Surface {
+	s := trackerSurface()
+	s.Catalogue = append(s.Catalogue, "web_search", "ssh_read", "a2a_ask", "react_to_message")
+	s.KnownReads = append(s.KnownReads, "web_search", "ssh_read")
+	s.KnownOpenWorld = []string{"web_search", "ssh_read", "a2a_ask", "react_to_message",
+		"comment_on_work_item", "update_work_item"}
+	return s
 }
 
 // commented is a closed round whose one write was the comment that answered

@@ -49,16 +49,16 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // already. A turn that PANICKED is abandoned too: the parked state is the same
 // bytes on every delivery, so the retry reaches the same defect. And so is a
 // resume REFUSED for a reason every retry would meet again (turn.ErrPermanent;
-// today a round lost with its host past its limit), whatever its record proves.
+// today a round lost with its host past its limit), whatever its record shows.
 //
 // A resumer wraps its error in this when, and only when, the turn's own answer
 // says so (in the engine, turn.Abandon). The coordinator then never reverts the
 // claim, which is what stops a retry winning the flip: it settles the delivery
 // and the run, reclaiming the box and deleting the record, so no redelivery
 // finds anything to claim. Every other resume failure still reverts and comes
-// back, because the parked turn is the expensive thing here and a resume that
-// proved nothing, and that a retry may get past, has lost nothing by trying
-// again.
+// back, because the parked turn is the expensive thing here and a resume whose
+// record shows no act, and that a retry may get past, has lost nothing by
+// trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
 // Unresumable is a run no build will ever resume, as the engine judges it. It
