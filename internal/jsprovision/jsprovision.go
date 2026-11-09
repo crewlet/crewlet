@@ -462,7 +462,8 @@ func Settle[T any](ctx context.Context, ask func(context.Context) (T, error)) (T
 // "stream not found" names the object and "deadline exceeded" does not. That
 // holds for the last attempt too — the one the window interrupts — so the
 // answer a caller wraps is what the object said, not what this function's
-// patience did.
+// patience did. And no question is asked again once the window's deadline
+// has passed, whether or not the window says so yet ([pause]).
 func SettleWith[T any](ctx context.Context, t Timing, ask func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if err := t.unset(); err != nil {
@@ -496,10 +497,10 @@ func SettleWith[T any](ctx context.Context, t Timing, ask func(context.Context) 
 		}
 		// THE CADENCE FOLLOWS THE CONDITION, never the loop: a not-found
 		// is an answer that clears on this member's next metadata update.
-		select {
-		case <-window.Done():
+		// And none is asked past the window, though the window cannot say
+		// yet that it has closed ([pause]).
+		if !pause(window, t.PlacementRetry) {
 			return zero, heard(absent, nil)
-		case <-time.After(t.PlacementRetry):
 		}
 	}
 }
@@ -616,7 +617,9 @@ const ReadTerm = time.Second
 // "deadline exceeded" says neither.
 //
 // Each attempt is [Timing.Ask]'d at t.AskTerm, and an answered refusal asked
-// again every t.PlacementRetry.
+// again every t.PlacementRetry — never once ctx's deadline has passed, whether
+// or not ctx says so yet ([pause]): a create sent then is one its caller has
+// given up on, and the error it comes back with can take the refusal's place.
 func (t Timing) Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
 	if err := t.unset(); err != nil {
 		return err
@@ -636,10 +639,8 @@ func (t Timing) Place(ctx context.Context, create func(context.Context) error, a
 		if attempt == 0 && awaiting != nil {
 			awaiting()
 		}
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, t.PlacementRetry) {
 			return err
-		case <-time.After(t.PlacementRetry):
 		}
 	}
 }
@@ -698,7 +699,9 @@ func Place(ctx context.Context, term time.Duration,
 // has a leader ([AskTerm]) — and the one request is abandoned before the next
 // is sent, since a second create while the first is held is a second write. A
 // read is never held, is answered when it is processed, and asks through
-// [ReadWith] at the read term instead, keeping every request outstanding.
+// [ReadWith] at the read term instead, keeping every request outstanding. No
+// request is sent again once ctx's deadline has passed, whether or not ctx
+// says so yet ([pause]).
 func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
 	if err := t.unset(); err != nil {
 		return err
@@ -713,10 +716,8 @@ func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again 
 		if again != nil {
 			again(asks)
 		}
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, t.ReAsk) {
 			return err
-		case <-time.After(t.ReAsk):
 		}
 	}
 }
@@ -787,6 +788,58 @@ const clusterAskTerm = 15 * time.Second
 // which member holds the group. Two conditions, two cadences, and merging them
 // would tie each to the other's evidence.
 const ReAsk = time.Second
+
+// pause waits d before a request is asked again, and reports whether it may
+// be: not once ctx has ended, and not once ctx's deadline has passed, whether
+// or not ctx says so yet ([overdue]). Then it waits for ctx's ending, which is
+// due, so its caller returns what it returns when ctx ends, with ctx's own
+// error set beside it for [Unanswered] to read, as it would be on a runtime
+// that ran every timer on time.
+func pause(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+	}
+	if overdue(ctx) {
+		<-ctx.Done()
+		return false
+	}
+	return true
+}
+
+// overdue reports whether ctx's deadline has passed, WHETHER OR NOT CTX SAYS
+// SO YET. Every loop here that asks again decides it with this, never with
+// ctx.Done alone.
+//
+// # Why ctx.Done is not enough
+//
+// Because a context is ended at its deadline by a timer of its own, whose
+// function ([time.AfterFunc]) the runtime runs in a goroutine of its own once
+// it gets to that timer, and until then ctx.Err() is nil and ctx.Done() open.
+// On a process the machine has not run for a while it gets there late, and a
+// loop that pauses on a timer of its own then finds both timers due: its own
+// channel ready and ctx's still open, or both ready and select choosing
+// between them at random. Either way it went on as though its caller were
+// still waiting. Where ctx was still open the request went out, since nats.go
+// refuses one only on a context whose Err is set: a read nobody would hear
+// the answer to, put to a leader already not answering — the load [hedge]
+// counts per request — or a write the broker may still carry out after its
+// caller gave up on it. And a write's or a placement's next attempt, sent or
+// refused, can come back with the deadline in place of what its caller was
+// owed: the silence the write was told, the refusal the placement waits out.
+// natsobj's unanswered stream info showed it on a loaded CI runner: three
+// requests inside a 3.9-second bound whose third was due at four. With the
+// test's process stopped from just before the bound to past four seconds, the
+// unchanged hedge sent that third request in four runs of eight, a few
+// hundred milliseconds after the bound.
+//
+// A deadline AT this instant has passed: a request sent at its caller's
+// deadline has no time left to be answered in.
+func overdue(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && !time.Now().Before(deadline)
+}
 
 // Clustered is whether this node's broker has peers, which is what decides
 // every budget above.
