@@ -495,6 +495,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // repositories' lines, `code_search`, which a script read alone on the
 // path api-endpoints.md prints ("GET /gitlet/search").
 var readOutsideTheDashboard = map[string]string{
+	// THE SETUP ADVISOR before its Settings screen: an administrator's
+	// script reads the findings and sends each fix through /config.
+	"advisor":           "an admin's script: GET /advisor, as docs/guides/advisor.md prints it",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
