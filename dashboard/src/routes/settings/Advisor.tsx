@@ -21,9 +21,11 @@ import {
   Link,
   Modal,
   PageNote,
+  StepList,
   Text,
   type AttentionItem,
   type AttentionTone,
+  type StepListStep,
 } from "@crewlethq/ui";
 import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -76,6 +78,7 @@ export function Advisor() {
             need from you is missing below.
           </Callout>
         )}
+        {data && <GoLiveCheck owner={owner} unread={data.unread} />}
         {data &&
           (owner.length === 0 ? (
             <EmptyState
@@ -104,6 +107,53 @@ export function Advisor() {
         />
       )}
     </>
+  );
+}
+
+/** The go-live check's own words for a step's state. */
+const GO_LIVE_LABELS = { done: "Done", waiting: "To do", pending: "Can't say yet" };
+
+/**
+ * THE GO-LIVE CHECK: the owner's findings counted by what ignoring them costs,
+ * as the three things to do before the agents start, each done when none is
+ * left. Read off the same answer as the list below, so the two cannot differ;
+ * a source the answer could not read leaves its step unsaid rather than done.
+ */
+function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: string[] }) {
+  const count = (severity: AdvisorSeverity) => owner.filter((f) => f.severity === severity).length;
+  const blocks = count("blocks");
+  const costs = count("costs");
+  const notes = count("note");
+  const blind = unread.length > 0;
+  const steps: StepListStep[] = [
+    {
+      id: "blocks",
+      label: blocks
+        ? `Fix what blocks the company (${blocks})`
+        : blind
+          ? "Nothing that could be read blocks the company"
+          : "Nothing blocks the company",
+      state: blocks ? "waiting" : blind ? "pending" : "done",
+    },
+    {
+      id: "costs",
+      label: costs ? `Look at what costs it (${costs})` : "Nothing costs it",
+      state: costs ? "waiting" : blind ? "pending" : "done",
+    },
+    {
+      id: "notes",
+      label: notes ? `Read what is worth knowing (${notes})` : "Nothing else to read",
+      state: notes ? "waiting" : "done",
+    },
+  ];
+  const done = steps.filter((s) => s.state === "done").length;
+  return (
+    <StepList
+      label="Go-live check"
+      steps={steps}
+      labels={GO_LIVE_LABELS}
+      summary={`Go-live check: ${done} of ${steps.length} done`}
+    />
   );
 }
 

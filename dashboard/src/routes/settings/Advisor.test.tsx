@@ -274,3 +274,28 @@ test("integrations the server couldn't read are said, so a short list is not all
   await mount({ revision: "r1", findings: [], unread: ["integrations"] });
   expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
 });
+
+/** The go-live check's steps as drawn, label and state. */
+function goLive() {
+  const list = screen.getByRole("list", { name: "Go-live check" });
+  return [...list.querySelectorAll("li")].map((li) => li.textContent ?? "");
+}
+
+test("the go-live check counts what is left by what it costs", async () => {
+  const blocker = { ...HEALTH, severity: "blocks" as const, path: "integrations.datadog" };
+  await mount({ revision: "r1", findings: [blocker, HEALTH, ENGINE], unread: [] });
+  const steps = goLive();
+  expect(steps[0]).toMatch(/Fix what blocks the company \(1\)/);
+  expect(steps[0]).toMatch(/To do/);
+  expect(steps[1]).toMatch(/Look at what costs it \(1\)/);
+  expect(steps[2]).toMatch(/Nothing else to read/);
+  expect(steps[2]).toMatch(/Done/);
+});
+
+test("a source the answer could not read leaves its steps unsaid, never done", async () => {
+  await mount({ revision: "r1", findings: [], unread: ["integrations"] });
+  const steps = goLive();
+  expect(steps[0]).toMatch(/Nothing that could be read blocks the company/);
+  expect(steps[0]).toMatch(/Can't say yet/);
+  expect(steps[0]).not.toMatch(/Done/);
+});
