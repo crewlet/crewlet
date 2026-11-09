@@ -61,11 +61,15 @@ const (
 	// PatternReviewIdle is an item in review its agent holder never takes a
 	// turn on.
 	PatternReviewIdle Pattern = "review_idle"
+
+	// PatternApprovalRubberStamp is a person choosing one agent's
+	// recommended option on almost every decision it asks of them.
+	PatternApprovalRubberStamp Pattern = "approval_rubber_stamp"
 )
 
 // Patterns is every [Pattern] a timeline may declare.
 var Patterns = []Pattern{PatternHealthyCompany, PatternAgentHandoffs, PatternAgentMentionsWithoutAsk,
-	PatternPersonRequestsWithoutAsk, PatternAskOvertaken, PatternReviewIdle}
+	PatternPersonRequestsWithoutAsk, PatternAskOvertaken, PatternReviewIdle, PatternApprovalRubberStamp}
 
 // Valid reports whether p is a declared pattern.
 func (p Pattern) Valid() bool { return slices.Contains(Patterns, p) }
@@ -136,6 +140,11 @@ type Step struct {
 
 	// Answers is the index of the earlier comment step this comment answers.
 	Answers *int `json:"answers,omitempty"`
+
+	// Recommend makes a question to a person a decision between [Choices],
+	// recommending this one; Choose is the option an answer to one chose.
+	Recommend string `json:"recommend,omitempty"`
+	Choose    string `json:"choose,omitempty"`
 
 	Assignee string `json:"assignee,omitempty"`
 	Status   string `json:"status,omitempty"`
@@ -283,11 +292,12 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		"say": st.Say != "", "mentions": len(st.Mentions) > 0, "ask": st.Ask != "",
 		"asks":    st.Asks != nil,
 		"answers": st.Answers != nil, "assignee": st.Assignee != "",
+		"recommend": st.Recommend != "", "choose": st.Choose != "",
 		"status": st.Status != "", "watcher": st.Watcher != "",
 	}
 	allowed := map[Verb][]string{
 		VerbFile:    {"assignee"},
-		VerbComment: {"say", "mentions", "ask", "asks", "answers"},
+		VerbComment: {"say", "mentions", "ask", "asks", "answers", "recommend", "choose"},
 		VerbAssign:  {"assignee"},
 		VerbStatus:  {"status"},
 		VerbWatch:   {"watcher"},
@@ -313,6 +323,11 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 	if st.Status != "" && !slices.Contains(Statuses, st.Status) {
 		return fmt.Errorf("status %q is not one of %s", st.Status, words.Or(Statuses))
 	}
+	if st.Recommend != "" && (!slices.Contains(Choices, st.Recommend) || st.Ask == "" ||
+		tl.Kind(st.Ask) != SeatPerson) {
+		return fmt.Errorf("recommend %q needs a question to a person and one of %s",
+			st.Recommend, words.Or(Choices))
+	}
 	if st.Answers != nil {
 		a := *st.Answers
 		if a < 0 || a >= i || tl.Steps[a].Verb != VerbComment || tl.Steps[a].Item != st.Item {
@@ -321,6 +336,11 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		if tl.Steps[a].Ask != st.Actor {
 			return fmt.Errorf("answers step %d, which asked %q, not %q", a, tl.Steps[a].Ask, st.Actor)
 		}
+	}
+	if st.Choose != "" && (!slices.Contains(Choices, st.Choose) || st.Answers == nil ||
+		tl.Steps[*st.Answers].Recommend == "") {
+		return fmt.Errorf("choose %q needs an answer to a decision and one of %s",
+			st.Choose, words.Or(Choices))
 	}
 	return nil
 }

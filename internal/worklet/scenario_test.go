@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/scenario"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -37,6 +38,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
 		scenario.PatternReviewIdle:               advisor.ClassReviewIdle,
+		scenario.PatternApprovalRubberStamp:      advisor.ClassApprovalRubberStamp,
 	}
 	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
 	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
@@ -231,6 +233,10 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 	if thread.Answers != "" {
 		c.Answers = &thread.Answers
 	}
+	if st.Recommend != "" {
+		c.Decision = scenarioDecision(st.Recommend)
+	}
+	c.Choice = st.Choose
 	d.comments[i] = c.ID
 	patch := worklet.TaskPatch{Comment: c,
 		Watch: &worklet.WatchIntent{Handle: st.Actor, Watch: true, Auto: true}}
@@ -380,4 +386,15 @@ func TestAnIdleReviewIsOneItsHolderLeftAlone(t *testing.T) {
 		t.Fatalf("with the quiet instant before every review, idle reviews %+v (%v), want none",
 			early.IdleReviews, err)
 	}
+}
+
+// scenarioDecision is a decision step's question: the fixed choices, one
+// recommended, in the timeline's own words.
+func scenarioDecision(recommend string) *decision.Decision {
+	d := &decision.Decision{Question: scenario.Phrase(scenario.SayQuestion, 0),
+		Role: decision.RoleApprover, Recommended: recommend, Rationale: "It keeps the work moving."}
+	for _, id := range scenario.Choices {
+		d.Options = append(d.Options, decision.Option{ID: id, Label: scenario.ChoiceLabels[id]})
+	}
+	return d
 }
