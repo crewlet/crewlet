@@ -33,9 +33,12 @@ type FileQuery struct {
 
 // DefaultFilePage and MaxFilePage are a listing's page.
 //
-// TWO HUNDRED BY DEFAULT AND A THOUSAND AT MOST: a row is a few hundred bytes,
-// so a page is well inside what a tool answer carries, and a project with more
-// files than that is paged through rather than sent whole.
+// TWO HUNDRED BY DEFAULT AND A THOUSAND AT MOST, so a project with more files
+// than that is paged through rather than sent whole. A row is about 325 bytes
+// of compact JSON with a short path, which puts the largest page near a third
+// of a megabyte: a page a reader over HTTP takes whole, and NOT one a seat's
+// tool answer carries, which is held to 64 KiB — so a seat's listing asks for
+// a page of its own, well below these.
 const (
 	DefaultFilePage = 200
 	MaxFilePage     = 1000

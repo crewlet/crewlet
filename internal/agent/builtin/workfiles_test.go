@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,19 +42,37 @@ func newFakeFiles() *fakeFiles { return &fakeFiles{files: map[string]worklet.Fil
 
 func (f *fakeFiles) key(project, path string) string { return project + "/" + path }
 
+// Files answers a page of a project's files as the tracker's reader does
+// ([worklet.Reader.Files]), the folder aside: a project other than ENG
+// [worklet.ErrNoProject], and otherwise its live rows in path order after
+// q.After, every field a listing carries, held to the reader's own page —
+// [worklet.DefaultFilePage] for none, never more than [worklet.MaxFilePage] —
+// with Next to go on from.
 func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileListing, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if q.Project != "ENG" {
 		return worklet.FileListing{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, q.Project)
 	}
+	page := q.Limit
+	switch {
+	case page <= 0:
+		page = worklet.DefaultFilePage
+	case page > worklet.MaxFilePage:
+		page = worklet.MaxFilePage
+	}
 	var out worklet.FileListing
 	for _, file := range f.files {
-		if !file.Removed() && file.Project == q.Project {
+		if !file.Removed() && file.Project == q.Project && file.Path > q.After {
 			out.Files = append(out.Files, worklet.FileRow{Project: file.Project, Path: file.Path,
-				Size: file.Size, Version: file.Version,
-				CreatedBy: file.CreatedBy, UpdatedBy: file.UpdatedBy})
+				ContentType: file.ContentType, Hash: string(file.Hash), Size: file.Size,
+				Version: file.Version, CreatedBy: file.CreatedBy, CreatedAt: file.CreatedAt,
+				UpdatedBy: file.UpdatedBy, UpdatedAt: file.UpdatedAt})
 		}
+	}
+	slices.SortFunc(out.Files, func(a, b worklet.FileRow) int { return strings.Compare(a.Path, b.Path) })
+	if len(out.Files) > page {
+		out.Files, out.Next = out.Files[:page], out.Files[page-1].Path
 	}
 	out.Complete, out.Level = true, q.Freshness.Level
 	return out, nil
@@ -259,6 +278,49 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 	got = callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "reports/q3.md"})
 	if !got.Failed || !strings.Contains(got.Output, "there is no file") {
 		t.Fatalf("a read of a removed file answered %s", got.Output)
+	}
+}
+
+// A SEAT'S FILE LISTING IS A PAGE ITS ANSWER CARRIES, whatever the call asks
+// for: fifty files by default and a hundred at most, each page with the next
+// to go on from. The tracker's own page — two hundred by default, a thousand
+// at most — is past what one tool answer carries ([builtin.ToolAnswerBytes]),
+// so a listing of a project of three hundred files was refused as too large,
+// asked for nothing at all.
+//
+// Mutation: hand the tracker the limit the call asked for again, and the rows
+// asking for no page and for more than a page are refused as too large.
+func TestASeatsFileListingIsAPageItsAnswerCarries(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	at := time.Unix(1_700_000_000, 0).UTC()
+	for i := range 300 {
+		p := fmt.Sprintf("reports/2026/q%03d.md", i)
+		files.files[files.key("ENG", p)] = worklet.File{Project: "ENG", Path: p,
+			ContentType: "text/markdown; charset=utf-8", Hash: objstore.HashOf([]byte(p)),
+			Size: 1234, Object: objstore.KeyAt(at), Version: 3,
+			CreatedBy: "agent-cto", CreatedAt: at, UpdatedBy: "agent-cto", UpdatedAt: at}
+	}
+	for _, c := range []struct {
+		name  string
+		args  map[string]any
+		files float64
+	}{
+		{"asked for no page", map[string]any{}, 50},
+		{"asked for more than a page", map[string]any{"limit": 5000}, 100},
+		{"asked for a page it carries", map[string]any{"limit": 7}, 7},
+	} {
+		got := callWork(t, reg, worklet.ListProjectFilesTool, c.args)
+		if got.Failed {
+			t.Errorf("%s: refused: %s", c.name, got.Output)
+			continue
+		}
+		listed := fileAnswer(t, got.Output)
+		if listed["count"] != c.files || listed["next"] == "" {
+			t.Errorf("%s: listed %v files with next %q, want %v and a next",
+				c.name, listed["count"], listed["next"], c.files)
+		}
 	}
 }
 

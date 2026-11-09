@@ -99,6 +99,34 @@ const (
 	maxFileRead     = 48 << 10
 )
 
+// The listing page, as a seat asks the tracker for one ([fileListPage]).
+//
+// FIFTY BY DEFAULT AND A HUNDRED AT MOST, well below the tracker's own page
+// ([worklet.DefaultFilePage], [worklet.MaxFilePage]): a file's row is about
+// 420 bytes of the answer with a short path, so [ToolAnswerBytes] holds about
+// 150 of them, and the tracker's default page of two hundred was refused as
+// too large in any project holding more files than that. A hundred rows are
+// about 41 KiB, which leaves the envelope its room and paths two hundred bytes
+// longer than a short one theirs; fifty is the default of the tracker's other
+// listings ([worklet.PageDefault]).
+const (
+	defaultFileList = 50
+	maxFileList     = 100
+)
+
+// fileListPage is the page a seat's listing asks the tracker for: the default
+// for none, and never more than its answer carries.
+func fileListPage(asked int) int {
+	switch {
+	case asked <= 0:
+		return defaultFileList
+	case asked > maxFileList:
+		return maxFileList
+	default:
+		return asked
+	}
+}
+
 // fileArgs is a project and a path as a caller names them, the project
 // defaulting to the caller's unit's.
 func (d WorkDeps) fileArgs(actor *Actor, args map[string]any) (string, string, string) {
@@ -168,8 +196,9 @@ func (t *listProjectFiles) Parameters() map[string]any {
 				"description": "The `next` of the previous page, to continue.",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": fmt.Sprintf("Files per page, at most %d.", worklet.MaxFilePage),
+				"type": "integer",
+				"description": fmt.Sprintf("Files per page, at most %d; %d by default.",
+					maxFileList, defaultFileList),
 			},
 		},
 	}
@@ -196,7 +225,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	listing, err := t.deps.Files.Files(ctx, worklet.FileQuery{
 		Project: project, Folder: argString(args, "folder"),
-		After: argString(args, "after"), Limit: argInt(args, "limit", 0),
+		After: argString(args, "after"), Limit: fileListPage(argInt(args, "limit", 0)),
 		Freshness: statelog.Freshness{Level: seatReadLevel},
 	})
 	if err != nil {
