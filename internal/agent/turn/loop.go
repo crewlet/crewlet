@@ -87,6 +87,15 @@ type Work struct {
 	Refs       []string
 	RefsElided int
 
+	// RefusedReplies are the replies to the questions the round's run asked
+	// that the engine refused as too large to hand it (internal/sandbox's
+	// RoundRefusals, ADR-0114), oldest first: the reviewer's record of what
+	// the run was never given, which its calls do not show — there a question
+	// asked again after its reply was refused reads as the same one sent
+	// twice, and the run's word that a reply never reached it has nothing to
+	// be held against.
+	RefusedReplies []RefusedReply
+
 	// Suspended marks an executor whose run was launched: the work happens
 	// in the run, detached in its box, and this segment of the turn ends
 	// here. The run's collection resumes the turn, so the loop hands the
@@ -96,6 +105,14 @@ type Work struct {
 	// Rescued marks an outcome the ENGINE synthesised because the executor
 	// never submitted one. See [OutcomeIncomplete].
 	Rescued bool
+}
+
+// RefusedReply is a reply to a question the round's run asked that the engine
+// refused as too large to hand it: how many messages it was, what it came to as
+// the engine records an answer and what an answer to a run may — never its
+// words, which no record of the run keeps.
+type RefusedReply struct {
+	Messages, Bytes, MaxBytes int
 }
 
 // Review is what the reviewer produced.

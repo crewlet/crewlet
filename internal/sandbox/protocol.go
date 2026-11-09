@@ -46,7 +46,9 @@
 // whatever any lease says. And no ending deletes a row still
 // holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
 // recorded as worked when the reply leaves the run, either way
-// ([CoordinatorOptions.Spent]).
+// ([CoordinatorOptions.Spent]) — but a refused reply's only once a turn that
+// took its refusal keeps it, since the delivery itself is what goes back to the
+// seat when the refusal is let go of ([AnswerRefused]).
 //
 // AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
 // is deleted, under the identity its decided ending recorded, so whichever node
@@ -95,6 +97,33 @@
 // (ADR-0031), and every reader opens it before anything of it is used. An answer
 // whose seal does not open is never handed to a turn or attributed to anybody.
 // See answerseal.go.
+//
+// AND A REPLY TOO LARGE TO BE THE ANSWER IS THE QUESTION'S REFUSAL (ADR-0114):
+// past what the row carries as an answer ([MaxAnswerBytes]), decided against the
+// run as the store finds it still waiting on the question
+// ([PendingRun.takesAnswer]), a chat reply is not taken; what the row records as
+// the question's outcome instead is its refusal — its deliveries by id, when it
+// was posted and the figures, sealed, and none of its words
+// ([PendingStore.RecordRefusal], [PendingRun.AnswerRefusal]) — and announced
+// as `executor_answered` too_large under one identity per run, question and
+// delivery ([tooLargeRecord]). The refusal is then resumed exactly as an
+// answer is: the run is told, in the engine's words and through the same
+// channel an answer reaches it ([AskedRun.Refused]), that the person replied
+// and the reply was too large to hand it, and either asks again with a question
+// of its own, whose own [PendingRun.AskedAt] leaves everything written before
+// it the ordinary message it is, or carries on without it. While the refusal
+// is the run's the question waits no more, so nothing the person writes
+// meanwhile is taken for its answer. The reply itself stays where it was: in
+// the conversation, and in its delivery, kept on the seat's inbox until the
+// refusal leaves the run ([AnswerRefused]) — spent once a turn that took the
+// refusal keeps it ([Coordinator.spendRefused]), and back to the seat as the
+// ordinary message it is when the refusal is let go of. A refusal let go of —
+// declined after its attempts, or a seal that does not open — puts the
+// question back to waiting under the anchor it was asked at, as an answer let
+// go of does, and the next qualifying reply answers it; the let-go is announced
+// as `executor_answered` declined ([Coordinator.announceRefusalLetGo]). A
+// reply within the share is the run's answer word for word, and an answer by
+// turn is held to [MaxAnswerTextBytes] at both its ends, on one string.
 //
 // AND A CALL TO A TOOL AT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK
 // DOES (ADR-0077): the job's question is the call ([PendingRun.HeldCall]), its

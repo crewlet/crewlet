@@ -25,8 +25,10 @@ import (
 const WithdrawAskTool = toolname.WithdrawAsk
 
 // MaxWithdrawReasonBytes bounds why a question is withdrawn: a run's
-// withdrawal travels as its answer ([MaxRunAnswerBytes]).
-const MaxWithdrawReasonBytes = MaxRunAnswerBytes
+// withdrawal travels as its answer by turn, which the coordinator holds to
+// [sandbox.MaxAnswerTextBytes] on the same string, the reason trimmed and
+// before any secret in it is redacted.
+const MaxWithdrawReasonBytes = sandbox.MaxAnswerTextBytes
 
 // AskResolver resolves a comment as its author: a question its asker
 // withdraws ([worklet.Writer.ResolveComment]).

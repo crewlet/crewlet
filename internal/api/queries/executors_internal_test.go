@@ -149,6 +149,49 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	}
 }
 
+// A RUN ROW SAYS ITS ANSWER IS A REFUSAL (ADR-0114). A reply too large for its
+// run is recorded as the question's outcome in the answer's place, and the row
+// names it as an answer is named — its deliveries, its sender and when — so a
+// reader tells the two apart by `answer_refused` alone: how many messages the
+// reply was and its two figures, never its words, and null on a row whose
+// answer is one.
+//
+// Mutation: leave the key off the row, and a refusal reads on every board as
+// an answer its run carries on with.
+func TestARunRowSaysItsAnswerIsARefusal(t *testing.T) {
+	t.Parallel()
+	seal := answerSealOf(t, "the fleet's key material")
+	run := sandbox.PendingRun{TurnID: "t1", LaunchID: "launch-t1", Status: sandbox.StatusAnswered}
+	refusal := sandbox.AnswerRefusal{EventIDs: []string{"a1", "a2"}, Bytes: 600 << 10, MaxBytes: 512 << 10}
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Via: types.AnswerViaChat, By: "miles", ByKind: "human",
+		Refusal: &refusal}, sandbox.RecordedAnswer{Via: types.AnswerViaChat, EventIDs: refusal.EventIDs,
+		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	run.Answer, run.AnswerRefusal = &answer, &refusal
+	sources := Sources{RunAnswers: seal}
+	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run))
+	got, ok := row["answer_refused"].(map[string]any)
+	if !ok || got["messages"] != 2 || got["bytes"] != 600<<10 || got["max_bytes"] != 512<<10 {
+		t.Errorf("answer_refused = %v, want two messages at 600 KiB past 512 KiB", row["answer_refused"])
+	}
+	if ids := row["answer_ids"]; !slices.Equal(ids.([]string), refusal.EventIDs) || row["answered_by"] != "miles" {
+		t.Errorf("the refused reply is named as %v by %v, want its deliveries and its sender", ids,
+			row["answered_by"])
+	}
+	plain := sandbox.PendingRun{TurnID: "t2", LaunchID: "launch-t2", Status: sandbox.StatusAnswered}
+	words, err := seal.Seal(plain, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaChat},
+		sandbox.RecordedAnswer{Via: types.AnswerViaChat, EventIDs: []string{"b1"}})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	plain.Answer = &words
+	if got := runRow(plain, sandbox.BridgeLog{}, sources.opened(plain))["answer_refused"]; got != nil {
+		t.Errorf("a row answered with words carries answer_refused %v, want null", got)
+	}
+}
+
 // answerSealOf is a fleet keyring's answer seal, under key material of its own.
 func answerSealOf(t *testing.T, material string) *sandbox.AnswerSeal {
 	t.Helper()

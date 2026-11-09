@@ -66,6 +66,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"QuestionRemoved":      caveat.QuestionRemoved(),
 	"AskedSomebodyElse":    caveat.AskedSomebodyElse("backend-engineer"),
 	"AnsweredAlready":      caveat.AnsweredAlready("miles"),
+	"RefusedReplyFirst":    caveat.RefusedReplyFirst("miles"),
 	"QuestionChanged":      caveat.QuestionChanged(),
 	"HeldCallAnswer":       caveat.HeldCallAnswer(),
 	"NoQuestionForChoice":  caveat.NoQuestionForChoice(),

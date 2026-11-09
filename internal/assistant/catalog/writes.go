@@ -166,8 +166,8 @@ func writeTools() []Tool {
 					"with its question.", nameBytes),
 				"choice": text("The id of the option chosen, where the question offers "+
 					"options (its decision).", nameBytes),
-				// The bound answer_executor itself refuses past
-				// (builtin.MaxRunAnswerBytes).
+				// The bound answer_executor itself refuses past, on the
+				// trimmed answer as given (sandbox.MaxAnswerTextBytes).
 				"answer": text("The answer in words, verbatim: the whole answer to an open "+
 					"question, or what to add to a choice.", 16<<10),
 			}))),

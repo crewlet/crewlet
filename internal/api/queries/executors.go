@@ -410,6 +410,7 @@ var runKeys = map[string]runShown{
 	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
 	"answered_by":         runStatus,
 	"answered_at":         runStatus,
+	"answer_refused":      runStatus, // a refused reply's figures and message count, never its words
 	"ending":              runStatus, // that the run is over and when, never what its turn did
 	"reply":               runBody,
 	"bridge_calls":        runBody,
@@ -588,6 +589,15 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		"answer_ids":  answerIDs(run.Answer),
 		"answered_by": answeredBy,
 		"answered_at": answeredAt(run.Answer),
+		// AND WHETHER THAT ANSWER IS A REFUSAL (ADR-0114): a reply too large
+		// for the run to take, recorded as the question's outcome in the
+		// answer's place, with what it came to and what an answer may and
+		// how many messages it was — none of its words, which no record of
+		// the run keeps. The ids, who and when above are that reply's. The
+		// run is resumed told the reply did not reach it, so a reader tells
+		// a reply refused from an answer the run carries on with by this
+		// alone. Null on every other row.
+		"answer_refused": answerRefused(run),
 		// THAT THE RUN IS OVER, though its record is not gone yet: its
 		// ending is decided ([sandbox.RecordedEnding]) and finishing — on a
 		// node that records every turn's end, waiting for the turn's
@@ -696,6 +706,22 @@ func answerIDs(answer *sandbox.RecordedAnswer) []string {
 // row to read instead.
 func (s Sources) answeredBy(run sandbox.PendingRun) string {
 	return sandbox.OpenedAnswerer(s.RunAnswers, run)
+}
+
+// answerRefused is the refusal run's recorded answer is, as a board reads it —
+// how many messages the reply was and its two figures — or nil where the
+// answer is none ([sandbox.PendingRun.Refused]): an untyped nil, so a reader of
+// the row finds no value at all rather than an empty object.
+func answerRefused(run sandbox.PendingRun) any {
+	refusal, refused := run.Refused()
+	if !refused {
+		return nil
+	}
+	return map[string]any{
+		"messages":  refusal.Messages(),
+		"bytes":     refusal.Bytes,
+		"max_bytes": refusal.MaxBytes,
+	}
 }
 
 func answeredAt(answer *sandbox.RecordedAnswer) string {

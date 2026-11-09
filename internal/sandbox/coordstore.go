@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -300,8 +302,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		switch {
 		case !run.Continues:
 			existing.Round, existing.AnsweredJob = run.LaunchID, ""
+			existing.RoundRefusals = nil
 		case existing.asked():
 			existing.AnsweredJob = existing.LaunchID
+			// AND A REFUSAL THE ROUND IS CARRIED ON FROM is kept for the
+			// round's review, in the write that clears it below: its
+			// reviewer reads the round from its calls, where the run's
+			// question asked again reads as the same one sent twice
+			// ([PendingRun.RoundRefusals]).
+			if refusal, refused := existing.Refused(); refused {
+				existing.RoundRefusals = withRoundRefusal(existing.RoundRefusals, existing.LaunchID, refusal)
+			}
 		}
 		// THE CALL A PERSON APPROVED IN THE REPLACED JOB, which the reset
 		// clears with its held call below, is carried to the opening in
@@ -389,6 +400,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// one question declined may be exactly what the next one is
 		// waiting for.
 		existing.AskedAt, existing.Answer, existing.DeclinedAnswers = time.Time{}, nil, nil
+		existing.AnswerRefusal = nil
 		// AND ITS COST: a parked job's tokens are paid by the resume its
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
@@ -923,7 +935,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// recorded against it and nothing yet declined: an answer and the
 		// replies let go of belong to the question they were matched to.
 		run.AskedAt = q.AskedAt
-		run.Answer, run.DeclinedAnswers = nil, nil
+		run.Answer, run.DeclinedAnswers, run.AnswerRefusal = nil, nil, nil
 		// And what condensing the collection that parked it cost, onto the
 		// record of the job the row holds — see [LaunchRecord.Condensed].
 		run.Launch.Condensed = q.Condensed
@@ -936,6 +948,50 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 // the recording node's lease. See the contract on [PendingStore].
 func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
 	fence Fence,
+) (PendingRun, bool, error) {
+	return s.recordOutcome(ctx, turnID, launch, answer, nil, fence)
+}
+
+// RecordRefusal records a reply too large to be the answer as the outcome of a
+// parked run's question, under the recording node's lease. See the contract on
+// [PendingStore].
+func (s *CoordStore) RecordRefusal(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	refusal AnswerRefusal, fence Fence,
+) (PendingRun, bool, error) {
+	if len(answer.Events) > 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: the refusal of a reply to run %s carries %d of "+
+			"its deliveries, which are the bytes the row could not carry", turnID, len(answer.Events))
+	}
+	if err := refusal.check(answer.EventIDs); err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: the refusal of a reply to run %s: %w", turnID, err)
+	}
+	return s.recordOutcome(ctx, turnID, launch, answer, &refusal, fence)
+}
+
+// check reports what is wrong with a refusal as one recorded against the
+// answer naming answer's deliveries: it names exactly those, and its figures
+// are a reply past a share.
+func (r AnswerRefusal) check(answer []string) error {
+	switch {
+	case len(r.EventIDs) == 0 || !slices.Equal(r.EventIDs, answer):
+		return fmt.Errorf("it names deliveries %s, and its answer names %s",
+			words.And(r.EventIDs), words.And(answer))
+	case r.MaxBytes <= 0 || r.Bytes <= r.MaxBytes:
+		return fmt.Errorf("it states a reply of %d bytes against a share of %d, which is no refusal",
+			r.Bytes, r.MaxBytes)
+	}
+	if n := addressBytes(r.Address); n > MaxRefusalAddressBytes {
+		return fmt.Errorf("its address weighs %s on the row, and a refusal's may weigh %s",
+			kept.SizeUp(n), kept.Size(MaxRefusalAddressBytes))
+	}
+	return nil
+}
+
+// recordOutcome is [CoordStore.RecordAnswer] and [CoordStore.RecordRefusal]:
+// one compare-and-set recording answer as the question's outcome, the refusal
+// it is beside it where refusal is set, and no refusal where it is not.
+func (s *CoordStore) recordOutcome(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	refusal *AnswerRefusal, fence Fence,
 ) (PendingRun, bool, error) {
 	if len(answer.EventIDs) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no delivery", turnID)
@@ -953,34 +1009,56 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		answer.RecordedAt = s.clock()
 	}
 	// HELD TO ITS SHARE OF THE ROW, as written and as its decline would owe
-	// it, before anything is written: see [MaxAnswerBytes].
-	if err := answerFits(turnID, answer); err != nil {
-		return PendingRun{}, false, err
+	// it, before anything is written: see [MaxAnswerBytes]. MEASURED ONCE,
+	// here, since what it weighs is the answer's alone, and REFUSED INSIDE
+	// THE WRITE, only once the row as it stands is found still waiting on the
+	// question ([PendingRun.takesAnswer]): a reply to a run answered another
+	// way, moved on or ending since the caller matched it is that run's
+	// ordinary loss whatever it weighs. Refused before the row was read, it
+	// was announced as a reply too large for a question nobody was waiting
+	// on any more.
+	fits := answerFits(turnID, answer)
+	if fits != nil && !errors.Is(fits, ErrAnswerTooLarge) {
+		return PendingRun{}, false, fits
 	}
 	ownedBy := int64(0)
+	var refused error
 	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		// EVERY ATTEMPT DECIDES AFRESH: the store re-reads and re-decides a
+		// lost race, and a refusal the last read did not make is no answer.
+		refused = nil
 		if superseded(*run, fence) {
 			ownedBy = run.OwnerEpoch
 			return false
 		}
 		ownedBy = 0
-		if run.LaunchID != launch || !slices.Contains(Awaiting, run.Status) || run.Answer != nil {
+		if !run.takesAnswer(launch, answer.EventIDs) {
 			return false
 		}
-		for _, id := range answer.EventIDs {
-			if slices.Contains(run.DeclinedAnswers, id) {
-				return false
-			}
+		if fits != nil {
+			refused = fits
+			return false
 		}
 		recorded := answer
 		recorded.From = run.Status
 		run.Status = StatusAnswered
 		run.Answer = &recorded
+		// THE REFUSAL IN THE SAME WRITE, and none beside an answer: a row
+		// never holds an answer half recorded as a refusal ([PendingRun.Refused]).
+		run.AnswerRefusal = nil
+		if refusal != nil {
+			kept := *refusal
+			kept.EventIDs, kept.Address = slices.Clone(refusal.EventIDs), maps.Clone(refusal.Address)
+			run.AnswerRefusal = &kept
+		}
 		return true
 	})
-	if err == nil && ownedBy > 0 {
+	switch {
+	case err == nil && ownedBy > 0:
 		err = fmt.Errorf("sandbox: recording an answer to run %s, which a newer lease (epoch %d) "+
 			"than the recording node's (%d) owns: %w", turnID, ownedBy, fence.Epoch, ErrSeatNotHeld)
+	case err == nil && refused != nil:
+		return PendingRun{}, false, refused
 	}
 	return recorded, won, err
 }
@@ -1007,7 +1085,7 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 			ids = append(ids, copied.ID)
 		}
 		run.Status = run.Answer.declinedTo()
-		run.Answer = nil
+		run.Answer, run.AnswerRefusal = nil, nil
 		run.DeclinedAnswers = boundedDeclined(run.DeclinedAnswers, ids)
 		run.HandBack = slices.Clone(handBack)
 		return true
@@ -1179,7 +1257,7 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 			owing = *run
 			return false
 		}
-		run.Answer = nil
+		run.Answer, run.AnswerRefusal = nil, nil
 		run.HandBack = nil
 		if len(letGo.HandBack) > 0 {
 			run.HandBack = slices.Clone(letGo.HandBack)
@@ -1271,9 +1349,14 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 		}
 		// WHAT GOES BACK TO THE SEAT, settled with the ending: copies the
 		// row already owes, and the answer it holds if that is owed — with
-		// a copy to hand back.
+		// a copy to hand back, or a refusal, whose reply goes back as the
+		// delivery it came in, kept on the seat's inbox until the refusal
+		// leaves the run ([AnswerRefused]).
+		_, refused := run.Refused()
+		owedRefusal := run.answerOwed() && refused
 		ending.Returned = len(run.HandBack) > 0 ||
-			(run.answerOwed() && len(run.Answer.Events) > 0)
+			(run.answerOwed() && len(run.Answer.Events) > 0) || owedRefusal
+		run.EndingReturnsRefusal = owedRefusal
 		return true
 	})
 	switch {

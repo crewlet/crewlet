@@ -9,6 +9,7 @@
 
 import type { AskAnswer } from "~/components/writes.tsx";
 import type { ExecutorRow } from "~/protocol/types.ts";
+import { moment } from "./model.ts";
 
 /**
  * An answer a person gave a parked executor by its turn (`answer_executor`): the option
@@ -38,6 +39,10 @@ export interface GivenAnswer {
  *    was never seen holding this answer, so whether it took the answer first
  *    is not something the record can say;
  *  - `superseded`: another answer was recorded first, so this one was not used;
+ *  - `refused`: a reply in the conversation reached the question first and
+ *    was too long for the executor to take: it closed the question with none
+ *    of it reaching the executor (`answer_refused`), so this answer was not
+ *    used either, and the executor asks again if it still needs one;
  *  - `declined`: the question let this very answer go, and the executor waits
  *    on it again, so the person must answer again;
  *  - `overtaken`: the executor moved on to another question first, so this
@@ -54,12 +59,15 @@ export interface GivenAnswer {
  * and never becomes an answer that fate could be read for.
  */
 export type AnswerFate =
-  "sent" | "recorded" | "taken" | "ended" | "superseded" | "declined" | "overtaken";
+  "sent" | "recorded" | "taken" | "ended" | "superseded" | "refused" | "declined" | "overtaken";
 
 export function answerFate(
   given: GivenAnswer,
   run:
-    | Pick<ExecutorRow, "status" | "launch_id" | "declined_answers" | "answer_ids" | "ending">
+    | Pick<
+        ExecutorRow,
+        "status" | "launch_id" | "declined_answers" | "answer_ids" | "answer_refused" | "ending"
+      >
     | undefined,
   loaded: boolean,
   /** Whether this answer was already seen recorded on the executor, or taken. */
@@ -76,11 +84,42 @@ export function answerFate(
   if (given.answerId && run.declined_answers?.includes(given.answerId)) return "declined";
   const recorded = run.answer_ids ?? [];
   const ours = given.answerId !== "" && recorded.includes(given.answerId);
-  if (recorded.length > 0 && !ours && run.launch_id === given.launchId) return "superseded";
+  // A REFUSAL CLOSED THE QUESTION, no answer: what the record names is a reply
+  // too long for the executor to take, and drawn as somebody's answer it would
+  // tell the person the executor carries on with it.
+  if (recorded.length > 0 && !ours && run.launch_id === given.launchId) {
+    return run.answer_refused ? "refused" : "superseded";
+  }
   if (run.launch_id && given.launchId && run.launch_id !== given.launchId) return "overtaken";
   if (run.status === "answered") return "recorded";
   if (run.status === "awaiting_clarification" || run.status === "reseed") return "sent";
   // RESUMED, OR LAUNCHING OR RUNNING on the same question: it was resumed
   // with the answer, and its turn may have launched it again since.
   return "taken";
+}
+
+/**
+ * When what closed the executor's question was recorded, on the READER's clock
+ * ([moment]), and by whom where `who`: a value beside the sentence drawn above
+ * it, never a second wording of it. Who it was is left to that sentence where
+ * it names them, as the engine's sentence for a question already answered does
+ * (`caveat.AnsweredAlready`, which leaves the time to the screen), so a person
+ * is told it once.
+ *
+ * A REFUSAL IS NO ANSWER. Where the record is a reply too long for the executor
+ * to take (`answer_refused`), it closed the question with none of it reaching
+ * the executor, and "Answered" beside it told the person the executor carries
+ * on with somebody's answer it was never given.
+ */
+export function closedAt(
+  record: Pick<ExecutorRow, "answered_by" | "answered_at" | "answer_refused">,
+  now: number,
+  who: boolean,
+): string {
+  const by = who && record.answered_by ? ` by @${record.answered_by}` : "";
+  const at = moment(record.answered_at ?? "", now);
+  if (record.answer_refused) {
+    return `A reply${by} too long for the executor to take closed the question at ${at}.`;
+  }
+  return `Answered${by} at ${at}.`;
 }

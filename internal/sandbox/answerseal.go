@@ -151,6 +151,17 @@ type AnswerWords struct {
 	// THE WORDS, so what the run is told about who wrote them comes out of
 	// the seal like everything else it is handed.
 	Label *provenance.Label
+
+	// Refusal is set where what was recorded is no answer but the REFUSAL of
+	// a reply too large to be one ([PendingRun.AnswerRefusal]): its
+	// deliveries and figures, which the resumed run is told, and nothing of
+	// its words — Text, Choice and Label are empty beside it. SEALED, as
+	// everything the run is handed is, and held by [AnswerSeal.Open] to the
+	// refusal the row records in the clear: a row that records a refusal
+	// opens only to one sealed as that refusal, and an answer only to one
+	// sealed as no refusal, so a refusal is never read as an answer with no
+	// words, nor an answer as a refusal (ADR-0114).
+	Refusal *AnswerRefusal
 }
 
 // attribution is who the resumed turn is told gave this answer: the author an
@@ -186,6 +197,7 @@ type sealedAnswer struct {
 	Text       string            `json:"text"`
 	Choice     string            `json:"choice"`
 	Label      *provenance.Label `json:"label"`
+	Refusal    *AnswerRefusal    `json:"refusal"`
 }
 
 // Seal is answer recording words as the answer to the question run's job
@@ -198,7 +210,7 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 	body, err := json.Marshal(sealedAnswer{
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
 		By: words.By, ByKind: words.ByKind, OperatorID: words.OperatorID, Text: words.Text,
-		Choice: words.Choice, Label: words.Label,
+		Choice: words.Choice, Label: words.Label, Refusal: words.Refusal,
 	})
 	if err != nil {
 		return RecordedAnswer{}, fmt.Errorf("sandbox: encoding the answer to run %s: %w", run.TurnID, err)
@@ -247,7 +259,20 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	case sealed.Via != answer.Via:
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed as come by %q, and the row says %q",
 			ErrAnswerUnopened, sealed.Via, answer.Via)
+	case !sealed.Refusal.equal(run.refusal()):
+		return AnswerWords{}, fmt.Errorf("%w: it was sealed as %s, and the row records %s",
+			ErrAnswerUnopened, refusalWord(sealed.Refusal), refusalWord(run.refusal()))
 	}
 	return AnswerWords{Text: sealed.Text, Choice: sealed.Choice, Via: sealed.Via, By: sealed.By,
-		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID, Label: sealed.Label}, nil
+		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID, Label: sealed.Label,
+		Refusal: sealed.Refusal}, nil
+}
+
+// refusalWord names what a seal or a row holds, for the error that says the two
+// disagree.
+func refusalWord(refusal *AnswerRefusal) string {
+	if refusal == nil {
+		return "an answer"
+	}
+	return fmt.Sprintf("the refusal of a reply of %d bytes", refusal.Bytes)
 }
