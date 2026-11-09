@@ -165,7 +165,7 @@ func TestAnUnreadableReferenceCarriesTheReadsError(t *testing.T) {
 			map[string]any{"title": "x", "project": "ENG", "waiting_on": []any{"ENG-2"}},
 			func(f *fakeTracker) { f.readErr = down }},
 		"the question a comment answers": {builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": "yes", "answers": "c1"},
+			map[string]any{"asks": false, "item": "ENG-1", "body": "yes", "answers": "c1"},
 			func(f *fakeTracker) { f.threadErr = down }},
 	} {
 		t.Run(name, func(t *testing.T) {

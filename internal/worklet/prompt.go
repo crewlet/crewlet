@@ -802,7 +802,7 @@ func promptWhyYou(b *strings.Builder, project string) {
 		" assign it to yourself." +
 		"\n- **Escalate** — if it is out of scope or you cannot tell whose it" +
 		" is, hand it to your own manager: mention them with `" +
-		CommentOnWorkTool + "`, or reassign it to them.\n")
+		CommentOnWorkTool + "` and `asks: true`, or reassign it to them.\n")
 }
 
 // promptHandling is the mechanics block.

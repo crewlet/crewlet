@@ -100,14 +100,14 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 		// A NODE NAMED LIKE A SEAT is still the engine.
 		{"bo", worklet.AuthorSystem, nil, types.NotificationWriter{Kind: iam.ActorSystem}},
 	} {
-		// THE COMMENT NAMES cy, so it wakes cy whoever wrote it: unnamed,
-		// only a person's comment asks the assignee anything (ownerAsked),
-		// and the writer of a notice that wakes nobody is never read.
+		// THE COMMENT ASKS cy BY NAME, so it wakes cy whoever wrote it:
+		// unnamed, only a person's comment asks the assignee anything
+		// (ownerAsked), and the writer of a notice that wakes nobody is never read.
 		record := parseRecord(&worklet.Notify{
 			Kind: worklet.ChangeComment, Excerpt: "can you look at this",
 			Mentions: []string{"cy"},
 			Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy",
-				CommentAuthorKind: c.kind},
+				CommentAuthorKind: c.kind, CommentAsks: ptr(true)},
 		})
 		record.Actor, record.ActorKind, record.ActorApps = c.actor, c.kind, c.apps
 		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(

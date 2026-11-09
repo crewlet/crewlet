@@ -60,17 +60,13 @@ func TestAnAgentsAcknowledgementWakesNoAgent(t *testing.T) {
 		t.Errorf("an agent's @channel that asks nothing woke %v", handlesRouted(woken))
 	}
 
-	// A NAME STILL WAKES, OBLIGING NOTHING: an agent's acknowledgement
-	// naming a colleague reaches it as `named`, so it can end in silence.
+	// AND A NAME IS A REFERENCE: an agent's acknowledgement naming a
+	// colleague wakes it not at all, so the two cannot name each other back
+	// and forth.
 	named := thread(chatlet.AuthorAgent)
 	named.Mentions = []string{"amir"}
-	woken = chatlet.Route(chatResolved(named), agents().Seat, "dev")
-	if len(woken) != 1 || woken[0].Handle != "amir" || woken[0].Reason != chatlet.ReasonNamed {
-		t.Fatalf("an agent naming amir woke %v, want amir alone, as named", woken)
-	}
-	if woken[0].Reason.Addressed() {
-		t.Error("an agent's name that asks nothing obliges an answer, so the named " +
-			"seat must answer an acknowledgement and the loop runs on")
+	if woken = chatlet.Route(chatResolved(named), agents().Seat, "dev"); len(woken) != 0 {
+		t.Fatalf("an agent naming amir in a message that asks nothing woke %v", woken)
 	}
 }
 
@@ -151,13 +147,13 @@ func TestAnAnswerWakesTheAgentThatAsked(t *testing.T) {
 				c.Handle, c.Reason, c.Reason.Addressed(), want[c.Handle])
 		}
 	}
-	// A STAKE IS WOKEN WHATEVER THE REPLY NAMES: the asker answered, the
-	// seat that owes still told, and the agent named told it asks nothing.
+	// A STAKE IS WOKEN WHATEVER THE REPLY NAMES: the asker answered and the
+	// seat that owes still told, while the agent it merely names is not.
 	answer.Mentions = []string{"ops"}
 	woken = chatlet.Route(chatResolved(answer), agents().Seat, "dev")
 	if reasonOf(woken, "amir") != chatlet.ReasonAnswer || reasonOf(woken, "qa") != chatlet.ReasonOwing ||
-		reasonOf(woken, "ops") != chatlet.ReasonNamed {
-		t.Errorf("an answer naming ops woke %v, want amir answered, qa owing and ops named", woken)
+		reasonOf(woken, "ops") != "" {
+		t.Errorf("an answer naming ops woke %v, want amir answered, qa owing and not ops", woken)
 	}
 	// AND THE SEAT THAT ASKED IS WOKEN BY A REPLY THAT IS NOT ITS ANSWER.
 	followUp := thread(chatlet.AuthorHuman)
@@ -170,15 +166,15 @@ func TestAnAnswerWakesTheAgentThatAsked(t *testing.T) {
 }
 
 // AN AGENT'S EDIT THAT NAMES SOMEBODY NEW wakes them the way its post would:
-// obliged where the message asks, told where it does not.
+// obliged where the message asks, not at all where it does not.
 func TestAnEditNamesUnderTheMessagesOwnAsk(t *testing.T) {
 	t.Parallel()
-	for asks, want := range map[bool]chatlet.Reason{true: chatlet.ReasonMention, false: chatlet.ReasonNamed} {
+	for asks, want := range map[bool]int{true: 1, false: 0} {
 		woken, _ := chatlet.ResolveMentions(chatlet.Routing{ChannelKind: chatlet.KindPublic,
 			AuthorKind: chatlet.AuthorAgent, Members: members("amir"),
 			Mentions: []string{"amir"}, Asks: asks})
-		if len(woken) != 1 || woken[0].Reason != want {
-			t.Errorf("an edit of a message with asks=%v named amir as %v, want %q", asks, woken, want)
+		if len(woken) != want || (want == 1 && woken[0].Reason != chatlet.ReasonMention) {
+			t.Errorf("an edit of a message with asks=%v named amir as %v, want %d woken", asks, woken, want)
 		}
 	}
 }

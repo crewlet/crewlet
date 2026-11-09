@@ -44,10 +44,10 @@ func TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage(t *te
 		Container: "ENG", Title: "Runbook", Body: "prose"}).Page.ID
 	seat := newSeatPages(t, r)
 	byID := func(body string) map[string]any {
-		return map[string]any{"page": page, "body": body}
+		return map[string]any{"page": page, "body": body, "asks": false}
 	}
 	byTitle := func(body string) map[string]any {
-		return map[string]any{"page": "ENG/Runbook", "body": body}
+		return map[string]any{"page": "ENG/Runbook", "body": body, "asks": false}
 	}
 
 	run := func(runID string) []string {

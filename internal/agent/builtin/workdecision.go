@@ -233,6 +233,30 @@ func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decid
 		tool, clip(asked), decision.MinOptions, decision.MaxOptions)))
 }
 
+// statedAsks is an agent's statement of whether its comment asks, which every
+// agent comment carries (ADR-0113), and nil for a person's.
+func (d WorkDeps) statedAsks(agent, asks bool) *bool {
+	if !agent {
+		return nil
+	}
+	return &asks
+}
+
+// agentsAmong is the handles an agent's comment names that are agent seats,
+// and nil for a person's comment.
+func (d WorkDeps) agentsAmong(agent bool, handles []string) []string {
+	if !agent {
+		return nil
+	}
+	var out []string
+	for _, handle := range handles {
+		if d.asksAgentSeat(handle) {
+			out = append(out, handle)
+		}
+	}
+	return out
+}
+
 // asksAgentSeat reports whether handle names an agent seat on the roster. No
 // roster names nobody, so a question it cannot place is asked as of a person.
 func (d WorkDeps) asksAgentSeat(handle string) bool {

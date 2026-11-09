@@ -57,7 +57,7 @@ func TestACommentCanAskWithADecision(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := decisionRegistry(t, trk, newFakeKB())
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "The audit starts Monday.", "ask": "pm",
 		"decision": decisionArg(),
 	})
@@ -88,7 +88,7 @@ func TestACommentCanAskWithADecision(t *testing.T) {
 	misspelled["recommendation"] = misspelled["recommended"]
 	delete(misspelled, "recommended")
 	refused := callWork(t, decisionRegistry(t, newFakeTracker(), newFakeKB()),
-		builtin.CommentOnWorkTool, map[string]any{
+		builtin.CommentOnWorkTool, map[string]any{"asks": false,
 			"item": "ENG-1", "body": "?", "ask": "pm", "decision": misspelled,
 		})
 	if !refused.Failed || !strings.Contains(refused.Output, "recommendation") {
@@ -109,7 +109,7 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{builtin.CommentOnWorkTool, map[string]any{
+		{builtin.CommentOnWorkTool, map[string]any{"asks": false,
 			"item": "ENG-1", "body": "which?", "decision": decisionArg()}},
 		{builtin.CreateWorkItemTool, map[string]any{
 			"title": "which?", "project": "ENG", "decision": decisionArg()}},
@@ -127,7 +127,7 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 
 	noKB := newFakeTracker()
 	got := callWork(t, decisionRegistry(t, noKB, nil), builtin.CommentOnWorkTool,
-		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm", "decision": decisionArg()})
+		map[string]any{"asks": false, "item": "ENG-1", "body": "?", "ask": "pm", "decision": decisionArg()})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output, "url") {
 		t.Errorf("a page cited with no knowledge base gave %+v", got)
 	}
@@ -145,7 +145,7 @@ func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := decisionRegistry(t, trk, newFakeKB())
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "answers": "c-ask", "choice": "ship",
 	})
 	if got.Failed {
@@ -163,14 +163,14 @@ func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
 
 	loose := newFakeTracker()
 	got = callWork(t, decisionRegistry(t, loose, newFakeKB()), builtin.CommentOnWorkTool,
-		map[string]any{"item": "ENG-1", "choice": "ship"})
+		map[string]any{"asks": false, "item": "ENG-1", "choice": "ship"})
 	if !got.Failed || !strings.Contains(got.Output, "`answers`") {
 		t.Errorf("a choice answering nothing gave %+v", got)
 	}
 	if len(loose.patched) != 0 {
 		t.Error("a choice answering nothing was posted")
 	}
-	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1",
 	}); !got.Failed || !strings.Contains(got.Output, "`body`") {
 		t.Errorf("a comment with neither a body nor a choice gave %+v", got)
@@ -288,7 +288,7 @@ func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "?",
+		{builtin.CommentOnWorkTool, map[string]any{"asks": false, "item": "ENG-1", "body": "?",
 			"ask": "pm", "decision": informedDecision("slack", "releases")}},
 		{builtin.CreateWorkItemTool, map[string]any{"title": "Ship Friday?",
 			"project": "ENG", "ask": "pm", "decision": informedDecision("slack", "releases")}},
@@ -305,7 +305,7 @@ func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 	}
 	plain := decisionArg()
 	delete(plain, "evidence")
-	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "pm", "decision": plain,
 	}); got.Failed {
 		t.Errorf("an operator's decision without an inform was refused: %s", got.Output)
@@ -326,7 +326,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 	} {
 		trk := newFakeTracker()
 		got := callWork(t, informRegistry(t, trk, nil), builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+			map[string]any{"asks": false, "item": "ENG-1", "body": "?", "ask": "pm",
 				"decision": informedDecision(c.surface, c.channel)})
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			!strings.Contains(got.Output, c.refusal) {
@@ -339,7 +339,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 
 	trk := newFakeTracker()
 	got := callWork(t, informRegistry(t, trk, nil), builtin.CommentOnWorkTool,
-		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+		map[string]any{"asks": false, "item": "ENG-1", "body": "?", "ask": "pm",
 			"decision": informedDecision("slack", "#releases")})
 	if got.Failed {
 		t.Fatalf("a declared channel on a held surface was refused: %s", got.Output)
@@ -353,7 +353,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 	// A SURFACE WITH NO CHART refuses rather than promising unchecked.
 	bare := newFakeTracker()
 	got = callWork(t, decisionRegistry(t, bare, newFakeKB()), builtin.CommentOnWorkTool,
-		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+		map[string]any{"asks": false, "item": "ENG-1", "body": "?", "ask": "pm",
 			"decision": informedDecision("slack", "releases")})
 	if !got.Failed || len(bare.patched) != 0 {
 		t.Errorf("an inform nothing could check was accepted: %+v", got)
@@ -407,7 +407,7 @@ func TestAnInformCanNameTheEnginesOwnChat(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "pm",
 		"decision": informedDecision(string(decision.InformChat), "#releases"),
 	})
@@ -447,7 +447,7 @@ func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
 	delete(unrecommended, "recommended")
 	delete(unrecommended, "rationale")
 	comment := func(ask string, decided map[string]any) map[string]any {
-		args := map[string]any{"item": "ENG-1", "body": "The merge is yours.", "ask": ask}
+		args := map[string]any{"item": "ENG-1", "body": "The merge is yours.", "ask": ask, "asks": true}
 		if decided != nil {
 			args["decision"] = decided
 		}

@@ -682,7 +682,7 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	document, err := EncodeComment(Comment{
 		V: DocumentVersion, ID: c.ID, PageID: pageID,
 		Author: c.Author, AuthorKind: c.AuthorKind, Body: deref(c.Body),
-		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo,
+		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo, Asks: c.Asks,
 		CreatedAt: created, UpdatedAt: at.brokerAt,
 	})
 	if err != nil {
@@ -691,20 +691,26 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO pages_comments
 			(id, page_id, author, author_kind, body, reply_to, created_at,
-			 updated_at, version, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 updated_at, version, document, asks)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			body = excluded.body, updated_at = excluded.updated_at,
 			version = excluded.version, document = excluded.document
 		WHERE excluded.version > pages_comments.version`,
 		c.ID, pageID, c.Author, string(c.AuthorKind), deref(c.Body), c.ReplyTo,
 		store.EncodeTime(at.brokerAt), store.EncodeTime(at.brokerAt),
-		at.packed, document)
+		at.packed, document, c.Asks != nil && *c.Asks)
 	if err != nil {
 		return 0, "", fmt.Errorf("doclet: apply comment %s at %s: %w",
 			c.ID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
+	// THE ASKS IT ANSWERS, which its writer named in its own decide.
+	for _, asked := range c.Closes {
+		if _, err := tx.ExecContext(ctx, closeAskStatement, asked, pageID); err != nil {
+			return 0, "", fmt.Errorf("doclet: close ask %s at %s: %w", asked, at.position, err)
+		}
+	}
 	// A CREATE AND AN EDIT ARE TOLD APART BY WHETHER THE INSERT WAS NEW,
 	// which the affected count answers — rather than by a fourth field on
 	// the patch that a writer could set wrongly.
@@ -1103,6 +1109,7 @@ const (
 	headAtStatement         = `SELECT document, version FROM pages_heads WHERE id = ?`
 	heldCommentStatement    = `SELECT document, created_at FROM pages_comments WHERE id = ?`
 	removeCommentStatement  = `DELETE FROM pages_comments WHERE id = ? AND version < ?`
+	closeAskStatement       = `UPDATE pages_comments SET answered = 1 WHERE id = ? AND page_id = ? AND asks = 1`
 	clearWatchersStatement  = `DELETE FROM pages_watchers WHERE page_id = ?`
 	retireRevisionStatement = `DELETE FROM pages_revisions WHERE page_id = ? AND edit_version = ?`
 	releaseTitleStatement   = `

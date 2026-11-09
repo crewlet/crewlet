@@ -106,6 +106,8 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	switch meta[RoutedViaField] {
 	case ViaMention:
 		promptMentioned(&b, n, parties)
+	case ViaThread:
+		promptThread(&b, n, parties)
 	case ViaLeadFallback:
 		promptLead(&b, n, parties)
 	default:
@@ -128,6 +130,15 @@ func promptMentioned(b *strings.Builder, n notify.Inbound, parties notify.Partie
 		body = "(no text)"
 	}
 	b.WriteString("\n**What they wrote:**\n" + body + "\n")
+}
+
+func promptThread(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
+	b.WriteString("A reply in a page comment thread where you asked something; " +
+		"it may answer you.")
+	promptHeader(b, n, parties)
+	if n.Body != "" {
+		b.WriteString("\n**What they wrote:**\n" + n.Body + "\n")
+	}
 }
 
 func promptWatching(b *strings.Builder, n notify.Inbound, parties notify.Parties) {

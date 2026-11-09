@@ -45,7 +45,10 @@ import (
 // awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
 // Version 4 is a history row that keeps its writer's apps
 // ([MutationRecord.ActorAppsKept]).
-const RecordVersion = 4
+// Version 5 is an agent's comment stating whether it asks
+// ([Snapshot.CommentAsks]) and which seats it names are agents
+// ([Snapshot.MentionedAgents]).
+const RecordVersion = 5
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -97,6 +100,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
 	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
 	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
+	{Name: "Snapshot.CommentAsks", Since: 5, Path: []string{"notify", "snapshot", "comment_asks"}},
+	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1281,6 +1286,15 @@ type Snapshot struct {
 
 	// CommentAsk is the handle a comment asked, set only at creation.
 	CommentAsk string `json:"comment_ask,omitempty"`
+
+	// CommentAsks is an agent's statement, on every comment it writes, of
+	// whether the comment asks the seats it names; false makes a mention of
+	// an agent a reference (ADR-0113). Nil on a person's and an older build's.
+	CommentAsks *bool `json:"comment_asks,omitempty"`
+
+	// MentionedAgents are the seats an agent's comment names that are
+	// agents; a person it names is addressed whether or not it asks.
+	MentionedAgents []string `json:"mentioned_agents,omitempty"`
 
 	// AnsweredAuthor is the author of the ASKED comment.
 	//

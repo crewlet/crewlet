@@ -653,7 +653,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		kb.page.Page.Title = attack(b, "commented-title")
 		reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 		seen, answer := fencesIn(t, b, callIn(t, reg, turn, builtin.CommentOnPageTool,
-			map[string]any{"page": "p1", "body": "noted"}).Output)
+			map[string]any{"asks": false, "page": "p1", "body": "noted"}).Output)
 		if len(seen) != 0 {
 			t.Errorf("comment_on_page fenced %d names", len(seen))
 		}
