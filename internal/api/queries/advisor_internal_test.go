@@ -132,7 +132,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if !known {
 		t.Fatal("the fleet's alarms read as unknown")
 	}
-	got := notice.Read(nil, fleet, since.Add(notice.AlarmAfter))
+	got := notice.Read(nil, fleet, nil, since.Add(notice.AlarmAfter))
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
 		Since: since, Nodes: []string{"node-a", "node-b"}}}
 	if !reflect.DeepEqual(got, want) {
@@ -169,7 +169,8 @@ func TestTheAdvisorNamesItsAlarmsUnreadOnce(t *testing.T) {
 		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, false,
 			[]string{advisor.UnreadWork, advisor.UnreadAlarms}},
 	} {
-		got := noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown, now)
+		got := noticedWith(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown,
+			nil, true, now)
 		if !slices.Equal(got.Unread, c.want) {
 			t.Errorf("%s: unread %v, want %v", c.name, got.Unread, c.want)
 		}

@@ -174,6 +174,28 @@ func (e *Engine) liftConversationHold(ctx context.Context, hold coord.Conversati
 	}
 }
 
+// clearRemovedConversationHolds lifts the holds of every seat next no longer
+// has, as a removed seat's pause goes with it; only the fleet's company clears.
+func (e *Engine) clearRemovedConversationHolds(ctx context.Context, next *Company) {
+	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
+		return
+	}
+	if err := e.fleetCompany(ctx, next); err != nil {
+		return
+	}
+	holds, err := e.backends.Fleet.ListConversationHolds(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "conversation_holds_not_swept", "error", err.Error(),
+			"detail", "a removed seat's held conversations are cleared by the next apply")
+		return
+	}
+	for _, h := range holds {
+		if next.Org.AgentSeatByID(h.Seat) == nil {
+			e.liftConversationHold(ctx, h, h.Seat.String(), "the seat left the company")
+		}
+	}
+}
+
 // rereadConversationHolds drops this node's reading of every seat's holds on an
 // apply, so each is judged again against the models it brings.
 func (e *Engine) rereadConversationHolds() {

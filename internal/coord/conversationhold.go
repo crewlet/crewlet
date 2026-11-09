@@ -18,6 +18,8 @@ import (
 type ConversationHolds interface {
 	// ConversationHolds is every held conversation of seat, each with its revision.
 	ConversationHolds(ctx context.Context, seat uuid.UUID) ([]ConversationHold, error)
+	// ListConversationHolds is every held conversation of every seat.
+	ListConversationHolds(ctx context.Context) ([]ConversationHold, error)
 	// CreateConversationHold writes h, false where its conversation is held already.
 	CreateConversationHold(ctx context.Context, h ConversationHold) (bool, error)
 	// DeleteConversationHold lifts the hold read at revision, false where it moved.
@@ -63,3 +65,6 @@ func ConversationHoldKey(seat uuid.UUID, conversation string) string {
 func ConversationHoldFilter(seat uuid.UUID) string {
 	return DocumentFilter(ConversationHoldClass, seat.String())
 }
+
+// ConversationHoldsFilter selects every hold of every seat.
+func ConversationHoldsFilter() string { return DocumentFilter(ConversationHoldClass) }

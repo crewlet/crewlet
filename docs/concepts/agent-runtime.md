@@ -546,6 +546,9 @@ time on a fresh session, the engine stops starting turns on that conversation
 (`conversation_hold` in the coordination store) while the seat's other
 conversations go on. Its wakes are recorded as skipped. A person writing on the
 conversation lifts the hold and runs, and so does a change of the seat's models.
+While it holds, every administrator sees it in **Needs you** as a notice of the
+engine's cause, and the item it is about says "Held by the engine" on its page;
+nothing releases it on a timer, since that would run the same brief again.
 Any other failure is retried on a backoff that doubles from one second to
 thirty, each wait spread by a fifth either way.
 

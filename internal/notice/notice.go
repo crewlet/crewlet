@@ -23,6 +23,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -31,6 +33,10 @@ import (
 // ClassAlarm is the class of an alarm that no finding carries; its subject is
 // the alarm, named by its kind.
 const ClassAlarm = "alarm"
+
+// ClassConversationHeld is a conversation the engine holds because its context
+// did not fit (ADR-0117); its subject is the seat, and Name the conversation.
+const ClassConversationHeld = "conversation.held"
 
 // SubjectAlarm is what an alarm's notice is about: Name is the alarm's kind.
 const SubjectAlarm advisor.SubjectKind = "alarm"
@@ -111,9 +117,25 @@ func FromFindings(findings []advisor.Finding) []Notice {
 	return Merge(out)
 }
 
-// Read is every notice the advisor's findings and the fleet's alarms raise at now.
-func Read(findings []advisor.Finding, fleet []NodeAlarms, now time.Time) []Notice {
-	return Merge(FromFindings(findings), FromAlarms(fleet, now))
+// FromConversationHolds is one notice per held conversation of a seat handleOf
+// names; a hold of a seat the company no longer has is left to its removal.
+func FromConversationHolds(holds []coord.ConversationHold, handleOf func(uuid.UUID) (string, bool)) []Notice {
+	var out []Notice
+	for _, h := range holds {
+		handle, known := handleOf(h.Seat)
+		if !known {
+			continue
+		}
+		out = append(out, Notice{Class: ClassConversationHeld, Since: h.At,
+			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: handle, Name: h.Conversation}})
+	}
+	return Merge(out)
+}
+
+// Read is every notice the advisor's findings, the fleet's alarms and the
+// engine's held conversations raise at now.
+func Read(findings []advisor.Finding, fleet []NodeAlarms, held []Notice, now time.Time) []Notice {
+	return Merge(FromFindings(findings), FromAlarms(fleet, now), held)
 }
 
 // Merge is lists as one notice per class and subject: the earliest instant any

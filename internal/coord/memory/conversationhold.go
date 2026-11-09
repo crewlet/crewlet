@@ -26,6 +26,20 @@ func (f *Fleet) ConversationHolds(_ context.Context, seat uuid.UUID) ([]coord.Co
 	}), nil
 }
 
+// ListConversationHolds is every held conversation of every seat, by seat then conversation.
+func (f *Fleet) ListConversationHolds(_ context.Context) ([]coord.ConversationHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []coord.ConversationHold
+	for _, held := range f.conversationHolds {
+		out = append(out, slices.Collect(maps.Values(held))...)
+	}
+	slices.SortFunc(out, func(a, b coord.ConversationHold) int {
+		return cmp.Or(cmp.Compare(a.Seat.String(), b.Seat.String()), cmp.Compare(a.Conversation, b.Conversation))
+	})
+	return out, nil
+}
+
 // CreateConversationHold writes h, false where its conversation is held already.
 func (f *Fleet) CreateConversationHold(_ context.Context, h coord.ConversationHold) (bool, error) {
 	if err := h.Validate(); err != nil {

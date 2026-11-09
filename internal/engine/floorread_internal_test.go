@@ -162,6 +162,13 @@ func (f *listingsHeld) ConversationHolds(ctx context.Context, seat uuid.UUID) ([
 	return f.wrappedFleet.ConversationHolds(ctx, seat)
 }
 
+func (f *listingsHeld) ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.ListConversationHolds(ctx)
+}
+
 func (f *listingsHeld) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

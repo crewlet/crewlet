@@ -319,6 +319,12 @@ type Sources struct {
 	// `decisions` notes on its questions. Nil notes nothing.
 	Access AccessReviews
 
+	// Holds is the fleet's held conversations (ADR-0117), which the advisor's
+	// notices name. Nil holds nothing.
+	Holds interface {
+		ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error)
+	}
+
 	// RunAnswers opens a run's recorded answer for who gave it, which only
 	// the answer's seal says ([sandbox.AnswerSeal]). Nil, or a seal that
 	// does not open here, leaves a row's `answered_by` empty.

@@ -19,8 +19,18 @@ func (f *FleetStore) ConversationHolds(ctx context.Context, seat uuid.UUID) ([]c
 	if seat == uuid.Nil {
 		return nil, errors.New("coord/kv: conversation holds are read per seat")
 	}
+	return f.conversationHoldsUnder(ctx, coord.ConversationHoldFilter(seat))
+}
+
+// ListConversationHolds is every held conversation of every seat.
+func (f *FleetStore) ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error) {
+	return f.conversationHoldsUnder(ctx, coord.ConversationHoldsFilter())
+}
+
+// conversationHoldsUnder decodes every hold filter selects.
+func (f *FleetStore) conversationHoldsUnder(ctx context.Context, filter string) ([]coord.ConversationHold, error) {
 	var out []coord.ConversationHold
-	err := f.eachUnder(ctx, f.positions, coord.ConversationHoldFilter(seat), "the held conversations",
+	err := f.eachUnder(ctx, f.positions, filter, "the held conversations",
 		func(kve jetstream.KeyValueEntry) error {
 			var h coord.ConversationHold
 			if err := json.Unmarshal(kve.Value(), &h); err != nil {

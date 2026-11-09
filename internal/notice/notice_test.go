@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notice"
@@ -132,5 +134,23 @@ func TestAPlatformNoticeOffersNoAnswer(t *testing.T) {
 	got := slices.Sorted(maps.Keys(fields))
 	if want := []string{"class", "nodes", "since", "subject"}; !slices.Equal(got, want) {
 		t.Errorf("a notice carries %v, want only %v", got, want)
+	}
+}
+
+// A CONVERSATION THE ENGINE HOLDS IS ONE NOTICE, under its seat and the
+// conversation, from when it was held; one whose seat the company no longer has
+// is left to its removal.
+func TestAHeldConversationIsANotice(t *testing.T) {
+	t.Parallel()
+	dev, gone := uuid.New(), uuid.New()
+	holds := []coord.ConversationHold{
+		{Seat: dev, Conversation: "task:t-1", Kind: "context_exhausted", Basis: "b", At: t0},
+		{Seat: gone, Conversation: "task:t-2", Kind: "context_exhausted", Basis: "b", At: t0},
+	}
+	got := notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) { return "dev", seat == dev })
+	want := []notice.Notice{{Class: notice.ClassConversationHeld, Since: t0,
+		Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "task:t-1"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the held conversations' notices are %+v, want %+v", got, want)
 	}
 }

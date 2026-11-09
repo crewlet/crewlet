@@ -50,5 +50,8 @@ var conversationHoldCases = []fleetCase{
 		if other, _ := h.f.ConversationHolds(h.ctx, qa); len(other) != 1 {
 			h.t.Errorf("lifting swe's hold took qa's: %+v", other)
 		}
+		if all, err := h.f.ListConversationHolds(h.ctx); err != nil || len(all) != 2 {
+			h.t.Errorf("every seat's holds are %+v (%v), want swe's one and qa's one", all, err)
+		}
 	}},
 }

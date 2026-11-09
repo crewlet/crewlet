@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -127,5 +129,32 @@ func TestNewModelsLiftAConversationHold(t *testing.T) {
 	}
 	if held := holdsOf(t, fleet); len(held) != 0 {
 		t.Errorf("the stale hold is still recorded: %+v", held)
+	}
+}
+
+// A SEAT THE COMPANY REMOVES TAKES ITS HELD CONVERSATIONS WITH IT, as its pause
+// goes with it; a seat it keeps keeps them.
+func TestARemovedSeatLeavesNoConversationHeld(t *testing.T) {
+	t.Parallel()
+	e, _, fleet := pausingEngine(t)
+	ctx := t.Context()
+	for _, seat := range []uuid.UUID{ceoSeat, seatOf("ghost")} {
+		if ok, err := fleet.CreateConversationHold(ctx, coord.ConversationHold{Seat: seat, Conversation: longRoom,
+			Kind: string(failureContextExhausted), Basis: "b", At: time.Now()}); err != nil || !ok {
+			t.Fatalf("hold: %v (%v)", ok, err)
+		}
+	}
+	origin := coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman, Source: "api", CreatedAt: time.Now()}
+	activated, err := fleet.Activate(ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte("{}"),
+		At: time.Now(), Origin: origin})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	next := companyFor(t, "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n")
+	next.ActivatedAt = activated.At
+	e.clearRemovedConversationHolds(ctx, next)
+	all, err := fleet.ListConversationHolds(ctx)
+	if err != nil || len(all) != 1 || all[0].Seat != ceoSeat {
+		t.Errorf("after the ghost seat left the holds are %+v (%v), want ceo's alone", all, err)
 	}
 }
