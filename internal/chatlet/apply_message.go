@@ -259,6 +259,13 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, "", err
 	}
 	rows += answered
+	if n := at.record.Notify; n != nil && len(n.Answering) > 0 {
+		marked, err := answerNamed(ctx, tx, at, message, n.Answering)
+		if err != nil {
+			return 0, "", err
+		}
+		rows += marked
+	}
 
 	// NO HISTORY ROW FOR A POST. The message row IS the post's own
 	// record, and a second row per message would double the highest-volume
@@ -1101,6 +1108,28 @@ func answerReceipts(ctx context.Context, tx *sql.Tx, at applyContext, kind Kind,
 		 WHERE `+where, args...)
 	if err != nil {
 		return 0, fmt.Errorf("chatlet: mark what message %s answers at %s: %w",
+			message.ID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// answerNamed marks answered the author's open receipts on the top-level asks
+// a top-level post in a named room answers ([Notify.Answering]): what the
+// writer decided, so every node marks the same rows.
+func answerNamed(ctx context.Context, tx *sql.Tx, at applyContext, message Message,
+	asks []string) (int, error) {
+
+	args := []any{message.ID, store.EncodeTime(at.brokerAt), message.ChannelID, message.Author}
+	for _, id := range asks {
+		args = append(args, id)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE chat_receipts SET answer_id = ?, answered_at = ?
+		 WHERE channel_id = ? AND handle = ? AND answer_id = ''
+		   AND message_id IN (`+placeholders(len(asks))+`)`, args...)
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: mark the asks message %s answers at %s: %w",
 			message.ID, at.position, err)
 	}
 	n, _ := res.RowsAffected()

@@ -64,3 +64,30 @@ func TestAPersonsCommentNamingSomebodyWakesOnlyWhomItNames(t *testing.T) {
 		}
 	}
 }
+
+// A STAKE IN A THREAD IS WOKEN BY ANY REPLY BY SOMEBODY ELSE, whatever it
+// names (ADR-0113): the seat that asked, and the seat asked that still owes,
+// even when the reply is addressed to somebody else, from a person or an agent.
+func TestTheAskerOfAnOpenAskIsWokenByAnyReply(t *testing.T) {
+	t.Parallel()
+	snapshot := worklet.Snapshot{
+		Assignee: "backend-engineer", ThreadParticipants: []string{"backend-engineer"},
+		ThreadOwing: []string{"designer"}, ThreadAwaiting: []string{"backend-engineer"},
+	}
+	for name, n := range map[string]worklet.Notify{
+		"the lead naming the asked seat": {Kind: worklet.ChangeComment,
+			Mentions: []string{"designer"}, Snapshot: withAuthor(snapshot, worklet.AuthorHuman)},
+		"another agent with the information": {Kind: worklet.ChangeComment,
+			Snapshot: withAuthor(snapshot, worklet.AuthorAgent)},
+	} {
+		woken := handles(worklet.Route(worklet.Candidates(&n), everyone, "lead"))
+		if !slices.Contains(woken, "backend-engineer") || !slices.Contains(woken, "designer") {
+			t.Errorf("%s woke %v, want the asker and the seat it asked", name, woken)
+		}
+	}
+}
+
+func withAuthor(s worklet.Snapshot, kind worklet.AuthorKind) worklet.Snapshot {
+	s.CommentAuthorKind = kind
+	return s
+}

@@ -3026,9 +3026,14 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		if err != nil {
 			return nil, err
 		}
-		routing.ThreadParticipants, routing.Followers, routing.Owing = parties, followers, owing
+		awaiting, err := awaitingTx(ctx, tx, room.ID, routing.ThreadRoot, actor.Name())
+		if err != nil {
+			return nil, err
+		}
+		routing.ThreadParticipants, routing.Followers = parties, followers
+		routing.Owing, routing.Awaiting = owing, awaiting
 	}
-	answers, err := answersTx(ctx, tx, room, routing.ThreadRoot, actor.Name())
+	answers, answering, err := answersTx(ctx, tx, room, routing.ThreadRoot, actor.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -3054,6 +3059,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		Asks:           routing.Asks,
 		Held:           RecipientsOf(held),
 		Asked:          askedOf(room, actor, routing, woken),
+		Answering:      answering,
 	}, nil
 }
 
@@ -3088,32 +3094,66 @@ func askedOf(room Channel, actor Actor, routing Routing, woken []Candidate) []st
 	return out
 }
 
-// answersTx is the authors of the messages whose receipts author still owes
-// in this thread, and in a direct conversation anywhere in it: the seats this
-// message answers ([ReasonAnswer]). Nothing for a top-level post in a named
-// room, which answers nobody's thread, the rule the applier marks receipts by
-// ([answerReceipts]).
+// answersTx is the authors of the asks this message answers ([ReasonAnswer]):
+// the author's open receipts in its thread, or anywhere in a direct
+// conversation; and for a top-level post in a named room, an agent's top-level
+// asks there, whose ids it returns for the applier to mark answered.
 func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author string) (
-	[]string, error) {
+	askers, answering []string, err error) {
 
 	query := `
-		SELECT DISTINCT m.author_handle
+		SELECT r.message_id, m.author_handle
 		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
 		  JOIN chat_messages m ON m.id = r.message_id
 		 WHERE r.channel_id = ? AND r.handle = ? AND r.answer_id = ''
 		   AND m.author_handle <> ? AND m.deleted_at IS NULL`
 	args := []any{room.ID, author, author}
+	top := false
 	switch {
 	case room.Kind.Direct():
 	case root != "":
 		query += ` AND r.thread_key = ?`
 		args = append(args, root)
 	default:
-		return nil, nil
+		top = true
+		query += ` AND m.thread_root = '' AND m.author_kind = ?`
+		args = append(args, string(AuthorAgent))
 	}
-	query += ` ORDER BY m.author_handle LIMIT ?`
+	query += ` ORDER BY m.author_handle, r.message_id LIMIT ?`
 	args = append(args, MaxThreadParticipants)
-	return handlesTx(ctx, tx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("chatlet: read the asks %s answers: %w", author, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var message, asker string
+		if err := rows.Scan(&message, &asker); err != nil {
+			return nil, nil, err
+		}
+		if !slices.Contains(askers, asker) {
+			askers = append(askers, asker)
+		}
+		if top {
+			answering = append(answering, message)
+		}
+	}
+	return askers, answering, rows.Err()
+}
+
+// awaitingTx is the agents that asked something in this thread, other than
+// the author, with no answer yet ([ReasonAwaiting]).
+func awaitingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string) (
+	[]string, error) {
+
+	return handlesTx(ctx, tx, `
+		SELECT DISTINCT m.author_handle
+		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
+		  JOIN chat_messages m ON m.id = r.message_id
+		 WHERE r.channel_id = ? AND r.thread_key = ? AND r.answer_id = ''
+		   AND m.author_kind = ? AND m.author_handle <> ? AND m.deleted_at IS NULL
+		 ORDER BY m.author_handle LIMIT ?`,
+		channelID, root, string(AuthorAgent), author, MaxThreadParticipants)
 }
 
 // owingTx is the seats asked something in this thread, other than the author,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
@@ -198,11 +199,11 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 			if err != nil {
 				return err
 			}
-			owing, err := threadOwing(ctx, tx, q.Task, q.ReplyTo)
+			owing, awaiting, err := threadStakes(ctx, tx, q.Task, q.ReplyTo)
 			if err != nil {
 				return err
 			}
-			out.Participants, out.Owing = participants, owing
+			out.Participants, out.Owing, out.Awaiting = participants, owing, awaiting
 		}
 		var posted *PostedRemark
 		if q.Comment != "" {
@@ -290,35 +291,40 @@ func threadParticipants(ctx context.Context, tx *sql.Tx, task, replyTo string) (
 	return out, rows.Err()
 }
 
-// threadOwing is every handle an open ask in ONE thread is addressed to: asked
-// something there, and not answered or resolved yet (ADR-0113). The thread is
-// resolved as [threadParticipants] resolves it, and cut at the same cap.
-func threadOwing(ctx context.Context, tx *sql.Tx, task, replyTo string) ([]string, error) {
+// threadStakes is who has a stake in ONE thread (ADR-0113): the handles its
+// open asks are addressed to (owing) and the authors of those asks (awaiting),
+// each cut at [MaxThreadParticipants].
+func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo string) (owing, awaiting []string,
+	err error) {
+
 	rows, err := tx.QueryContext(ctx, `
 		WITH root AS (
 			SELECT COALESCE(NULLIF(reply_to, ''), id) AS id
 			FROM tracker_comments WHERE id = ? AND task_id = ?
 		)
-		SELECT DISTINCT c.ask
+		SELECT c.ask, c.author
 		FROM tracker_comments c, root
 		WHERE c.task_id = ? AND c.removed = 0 AND c.ask <> ''
 		  AND c.resolved = 0 AND c.answered_by IS NULL
 		  AND (c.id = root.id OR c.reply_to = root.id)
-		ORDER BY c.ask
-		LIMIT ?`, replyTo, task, task, MaxThreadParticipants)
+		ORDER BY c.created_at, c.id`, replyTo, task, task)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: read who owes an answer under %s: %w", replyTo, err)
+		return nil, nil, fmt.Errorf("worklet: read the open asks under %s: %w", replyTo, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []string
 	for rows.Next() {
-		var handle string
-		if err := rows.Scan(&handle); err != nil {
-			return nil, err
+		var ask, author string
+		if err := rows.Scan(&ask, &author); err != nil {
+			return nil, nil, err
 		}
-		out = append(out, handle)
+		if !slices.Contains(owing, ask) && len(owing) < MaxThreadParticipants {
+			owing = append(owing, ask)
+		}
+		if author != "" && !slices.Contains(awaiting, author) && len(awaiting) < MaxThreadParticipants {
+			awaiting = append(awaiting, author)
+		}
 	}
-	return out, rows.Err()
+	return owing, awaiting, rows.Err()
 }
 
 // inferAnswer is the one open ask addressed to this author, or nothing.

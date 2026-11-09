@@ -190,7 +190,7 @@ func TestAHandleHearsUnderTheFirstReasonThatNamesIt(t *testing.T) {
 			got, chatlet.ReasonReplyToOwnRoot)
 	}
 	if got := reasonOf(unnamed, "eng-lead"); got != chatlet.ReasonReply {
-		t.Errorf("eng-lead was woken as %q, want %q — speaking in the thread "+
+		t.Errorf("eng-lead was woken as %q, want %q: speaking in the thread "+
 			"outranks following it and the room", got, chatlet.ReasonReply)
 	}
 }

@@ -84,6 +84,8 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		n.Held = []chatlet.Recipient{{Handle: "colleague", Reason: chatlet.ReasonFollowAll}}
 	case "Notify.Asked":
 		n.Asked = []string{"colleague"}
+	case "Notify.Answering":
+		n.Answering = []string{"message-asked"}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

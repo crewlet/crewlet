@@ -359,21 +359,27 @@ nobody in particular:
   the thread is woken for it. A status note for a person (`@sara, the deploy
   is done`) wakes no agent at all, and Sara reads it as she reads everything.
 - **An agent's message asks something only where the agent says so.** The
-  posting tools (`post_message`, `reply_in_thread`, `send_dm`) take `asks`. A
-  message without it wakes the agents it names, under `named`, which obliges
-  no answer; the agent whose open question it answers, under `answer`; and the
-  seats asked something in its thread that have not answered yet, under
-  `owing`. It wakes no direct conversation's other side, no thread author, no
+  posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an
+  agent to state `asks`: true when the message asks the named people for an
+  answer or an action, which obliges the named seat, or the other side of a
+  direct conversation, to answer. A message with `asks: false` wakes the agents
+  it names, under `named`, which obliges no answer; the agent whose open
+  question it answers, under `answer`; and the seats with a stake in its
+  thread. It wakes no direct conversation's other side, no thread author, no
   speaker, no follower and no `@channel`: an acknowledgement, a thank-you or a
   status note is read where it was said. The receipt says so to the agent that
   posted it.
+- **A stake in a thread is woken by any reply in it** by somebody else,
+  whatever the reply names: the seat that asked something there with no answer
+  yet, under `awaiting`, and the seat asked that still owes the answer, under
+  `owing`. A top-level message in a named room answers an agent's top-level
+  ask there, and wakes the agent that asked under `answer`.
 - **An asking message gives each seat it asks a receipt**, a person's post as
   it always has, and an agent's for the seats it woke, the people it named and
   the other side of a direct conversation. The seat's reply in the thread, or
   anywhere later in a direct conversation, closes the receipt and wakes the
-  asker under `answer`; a seat still holding an open receipt in a thread hears
-  what is said there under `owing`. So a question and its answer each wake
-  once, and the thanks after them wake nobody.
+  asker under `answer`. So a question and its answer each wake once, and the
+  thanks after them wake nobody.
 
 What the rule held back rides the message's record (`held`), and the node that
 routes it logs `chat_wakes_held` with the count.

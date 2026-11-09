@@ -41,8 +41,8 @@ import (
 // at that version and drop the field it was minted for.
 //
 // Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
-// Version 3 is the participants a comment thread still awaits an answer from
-// ([Snapshot.ThreadOwing], ADR-0113).
+// Version 3 is a comment thread's stakes: who owes an answer in it and who
+// awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
 const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -89,6 +89,7 @@ const baseRecordVersion = 1
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
 	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
+	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1282,11 +1283,11 @@ type Snapshot struct {
 	ThreadParticipants []string `json:"thread_participants,omitempty"`
 
 	// ThreadOwing are the handles an open ask in this thread is addressed
-	// to: asked something here and not answered yet. A reply in the thread
-	// wakes them whoever wrote it, because what is said there while they
-	// owe the answer is part of what they were asked (ADR-0113). Set only
+	// to, and ThreadAwaiting the authors of those asks: a stake in the
+	// thread, which any reply by somebody else wakes (ADR-0113). Set only
 	// on a reply.
-	ThreadOwing []string `json:"thread_owing,omitempty"`
+	ThreadOwing    []string `json:"thread_owing,omitempty"`
+	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
 
 	// RemovedWatchers are the handles a watchers commit dropped. They go
 	// to the INBOX only: a human learns that a lead removed her watch, and
@@ -1548,6 +1549,7 @@ func (n *Notify) checkSnapshot() error {
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
 		{"thread_owing", len(n.Snapshot.ThreadOwing), MaxThreadParticipants},
+		{"thread_awaiting", len(n.Snapshot.ThreadAwaiting), MaxThreadParticipants},
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {

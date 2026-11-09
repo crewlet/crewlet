@@ -103,11 +103,13 @@ type Routing struct {
 	Asks bool
 
 	// Answers are the seats whose open questions to the author this message
-	// answers ([ReasonAnswer]), and Owing the seats asked something in this
-	// thread that have not answered yet ([ReasonOwing]): both read from the
-	// room's receipts in the decide's own snapshot.
-	Answers []string
-	Owing   []string
+	// answers ([ReasonAnswer]); Owing the seats asked something in this
+	// thread and not answered yet, and Awaiting the seats that asked it
+	// ([ReasonOwing], [ReasonAwaiting]). Read from the room's receipts in
+	// the decide's own snapshot.
+	Answers  []string
+	Owing    []string
+	Awaiting []string
 
 	// loud routes as before ADR-0113: the set [Resolve] compares the quiet
 	// routing against to say which seats the rule held back.
@@ -381,9 +383,13 @@ func (r Routing) arm(reason Reason) []string {
 		// WHATEVER ELSE THE MESSAGE IS: the asker is waiting on it.
 		return r.Answers
 
-	case ReasonOwing:
-		if r.ThreadRoot == "" || r.addressed() {
+	case ReasonOwing, ReasonAwaiting:
+		// A STAKE IN THE THREAD, woken by any reply whatever it names.
+		if r.ThreadRoot == "" {
 			return nil
+		}
+		if reason == ReasonAwaiting {
+			return r.Awaiting
 		}
 		return r.Owing
 
@@ -565,7 +571,7 @@ func limitFor(reason Reason) int {
 	switch reason {
 	case ReasonMention, ReasonNamed:
 		return MaxMentions
-	case ReasonReply, ReasonAnswer, ReasonOwing:
+	case ReasonReply, ReasonAnswer, ReasonOwing, ReasonAwaiting:
 		return MaxThreadParticipants
 	case ReasonCollectiveRequest, ReasonCollective:
 		return MaxCollectiveRecipients

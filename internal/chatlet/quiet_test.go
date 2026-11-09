@@ -151,11 +151,21 @@ func TestAnAnswerWakesTheAgentThatAsked(t *testing.T) {
 				c.Handle, c.Reason, c.Reason.Addressed(), want[c.Handle])
 		}
 	}
-	// THE ANSWER REACHES ITS ASKER EVEN WHEN IT NAMES SOMEBODY ELSE.
+	// A STAKE IS WOKEN WHATEVER THE REPLY NAMES: the asker answered, the
+	// seat that owes still told, and the agent named told it asks nothing.
 	answer.Mentions = []string{"ops"}
 	woken = chatlet.Route(chatResolved(answer), agents().Seat, "dev")
-	if reasonOf(woken, "amir") != chatlet.ReasonAnswer || reasonOf(woken, "qa") != "" {
-		t.Errorf("an answer naming ops woke %v, want amir answered and qa, not named, quiet", woken)
+	if reasonOf(woken, "amir") != chatlet.ReasonAnswer || reasonOf(woken, "qa") != chatlet.ReasonOwing ||
+		reasonOf(woken, "ops") != chatlet.ReasonNamed {
+		t.Errorf("an answer naming ops woke %v, want amir answered, qa owing and ops named", woken)
+	}
+	// AND THE SEAT THAT ASKED IS WOKEN BY A REPLY THAT IS NOT ITS ANSWER.
+	followUp := thread(chatlet.AuthorHuman)
+	followUp.Mentions = []string{"sara"}
+	followUp.Awaiting = []string{"amir"}
+	woken = chatlet.Route(chatResolved(followUp), agents().withPeople("sara").Seat, "jane")
+	if reasonOf(woken, "amir") != chatlet.ReasonAwaiting {
+		t.Errorf("a person's reply naming sara in amir's open question woke %v, want amir awaiting", woken)
 	}
 }
 

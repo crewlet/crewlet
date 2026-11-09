@@ -265,9 +265,14 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 		add(n.Snapshot.Reporter, ReasonReporter, false)
 	}
 	if n.Kind == ChangeComment {
-		for _, handle := range n.Snapshot.ThreadParticipants {
-			b.AddWaking(handle, ReasonThread, false,
-				ReasonThread.StartsTurn(n.threadAsked(handle)))
+		// A STAKE IN THE THREAD WAKES WHETHER OR NOT ITS HOLDER SPOKE
+		// THERE: an asker, or a seat asked and not answered yet.
+		for _, handles := range [][]string{n.Snapshot.ThreadParticipants,
+			n.Snapshot.ThreadOwing, n.Snapshot.ThreadAwaiting} {
+			for _, handle := range handles {
+				b.AddWaking(handle, ReasonThread, false,
+					ReasonThread.StartsTurn(n.threadAsked(handle)))
+			}
 		}
 	}
 	// THE UNBLOCKED NOTICE TAKES ITS PLACE LIKE ANY OTHER REASON, because its
@@ -396,11 +401,12 @@ func (n *Notify) ownerAsked() bool {
 	return n.Kind != ChangeWatchers
 }
 
-// threadAsked decides whether a reply wakes one thread participant: one an
-// open ask in the thread is addressed to, whoever wrote the reply, and any
-// other only for a person's comment that names nobody in particular.
+// threadAsked decides whether a reply wakes one thread participant: one with
+// a stake in it (an open ask it made, or one made of it) whatever the reply
+// names, and any other only for a person's comment that names nobody.
 func (n *Notify) threadAsked(handle string) bool {
-	if slices.Contains(n.Snapshot.ThreadOwing, handle) {
+	if slices.Contains(n.Snapshot.ThreadOwing, handle) ||
+		slices.Contains(n.Snapshot.ThreadAwaiting, handle) {
 		return true
 	}
 	return n.personComment() && !n.addressedToSomebody()

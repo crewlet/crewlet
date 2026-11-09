@@ -252,6 +252,9 @@ func whyYou(meta map[string]string) string {
 	case ReasonOwing:
 		line = "You were asked something in this thread and have not " +
 			"answered yet; this adds to what you were asked."
+	case ReasonAwaiting:
+		line = "You asked something in this thread that has not been " +
+			"answered yet; this is a reply in it."
 	case ReasonReply:
 		line = "You have spoken in this thread, so you are hearing the rest " +
 			"of it. That is not an ask."
@@ -329,7 +332,7 @@ func answererLine(kind Kind) string {
 //
 // TWO BRANCHES, on the verdict the routing already reached rather than on the
 // reason again: being asked and being told are what a recipient does
-// differently, and the twelve reasons collapse to those two.
+// differently, and the thirteen reasons collapse to those two.
 //
 // WHAT A SEAT OWES WHEN IT DECLINES IS NOT HERE. The executor's contract
 // states it for every surface and the delivery check enforces it, which is

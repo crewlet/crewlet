@@ -30,8 +30,8 @@ import (
 // # What each version added
 //
 //   - 1: every shape this domain has.
-//   - 2: an agent's statement that its message asks something, and the seats
-//     a message held back and asked (ADR-0113).
+//   - 2: an agent's statement that its message asks something, the seats a
+//     message held back and asked, and the asks it answers (ADR-0113).
 const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -67,6 +67,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Notify.Asks", Since: 2, Path: []string{"notify", "asks"}},
 	{Name: "Notify.Held", Since: 2, Path: []string{"notify", "held"}},
 	{Name: "Notify.Asked", Since: 2, Path: []string{"notify", "asked"}},
+	{Name: "Notify.Answering", Since: 2, Path: []string{"notify", "answering"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -243,7 +244,7 @@ type MutationRecord struct {
 // about what a record means.
 type Reason string
 
-// The twelve reasons.
+// The thirteen reasons.
 //
 // `reply` and `reply_to_own_root` are one event split in two, and the split is
 // the whole point of the vocabulary: a reply in a thread you merely take part
@@ -294,27 +295,22 @@ const (
 	// to silence is a person talking to an empty screen.
 	ReasonAnswerer Reason = "answerer"
 
-	// ReasonAnswer is a message that answers a question this recipient
-	// asked its author: one of the author's open receipts in this thread
-	// (in a direct conversation, anywhere in it) is on a message this
-	// recipient wrote. It wakes whatever else the message is, because the
-	// asker is waiting on it, and obliges nothing: the answer closes a
-	// question rather than opening one (ADR-0113).
+	// ReasonAnswer is a message answering a question this recipient asked
+	// its author (an open receipt the author holds). It wakes whatever else
+	// the message is and obliges nothing (ADR-0113).
 	ReasonAnswer Reason = "answer"
 
 	// ReasonNamed is an AGENT'S message that names this recipient and asks
-	// nothing ([Routing.Asks]). The mention still wakes, because a seat an
-	// agent names should know, and obliges no answer, because an agent that
-	// says nothing asks for nothing: obliged, the named seat answered an
-	// acknowledgement with an acknowledgement that named the first seat
-	// back (ADR-0113).
+	// nothing ([Routing.Asks]): it wakes, and obliges no answer, so an
+	// acknowledgement is not answered back (ADR-0113).
 	ReasonNamed Reason = "named"
 
 	// ReasonOwing is a reply in a thread where this recipient was asked
-	// something and has not answered yet: one of its receipts in the thread
-	// is still open. What is said there while it owes the answer is part of
-	// what it was asked (ADR-0113).
-	ReasonOwing Reason = "owing"
+	// something and has not answered yet, and ReasonAwaiting one where it
+	// asked something not yet answered: a stake in the thread, which any
+	// reply by somebody else wakes (ADR-0113).
+	ReasonOwing    Reason = "owing"
+	ReasonAwaiting Reason = "awaiting"
 
 	// ReasonReply is a reply in a thread this recipient takes part in.
 	ReasonReply Reason = "reply"
@@ -332,7 +328,7 @@ const (
 	ReasonFollowAll Reason = "follow_all"
 )
 
-// Reasons are the twelve, IN PRECEDENCE ORDER: a recipient appears once, under
+// Reasons are the thirteen, IN PRECEDENCE ORDER: a recipient appears once, under
 // the first of these that applies to them.
 //
 // # The ordering, and the two rules it is built from
@@ -356,7 +352,7 @@ const (
 var Reasons = []Reason{
 	ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
 	ReasonAnswerer, ReasonAnswer, ReasonNamed, ReasonReply,
-	ReasonCollective, ReasonFollow, ReasonFollowAll, ReasonOwing,
+	ReasonCollective, ReasonFollow, ReasonFollowAll, ReasonOwing, ReasonAwaiting,
 }
 
 // Valid reports whether a reason off the wire is one this build knows.
@@ -368,10 +364,10 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // the thread you started, a person's `@channel`, and the room's answerer.
 // Each is a person or a colleague speaking TO this recipient.
 //
-// THE OTHER SEVEN ARE NOT, and each would be a false obligation: an answer
+// THE OTHER EIGHT ARE NOT, and each would be a false obligation: an answer
 // closes a question rather than opening one, an agent's mention that asks
-// nothing and an agent's collective address are news, a follow-up in a thread
-// where the seat owes an answer adds to an obligation it already has, a plain
+// nothing and an agent's collective address are news, a reply in a thread
+// where the seat owes or awaits an answer adds to a stake it has, a plain
 // reply reaches everybody who ever posted in the thread, and both follow
 // reasons are standing arrangements the recipient made rather than anything
 // this message did. A seat that treats them as addressed answers every remark in every
@@ -464,18 +460,19 @@ type Notify struct {
 	// person's message, which always does.
 	Asks bool `json:"asks,omitempty"`
 
-	// Held are the seats this message would have woken before ADR-0113
-	// and does not: an agent's message that asks nothing, or a message
-	// addressed to the seats it names. Each still reads the message in the
-	// room; the list is what the parser reports, so an operator sees what
-	// the rule kept quiet. At most [MaxRecipients].
+	// Held are the seats the quiet rule kept this message from waking, which
+	// the parser reports (ADR-0113). At most [MaxRecipients].
 	Held []Recipient `json:"held,omitempty"`
 
-	// Asked are the seats an AGENT'S asking message asked: the seats it
-	// woke, the people it named, and the other side of a direct
-	// conversation. Each gets a receipt, and its answer wakes the author
-	// ([ReasonAnswer]). At most [MaxRecipients] + [MaxMentions].
+	// Asked are the seats an AGENT'S asking message asked, each given a
+	// receipt so its answer wakes the author. At most [MaxRecipients] +
+	// [MaxMentions].
 	Asked []string `json:"asked,omitempty"`
+
+	// Answering are the top-level asks in a named room this top-level post
+	// answers, which the applier marks answered. At most
+	// [MaxThreadParticipants].
+	Answering []string `json:"answering,omitempty"`
 
 	// WakesTruncated says the routing reached fewer seats than the
 	// message named, because a collective address exceeded
@@ -548,6 +545,10 @@ func (n *Notify) Validate() error {
 	if len(n.Held) > MaxRecipients {
 		return invalid("notify.held", "a notification holds %d seats back and "+
 			"the maximum is %d", len(n.Held), MaxRecipients)
+	}
+	if len(n.Answering) > MaxThreadParticipants {
+		return invalid("notify.answering", "a notification answers %d asks and the "+
+			"maximum is %d", len(n.Answering), MaxThreadParticipants)
 	}
 	if len(n.Asked) > MaxRecipients+MaxMentions {
 		return invalid("notify.asked", "a notification asks %d seats and the "+

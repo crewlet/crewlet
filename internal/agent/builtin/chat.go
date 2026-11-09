@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // Chatlet's tool names, re-exported from the package that owns the
@@ -831,19 +832,33 @@ func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMes
 	return in
 }
 
-// asksParam is the `asks` argument every posting tool takes: an agent's own
-// statement that its message asks something, which is what lets it wake the
-// colleagues it does not name (ADR-0113).
+// asksParam is the `asks` argument every posting tool requires of an agent:
+// its own statement that its message asks something (ADR-0113). Not in the
+// schema's required list, because a person's message asks whatever it says.
 func asksParam() map[string]any {
 	return map[string]any{
 		"type": "boolean",
-		"description": "true when this message asks something of the colleagues " +
-			"it reaches and you need their answer to go on. Left off, it wakes " +
-			"only the colleagues you @-mention (who are told it asks nothing), " +
-			"whoever's question it answers, and anyone in the thread who still " +
-			"owes an answer; everybody else reads it when they next open the " +
-			"room. Leave it off for acknowledgements, thanks and status notes.",
+		"description": "Required of an agent. true when the message asks the named people for " +
+			"an answer or an action: a question, a request, a hand-off. They, or " +
+			"the other side of a direct conversation, must then answer. false for " +
+			"news, status notes, acknowledgements and thanks: it wakes only the " +
+			"colleagues you @-mention, told it asks nothing, whoever's question it " +
+			"answers, and anyone with an open question in the thread.",
 	}
+}
+
+// asksOf is the call's `asks`, or, for an agent, the refusal of a call that
+// left it out: whether its message asks is the author's to say, never the
+// engine's guess. A person's message asks whatever it says, so a person's call
+// may leave it out.
+func asksOf(tool string, args map[string]any, author chatlet.AuthorKind) (bool, *tools.Result) {
+	asks, typed := argval.Bool(args["asks"])
+	if !typed && author == chatlet.AuthorAgent {
+		refused := failed(tool + " needs `asks`: true when the message asks the named " +
+			"people for an answer or an action, false otherwise.")
+		return false, &refused
+	}
+	return asks, nil
 }
 
 // ChatMessage is what a post carries, read from the words a person or a model
@@ -1001,9 +1016,13 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(PostMessageTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, PostMessageTool)
 	written, err := t.deps.Writer.Post(ctx, actor, id,
-		t.deps.message(body, argStrings(args, "links"), argBool(args, "asks")))
+		t.deps.message(body, argStrings(args, "links"), asks))
 	if err != nil {
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1078,9 +1097,13 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(ReplyInThreadTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, ReplyInThreadTool)
 	written, err := t.deps.Writer.Reply(ctx, actor, id, replyTo,
-		t.deps.message(body, argStrings(args, "links"), argBool(args, "asks")))
+		t.deps.message(body, argStrings(args, "links"), asks))
 	if err != nil {
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1157,8 +1180,12 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	asks, refused := asksOf(SendDMTool, args, actor.Kind)
+	if refused != nil {
+		return *refused, nil
+	}
 	again := callRepeat(turn, actor.OpKey, SendDMTool)
-	said := t.deps.message(body, argStrings(args, "links"), argBool(args, "asks"))
+	said := t.deps.message(body, argStrings(args, "links"), asks)
 	// WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS WRITTEN. A body
 	// over the cap is refused by the post however the room is found, so
 	// opening the conversation first only left a room in every

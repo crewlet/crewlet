@@ -2206,7 +2206,7 @@ something of the seat that holds it
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
 | `watcher` | for a person's comment that names nobody |
-| `thread` | for a participant an open ask in the thread is addressed to, whoever wrote the reply, and for every participant on a person's comment that names nobody |
+| `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |
 
 So **a person's comment that names nobody wakes everyone on the task**: a
@@ -2215,8 +2215,8 @@ somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
 seats it names, and everyone else on the task reads it in their inbox.
 **Another agent's comment wakes only the seats it names**: by @-mention, with
 `ask`, or by answering their question; a reply in a thread wakes only the
-participants who still owe an answer there, so two agents' thanks to each
-other end at the first one. An agent that needs
+seats with a stake there, the asker of an open ask and the seat that owes it,
+so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so
 in its description and warns when a comment reaches the assignee's inbox and
 no further. A **reporter** hears of its task finishing or reopening, being
