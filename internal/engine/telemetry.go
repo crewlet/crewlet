@@ -731,7 +731,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		whole := t.measured(spend, ended)
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted,
-			Tools: whole.Tools}
+			Tools: whole.Tools, Wake: whole.Wake, Outcome: t.written.Outcome(), Tokens: whole.Tokens}
 	}
 	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)
@@ -758,12 +758,20 @@ func (t turnTelemetry) measuredWhole() bool { return !t.resumed || t.soFar != ni
 // runner's tally of its phase records. A segment that parks hands it on ([segmentCharge.soFar]); the one
 // that ends the turn states it ([Engine.publishTurnCompleted]).
 func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.TurnSoFar {
+	aux := t.auxSpent.Total()
 	out := execstate.TurnSoFar{
 		DurationMS: int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Reviews:    spend.Reviews,
 		SentBack:   spend.SentBack,
 		Unaccepted: spend.Unaccepted,
 		Tools:      types.SumToolTallies(spend.Tools),
+		Wake:       types.WakeOf(t.trigger),
+		Tokens: types.TurnTokens{
+			Input:     spend.InputTokens + spend.WorkerInput + spend.JudgeInput,
+			Output:    spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput,
+			CacheRead: spend.CacheRead, CacheWrite: spend.CacheWrite,
+			AuxInput: aux.Input, AuxOutput: aux.Output,
+		},
 	}
 	if t.soFar != nil {
 		out.DurationMS += t.soFar.DurationMS
@@ -771,6 +779,12 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 		out.SentBack += t.soFar.SentBack
 		out.Unaccepted += t.soFar.Unaccepted
 		out.Tools = types.SumToolTallies(t.soFar.Tools, spend.Tools)
+		out.Tokens = t.soFar.Tokens.Plus(out.Tokens)
+		// THE WAKE IS THE FIRST SEGMENT'S: a resume is woken by an answer
+		// or a completion, never by what started the turn.
+		if t.soFar.Wake != "" {
+			out.Wake = t.soFar.Wake
+		}
 	}
 	return out
 }
@@ -1040,7 +1054,15 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// carried on the suspension, so a completion concluding a sole write
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
-	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	committed := make([]types.CommittedChange, 0, len(in.State.Committed))
+	for _, c := range in.State.Committed {
+		committed = append(committed, types.CommittedChange(c))
+	}
+	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany, committed...)
+	// WHAT THE RUN PUSHED ON GITLET is code the turn committed, collected here.
+	if len(in.Account.Pushed) > 0 {
+		t.written.Commit(types.CommittedCode)
+	}
 	// THE HOLDS THE ROW CARRIES, OFF THE RESUMED TURN for the reason its
 	// unit of work is (resumedTurn read the row into it, with the row's
 	// writer attached): the same turn, holding what it named before it parked.

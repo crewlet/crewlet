@@ -567,6 +567,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return pageWriteFailure(ctx, WritePageTool, err, next), nil
 	}
+	commit(turn, got.Outcome.Outcome, types.CommittedPage)
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(WritePageTool, got.Outcome, next), nil
 	}
@@ -777,6 +778,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return pageWriteFailure(ctx, SavePageTool, err, saveNext), nil
 	}
+	commit(turn, got.Outcome.Outcome, types.CommittedPage)
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(SavePageTool, got.Outcome, saveNext), nil
 	}
@@ -969,6 +971,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if err != nil {
 			return pageWriteFailure(ctx, CommentOnPageTool, err, editNext), nil
 		}
+		commit(turn, written.Outcome.Outcome, types.CommittedComment)
 		if written.Outcome.Outcome == statelog.OutcomeUnknown {
 			return pageUnknown(CommentOnPageTool, written.Outcome, editNext), nil
 		}
@@ -1007,6 +1010,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return pageWriteFailure(ctx, CommentOnPageTool, err, commentNext(false)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedComment)
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(CommentOnPageTool, written.Outcome,
 			commentNext(written.Outcome.Unvouched)), nil

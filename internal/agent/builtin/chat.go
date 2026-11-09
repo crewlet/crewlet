@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -997,6 +998,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(PostMessageTool, written, id, again)
 }
@@ -1078,6 +1080,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(ReplyInThreadTool, written, id, again)
 }
@@ -1190,6 +1193,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return directPostFailure(ctx, to, room, err, again), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		// THE OPEN LANDED AND THE ANSWER SAYS SO, as a refused post's does:

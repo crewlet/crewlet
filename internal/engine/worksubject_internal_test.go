@@ -447,6 +447,44 @@ func TestTheMeasurementBeforeAParkCountsAtTheEnd(t *testing.T) {
 	}
 }
 
+// THE TURN LEDGER'S FIGURES SPAN THE PARK, through the real resume path: the
+// ending record states the first segment's wake (a resume is woken by an answer,
+// never by what started the turn), the outcome of every change the turn
+// committed, the parked ones included, and at least the tokens they spent.
+//
+// Mutation: read the wake off the resume's trigger, or drop State.Committed,
+// and this goes red.
+func TestTheLedgerFiguresBeforeAParkCountAtTheEnd(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	carried := execstate.TurnSoFar{Wake: "work_item:assignee",
+		Tokens: types.TurnTokens{Input: 1_000, Output: 200, AuxInput: 50}}
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3},
+		State: execstate.State{SoFar: &carried, Committed: []string{string(types.CommittedComment)}},
+		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+			Org: company.Org},
+		Answer:  "done",
+		Trigger: chatTrigger("D0ANA"),
+	}); err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	done := only[*types.TurnCompleted](t, p, "turn_completed")
+	switch {
+	case done.Turn == nil:
+		t.Fatal("the resumed turn's end states no tally")
+	case done.Turn.Wake != carried.Wake:
+		t.Errorf("wake %q, want the first segment's %q", done.Turn.Wake, carried.Wake)
+	case done.Turn.Outcome != types.OutcomeWords:
+		t.Errorf("outcome %q, want words: the comment committed before the park", done.Turn.Outcome)
+	case done.Turn.Tokens.Input < carried.Tokens.Input || done.Turn.Tokens.AuxInput < carried.Tokens.AuxInput:
+		t.Errorf("tokens %+v, want at least the %+v spent before the park", done.Turn.Tokens, carried.Tokens)
+	}
+}
+
 // A RESUMED TURN WHOSE PARK NOBODY MEASURED STATES NO TALLY, through the real
 // resume path.
 //

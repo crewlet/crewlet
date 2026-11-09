@@ -260,7 +260,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		req.Actor.Provenance.Written = written
 	}
 	result, err := spec.serve(readSpent(ctx, spec, spent), b, req.Actor, req.Args)
-	out.Written = written.list()
+	out.Written, out.Committed = written.list(), written.committed()
 	switch {
 	case errors.Is(err, errNoHalf):
 		out.Unserved, out.Detail = unservedNoBackend, ranNothingDetail(s.self, req.Op, err)
@@ -500,8 +500,28 @@ func deadlineOf(ctx context.Context) time.Time {
 // may report one item more than once; the set keeps it once, in the order it
 // was first reported.
 type writtenItems struct {
-	mu    sync.Mutex
-	items []types.WorkItem
+	mu      sync.Mutex
+	items   []types.WorkItem
+	changes []types.CommittedChange
+}
+
+// Commit implements [worklet.WriteLog].
+func (w *writtenItems) Commit(c types.CommittedChange) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !slices.Contains(w.changes, c) {
+		w.changes = append(w.changes, c)
+	}
+}
+
+// committed is the changes reported, or nil where nothing asked for them.
+func (w *writtenItems) committed() []types.CommittedChange {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.changes)
 }
 
 // Add implements [worklet.WriteLog].

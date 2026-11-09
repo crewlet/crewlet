@@ -193,6 +193,10 @@ type State struct {
 	Written     []types.WorkItem `json:"written,omitempty"`
 	WrittenMany bool             `json:"written_many,omitempty"`
 
+	// Committed is the kinds of change the turn's writes had committed when
+	// it parked (turnctx.Change), carried so its outcome covers the whole turn.
+	Committed []string `json:"committed,omitempty"`
+
 	// Uncharged is what the turn's segments cost that no work item has been
 	// charged for yet — the half before a park, when nothing at dispatch
 	// named an item and the segment that parked could not conclude one.
@@ -360,6 +364,10 @@ type TurnSoFar struct {
 	// (server, tool): what the ending record's [types.TurnTally.Tools]
 	// adds this segment's to.
 	Tools []types.ToolTally `json:"tools,omitempty"`
+	// Wake is what woke the turn's first segment, and Tokens the earlier
+	// segments' spend: what the ending record's ledger figures carry.
+	Wake   string           `json:"wake,omitempty"`
+	Tokens types.TurnTokens `json:"tokens,omitzero"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

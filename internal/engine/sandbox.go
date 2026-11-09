@@ -2097,6 +2097,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = tel.written.Items()
+	for _, c := range tel.written.Changes() {
+		suspension.State.Committed = append(suspension.State.Committed, string(c))
+	}
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = tel.ask

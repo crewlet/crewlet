@@ -646,6 +646,13 @@ type TurnTally struct {
 	// across a park like the reviews. Absent on a turn that called none.
 	// What the usage domain counts a seat's calls per tool from.
 	Tools []ToolTally `json:"tools,omitempty"`
+	// Wake is what woke the turn, as the turn ledger keys it ([WakeOf]), and
+	// Outcome what its writes committed, read from their records.
+	Wake    string      `json:"wake,omitempty"`
+	Outcome TurnOutcome `json:"outcome,omitempty"`
+	// Tokens is what the turn's model calls and its in-turn auxiliary calls
+	// spent, every segment's summed.
+	Tokens TurnTokens `json:"tokens,omitzero"`
 }
 
 // ToolTally is one MCP tool's calls in one turn: how many the turn made and
