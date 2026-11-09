@@ -1203,7 +1203,6 @@ var allowed = []Entry{
 	{File: "internal/objstore/collect/ranged_test.go", Func: "TestARangeOutOfOrderTurnsTheAuditToTheListing", ExemptWait: 1, ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/collect/ranged_test.go", Func: "TestARangeSetAsideIsRelistedOnceTheQueueHoldsItsBound", ExemptWait: 1, Piece: 9},
 	{File: "internal/objstore/collect/ranged_test.go", Func: "TestTheAuditListsAtMostItsBoundOfRangesAtOnce", NegativeWindow: 1, Piece: 9},
-	{File: "internal/objstore/natsobj/leaderreads_test.go", Func: "TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault", ExemptWait: 1, ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/natsobj_test.go", Func: "TestAListingWhoseConsumerIsLostFinishesOnItsReplacement", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/natsobj_test.go", Func: "TestAReadWhoseClientSkippedAPullGoesOn", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/natsobj_test.go", Func: "TestAReadWhoseConsumerIsLostFinishesOnItsReplacement", ElapsedBound: 1, Piece: 9},
