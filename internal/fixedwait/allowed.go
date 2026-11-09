@@ -698,7 +698,6 @@ var allowed = []Entry{
 	{File: "internal/coord/kv/kv_test.go", Func: "TestAnAdmittedChargeLeavesANewerRefusalStanding", ExemptWait: 1, ElapsedBound: 1, Piece: 11},
 	{File: "internal/coord/kv/kv_test.go", Func: "TestAnUnchargedCounterAgesOut", ExemptWait: 1, ExemptElapsed: 1, Piece: 11},
 	{File: "internal/coord/kv/kv_test.go", Func: "TestServerSideExpiryHandsTheSeatOver", PositiveDeadline: 1, ExemptWait: 1, Piece: 11},
-	{File: "internal/coord/kv/leaderreads_test.go", Func: "TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault", ExemptWait: 1, ElapsedBound: 1, Piece: 11},
 	{File: "internal/coord/kv/markers_test.go", Func: "TestTheSweepRemovesExactlyTheMarkersOlderThanItsCutoff", ClockStep: 2, Piece: 11},
 	{File: "internal/coord/kv/positions_test.go", Func: "TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse", PositiveDeadline: 1, Piece: 11},
 	{File: "internal/coord/kv/quietpass_test.go", Func: "TestAListingWhosePassGoesQuietEndsWithEveryLiveKey", ExemptElapsed: 1, Piece: 11},

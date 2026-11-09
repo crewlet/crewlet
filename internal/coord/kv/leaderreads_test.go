@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -180,8 +181,17 @@ func TestAListingsCertifyingReadAMemberDropsIsAskedAgain(t *testing.T) {
 // inside the bound, and a broker that never answers costs a renewal no more
 // than it did. The client here is given a default of 3.9 seconds — just
 // short of a third request, at four — so the read is asked at none and two,
-// twice, the second with nearly two seconds to spare, and a read held to the
-// thirty-second ceiling instead is told apart by far more than a late timer.
+// twice, where a read held to the five seconds of a default it did not take
+// from its client is asked three times, and one held to the thirty-second
+// ceiling fifteen.
+//
+// THE READ RUNS IN A SYNCTEST BUBBLE, and the broker outside it, so its timers
+// fire at exactly their instants: on the machine's clock the bound and the
+// third request were a tenth of a second apart, and the verdict turned on how
+// late a loaded runner woke — natsobj's twin of this case failed on CI with
+// the third sent past the bound, which the hedge no longer does
+// ([jsprovision.ReadBoundedWith]). The requests are counted behind a fence on
+// the read's own connection ([jsapitest.Held.Fence]).
 func TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond
@@ -193,28 +203,25 @@ func TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := jsapitest.Hold(t, ns, jsapitest.StreamInfo(s.leases.stream))
-	done := make(chan error, 1)
-	start := time.Now()
-	go func() {
-		_, err := leaderInfo(context.Background(), js, s.leases.stream)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !jsprovision.Unanswered(context.Background(), err) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		_, err := leaderInfo(t.Context(), js, s.leases.stream)
+		if !jsprovision.Unanswered(t.Context(), err) {
 			t.Errorf("a stream info nobody answered ended with %v, which its caller "+
 				"cannot read as silence", err)
 		}
-		if took := time.Since(start); took < bound {
-			t.Errorf("the read gave up after %v, inside its client's %v", took, bound)
+		if took := time.Since(start); took != bound {
+			t.Errorf("the read ended after %v, want its client's %v", took, bound)
 		}
-	case <-time.After(jsprovision.LookupBudget / 2):
-		t.Fatalf("a stream info nobody answers was still being asked %v later, past "+
-			"its client's %v default (%d requests)", jsprovision.LookupBudget/2, bound,
-			held.Count())
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	asked, err := held.Fence(ctx, nc)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if n := held.Count(); n != 2 {
+	if asked != 2 {
 		t.Errorf("the read was asked %d times inside its client's %v, want 2: at none "+
-			"and two seconds", n, bound)
+			"and two seconds", asked, bound)
 	}
 }
