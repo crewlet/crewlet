@@ -29,6 +29,21 @@ import { fmtAt } from "./format.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
+/** A setup finding that blocks the company and is the owner's to fix. */
+const SETUP_BLOCKER = {
+  class: "integration.credential_rejected",
+  severity: "blocks" as const,
+  actor: "owner" as const,
+  source: "reconcile" as const,
+  area: "integrations",
+  subject: { kind: "integration", name: "Datadog" },
+  title: "Datadog refused the credential.",
+  why: "The agents' Datadog tools are off.",
+  path: "integrations.datadog",
+  evidence: [],
+  fix: { kind: "external_step", sentence: "Replace the credential.", options: [] },
+};
+
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
@@ -40,6 +55,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     now,
     nameOf: (key) => key,
     mcpAlarms: [],
+    setupBlockers: [],
     ...over,
   };
 }
@@ -375,6 +391,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         mcpAlarms: [mcpAlarm("mcp_server_failing", "github")],
+        setupBlockers: [SETUP_BLOCKER],
         engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
@@ -793,4 +810,16 @@ describe("an MCP server's alarms", () => {
     expect(row?.title).toBe("docs is not running on every node");
     expect(row?.who).toBeUndefined();
   });
+});
+
+// THE SETUP'S BLOCKERS ARE A PERSON'S, in the Inbox and on Home: each opens the
+// advisor, says what to do, and clears when the setup no longer raises it.
+test("a finding that blocks the company is a condition a person decides", () => {
+  const blocker = SETUP_BLOCKER;
+  const queue = attentionQueue(input({ setupBlockers: [blocker] }));
+  const row = queue.find((a) => a.subject === "setup");
+  expect(row?.title).toBe("Datadog refused the credential.");
+  expect(row?.detail).toBe("Replace the credential.");
+  expect(row?.path).toEqual(["settings", "advisor"]);
+  expect(conditionsToDecide(queue)).toContainEqual(row);
 });
