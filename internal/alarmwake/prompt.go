@@ -141,13 +141,6 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 			b.WriteString(", having stood since " + since + " (" + stood + ")")
 		}
 		b.WriteString(".")
-	case statelog.TransitionFiringAtBoot:
-		b.WriteString("the node's first look at its alarms since it started found it firing")
-		if at != "" {
-			b.WriteString(" at " + at)
-		}
-		b.WriteString(". It may have been firing before the node restarted, and a clear the " +
-			"node did not live to send is not known here.")
 	default:
 		b.WriteString("it changed (" + string(change) + ")")
 		if at != "" {
