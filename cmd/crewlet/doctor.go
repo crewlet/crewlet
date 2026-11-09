@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -16,8 +17,13 @@ import (
 
 const doctorUsage = "usage: crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]"
 
-// runDoctor prints the setup advisor's findings: classes, subjects and counts by
-// default, so its output can be pasted anywhere; titles and reasons with -words.
+// exitBlocked is the doctor's status while a finding blocks the company: apart
+// from 1, which says the command could not ask.
+const exitBlocked = 2
+
+// runDoctor prints the setup advisor's findings: classes, subjects by kind and
+// ordinal, and counts by default, so its output can be pasted anywhere; the
+// subjects' handles, titles and reasons only with -words.
 func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
 		fmt.Fprintln(stderr, doctorUsage)
@@ -26,7 +32,7 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 	var asJSON, withWords *bool
 	client, err := nodeClientFor(environ, args, "doctor", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false, "print the node's answer as JSON, for a script")
-		withWords = fs.Bool("words", false, "print each finding's title and why, which name the company's own seats and schedules")
+		withWords = fs.Bool("words", false, "print each finding's subject by its handles, and its title and why: the company's own names")
 	})
 	if err != nil {
 		return err
@@ -47,17 +53,21 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 		renderFindings(stdout, answer, *withWords)
 	}
 	var blocking []string
+	count := 0
 	for _, f := range answer.Findings {
 		if f.Severity == advisor.SeverityBlocks {
-			blocking = append(blocking, string(f.Class))
+			count++
+			if !slices.Contains(blocking, string(f.Class)) {
+				blocking = append(blocking, string(f.Class))
+			}
 		}
 	}
-	if len(blocking) > 0 {
+	if count > 0 {
 		if *asJSON {
-			return errSilent
+			return &exitError{code: exitBlocked, err: errSilent}
 		}
-		return fmt.Errorf("%s the company cannot work as configured: %s",
-			words.Count(len(blocking), "finding says", "findings say"), words.And(blocking))
+		return &exitError{code: exitBlocked, err: fmt.Errorf("%s the company cannot work as configured: %s",
+			words.Count(count, "finding says", "findings say"), words.And(blocking))}
 	}
 	return nil
 }
@@ -68,20 +78,50 @@ func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 		fmt.Fprintf(w, "No findings at revision %s.\n", a.Revision)
 		return
 	}
+	subjects := ordinals(a.Findings)
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tACTOR\tCLASS\tSUBJECT\tEVIDENCE")
-	for _, f := range a.Findings {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Severity, f.Actor, f.Class, subjectText(f.Subject), factsText(f.Evidence))
+	fmt.Fprintln(tw, "#\tSEVERITY\tACTOR\tCLASS\tSUBJECT\tEVIDENCE")
+	for i, f := range a.Findings {
+		subject := subjects[i]
 		if withWords {
-			fmt.Fprintf(tw, "\t\t%s %s\t\t\n", f.Title, f.Why)
+			subject = subjectHandles(f.Subject)
 		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", i+1, f.Severity, f.Actor, f.Class, subject, factsText(f.Evidence))
 	}
 	_ = tw.Flush()
+	if withWords {
+		fmt.Fprintln(w)
+		for i, f := range a.Findings {
+			fmt.Fprintf(w, "%d. %s %s\n", i+1, f.Title, f.Why)
+		}
+	}
 	fmt.Fprintf(w, "\nAt revision %s. An owner finding's fix is sent from the dashboard or with "+
 		"PUT /config; an engine finding is a pattern the engine is reducing.\n", a.Revision)
 }
 
-func subjectText(s advisor.Subject) string {
+// ordinals names each finding's subject by its kind and the order the answer
+// first names it in (seat#1, schedule#2), never by a handle the company chose.
+func ordinals(findings []advisor.Finding) []string {
+	seen := map[string]string{}
+	next := map[advisor.SubjectKind]int{}
+	out := make([]string, len(findings))
+	for i, f := range findings {
+		if f.Subject.Kind == advisor.SubjectCompany {
+			out[i] = string(f.Subject.Kind)
+			continue
+		}
+		key := subjectHandles(f.Subject)
+		if _, ok := seen[key]; !ok {
+			next[f.Subject.Kind]++
+			seen[key] = fmt.Sprintf("%s#%d", f.Subject.Kind, next[f.Subject.Kind])
+		}
+		out[i] = seen[key]
+	}
+	return out
+}
+
+// subjectHandles is a subject by its kind and handles: seat:sre:health-check.
+func subjectHandles(s advisor.Subject) string {
 	parts := []string{string(s.Kind)}
 	for _, p := range []string{s.Seat, s.Unit, s.Schedule} {
 		if p != "" {
