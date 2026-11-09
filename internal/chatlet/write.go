@@ -3105,7 +3105,8 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 	askers, answering []string, err error) {
 
 	query := `
-		SELECT r.message_id, m.author_handle
+		SELECT r.message_id, m.author_handle,
+		       ROW_NUMBER() OVER (PARTITION BY m.author_handle ORDER BY m.channel_seq DESC) AS newest
 		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
 		  JOIN chat_messages m ON m.id = r.message_id
 		 WHERE r.channel_id = ? AND r.handle = ? AND r.answer_id = ''
@@ -3122,7 +3123,10 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 		query += ` AND m.thread_root = '' AND m.author_kind = ?`
 		args = append(args, string(AuthorAgent))
 	}
-	query += ` ORDER BY m.author_handle, m.channel_seq DESC LIMIT ?`
+	// EACH ASKER'S NEWEST ASK, chosen before the cap, so one asker's older
+	// asks never crowd another's out.
+	query = `SELECT message_id, author_handle FROM (` + query + `)
+		 WHERE newest = 1 ORDER BY author_handle LIMIT ?`
 	args = append(args, MaxThreadParticipants)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -3134,10 +3138,6 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 		if err := rows.Scan(&message, &asker); err != nil {
 			return nil, nil, err
 		}
-		if slices.Contains(askers, asker) {
-			// A TOP-LEVEL POST ANSWERS EACH ASKER'S NEWEST ASK ALONE.
-			continue
-		}
 		askers = append(askers, asker)
 		if top {
 			answering = append(answering, message)
@@ -3148,19 +3148,19 @@ func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author strin
 
 // awaitingTx is the agents that asked something in this thread, other than
 // the author, with no answer yet ([ReasonAwaiting]), less a co-asker's: an
-// author whose only stake is awaiting an addressee does not wake another seat
-// awaiting the same one.
+// author whose only stake is awaiting an addressee, by an agent's ask or a
+// person's message alike, does not wake another seat awaiting the same one.
 func awaitingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string) (
 	[]string, error) {
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT m.author_handle, r.handle
+		SELECT m.author_handle, m.author_kind, r.handle
 		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
 		  JOIN chat_messages m ON m.id = r.message_id
 		 WHERE r.channel_id = ? AND r.thread_key = ? AND r.answer_id = ''
-		   AND m.author_kind = ? AND m.deleted_at IS NULL
+		   AND m.deleted_at IS NULL
 		 ORDER BY m.author_handle, r.handle LIMIT ?`,
-		channelID, root, string(AuthorAgent), MaxThreadParticipants*MaxThreadParticipants)
+		channelID, root, MaxThreadParticipants*MaxThreadParticipants)
 	if err != nil {
 		return nil, fmt.Errorf("chatlet: read the open asks of thread %s: %w", root, err)
 	}
@@ -3169,12 +3169,14 @@ func awaitingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string)
 	var askers []string
 	owes := false
 	for rows.Next() {
-		var asker, addressee string
-		if err := rows.Scan(&asker, &addressee); err != nil {
+		var asker, kind, addressee string
+		if err := rows.Scan(&asker, &kind, &addressee); err != nil {
 			return nil, err
 		}
 		owes = owes || addressee == author
-		if _, seen := asked[asker]; !seen {
+		// A PERSON'S OWN ASK IS A STAKE that makes a co-asker, and only an
+		// agent is woken for one.
+		if _, seen := asked[asker]; !seen && AuthorKind(kind) == AuthorAgent {
 			askers = append(askers, asker)
 		}
 		asked[asker] = append(asked[asker], addressee)

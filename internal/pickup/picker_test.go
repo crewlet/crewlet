@@ -414,6 +414,59 @@ func TestProgressHandsAStartedItemBackOncePerCooldown(t *testing.T) {
 	}
 }
 
+// A COOLING ITEM GIVES WAY TO THE NEXT: a started item whose hand-back waits
+// out the cooldown does not keep an idle seat from its other ready work.
+func TestACoolingItemGivesWayToTheNext(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	tr := &tracker{items: []worklet.ReadyItem{item("a", worklet.StatusInProgress, 40),
+		item("b", worklet.StatusTodo, 41)}}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken || out.Item.ID != "a" {
+		t.Fatalf("the first pass = %+v, want the started item", out)
+	}
+	f.turnOn(in.got[0])
+	tr.mu.Lock()
+	tr.items[0].Progressed = 55
+	tr.mu.Unlock()
+	if out := pass(p); !out.Woken || out.Item.ID != "b" {
+		t.Fatalf("with the started item cooling = %+v, want the next item handed over", out)
+	}
+	f.turnOn(in.got[1])
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipCooldown {
+		t.Fatalf("with nothing but a cooling item left = %+v, want the cooldown", out)
+	}
+	f.advance(10 * time.Minute)
+	if out := pass(p); !out.Woken || out.Item.ID != "a" || in.count() != 3 {
+		t.Errorf("past the cooldown = %+v, want the started item handed back", out)
+	}
+}
+
+// THE SEAT'S COOLDOWN IS TAKEN ONCE A PASS, however many items the pass
+// offers after passing over one the seat was handed.
+func TestAPassTakesTheSeatsCooldownOnce(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	tr := &tracker{items: []worklet.ReadyItem{item("a", worklet.StatusInProgress, 40)}}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken {
+		t.Fatalf("the first pass = %+v, want the started item", out)
+	}
+	f.turnOn(in.got[0])
+	handed := item("w", worklet.StatusInProgress, 39)
+	f.turnOn(pickup.Event(seat, "Engineer", handed, pickup.KeyOf(seat, handed), 1, false,
+		events.TraceContext{}))
+	tr.mu.Lock()
+	tr.items[0].Progressed = 55
+	tr.items = []worklet.ReadyItem{handed, tr.items[0], item("b", worklet.StatusTodo, 41)}
+	tr.mu.Unlock()
+	if out := pass(p); !out.Woken || out.Item.ID != "b" {
+		t.Errorf("past a handed item and a cooling one = %+v, want the next item", out)
+	}
+}
+
 // A REQUESTER THE ORGANISATION NO LONGER HOLDS IS WORKED FOR AS A STRANGER,
 // never as a seat the turn's every decision would fail to resolve.
 func TestARequesterNoLongerHeldIsWorkedForAsAStranger(t *testing.T) {

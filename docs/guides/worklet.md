@@ -2206,7 +2206,7 @@ something of the seat that holds it
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
 | `watcher` | for a person's comment that names nobody |
-| `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
+| `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker (an agent or a person) whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |
 
 So **a person's comment that names nobody wakes everyone on the task**: a
