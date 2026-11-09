@@ -360,6 +360,10 @@ func (filledWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 	return filled[map[string]worklet.TurnPlace](), nil
 }
 
+func (filledWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return worklet.WorkPatterns{}, nil
+}
+
 func (filledWork) Thread(context.Context, worklet.ThreadQuery, statelog.Freshness) (
 	worklet.ResolvedThread, error) {
 	return filled[worklet.ResolvedThread](), nil

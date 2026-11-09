@@ -162,6 +162,7 @@ type WorkReader interface {
 	// answer they would post is resolved by (see [Sources.workItem]).
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
+	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
 }
 
 // Keeper is a native source that can say, before anything is read from it,

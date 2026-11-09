@@ -644,6 +644,8 @@ func taskReads() map[string]indexedRead {
 		"the move stragglers walk":      seek(stranded, strandedAfterStatement, "", WalkBatch),
 		"the apply's duplicate probe": seek(ranks, rankDuplicateStatement,
 			"P01", "P01", "a000001", "t-00002"),
+		"the advisor's answers in a window": seek(key, patternAnswersStatement,
+			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
