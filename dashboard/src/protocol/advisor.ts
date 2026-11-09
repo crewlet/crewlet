@@ -28,7 +28,13 @@ export interface AdvisorOption {
 
 /** What fixes a finding. */
 export interface AdvisorFix {
-  kind: "config_change" | "open_setting" | "external_step" | "none" | (string & {});
+  kind:
+    | "config_change"
+    | "open_setting"
+    | "external_step"
+    | "draft_with_assistant"
+    | "none"
+    | (string & {});
   sentence: string;
   unchanged?: string;
   options: AdvisorOption[];
@@ -36,6 +42,8 @@ export interface AdvisorFix {
   setting?: string;
   /** Where an `external_step` is taken, where one was named. */
   url?: string;
+  /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
+  prompt?: string;
 }
 
 /** The one thing a finding is about. */

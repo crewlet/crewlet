@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -49,8 +51,19 @@ type WorkPatterns struct {
 	Superseded int      `json:"superseded"`
 	Moot       int      `json:"moot"`
 	Overtaken  []string `json:"overtaken"`
+	// Decisions tallies, per person and asking agent, the decisions the
+	// person answered with a choice and how many chose the recommended one.
+	Decisions []DecisionTally `json:"decisions"`
 	// IdleReviews are the reviewers' items in review idle since QuietSince.
 	IdleReviews []IdleReview `json:"idle_reviews"`
+}
+
+// DecisionTally is one person's choices on one agent's decisions.
+type DecisionTally struct {
+	Person      string `json:"person"`
+	Asker       string `json:"asker"`
+	Decided     int    `json:"decided"`
+	Recommended int    `json:"recommended"`
 }
 
 // NamedWithoutAsk is one seat agents' comments named without a question.
@@ -158,7 +171,7 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 // patternAnswersStatement is every person's answer in the window to an agent's
 // question, with whether the item had finished first and whether the asker had
 // asked the same person again on it, still open when this answer came.
-const patternAnswersStatement = `SELECT a.id,
+const patternAnswersStatement = `SELECT a.id, a.author, r.author, a.document, r.document,
 	t.finished_at IS NOT NULL AND t.finished_at <= r.created_at,
 	EXISTS (SELECT 1 FROM tracker_comments b
 		WHERE b.task_id = a.task_id AND b.author = a.author AND b.ask = a.ask
@@ -178,12 +191,18 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
 	}
 	out.Overtaken = []string{}
+	tallies := map[[2]string]*DecisionTally{}
 	for rows.Next() {
-		var ask string
+		var ask, asker, person string
+		var asked, answered []byte
 		var moot, superseded bool
-		if err := rows.Scan(&ask, &moot, &superseded); err != nil {
+		if err := rows.Scan(&ask, &asker, &person, &asked, &answered, &moot, &superseded); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an answer: %w", err)
+		}
+		if err := tallyDecision(tallies, asker, person, asked, answered); err != nil {
+			_ = rows.Close()
+			return err
 		}
 		out.Answers++
 		switch {
@@ -200,6 +219,39 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 	}
 	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
+	}
+	out.Decisions = []DecisionTally{}
+	for _, key := range slices.SortedFunc(maps.Keys(tallies), func(a, b [2]string) int {
+		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
+	}) {
+		out.Decisions = append(out.Decisions, *tallies[key])
+	}
+	return nil
+}
+
+// tallyDecision counts one answer that chose an option of a decision, and
+// whether the choice was the asker's recommendation.
+func tallyDecision(tallies map[[2]string]*DecisionTally, asker, person string,
+	asked, answered []byte) error {
+	var ask, answer Comment
+	if err := json.Unmarshal(asked, &ask); err != nil {
+		return fmt.Errorf("worklet: decode a question in the window: %w", err)
+	}
+	if err := json.Unmarshal(answered, &answer); err != nil {
+		return fmt.Errorf("worklet: decode an answer in the window: %w", err)
+	}
+	if ask.Decision == nil || answer.Choice == "" {
+		return nil
+	}
+	key := [2]string{person, asker}
+	t, ok := tallies[key]
+	if !ok {
+		t = &DecisionTally{Person: person, Asker: asker}
+		tallies[key] = t
+	}
+	t.Decided++
+	if answer.Choice == ask.Decision.Recommended {
+		t.Recommended++
 	}
 	return nil
 }
