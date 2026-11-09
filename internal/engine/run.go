@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -4087,7 +4088,7 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
-		Models: e.modelStatus(ctx),
+		Models: e.modelStatus(ctx), ParkedStateVersion: execstate.Version,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

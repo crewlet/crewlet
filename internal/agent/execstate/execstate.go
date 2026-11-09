@@ -42,6 +42,11 @@
 // exists only for a build that never shipped. Versions 1 to 3 are such: this
 // build reads 4 alone and refuses the others as unknown.
 //
+// A ROW OF A RETIRED VERSION IS SETTLED, NEVER RETRIED. Every bump moves up, so
+// once no live node reads a version below this one, no build ever will: the
+// engine ends its run, withdraws its question and hands a reply on it back to
+// the seat ([ErrRetired]; internal/engine, retiredstate.go).
+//
 // A FIELD EVERY READER DEFAULTS MAY GO WITHIN A VERSION, as one may come. A
 // bump is for a change some build could MISREAD, and a field gone is read by
 // an older build as the zero it already defaults — the rule that nothing is
@@ -365,6 +370,29 @@ type TurnSoFar struct {
 // ErrUnknownVersion reports a state this build cannot read.
 var ErrUnknownVersion = errors.New("execstate: unknown version")
 
+// ErrRetired reports a state written at a version below [Version]: once no live
+// node runs a build that reads it, no build ever will, so its run is settled.
+var ErrRetired = errors.New("execstate: retired version")
+
+// VersionError is a state whose version this build does not read. It matches
+// [ErrUnknownVersion] always and [ErrRetired] when the version is below [Version].
+type VersionError struct{ Found int }
+
+func (e *VersionError) Error() string {
+	if e.Retired() {
+		return fmt.Sprintf("%s: %d (this build reads %d)", ErrRetired, e.Found, Version)
+	}
+	return fmt.Sprintf("%s: %d (this build reads %d)", ErrUnknownVersion, e.Found, Version)
+}
+
+// Retired reports a version no later build reads: every bump moves up.
+func (e *VersionError) Retired() bool { return e.Found < Version }
+
+// Is matches [ErrUnknownVersion], and [ErrRetired] for a retired version.
+func (e *VersionError) Is(target error) bool {
+	return target == ErrUnknownVersion || (target == ErrRetired && e.Retired())
+}
+
 // Validate checks what a parked state must be to be resumed: one this build
 // writes.
 //
@@ -442,10 +470,9 @@ func Decode(blob json.RawMessage) (State, bool, error) {
 	default:
 		// LOUD, and the row is left alone. A resume that guessed at a
 		// format it does not know would act on a half-understood state;
-		// refusing leaves the run for a node that understands it, which in
-		// a rolling upgrade is a node that exists.
-		return State{}, false, fmt.Errorf("%w: %d (this build reads %d)",
-			ErrUnknownVersion, int(version), Version)
+		// a newer one waits for a node that reads it, and a retired one is
+		// settled by the engine once no live node does ([ErrRetired]).
+		return State{}, false, &VersionError{Found: int(version)}
 	}
 }
 
