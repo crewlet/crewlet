@@ -118,6 +118,8 @@ type Fleet struct {
 	sshTests entryRecords[coord.SSHTest, coord.SSHTest]
 	// issueReports are the engine defects the company reported, by fingerprint.
 	issueReports entryRecords[coord.IssueReport, coord.IssueReport]
+	// insightRecords are the operating insights the company shares, by class and week.
+	insightRecords entryRecords[coord.InsightRecord, coord.InsightRecord]
 	// accepted are the definitions MCP tools' levels were decided on, by
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
@@ -167,36 +169,37 @@ var _ coord.Fleet = (*Fleet)(nil)
 // NewFleet returns an empty twin.
 func NewFleet() *Fleet {
 	return &Fleet{
-		windows:       map[windowKey]int{},
-		claims:        map[string]time.Time{},
-		worked:        map[string]workedEntry{},
-		applies:       map[string]coord.NodeApply{},
-		budgets:       map[string]coord.Tally{},
-		channels:      map[string]coord.Channel{},
-		follows:       map[string]followEntry{},
-		chatReads:     map[string]coord.ChatReadState{},
-		fires:         map[string]map[string]time.Time{},
-		custody:       map[string]string{},
-		rebases:       map[string]rebaseEntry{},
-		runs:          map[string]coord.Record{},
-		runParts:      map[runPartKey]coord.Record{},
-		secrets:       map[string]coord.SecretRecord{},
-		integrations:  map[string][]byte{},
-		seatAccess:    map[string]map[string][]byte{},
-		accessReviews: map[string]accessReview{},
-		mailboxes:     map[uuid.UUID]coord.MailboxRecord{},
-		pauses:        map[uuid.UUID]coord.SeatPause{},
-		uploads:       map[string]versioned{},
-		retries:       newRetryRecords(),
-		signIns:       newSignInRecords(),
-		listings:      newListingRecords(),
-		restarts:      newRestartRecords(),
-		checks:        newCheckRecords(),
-		sshTests:      newSSHTestRecords(),
-		issueReports:  newIssueReportRecords(),
-		grants:        newGrantRecords(),
-		mcpSignIns:    newMCPSignInRecords(),
-		accepted:      newAcceptedRecords(),
+		windows:        map[windowKey]int{},
+		claims:         map[string]time.Time{},
+		worked:         map[string]workedEntry{},
+		applies:        map[string]coord.NodeApply{},
+		budgets:        map[string]coord.Tally{},
+		channels:       map[string]coord.Channel{},
+		follows:        map[string]followEntry{},
+		chatReads:      map[string]coord.ChatReadState{},
+		fires:          map[string]map[string]time.Time{},
+		custody:        map[string]string{},
+		rebases:        map[string]rebaseEntry{},
+		runs:           map[string]coord.Record{},
+		runParts:       map[runPartKey]coord.Record{},
+		secrets:        map[string]coord.SecretRecord{},
+		integrations:   map[string][]byte{},
+		seatAccess:     map[string]map[string][]byte{},
+		accessReviews:  map[string]accessReview{},
+		mailboxes:      map[uuid.UUID]coord.MailboxRecord{},
+		pauses:         map[uuid.UUID]coord.SeatPause{},
+		uploads:        map[string]versioned{},
+		retries:        newRetryRecords(),
+		signIns:        newSignInRecords(),
+		listings:       newListingRecords(),
+		restarts:       newRestartRecords(),
+		checks:         newCheckRecords(),
+		sshTests:       newSSHTestRecords(),
+		issueReports:   newIssueReportRecords(),
+		insightRecords: newInsightRecords(),
+		grants:         newGrantRecords(),
+		mcpSignIns:     newMCPSignInRecords(),
+		accepted:       newAcceptedRecords(),
 	}
 }
 
