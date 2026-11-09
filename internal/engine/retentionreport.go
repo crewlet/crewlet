@@ -191,6 +191,14 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// than taken, because its age is an interval between observations —
 		// one taken per poll would make it whatever the poll rate is.
 		d.FloorUnknownFor, d.FloorUnknownCause = r.floors.of(name)
+		// WHAT THIS LOG'S WAKE FEED GAVE UP ON, listed again on every report
+		// — the beat's above all — so each entry's age and the time it has
+		// left are now's, and an entry that vanished at its expiry is
+		// counted as the wake it lost (feeddeadletters.go). A listing that
+		// failed carries the last one that answered.
+		if src, declared := r.feedSources[name]; declared {
+			d.FeedDeadLetters = r.feedLetters.read(ctx, src, now)
+		}
 		// AT THE CEILING THE STREAM READ ABOVE FOUND IT HOLDING: a log whose
 		// census counts readers of its own and whose stream this pass could
 		// not read is left uncounted rather than judged without them, where

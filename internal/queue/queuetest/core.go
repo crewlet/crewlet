@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // runCore covers the properties every producer and consumer depends on:
@@ -900,7 +901,7 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
-	// THE FOURTEEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
+	// EVERY VERB, AT THE TWO POINTS A QUEUE IS NOT LIVE.
 	//
 	// Nine of them had never been sent at either point by any case in this
 	// suite, and both backends were internally inconsistent there. The twin
@@ -914,7 +915,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate —
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all sixteen.
+	// BEFORE START a backend picks its answer and applies it to all nineteen.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -956,7 +957,7 @@ func (s *suite) runCore(t *testing.T) {
 	//
 	// Deleting it costs nothing, because this case is the GENERAL form of the
 	// same fix and is strictly stronger: it is ungated, it runs on both
-	// backends, and it requires all sixteen verbs (PauseTopic among them) to
+	// backends, and it requires all nineteen verbs (PauseTopic among them) to
 	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
 	// anything, so the window is closed by construction rather than by
 	// observation, and it is closed for every verb rather than for the one
@@ -1095,10 +1096,10 @@ func second(_ bool, err error) error { return err }
 // listErr is second for the listing's shape.
 func listErr(_ []queue.Subscription, err error) error { return err }
 
-// lifecycleVerbs sends every publish, subscription, attachment and ephemeral
-// verb once and reports what each answered.
+// lifecycleVerbs sends every publish, subscription, attachment, ephemeral and
+// dead-letter verb once and reports what each answered.
 //
-// ALL SIXTEEN, in one list, because the property under test is that they AGREE
+// ALL NINETEEN, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //
@@ -1130,6 +1131,10 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 	if stopListening != nil {
 		_ = stopListening(ctx)
 	}
+	// A DEAD-LETTER SUBJECT OF ITS OWN, and a drop of an entry nobody kept:
+	// a live queue answers that drop nil, so what is read is again only
+	// whether the verb refused.
+	letters := topics.DeadLetter(topic, "g")
 	return []verbResult{
 		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
 		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
@@ -1151,5 +1156,8 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},
 		{"Listen", listenErr},
+		{"KeepDeadLetter", q.KeepDeadLetter(ctx, letters, []byte("probe"))},
+		{"DeadLettersOn", keptErr(q.DeadLettersOn(ctx, letters))},
+		{"DropDeadLetter", q.DropDeadLetter(ctx, letters, absentLetter)},
 	}
 }

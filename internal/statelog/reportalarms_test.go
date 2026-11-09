@@ -328,6 +328,12 @@ func TestEveryPerLogKindLeadsWithItsMostPressingLog(t *testing.T) {
 			weak.FloorUnknownFor = statelog.FloorCacheStale + time.Second
 			strong.FloorUnknownFor = statelog.FloorCacheStale + time.Hour
 		},
+		statelog.KindFeedDeadLettered: func(weak, strong *statelog.DomainInputs) {
+			// THE ENTRY WITH THE LEAST TIME LEFT LEADS: its wake is the
+			// next the retention takes.
+			weak.FeedDeadLetters = []statelog.FeedDeadLetter{{Age: time.Hour, ExpiresIn: 29 * 24 * time.Hour}}
+			strong.FeedDeadLetters = []statelog.FeedDeadLetter{{Age: 29 * 24 * time.Hour, ExpiresIn: time.Hour}}
+		},
 		statelog.KindCensusDrift: func(weak, strong *statelog.DomainInputs) {
 			weak.LinearizableReadsExpected, strong.LinearizableReadsExpected = 1_000, 1_000
 			weak.LinearizableReads = int(statelog.CensusDriftFactor*1_000) + 1

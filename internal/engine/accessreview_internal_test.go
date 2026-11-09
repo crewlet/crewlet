@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -529,5 +530,79 @@ func TestAToldRecordIsClearedOnceItsTurnEnded(t *testing.T) {
 	}
 	if pending, found, err := e.PendingAccessReview(t.Context(), "ceo"); err != nil || found {
 		t.Errorf("a check after the told turn ended kept %+v (%v)", pending, err)
+	}
+}
+
+// activeRuns is a pending store whose seat listing answers runs, and every
+// other read the store it wraps.
+type activeRuns struct {
+	sandbox.PendingStore
+	mu   sync.Mutex
+	runs []sandbox.PendingRun
+}
+
+func (a *activeRuns) set(runs ...sandbox.PendingRun) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.runs = runs
+}
+
+func (a *activeRuns) ListActiveForSeat(_ context.Context, handle string) ([]sandbox.PendingRun, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []sandbox.PendingRun
+	for _, run := range a.runs {
+		if run.AgentHandle == handle {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+// A TOLD TURN HAS ENDED ONLY WHERE NOTHING OF IT RUNS ON THE SEAT'S NODE: the
+// node holds the seat, no delivery of the seat is dispatched here, and no
+// executor run of the turn is active. A run of another turn leaves it ended.
+//
+// Mutation: drop any one of the three and its case reads the turn as ended.
+func TestATurnHasEndedOnlyWhereNothingOfItRuns(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	applyOK(t, e, sandboxWithModelDoc)
+	waitHeld(t, e, "swe")
+	old := e.sandbox.Load()
+	if old == nil {
+		t.Fatal("the premise: the node runs no sandbox runtime")
+	}
+	runs := &activeRuns{PendingStore: old.pending}
+	e.sandbox.Store(&sandboxRuntime{pending: runs, coordinator: old.coordinator})
+	t.Cleanup(func() { e.sandbox.Store(old) })
+	ended := func(handle string) bool {
+		t.Helper()
+		ok, err := e.turnEnded(t.Context(), handle, "t-review")
+		if err != nil {
+			t.Fatalf("turnEnded: %v", err)
+		}
+		return ok
+	}
+	if !ended("swe") {
+		t.Fatal("a held seat with nothing of the turn running reads as running")
+	}
+	runs.set(sandbox.PendingRun{TurnID: "t-later", AgentHandle: "swe"})
+	if !ended("swe") {
+		t.Error("a run of another turn keeps the told turn running")
+	}
+	runs.set(sandbox.PendingRun{TurnID: "t-review", AgentHandle: "swe"})
+	if ended("swe") {
+		t.Error("the told turn's run, parked on a person, reads as ended")
+	}
+	runs.set()
+	e.dispatch.enter("swe")
+	busy := ended("swe")
+	e.dispatch.leave("swe")
+	if busy {
+		t.Error("a delivery of the seat dispatched here reads as ended")
+	}
+	if ended("ghost") {
+		t.Error("a seat this node does not hold reads as ended")
 	}
 }

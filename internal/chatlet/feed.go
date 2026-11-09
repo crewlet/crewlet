@@ -108,7 +108,7 @@ func (t *Translator) Source() changefeed.Source {
 // Translate decides whether a committed record wakes anybody, and hands the
 // parser the whole thing.
 //
-// # The five ways a record wakes nobody, and why every one of them is an ACK
+// # The four ways a record wakes nobody, why each is an ACK, and the one deferral
 //
 // A MACHINERY SUBJECT — a barrier, a generation, an eviction — is the fleet
 // talking to itself. A wake per barrier would page the company once per
@@ -119,8 +119,9 @@ func (t *Translator) Source() changefeed.Source {
 // A PAYLOAD FROM A NEWER BUILD. The envelope decoded, so this node knows what
 // the record is about and knows it cannot read the rules — and waking
 // somebody from a payload it cannot decode would be inventing a notification.
-// A peer on that build wins the next redelivery, so the record is handled
-// here rather than lost.
+// It is DEFERRED to a peer on that build ([changefeed.Defer]), never answered
+// "no wake": the feed's consumer is the fleet's, so a record this node acked
+// is one no peer would ever see (#838).
 //
 // A NIL ROUTING SNAPSHOT is how a record says "wake nobody" — the engine
 // narrating its own room, a reaction and a prune are the records it exists
@@ -133,9 +134,10 @@ func (t *Translator) Source() changefeed.Source {
 // derived from the record as it always was: see [Decisions] for why the feed
 // never waits on an applier that cannot answer.
 //
-// All five are DECISIONS, and a decision is handling: acked rather than
+// The other four are DECISIONS, and a decision is handling: acked rather than
 // naked, because a record naked for having nothing to say comes back for
-// ever.
+// ever. The newer build's payload is the one that is not: this node has
+// decided nothing about it, and a peer can.
 func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
 	changefeed.Delivery, bool, error) {
 
@@ -162,7 +164,7 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
 		if errors.As(err, &future) {
 			log.DebugContext(ctx, "chat_change_from_a_newer_build",
 				"subject", envelope.Subject.String(), "version", future.Got)
-			return changefeed.Delivery{}, false, nil
+			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
 		}
 		return changefeed.Delivery{}, false, fmt.Errorf(
 			"chatlet: read the record on %s: %w", rec.Key, err)

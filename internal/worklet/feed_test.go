@@ -2,6 +2,8 @@ package worklet_test
 
 import (
 	"encoding/json"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -156,6 +158,45 @@ func TestTheFeedBodyIsTheWholeRecord(t *testing.T) {
 		t.Fatalf("a field this build does not understand was dropped from the " +
 			"body — a parser on a newer node must see everything the writer " +
 			"wrote, and a rolling upgrade puts exactly that on the wire")
+	}
+}
+
+// A RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER ON THAT BUILD, never
+// answered "no wake".
+//
+// Its envelope reads, so this node knows it is a task's change, and its version
+// is past what this build decodes, so the notification rules are a newer
+// build's. Answered "no wake", the feed would acknowledge it — and the feed's
+// consumer is the fleet's, so no peer on the newer build would ever see it and
+// its wake would be gone (#838): what `ActorApps` records lost on an older node
+// during a roll. It answers the feed's deferral instead.
+//
+// Mutation: answer the future-version arm with no wake, and the deferral is
+// gone.
+func TestARecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
+	t.Parallel()
+	record := feedRecord(worklet.TaskSubject("t-1"), worklet.OpPatch,
+		&worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: worklet.Snapshot{Key: "ENG-1",
+			Project: "ENG", Assignee: "ana"}}, time.Unix(1_700_000_000, 0).UTC())
+	payload, err := record.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	raw["v"] = json.RawMessage(strconv.Itoa(worklet.RecordVersion + 1))
+	if payload, err = json.Marshal(raw); err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+
+	_, wakes, err := worklet.NewTranslator().Translate(t.Context(),
+		changefeed.Record{ID: record.OpID, Key: "k", Payload: payload})
+	var deferral *changefeed.Deferral
+	if wakes || !errors.As(err, &deferral) || deferral.Reason != changefeed.DeferNewerRecord {
+		t.Fatalf("a newer build's record answered wake=%v, %v; want it deferred to a peer "+
+			"on that build (%s)", wakes, err, changefeed.DeferNewerRecord)
 	}
 }
 
