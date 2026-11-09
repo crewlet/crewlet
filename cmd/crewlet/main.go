@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/insights"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -3230,6 +3231,15 @@ const apiIdleTimeout = 60 * time.Second
 // schema`, and is the name of its checked-in file.
 const issueReportCatalogue = "issue-report-catalogue"
 
+// insightsCatalogue names the operating insights catalogue the same way.
+const insightsCatalogue = "insights-catalogue"
+
+// catalogues are the exports `crewlet schema` emits beside the two tiers.
+var catalogues = map[string]func() ([]byte, error){
+	issueReportCatalogue: issuereport.CatalogueJSON,
+	insightsCatalogue:    insights.CatalogueJSON,
+}
+
 // emitSchema writes a tier's JSON Schema.
 //
 // # Why the CLI carries this at all
@@ -3264,8 +3274,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// rather than a silently ignored argument.
 	name, given := onePositional(fs, name)
 	if given > 1 {
-		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s|%s] [-o path]\n",
-			config.TierCompany, config.TierBootstrap, issueReportCatalogue)
+		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s|%s|%s] [-o path]\n",
+			config.TierCompany, config.TierBootstrap, issueReportCatalogue, insightsCatalogue)
 		return errors.New("name at most one tier")
 	}
 	if name == "" {
@@ -3277,11 +3287,11 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var body []byte
-	if name == issueReportCatalogue {
-		// NOT A TIER: the catalogue a relay vendors, emitted and gated beside
+	if export, ok := catalogues[name]; ok {
+		// NOT A TIER: a catalogue a relay vendors, emitted and gated beside
 		// the two schemas for the same reason they are checked in. It ends in
 		// its own newline.
-		catalogue, err := issuereport.CatalogueJSON()
+		catalogue, err := export()
 		if err != nil {
 			return err
 		}
