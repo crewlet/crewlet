@@ -389,11 +389,11 @@ func stakesTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author string,
 	switch {
 	case replyTo != "":
 		root := replyTo
-		switch replied, err := readCommentTx(ctx, tx, pageID, replyTo); {
-		case errors.Is(err, ErrNotFound):
+		switch replied, rerr := readCommentTx(ctx, tx, pageID, replyTo); {
+		case errors.Is(rerr, ErrNotFound):
 			return nil, nil, nil
-		case err != nil:
-			return nil, nil, err
+		case rerr != nil:
+			return nil, nil, rerr
 		case replied.ReplyTo != "":
 			root = replied.ReplyTo
 		}
