@@ -330,8 +330,8 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet t
 	return nil
 }
 
-// patternNoticesStatement is one person's notices in the window, a seek of
-// their own rows, which the inbox horizon already bounds.
+// patternNoticesStatement is one person's notices in the window, a range of
+// tracker_notifications_load_idx that covers it (replicated 0157).
 const patternNoticesStatement = `SELECT COUNT(*), COALESCE(SUM(addressed), 0)
 FROM tracker_notifications
 WHERE recipient = ? AND created_at >= ? AND created_at < ?`

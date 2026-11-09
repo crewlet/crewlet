@@ -136,6 +136,25 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 	}
 }
 
+// A HEALTHY WEEK'S LEDGER RAISES NOTHING: agents that mostly move work, pickups
+// that move what they pick up, modest auxiliary spend, and an SRE seat whose
+// schedules fire 48 times a day and find nothing, which is the schedule working.
+func TestAHealthyLedgerRaisesNothing(t *testing.T) {
+	t.Parallel()
+	const pickup = "work_item:pickup"
+	healthy := []usage.TurnLedgerRow{
+		started("pm", "chat:message", "moved", 40), started("pm", "chat:message", "words", 15),
+		started("pm", "chat:message", "nothing", 5),
+		started("app", pickup, "moved", 25), started("app", pickup, "words", 4),
+		started("app", pickup, "nothing", 1),
+		started("sre", "schedule:health-check", "nothing", 336), started("sre", "chat:message", "moved", 6),
+		spent("backend", 2_000_000, 200_000),
+	}
+	if got := advisor.Detect(advisor.Evidence{Ledger: healthy}, kindOf); len(got) != 0 {
+		t.Errorf("a healthy week raised %v", got)
+	}
+}
+
 // A LEDGER FINDING NAMES ITS SEAT by the handle the ledger carries, and by the
 // seat's id when the ledger carries none, so no finding is about nobody.
 func TestALedgerFindingNamesItsSeat(t *testing.T) {
@@ -208,7 +227,7 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 			t.Errorf("%s names %d records, want 1 to %d, or none for a count", f.Class, len(f.Records),
 				worklet.MaxPatternExamples)
 		}
-		if f.Title == "" || f.Why == "" || len(f.Evidence) == 0 {
+		if f.Title == "" || f.Why == "" || f.Fix.Sentence == "" || len(f.Evidence) == 0 {
 			t.Errorf("%s has no words or no evidence: %+v", f.Class, f)
 		}
 	}
