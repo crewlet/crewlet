@@ -887,10 +887,10 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
-**Stored, not fed.** Three types are rows like every other and are kept out of
+**Stored, not fed.** Some types are rows like every other and are kept out of
 the activity feed: `auxiliary_spend`, which is accounting rather than activity,
-`code_fetched`, which is an audit, and `code_check_finished`, which is
-counted rather than watched. The feed is a ring of the whole
+`code_fetched`, which is an audit, and `code_check_finished` and `wake_held`,
+which are counted rather than watched. The feed is a ring of the whole
 company's last few hundred events — every node's is fed by a fleet-wide
 broadcast — and a turn writes several auxiliary records beside its own phases,
 a compaction a burst, while a busy company's readers of its unit repositories —
