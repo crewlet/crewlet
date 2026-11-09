@@ -107,3 +107,83 @@ func TestAnAnswerToASettledRunReachesTheSeatOnce(t *testing.T) {
 		t.Fatalf("handed back %v after a second reply, want only the first's copy", back)
 	}
 }
+
+// A PARKED RUN HOLDS ITS SEAT FROM OTHER WORK ONLY WHILE ITS BOX WAITS PAUSED:
+// past its pause it is reseeded and still takes its answer, but the seat is free.
+// One no build will resume is ended there, and the seat is free too.
+func TestASeatWaitingPastThePauseTTLIsHandedWork(t *testing.T) {
+	t.Parallel()
+	t.Run("within its pause, then past it", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		if pausing, err := rig.coordinator.SettleParked(t.Context(), "swe"); err != nil || !pausing {
+			t.Fatalf("SettleParked = %v, %v within the pause, want the seat held", pausing, err)
+		}
+		if won, err := rig.pending.ExpirePause(t.Context(), "t1"); err != nil || !won {
+			t.Fatalf("ExpirePause = %v, %v", won, err)
+		}
+		if pausing, err := rig.coordinator.SettleParked(t.Context(), "swe"); err != nil || pausing {
+			t.Fatalf("SettleParked = %v, %v past the pause, want the seat free", pausing, err)
+		}
+		if got := rig.get("t1"); got.Status != StatusReseed {
+			t.Fatalf("status %q, want the run still waiting for its answer", got.Status)
+		}
+	})
+	t.Run("judged unresumable", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		rig.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
+			return &Unresumable{Reason: types.ExecutorFailureItemFinished, Detail: "the item was finished"}, nil
+		}
+		if pausing, err := rig.coordinator.SettleParked(t.Context(), "swe"); err != nil || pausing {
+			t.Fatalf("SettleParked = %v, %v, want the run ended and the seat free", pausing, err)
+		}
+		rig.finished("t1")
+		announcedOnce(t, rig, types.ExecutorFailureItemFinished)
+		if _, awaits := rig.coordinator.SeatRuns("swe"); awaits {
+			t.Fatal("the seat still counts a question waiting on a person")
+		}
+	})
+	t.Run("a seat this node does not hold", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		rig.coordinator.lease = func(string) (Fence, bool) { return Fence{}, false }
+		if _, err := rig.coordinator.SettleParked(t.Context(), "swe"); !errors.Is(err, ErrSeatNotHeld) {
+			t.Fatalf("SettleParked = %v, want it refused for a seat not held", err)
+		}
+	})
+}
+
+// A SETTLE HELD BACK AT RECOVERY IS RETRIED ON THE NEXT PASS: a run judged
+// resumable while an older node still read its state is ended once the judge
+// says no build will, with no answer needed.
+func TestASettleHeldBackAtRecoveryIsRetriedOnTheNextPass(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.coordinator.Stop()
+	var readerGone bool
+	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) {
+		next.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
+			if !readerGone {
+				return nil, nil
+			}
+			return stateRetired(), nil
+		}
+	})
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status %q at recovery, want the run held back while a reader is live", got.Status)
+	}
+	readerGone = true
+	if pausing, err := next.coordinator.SettleParked(t.Context(), "swe"); err != nil || pausing {
+		t.Fatalf("SettleParked = %v, %v, want the run ended and the seat free", pausing, err)
+	}
+	rig.finished("t1")
+	announcedOnce(t, rig, types.ExecutorFailureStateRetired)
+	if held, awaits := next.coordinator.SeatRuns("swe"); held || awaits {
+		t.Fatalf("SeatRuns = %v, %v, want the seat free", held, awaits)
+	}
+}

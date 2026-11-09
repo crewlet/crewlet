@@ -618,12 +618,18 @@ the last word anybody said about that item.
 
 - **Idle** is decided by the node that holds the seat, once a minute: no turn
   of the seat dispatching, no executor run holding it or waiting on a person's
-  answer, nothing waiting in its inbox, not paused, not parked on a token
+  answer with its box still paused (within the role's `pause_ttl_seconds`; a
+  run past its pause still takes its answer when it comes, but no longer keeps
+  the seat from its ready work), nothing waiting in its inbox, not paused, not parked on a token
   budget or a provider limit, no budget window or provider limit that would
   refuse its next launch, and the node neither shedding nor draining. All of
   that must hold on two passes in a row, so the writes of the turn that just
   ended are on the node's copy first: a seat is handed its next item within
-  about two minutes of going idle.
+  about two minutes of going idle. The same pass ends a parked run nobody can
+  continue any more: one whose Worklet item was finished or removed while it
+  waited (`executor_failed`, reason `item_finished`) and one whose saved state
+  no live build reads (`state_retired`); its question is withdrawn and a reply
+  on it goes back to the seat.
 - **Ready** is Worklet's: assigned to the seat, `in_progress` or `todo`,
   waiting on no open blocker, past its start date, and not held on a question
   the seat itself asked on the item that nobody has answered. Work in review

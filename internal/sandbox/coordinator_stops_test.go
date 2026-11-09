@@ -242,10 +242,28 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
-	"RecoverSeat": {{
-		name: "a seat claimed by a new owner",
-		call: recovers,
-	}},
+	"RecoverSeat": {
+		{
+			name: "a seat claimed by a new owner",
+			call: recovers,
+		},
+		{
+			name:    "a seat claimed by a new owner whose parked run no build will resume",
+			arrange: judgedUnresumable,
+			call:    recovers,
+		},
+	},
+	"SettleParked": {
+		{
+			name: "a pickup pass over the seat's parked runs",
+			call: settlesParked,
+		},
+		{
+			name:    "a pickup pass that ends a parked run no build will resume",
+			arrange: judgedUnresumable,
+			call:    settlesParked,
+		},
+	},
 	"StopSeat": {
 		{
 			name: "a person's pause asking the seat's running work to stop",
@@ -627,6 +645,21 @@ func stopsTheSeat(t *testing.T, rig *coordRig) {
 		By: "founder", ByKind: "human", OperatorID: "pat:founder-token",
 	}); err != nil {
 		t.Logf("StopSeat: %v", err)
+	}
+}
+
+// settlesParked is a pickup pass judging the seat's parked runs.
+func settlesParked(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if _, err := rig.coordinator.SettleParked(t.Context(), "swe"); err != nil {
+		t.Logf("SettleParked: %v", err)
+	}
+}
+
+// judgedUnresumable is an engine that judges every parked run unresumable.
+func judgedUnresumable(_ *testing.T, rig *coordRig) {
+	rig.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
+		return &Unresumable{Reason: types.ExecutorFailureItemFinished, Detail: "the item was finished"}, nil
 	}
 }
 
