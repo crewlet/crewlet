@@ -454,6 +454,9 @@ type guarded struct {
 	decides   func(runner.AgentRunRequest) runner.SessionDecision
 	says      *bool
 	carry     func(*runner.Resume)
+	// during is what the run does once its launch has decided and before the
+	// launch returns ([playLauncher.during]).
+	during func(runner.AgentRunRequest)
 }
 
 // loadSkill is a call that loaded the seat's one required skill, the seq'th
@@ -467,6 +470,13 @@ func loadSkill(seq int) runner.BridgedCall {
 // relaunch builds g's seat and relaunches its executor, returning what the
 // launch was handed.
 func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
+	t.Helper()
+	_, req := g.relaunched(t)
+	return req
+}
+
+// relaunched is [guarded.relaunch] with the runner that launched.
+func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunRequest) {
 	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
@@ -491,7 +501,7 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &probingLauncher{basis: g.basis}
-	launcher.decides, launcher.says = g.decides, g.says
+	launcher.decides, launcher.says, launcher.during = g.decides, g.says, g.during
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
 	resume := &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued}
@@ -514,12 +524,72 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 		if _, _, err := r.Resume(t.Context(), g.history); err != nil {
 			t.Fatalf("Resume: %v", err)
 		}
-		return launcher.last(t)
+		return r, launcher.last(t)
 	}
 	if _, _, err := r.Execute(t.Context(), 2, "thread the reply", g.history); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	return launcher.last(t)
+	return r, launcher.last(t)
+}
+
+// A LAUNCH RECORDS THE SKILLS IT ARMED, NEVER A LOAD ITS RUN MADE AS IT STARTED.
+// The run starts inside its launch, on the guard the launch armed, so its
+// harness can report a skill load over the bridge before the launch returns.
+// That load is a call of the job's own, placed past its BridgeFrom, which every
+// rebuild of its guard replays only where the session it continues holds it —
+// never where the job's own copy in its box is continued after its harness was
+// cut off, or a capture of it saved before the load. So the job's parked state
+// records the skills its launch armed as it armed them, before the run started,
+// on a first launch and on a relaunch alike: none for a session of the run's
+// own, and the ones the session it continues held for a capture its launch
+// takes up.
+//
+// Mutation: record the guard as it stands once the launch returns, at either
+// launch, and the load is recorded as one the launch armed; record the guard
+// before the launch arms it, and the continued capture's skill is not.
+func TestALaunchRecordsTheSkillsItArmedNeverALoadItsRunMadeAsItStarted(t *testing.T) {
+	t.Parallel()
+	inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+	active := guarded{basis: inBox}.relaunch(t).Surface.Active()
+	rotated := func(r *runner.Resume) { r.Rotated = &runner.Rotated{SessionID: "sess-1", BoxKept: true} }
+	for name, tc := range map[string]struct {
+		g     guarded
+		loads bool
+		want  []string
+	}{
+		"a first launch, its run loading a skill as it starts": {loads: true},
+		"a relaunch carrying the round on in its job's box, its run loading a skill as it starts": {
+			g: guarded{basis: inBox, state: execstate.State{ActiveTools: active}, carry: rotated}, loads: true},
+		"a relaunch continuing a capture whose session held a skill": {g: guarded{basis: keptBasis,
+			continued: true, state: execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}},
+			carry: rotated}, want: []string{"chat-conventions"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// THE LOAD, made as the run starts: once its launch has decided,
+			// before the launch returns.
+			var made []runner.BridgedCall
+			g := tc.g
+			if tc.loads {
+				g.during = func(req runner.AgentRunRequest) {
+					made = play(t, req, run{calls: []llm.ToolCall{
+						call(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`)}})
+				}
+			}
+			r, _ := g.relaunched(t)
+			if tc.loads && (len(made) != 1 || made[0].Failed) {
+				t.Fatalf("the run's load as it started = %+v, want it made", made)
+			}
+			parked, ok := r.Suspended()
+			if !ok {
+				t.Fatal("the launch recorded no state")
+			}
+			if got := parked.State.LoadedSkills; !slices.Equal(got, tc.want) && len(got)+len(tc.want) > 0 {
+				t.Errorf("the parked state records %v as the skills its launch armed, want %v: a load the "+
+					"run made as it started is one of the job's own calls", got, tc.want)
+			}
+		})
+	}
 }
 
 // A RELAUNCH'S GUARD HOLDS WHAT THE SESSION ITS RUN TAKES UP LOADED, AND NOTHING

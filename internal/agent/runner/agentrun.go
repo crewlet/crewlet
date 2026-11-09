@@ -530,7 +530,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
-	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom)
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom,
+		decided.skills())
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
@@ -780,7 +781,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		launchedAt = began
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
-		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed, launched.BridgeFrom)
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed, launched.BridgeFrom,
+		decided.skills())
 	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
@@ -790,9 +792,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}, describe(surface), nil
 }
 
-// recordAgentSuspension captures what the run's collection needs.
+// recordAgentSuspension captures what the run's collection needs: armed is the
+// skills the launch armed the run's guard with as it decided
+// ([launchDecided.skills]).
 func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
-	began time.Time, launched time.Duration, handed HandedSkills, bridgeFrom int,
+	began time.Time, launched time.Duration, handed HandedSkills, bridgeFrom int, armed []string,
 ) {
 	state := execstate.State{
 		Version:     execstate.Version,
@@ -800,8 +804,14 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 		// THE SKILLS THE SESSION THE LAUNCH DECIDED ON HOLDS, as its guard
 		// was armed ([Runner.sessionDecided]), and the call the job's own
 		// calls are numbered after: every rebuild of the run's guard replays
-		// this job's loads on top of these, and no other job's.
-		LoadedSkills: r.loadedSkills(),
+		// this job's loads on top of these, and no other job's. AS ARMED,
+		// never read off the guard once the launch returns: the run starts
+		// inside the launch, so a load its harness reported by then is one
+		// of the job's own calls, and recorded here as one its launch armed
+		// it would be armed by every rebuild that arms none of them — the
+		// job's copy in its box continued after its harness was cut off, or
+		// a capture of it saved before the load.
+		LoadedSkills: armed,
 		BridgeFrom:   bridgeFrom,
 		// THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, which every
 		// later opening of its bridge reads a reported load by, and every

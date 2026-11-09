@@ -459,20 +459,23 @@ type launchBriefs struct {
 // session never reads.
 //
 // What it decided is kept in decided, which the box's word on the session it
-// started is read against ([Runner.sessionStarted]).
+// started is read against ([Runner.sessionStarted]), BESIDE THE SKILLS IT ARMED,
+// read off the guard as it armed them: the skills the job's parked state records
+// as its launch's ([Runner.recordAgentSuspension]).
 func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, system prompts.Prompt,
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(SessionDecision) {
 
 	return func(d SessionDecision) {
-		decided.set(d)
-		handed := b.fresh
+		handed, publish := b.fresh, true
+		var (
+			loaded []string
+			calls  []ledger.Call
+		)
 		switch {
 		case d.Continues && d.Base && b.kept != nil:
-			r.armSession(surface, nil, nil)
 			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
-			r.armSession(surface, b.state.LoadedSkills,
-				ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through))
+			loaded, calls = b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through)
 			handed = prompts.Prompt{Text: b.kept.Brief}
 			if d.NewBox {
 				handed = prompts.Prompt{Text: b.kept.Replaced}
@@ -482,19 +485,19 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			// and its own loads only where its harness ended its own run: one
 			// cut off may never have written a load it made, which is told as
 			// a call it may lack, and is loaded again before a call it covers.
-			var own []ledger.Call
+			loaded = b.state.LoadedSkills
 			if b.endedOwnRun {
-				own = ownCalls(b.bridged, b.state.BridgeFrom, nil)
+				calls = ownCalls(b.bridged, b.state.BridgeFrom, nil)
 			}
-			r.armSession(surface, b.state.LoadedSkills, own)
 			handed = prompts.Prompt{Text: b.inPlace}
 		default:
-			r.armSession(surface, nil, nil)
-			if b.freshReported {
-				return
-			}
+			publish = !b.freshReported
 		}
-		emit.prompted(ctx, phase.Execute, round, system, handed, caps)
+		r.armSession(surface, loaded, calls)
+		decided.set(d, r.loadedSkills())
+		if publish {
+			emit.prompted(ctx, phase.Execute, round, system, handed, caps)
+		}
 	}
 }
 
@@ -502,16 +505,32 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 // runner keeps it between the launch's word ([AgentRunRequest.Decided]) and the
 // word of the run's box on the session it started ([AgentRunRequest.Started]):
 // the first is told before the run starts and the second as its harness first
-// reaches the seat's tools, on another goroutine.
+// reaches the seat's tools, on another goroutine. And the skills the launch
+// armed the run's guard with as it decided, which the launch's parked state
+// records ([launchDecided.skills]).
 type launchDecided struct {
-	mu sync.Mutex
-	d  SessionDecision
+	mu    sync.Mutex
+	d     SessionDecision
+	armed []string
 }
 
-func (l *launchDecided) set(d SessionDecision) {
+// set keeps d, and armed, the skills the guard holds once armed for it.
+func (l *launchDecided) set(d SessionDecision, armed []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.d = d
+	l.d, l.armed = d, armed
+}
+
+// skills is the skills the launch armed the run's guard with as it decided
+// ([Runner.sessionDecided]), nil where it has not decided: the guard is empty
+// from the relaunch's last step before its launch until the launch decides.
+// NEVER THE GUARD AS IT STANDS ONCE THE LAUNCH RETURNS: the run starts inside the
+// launch, and a load its harness reported before the launch returned is a call
+// of the job's own, made on the same guard.
+func (l *launchDecided) skills() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.armed
 }
 
 func (l *launchDecided) get() SessionDecision {

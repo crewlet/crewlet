@@ -43,13 +43,17 @@ type playLauncher struct {
 	// place. Nil says nothing, as a box whose harness has not reached its
 	// bridge yet.
 	says *bool
+	// during is what each launch's run does once its launch has decided and
+	// before the launch returns, as a harness that reaches its bridge as its
+	// run starts does; nil does nothing then.
+	during func(runner.AgentRunRequest)
 }
 
 func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	time.Sleep(l.took)
 	l.mu.Lock()
 	l.reqs = append(l.reqs, req)
-	err, decides, says, n := l.err, l.decides, l.says, len(l.reqs)
+	err, decides, says, during, n := l.err, l.decides, l.says, l.during, len(l.reqs)
 	l.mu.Unlock()
 	if err != nil {
 		return runner.Launched{}, err
@@ -63,6 +67,9 @@ func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequ
 	}
 	if says != nil && req.Started != nil {
 		req.Started(*says)
+	}
+	if during != nil {
+		during(req)
 	}
 	// EACH LAUNCH A JOB OF ITS OWN, named as a store names one.
 	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", n)}, nil
