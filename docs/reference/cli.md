@@ -2358,19 +2358,23 @@ crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]
 ```
 
 The [setup advisor](../guides/advisor.md)'s findings about the running node's
-company, the most costly first: what its document costs it, and the patterns
-the engine read in its last 7 days of work. It is a client of
+company, the most costly first: what its document costs it, what its
+integrations' last check reported, and the patterns the engine read in its last
+7 days of work. It is a client of
 [`GET /advisor`](api-endpoints.md), and the token in `CREWLET_API_TOKEN` takes
 `admin`.
 
 Each row is a finding's number, its **severity** (`blocks`, `costs`, `note`),
 its **actor** (`owner` for a change you send, `engine` for a pattern the engine
 is reducing), its **class**, its **subject** and its **evidence** as counts. A
-subject is `company`, or a seat, unit or schedule as its kind and the order the
-answer first names it in (`seat#1`, `schedule#2`; one subject keeps one
-ordinal), never by a handle. That is all it prints by default, so the output
+subject is `company`, or a seat, unit, schedule or integration as its kind and
+the order the answer first names it in (`seat#1`, `schedule#2`; one subject
+keeps one ordinal), never by a handle. Below the table, `Not read:` names what
+the node could not read (its integrations' state), so a short or empty list
+never reads as all clear. That is all it prints by default, so the output
 can be pasted into an issue or a chat without carrying the company's own
-names; `-words` prints the subjects by their handles (`schedule:sre:health-check`)
+names; `-words` prints the subjects by their handles (`schedule:sre:health-check`,
+an integration by its product, `integration:GitHub`)
 and, under the table, each finding's title and why. `-json` prints the node's
 answer as JSON for a script, its keys sorted, with every name in it.
 

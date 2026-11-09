@@ -76,6 +76,7 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 	if len(a.Findings) == 0 {
 		fmt.Fprintf(w, "No findings at revision %s.\n", a.Revision)
+		renderUnread(w, a.Unread)
 		return
 	}
 	subjects := ordinals(a.Findings)
@@ -97,6 +98,15 @@ func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 	}
 	fmt.Fprintf(w, "\nAt revision %s. An owner finding's fix is sent from the dashboard or with "+
 		"PUT /config; an engine finding is a pattern the engine is reducing.\n", a.Revision)
+	renderUnread(w, a.Unread)
+}
+
+// renderUnread names what the node could not read, so a short list never
+// reads as all clear.
+func renderUnread(w io.Writer, unread []string) {
+	if len(unread) > 0 {
+		fmt.Fprintf(w, "Not read: %s. The list may be incomplete.\n", words.And(unread))
+	}
 }
 
 // ordinals names each finding's subject by its kind and the order the answer
@@ -121,9 +131,14 @@ func ordinals(findings []advisor.Finding) []string {
 }
 
 // subjectHandles is a subject by its kind and handles: seat:sre:health-check.
+// An integration is named by its product, which the company did not choose.
 func subjectHandles(s advisor.Subject) string {
 	parts := []string{string(s.Kind)}
-	for _, p := range []string{s.Seat, s.Unit, s.Schedule} {
+	handles := []string{s.Seat, s.Unit, s.Schedule}
+	if s.Kind == advisor.SubjectIntegration {
+		handles = []string{s.Name}
+	}
+	for _, p := range handles {
 		if p != "" {
 			parts = append(parts, p)
 		}

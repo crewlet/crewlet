@@ -119,3 +119,30 @@ func TestTheDoctorExitsZeroWhenNothingBlocks(t *testing.T) {
 		t.Fatalf("an empty answer printed %q and exited %v", out, err)
 	}
 }
+
+// WHAT THE NODE COULD NOT READ IS SAID, so an empty or short list never reads
+// as all clear; and two integrations are two subjects.
+func TestTheDoctorSaysWhatItCouldNotReadAndNamesEachIntegrationApart(t *testing.T) {
+	t.Parallel()
+	out, _, err := cli(t, "doctor", doctorNode(t, advisor.Answer{Revision: "rev-10",
+		Findings: []advisor.Finding{}, Unread: []string{advisor.UnreadIntegrations}}))
+	if err != nil || !strings.Contains(out, "No findings at revision rev-10.") ||
+		!strings.Contains(out, `Not read: "integrations".`) {
+		t.Fatalf("an answer with integrations unread printed %q and exited %v", out, err)
+	}
+	integration := func(name string) advisor.Finding {
+		return advisor.Finding{Class: "integration.credential_rejected", Severity: advisor.SeverityNote,
+			Actor: advisor.ActorOwner, Subject: advisor.Subject{Kind: advisor.SubjectIntegration, Name: name}}
+	}
+	config := doctorNode(t, advisor.Answer{Revision: "rev-11",
+		Findings: []advisor.Finding{integration("GitHub"), integration("Linear")}, Unread: []string{}})
+	out, _, _ = cli(t, "doctor", config)
+	if !strings.Contains(out, "integration#1") || !strings.Contains(out, "integration#2") ||
+		strings.Contains(out, "Not read") {
+		t.Errorf("two integrations are not two ordinals, or an empty unread list was said:\n%s", out)
+	}
+	out, _, _ = cli(t, "doctor", "-words", config)
+	if !strings.Contains(out, "integration:GitHub") || !strings.Contains(out, "integration:Linear") {
+		t.Errorf("-words does not name each integration by its product:\n%s", out)
+	}
+}
