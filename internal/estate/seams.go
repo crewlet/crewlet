@@ -102,6 +102,13 @@ func (w Work) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
+// ReadyWork answers what one seat could start now: the work pickup's read
+// (ADR-0112), from whichever data node serves the tracker.
+func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
+	worklet.ReadyWork, error) {
+	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)

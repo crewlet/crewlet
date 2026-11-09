@@ -39,6 +39,10 @@ func TestACommittedEffectCrossesTheWireWhole(t *testing.T) {
 			Excerpt: "ship it", Mentions: []string{"bo"}, Answerer: "cy",
 			Recipients:     []chatlet.Recipient{{Handle: "bo", Reason: chatlet.ReasonMention}},
 			WakesTruncated: true,
+			Asks:           true,
+			Held:           []chatlet.Recipient{{Handle: "ed", Reason: chatlet.ReasonFollowAll}},
+			Asked:          []string{"bo"},
+			Answering:      []string{"m-0"},
 		},
 		Removed: []string{"dee"},
 	}

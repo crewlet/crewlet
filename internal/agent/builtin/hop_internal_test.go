@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -174,6 +175,50 @@ func TestAColleaguesAskCarriesWhoeverTheAskingTurnWorksFor(t *testing.T) {
 		}
 		if got := svc.asks[0].WorkingFor; !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: the ask carries %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
+// A PICKUP TURN IS HELD AS THE ASSIGNMENT TURN IS (ADR-0109, ADR-0112): the
+// turn the pickup starts on an item is held to the person or the credential
+// the item is for exactly as the turn the item's assignment woke, so work a
+// person without an app filed is refused that app in both.
+//
+// Mutation: compose the pickup turn as a turn nobody woke, and it uses the
+// seat's every app.
+func TestAPickupTurnIsHeldAsTheAssignmentTurnIs(t *testing.T) {
+	t.Parallel()
+	r := countedRequesters{asked: &atomic.Int64{}, of: map[string]iam.Principal{
+		"lena": lena,
+		"login:token:ci": {Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantWorklet}},
+	}}
+	assignedBy := opsBotTurn("lena")
+	pickedUp := opsBotTurn("")
+	pickedUp.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "lena"}
+	byToken := opsBotTurn("")
+	byToken.RequesterLogin, byToken.RequesterApps = "token:ci", []iam.Grant{iam.GrantWorklet}
+	pickedForToken := opsBotTurn("")
+	pickedForToken.WorkingFor = &types.WorkingFor{Kind: types.WorkingForCredential,
+		Login: "token:ci", Apps: []iam.Grant{iam.GrantWorklet}}
+	for name, pair := range map[string][2]*turnctx.Turn{
+		"a person's item":     {assignedBy, pickedUp},
+		"a credential's item": {byToken, pickedForToken},
+	} {
+		assignment, err := composeCeiling(t.Context(), pair[0], "ops-bot", r)
+		if err != nil {
+			t.Fatalf("%s: compose the assignment turn: %v", name, err)
+		}
+		picked, err := composeCeiling(t.Context(), pair[1], "ops-bot", r)
+		if err != nil {
+			t.Fatalf("%s: compose the pickup turn: %v", name, err)
+		}
+		if picked.Kind != authz.CeilingRequester || !reflect.DeepEqual(picked, assignment) {
+			t.Errorf("%s: the pickup turn is held to %+v and the assignment turn to %+v",
+				name, picked, assignment)
+		}
+		if slices.Contains(picked.Principal.Grants, iam.GrantDoclet) {
+			t.Errorf("%s: the pickup turn may use Doclet, which the item's requester may not", name)
 		}
 	}
 }

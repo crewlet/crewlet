@@ -31,7 +31,10 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 		Kind:    worklet.ChangeComment,
 		After:   worklet.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
 		Comment: &answer, AnswersDecision: asked,
-		Thread: worklet.ThreadParties{AnsweredAuthor: "cy", Participants: []string{"bo"}},
+		// BO STILL OWES AN ANSWER IN THE THREAD, which is what wakes a
+		// participant for an answer addressed to somebody else (ADR-0113).
+		Thread: worklet.ThreadParties{AnsweredAuthor: "cy", Participants: []string{"bo"},
+			Owing: []string{"bo"}},
 	}
 	byHandle := routedByHandle(t, askRecord(t, worklet.TaskPatch{Comment: &answer}, wake))
 	asker, participant := byHandle["cy"], byHandle["bo"]

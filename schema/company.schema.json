@@ -5370,6 +5370,10 @@
             "integer",
             "null"
           ]
+        },
+        "work_pickup": {
+          "$ref": "#/$defs/WorkPickup",
+          "description": "Hands an idle agent seat its next ready work item (default on)."
         }
       },
       "type": [
@@ -6077,6 +6081,33 @@
       "required": [
         "name"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "WorkPickup": {
+      "additionalProperties": false,
+      "properties": {
+        "cooldown_seconds": {
+          "description": "Least time between two pickups of one seat, 60..1800 seconds (default 600).",
+          "maximum": 1800,
+          "minimum": 60,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Hand an idle agent seat its next ready work item (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"

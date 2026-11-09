@@ -27,7 +27,7 @@ func catalogue() []events.Payload {
 		// config.go
 		ConfigRevisionActivated{}, ConfigRevisionApplied{},
 		// task.go
-		TaskAssigned{},
+		TaskAssigned{}, WorkPickup{},
 		// schedule.go
 		ScheduledTaskFired{},
 		ScheduledFireSuperseded{},
@@ -207,6 +207,7 @@ var wireTypes = []string{
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",
+	"work_pickup",
 }
 
 func TestRegistryMatchesWireTypes(t *testing.T) {
@@ -369,6 +370,7 @@ var wireTags = map[string][]string{
 		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
+	"work_pickup":                   {"agent_id", "item", "key", "moved", "progressed", "ready", "ready_capped", "role", "status", "why", "working_for"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},

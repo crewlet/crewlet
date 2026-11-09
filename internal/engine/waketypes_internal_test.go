@@ -99,7 +99,8 @@ type wakeType struct {
 // each carrying said where its foreign text goes: a notification's body (by
 // the promptless surface, every other surface being
 // TestEveryWakeSurfaceFencesWhatSomebodyWrote's), a colleague's ask and answer
-// whose role name and question spell a closer, and a schedule's task.
+// whose role name and question spell a closer, a schedule's task, and a
+// pickup's tracker values.
 func wakeTypes(o *org.Organization, reg *notify.Registry, said string) map[string]wakeType {
 	return map[string]wakeType{
 		types.ExternalNotification{}.EventType(): {func(t *testing.T) *events.Event {
@@ -117,6 +118,12 @@ func wakeTypes(o *org.Organization, reg *notify.Registry, said string) map[strin
 		types.TaskAssigned{}.EventType(): {func(*testing.T) *events.Event {
 			return events.New(types.TaskAssigned{TaskID: "fire-1", RoleName: "SWE",
 				Schedule: "nightly", Description: said}, events.NewTrace())
+		}, "", ""},
+		// THE TRACKER'S OWN VALUES, never anybody's prose: neutralised whole,
+		// as a schedule's task is.
+		types.WorkPickupType: {func(*testing.T) *events.Event {
+			return events.New(types.WorkPickup{RoleName: "SWE", Item: "t-1", Key: said,
+				Status: "todo", Why: types.PickupQueue, Ready: 1}, events.NewTrace())
 		}, "", ""},
 	}
 }

@@ -359,7 +359,15 @@ scheduling:                              # optional — role/unit scheduled work
   jitter_seconds: 0                      # max per-schedule spread to smooth a shared cron minute
   catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window (at least 1)
   catchup_max_seconds: 7200              # upper clamp on the missed-tick catchup window
+  work_pickup:                           # hand an idle agent seat its next ready work item
+    enabled: true                        # default on, whether or not any schedule exists
+    cooldown_seconds: 600                # least time between two pickups of one seat, 60..1800
 ```
+
+`work_pickup` is not a schedule: it hands an agent seat that is idle while it
+holds ready work on Worklet its next item, once per item version
+([The work pickup](../concepts/scheduling.md#the-work-pickup)), and it runs
+whatever `enabled` above says.
 
 A schedule that names no `timezone` of its own fires on the company's
 [clock](#the-companys-clock); there is no scheduler-wide default zone.

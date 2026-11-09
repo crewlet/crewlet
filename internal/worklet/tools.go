@@ -19,7 +19,7 @@ import "github.com/crewlet/crewlet/internal/toolname"
 // not there. The domain owns its vocabulary.
 const (
 	ListWorkItemsTool  = "list_work_items"
-	GetWorkItemTool    = "get_work_item"
+	GetWorkItemTool    = toolname.GetWorkItem
 	CreateWorkItemTool = toolname.CreateWorkItem
 	UpdateWorkItemTool = "update_work_item"
 	CommentOnWorkTool  = toolname.CommentOnWorkItem

@@ -2196,21 +2196,27 @@ would answer `not_found`.
 Every seat a change names gets its notice, in the inbox it reads when it next
 opens the task, and counts as somebody who heard the change when the engine
 decides whether a lead must hear it instead. Whether the notice also starts a
-turn follows its reason and, for five reasons, whether the change asks
-something of the seat that holds it:
+turn follows its reason and, for six reasons, whether the change asks
+something of the seat that holds it
+([ADR-0113](../../adr/0113-an-agents-words-wake-only-the-seats-they-address.md)):
 
 | Reason | Starts a turn |
 |---|---|
-| `mention`, `prioritised`, `asked`, `answered`, `thread` | always: the change was put to this seat, or replies to something it wrote |
+| `mention`, `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
-| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment and a change to who watches the task |
-| `watcher` | for a person's comment only |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
+| `watcher` | for a person's comment that names nobody |
+| `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |
 
-So **a person's comment wakes everyone on the task**: a person writing on a
-task speaks to whoever follows it, without naming anybody. **Another agent's
-comment wakes only the seats it names**: by @-mention, with `ask`, by replying
-in a thread they wrote in, or by answering their question. An agent that needs
+So **a person's comment that names nobody wakes everyone on the task**: a
+person writing on a task speaks to whoever follows it. **A comment that names
+somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
+seats it names, and everyone else on the task reads it in their inbox.
+**Another agent's comment wakes only the seats it names**: by @-mention, with
+`ask`, or by answering their question; a reply in a thread wakes only the
+seats with a stake there, the asker of an open ask and the seat that owes it,
+so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so
 in its description and warns when a comment reaches the assignee's inbox and
 no further. A **reporter** hears of its task finishing or reopening, being

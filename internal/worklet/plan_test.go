@@ -802,6 +802,10 @@ func taskReads() map[string]indexedRead {
 		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
 		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
 		"unblocked":     {unblockedBlock(person), queue},
+		// THE WORK PICKUP'S TWO READY BLOCKS, each a seek of the queue
+		// by the seat and the status group.
+		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
+		"ready (waiting)": {readyBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
 		page, args := taskRowsStatement(set, block.query.terms)
@@ -1125,6 +1129,16 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
+		"who last changed a seat's ready work": seek(subject, arms(2, readyMovedArm),
+			task, "ana", "t-0008", "ana"),
+		"when a seat's own ready work was filed": seek(subject, arms(2, readyFirstArm),
+			task, "t-0008"),
+		"a seat's progress on its started work": seek(subject, arms(2, readyProgressArm),
+			task, "ana", "t-0008", "ana"),
+		"who filed a seat's ready work": seek(subject, arms(2, readyCreatedArm),
+			task, "ana", "t-0008", "ana"),
+		"who assigned a seat's ready work": seek(subject, arms(2, readyAssignedArm),
+			task, "ana", "t-0008", "ana"),
 		"an asker's next record after an ask closed": seek(subject, followUpStatement,
 			task, "ana", record),
 		"what resolved an ask": seek(subject, resolvedStatement,

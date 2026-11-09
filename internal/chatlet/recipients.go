@@ -96,6 +96,39 @@ type Routing struct {
 	// resolving it later would route a message posted under one org chart
 	// to whoever answers under the next one.
 	Answerer string
+
+	// Asks is an AGENT author's statement that the message asks something
+	// of the seats it reaches, made by the tool that posts it. A person's
+	// message asks whatever it says and carries none.
+	Asks bool
+
+	// Answers are the seats whose open questions to the author this message
+	// answers ([ReasonAnswer]); Owing the seats asked something in this
+	// thread and not answered yet, and Awaiting the seats that asked it
+	// ([ReasonOwing], [ReasonAwaiting]). Read from the room's receipts in
+	// the decide's own snapshot.
+	Answers  []string
+	Owing    []string
+	Awaiting []string
+
+	// loud routes as before ADR-0113: the set [Resolve] compares the quiet
+	// routing against to say which seats the rule held back.
+	loud bool
+}
+
+// silent is an agent's message that asks nothing: it wakes the seats it names,
+// the seats whose questions it answers and the seats that still owe an answer
+// in its thread, and no seat for a standing arrangement (ADR-0113).
+func (r Routing) silent() bool {
+	return !r.loud && r.AuthorKind == AuthorAgent && !r.Asks
+}
+
+// addressed is a message that names somebody the company has, a person or an
+// agent: it is addressed to them, and wakes no seat it does not name for a
+// standing arrangement (ADR-0113). The mention arm's own answer, so a private
+// room's rule carries over.
+func (r Routing) addressed() bool {
+	return !r.loud && len(r.mentioned()) > 0
 }
 
 // Resolve turns a room's rows into the recipient set, reporting whether a cap
@@ -106,6 +139,30 @@ type Routing struct {
 // of the set BEFORE the cap — which the record deliberately does not carry. A
 // room that cannot see this reads a partial broadcast as a complete one.
 func Resolve(r Routing) ([]Candidate, bool) {
+	r.loud = false
+	return resolve(r)
+}
+
+// Held is the seats a message would have woken before ADR-0113 and does not,
+// each under the reason it would have had: the loud routing less every handle
+// the quiet one reaches.
+func Held(r Routing, woken []Candidate) []Candidate {
+	r.loud = true
+	all, _ := resolve(r)
+	reached := make(map[string]bool, len(woken))
+	for _, c := range woken {
+		reached[c.Handle] = true
+	}
+	var out []Candidate
+	for _, c := range all {
+		if !reached[c.Handle] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func resolve(r Routing) ([]Candidate, bool) {
 	c := &collector{}
 	for _, reason := range routedReasons() {
 		c.add(reason, limitFor(reason), r.arm(reason))
@@ -141,8 +198,10 @@ func Resolve(r Routing) ([]Candidate, bool) {
 // flag the membership carries — and a caller that zeroed either to suppress
 // them would be lying about the room in order to get the routing it wanted.
 func ResolveMentions(r Routing) ([]Candidate, bool) {
+	r.loud = false
 	c := &collector{}
-	c.add(ReasonMention, limitFor(ReasonMention), r.mentioned())
+	c.add(ReasonMention, limitFor(ReasonMention), r.arm(ReasonMention))
+	c.add(ReasonNamed, limitFor(ReasonNamed), r.arm(ReasonNamed))
 	return c.out, c.truncated
 }
 
@@ -291,23 +350,51 @@ func (r Routing) arm(reason Reason) []string {
 	case ReasonDM:
 		// EVERY PARTICIPANT, because a direct conversation exists only
 		// between these parties: there is nothing in it that is not
-		// addressed to all of them.
-		if !r.ChannelKind.Direct() {
+		// addressed to all of them. Unless an agent says it asks
+		// nothing: an acknowledgement in a direct conversation obliged
+		// the other side to acknowledge it back.
+		if !r.ChannelKind.Direct() || r.silent() {
 			return nil
 		}
 		return memberHandles(r.Members)
 
 	case ReasonMention:
+		if r.silent() {
+			return nil
+		}
+		return r.mentioned()
+
+	case ReasonNamed:
+		// THE MENTION, WOKEN AND NOT OBLIGED, of an agent that asks
+		// nothing: the mention arm above is silent for exactly this
+		// message, so a handle is named under one of the two.
+		if !r.silent() {
+			return nil
+		}
 		return r.mentioned()
 
 	case ReasonReplyToOwnRoot:
-		if r.ThreadRoot == "" {
+		if r.ThreadRoot == "" || r.silent() || r.addressed() {
 			return nil
 		}
 		return []string{r.RootAuthor}
 
-	case ReasonReply:
+	case ReasonAnswer:
+		// WHATEVER ELSE THE MESSAGE IS: the asker is waiting on it.
+		return r.Answers
+
+	case ReasonOwing, ReasonAwaiting:
+		// A STAKE IN THE THREAD, woken by any reply whatever it names.
 		if r.ThreadRoot == "" {
+			return nil
+		}
+		if reason == ReasonAwaiting {
+			return r.Awaiting
+		}
+		return r.Owing
+
+	case ReasonReply:
+		if r.ThreadRoot == "" || r.silent() || r.addressed() {
 			return nil
 		}
 		return r.ThreadParticipants
@@ -315,19 +402,23 @@ func (r Routing) arm(reason Reason) []string {
 	case ReasonCollectiveRequest, ReasonCollective:
 		// ONE ADDRESS, TWO REASONS, and the author picks which: the arm
 		// whose reason [collectiveReason] does not name is silent, so a
-		// message raises exactly one of them.
-		if !r.Collective || collectiveReason(r.AuthorKind) != reason {
+		// message raises exactly one of them. An agent's `@channel` that
+		// asks nothing is news nobody has to stop for.
+		if !r.Collective || collectiveReason(r.AuthorKind) != reason || r.silent() {
 			return nil
 		}
 		return memberHandles(r.Members)
 
 	case ReasonFollow:
-		if r.ThreadRoot == "" {
+		if r.ThreadRoot == "" || r.silent() || r.addressed() {
 			return nil
 		}
 		return r.Followers
 
 	case ReasonFollowAll:
+		if r.silent() || r.addressed() {
+			return nil
+		}
 		out := make([]string, 0, len(r.Members))
 		for _, m := range r.Members {
 			if m.FollowAll {
@@ -478,9 +569,9 @@ func routedReasons() []Reason {
 // bites only on these.
 func limitFor(reason Reason) int {
 	switch reason {
-	case ReasonMention:
+	case ReasonMention, ReasonNamed:
 		return MaxMentions
-	case ReasonReply:
+	case ReasonReply, ReasonAnswer, ReasonOwing, ReasonAwaiting:
 		return MaxThreadParticipants
 	case ReasonCollectiveRequest, ReasonCollective:
 		return MaxCollectiveRecipients

@@ -856,11 +856,11 @@ func (m *scriptedModel) chatAnswer(req modelRequest) (modelReply, <-chan struct{
 		s.posted = true
 		if s.thread != "" {
 			return toolUse(chatlet.ReplyInThreadTool, map[string]any{
-				"channel": s.channel, "reply_to": s.thread, "body": s.answer,
+				"channel": s.channel, "reply_to": s.thread, "body": s.answer, "asks": false,
 			}), s.hold, true
 		}
 		return toolUse(chatlet.PostMessageTool, map[string]any{
-			"channel": s.channel, "body": s.answer,
+			"channel": s.channel, "body": s.answer, "asks": false,
 		}), s.hold, true
 	case s.posted:
 		// THE CITATION IS WHAT THE ENGINE CHECKS AGAINST ITS OWN RECORD,

@@ -56,6 +56,20 @@
 // keys both on the subject too, and offers each subject's news to a Builder
 // of its own (internal/code's Concerns and NoticeID).
 //
+// # Words wake only the seats they address (ADR-0113)
+//
+// Who a change CONCERNS and who it WAKES are two answers, and every domain
+// draws the second one by one rule. A standing arrangement (following a room
+// or a thread, having spoken in a thread, being a task's owner or watcher, the
+// other side of a direct conversation) wakes a seat only for words that ask
+// something and are addressed to nobody in particular. Words that name a seat,
+// ask one or answer one wake the seats they address; an agent's words ask
+// something only where the agent says so; and a seat still owing an answer in
+// a thread is woken by what is said there. Each domain reads those facts from
+// its own structured records (the tracker's asks and answers, the chat's
+// `asks` statement and receipts), never from prose, and a reason whose wake
+// turns on who the handle is offers it through [Builder.AddWaking].
+//
 // # The fallback is a chain
 //
 // A domain offers a lead to fall back on when nobody ordinary hears a change,
@@ -214,14 +228,22 @@ type Builder[R ~string] struct {
 // gains this one's wake where both are ordinary offers (see the package doc,
 // "Told and woken are two answers").
 func (b *Builder[R]) Add(handle string, reason R, addressed bool) {
+	b.AddWaking(handle, reason, addressed, b.wakes(reason))
+}
+
+// AddWaking offers handle as [Builder.Add] does, with whether its notice
+// starts a turn decided by the caller for this one handle rather than by the
+// reason: the case of a reason whose wake turns on who the handle is, such as
+// a thread participant that still owes an answer in the thread (ADR-0113).
+func (b *Builder[R]) AddWaking(handle string, reason R, addressed, wakes bool) {
 	if i, ok := b.named[handle]; ok {
 		if held := &b.out[i]; !held.FallbackOnly && !held.InboxOnly {
-			held.Wakes = held.Wakes || b.wakes(reason)
+			held.Wakes = held.Wakes || wakes
 		}
 		return
 	}
 	b.claim(Candidate[R]{
-		Handle: handle, Reason: reason, Addressed: addressed, Wakes: b.wakes(reason),
+		Handle: handle, Reason: reason, Addressed: addressed, Wakes: wakes,
 	})
 }
 

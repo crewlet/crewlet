@@ -24,9 +24,8 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 		worklet.ReasonMention:     {true, true},
 		worklet.ReasonPrioritised: {true, true},
 		worklet.ReasonAsked:       {true, true},
-		// A reply to something the seat wrote.
+		// A reply to something the seat asked.
 		worklet.ReasonAnswered: {true, true},
-		worklet.ReasonThread:   {true, true},
 		// Work the seat is accountable for moved.
 		worklet.ReasonUnblocked:      {true, true},
 		worklet.ReasonRoutedTo:       {true, true},
@@ -40,6 +39,9 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 		worklet.ReasonLeadFallback: {false, true},
 		worklet.ReasonReporter:     {false, true},
 		worklet.ReasonWatcher:      {false, true},
+		// Decided per participant: one still owing an answer in the
+		// thread, or a person's comment that names nobody (ADR-0113).
+		worklet.ReasonThread: {false, true},
 		// A row in the inbox and never a turn: nothing is left to do.
 		worklet.ReasonUnassigned: {false, false},
 		worklet.ReasonUnwatched:  {false, false},
@@ -104,14 +106,29 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		actor: "miles",
 		want:  []string{"app-engineer", "backend-engineer", "designer", "pm", "qa"},
 	}, {
-		name: "a reply in a thread two seats wrote in",
+		name: "an agent's reply in a thread two seats wrote in",
 		n: worklet.Notify{Kind: worklet.ChangeComment, Snapshot: func() worklet.Snapshot {
 			s := agentComment
 			s.ThreadParticipants = []string{"qa", "pm"}
 			return s
 		}()},
 		actor: "sre",
-		want:  []string{"pm", "qa"},
+		want:  nil,
+	}, {
+		name: "an agent's reply in a thread where one seat still owes an answer",
+		n: worklet.Notify{Kind: worklet.ChangeComment, Snapshot: func() worklet.Snapshot {
+			s := agentComment
+			s.ThreadParticipants = []string{"qa", "pm"}
+			s.ThreadOwing = []string{"qa"}
+			return s
+		}()},
+		actor: "sre",
+		want:  []string{"qa"},
+	}, {
+		name:  "a person's comment naming one seat",
+		n:     worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: humanComment},
+		actor: "miles",
+		want:  []string{"pm"},
 	}, {
 		name:  "a change to who watches the task",
 		n:     worklet.Notify{Kind: worklet.ChangeWatchers, Snapshot: agentComment},
@@ -225,7 +242,7 @@ func TestAShadowedReasonStillWakesItsHandle(t *testing.T) {
 			Kind: worklet.ChangeComment,
 			Snapshot: worklet.Snapshot{
 				Reporter: "pm", ThreadParticipants: []string{"pm"},
-				CommentAuthorKind: worklet.AuthorAgent,
+				ThreadOwing: []string{"pm"}, CommentAuthorKind: worklet.AuthorAgent,
 			},
 		},
 		"work routed to the assignee's own unit": {

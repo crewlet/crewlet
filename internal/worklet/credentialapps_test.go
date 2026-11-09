@@ -12,8 +12,8 @@ import (
 // NOTHING ELSE DOES (ADR-0109). A task a pipeline's token files with its wake
 // records, beside its login, the apps the node that took the write resolved
 // for it — the turn the wake starts is bounded by them — at the version that
-// carries them, which an older build retains rather than applying without
-// them. The same token's write that wakes nobody carries none, and neither
+// that marks them kept for the history row, which an older build retains
+// rather than applying without them. The same token's write that wakes nobody carries none, and neither
 // does a person's even when handed some: its record names the seat, whose
 // holder the node running a turn reads. Both stay at the base version every
 // build reads.
@@ -33,7 +33,7 @@ func TestACredentialsWriteCarriesTheAppsItUsedHere(t *testing.T) {
 		want      []iam.Grant
 		version   int
 	}{
-		{"t-by-token", "token:ci", worklet.AuthorOperator, true, worklets, 2},
+		{"t-by-token", "token:ci", worklet.AuthorOperator, true, worklets, worklet.AppsKeptVersion},
 		{"t-quiet-by-token", "token:ci", worklet.AuthorOperator, false, nil, 1},
 		{"t-by-person", "jane-founder", worklet.AuthorHuman, true, nil, 1},
 	} {
@@ -52,9 +52,10 @@ func TestACredentialsWriteCarriesTheAppsItUsedHere(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode %s: %v", c.id, err)
 		}
-		if record.Actor != c.actor || !slices.Equal(record.ActorApps, c.want) || record.V != c.version {
-			t.Errorf("%s is recorded as %q carrying %v at version %d, want %v at %d",
-				c.id, record.Actor, record.ActorApps, record.V, c.want, c.version)
+		if record.Actor != c.actor || !slices.Equal(record.ActorApps, c.want) || record.V != c.version ||
+			record.ActorAppsKept != (c.want != nil) {
+			t.Errorf("%s is recorded as %q carrying %v (kept %v) at version %d, want %v at %d",
+				c.id, record.Actor, record.ActorApps, record.ActorAppsKept, record.V, c.want, c.version)
 		}
 	}
 }

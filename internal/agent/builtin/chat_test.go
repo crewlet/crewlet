@@ -534,16 +534,16 @@ func TestATurnThatPostsTwiceWritesTwoMessagesAndARerunWritesOne(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "on it"}},
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "opened ENG-14"}},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"}},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "opened ENG-14"}},
 		{builtin.ReplyInThreadTool, map[string]any{
-			"channel": chatRoomID, "reply_to": "m1", "body": "and here is why",
+			"channel": chatRoomID, "reply_to": "m1", "asks": false, "body": "and here is why",
 		}},
 		// THE SAME WORDS AGAIN, AFTER A DIFFERENT POST: a third message.
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "on it"}},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"}},
 		// AND AGAIN WITH NOTHING DIFFERENT BETWEEN: the same call, asked
 		// twice — one message.
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "on it"}},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"}},
 	}
 	run := func(runID string) []string {
 		f := newFakeChat()
@@ -607,7 +607,7 @@ func TestAJoinAfterALeaveIsANewOperation(t *testing.T) {
 		args map[string]any
 	}{
 		{builtin.JoinChannelTool, room},
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "hi"}},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "hi"}},
 		{builtin.JoinChannelTool, room},
 		{builtin.LeaveChannelTool, room},
 		{builtin.JoinChannelTool, room},
@@ -743,7 +743,7 @@ func TestADirectMessageWhoseOpenIsUnknownSaysNothing(t *testing.T) {
 			f.opened = &outcome
 			reg := chatRegistry(t, chatDeps(f))
 			got := callChat(t, reg, builtin.SendDMTool, turnFor(t, "agent-cto"),
-				map[string]any{"to": []any{"agent-ceo"}, "body": "a word"})
+				map[string]any{"to": []any{"agent-ceo"}, "asks": false, "body": "a word"})
 			if len(f.posts) != 0 {
 				t.Fatalf("an unknown open was followed by a post into %q — it is "+
 					"refused as not found, or lands in a room nobody knows opened",
@@ -814,7 +814,7 @@ func TestAChatWriteWhoseOutcomeIsUnknownIsNeitherDoneNorFailed(t *testing.T) {
 	f := newFakeChat()
 	reg := chatRegistry(t, chatDeps(f))
 	got := callChat(t, reg, builtin.PostMessageTool, turnFor(t, "agent-cto"),
-		map[string]any{"channel": chatRoomID, "body": "on it"})
+		map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"})
 	if got.Failed || !strings.Contains(got.Output, `"outcome": "applied"`) ||
 		!strings.Contains(got.Output, `"position": "CREWLET_CHAT_LOG@`) {
 		t.Errorf("a post that landed answered %+v, want its outcome and position", got)
@@ -842,12 +842,12 @@ func seatChatWrites() []struct {
 		args map[string]any
 		next string
 	}{
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "on it"},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"},
 			sameCall(builtin.PostMessageTool)},
 		{builtin.ReplyInThreadTool,
-			map[string]any{"channel": chatRoomID, "reply_to": "m1", "body": "ok"},
+			map[string]any{"channel": chatRoomID, "reply_to": "m1", "asks": false, "body": "ok"},
 			sameCall(builtin.ReplyInThreadTool)},
-		{builtin.SendDMTool, map[string]any{"to": []any{"agent-ceo"}, "body": "a word"},
+		{builtin.SendDMTool, map[string]any{"to": []any{"agent-ceo"}, "asks": false, "body": "a word"},
 			sameCall(builtin.SendDMTool)},
 		{builtin.ReactToMessageTool,
 			map[string]any{"channel": chatRoomID, "message_id": "m1", "emoji": ":+1:"},
@@ -896,7 +896,7 @@ func TestAWriteNobodyAnsweredSaysHowThisCallerRepeatsIt(t *testing.T) {
 	f.writeErr = silent
 	person := operatorChat(t, f, nil, nil)
 	got := callOperator(t, person[builtin.PostMessageTool],
-		map[string]any{"channel": chatRoomID, "body": "on it"})
+		map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"})
 	if !tools.UnknownOf(got) {
 		t.Fatalf("an operator's post nobody answered answered %+v, want unknown", got)
 	}
@@ -949,7 +949,7 @@ func TestABodyOverTheCapIsRefusedNamingTheField(t *testing.T) {
 		t.Fatal("a body over the cap validates, so this case holds nothing")
 	}
 	got := callChat(t, chatRegistry(t, chatDeps(f)), builtin.PostMessageTool,
-		turnFor(t, "agent-cto"), map[string]any{"channel": chatRoomID, "body": "too long"})
+		turnFor(t, "agent-cto"), map[string]any{"channel": chatRoomID, "asks": false, "body": "too long"})
 	if tools.RefusalOf(got) != tools.RefusalInvalid {
 		t.Fatalf("an oversized body answered %+v, want the argument's class", got)
 	}
@@ -1038,7 +1038,7 @@ func TestAPostIsAttributedToTheTurnsSeatAndNotToAnArgument(t *testing.T) {
 	turn := turnFor(t, "agent-cto")
 	for _, arg := range []string{"author", "handle", "actor", "author_kind"} {
 		got := callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
-			"channel": chatRoomID, "body": "shipping tomorrow", arg: "agent-ceo",
+			"channel": chatRoomID, "asks": false, "body": "shipping tomorrow", arg: "agent-ceo",
 		})
 		if !got.Failed || len(f.posts) != 0 {
 			t.Fatalf("a post naming its own %s answered %+v and reached the "+
@@ -1046,7 +1046,7 @@ func TestAPostIsAttributedToTheTurnsSeatAndNotToAnArgument(t *testing.T) {
 		}
 	}
 	callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
-		"channel": chatRoomID, "body": "shipping tomorrow",
+		"channel": chatRoomID, "asks": false, "body": "shipping tomorrow",
 	})
 	if len(f.posts) != 1 {
 		t.Fatalf("%d messages reached the store", len(f.posts))
@@ -1088,9 +1088,9 @@ func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 		args map[string]any
 		want uint64
 	}{
-		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "body": "a"}, 21},
+		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "a"}, 21},
 		{builtin.ReplyInThreadTool,
-			map[string]any{"channel": chatRoomID, "reply_to": "m1", "body": "b"}, 22},
+			map[string]any{"channel": chatRoomID, "reply_to": "m1", "asks": false, "body": "b"}, 22},
 		{builtin.ReactToMessageTool,
 			map[string]any{"channel": chatRoomID, "message_id": "m1", "emoji": ":eyes:"}, 31},
 		{builtin.JoinChannelTool, map[string]any{"channel": chatRoomID}, 33},
@@ -1117,7 +1117,7 @@ func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 	// finds no room at all.
 	before := len(f.awaited)
 	if got := callChat(t, reg, builtin.SendDMTool, turn, map[string]any{
-		"to": []any{"agent-ceo"}, "body": "between us",
+		"to": []any{"agent-ceo"}, "asks": false, "body": "between us",
 	}); got.Failed {
 		t.Fatalf("send_dm failed: %s", got.Output)
 	}
@@ -1302,7 +1302,7 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 	for _, ref := range []string{chatRoomName, "#" + chatRoomName, "ENG"} {
 		before := len(f.posts)
 		if got := callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
-			"channel": ref, "body": "hello",
+			"channel": ref, "asks": false, "body": "hello",
 		}); got.Failed {
 			t.Fatalf("a post to %q was refused: %s", ref, got.Output)
 		}
@@ -1324,7 +1324,7 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 	// reader would put a read on the hot path of every answer.
 	f.reads = 0
 	callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
-		"channel": chatRoomID, "body": "hello",
+		"channel": chatRoomID, "asks": false, "body": "hello",
 	})
 	if f.reads != 0 {
 		t.Errorf("a post addressed by id reached the reader %d times", f.reads)
@@ -1335,7 +1335,7 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 	// every room it may read as surely as an id does.
 	f.writeErr = fmt.Errorf("%w: room %s", chatlet.ErrNotFound, chatRoomID)
 	got := callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
-		"channel": chatRoomID, "body": "hello",
+		"channel": chatRoomID, "asks": false, "body": "hello",
 	})
 	if tools.RefusalOf(got) != tools.RefusalNotFound ||
 		!strings.Contains(got.Output, builtin.ListChannelsTool) ||
@@ -1358,7 +1358,7 @@ func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
 	got := callChat(t, chatRegistry(t, chatDeps(f)), builtin.PostMessageTool,
-		turnFor(t, "agent-cto"), map[string]any{"channel": "marketing", "body": "hi"})
+		turnFor(t, "agent-cto"), map[string]any{"channel": "marketing", "asks": false, "body": "hi"})
 	if tools.RefusalOf(got) != tools.RefusalInvalid ||
 		!strings.Contains(got.Output, builtin.ListChannelsTool) {
 		t.Errorf("a name nothing matches answered %+v, want the argument class "+
@@ -1368,7 +1368,7 @@ func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 	f = newFakeChat()
 	f.readErr = &statelog.Unavailable{Reason: statelog.ReasonDeferred}
 	got = callChat(t, chatRegistry(t, chatDeps(f)), builtin.PostMessageTool,
-		turnFor(t, "agent-cto"), map[string]any{"channel": "eng", "body": "hi"})
+		turnFor(t, "agent-cto"), map[string]any{"channel": "eng", "asks": false, "body": "hi"})
 	if tools.RefusalOf(got) != tools.RefusalUnavailable {
 		t.Errorf("a name lookup that failed answered %+v, want the node's class", got)
 	}
@@ -1380,7 +1380,7 @@ func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 	// the argument that works there, which is the argument's class again.
 	f = newFakeChat()
 	got = callChat(t, chatRegistry(t, builtin.ChatDeps{Writer: f}), builtin.PostMessageTool,
-		turnFor(t, "agent-cto"), map[string]any{"channel": "eng", "body": "hi"})
+		turnFor(t, "agent-cto"), map[string]any{"channel": "eng", "asks": false, "body": "hi"})
 	if tools.RefusalOf(got) != tools.RefusalInvalid ||
 		!strings.Contains(got.Output, "by its id") {
 		t.Errorf("a name on a surface with no reader answered %+v", got)
@@ -1409,7 +1409,7 @@ func TestAtChannelInTheBodyAddressesTheWholeRoom(t *testing.T) {
 	} {
 		before := len(f.posts)
 		callChat(t, reg, builtin.PostMessageTool, turn,
-			map[string]any{"channel": chatRoomID, "body": c.body})
+			map[string]any{"channel": chatRoomID, "asks": false, "body": c.body})
 		if got := f.posts[before].in.Collective; got != c.want {
 			t.Errorf("%q addressed the room = %v, want %v", c.body, got, c.want)
 		}
@@ -1860,7 +1860,7 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 	t.Parallel()
 	dm := func(f *fakeChat, body string) tools.Result {
 		return callChat(t, chatRegistry(t, chatDeps(f)), builtin.SendDMTool,
-			turnFor(t, "agent-cto"), map[string]any{"to": []any{"agent-ceo"}, "body": body})
+			turnFor(t, "agent-cto"), map[string]any{"to": []any{"agent-ceo"}, "asks": false, "body": body})
 	}
 	f := newFakeChat()
 	f.opened = &statelog.Result{Outcome: statelog.OutcomePending,
@@ -2299,5 +2299,33 @@ func TestARoomsArchiveIsDecidedOnTheStoredRoom(t *testing.T) {
 		f.authorities[0] != (chatlet.ChannelAuthority{}) {
 		t.Errorf("a colleague's topic answered %+v after %d reads under %+v", got,
 			f.reads, f.authorities)
+	}
+}
+
+// AN AGENT STATES WHETHER ITS MESSAGE ASKS (ADR-0113): a post that leaves
+// `asks` out is refused before anything is written, and the statement it makes
+// reaches the message, so a request routes as one and a note as news.
+//
+// Mutation: default a missing `asks` to false, and a delegation written
+// without it reaches its colleague as something that asks nothing.
+func TestAnAgentMustSayWhetherItsMessageAsks(t *testing.T) {
+	t.Parallel()
+	f := newFakeChat()
+	reg := chatRegistry(t, chatDeps(f))
+	got := callChat(t, reg, builtin.PostMessageTool, turnFor(t, "agent-cto"),
+		map[string]any{"channel": chatRoomID, "body": "@ops please roll back staging"})
+	if !got.Failed || !strings.Contains(got.Output, "needs `asks`") || len(f.posts) != 0 {
+		t.Fatalf("a post without asks answered %q and wrote %d messages, want it refused",
+			got.Output, len(f.posts))
+	}
+	for _, asks := range []bool{true, false} {
+		got = callChat(t, reg, builtin.PostMessageTool, turnFor(t, "agent-cto"),
+			map[string]any{"channel": chatRoomID, "body": "@ops please roll back staging", "asks": asks})
+		if got.Failed {
+			t.Fatalf("a post with asks=%v failed: %s", asks, got.Output)
+		}
+		if said := f.posts[len(f.posts)-1].in; said.Asks != asks {
+			t.Errorf("a post with asks=%v reached the store asking %v", asks, said.Asks)
+		}
 	}
 }

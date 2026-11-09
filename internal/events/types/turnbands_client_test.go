@@ -134,6 +134,9 @@ var keptOutOfTurnBands = map[string]string{
 		"to wake a seat. It is the TRIGGER of a turn rather than work a turn " +
 		"did, so it precedes every turn id there could be — and the Turn screen " +
 		"already renders the trigger, as the brief. Permanent",
+	"work_pickup": "the work pickup's wake (internal/pickup), published to " +
+		"hand an idle seat its next ready item. It is the TRIGGER of a turn, " +
+		"as a schedule's fire is. Permanent",
 	"turn_trigger_skipped": "the record that a trigger will NOT be worked " +
 		"(internal/engine/turn.go) — it is addressed to the delivery, which is " +
 		"why its payload carries trigger_id, and the whole of what it says is " +

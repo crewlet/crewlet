@@ -59,6 +59,8 @@ type TrackerReader interface {
 		worklet.ActivityAnswer, error)
 	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 		loc *time.Location) (worklet.MyWork, error)
+	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
+		worklet.ReadyWork, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -786,6 +788,19 @@ var opMyWork = define("tracker.my_work", opRead, trackerDomain, false,
 			return worklet.MyWork{}, err
 		}
 		return b.Tracker.MyWork(ctx, a.Query, a.Now, loc)
+	})
+
+type readyWorkArgs struct {
+	Query worklet.ReadyWorkQuery
+	Now   time.Time
+}
+
+var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a readyWorkArgs) (worklet.ReadyWork, error) {
+		if b.Tracker == nil {
+			return worklet.ReadyWork{}, errNoHalf
+		}
+		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,

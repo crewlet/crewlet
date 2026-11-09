@@ -1260,6 +1260,10 @@ func workingForIn(evs []*events.Event) *types.WorkingFor {
 		if answer, ok := events.DataAs[*types.A2AMessage](ev); ok && answer != nil {
 			return answer.WorkingFor
 		}
+		// A PICKUP IS WORKED FOR WHOM ITS ITEM IS FOR (ADR-0109, ADR-0112).
+		if pickup, ok := events.DataAs[*types.WorkPickup](ev); ok && pickup != nil {
+			return pickup.WorkingFor
+		}
 		return nil
 	}
 	return nil

@@ -41,7 +41,15 @@ import (
 // at that version and drop the field it was minted for.
 //
 // Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
-const RecordVersion = 2
+// Version 3 is a comment thread's stakes: who owes an answer in it and who
+// awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
+// Version 4 is a history row that keeps its writer's apps
+// ([MutationRecord.ActorAppsKept]).
+const RecordVersion = 4
+
+// AppsKeptVersion is the version from which the applier keeps a record's
+// apps on its history row; every older record keeps an empty column.
+const AppsKeptVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -86,6 +94,9 @@ const baseRecordVersion = 1
 // field from its row.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
+	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
+	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -774,12 +785,17 @@ type MutationRecord struct {
 	// ActorApps are the apps the credential behind an [AuthorOperator]
 	// record that wakes somebody used when the node that took the write
 	// resolved it (iam.ActorApps), and absent on every other record — one
-	// that wakes nobody included, a gate among them. NOT APPLIED to any row:
-	// the change feed reads it, and a turn the record wakes uses no app
-	// outside it (ADR-0109, notify.FirstPartyWriter). Version 2: an older
-	// build retains a record carrying it rather than waking a seat for a
-	// credential it would read as a stranger.
+	// that wakes nobody included, a gate among them. The change feed reads
+	// it, and a turn the record wakes uses no app outside it (ADR-0109,
+	// notify.FirstPartyWriter). Version 2: an older build retains a record
+	// carrying it rather than waking a seat for a credential it would read as
+	// a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
+
+	// ActorAppsKept marks a record whose [MutationRecord.ActorApps] its
+	// history row keeps (`tracker_history.actor_apps`, ADR-0112). Version 4,
+	// so a record older than the rule keeps an empty column on every node.
+	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
 
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
@@ -911,7 +927,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "actor_apps", "operator_id",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "operator_id",
 	"turn_id", "chain", "kind", "notify",
 }
 
@@ -1278,6 +1294,13 @@ type Snapshot struct {
 	// only on a reply.
 	ThreadParticipants []string `json:"thread_participants,omitempty"`
 
+	// ThreadOwing are the handles an open ask in this thread is addressed
+	// to, and ThreadAwaiting the authors of those asks: a stake in the
+	// thread, which any reply by somebody else wakes (ADR-0113). Set only
+	// on a reply.
+	ThreadOwing    []string `json:"thread_owing,omitempty"`
+	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
+
 	// RemovedWatchers are the handles a watchers commit dropped. They go
 	// to the INBOX only: a human learns that a lead removed her watch, and
 	// an agent is not woken about a decision that was not its own.
@@ -1537,6 +1560,8 @@ func (n *Notify) checkSnapshot() error {
 		{"unblocked", len(n.Snapshot.Unblocked), MaxDependents},
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
+		{"thread_owing", len(n.Snapshot.ThreadOwing), MaxThreadParticipants},
+		{"thread_awaiting", len(n.Snapshot.ThreadAwaiting), MaxThreadParticipants},
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {
