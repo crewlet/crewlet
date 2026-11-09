@@ -25,7 +25,7 @@
      "expect": {"woken": []}},
     {"at": 90000, "actor": "qa", "verb": "turn", "item": "W-2",
      "expect": {"woken": []}},
-    {"at": 90010, "actor": "app", "verb": "assign", "item": "W-3", "assignee": "qa",
+    {"at": 90010, "actor": "app", "verb": "status", "item": "W-3", "status": "in_review", "assignee": "qa",
      "expect": {"woken": ["qa"]}}
   ]
 }

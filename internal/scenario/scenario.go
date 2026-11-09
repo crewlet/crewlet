@@ -100,7 +100,8 @@ const (
 	VerbComment Verb = "comment"
 	// VerbAssign hands the item to Assignee.
 	VerbAssign Verb = "assign"
-	// VerbStatus moves the item to Status.
+	// VerbStatus moves the item to Status, handing it to Assignee in the same
+	// change when one is named.
 	VerbStatus Verb = "status"
 	// VerbWatch adds Watcher to the item's watchers.
 	VerbWatch Verb = "watch"
@@ -289,7 +290,7 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		VerbFile:    {"assignee"},
 		VerbComment: {"say", "mentions", "ask", "asks", "answers"},
 		VerbAssign:  {"assignee"},
-		VerbStatus:  {"status"},
+		VerbStatus:  {"status", "assignee"},
 		VerbWatch:   {"watcher"},
 		VerbTurn:    {},
 	}[st.Verb]

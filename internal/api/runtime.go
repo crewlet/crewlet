@@ -260,6 +260,8 @@ type NodeRuntime interface {
 	// the MCP kinds, from the evaluation the health count, the gauge and the
 	// log lines were told, so the page cannot disagree with them.
 	LatestAlarms() []statelog.Alarm
+	// AlarmsEvaluated reports whether that evaluation has run at all.
+	AlarmsEvaluated() bool
 
 	// MCPChecker tests an MCP server where it runs and checks an address
 	// before one is added (`POST /mcp-servers/{name}/check`,
