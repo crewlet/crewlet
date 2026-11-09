@@ -355,8 +355,9 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		snapshot.AnsweredAuthor = w.Thread.AnsweredAuthor
 		snapshot.ThreadParticipants = capHandles(
 			w.Thread.Participants, MaxThreadParticipants)
-		snapshot.ThreadOwing = capHandles(w.Thread.Owing, MaxThreadParticipants)
-		snapshot.ThreadAwaiting = capHandles(w.Thread.Awaiting, MaxThreadParticipants)
+		// CAPPED AND DEDUPED BY THE READ ([Reader.Thread]); Validate refuses more.
+		snapshot.ThreadOwing = slices.Clone(w.Thread.Owing)
+		snapshot.ThreadAwaiting = slices.Clone(w.Thread.Awaiting)
 	}
 	return snapshot
 }

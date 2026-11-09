@@ -134,20 +134,18 @@ func (p *Picker) forget(held map[uuid.UUID]bool) {
 }
 
 // remember records, or with "" forgets, that a seat's ready set named by
-// fingerprint was all handed over; and answers what was recorded before.
-func (p *Picker) remember(seat uuid.UUID, fingerprint string) string {
+// fingerprint was all handed over.
+func (p *Picker) remember(seat uuid.UUID, fingerprint string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	before := p.offered[seat]
 	if fingerprint == "" {
 		delete(p.offered, seat)
-		return before
+		return
 	}
 	if p.offered == nil {
 		p.offered = map[uuid.UUID]string{}
 	}
 	p.offered[seat] = fingerprint
-	return before
 }
 
 func (p *Picker) allOffered(seat uuid.UUID, fingerprint string) bool {

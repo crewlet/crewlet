@@ -368,14 +368,14 @@ func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) 
 	}
 	for rows.Next() {
 		var id, actor, kind, apps string
-		if err := rows.Scan(&id, &actor, &kind, &apps); err != nil {
+		if serr := rows.Scan(&id, &actor, &kind, &apps); serr != nil {
 			_ = rows.Close()
-			return err
+			return serr
 		}
 		assigned[id] = workingForWriter(AuthorKind(kind), actor, apps)
 	}
-	if err := closeRows(rows); err != nil {
-		return err
+	if cerr := closeRows(rows); cerr != nil {
+		return cerr
 	}
 	reporters := map[string]string{}
 	rows, err = tx.QueryContext(ctx, readyReporterStatement(len(ids)), ids...)
