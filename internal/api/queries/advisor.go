@@ -4,9 +4,12 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -14,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -86,7 +90,43 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 	} else {
 		ev.Backup = backupEvidence(s.latestAlarms())
 	}
+	if ev.Paused, err = s.pausedSeats(ctx, company); err != nil {
+		log.WarnContext(ctx, "advisor_seat_pauses_unreadable", "error", err.Error())
+		ev.PausesUnread = true
+	}
 	return ev
+}
+
+// SeatPauseLister is the read of every seat's pause ([coord.SeatPauses]').
+type SeatPauseLister interface {
+	ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error)
+}
+
+// pausedSeats is every agent seat of company the engine paused for a failure,
+// named by handle: the pause record is keyed by the seat's agent id. A node with
+// no pause store has none, since the engine pauses through that store alone.
+func (s Sources) pausedSeats(ctx context.Context, company *config.Company) ([]advisor.PausedSeat, error) {
+	var out []advisor.PausedSeat
+	if s.Pauses == nil {
+		return nil, nil
+	}
+	pauses, err := s.Pauses.ListSeatPauses(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("queries: list the seats' pauses: %w", err)
+	}
+	failed := map[uuid.UUID]string{}
+	for _, p := range pauses {
+		if p.Failure != nil {
+			failed[p.Seat] = p.Failure.Kind
+		}
+	}
+	for role := range company.EachRole() {
+		id, ok := org.DeriveAgentID(company.Name, role.Seat().Handle())
+		if kind, paused := failed[id]; ok && role.Kind != org.KindHuman && paused {
+			out = append(out, advisor.PausedSeat{Handle: role.Seat().Handle(), Name: role.Name, Failure: kind})
+		}
+	}
+	return out, nil
 }
 
 // fleetAlarms is every live node's alarm marks as its last heartbeat carried
