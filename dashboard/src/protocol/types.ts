@@ -6246,6 +6246,12 @@ export interface DecisionItem {
   at: string;
   ask?: WorkAskRow;
   run?: ExecutorRow;
+  /**
+   * The agent that asked was asked under access it no longer holds: what
+   * changed in its access since, as the lines it is told. Empty where the
+   * change cannot be said line by line; absent once it asks again.
+   */
+  access_changed?: { lines: string[] };
 }
 
 /** `decisions`: the open asks put to a person and the executors parked on

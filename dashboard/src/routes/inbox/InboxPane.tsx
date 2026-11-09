@@ -59,7 +59,7 @@ import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
-import type { SeatCondition } from "~/lib/decisions.ts";
+import { accessNote, type SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
@@ -250,6 +250,9 @@ function OpenPane({
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
+  // A QUESTION ASKED BEFORE THE AGENT'S ACCESS CHANGED says so under who asked
+  // it, so the person answers knowing the agent may not be able to act on it.
+  const accessed = row.kind === "decision" ? accessNote(row.subject) : undefined;
   // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
   // byline's start slot floated beside a wrapped byline's middle line.
   const back = onBack ? (
@@ -274,7 +277,7 @@ function OpenPane({
         {back}
         <ReadingPaneByline
           leading={<Badge row={row} who={who} size={20} />}
-          note={note || undefined}
+          note={[note, accessed].filter(Boolean).join(" ") || undefined}
         >
           {sentence}
         </ReadingPaneByline>

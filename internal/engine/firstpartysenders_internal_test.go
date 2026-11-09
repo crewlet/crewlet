@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -68,7 +69,8 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	// alarm transition is routed by the health grant alone, with no actor
 	// (internal/alarmwake), so nobody on it is a person to resolve.
 	parsers := slices.DeleteFunc(slices.Clone(registered), func(p notify.Parser) bool {
-		return p.Source() == alarmwake.Source
+		// NOR THE ACCESS REVIEWS', which name their seat and no sender.
+		return p.Source() == alarmwake.Source || p.Source() == accessreview.Source
 	})
 	if len(parsers) != 4 {
 		t.Fatalf("a company running every half natively registered %d parsers beside "+

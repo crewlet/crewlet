@@ -716,3 +716,16 @@ export function accessHold(
   const notAdmin = admin ? undefined : "Admins change an agent's access.";
   return operator ? notAdmin : (managed ?? notAdmin);
 }
+
+/**
+ * What one agent will review once a draft is saved, as the review says it:
+ * how many of its open items were raised under its access now, "at least" where
+ * the count is a floor, and that it reviews them after the save. The agent is
+ * named as the tab names it.
+ */
+export function reviewWords(open: number, agent: string, atLeast = false): string {
+  const one = open === 1 && !atLeast;
+  const items = one ? "1 open item" : `${open.toLocaleString()} open items`;
+  const were = one ? "was" : "were";
+  return `${atLeast ? "At least " : ""}${items} from ${agent} ${were} raised under its current access; it will review them after you save.`;
+}

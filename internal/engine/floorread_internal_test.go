@@ -139,6 +139,13 @@ func (f *listingsHeld) Admissions(ctx context.Context) ([]coord.Admission, error
 	return f.wrappedFleet.Admissions(ctx)
 }
 
+func (f *listingsHeld) AccessReviewRevisions(ctx context.Context) (map[string]uint64, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.AccessReviewRevisions(ctx)
+}
+
 func (f *listingsHeld) MaintenanceAcks(ctx context.Context, stream string) ([]coord.MaintenanceAck, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

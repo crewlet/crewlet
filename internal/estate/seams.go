@@ -389,6 +389,17 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 	return out, err
 }
 
+// ResolveComment resolves the writer's own remark on a work item: an open
+// question its asker withdraws.
+func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
+	out, err := call(ctx, w.r, opResolveTaskComment, &w.actor, resolveCommentOnTaskArgs{
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Notify: notify,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
 // WritePriorities sets a person's priority order, conditioned on ifMatch.
 func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error) {

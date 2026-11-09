@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -153,6 +154,10 @@ type Dispatcher struct {
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
+
+	// ReviewSettled reports an access review with nothing left to tell
+	// ([Engine.AccessReviewSettled]), acked without a turn. Nil settles nothing.
+	ReviewSettled func(ctx context.Context, handle string) bool
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -568,6 +573,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	held.events = surviving
 	d.noteSkipped(ctx, handle, screening.Events, surviving, answeredInThread)
 	if len(surviving) == 0 {
+		return queue.Ack()
+	}
+	// AN ACCESS REVIEW WITH NOTHING LEFT TO TELL, acked unrun: the turn that
+	// told the change already asked for the review (internal/accessreview).
+	if d.ReviewSettled != nil && accessReviewsOnly(surviving) && d.ReviewSettled(ctx, handle) {
+		log.InfoContext(ctx, "access_review_settled", "seat", handle, "events", len(surviving),
+			"detail", "the seat was already told its access as it stands; no review turn runs")
 		return queue.Ack()
 	}
 
@@ -1982,4 +1994,15 @@ var replyRank = map[turn.ReplyKind]int{
 	turn.ReplyNone:   1,
 	turn.ReplyEngine: 2,
 	turn.ReplyTool:   3,
+}
+
+// accessReviewsOnly reports a delivery made only of access reviews.
+func accessReviewsOnly(evs []*events.Event) bool {
+	for _, ev := range evs {
+		n, ok := events.DataAs[*types.ExternalNotification](ev)
+		if !ok || n == nil || n.NotificationSource != accessreview.Source {
+			return false
+		}
+	}
+	return len(evs) > 0
 }

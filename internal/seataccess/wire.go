@@ -192,6 +192,22 @@ type PlanAnswer struct {
 
 	// StepUp is whether saving the whole draft needs a fresh step-up.
 	StepUp bool `json:"step_up,omitempty"`
+
+	// Reviews are the agents the draft changes the access of that have open
+	// work to review once it is saved (ADR-0111); absent where not counted.
+	Reviews []SeatReview `json:"reviews,omitempty"`
+}
+
+// SeatReview is one agent the draft asks to review its open work.
+type SeatReview struct {
+	Handle string `json:"handle"`
+	// Open is how many distinct open items it has: questions still open, runs
+	// waiting on a person, and work items in progress or blocked. AtLeast is
+	// that the tracker stopped counting at its ceiling, so Open is a floor.
+	Open    int  `json:"open"`
+	AtLeast bool `json:"at_least,omitempty"`
+	// Changes are the change lines it will be told, at most twenty.
+	Changes []string `json:"changes"`
 }
 
 // CredentialAnswer is the answer to a credential a person pasted for a seat:

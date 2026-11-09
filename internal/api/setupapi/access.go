@@ -1197,14 +1197,30 @@ type accessChange struct {
 func draftEdits(current seataccess.Answer, draft accessDraft) ([]configapi.SeatEdit,
 	[]accessChange) {
 
+	return seatEdits(current, draft.Seats)
+}
+
+// DraftSeatEdits is the seat edits a save of seats writes, against current:
+// what a plan measures a draft by, so its count follows the save's own rules.
+func DraftSeatEdits(current seataccess.Answer,
+	seats map[string]map[seataccess.Lane]seataccess.Desired) []configapi.SeatEdit {
+
+	edits, _ := seatEdits(current, seats)
+	return edits
+}
+
+// seatEdits is [draftEdits] over the draft's seats.
+func seatEdits(current seataccess.Answer,
+	seats map[string]map[seataccess.Lane]seataccess.Desired) ([]configapi.SeatEdit, []accessChange) {
+
 	var edits []configapi.SeatEdit
 	var changed []accessChange
-	for _, handle := range sortedHandles(draft.Seats) {
+	for _, handle := range sortedHandles(seats) {
 		seat, _ := seatOf(current, handle)
 		var lanes []seataccess.Lane
-		for _, lane := range sortedLanes(draft.Seats[handle]) {
+		for _, lane := range sortedLanes(seats[handle]) {
 			before := seat.Lanes[lane].Desired
-			after := draft.Seats[handle][lane].Normalized()
+			after := seats[handle][lane].Normalized()
 			if before.Enabled == after.Enabled && before.SameAccess(after) {
 				continue
 			}
@@ -1215,7 +1231,7 @@ func draftEdits(current seataccess.Answer, draft accessDraft) ([]configapi.SeatE
 		if len(lanes) == 0 {
 			continue
 		}
-		wants := draft.Seats[handle]
+		wants := seats[handle]
 		edits = append(edits, configapi.SeatEdit{Handle: handle,
 			Edit: func(role *config.Role) error {
 				for _, lane := range lanes {

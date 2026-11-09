@@ -11,7 +11,7 @@ package httpjson
 // reads every package clause in the module and fails, naming the difference,
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
-	"a2a": true, "a2atest": true, "accessdomain": true, "accessmigrate": true, "adr": true, "agentaccess": true, "alarmwake": true,
+	"a2a": true, "a2atest": true, "accessdomain": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
 	"api":    true,
 	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,

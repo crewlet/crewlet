@@ -305,6 +305,9 @@ const (
 	ActionPageCommentEdit   Action = "pages.comment.edit"
 	ActionPageCommentRemove Action = "pages.comment.remove"
 	ActionWorkCommentEdit   Action = "work.comment.edit"
+	// ActionWithdrawAsk is a seat withdrawing its own question, or a call its
+	// executor holds for approval (ADR-0111): an agent's alone, on its own.
+	ActionWithdrawAsk Action = toolname.WithdrawAsk
 
 	// --- the org chart ---------------------------------------------- //
 	//
@@ -1549,6 +1552,9 @@ var rules = map[Action]rule{
 	// [rule.seatOnly].
 	ActionSessionsList: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	ActionSessionRead:  {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
+	// A SEAT'S OWN QUESTION WITHDRAWN: the tracker's writer holds it to its
+	// author and a run to its seat, so the row asks nothing more.
+	ActionWithdrawAsk: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
 	// seat's turn, and the ROLE decides which seats are offered it. No
 	// person takes it — see [rule.seatOnly].
@@ -2210,6 +2216,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionWithdrawAsk: {"an agent seat's own verb: a person resolves their own question from its " +
+		"work item, and withdraws nothing an agent's run waits on", tellSeat},
 	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
 		"person reads a seat's as its trail", tellSeat},
 	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +

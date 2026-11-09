@@ -915,6 +915,47 @@ describe("the list", () => {
   });
 });
 
+describe("a question asked before its agent's access changed", () => {
+  // THE PERSON ANSWERS KNOWING THE AGENT MAY NOT BE ABLE TO ACT ON IT: the row
+  // and the reading pane say the question was asked before the agent's access
+  // changed, with the change, short. Mutation: drop the note and an approval
+  // the agent can no longer act on reads like any other.
+  test("its row and its pane say so, with the change", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = {
+      ...askItem(),
+      access_changed: {
+        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
+      },
+    };
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    const note =
+      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain(note);
+    expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);
+  });
+
+  // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
+  // is told only that the access changed.
+  test("a reader sent no change lines is told only that it changed", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Asked before this agent's access changed.");
+    expect(list.textContent).not.toContain("level");
+  });
+
+  test("a question asked under the access the agent holds now says nothing of it", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(document.body.textContent).not.toContain("access changed");
+  });
+});
+
 describe("the pane", () => {
   test("the byline is one sentence: who, what is asked of you, and the task", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";

@@ -363,6 +363,16 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		}
 	}
 	answer.Notice = a.notice(ctx, q.Kind, records, answer.Seats)
+	if draft != nil {
+		// AND WHO WILL REVIEW WHAT ONCE IT IS SAVED (ADR-0111): a count the
+		// plan could not take is left out and said in the log, never a zero.
+		reviews, err := a.engine.draftReviews(ctx, q.Company, q.Roster, answer, *draft, a.engine.openWork)
+		if err != nil {
+			log.WarnContext(ctx, "access_plan_reviews_uncounted", "kind", string(q.Kind),
+				"error", err.Error(), "detail", "the plan names no agent's open work to review")
+		}
+		plan.Reviews = reviews
+	}
 	return answer, plan, nil
 }
 
