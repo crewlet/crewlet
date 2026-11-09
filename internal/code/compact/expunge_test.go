@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -91,6 +93,19 @@ func (x *fixture) mustOwe() code.ExpungeCandidate {
 // the node's maintainer keeps the one slot of the maintenance lane an
 // expunge's build may take for a moment at a time, as compactWhileBusy waits
 // it out, for a minute at the most.
+//
+// ASKED AGAIN AS THE NEXT PASS ASKS IT, of what the listing names then
+// (compact.Listed), never of cand again: a cycle is two records, and its busy
+// answer may come after its BEGIN has applied — its rescue's admission
+// refused while the maintainer holds the lane, its copy still holding the
+// begin's inputs — so the listing names that expunge open from then on. A
+// cycle asked of cand again, which names none, plans over a copy whose every
+// live pack the begin dated at its scan: a purge's finds its request in hand
+// and answers not_due (#840). A compaction's and a publication's busy answers
+// come before their one record, which is why compactWhileBusy and
+// publishWhileBusy ask the same candidate again. A listing that no longer
+// names the repository after a busy answer is answered as the error, with
+// that busy answer.
 func expungeWhileBusy(t testing.TB, c *compact.Compactor, cand code.ExpungeCandidate) (compact.Outcome, error) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -100,6 +115,15 @@ func expungeWhileBusy(t testing.TB, c *compact.Compactor, cand code.ExpungeCandi
 			return out, err
 		}
 		time.Sleep(20 * time.Millisecond)
+		listed, ok, lerr := compact.Listed(t.Context(), c, cand.ID)
+		switch {
+		case lerr != nil:
+			return out, fmt.Errorf("the expunge listing, read again after %s answered busy (%w): %w", cand.Name, err,
+				lerr)
+		case !ok:
+			return out, fmt.Errorf("the expunge listing names %s no more after it answered busy: %w", cand.Name, err)
+		}
+		cand = listed
 	}
 }
 
@@ -523,7 +547,10 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 	// what the node does in the background: a publication's layer, which the
 	// installer places by swapping the copy, may swap the one the expunge's
 	// sync pinned, and a plan from that copy is refused busy
-	// (cache.ErrSuperseded), never read as a repository holding no pack.
+	// (cache.ErrSuperseded), never read as a repository holding no pack. A
+	// busy answer may come after the expunge's begin, too — its rescue's
+	// admission refused while the node's maintainer holds the lane — which is
+	// why it is asked again of what the listing names then (expungeWhileBusy).
 	for _, other := range []struct {
 		name  string
 		point codefault.Point
@@ -624,6 +651,62 @@ func TestAPassOverACopyASwapReplacedPlansNothing(t *testing.T) {
 	cc.mu.Unlock()
 	if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
 		t.Errorf("the next pass, past the swap, answered %s, %v; want the purge's expunge applied", out, err)
+	}
+}
+
+// AN EXPUNGE BUSY PAST ITS BEGIN IS FINISHED BY THE NEXT ASK OF THE LISTING
+// (#840): a cycle's busy answer may come after its begin has applied — its
+// rescue's admission refused while the node's maintainer holds the one slot
+// of the maintenance lane an expunge's build may take, as it may at any of its
+// ticks — leaving the expunge open, which the listing names from then on. The
+// next ask, of what the listing names, as a pass asks (expungeWhileBusy),
+// finishes it from its rows: the one begin committed, the purge served, the
+// leaked commit in no live pack.
+//
+// Mutation: ask expungeWhileBusy's next cycle of the candidate it was first
+// given, which names no expunge open, and that cycle plans over a copy whose
+// every live pack the begin dated at its scan: the purge's expunge answers
+// not_due.
+func TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.push(4 << 10)
+	leaked := x.leak("feature")
+	x.purge()
+	// THE MAINTAINER'S RUN AT THE RESCUE: the first admission over a copy past
+	// the begin — at the drop epoch the begin moved it to — is refused as the
+	// cache refuses one while the maintainer's run holds the lane; every other
+	// is the cache's own.
+	var refused atomic.Bool
+	cc := countedOver(x.node().Cache())
+	cc.answerExpunges(func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error) {
+		if s.DropEpoch > 0 && refused.CompareAndSwap(false, true) {
+			return nil, fmt.Errorf("cache: expunge %s: %w: a case's maintenance run holds the lane",
+				codetest.RepoName, gitproc.ErrBusy)
+		}
+		return x.node().Cache().AdmitExpunge(s, objects, limits)
+	})
+	c, rec, l := x.compactorOf(func(o *compact.Options) { o.Cache = cc })
+	if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
+		t.Fatalf("the purge's expunge, busy past its begin: %s, %v; want applied", out, err)
+	}
+	if !refused.Load() {
+		t.Fatal("the premise: no admission over a copy past the begin was refused")
+	}
+	if n := counter(rec, metrics.CodeExpungeRuns, "outcome", string(compact.OutcomeBusy)); n == 0 {
+		t.Errorf("%s{outcome=busy} = 0, want the cycle the refused rescue left open counted busy",
+			metrics.CodeExpungeRuns)
+	}
+	for _, msg := range []string{"code_expunge_begun", "code_expunge_committed"} {
+		if n := l.count(msg); n != 1 {
+			t.Errorf("%s logged %d times, want once: the one begin, finished:\n%s", msg, n, l)
+		}
+	}
+	if _, ok := x.owed(); ok {
+		t.Error("the purge is still owed after the expunge its busy answer left open was finished")
+	}
+	if x.liveHold(leaked) {
+		t.Errorf("a live pack still holds the leaked commit %s after the purge", leaked)
 	}
 }
 

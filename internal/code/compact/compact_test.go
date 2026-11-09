@@ -351,6 +351,9 @@ type counted struct {
 	admit func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	// publish, where set, answers every publication's admission.
 	publish func(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission, error)
+	// expunge, where set, answers every admission of an expunge's builds —
+	// its kept and dropping packs', and its rescue's.
+	expunge func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	// superseded, where set, answers every read of the live packs as the cache
 	// answers one of a copy a swap replaced after the sync pinned it.
 	superseded bool
@@ -398,6 +401,16 @@ func (c *counted) AdmitPublication(s cache.Synced, base int, layerObjects, repac
 	return c.Cache.AdmitPublication(s, base, layerObjects, repackObjects, limits)
 }
 
+func (c *counted) AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error) {
+	c.mu.Lock()
+	expunge := c.expunge
+	c.mu.Unlock()
+	if expunge != nil {
+		return expunge(s, objects, limits)
+	}
+	return c.Cache.AdmitExpunge(s, objects, limits)
+}
+
 // answerAdmissions has every later compaction's admission answered by admit;
 // nil asks the cache.
 func (c *counted) answerAdmissions(admit func(cache.Synced, int64, code.Limits) (*cache.Admission, error)) {
@@ -413,6 +426,14 @@ func (c *counted) answerPublications(publish func(cache.Synced, int64, int64, co
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.publish = publish
+}
+
+// answerExpunges has every later admission of an expunge's builds answered by
+// expunge; nil asks the cache.
+func (c *counted) answerExpunges(expunge func(cache.Synced, int64, code.Limits) (*cache.Admission, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expunge = expunge
 }
 
 // counts is the syncs and plans so far.
