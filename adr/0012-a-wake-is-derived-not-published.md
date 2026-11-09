@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/changefeed`
-- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt` and `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`
+- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt`, `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`, and for an operator's discard `internal/engine.TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt` and `internal/engine.TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost`
 - **Cost-when-tried:** both failure modes were already in the tree when this was written. The Mattermost socket path SWALLOWS a failed publish — a wake lost with a logged line and no retry — and the webhook path is correct only because the vendor retries it, which is a property of somebody else's product rather than of this engine.
 - **Tag-status:** unreleased
 
@@ -109,14 +109,29 @@ expires, its wake with it, counted once across the fleet as
 raised per log from the first entry, naming each entry's age and the time it
 has left.
 
-What clears an entry is a REPLAY or its expiry. A feed's start lists its
-domain's dead letters and opens each frame exactly as a delivery is opened —
-verified, its envelope read, the translator asked — and publishes what it can
-now read through the same claim a delivery passes, then drops the entry; an
-entry it still cannot read is left for a node that can, and a frame the fleet
-did not write is dropped. The start is the moment that matters, because what
-makes an entry readable arrives with a restart: a newer build, or a key, since
-a node's verifier is built once at boot.
+What clears an entry is a REPLAY, an operator's DISCARD, or its expiry. A
+feed's start lists its domain's dead letters and opens each frame exactly as a
+delivery is opened — verified, its envelope read, the translator asked — and
+publishes what it can now read through the same claim a delivery passes, then
+drops the entry; an entry it still cannot read is left for a node that can, and
+a frame the fleet did not write is dropped. The start is the moment that
+matters, because what makes an entry readable arrives with a restart: a newer
+build, or a key, since a node's verifier is built once at boot.
+
+An entry no build will ever read — a record sealed under a key retired from
+every node, one no build translates and none will — would keep
+`feed_dead_lettered` raised for the whole retention, hiding the next entry
+behind a loss already accepted. So an operator who has decided its wake can be
+lost DISCARDS it: `GET /feeds/dead-letters` lists every wake feed's entries by
+the broker's sequence, never their frames, and
+`POST /feeds/dead-letters/{id}/discard?confirm={id}` (`crewlet feeds discard`),
+admin's at a recent proof, drops the entry from whichever feed's subject holds
+it — never one on another `dlq.` subject, a subscription's poison — through
+the same ledger a replay's drop passes. That ledger takes the claim the expiry
+count takes, so no node counts a discarded entry as one the retention lost; the
+discard is logged naming who pressed it (`changefeed_dead_letter_discarded`)
+and counted as `crewlet.tracker.feed.dead_letter_discarded`, and one a replay,
+the expiry or another discard accounted for first removed nothing and says so.
 
 A TAMPERED frame — a MAC that fails under a key the node holds — is still
 acknowledged and skipped: no node should act on a frame this fleet did not

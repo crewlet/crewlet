@@ -36,6 +36,8 @@ subcommand below is served by it.
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
+| `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
+| `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -2289,6 +2291,64 @@ The key reaches every stream and bucket and never the system account —
 membership changes go through `remove` — and it grants nothing its holder
 lacks: whoever reads the node's Tier A holds the keyring. It is admitted for as
 long as its key is in `secrets.keys`; write it again after a rotation drops it.
+
+## `crewlet feeds`
+
+```
+crewlet feeds dead-letters [-json] [<config.yaml>] [-api URL]
+crewlet feeds discard <id> -confirm <id> [<config.yaml>] [-api URL]
+```
+
+The wake feeds' dead letters. A domain's wake feed hands a record it cannot read
+back for a node that can, and one no node has read within an hour of being
+stored is kept as a dead letter in `CREWLET_DLQ`, its sealed frame inside, and
+raises `feed_dead_lettered`; the first node whose feed starts able to read an
+entry replays it, and the stream's age bound lets one go after
+`stream.event_retention_hours`
+([Dead letters](../concepts/event-system.md#dead-letters)). Both commands talk
+to a running node, since the entries are kept in its broker, and every node
+serving the API answers alike. They are clients of the routes in the
+[API reference](api-endpoints.md#the-wake-feeds-dead-letters), and the token
+in `CREWLET_API_TOKEN` takes `admin`.
+
+### `crewlet feeds dead-letters`
+
+One row per entry, every feed's in turn: its **id**, the one `discard` names; its
+**feed** (`work`, `page`, `chat` or `code`); the **reason** no node read it
+(`newer_record`, `newer_envelope`, `unknown_key`, `untranslatable`, or
+`(unreadable)` for an entry a newer build kept, which this build cannot read
+past its id); where its **record** was delivered from, written as every
+operator surface writes a position (`CREWLET_TRACKER_LOG@1:1234`); its **key**;
+how long ago it was **kept** and when it **expires**, by the answering node's
+clock. Under the table, each entry's own words: what the node that gave up met,
+or why this build cannot read the entry. Feeds holding nothing say so.
+
+A feed whose dead letters the node could not list is named on stderr with its
+error, and the command **exits non-zero** — an unread feed is not an empty one.
+`-json` prints the node's answer as JSON for a script, its keys sorted, and
+exits the same way.
+
+### `crewlet feeds discard`
+
+Drops the entry `<id>` from whichever feed holds it, and prints the entry it
+dropped. **Its wake is lost for good: no node will ever derive it**, which is
+why `-confirm` must repeat the id. Discard an entry only once you have decided
+its wake can be lost — one no build will ever read, such as a record sealed
+under a key you have retired from every node's `secrets.keys`, which would
+otherwise keep `feed_dead_lettered` raised until the retention lets it go. An
+entry a newer build will read is not one: finish the roll instead, and the
+first node on that build replays it.
+
+The node takes the claim on the entry's going that its replay and the alarm's
+expiry count take, so no node counts a discarded entry as a wake the retention
+lost; it logs `changefeed_dead_letter_discarded` naming who pressed it and
+counts `crewlet.tracker.feed.dead_letter_discarded`. An id no feed holds — never
+an entry, one already replayed, expired or discarded, or a subscription's
+poison under another `dlq.` subject, which this never reaches — is refused as
+`no_dead_letter` and removes nothing. Where a feed could not be listed and no
+other holds the id, the node says so rather than "no such entry": run it again.
+A discard the node did not answer may have been made; `dead-letters` lists what
+the feeds still hold.
 
 ## `crewlet seats`
 

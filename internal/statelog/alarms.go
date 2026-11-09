@@ -1829,8 +1829,8 @@ var table = []rule{
 		// feed handed back for an hour — a roll that outlasted it, a key
 		// no node holds, a record no build here can translate — kept in
 		// CREWLET_DLQ, sealed frame and all, until the first node whose
-		// feed starts able to read it replays it, or the stream's
-		// retention lets it go.
+		// feed starts able to read it replays it, an operator discards it,
+		// or the stream's retention lets it go.
 		//
 		// RAISED FROM THE FIRST ENTRY, PER LOG: each domain's feed keeps
 		// its own subject, and a single entry is a wake somebody has not
@@ -1845,13 +1845,17 @@ var table = []rule{
 			}
 			return feedDeadLetterDetail(r.FeedDeadLetters), true
 		},
-		remedy: "Each entry is a wake nobody has had. Bring a node that can read the " +
-			"records up — the build they need, or the keyring: a key in `secrets.keys` " +
-			"on every node and a restart — and the first node whose feed starts able to " +
-			"read an entry derives its wake, once, and drops the entry. A record no " +
-			"build reads needs a build that fixes it. An entry nothing replays expires " +
-			"after `stream.event_retention_hours` and its wake is lost " +
-			"(`crewlet.tracker.feed.dead_letter_expired`). Each entry's " +
+		remedy: "Each entry is a wake nobody has had; `crewlet feeds dead-letters` " +
+			"lists them by id, each with its record and why no node read it. Bring a " +
+			"node that can read the records up — the build they need, or the keyring: " +
+			"a key in `secrets.keys` on every node and a restart — and the first node " +
+			"whose feed starts able to read an entry derives its wake, once, and drops " +
+			"the entry. A record no build reads needs a build that fixes it. An entry no " +
+			"node will ever read, such as one sealed under a key retired from every node, " +
+			"is given up with `crewlet feeds discard <id> -confirm <id>`, its wake lost for good " +
+			"(`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays " +
+			"or discards expires after `stream.event_retention_hours` and its wake is " +
+			"lost (`crewlet.tracker.feed.dead_letter_expired`). Each entry's " +
 			"`changefeed_record_dead_lettered` log line names the record and why.",
 	},
 	{
@@ -3031,6 +3035,13 @@ func Kinds() []Kind {
 // (`fmtDuration`, lib/format.ts), so a figure and the sentence beside it
 // agree. Never a bare count of seconds.
 func Spoken(d time.Duration) string { return spoken(d) }
+
+// SpokenSpan is a span that may run to days in days and hours ("29d 23h") and
+// any shorter one as [Spoken] says it: a dead letter's age and the time it has
+// left, as `feed_dead_lettered` names each entry, for a surface outside this
+// package that lists the same entries — `crewlet feeds dead-letters` — so the
+// alarm and the listing an operator reads beside it say one entry alike.
+func SpokenSpan(d time.Duration) string { return spokenSpan(d) }
 
 // SpokenWait is a WAIT a person is told to sit out ("retry in about 22h
 // 33m"): the largest two units, ROUNDED UP at every magnitude, so a wait never

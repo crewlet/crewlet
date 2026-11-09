@@ -131,6 +131,10 @@ var startsWork = []struct {
 	{http.MethodPost, "/worklet/retention/ack", true},
 	{http.MethodPost, "/fleet/broker/remove/node-c", true},
 	{http.MethodPost, "/fleet/broker/remove-peer/abcdefgh", true},
+	// UNCONFIRMED, so a serving node's handler answers it 400 rather than the
+	// 404 its feeds holding nothing would give a confirmed one — which this
+	// declaration's other half reads as a route that is not mounted.
+	{http.MethodPost, "/feeds/dead-letters/41/discard", true},
 	{http.MethodPut, "/worklet/files/ENG/report.md", false},
 	{http.MethodDelete, "/worklet/files/ENG/report.md", false},
 	{http.MethodPost, "/worklet/items/ENG-1/purge", false},
@@ -532,9 +536,10 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	}
 
 	// Every other read keeps answering, which is how an operator watches
-	// the drain: the dashboard, the REST reads (the code reads among them)
-	// and the query surface.
-	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer", "/gitlet/repos"} {
+	// the drain: the dashboard, the REST reads (the code reads and the
+	// wake feeds' dead letters among them) and the query surface.
+	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer", "/gitlet/repos",
+		"/feeds/dead-letters"} {
 		if rec := send(t, a, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s answered %d during a drain, want 200", path, rec.Code)
 		}

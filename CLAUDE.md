@@ -130,13 +130,13 @@ Rules:
 
 ```
 cmd/crewlet/          # The one binary: run / validate / schema / migrate / budgets /
-                      #   backup / retention / worklet / objects / fleet / seats /
-                      #   artifacts / chatlet / secrets / config / iam / llm / search /
-                      #   assistant / gitlet, the six vendor CLIs (gitlab, github, jira,
-                      #   slack, confluence, mattermost) and mcp-relay, which a seat's
-                      #   coding harness starts rather than a person. Every command the
-                      #   switch dispatches must appear in usage(): nothing connects
-                      #   them, a test asserts it
+                      #   backup / retention / worklet / objects / fleet / feeds /
+                      #   seats / artifacts / chatlet / secrets / config / iam / llm /
+                      #   search / assistant / gitlet, the six vendor CLIs (gitlab,
+                      #   github, jira, slack, confluence, mattermost) and mcp-relay,
+                      #   which a seat's coding harness starts rather than a person.
+                      #   Every command the switch dispatches must appear in usage():
+                      #   nothing connects them, a test asserts it
 internal/             # Everything else, mapped package by package in
                       #   internal/README.md. Nothing here is importable from outside
                       #   the module: the engine has no stable Go API, only a CLI, a

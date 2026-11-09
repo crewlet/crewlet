@@ -423,15 +423,16 @@ const (
 	ActionSetupAccessRaise Action = "setup.access.raise"
 	// ActionFleetOperate is the deployment's own controls: a backup, the
 	// retention gestures, the capacity window, the fleet broker's
-	// membership — and a verify of a Gitlet node's cache of one repository,
+	// membership, the discard of a wake feed's dead letter (a wake given up
+	// for good) — and a verify of a Gitlet node's cache of one repository,
 	// which reads every byte of THIS NODE's copy, holds a maintenance slot
 	// and the memory its check needs, and with a repair rewrites the copy
 	// every fetch on the node is served from: an operation on the node, as
 	// a backup of it is, and nothing a repository's own grant decides.
 	ActionFleetOperate Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
-	// maintenance window's status, the value a reanchor must echo and a
-	// verify's outcome.
+	// maintenance window's status, the value a reanchor must echo, the wake
+	// feeds' dead letters and a verify's outcome.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
 	// for no step-up: a read changes nothing, and a status an operator
 	// cannot see without re-proving who they are is a status they stop

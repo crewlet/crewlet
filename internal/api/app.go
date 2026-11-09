@@ -120,6 +120,10 @@ type App struct {
 	// fleetbroker.go.
 	fleetBroker FleetBrokerControl
 
+	// deadLetters lists and discards the wake feeds' dead letters. See
+	// feeddeadletters.go. Never nil: see [Options.DeadLetters].
+	deadLetters FeedDeadLetters
+
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
 	company func() (*config.Company, *org.Organization)
@@ -312,8 +316,8 @@ type guardedMounter interface {
 // Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Retention, Code, Capacity, FleetBroker, Backup, Nodes, AuthEvents and
-// Audit are REQUIRED, and [New] refuses a missing one by name.
+// Setup, Retention, Code, Capacity, FleetBroker, DeadLetters, Backup, Nodes,
+// AuthEvents and Audit are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -705,6 +709,15 @@ type Options struct {
 	// [FleetBrokerControl].
 	FleetBroker FleetBrokerControl
 
+	// DeadLetters lists and discards the wake feeds' dead letters — see
+	// [FeedDeadLetters].
+	//
+	// REQUIRED, for [Options]' reason: every engine [engine.New] builds
+	// keeps its feeds' dead letters through one ledger over its queue, and
+	// the entries are the broker's, so a node serving the API answers for
+	// every feed whether or not its own logs are running.
+	DeadLetters FeedDeadLetters
+
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
@@ -1026,6 +1039,7 @@ func New(opts Options) (*App, error) {
 	a.listens = opts.OperatorListens
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
+	a.deadLetters = opts.DeadLetters
 
 	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
 	mux := &routeTable{mux: http.NewServeMux()}
@@ -1036,9 +1050,9 @@ func New(opts Options) (*App, error) {
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
 	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures,
-	// the capacity window and the fleet broker's membership — each mounted
-	// with the grant it takes, and failing the boot where a policy is
-	// missing.
+	// the capacity window, the fleet broker's membership and the wake
+	// feeds' dead letters — each mounted with the grant it takes, and
+	// failing the boot where a policy is missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
@@ -1385,6 +1399,7 @@ func (o Options) missing() error {
 		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
+		{"DeadLetters", o.DeadLetters == nil},
 		{"Backup", o.Backup == nil},
 		{"Objects", o.Objects == nil},
 		{"Nodes", o.Nodes == nil},
@@ -1404,10 +1419,11 @@ func (o Options) missing() error {
 }
 
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
-// than the company: the backup, the retention gestures, the capacity window
-// and the fleet broker's membership. Every one is admin's ([iam.GrantAdmin]),
-// through the authority table's [authz.ActionFleetOperate] for a write and
-// [authz.ActionFleetRead] for a read, stated where it is mounted.
+// than the company: the backup, the retention gestures, the capacity window,
+// the fleet broker's membership and the wake feeds' dead letters. Every one is
+// admin's ([iam.GrantAdmin]), through the authority table's
+// [authz.ActionFleetOperate] for a write and [authz.ActionFleetRead] for a
+// read, stated where it is mounted.
 //
 // # They decided nothing, and the guard in front of them decides nothing either
 //
@@ -1423,23 +1439,24 @@ func (o Options) missing() error {
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO (the maintenance status and the reanchor confirmation value),
-// because `/worklet/retention*` is the deployment's surface whole, which is
-// what the `retention` question already declares: a map of which machine
-// holds what, and the value a reanchor must echo, are not the company's
-// working state.
+// THE READS TOO (the maintenance status, the reanchor confirmation value and
+// the wake feeds' dead letters), because `/worklet/retention*` is the
+// deployment's surface whole, which is what the `retention` question already
+// declares: a map of which machine holds what, the value a reanchor must echo,
+// and the records no node could read, are not the company's working state.
 //
 // # A write asks for a recent proof of identity, and a read does not
 //
 // The two verbs ask the same permission and differ in the step-up alone: every
 // write here changes what the deployment does for everybody on it, so it asks
-// for a proof inside `api.auth.session.step_up`, while the two reads — the
-// maintenance window's status and the value a reanchor must echo — change
-// nothing, and a status an operator cannot see without re-proving who they
-// are is one they stop checking. The METHOD picks the verb, because that is
-// the one fact about a route this surface already treats as its read/write
-// line (the session table's columns are keyed on it too), and a second list
-// of which patterns read would be the thing that drifts.
+// for a proof inside `api.auth.session.step_up`, while the three reads — the
+// maintenance window's status, the value a reanchor must echo and the dead
+// letters' listing — change nothing, and a status an operator cannot see
+// without re-proving who they are is one they stop checking. The METHOD picks
+// the verb, because that is the one fact about a route this surface already
+// treats as its read/write line (the session table's columns are keyed on it
+// too), and a second list of which patterns read would be the thing that
+// drifts.
 func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
@@ -1479,6 +1496,10 @@ func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc
 	// election runs on. The listing beside it is the `fleet_broker`
 	// question, a named read. See fleetbroker.go.
 	a.mountFleetBroker(mount)
+	// The wake feeds' dead letters: the listing, and an operator's discard
+	// of an entry whose wake they have decided to lose. See
+	// feeddeadletters.go.
+	a.mountFeedDeadLetters(mount)
 }
 
 // deploymentPolicy is the verb one deployment route is decided under: a read
