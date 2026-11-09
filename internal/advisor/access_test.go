@@ -2,6 +2,7 @@ package advisor_test
 
 import (
 	"errors"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -46,6 +47,13 @@ func TestEveryGrantChangesOnlyWhatItNames(t *testing.T) {
 	}
 	if ch := fix.Options[0].Change; ch.Entity != advisor.EntityRoles || ch.ID != "pm" || ch.Summary == "" {
 		t.Errorf("change = %+v, want a write of pm's own entity with a summary", ch)
+	}
+	// THE ONE FIELD, merged into the entity as the preview reads it: a
+	// snapshot of the seat's integrations would revert any change made since.
+	want := map[string]any{"integrations": map[string]any{"github": map[string]any{
+		"permissions": map[string]any{"pull_requests": "write"}}}}
+	if ch := fix.Options[0].Change; len(ch.Set) != 0 || !reflect.DeepEqual(ch.Merge, want) {
+		t.Errorf("change sets %v and merges %v, want only %v merged", ch.Set, ch.Merge, want)
 	}
 	if !grants(t, c, "pm", advisor.AccessGitHubPulls, fix) {
 		t.Error("after the change pm still cannot merge")

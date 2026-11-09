@@ -1,8 +1,9 @@
 /**
- * An agent's access request answered (ADR-0118). The invariants: choosing the
- * grant previews the exact change the engine built and sends nothing; Apply
- * saves the grant and only then answers the question; closing the preview
- * answers nothing; declining answers at once.
+ * An agent's access request answered (ADR-0118). The invariants: the grant's
+ * button says the engine's words, never the asker's; choosing it previews the
+ * exact change the engine built and sends nothing; Apply saves the grant and
+ * only then answers the question; closing the preview answers nothing;
+ * declining answers at once.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -133,7 +134,7 @@ function mount() {
           askedBy="ada"
           question="Allow Ada to watch the engine's health and wake on its alarms?"
           options={[
-            { id: "grant-health", label: "Allow it" },
+            { id: "grant-health", label: "Approve the release" },
             { id: "decline", label: "Not now" },
           ]}
           recommended="grant-health"
@@ -147,9 +148,17 @@ function mount() {
   );
 }
 
+test("the grant's button says the engine's words, not the asker's", () => {
+  mount();
+  expect(
+    screen.getByRole("button", { name: /Allow Ada to watch the engine's health/ }),
+  ).toBeTruthy();
+  expect(screen.queryByText("Approve the release")).toBeNull();
+});
+
 test("choosing the grant previews the change and answers nothing yet", async () => {
   mount();
-  fireEvent.click(screen.getByRole("button", { name: /Allow it/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Allow Ada to watch/ }));
   await waitFor(() => expect(dryRunEntity).toHaveBeenCalled());
   expect(query).toHaveBeenCalledWith("advisor_access", { seat: "ada", access: "grant-health" });
   expect(sent).toHaveLength(0);
@@ -158,7 +167,7 @@ test("choosing the grant previews the change and answers nothing yet", async () 
 
 test("apply saves the grant, and only then answers the question with it", async () => {
   mount();
-  fireEvent.click(screen.getByRole("button", { name: /Allow it/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Allow Ada to watch/ }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy());
   await waitFor(() =>
     expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
@@ -175,7 +184,7 @@ test("apply saves the grant, and only then answers the question with it", async 
 
 test("closing the preview answers nothing", async () => {
   mount();
-  fireEvent.click(screen.getByRole("button", { name: /Allow it/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Allow Ada to watch/ }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy());
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Apply" })).toBeNull());
@@ -188,4 +197,74 @@ test("declining answers at once", async () => {
   await waitFor(() => expect(sent).toHaveLength(1));
   expect(sent[0]).toMatchObject({ choice: "decline" });
   expect(putEntity).not.toHaveBeenCalled();
+});
+
+test("a GitHub grant sets its one permission on the entity as read, and keeps the rest", async () => {
+  const pulls = {
+    label: "Allow Ada to review and merge pull requests on GitHub",
+    change: {
+      entity: "roles",
+      id: "ada",
+      set: {},
+      merge: { integrations: { github: { permissions: { pull_requests: "write" } } } },
+      summary: "Allow ada to review and merge pull requests on GitHub",
+    },
+  };
+  query.mockReturnValue({
+    data: {
+      seat: "ada",
+      access: "grant-github-pull-requests",
+      revision: "r1",
+      fix: { ...FIX, options: [pulls] },
+    },
+  });
+  const integrations = {
+    github: { enabled: true, permissions: { contents: "write" } },
+    cloudflare: { enabled: true, level: "operate" },
+  };
+  getEntity.mockResolvedValue({
+    kind: "entity",
+    entity: { name: "Ada", integrations },
+    etag: '"roles-2"',
+  });
+  render(
+    <ToastProvider>
+      <LayerHost>
+        <AnswerAsk
+          item="NIM-7"
+          comment="c-1"
+          asker="Ada"
+          askedBy="ada"
+          options={[
+            { id: "grant-github-pull-requests", label: "Allow it" },
+            { id: "decline", label: "Not now" },
+          ]}
+          recommended="grant-github-pull-requests"
+          open={false}
+          onOpenChange={() => {}}
+          onAnswered={() => {}}
+          layout="buttons"
+        />
+      </LayerHost>
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /review and merge pull requests/ }));
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  });
+  await waitFor(() => expect(putEntity).toHaveBeenCalledOnce());
+  const [, , written, etag] = putEntity.mock.calls[0] as unknown[];
+  expect(etag).toBe('"roles-2"');
+  expect(written).toEqual({
+    name: "Ada",
+    integrations: {
+      github: { enabled: true, permissions: { contents: "write", pull_requests: "write" } },
+      cloudflare: { enabled: true, level: "operate" },
+    },
+  });
 });

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // RequestAccessTool asks a person for one grant from a closed list (ADR-0118).
@@ -99,7 +100,8 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	name := turn.Seat.Name
 	question := fmt.Sprintf("Allow %s to %s?", name, key.Does())
-	return t.comment.CallForTurn(ctx, turn, map[string]any{
+	// THE ENGINE'S OWN OPTIONS, the one path a grant's reserved id is admitted on.
+	return t.comment.CallForTurn(decision.WithEngineOptions(ctx), turn, map[string]any{
 		"item": argString(args, "item"), "body": why, "ask": person, "asks": true,
 		"decision": map[string]any{
 			"question": question, "role": string(decision.RoleApprover),
@@ -121,4 +123,33 @@ func accessList() string {
 		parts = append(parts, words.Said(fmt.Sprintf("`%s` (%s)", k, k.Does())))
 	}
 	return words.Or(parts)
+}
+
+// grantChosen refuses an answer that chooses a grant its asker does not hold
+// yet: the grant is saved first and only then answered (ADR-0118), whoever sends it.
+func (d WorkDeps) grantChosen(ctx context.Context, choice string,
+	thread worklet.ResolvedThread) *tools.Result {
+
+	if thread.AnswersDecision == nil || !advisor.IsAccessOption(choice) {
+		return nil
+	}
+	key := advisor.AccessKey(choice)
+	if d.FleetSeat == nil {
+		refused := failed(CommentOnWorkTool + ": this server cannot confirm the grant, so " +
+			"the answer was not posted. Answer from the dashboard, which applies it first.")
+		return &refused
+	}
+	seat, err := d.FleetSeat(ctx, thread.AnsweredAuthor)
+	if err != nil {
+		refused := failed(fmt.Sprintf("%s: the grant could not be confirmed (%v), so the "+
+			"answer was not posted. Try again in a moment.", CommentOnWorkTool, err))
+		return &refused
+	}
+	if !errors.Is(advisor.CanAsk(seat, key), advisor.ErrAccessHeld) {
+		refused := failed(fmt.Sprintf("%s: %s cannot %s yet. Apply the grant first, then "+
+			"answer: the agent is told yes only once it holds the access.",
+			CommentOnWorkTool, thread.AnsweredAuthor, key.Does()))
+		return &refused
+	}
+	return nil
 }

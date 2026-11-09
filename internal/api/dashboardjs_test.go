@@ -2163,7 +2163,9 @@ const (
 	// script). The measured size's next KiB: 5692 KiB. An agent's access request
 	// (its grant previewed and applied before the answer, in the Advisor's change
 	// dialog) took it to 5692.7 KiB (5,829,360 bytes, +1,646, all script): 5693 KiB.
-	treeBudget = 5<<20 + 573<<10
+	// A grant's button in the engine's words and a change's nested merge took
+	// it to 5693.5 KiB (5,830,109 bytes, +749, all script): 5694 KiB.
+	treeBudget = 5<<20 + 574<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

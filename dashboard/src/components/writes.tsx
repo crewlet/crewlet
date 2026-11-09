@@ -661,6 +661,63 @@ const OTHER = "\u0000other";
  */
 const DECISION_REPLY_MAX = 2000;
 
+type AskOption = { id: string; label: string; detail?: string };
+
+/** What a grant option's button says before the engine's words arrive. */
+const GRANT_LABEL = "Review the access change";
+
+/**
+ * A grant option drawn in the engine's words (ADR-0118), never the asker's:
+ * the label and note of the change `advisor_access` builds for the asker.
+ */
+function useGrantWords(options: readonly AskOption[], seat: string): readonly AskOption[] {
+  const grant = options.find((o) => isAccessOption(o.id))?.id;
+  const { data } = useQuery("advisor_access", { seat, access: grant }, { enabled: !!grant });
+  const words = data?.fix.options[0];
+  return useMemo(
+    () =>
+      options.map((o) =>
+        isAccessOption(o.id)
+          ? {
+              id: o.id,
+              label: o.id === grant && words ? words.label : GRANT_LABEL,
+              detail: o.id === grant && data ? data.fix.unchanged : undefined,
+            }
+          : o,
+      ),
+    [options, grant, words, data],
+  );
+}
+
+/** What an ask is answered from; see [AnswerAsk]. */
+type AnswerAskProps = {
+  /**
+   * The task's address ([itemAddress]): its key, or its id where another
+   * task claimed that key first and the key would answer on the claimant.
+   */
+  item: string;
+  /** What the answer's toast calls the task (its key) where `item` is its id. */
+  label?: string;
+  /** The ask's comment id, which the answer names. */
+  comment: string;
+  /** Who asked, by name, for the reply field's placeholder. */
+  asker: string;
+  /** The ask's options; empty for an ask answered in words. */
+  options: readonly { id: string; label: string; detail?: string }[];
+  /** The option the asker recommends, if any. */
+  recommended?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called once the engine has the answer. */
+  onAnswered: (answer: AskAnswer) => void;
+  /** How the answer is laid out; see above. */
+  layout?: "line" | "row" | "buttons";
+  /** The asker's handle: whose access a grant option would change. */
+  askedBy: string;
+  /** The question asked, for a grant's preview title. */
+  question?: string;
+};
+
 /**
  * Answer an ask in place: accept its recommendation, choose another option,
  * or reply in your own words.
@@ -696,7 +753,20 @@ const DECISION_REPLY_MAX = 2000;
  * answered in that field from the start. Whichever the layout, the answer
  * goes through this one write, so the rules above hold for all three.
  */
-export function AnswerAsk({
+export function AnswerAsk(props: AnswerAskProps) {
+  // A GRANT IS DRAWN IN THE ENGINE'S WORDS, read only where an option is one.
+  return props.options.some((o) => isAccessOption(o.id)) ? (
+    <GrantAnswer {...props} />
+  ) : (
+    <AskAnswer {...props} />
+  );
+}
+
+function GrantAnswer(props: AnswerAskProps) {
+  return <AskAnswer {...props} options={useGrantWords(props.options, props.askedBy)} />;
+}
+
+function AskAnswer({
   item,
   comment,
   asker,
@@ -709,33 +779,7 @@ export function AnswerAsk({
   label,
   askedBy,
   question,
-}: {
-  /**
-   * The task's address ([itemAddress]): its key, or its id where another
-   * task claimed that key first and the key would answer on the claimant.
-   */
-  item: string;
-  /** What the answer's toast calls the task — its key — where `item` is its id. */
-  label?: string;
-  /** The ask's comment id, which the answer names. */
-  comment: string;
-  /** Who asked, by name, for the reply field's placeholder. */
-  asker: string;
-  /** The ask's options; empty for an ask answered in words. */
-  options: readonly { id: string; label: string; detail?: string }[];
-  /** The option the asker recommends, if any. */
-  recommended?: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Called once the engine has the answer. */
-  onAnswered: (answer: AskAnswer) => void;
-  /** How the answer is laid out; see above. */
-  layout?: "line" | "row" | "buttons";
-  /** The asker's handle: whose access a grant option would change. */
-  askedBy: string;
-  /** The question asked, for a grant's preview title. */
-  question?: string;
-}) {
+}: AnswerAskProps) {
   const write = useAct("comment_on_work_item");
   const named = label || item;
   const rec = options.find((o) => o.id === recommended);

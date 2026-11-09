@@ -79,7 +79,7 @@ export function FixDialog({
     if (!option || check?.kind !== "ready" || applying) return;
     setApplying(true);
     setRefused("");
-    const merged = { ...check.entity, ...option.change.set };
+    const merged = changed(check.entity, option.change);
     void putEntity(
       option.change.entity,
       option.change.id,
@@ -181,12 +181,13 @@ export function FixDialog({
  * the change itself would add.
  */
 async function preview(option: AdvisorOption, signal: AbortSignal): Promise<Check> {
-  const { entity: kind, id, set } = option.change;
+  const { entity: kind, id } = option.change;
   const read = await getEntity(kind, id, signal);
   if (read.kind !== "entity") {
     return { kind: "refused", message: refusalWords(read, COMPANY).message };
   }
-  const merged = { ...read.entity, ...set };
+  const merged = changed(read.entity, option.change);
+  const fields = [...Object.keys(option.change.merge ?? {}), ...Object.keys(option.change.set)];
   const [before, after] = await Promise.all([
     dryRunEntity(kind, id, read.entity, read.etag, signal),
     dryRunEntity(kind, id, merged, read.etag, signal),
@@ -205,15 +206,42 @@ async function preview(option: AdvisorOption, signal: AbortSignal): Promise<Chec
     kind: "ready",
     entity: read.entity,
     etag: read.etag,
-    before: fieldLines(set, (field) => read.entity[field]),
-    after: fieldLines(set, (field) => set[field]),
+    before: fieldLines(fields, (field) => read.entity[field]),
+    after: fieldLines(fields, (field) => merged[field]),
     introduced: introducedWarnings(had, after.warnings),
   };
 }
 
-/** The fields a change sets, one a line, each read through `value`. */
-function fieldLines(set: Record<string, unknown>, value: (field: string) => unknown): string {
-  return Object.keys(set)
+/**
+ * The entity a change writes: `merge` into the entity as read, so a grant
+ * changes its one field and keeps every other, then `set`'s fields replaced.
+ */
+function changed(
+  entity: Record<string, unknown>,
+  change: AdvisorOption["change"],
+): Record<string, unknown> {
+  return { ...mergeInto(entity, change.merge ?? {}), ...change.set };
+}
+
+function mergeInto(
+  into: Record<string, unknown>,
+  from: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...into };
+  for (const [key, value] of Object.entries(from)) {
+    const had = out[key];
+    out[key] = isObject(value) && isObject(had) ? mergeInto(had, value) : value;
+  }
+  return out;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The fields a change touches, one a line, each read through `value`. */
+function fieldLines(fields: string[], value: (field: string) => unknown): string {
+  return [...new Set(fields)]
     .map((field) => `${field}: ${value(field) === undefined ? "not set" : shown(value(field))}`)
     .join("\n");
 }

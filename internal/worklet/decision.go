@@ -187,6 +187,11 @@ func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorK
 	if err := validDecision(d, author, prefix); err != nil {
 		found = append(found, err)
 	}
+	if !decision.EngineOptions(ctx) {
+		if err := d.ReservedFaultAt(prefix); err != nil {
+			found = append(found, invalid("%w", err))
+		}
+	}
 	out := d
 	out.Evidence = make([]decision.Evidence, len(d.Evidence))
 	copy(out.Evidence, d.Evidence)

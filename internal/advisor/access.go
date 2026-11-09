@@ -1,13 +1,13 @@
 package advisor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -18,8 +18,8 @@ import (
 type AccessKey string
 
 // AccessPrefix begins every [AccessKey], so a reader tells a grant option
-// from any other option by its id.
-const AccessPrefix = "grant-"
+// from any other option by its id: an id no other decision may use.
+const AccessPrefix = decision.ReservedOptionPrefix
 
 // The grants an agent may ask for.
 const (
@@ -37,9 +37,9 @@ type accessGrant struct {
 	// does finishes "Allow <agent> to ..." and "<agent> can ...".
 	does string
 	held func(seat *org.Role) bool
-	// set is the top-level fields of the role entity that grant it, built
-	// from the role as the config surface reads it.
-	set func(role *config.Role) (map[string]any, error)
+	// set is the top-level fields of the role entity that grant it, and
+	// merge the nested ones; either may be nil.
+	set, merge func() map[string]any
 	// takes reports whether a seat can be granted it at all.
 	takes func(seat *org.Role) bool
 }
@@ -49,9 +49,7 @@ var accessGrants = []accessGrant{
 		key: AccessHealth, does: "watch the engine's health and wake on its alarms",
 		held:  func(s *org.Role) bool { return s.HealthTools },
 		takes: func(*org.Role) bool { return true },
-		set: func(*config.Role) (map[string]any, error) {
-			return map[string]any{"health_tools": true}, nil
-		},
+		set:   func() map[string]any { return map[string]any{"health_tools": true} },
 	},
 	gitHubWrite(AccessGitHubPulls, "pull_requests", "review and merge pull requests on GitHub"),
 	gitHubWrite(AccessGitHubCode, "contents", "push code to its repositories on GitHub"),
@@ -60,7 +58,8 @@ var accessGrants = []accessGrant{
 }
 
 // gitHubWrite is the grant of write on one permission of the seat's own
-// GitHub App, which it must already have.
+// GitHub App, which it must already have: that one field, merged into the
+// seat's entity as the person's preview reads it.
 func gitHubWrite(key AccessKey, permission, does string) accessGrant {
 	return accessGrant{
 		key: key, does: does,
@@ -68,26 +67,9 @@ func gitHubWrite(key AccessKey, permission, does string) accessGrant {
 			return s.GitHub != nil && s.GitHub.Permissions[permission] == string(config.GitHubWrite)
 		},
 		takes: func(s *org.Role) bool { return s.GitHub != nil && s.GitHub.Enabled },
-		set: func(role *config.Role) (map[string]any, error) {
-			raw, err := json.Marshal(role.Integrations)
-			if err != nil {
-				return nil, fmt.Errorf("advisor: read the seat's integrations: %w", err)
-			}
-			var integrations map[string]any
-			if err := json.Unmarshal(raw, &integrations); err != nil {
-				return nil, fmt.Errorf("advisor: read the seat's integrations: %w", err)
-			}
-			github, _ := integrations["github"].(map[string]any)
-			if github == nil {
-				return nil, ErrAccessNotTakable
-			}
-			permissions, _ := github["permissions"].(map[string]any)
-			if permissions == nil {
-				permissions = map[string]any{}
-			}
-			permissions[permission] = string(config.GitHubWrite)
-			github["permissions"] = permissions
-			return map[string]any{"integrations": integrations}, nil
+		merge: func() map[string]any {
+			return map[string]any{"integrations": map[string]any{"github": map[string]any{
+				"permissions": map[string]any{permission: string(config.GitHubWrite)}}}}
 		},
 	}
 }
@@ -161,16 +143,19 @@ func AccessFix(c *config.Company, handle string, k AccessKey) (Fix, error) {
 		if err := CanAsk(seat, k); err != nil {
 			return Fix{}, err
 		}
-		set, err := g.set(role)
-		if err != nil {
-			return Fix{}, err
+		change := Change{Entity: EntityRoles, ID: handle, Set: map[string]any{},
+			Summary: fmt.Sprintf("Allow %s to %s", handle, g.does)}
+		if g.set != nil {
+			change.Set = g.set()
+		}
+		if g.merge != nil {
+			change.Merge = g.merge()
 		}
 		allow := fmt.Sprintf("Allow %s to %s", role.Name, g.does)
 		return Fix{
 			Kind: FixConfigChange, Sentence: allow + ".",
 			Unchanged: fmt.Sprintf("%s gets no other new access.", role.Name),
-			Options: []Option{{Label: allow, Change: Change{Entity: EntityRoles, ID: handle,
-				Set: set, Summary: fmt.Sprintf("Allow %s to %s", handle, g.does)}}},
+			Options:   []Option{{Label: allow, Change: change}},
 		}, nil
 	}
 	return Fix{}, fmt.Errorf("advisor: no agent seat is %q", handle)

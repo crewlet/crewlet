@@ -1,12 +1,14 @@
 package builtin_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -77,6 +79,65 @@ func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {
 			if !got.Failed || len(trk.patched) != 0 {
 				t.Errorf("result = %+v with %d writes, want a refusal and nothing posted",
 					got, len(trk.patched))
+			}
+		})
+	}
+}
+
+// NO AUTHOR'S DECISION MAY OFFER A GRANT: a reader takes a `grant-` choice as
+// that grant, so only the decision request_access builds may carry one.
+func TestNoAuthorsDecisionMayOfferAGrant(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := decisionRegistry(t, trk, newFakeKB())
+	asked := decisionArg()
+	asked["options"] = []any{
+		map[string]any{"id": string(advisor.AccessHealth), "label": "Approve", "detail": "Ship it"},
+		map[string]any{"id": "hold", "label": "Hold"},
+	}
+	asked["recommended"] = string(advisor.AccessHealth)
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": true,
+		"item": "ENG-1", "body": "Approve the release?", "ask": "pm", "decision": asked})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		!strings.Contains(got.Output, "request_access") {
+		t.Errorf("a decision offering %s gave %+v, want it refused", advisor.AccessHealth, got)
+	}
+	if len(trk.patched) != 0 {
+		t.Error("a decision offering a grant was posted")
+	}
+}
+
+// A GRANT IS ANSWERED ONLY ONCE ITS ASKER HOLDS IT, whoever sends the answer:
+// the agent is told yes only when the access is saved.
+func TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		seat func(context.Context, string) (*org.Role, error)
+		want bool
+	}{
+		"not applied yet": {func(context.Context, string) (*org.Role, error) {
+			return &org.Role{}, nil
+		}, false},
+		"applied": {func(context.Context, string) (*org.Role, error) {
+			return &org.Role{HealthTools: true}, nil
+		}, true},
+		"cannot be confirmed": {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.thread.AnswersDecision = &decision.Decision{Options: []decision.Option{
+				{ID: string(advisor.AccessHealth), Label: "Allow it"}, {ID: "decline", Label: "Not now"}}}
+			trk.thread.AnsweredAuthor = "agent-cto"
+			reg := tools.NewRegistry()
+			if _, err := builtin.Register(reg, gated(builtin.Deps{Work: builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, FleetSeat: tc.seat}})); err != nil {
+				t.Fatal(err)
+			}
+			got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+				"item": "ENG-1", "answers": "c-ask", "choice": string(advisor.AccessHealth)})
+			if posted := !got.Failed && len(trk.patched) == 1; posted != tc.want {
+				t.Errorf("answer = %+v with %d writes, want posted %v", got, len(trk.patched), tc.want)
 			}
 		})
 	}

@@ -12,11 +12,16 @@ export type AdvisorSeverity = "blocks" | "costs" | "note";
 /** Who acts on a finding. An `engine` finding is never the owner's to-do. */
 export type AdvisorActor = "owner" | "engine";
 
-/** One entity write: read the entity, set these top-level fields, write it back. */
+/**
+ * One entity write: read the entity, merge `merge` into it key by key, set
+ * these top-level fields, write it back.
+ */
 export interface AdvisorChange {
   entity: "roles" | "units";
   id: string;
   set: Record<string, unknown>;
+  /** Fields merged into the entity as read, nested objects key by key. */
+  merge?: Record<string, unknown>;
   summary: string;
 }
 

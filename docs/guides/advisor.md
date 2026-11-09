@@ -55,13 +55,13 @@ One finding read from the engine's own state is yours: **Your company has no rec
 
 ## Access an agent asks for
 
-An agent that needs more access asks for it with `request_access`, naming one grant from a closed list: watching the engine's health, or a write permission of its own GitHub App (pull requests, contents, checks, issues). It reaches you as a decision in your Inbox, **Allow it** or **Not now**, with the agent's reason. **Allow it** opens the same preview as a fix here: the exact change to that agent's role, built by the engine for that agent alone, checked by the engine's dry run. Nothing is saved until you press **Apply**, and the question is answered only once the grant is saved. **Not now** answers at once and changes nothing. `GET /advisor/access?seat=<handle>&access=<grant>` returns the change for a script.
+An agent that needs more access asks for it with `request_access`, naming one grant from a closed list: watching the engine's health, or a write permission of its own GitHub App (pull requests, contents, checks, issues). It reaches you as a decision in your Inbox with the agent's reason: the grant, in the engine's own words (for example **Allow Ada to watch the engine's health and wake on its alarms**), or **Not now**. Choosing the grant opens the same preview as a fix here: the exact change to that agent's role, built by the engine for that agent alone, checked by the engine's dry run. Nothing is saved until you press **Apply**, and the engine accepts the answer only once the agent holds the grant, so an agent is never told yes with nothing changed. **Not now** answers at once and changes nothing. Only the engine can offer a grant: a decision any author writes is refused if an option's id begins with `grant-`. `GET /advisor/access?seat=<handle>&access=<grant>` returns the change for a script.
 
 ## Previewing and applying a change
 
-A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace) and `summary`. To apply one:
+A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace), `merge` where a change sets a nested field (merged into the entity key by key, so every other field stays as you read it) and `summary`. To apply one:
 
-1. `GET /config/{entity}/{id}`: the entity and its own `ETag`. Replace the fields `set` names.
+1. `GET /config/{entity}/{id}`: the entity and its own `ETag`. Merge in `merge`, then replace the fields `set` names.
 2. `PUT /config/{entity}/{id}?dry_run=true` with that body and `If-Match` set to that `ETag`. The answer is the preview: whether the company would still be valid and any warning the write would introduce. Nothing is stored.
 3. Send the same `PUT` without `dry_run`, with the `summary` as `X-Summary`. It is recorded as a revision by you, like any change you make.
 

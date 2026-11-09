@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`, `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`, `internal/advisor.TestEveryAccessKeyIsAnOptionID`, `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`, `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`, `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`
+- **Enforced-by:** `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`, `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`, `internal/advisor.TestEveryAccessKeyIsAnOptionID`, `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`, `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`, `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestNoAuthorsDecisionMayOfferAGrant`, `internal/agent/builtin.TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -20,6 +20,11 @@ closed catalogue, and the grant is made only by a person who previewed it.**
   person, with two options: the grant, whose id is the key, and declining.
   The question and the options are the engine's words; the agent's reason is
   the rationale.
+- **Only the engine offers a grant.** An option id beginning with `grant-` is
+  reserved: every author's decision that names one is refused, and the
+  request's own decision is admitted on an internal path no argument reaches.
+  The dashboard draws a grant's button in the words of the change the engine
+  builds, never the decision's label.
 - **The change is built for the asking agent alone, at read time.** The option
   carries only the key. `GET /advisor/access` (administrators) builds the
   entity change from the redacted company document for the seat that asked,
@@ -28,6 +33,10 @@ closed catalogue, and the grant is made only by a person who previewed it.**
   question answered.** The dashboard draws the change from the entity route's
   dry run (ADR-0115), sends it from the person's session under the entity's
   own tag, and answers the question with the grant once the write is saved.
+  A GitHub grant is its one permission merged into the entity as the preview
+  read it, so no other field is rewritten. The engine accepts an answer
+  choosing the grant only once the fleet's active revision gives the agent
+  that access, whoever sends it.
   The write is `config.write`, so it asks for the person's step-up as every
   configuration change does. Closing the preview answers nothing; declining
   answers at once. One request is one grant, never batched.
