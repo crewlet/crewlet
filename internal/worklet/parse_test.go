@@ -107,7 +107,7 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 			Kind: worklet.ChangeComment, Excerpt: "can you look at this",
 			Mentions: []string{"cy"},
 			Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy",
-				CommentAuthorKind: c.kind, CommentAsks: true},
+				CommentAuthorKind: c.kind, CommentAsks: ptr(true)},
 		})
 		record.Actor, record.ActorKind, record.ActorApps = c.actor, c.kind, c.apps
 		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(

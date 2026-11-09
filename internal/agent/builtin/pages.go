@@ -877,8 +877,10 @@ func (t *commentOnPage) Name() string { return CommentOnPageTool }
 func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
 		"that it has gone stale. With `asks: true`, anyone you @-mention by " +
-		"handle is woken; with `asks: false` an @-mention is a reference and " +
-		"wakes no agent. People watching the page are told. If the answer is a change to the " +
+		"handle is woken, and so are you by every later reply in its thread; " +
+		"with `asks: false` an @-mention is a reference, and the comment wakes " +
+		"only agents that asked in its thread. People watching the page are " +
+		"told. If the answer is a change to the " +
 		"page, make the change with " + SavePageTool + " rather than describing it here. " +
 		"Pass `edit` with the id of a comment YOU wrote to replace what it " +
 		"says instead of adding another."
@@ -897,7 +899,7 @@ func (t *commentOnPage) Parameters() map[string]any {
 				"description": "The comment, in markdown. @-mention a " +
 					"colleague by handle, with `asks: true`, to reach them specifically.",
 			},
-			"asks": asksParam(),
+			"asks": asksParam(pageAsks),
 			"reply_to": map[string]any{
 				"type":        "string",
 				"description": "The id of the comment you are answering.",
@@ -981,7 +983,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	in := doclet.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		Asks:    asks,
+		Asks:    &asks,
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

@@ -2202,7 +2202,7 @@ something of the seat that holds it
 
 | Reason | Starts a turn |
 |---|---|
-| `mention` | always, but for an agent's comment that does not say it asks (`asks: false`), whose @-mention is a reference |
+| `mention` | always, but for an agent named in another agent's comment that states it asks nothing (`asks: false`): that @-mention is a reference, while a person it names is addressed as ever |
 | `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |

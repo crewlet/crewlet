@@ -99,16 +99,25 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		name: "an agent's comment naming one seat and asking",
 		n: worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: func() worklet.Snapshot {
 			s := agentComment
-			s.CommentAsks = true
+			s.CommentAsks, s.MentionedAgents = ptr(true), []string{"pm"}
 			return s
 		}()},
 		actor: "sre",
 		want:  []string{"pm"},
 	}, {
-		name:  "an agent's comment naming one seat and asking nothing",
-		n:     worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: agentComment},
+		name: "an agent's comment naming one seat and asking nothing",
+		n: worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: func() worklet.Snapshot {
+			s := agentComment
+			s.CommentAsks, s.MentionedAgents = ptr(false), []string{"pm"}
+			return s
+		}()},
 		actor: "sre",
 		want:  nil,
+	}, {
+		name:  "an older build's agent comment naming one seat",
+		n:     worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: agentComment},
+		actor: "sre",
+		want:  []string{"pm"},
 	}, {
 		name:  "a person's comment on the task, which speaks to everyone following it",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: humanComment},

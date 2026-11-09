@@ -682,7 +682,7 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	document, err := EncodeComment(Comment{
 		V: DocumentVersion, ID: c.ID, PageID: pageID,
 		Author: c.Author, AuthorKind: c.AuthorKind, Body: deref(c.Body),
-		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo,
+		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo, Asks: c.Asks,
 		CreatedAt: created, UpdatedAt: at.brokerAt,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -15,9 +16,13 @@ import (
 // seat is still told; `asks: true` wakes it, and an agent must say which.
 func TestAnAgentsCommentMentionWakesOnlyWhenItAsks(t *testing.T) {
 	t.Parallel()
-	const body = "My approval still stands, nothing for @qa."
+	const body = "My approval still stands, nothing for @eng or @jane."
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Mentions: fakeMentions{"qa"}})
+	roster := func() []colleague.Seat {
+		return append(askable(), colleague.Seat{Handle: "jane", Name: "Jane", Kind: "human"})
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as,
+		Mentions: fakeMentions{"eng", "jane"}, Seats: roster})
 	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": body})
 	if !got.Failed || !strings.Contains(got.Output, "needs `asks`") || len(trk.notified) != 0 {
 		t.Fatalf("an agent's comment without asks answered %q and wrote %d, want it refused",
@@ -30,13 +35,16 @@ func TestAnAgentsCommentMentionWakesOnlyWhenItAsks(t *testing.T) {
 			t.Fatalf("a comment with asks=%v failed: %s", asks, got.Output)
 		}
 		notify := trk.notified[len(trk.notified)-1]
-		heard, told := worklet.CandidateFor(notify, "qa")
+		heard, told := worklet.CandidateFor(notify, "eng")
 		if !told || heard.Reason != worklet.ReasonMention {
-			t.Fatalf("asks=%v: qa was not told of the mention: %+v", asks, heard)
+			t.Fatalf("asks=%v: eng was not told of the mention: %+v", asks, heard)
 		}
 		if heard.Wakes != asks || heard.Addressed != asks {
-			t.Errorf("asks=%v: qa woken %v, asked %v; want both %v", asks, heard.Wakes,
+			t.Errorf("asks=%v: eng woken %v, asked %v; want both %v", asks, heard.Wakes,
 				heard.Addressed, asks)
+		}
+		if person, _ := worklet.CandidateFor(notify, "jane"); !person.Addressed {
+			t.Errorf("asks=%v: the person named is not addressed", asks)
 		}
 	}
 }

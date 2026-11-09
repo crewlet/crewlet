@@ -112,6 +112,10 @@ type Comment struct {
 	Mentions []string `json:"mentions,omitempty"`
 	ReplyTo  string   `json:"reply_to,omitempty"`
 
+	// Asks is an agent author's statement of whether the comment asks
+	// (ADR-0113), kept so an edit keeps it and a reply finds who asked.
+	Asks *bool `json:"asks,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 

@@ -3394,7 +3394,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 				"description": "The comment, in markdown. @-mention a " +
 					"colleague by handle, with `asks: true`, to wake them to act on it.",
 			},
-			"asks": asksParam(),
+			"asks": asksParam(workAsks),
 			"ask": map[string]any{
 				"type": "string",
 				"description": "A colleague's handle: this comment is a " +
@@ -3641,8 +3641,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// there rather than refused.
 		After:   patched(before.Task, patch),
 		Comment: comment, Mentions: comment.Mentions,
-		// AN AGENT'S OWN STATEMENT, and a question it puts with `ask` asks.
-		Asks:            agent && (asks || comment.Ask != ""),
+		Asks:            t.deps.statedAsks(agent, asks || comment.Ask != ""),
+		MentionedAgents: t.deps.agentsAmong(agent, comment.Mentions),
 		Thread:          thread.ThreadParties,
 		AnswersDecision: thread.AnswersDecision,
 	}.Notify(t.deps.Leads)

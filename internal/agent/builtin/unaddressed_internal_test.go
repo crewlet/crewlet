@@ -63,7 +63,8 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 				Snapshot: worklet.Snapshot{
 					Assignee: c.task.Assignee, CommentAuthorKind: c.actor.Kind,
 					CommentAsk: comment.Ask, ThreadParticipants: c.thread,
-					ThreadOwing: c.owing, CommentAsks: c.actor.Handle == asking.Handle,
+					ThreadOwing: c.owing, CommentAsks: statedOf(c.actor, asking),
+					MentionedAgents: comment.Mentions,
 				}}
 			got := unaddressedCaveat(c.task, c.actor, &comment, notify)
 			switch {
@@ -83,4 +84,13 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// statedOf is an agent's statement of whether its comment asks, true for asking.
+func statedOf(actor, asking Actor) *bool {
+	if actor.Kind != worklet.AuthorAgent {
+		return nil
+	}
+	asks := actor.Handle == asking.Handle
+	return &asks
 }

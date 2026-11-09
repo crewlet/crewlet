@@ -961,7 +961,7 @@ func (t *postMessage) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"channel", "body"},
 	}
@@ -1038,7 +1038,7 @@ func (t *replyInThread) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs, %s. No file attachments.",
 					chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"channel", "reply_to", "body"},
 	}
@@ -1114,7 +1114,7 @@ func (t *sendDM) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"to", "body"},
 	}

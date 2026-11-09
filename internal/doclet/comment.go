@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -36,9 +37,9 @@ type NewComment struct {
 	// not they watch, and each is subscribed.
 	Mentions []string
 
-	// Asks is an agent author's statement that the comment asks something
-	// ([Notify.Asks]).
-	Asks bool
+	// Asks is an agent author's statement of whether the comment asks
+	// ([Notify.Asks]); nil for a person's.
+	Asks *bool
 
 	Quiet bool
 }
@@ -90,10 +91,11 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				if err = s.refuseReserved(actor, head.Container, false); err != nil {
 					return statelog.Decision{}, err
 				}
+				asks := statedBy(actor, in.Asks)
 				patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
 					ID: comment.ID, Body: &body, Author: comment.Author,
 					AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
-					Mentions: mentions,
+					Mentions: mentions, Asks: asks,
 				}}
 				// A MENTION SUBSCRIBES, and nothing else does. It is
 				// carried on the patch as the whole watcher set, because
@@ -107,7 +109,11 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				notify := s.notifyOf(in.Quiet, ChangeComment, head,
 					excerpt(body), mentions)
 				if notify != nil {
-					notify.Asks = in.Asks && actor.Kind == AuthorAgent
+					notify.Asks = asks
+					if notify.Awaiting, err = threadAskersTx(ctx, tx, pageID,
+						comment.ReplyTo, actor.Name()); err != nil {
+						return statelog.Decision{}, err
+					}
 				}
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 			},
@@ -205,11 +211,13 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 				scope := ScopeSet{Subject: true, Container: head.Container}
 				notify := s.notifyOf(false, ChangeCommentEdited, head,
 					excerpt(body), nil)
+				// AN EDIT KEEPS THE STATEMENT ITS COMMENT WAS POSTED WITH.
+				notify.Asks = held.Asks
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 					V: DocumentVersion, Comment: &CommentPatch{
 						ID: commentID, Body: &body, Author: held.Author,
 						AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
-						Mentions: held.Mentions,
+						Mentions: held.Mentions, Asks: held.Asks,
 					},
 				}, notify, at)
 			},
@@ -357,6 +365,54 @@ func subscribeMentions(page *Page, mentions []string) bool {
 }
 
 // readCommentTx reads one comment from inside a decision's own transaction.
+// statedBy is an agent's statement of whether its comment asks, which every
+// agent comment carries, and nil for anybody else's.
+func statedBy(actor Actor, asks *bool) *bool {
+	if actor.Kind != AuthorAgent {
+		return nil
+	}
+	stated := asks != nil && *asks
+	return &stated
+}
+
+// threadAskersTx is the agents other than author that asked something in the
+// thread replyTo is in, its root and every reply to it, cut at [MaxAwaiting].
+func threadAskersTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author string) (
+	[]string, error) {
+
+	if replyTo == "" {
+		return nil, nil
+	}
+	root := replyTo
+	switch replied, err := readCommentTx(ctx, tx, pageID, replyTo); {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case replied.ReplyTo != "":
+		root = replied.ReplyTo
+	}
+	rows, err := tx.QueryContext(ctx, threadCommentsStatement, pageID, root, root, MaxThreadComments)
+	if err != nil {
+		return nil, fmt.Errorf("doclet: read the thread of comment %s: %w", root, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var document []byte
+		if err := rows.Scan(&document); err != nil {
+			return nil, err
+		}
+		c, err := DecodeComment(document)
+		if err != nil || c.Asks == nil || !*c.Asks || c.Author == author ||
+			slices.Contains(out, c.Author) || len(out) == MaxAwaiting {
+			continue
+		}
+		out = append(out, c.Author)
+	}
+	return out, rows.Err()
+}
+
 func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 	Comment, error) {
 
@@ -494,6 +550,13 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 // commentTxStatement is [readCommentTx]'s read of one comment on one page, by
 // its key, named for the plan gate.
 const commentTxStatement = `SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`
+
+// threadCommentsStatement reads one comment thread of a page, its root and its
+// replies, oldest first.
+const threadCommentsStatement = `
+	SELECT document FROM pages_comments
+	WHERE page_id = ? AND (id = ? OR reply_to = ?)
+	ORDER BY created_at LIMIT ?`
 
 // revisionStatement reads one immutable body by its page and its number — the
 // statement [Store.Revision] and [Reader.Revision] both read it with, named for

@@ -32,7 +32,9 @@ import (
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
 //   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
-//   - 3: an agent's comment that says it asks ([Notify.Asks]).
+//   - 3: an agent's comment stating whether it asks ([Notify.Asks],
+//     [CommentPatch.Asks]) and the agents a reply wakes for asking in its
+//     thread ([Notify.Awaiting]).
 const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -61,6 +63,8 @@ const baseRecordVersion = 1
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
 	{Name: "Notify.Asks", Since: 3, Path: []string{"notify", "asks"}},
+	{Name: "Notify.Awaiting", Since: 3, Path: []string{"notify", "awaiting"}},
+	{Name: "CommentPatch.Asks", Since: 3, Path: []string{"mutation", "comment", "asks"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -325,9 +329,14 @@ type Notify struct {
 	// not they watch.
 	Mentions []string `json:"mentions,omitempty"`
 
-	// Asks is an agent's statement that its comment asks the seats it
-	// reaches: without it, an agent's comment wakes no agent (ADR-0113).
-	Asks bool `json:"asks,omitempty"`
+	// Asks is an agent's statement, on every comment it writes, of whether
+	// the comment asks; false wakes no agent but Awaiting (ADR-0113). Nil
+	// on a person's and an older build's, which route as they always did.
+	Asks *bool `json:"asks,omitempty"`
+
+	// Awaiting are the agents that asked something in a reply's thread,
+	// woken by any reply there by somebody else (ADR-0113).
+	Awaiting []string `json:"awaiting,omitempty"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`

@@ -224,10 +224,10 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 		b.AddAll(handles, reason, addressed)
 	}
 
-	// AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE: told, never woken
-	// or obliged (ADR-0113).
-	named := !n.agentReference()
+	// AN AGENT'S MENTION OF AN AGENT THAT ASKS NOTHING IS A REFERENCE: told,
+	// never woken or obliged (ADR-0113); a person named is addressed as ever.
 	for _, handle := range n.Mentions {
+		named := !n.agentReference() || !slices.Contains(n.Snapshot.MentionedAgents, handle)
 		b.AddWaking(handle, ReasonMention, named, named)
 	}
 	if n.Kind == ChangePrioritised {
@@ -438,11 +438,13 @@ func (n *Notify) watcherAsked() bool {
 // every author's but an agent's comment that does not say it asks.
 func (n *Notify) MentionsWake() bool { return n != nil && !n.agentReference() }
 
-// agentReference reports an agent's comment that does not say it asks, whose
-// mentions are references rather than wakes (ADR-0113).
+// agentReference reports an agent's comment that states it asks nothing, whose
+// mentions of agents are references (ADR-0113). A record with no statement, a
+// person's or an older build's, routes as it always did.
 func (n *Notify) agentReference() bool {
+	asks := n.Snapshot.CommentAsks
 	return n.Kind.Conversation() && n.Snapshot.CommentAuthorKind == AuthorAgent &&
-		!n.Snapshot.CommentAsks
+		asks != nil && !*asks
 }
 
 // personComment reports a comment a person wrote ([AuthorKind.Person]).

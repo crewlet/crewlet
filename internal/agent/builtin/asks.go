@@ -5,20 +5,45 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// asksParam is the `asks` argument every tool that posts an agent's words
-// requires of it, a chat message or a work item comment alike: its own
-// statement that the words ask something (ADR-0113). Not in the schema's
-// required list, because a person's words ask whatever they say.
-func asksParam() map[string]any {
+// The `asks` argument every tool posting an agent's words requires of it
+// (ADR-0113), worded per surface by what its words wake there. Not in the
+// schema's required list, because a person's words ask whatever they say.
+type asksSurface struct{ asked, quiet string }
+
+var (
+	// chatAsks is a chat message's: a direct conversation's other side
+	// answers an ask, and a stake in the thread hears every reply.
+	chatAsks = asksSurface{
+		asked: "The colleagues you @-mention, or the other side of a direct " +
+			"conversation, are woken and must answer.",
+		quiet: "whoever's question it answers and anyone with an open question in " +
+			"the thread are woken.",
+	}
+	// workAsks is a work item comment's: an answer wakes its asker, and a
+	// stake in the thread hears every reply.
+	workAsks = asksSurface{
+		asked: "The colleagues you @-mention are woken and must answer.",
+		quiet: "whoever's question it answers (`answers`) and anyone with an open " +
+			"question in the thread are woken.",
+	}
+	// pageAsks is a page comment's: a page has no answer record, so an agent
+	// that asked in a comment's thread hears every reply in it.
+	pageAsks = asksSurface{
+		asked: "The colleagues you @-mention are woken, and every later reply in " +
+			"this comment's thread wakes you.",
+		quiet: "only agents that asked something in this comment's thread are woken.",
+	}
+)
+
+// asksParam is the `asks` argument as surface s words it.
+func asksParam(s asksSurface) map[string]any {
 	return map[string]any{
 		"type": "boolean",
 		"description": "Required of an agent. true when this asks someone for an " +
-			"answer or an action: a question, a request, a hand-off. The colleagues " +
-			"you @-mention, or the other side of a direct conversation, must then " +
-			"answer. false for news, status notes, approvals, acknowledgements and " +
+			"answer or an action: a question, a request, a hand-off. " + s.asked +
+			" false for news, status notes, approvals, acknowledgements and " +
 			"thanks: an @-mention is then a reference that wakes no agent, and only " +
-			"whoever's question it answers and anyone with an open question in the " +
-			"thread are woken.",
+			s.quiet,
 	}
 }
 

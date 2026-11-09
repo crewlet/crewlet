@@ -68,9 +68,11 @@ type Wake struct {
 	// later, which is a different person.
 	Mentions []string
 
-	// Asks is an agent author's statement that the comment asks the seats
-	// it names ([Snapshot.CommentAsks]).
-	Asks bool
+	// Asks is an agent author's statement of whether the comment asks the
+	// seats it names, and MentionedAgents those that are agents
+	// ([Snapshot.CommentAsks], [Snapshot.MentionedAgents]). Nil for a person.
+	Asks            *bool
+	MentionedAgents []string
 
 	// Excerpt overrides what a card shows. Empty derives one from the
 	// comment, or from the body on a create.
@@ -298,6 +300,7 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		// answer.
 		snapshot.CommentAuthorKind = w.Comment.AuthorKind
 		snapshot.CommentAsks = w.Asks
+		snapshot.MentionedAgents = slices.Clone(w.MentionedAgents)
 	}
 	if w.Kind == ChangeWatchers {
 		// THE HANDLES THIS COMMIT DROPPED, which only the two states

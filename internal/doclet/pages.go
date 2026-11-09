@@ -139,6 +139,11 @@ const (
 	// MaxComment bounds one comment on a page.
 	MaxComment = 32 << 10
 
+	// MaxThreadComments bounds the comments of one thread a reply reads for
+	// who asked in it, and MaxAwaiting the askers it wakes.
+	MaxThreadComments = 200
+	MaxAwaiting       = 16
+
 	// MaxExcerpt bounds the excerpt a change record carries.
 	MaxExcerpt = 600
 

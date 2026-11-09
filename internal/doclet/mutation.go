@@ -170,6 +170,8 @@ type CommentPatch struct {
 	AuthorKind AuthorKind `json:"author_kind,omitempty"`
 	ReplyTo    string     `json:"reply_to,omitempty"`
 	Mentions   []string   `json:"mentions,omitempty"`
+	// Asks is an agent author's statement ([Comment.Asks]).
+	Asks *bool `json:"asks,omitempty"`
 }
 
 // ContainerPayload is a space's settings, as FULL POST-STATE.
