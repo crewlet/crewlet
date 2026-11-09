@@ -21,6 +21,16 @@ type PatternsQuery struct {
 	// turn by its holder since QuietSince is idle.
 	Reviewers  []string
 	QuietSince time.Time
+	// People are the persons whose notices in the window are counted.
+	People []string
+}
+
+// NoticeLoad is how many notices one person was sent in the window, and how
+// many of them asked something of them.
+type NoticeLoad struct {
+	Handle    string `json:"handle"`
+	Notices   int    `json:"notices"`
+	Addressed int    `json:"addressed"`
 }
 
 // IdleReview is an item in review its agent holder has taken no turn on.
@@ -51,6 +61,8 @@ type WorkPatterns struct {
 	Overtaken  []string `json:"overtaken"`
 	// IdleReviews are the reviewers' items in review idle since QuietSince.
 	IdleReviews []IdleReview `json:"idle_reviews"`
+	// Notices are the people's notice loads, in the order they were asked for.
+	Notices []NoticeLoad `json:"notices"`
 }
 
 // NamedWithoutAsk is one seat agents' comments named without a question.
@@ -87,7 +99,10 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
 			return err
 		}
-		return readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out)
+		if err := readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out); err != nil {
+			return err
+		}
+		return readNoticeLoads(ctx, tx, q.People, since, until, &out)
 	})
 	return out, err
 }
@@ -269,6 +284,25 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int6
 			}
 		}
 		out.IdleReviews = append(out.IdleReviews, r)
+	}
+	return nil
+}
+
+// patternNoticesStatement is one person's notices in the window, a seek of
+// their own rows, which the inbox horizon already bounds.
+const patternNoticesStatement = `SELECT COUNT(*), COALESCE(SUM(addressed), 0)
+FROM tracker_notifications
+WHERE recipient = ? AND created_at >= ? AND created_at < ?`
+
+func readNoticeLoads(ctx context.Context, tx *sql.Tx, people []string, since, until int64, out *WorkPatterns) error {
+	out.Notices = make([]NoticeLoad, 0, len(people))
+	for _, handle := range people {
+		load := NoticeLoad{Handle: handle}
+		if err := tx.QueryRowContext(ctx, patternNoticesStatement, handle, since, until).Scan(
+			&load.Notices, &load.Addressed); err != nil {
+			return fmt.Errorf("worklet: count %s's notices: %w", handle, err)
+		}
+		out.Notices = append(out.Notices, load)
 	}
 	return nil
 }

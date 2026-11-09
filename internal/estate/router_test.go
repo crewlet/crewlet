@@ -376,6 +376,10 @@ func (f fakeUsage) PageReadsPage(context.Context, usage.PageReadsQuery, usage.Gr
 
 func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) { return 3, nil }
 
+func (f fakeUsage) TurnLedger(context.Context, usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
+	return nil, nil
+}
+
 func (f fakeUsage) ServerToolCalls(_ context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error) {
 	return []usage.ServerToolCallsRow{{Tool: q.Server + ".search", AgentID: f.name, Calls: 2}}, nil
 }

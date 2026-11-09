@@ -1,12 +1,15 @@
 package advisor
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -18,6 +21,10 @@ const (
 	ClassPersonRequestsWithoutAsk Class = "person.requests_without_ask"
 	ClassAskOvertaken             Class = "ask.overtaken"
 	ClassReviewIdle               Class = "review.idle"
+	ClassNoticeLoad               Class = "person.notice_load"
+	ClassNoopShare                Class = "wake.noop_share"
+	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
+	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 )
@@ -39,22 +46,53 @@ const (
 )
 
 // PatternsWindow is the tracker read the evidence classes need at now: the
-// window before it and every agent seat's reviews, quiet since ReviewQuiet ago.
-// The caller names the read level.
+// window before it, every agent seat's reviews, quiet since ReviewQuiet ago,
+// and every person's notices. The caller names the read level.
 func PatternsWindow(now time.Time, c *config.Company) worklet.PatternsQuery {
 	return worklet.PatternsQuery{Since: now.Add(-Window), Until: now,
-		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet)}
+		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet), People: personHandles(c)}
 }
+
+// LedgerDays is how many company days the turn ledger is read over: the
+// window's week, today included.
+const LedgerDays = 7
 
 // Evidence is what the company did in the window that ends at Until.
 type Evidence struct {
 	Until time.Time
 	Work  worklet.WorkPatterns
+	// Ledger is every seat's turns by wake and outcome over [LedgerDays].
+	Ledger []usage.TurnLedgerRow
 	// Backup is the node's backup alarm as its latest evaluation stands.
 	Backup Backup
-	// WorkUnread and AlarmsUnread say the caller could not read that source,
-	// so its classes raise nothing and the answer names it as unread.
-	WorkUnread, AlarmsUnread bool
+	// WorkUnread, LedgerUnread and AlarmsUnread say the caller could not read
+	// that source, so its classes raise nothing and the answer names it.
+	WorkUnread, LedgerUnread, AlarmsUnread bool
+}
+
+// source is the record a detector reads.
+type source int
+
+const (
+	// sourceWork is the tracker's [worklet.WorkPatterns].
+	sourceWork source = iota
+	// sourceLedger is the turn ledger, [Evidence.Ledger].
+	sourceLedger
+	// sourceAlarms is the node's alarms, [Evidence.Backup].
+	sourceAlarms
+)
+
+// unread reports whether ev could not read src.
+func (ev Evidence) unread(src source) bool {
+	switch src {
+	case sourceWork:
+		return ev.WorkUnread
+	case sourceLedger:
+		return ev.LedgerUnread
+	case sourceAlarms:
+		return ev.AlarmsUnread
+	}
+	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
 
 // Backup is whether the backup alarm stands, and over how many logs.
@@ -76,19 +114,22 @@ const (
 // detector raises one class's findings from the evidence; kind tells an
 // agent seat's handle from a person's. It reads records only and calls no model.
 type detector struct {
-	class Class
-	// work marks a detector that reads the tracker's [worklet.WorkPatterns].
-	work   bool
+	class  Class
+	source source
 	detect func(ev Evidence, kind func(string) SeatKind) []Finding
 }
 
 // detectors is every evidence class's detector.
 var detectors = []detector{
-	{ClassAgentMentionsWithoutAsk, true, agentMentionsWithoutAsk},
-	{ClassPersonRequestsWithoutAsk, true, personRequestsWithoutAsk},
-	{ClassAskOvertaken, true, askOvertaken},
-	{ClassReviewIdle, true, reviewIdle},
-	{ClassNoVerifiedBackup, false, noVerifiedBackup},
+	{ClassAgentMentionsWithoutAsk, sourceWork, agentMentionsWithoutAsk},
+	{ClassPersonRequestsWithoutAsk, sourceWork, personRequestsWithoutAsk},
+	{ClassAskOvertaken, sourceWork, askOvertaken},
+	{ClassReviewIdle, sourceWork, reviewIdle},
+	{ClassNoticeLoad, sourceWork, noticeLoad},
+	{ClassNoopShare, sourceLedger, noopShare},
+	{ClassPickupStillWaiting, sourceLedger, pickupStillWaiting},
+	{ClassAuxiliaryShare, sourceLedger, auxiliaryShare},
+	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -105,6 +146,26 @@ const (
 	overtakenPercent = 5
 )
 
+// The load and ledger thresholds, each a share no healthy week reaches.
+const (
+	// minNotices and addressedPercent: 50 notices a day, under a quarter of
+	// them put to the person, make an Inbox a feed nobody reads.
+	minNotices       = 350
+	addressedPercent = 25
+	// minStartedTurns and noopPercent: 20 turns a week, a quarter of them
+	// committing nothing.
+	minStartedTurns = 20
+	noopPercent     = 25
+	// minPickups and stillWaitingPercent: 10 pickups a week, a fifth of them
+	// ending in words only, which says the work handed out could not move.
+	minPickups          = 10
+	stillWaitingPercent = 20
+	// minSeatTokens and auxiliaryPercent: a million tokens a week, more than
+	// 15% of them spent on in-turn auxiliary calls.
+	minSeatTokens    = 1_000_000
+	auxiliaryPercent = 15
+)
+
 // EvidenceClasses is every class a detector raises.
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
@@ -115,10 +176,15 @@ func EvidenceClasses() []Class {
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
-func WorkClasses() []Class {
+func WorkClasses() []Class { return classesOf(sourceWork) }
+
+// LedgerClasses is every class a detector raises from the turn ledger.
+func LedgerClasses() []Class { return classesOf(sourceLedger) }
+
+func classesOf(src source) []Class {
 	var out []Class
 	for _, d := range detectors {
-		if d.work {
+		if d.source == src {
 			out = append(out, d.class)
 		}
 	}
@@ -129,7 +195,7 @@ func WorkClasses() []Class {
 func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 	out := []Finding{}
 	for _, d := range detectors {
-		if d.work && ev.WorkUnread || d.class == ClassNoVerifiedBackup && ev.AlarmsUnread {
+		if ev.unread(d.source) {
 			continue
 		}
 		out = append(out, d.detect(ev, kind)...)
@@ -159,6 +225,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)
+	}
+	if ev.LedgerUnread {
+		answer.Unread = append(answer.Unread, UnreadLedger)
 	}
 	if ev.AlarmsUnread {
 		answer.Unread = append(answer.Unread, UnreadAlarms)
@@ -278,6 +347,129 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 				"(a turn on a linked pull request counts on the change, not the item), so "+
 				"the work behind them waits.", words.Count(len(keys), "item in review", "items in review"), h),
 			[]Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
+	}
+	return out
+}
+
+// noticeLoad is one finding per person sent more notices than a person reads,
+// most of them context rather than something put to them.
+func noticeLoad(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, n := range ev.Work.Notices {
+		if n.Notices < minNotices || n.Addressed*100 >= addressedPercent*n.Notices {
+			continue
+		}
+		out = append(out, engineFinding(ClassNoticeLoad, Subject{Kind: SubjectSeat, Seat: n.Handle},
+			"A person was sent more notices than anyone reads.",
+			fmt.Sprintf("In the last 7 days, %s was sent %d notices, and %d of them asked "+
+				"something of them, so what does ask them waits among the rest.",
+				n.Handle, n.Notices, n.Addressed),
+			[]Fact{{Key: "notices", Value: int64(n.Notices)}, {Key: "addressed", Value: int64(n.Addressed)}},
+			nil))
+	}
+	return out
+}
+
+// seatTurns is one seat's started turns in the ledger, by outcome, and its spend.
+type seatTurns struct {
+	handle                string
+	turns, nothing        int64
+	tokens, auxiliary     int64
+	pickups, pickupsWords int64
+}
+
+// seatsOf folds the ledger's started turns by seat, in the ledger's order.
+func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
+	var out []*seatTurns
+	byID := map[string]*seatTurns{}
+	for _, r := range ledger {
+		if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+			continue
+		}
+		s, ok := byID[r.AgentID]
+		if !ok {
+			s = &seatTurns{handle: cmp.Or(r.Handle, r.AgentID)}
+			byID[r.AgentID] = s
+			out = append(out, s)
+		}
+		s.turns += r.Turns
+		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
+		s.auxiliary += r.AuxInput + r.AuxOutput
+		outcome := types.TurnOutcome(r.Outcome)
+		if outcome == types.OutcomeNothing {
+			s.nothing += r.Turns
+		}
+		if r.Wake == pickupWake {
+			s.pickups += r.Turns
+			if outcome == types.OutcomeWords {
+				s.pickupsWords += r.Turns
+			}
+		}
+	}
+	return out
+}
+
+// pickupWake is the ledger's wake for work handed to an idle seat.
+const pickupWake = types.OriginWorkItem + ":" + types.PickupReason
+
+// noopShare is one finding per agent whose started turns often committed nothing.
+func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, s := range seatsOf(ev.Ledger) {
+		if s.turns < minStartedTurns || s.nothing*100 < noopPercent*s.turns {
+			continue
+		}
+		out = append(out, engineFinding(ClassNoopShare, Subject{Kind: SubjectSeat, Seat: s.handle},
+			"An agent was woken for turns that changed nothing.",
+			fmt.Sprintf("In the last 7 days, %d of %s's %d turns committed nothing: no work "+
+				"moved and no words written.", s.nothing, s.handle, s.turns),
+			[]Fact{{Key: "turns", Value: s.turns}, {Key: "nothing", Value: s.nothing}}, nil))
+	}
+	return out
+}
+
+// pickupStillWaiting is one finding for the company when pickups often ended
+// in words only: the work handed out was waiting on something else.
+func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
+	var pickups, words int64
+	for _, s := range seatsOf(ev.Ledger) {
+		pickups += s.pickups
+		words += s.pickupsWords
+	}
+	if pickups < minPickups || words*100 < stillWaitingPercent*pickups {
+		return nil
+	}
+	return []Finding{engineFinding(ClassPickupStillWaiting, Subject{Kind: SubjectCompany},
+		"Agents picked up work that could not move yet.",
+		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only, as when "+
+			"an agent says the item still waits on something.", words, pickups),
+		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
+}
+
+// auxiliaryShare is one finding per agent whose in-turn auxiliary calls took
+// a large share of its spend.
+func auxiliaryShare(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, s := range seatsOf(ev.Ledger) {
+		if s.tokens < minSeatTokens || s.auxiliary*100 <= auxiliaryPercent*s.tokens {
+			continue
+		}
+		out = append(out, engineFinding(ClassAuxiliaryShare, Subject{Kind: SubjectSeat, Seat: s.handle},
+			"An agent spent a large share of its tokens on auxiliary calls.",
+			fmt.Sprintf("In the last 7 days, %d of %s's %d tokens went to auxiliary calls "+
+				"inside its turns rather than to the turns' own work.", s.auxiliary, s.handle, s.tokens),
+			[]Fact{{Key: "tokens", Value: s.tokens}, {Key: "auxiliary", Value: s.auxiliary}}, nil))
+	}
+	return out
+}
+
+// personHandles is every person's seat handle, in the chart's order.
+func personHandles(c *config.Company) []string {
+	var out []string
+	for role := range c.EachRole() {
+		if role.Kind == org.KindHuman {
+			out = append(out, role.Seat().Handle())
+		}
 	}
 	return out
 }

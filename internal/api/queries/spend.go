@@ -267,6 +267,7 @@ type UsageReads interface {
 	ReadsElided(ctx context.Context, from, to string) (int64, error)
 	ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error)
 	ToolsElided(ctx context.Context, from, to string) (int64, error)
+	TurnLedger(ctx context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error)
 }
 
 // usageErr is a usage read's failure as this surface reports it: an estate

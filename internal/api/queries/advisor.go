@@ -13,6 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // advisor answers `advisor`: every finding about the fleet's company at the
@@ -54,6 +56,10 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		ev.WorkUnread = true
 	}
 	ev.Work = work
+	if ev.Ledger, err = s.advisorLedger(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_turn_ledger_unreadable", "error", err.Error())
+		ev.LedgerUnread = true
+	}
 	if s.AlarmsEvaluated == nil || !s.AlarmsEvaluated() {
 		ev.AlarmsUnread = true
 	} else {
@@ -76,4 +82,24 @@ func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
 		return advisor.Backup{Standing: true, Logs: logs}
 	}
 	return advisor.Backup{}
+}
+
+// advisorLedger is the turn ledger over [advisor.LedgerDays], each seat named
+// by the chart's handle while the chart holds it.
+func (s Sources) advisorLedger(ctx context.Context, now time.Time) ([]usage.TurnLedgerRow, error) {
+	if s.Usage == nil {
+		return nil, errors.New("queries: no usage half to read the turn ledger from")
+	}
+	window := tokens.LastDays(advisor.LedgerDays, now, s.zone())
+	rows, err := s.Usage.TurnLedger(ctx, usage.SpendQuery{From: window.First.Label, To: window.Last.Label})
+	if err != nil {
+		return nil, err
+	}
+	chart := s.chartHandles()
+	for i := range rows {
+		if seat, ok := chart[rows[i].AgentID]; ok && seat.handle != "" {
+			rows[i].Handle = seat.handle
+		}
+	}
+	return rows, nil
 }
