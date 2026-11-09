@@ -28,12 +28,14 @@ export interface AdvisorOption {
 
 /** What fixes a finding. */
 export interface AdvisorFix {
-  kind: "config_change" | "open_setting" | (string & {});
+  kind: "config_change" | "open_setting" | "external_step" | "none" | (string & {});
   sentence: string;
   unchanged?: string;
   options: AdvisorOption[];
   /** The document path an `open_setting` fix opens. */
   setting?: string;
+  /** Where an `external_step` is taken, where one was named. */
+  url?: string;
 }
 
 /** The one thing a finding is about. */

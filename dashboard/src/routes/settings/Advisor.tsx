@@ -111,6 +111,12 @@ function findingItem(f: AdvisorFinding, review: (() => void) | null): AttentionI
         Review the change
       </Button>
     );
+  } else if (review && f.fix.kind === "external_step" && f.fix.url) {
+    action = (
+      <Link href={f.fix.url} external size="caption">
+        {subject ? `Open ${subject}` : "Open it"}
+      </Link>
+    );
   } else if (review && f.fix.kind === "open_setting") {
     action = (
       <Link href={href(["settings", "config"])} size="caption">
@@ -119,14 +125,18 @@ function findingItem(f: AdvisorFinding, review: (() => void) | null): AttentionI
     );
   }
   return {
-    key: `${f.class}\u0000${f.path}\u0000${subject}`,
+    // BY HANDLE, never by name: two seats may share a display name.
+    key: [f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("\u0000"),
     tone: TONE[f.severity],
     title: f.title,
-    meta: subject || undefined,
+    // WHAT TO DO, where it happens outside the engine, is read without opening
+    // the row; elsewhere the row names what it is about.
+    meta: f.fix.kind === "external_step" ? f.fix.sentence : subject || undefined,
     action,
     details: (
       <div className="col gap-1">
         <Text as="p">{f.why}</Text>
+        {review && f.fix.kind !== "external_step" && <Text as="p">{f.fix.sentence}</Text>}
         {f.fix.kind === "open_setting" && f.fix.setting && (
           <Text as="p" tone="secondary">
             The setting: <InlineCode>{f.fix.setting}</InlineCode>

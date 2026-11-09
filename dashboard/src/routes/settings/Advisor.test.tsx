@@ -213,3 +213,31 @@ test("a reader who may not write cannot apply", async () => {
   expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText("Only an administrator can change this.")).toBeTruthy();
 });
+
+const BACKUP: AdvisorFinding = {
+  ...HEALTH,
+  class: "durability.no_verified_backup",
+  severity: "blocks",
+  source: "evidence",
+  area: "durability",
+  title: "Your company has no recent verified backup.",
+  path: "",
+  fix: {
+    kind: "external_step",
+    sentence: "Take a backup now, then schedule one to a place off this server.",
+    options: [],
+  },
+};
+
+test("a step outside the engine says what to do on the row, and offers no change", async () => {
+  await mount({ revision: "r1", findings: [BACKUP] });
+  expect(screen.getByText(BACKUP.fix.sentence)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Review the change" })).toBeNull();
+});
+
+test("two findings of one class about two seats sharing a name are two rows", async () => {
+  const pm = { ...HEALTH, subject: { kind: "seat", seat: "pm", name: "Engineer" } };
+  const qa = { ...HEALTH, subject: { kind: "seat", seat: "qa", name: "Engineer" } };
+  await mount({ revision: "r1", findings: [pm, qa] });
+  expect(screen.getAllByText(HEALTH.title)).toHaveLength(2);
+});
