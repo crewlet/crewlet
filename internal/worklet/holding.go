@@ -79,9 +79,16 @@ const holdingSinceStatement = `SELECT h.created_at FROM tracker_history h
 	WHERE h.subject_id = ? AND h.kind IN ('assignee', 'created')
 	ORDER BY CASE h.kind WHEN 'assignee' THEN 0 ELSE 1 END, h.log_seq DESC LIMIT 1`
 
+// MaxHoldingSteps bounds how many items one read asks for the waiters of,
+// across every candidate: the walks share what they learn, so a graph the
+// candidates have in common is read once, and past this the rows it cut say
+// their counts are floors.
+const MaxHoldingSteps = 2048
+
 // readHolding reads the block: every held blocker up to
-// [MaxHoldingCandidates], each walked, ranked by how much waits on it, then
-// the page.
+// [MaxHoldingCandidates] (the queue's own order picks them, so for a person
+// holding more the ranking is among those), each walked, ranked by how much
+// waits on it, then the page.
 func readHolding(ctx context.Context, tx *sql.Tx, handle string,
 	dayStart time.Time) ([]HoldingRow, ClaimTotal, error) {
 
@@ -95,10 +102,17 @@ func readHolding(ctx context.Context, tx *sql.Tx, handle string,
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
+	statement, open := holdingWaitersStatement()
+	w := newHoldingWalk(handle, MaxHoldingSteps, func(id string) ([]waiter, error) {
+		return readWaiters(ctx, tx, statement, open, id)
+	})
 	rows := make([]HoldingRow, 0, len(candidates))
 	for _, task := range candidates {
-		row, err := walkHolding(ctx, tx, handle, task)
+		row, err := w.walk(task)
 		if err != nil {
+			return nil, ClaimTotal{}, err
+		}
+		if row.HeldSince, err = readHeldSince(ctx, tx, task.ID); err != nil {
 			return nil, ClaimTotal{}, err
 		}
 		rows = append(rows, row)
@@ -111,47 +125,59 @@ func readHolding(ctx context.Context, tx *sql.Tx, handle string,
 	return rows, ClaimTotal{Total: total, Capped: capped}, nil
 }
 
-// walkHolding counts what waits on task, breadth first and each item once,
-// so a dependency cycle ends the walk rather than looping it.
-func walkHolding(ctx context.Context, tx *sql.Tx, handle string, task TaskRow) (HoldingRow, error) {
+// waiter is one open item waiting on another, and who holds it.
+type waiter struct{ id, assignee string }
+
+// holdingWalk walks every candidate of one read over one memo of each item's
+// waiters, asking for an item's waiters at most once and at most steps times.
+type holdingWalk struct {
+	handle  string
+	steps   int
+	memo    map[string][]waiter
+	waiters func(id string) ([]waiter, error)
+}
+
+func newHoldingWalk(handle string, steps int, waiters func(string) ([]waiter, error)) *holdingWalk {
+	return &holdingWalk{handle: handle, steps: steps, memo: map[string][]waiter{}, waiters: waiters}
+}
+
+// walk counts what waits on task, breadth first and each item once, so a
+// dependency cycle ends the walk rather than looping it.
+func (w *holdingWalk) walk(task TaskRow) (HoldingRow, error) {
 	row := HoldingRow{TaskRow: task, Holders: []string{}}
-	statement, open := holdingWaitersStatement()
 	seen := map[string]bool{task.ID: true}
 	holders := map[string]bool{}
 	frontier := []string{task.ID}
 	for len(frontier) > 0 && !row.BlocksCapped {
 		next := frontier[0]
 		frontier = frontier[1:]
-		waiters, err := tx.QueryContext(ctx, statement, append([]any{next}, open...)...)
-		if err != nil {
-			return HoldingRow{}, fmt.Errorf("worklet: read what waits on %s: %w", next, err)
-		}
-		for waiters.Next() {
-			var id, assignee string
-			if err := waiters.Scan(&id, &assignee); err != nil {
-				_ = waiters.Close()
-				return HoldingRow{}, fmt.Errorf("worklet: scan what waits on %s: %w", next, err)
+		waiting, known := w.memo[next]
+		if !known {
+			if w.steps == 0 {
+				row.BlocksCapped = true
+				break
 			}
-			if seen[id] {
+			w.steps--
+			var err error
+			if waiting, err = w.waiters(next); err != nil {
+				return HoldingRow{}, err
+			}
+			w.memo[next] = waiting
+		}
+		for _, wt := range waiting {
+			if seen[wt.id] {
 				continue
 			}
 			if row.Blocks == MaxHoldingWalk {
 				row.BlocksCapped = true
 				break
 			}
-			seen[id] = true
+			seen[wt.id] = true
 			row.Blocks++
-			frontier = append(frontier, id)
-			if assignee != "" && assignee != handle {
-				holders[assignee] = true
+			frontier = append(frontier, wt.id)
+			if wt.assignee != "" && wt.assignee != w.handle {
+				holders[wt.assignee] = true
 			}
-		}
-		if err := waiters.Err(); err != nil {
-			_ = waiters.Close()
-			return HoldingRow{}, fmt.Errorf("worklet: walk what waits on %s: %w", next, err)
-		}
-		if err := waiters.Close(); err != nil {
-			return HoldingRow{}, fmt.Errorf("worklet: close the walk of %s: %w", next, err)
 		}
 	}
 	for _, h := range slices.Sorted(maps.Keys(holders)) {
@@ -160,13 +186,40 @@ func walkHolding(ctx context.Context, tx *sql.Tx, handle string, task TaskRow) (
 		}
 		row.Holders = append(row.Holders, h)
 	}
+	return row, nil
+}
+
+// readWaiters is one step of the walk: the open items waiting on id.
+func readWaiters(ctx context.Context, tx *sql.Tx, statement string, open []any, id string) ([]waiter, error) {
+	rows, err := tx.QueryContext(ctx, statement, append([]any{id}, open...)...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read what waits on %s: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []waiter
+	for rows.Next() {
+		var wt waiter
+		if err := rows.Scan(&wt.id, &wt.assignee); err != nil {
+			return nil, fmt.Errorf("worklet: scan what waits on %s: %w", id, err)
+		}
+		out = append(out, wt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("worklet: walk what waits on %s: %w", id, err)
+	}
+	return out, nil
+}
+
+// readHeldSince is when an item was last assigned, or filed already assigned.
+func readHeldSince(ctx context.Context, tx *sql.Tx, id string) (time.Time, error) {
 	var since int64
-	err := tx.QueryRowContext(ctx, holdingSinceStatement, task.ID).Scan(&since)
+	err := tx.QueryRowContext(ctx, holdingSinceStatement, id).Scan(&since)
 	switch {
 	case err == nil:
-		row.HeldSince = store.DecodeTime(since)
-	case !errors.Is(err, sql.ErrNoRows):
-		return HoldingRow{}, fmt.Errorf("worklet: read when %s was assigned: %w", task.ID, err)
+		return store.DecodeTime(since), nil
+	case errors.Is(err, sql.ErrNoRows):
+		return time.Time{}, nil
+	default:
+		return time.Time{}, fmt.Errorf("worklet: read when %s was assigned: %w", id, err)
 	}
-	return row, nil
 }

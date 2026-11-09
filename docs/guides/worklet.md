@@ -1193,11 +1193,13 @@ cut **after** finished and removed entries are dropped, so a list whose head is
 done work still shows its first twenty open entries in the order they were put.
 
 A `holding_up` row is the task plus `blocks` (how many open items wait on it,
-directly or through another waiting item, each counted once, up to 512 with
-`blocks_capped` past it), `holders` (who holds that waiting work, the reader
+directly or through another waiting item, each counted once; `blocks_capped`
+says the count is a floor, past 512 waiting items or past the 2,048 items one
+read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
 left out, at most eight) and `held_since` (when it was last assigned). It is
 the one list about who waits on the reader rather than what waits for them, and
-it is the same for a person, whose dashboard shows it under My work: a person
+it is the same for a person, whose dashboard shows it under My work. The list
+ranks the first 100 such items in the queue's own order: a person
 holding a review or a decision as a work item can stall a team that nothing
 else tells them about. What to do with a row is the tracker's own actions, taken
 by the reader.
