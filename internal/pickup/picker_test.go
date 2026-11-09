@@ -3,6 +3,7 @@ package pickup_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ type fleet struct {
 	worked map[string]bool
 	claims map[string]time.Time
 	down   bool
+	reads  int
 }
 
 func newFleet() *fleet {
@@ -34,6 +36,7 @@ func newFleet() *fleet {
 func (f *fleet) Worked(_ context.Context, _ string, keys []string) map[string]bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads += len(keys)
 	out := map[string]bool{}
 	for _, k := range keys {
 		if f.worked[k] {
@@ -85,20 +88,27 @@ func (f *fleet) turnOn(ev *events.Event) {
 
 func pickupWorkKey(ev *events.Event) string {
 	assigned, _ := events.DataAs[*types.TaskAssigned](ev)
-	return pickup.Key{Seat: seat, Item: assigned.Pickup.Item, Moved: assigned.Pickup.Version,
-		Status: assigned.Pickup.Status}.WorkKey()
+	return pickup.Key{Seat: seat, Item: assigned.Pickup.Item, Moved: assigned.Pickup.Moved,
+		Status: assigned.Pickup.Status, Progressed: assigned.Pickup.Progressed}.WorkKey()
 }
 
-// tracker is the seat's ready work, as the read answers it.
+// tracker is the seat's ready work, as the read answers it, page by page.
 type tracker struct {
 	mu    sync.Mutex
 	items []worklet.ReadyItem
 }
 
-func (t *tracker) ReadyWork(context.Context, worklet.ReadyWorkQuery, time.Time) (worklet.ReadyWork, error) {
+func (t *tracker) ReadyWork(_ context.Context, q worklet.ReadyWorkQuery, _ time.Time) (worklet.ReadyWork, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return worklet.ReadyWork{Items: append([]worklet.ReadyItem(nil), t.items...)}, nil
+	from := min(q.Page*worklet.ReadyRows, len(t.items))
+	to := min(from+worklet.ReadyRows, len(t.items))
+	fp := ""
+	for _, it := range t.items {
+		fp += fmt.Sprintf("%s:%s:%d:%d;", it.ID, it.Status, it.Moved, it.Progressed)
+	}
+	return worklet.ReadyWork{Items: append([]worklet.ReadyItem(nil), t.items[from:to]...),
+		Total: len(t.items), More: to < len(t.items), Fingerprint: fp}, nil
 }
 
 // inbox is what a node published, and whether it refuses.
@@ -169,9 +179,9 @@ func TestAnIdleSeatIsHandedItsReadyItemOnce(t *testing.T) {
 			out, in.count())
 	}
 
-	// THE SAME NODE ASKING AGAIN, inside the cooldown.
-	if out := pass(a); out.Woken || out.Skip != pickup.SkipCooldown {
-		t.Errorf("a pass inside the cooldown = %+v, want the cooldown", out)
+	// THE SAME NODE ASKING AGAIN while the copy waits: the pickup's claim.
+	if out := pass(a); out.Woken || out.Skip != pickup.SkipClaimed {
+		t.Errorf("a pass while the pickup waits = %+v, want it claimed", out)
 	}
 
 	// A SECOND NODE that believes it holds the seat, as during a move: the
@@ -207,24 +217,100 @@ func TestAnIdleSeatIsHandedItsReadyItemOnce(t *testing.T) {
 	}
 }
 
-// A SEAT THAT DECLINES ONE ITEM IS HANDED THE NEXT, one per cooldown.
+// A DECLINE IS SPACED BY THE COOLDOWN, WORK IS NOT: a seat that declines one
+// item is handed the next, and the one after only once the cooldown lapses;
+// a seat that acted on its item is handed the next at once.
 func TestADeclinedItemGivesWayToTheNext(t *testing.T) {
 	t.Parallel()
 	f, in := newFleet(), &inbox{}
 	tr := &tracker{items: []worklet.ReadyItem{item("a", worklet.StatusInProgress, 40),
-		item("b", worklet.StatusTodo, 7)}}
+		item("b", worklet.StatusTodo, 7), item("c", worklet.StatusTodo, 9)}}
 	p := node(f, tr, in, idleHolder())
 	pass(p)
 	if out := pass(p); out.Item.ID != "a" {
 		t.Fatalf("first pickup = %q, want a", out.Item.ID)
 	}
 	f.turnOn(in.got[0])
-	if out := pass(p); out.Skip != pickup.SkipCooldown {
-		t.Fatalf("inside the cooldown = %+v", out)
+	if out := pass(p); !out.Woken || out.Item.ID != "b" || out.Ready != 3 {
+		t.Fatalf("after declining a = %+v, want b of 3 ready", out)
+	}
+	f.turnOn(in.got[1])
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipCooldown {
+		t.Fatalf("after declining b inside the cooldown = %+v, want the cooldown", out)
 	}
 	f.advance(10 * time.Minute)
-	if out := pass(p); !out.Woken || out.Item.ID != "b" || out.Ready != 2 {
-		t.Errorf("after the cooldown = %+v, want b of 2 ready", out)
+	if out := pass(p); !out.Woken || out.Item.ID != "c" {
+		t.Errorf("after the cooldown = %+v, want c", out)
+	}
+
+	// WORK: the seat finished its item, which left its ready work, so the
+	// next is handed over at once, with no cooldown taken.
+	g, out := newFleet(), &inbox{}
+	tr2 := &tracker{items: []worklet.ReadyItem{item("a", worklet.StatusTodo, 1),
+		item("b", worklet.StatusTodo, 2), item("c", worklet.StatusTodo, 3)}}
+	q := node(g, tr2, out, idleHolder())
+	pass(q)
+	for _, want := range []string{"a", "b", "c"} {
+		got := pass(q)
+		if !got.Woken || got.Item.ID != want {
+			t.Fatalf("the seat that finished its last item was handed %+v, want %s at once", got, want)
+		}
+		g.turnOn(out.got[len(out.got)-1])
+		tr2.mu.Lock()
+		tr2.items = tr2.items[1:]
+		tr2.mu.Unlock()
+	}
+}
+
+// ITEM 21 ONWARDS IS OFFERED once every item of the first page was, and an
+// unchanged set already handed over whole costs no ledger read.
+func TestThePickupReadsPastTheFirstPageAndRemembersAnAllOfferedSet(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	tr := &tracker{}
+	for i := range worklet.ReadyRows + 5 {
+		tr.items = append(tr.items, item(fmt.Sprintf("t%02d", i), worklet.StatusTodo, uint64(i+1)))
+	}
+	for _, it := range tr.items[:worklet.ReadyRows] {
+		f.worked[pickup.KeyOf(seat, it).WorkKey()] = true
+	}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken || out.Item.ID != fmt.Sprintf("t%02d", worklet.ReadyRows) {
+		t.Fatalf("with the first page offered = %+v, want the first item of the second", out)
+	}
+	for _, it := range tr.items {
+		f.worked[pickup.KeyOf(seat, it).WorkKey()] = true
+	}
+	f.advance(31 * time.Minute)
+	if out := pass(p); out.Skip != pickup.SkipOffered {
+		t.Fatalf("with every item offered = %+v", out)
+	}
+	before := f.reads
+	if out := pass(p); out.Skip != pickup.SkipOffered || f.reads != before {
+		t.Errorf("an unchanged set handed over whole read the ledger %d more times", f.reads-before)
+	}
+	tr.mu.Lock()
+	tr.items[3].Moved = 999
+	tr.mu.Unlock()
+	if out := pass(p); !out.Woken || out.Item.ID != "t03" {
+		t.Errorf("after somebody changed t03 = %+v, want it handed over", out)
+	}
+}
+
+// THE LEDGER IS ASKED IN ORDER AND NO FURTHER than the first item the seat
+// has not had.
+func TestTheLedgerIsReadOnlyUpToTheItemChosen(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	tr := &tracker{}
+	for i := range 30 {
+		tr.items = append(tr.items, item(fmt.Sprintf("t%02d", i), worklet.StatusTodo, uint64(i+1)))
+	}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken || f.reads != 1 {
+		t.Errorf("handing over the first item read the ledger %d times, want 1", f.reads)
 	}
 }
 

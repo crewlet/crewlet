@@ -107,20 +107,28 @@ type TaskAssigned struct {
 	Pickup *WorkPickup `json:"pickup,omitempty"`
 }
 
-// WorkPickup is the item a pickup names. Every field is the tracker's own
-// value, never anybody's prose, so the brief carries no words to fence.
+// WorkPickup is the item a pickup names, and whom its work is for. Every
+// field is the tracker's own value, never anybody's prose.
 type WorkPickup struct {
 	// Item is the task's id, Key its address and Status where it stands.
 	Item   string `json:"item"`
 	Key    string `json:"key"`
 	Status string `json:"status"`
-	// Version is the task's version the pickup was derived from: the
-	// pickup is made once per (seat, item, version).
-	Version uint64 `json:"version"`
+	// Moved is the log position of the last change somebody other than the
+	// seat made to the item, and Progressed the seat's own last progress on
+	// it when started: with the seat, the item and its status, the pickup's
+	// identity.
+	Moved      uint64 `json:"moved"`
+	Progressed uint64 `json:"progressed,omitempty"`
 	// Why is what put the item first ([PickupWhy]).
 	Why PickupWhy `json:"why"`
-	// Ready is how many ready items the seat holds, this one included.
-	Ready int `json:"ready"`
+	// Ready is how many ready items the seat holds, this one included, and
+	// ReadyCapped whether it holds more than the pickup counted.
+	Ready       int  `json:"ready"`
+	ReadyCapped bool `json:"ready_capped,omitempty"`
+	// WorkingFor is whom the item's work is for, so the turn is held to
+	// their apps (ADR-0109); nil for the seat's own work.
+	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 
 // PickupWhy is what put an item first in a seat's ready work.
@@ -271,13 +279,8 @@ func (e TaskAssigned) SummaryFor(actor string) string {
 	return lead(actor, "was assigned a task")
 }
 
-// brief is the pickup's ask: which item, why it was chosen, and the four
-// honest ways to answer it.
-//
-// THE WAYS OUT ARE NAMED because the pickup is made once per item version: a
-// seat that answers with a promise and changes nothing is not reminded until
-// the item changes, so "later" has to be said on the item, where a person
-// sees it, or not at all.
+// brief is the pickup's ask: which item, why, and the four honest answers,
+// named because a promise that changes nothing is never reminded.
 func (p WorkPickup) brief() string {
 	var b strings.Builder
 	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
@@ -285,7 +288,10 @@ func (p WorkPickup) brief() string {
 	if why := p.Why.sentence(); why != "" {
 		b.WriteString(" " + why)
 	}
-	if p.Ready > 1 {
+	switch {
+	case p.ReadyCapped:
+		b.WriteString(" You hold at least " + strconv.Itoa(p.Ready) + " ready items.")
+	case p.Ready > 1:
 		b.WriteString(" You hold " + strconv.Itoa(p.Ready) + " ready items in all.")
 	}
 	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then do one of these in this turn:\n" +

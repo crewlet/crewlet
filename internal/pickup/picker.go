@@ -94,6 +94,11 @@ type Picker struct {
 
 	mu   sync.Mutex
 	idle map[uuid.UUID]bool
+
+	// offered is the fingerprint of each seat's ready set the last pass
+	// found every item of already handed over, so an unchanged set costs
+	// no ledger read ([worklet.ReadyWork.Fingerprint]).
+	offered map[uuid.UUID]string
 }
 
 // Pass decides every seat once, and forgets the settle of any seat it was
@@ -121,6 +126,34 @@ func (p *Picker) forget(held map[uuid.UUID]bool) {
 			delete(p.idle, id)
 		}
 	}
+	for id := range p.offered {
+		if !held[id] {
+			delete(p.offered, id)
+		}
+	}
+}
+
+// remember records, or with "" forgets, that a seat's ready set named by
+// fingerprint was all handed over; and answers what was recorded before.
+func (p *Picker) remember(seat uuid.UUID, fingerprint string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	before := p.offered[seat]
+	if fingerprint == "" {
+		delete(p.offered, seat)
+		return before
+	}
+	if p.offered == nil {
+		p.offered = map[uuid.UUID]string{}
+	}
+	p.offered[seat] = fingerprint
+	return before
+}
+
+func (p *Picker) allOffered(seat uuid.UUID, fingerprint string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return fingerprint != "" && p.offered[seat] == fingerprint
 }
 
 // settle records whether this pass found the seat idle, and answers whether
@@ -145,35 +178,26 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 		return out
 	}
 	now := p.Now()
-	// THE NODE'S OWN COPY: the settle gave the last turn's writes a pass to
-	// land, and a stale answer costs at most a pickup the ledger refuses.
-	ready, err := p.Ready.ReadyWork(ctx, worklet.ReadyWorkQuery{
-		Handle: seat.Handle, Level: statelog.ReadStale,
-	}, now)
-	if err != nil {
-		return failed(out, fmt.Errorf("read %s's ready work: %w", seat.Handle, err))
-	}
-	out.Ready = len(ready.Items)
-	if out.Ready == 0 {
-		out.Skip = SkipNothing
+	pick, err := p.choose(ctx, seat, now)
+	out.Ready, out.Item = pick.ready, pick.item
+	switch {
+	case err != nil:
+		return failed(out, err)
+	case pick.skip != "":
+		out.Skip = pick.skip
 		return out
 	}
-	worked := p.Ledger.Worked(ctx, seat.Handle, WorkKeys(seat.ID, ready.Items))
-	item, key, ok := Choose(seat.ID, ready.Items, worked)
-	if !ok {
-		out.Skip = SkipOffered
-		return out
+	// A DECLINE IS SPACED, WORK IS NOT: the cooldown is taken only when the
+	// pickup passes over an item the seat was handed and left unchanged.
+	if pick.passed {
+		if skip, err := p.claim(ctx, CooldownKey(seat.ID), p.Cooldown, now, SkipCooldown); skip != "" {
+			out.Skip, out.Err = skip, err
+			return out
+		}
 	}
-	out.Item = item
-	// THE SEAT'S COOLDOWN FIRST, then the pickup's own claim, held for the
-	// fleet's longest claim so a copy waiting in the inbox is not published
-	// again before its turn records it in the ledger. A pickup a
-	// second node already claimed costs this seat one cooldown, where the
-	// other order would spend the item's claim on a seat still cooling.
-	if skip, err := p.claim(ctx, CooldownKey(seat.ID), p.Cooldown, now, SkipCooldown); skip != "" {
-		out.Skip, out.Err = skip, err
-		return out
-	}
+	// HELD FOR THE FLEET'S LONGEST CLAIM, so a copy waiting in the inbox is
+	// not published again before its turn records it in the ledger.
+	key := pick.key
 	if skip, err := p.claim(ctx, key.ClaimKey(), coord.MaxClaimTTL, now, SkipClaimed); skip != "" {
 		out.Skip, out.Err = skip, err
 		return out
@@ -182,13 +206,18 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 	if p.Trace != nil {
 		trace = p.Trace(ctx)
 	}
-	ev := Event(seat.ID, seat.Role, item, key, out.Ready, trace)
+	item := pick.item
+	ev := Event(seat.ID, seat.Role, item, key, out.Ready, pick.capped, trace)
 	if err := p.Publisher.Publish(ctx, topics.AgentInbox(seat.ID), ev); err != nil {
 		// NOTHING WAS SPENT THAT A RETRY CANNOT TAKE AGAIN: a copy that
 		// landed after all carries the same id, which the inbox and the
 		// ledger collapse, so both claims are given back for the next pass.
 		release := context.WithoutCancel(ctx)
-		for _, claim := range []string{key.ClaimKey(), CooldownKey(seat.ID)} {
+		claims := []string{key.ClaimKey()}
+		if pick.passed {
+			claims = append(claims, CooldownKey(seat.ID))
+		}
+		for _, claim := range claims {
 			if rerr := p.Claims.Release(release, claim); rerr != nil {
 				err = fmt.Errorf("%w; and the claim %s is kept until it lapses: %w", err, claim, rerr)
 			}
@@ -197,6 +226,57 @@ func (p *Picker) decide(ctx context.Context, seat Seat) Outcome {
 	}
 	out.Woken, out.Wake = true, ev.ID
 	return out
+}
+
+// picked is what [Picker.choose] found: the item and its key, whether it
+// passed over an item already handed over, and the ready count.
+type picked struct {
+	item   worklet.ReadyItem
+	key    Key
+	passed bool
+	ready  int
+	capped bool
+	skip   Skip
+}
+
+// choose walks the seat's ready work page by page and asks the ledger key by
+// key, stopping at the first pickup the seat has not had.
+func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time) (picked, error) {
+	var out picked
+	for page := 0; ; page++ {
+		// THE NODE'S OWN COPY: the settle gave the last turn's writes a
+		// pass to land, and a stale answer costs a pickup the ledger refuses.
+		ready, err := p.Ready.ReadyWork(ctx, worklet.ReadyWorkQuery{
+			Handle: seat.Handle, Level: statelog.ReadStale, Page: page,
+		}, now)
+		if err != nil {
+			return out, fmt.Errorf("read %s's ready work: %w", seat.Handle, err)
+		}
+		out.ready, out.capped = ready.Total, ready.Capped
+		if ready.Total == 0 {
+			p.remember(seat.ID, "")
+			out.skip = SkipNothing
+			return out, nil
+		}
+		if p.allOffered(seat.ID, ready.Fingerprint) {
+			out.skip = SkipOffered
+			return out, nil
+		}
+		for _, item := range ready.Items {
+			key := KeyOf(seat.ID, item)
+			if !p.Ledger.Worked(ctx, seat.Handle, []string{key.WorkKey()})[key.WorkKey()] {
+				out.item, out.key = item, key
+				p.remember(seat.ID, "")
+				return out, nil
+			}
+			out.passed = true
+		}
+		if !ready.More {
+			p.remember(seat.ID, ready.Fingerprint)
+			out.skip = SkipOffered
+			return out, nil
+		}
+	}
 }
 
 // claim takes one fleet claim, answering the skip that holds the seat back,

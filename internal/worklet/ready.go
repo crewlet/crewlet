@@ -2,51 +2,58 @@ package worklet
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A seat's READY work: the assigned items it could start now, in the order
-// the work pickup offers them (ADR-0112).
+// A seat's READY work, in the order the work pickup offers it (ADR-0112).
 //
 // # Ready
 //
 // Assigned to the seat, `in_progress` or `todo`, not archived, not mid-merge,
 // not in the trash, past its start date if it has one, waiting on no open
 // blocker, and not held on a question the seat itself asked on it and nobody
-// has answered yet. `in_review` is not ready: the work is done and a
-// colleague holds the next move.
+// has answered yet. `in_review` is not ready: a colleague holds the next move.
 //
 // # The order
 //
-// What the seat already started comes first, because an `in_progress` item
-// with no run behind it is work somebody believes is moving. Then the seat's
-// priority list, in the order its lead set. Then the queue: priority, then
-// due date, the order `my_work` lists `assigned` in.
+// Started work first, then the seat's priority list in its lead's order, then
+// the queue: priority, then due date, the order `my_work` lists `assigned` in.
 //
-// # What a pickup keys on
+// # What a pickup keys on, and whom its turn works for
 //
-// [ReadyItem.Moved] is the last change SOMEBODY ELSE made to the item, so a
-// seat that answers a pickup with a comment of its own is not handed the same
-// item again for it, while a reviewer's send-back, a person's comment or the
-// unblocked repair hands it over again.
+// [ReadyItem.Moved] is the last change somebody else made to the item, so the
+// seat's own comment does not hand it the same item again. [ReadyItem.For] is
+// whom the item's work is for, so the turn is held to their apps (ADR-0109).
 
-// ReadyRows is how many items each status reads: the page `my_work` reads its
-// blocks in, for the reason [MyWorkRows] gives.
+// ReadyRows is one page of ready work: the pickup reads the next page only
+// when every item on this one was already offered.
 const ReadyRows = MyWorkRows
 
-// ReadyWorkQuery asks for one seat's ready work.
+// MaxReady is how many items of each status the order is taken over: a seat
+// holding more is offered its first MaxReady of each, and told so.
+const MaxReady = 200
+
+// ReadyWorkQuery asks for one page of a seat's ready work.
 type ReadyWorkQuery struct {
 	// Handle is whose. Required.
 	Handle string
 
 	// Level is the read level; a pickup reads at the node's own copy.
 	Level statelog.ReadLevel
+
+	// Page is which page of [ReadyRows] items, from 0.
+	Page int
 }
 
 // ReadyItem is one item a seat could start now, and why it sits where it does.
@@ -57,21 +64,45 @@ type ReadyItem struct {
 	Why types.PickupWhy `json:"why"`
 
 	// Moved is the log position of the last change somebody other than the
-	// seat made to the item: zero where nobody else ever has.
-	Moved uint64 `json:"moved"`
+	// seat made to the item, zero where nobody else ever has, and MovedAt
+	// that change's instant (the item's creation where Moved is zero).
+	Moved   uint64    `json:"moved"`
+	MovedAt time.Time `json:"moved_at"`
+
+	// Progressed is the log position of the seat's own last change to a
+	// started item other than a comment: its progress, which hands the
+	// item over again. Zero on an item not started.
+	Progressed uint64 `json:"progressed,omitempty"`
+
+	// For is whom the item's work is for: the writer of its last
+	// assignment by somebody else, else its reporter; nil for the seat's
+	// own work.
+	For *types.WorkingFor `json:"for,omitempty"`
 }
 
-// ReadyWork is a seat's ready items in pickup order.
+// ReadyWork is one page of a seat's ready items in pickup order.
 type ReadyWork struct {
 	Handle string      `json:"handle"`
 	Items  []ReadyItem `json:"items"`
+
+	// Total is how many ready items the order holds, More whether a page
+	// follows this one, and Capped whether a status held more than
+	// [MaxReady], so Total is a floor.
+	Total  int  `json:"total"`
+	More   bool `json:"more,omitempty"`
+	Capped bool `json:"capped,omitempty"`
+
+	// Fingerprint names the whole ordered set, every item's id, status and
+	// version, so a pickup that found every item offered asks again only
+	// once something in it moved.
+	Fingerprint string `json:"fingerprint"`
 
 	Level      statelog.ReadLevel `json:"read_level"`
 	Complete   bool               `json:"complete"`
 	Incomplete *Incomplete        `json:"incomplete,omitempty"`
 }
 
-// ReadyWork answers what one seat could start now, at `now`.
+// ReadyWork answers one page of what a seat could start now, at `now`.
 func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time) (ReadyWork, error) {
 	if q.Handle == "" {
 		return ReadyWork{}, fmt.Errorf("worklet: a ready-work read names no seat; " +
@@ -81,17 +112,17 @@ func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time)
 		return ReadyWork{}, fmt.Errorf("worklet: a ready-work read names no level; " +
 			"the pickup states the level it reads at")
 	}
+	if q.Page < 0 {
+		return ReadyWork{}, fmt.Errorf("worklet: a ready-work page is %d; pages count from 0", q.Page)
+	}
 	out := ReadyWork{Handle: q.Handle, Items: []ReadyItem{}}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
-		// THE DOMAIN, for my_work's reason: a seat's work is in every
-		// project.
+		// THE DOMAIN, for my_work's reason: a seat's work is in every project.
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
-		items, err := readReady(ctx, tx, q.Handle, now)
-		out.Items = items
-		return err
+		return readReady(ctx, tx, q, now, &out)
 	})
 	if err != nil {
 		return ReadyWork{}, err
@@ -125,39 +156,77 @@ func readyBlock(handle string, status Status, now time.Time) blockQuery {
 	}
 }
 
-// readyMovedStatement is the last change somebody other than the seat made to
-// each of a page of items: one seek of the history's subject index per item.
-func readyMovedStatement(n int) string {
-	return `SELECT h.subject_id, MAX(h.log_seq) FROM tracker_history h
-		WHERE h.subject_id IN (` + placeholders(n) + `) AND h.actor <> ?
-		GROUP BY h.subject_id`
+func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+	out *ReadyWork) error {
+
+	var blocks [2][]TaskRow
+	for i, status := range []Status{StatusInProgress, StatusTodo} {
+		block := readyBlock(q.Handle, status, now)
+		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
+			block.terms, MaxReady, now)
+		if err != nil {
+			return fmt.Errorf("worklet: read %s's %s work: %w", q.Handle, status, err)
+		}
+		blocks[i] = rows
+		out.Capped = out.Capped || more != ""
+	}
+	person, _, err := readPerson(ctx, tx, q.Handle)
+	if err != nil {
+		return err
+	}
+	all := orderReady(blocks[0], blocks[1], person.Priorities)
+	out.Total = len(all)
+	out.Fingerprint = fingerprintOf(all)
+	from := min(q.Page*ReadyRows, len(all))
+	to := min(from+ReadyRows, len(all))
+	out.More = to < len(all)
+	out.Items = all[from:to]
+	if err := loadMoved(ctx, tx, q.Handle, out.Items); err != nil {
+		return err
+	}
+	if err := loadProgressed(ctx, tx, q.Handle, out.Items); err != nil {
+		return err
+	}
+	return loadFor(ctx, tx, q.Handle, out.Items)
 }
 
-func readReady(ctx context.Context, tx *sql.Tx, handle string, now time.Time) ([]ReadyItem, error) {
-	started, _, err := readTasks(ctx, tx, readyBlockSet(handle, StatusInProgress, now),
-		readyBlock(handle, StatusInProgress, now).terms, ReadyRows, now)
-	if err != nil {
-		return nil, fmt.Errorf("worklet: read %s's started work: %w", handle, err)
+// fingerprintOf names an ordered ready set by its items' ids, statuses and
+// versions.
+func fingerprintOf(items []ReadyItem) string {
+	h := sha256.New()
+	for _, item := range items {
+		fmt.Fprintf(h, "%s:%s:%d;", item.ID, item.Status, item.Version)
 	}
-	waiting, _, err := readTasks(ctx, tx, readyBlockSet(handle, StatusTodo, now),
-		readyBlock(handle, StatusTodo, now).terms, ReadyRows, now)
-	if err != nil {
-		return nil, fmt.Errorf("worklet: read %s's waiting work: %w", handle, err)
-	}
-	person, _, err := readPerson(ctx, tx, handle)
-	if err != nil {
-		return nil, err
-	}
-	items := orderReady(started, waiting, person.Priorities)
-	if err := loadMoved(ctx, tx, handle, items); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-func readyBlockSet(handle string, status Status, now time.Time) taskSet {
-	block := readyBlock(handle, status, now)
-	return tasksWhere(block.where, block.args)
+// readyProgressArm is one started item's last change by the seat itself that
+// is not a comment.
+const readyProgressArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
+	WHERE h.subject_id = ? AND h.actor = ?
+	  AND h.kind NOT IN ('comment', 'comment_edited', 'comment_resolved', 'comment_removed')
+	ORDER BY h.log_seq DESC LIMIT 1`
+
+// loadProgressed stamps each started item with the seat's own last change to
+// it that is not a comment.
+func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+	var args []any
+	for _, item := range items {
+		if item.Status == StatusInProgress {
+			args = append(args, item.ID, handle)
+		}
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	got, err := seqAt(ctx, tx, arms(len(args)/2, readyProgressArm), args)
+	if err != nil {
+		return fmt.Errorf("worklet: read %s's progress on its started work: %w", handle, err)
+	}
+	for i := range items {
+		items[i].Progressed = got[items[i].ID].seq
+	}
+	return nil
 }
 
 // orderReady is the pickup order over the two blocks and the priority list:
@@ -187,36 +256,178 @@ func orderReady(started, waiting []TaskRow, priorities []string) []ReadyItem {
 	return out
 }
 
+// arms is one statement of n arms joined by UNION ALL, each a seek of its own
+// item: the newest row of each item that one predicate selects.
+func arms(n int, arm string) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "SELECT * FROM (" + arm + ")"
+	}
+	return strings.Join(parts, " UNION ALL ")
+}
+
+// readyMovedArm is one item's last change by somebody other than the seat.
+const readyMovedArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
+	WHERE h.subject_id = ? AND h.actor <> ? ORDER BY h.log_seq DESC LIMIT 1`
+
+// readyFirstArm is one item's first change, the creation the seat made itself.
+const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
+	WHERE h.subject_id = ? ORDER BY h.log_seq LIMIT 1`
+
+// readyAssignedArm is one item's last assignment by a person, a colleague or
+// a credential other than the seat: anybody but the engine's own duties.
+const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
+	FROM tracker_history h
+	WHERE h.subject_id = ? AND h.kind = 'assignee' AND h.actor <> ?
+	  AND h.actor_kind <> 'system'
+	ORDER BY h.log_seq DESC LIMIT 1`
+
+// readyReporterStatement is each item's reporter.
+func readyReporterStatement(n int) string {
+	return `SELECT t.id, t.reporter FROM tracker_tasks t WHERE t.id IN (` + placeholders(n) + `)`
+}
+
 // loadMoved stamps each item with the last change somebody other than handle
-// made to it.
+// made to it, and that change's instant; an item only the seat ever changed
+// takes the instant it was created.
 func loadMoved(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
 	if len(items) == 0 {
 		return nil
 	}
-	args := make([]any, 0, len(items)+1)
+	args := make([]any, 0, 2*len(items))
 	for _, item := range items {
-		args = append(args, item.ID)
+		args = append(args, item.ID, handle)
 	}
-	args = append(args, handle)
-	rows, err := tx.QueryContext(ctx, readyMovedStatement(len(items)), args...)
+	got, err := seqAt(ctx, tx, arms(len(items), readyMovedArm), args)
 	if err != nil {
 		return fmt.Errorf("worklet: read who last changed %s's ready work: %w", handle, err)
 	}
+	var lonely []any
+	for i := range items {
+		if at, ok := got[items[i].ID]; ok {
+			items[i].Moved, items[i].MovedAt = at.seq, at.at
+			continue
+		}
+		lonely = append(lonely, items[i].ID)
+	}
+	if len(lonely) == 0 {
+		return nil
+	}
+	first, err := seqAt(ctx, tx, arms(len(lonely), readyFirstArm), lonely)
+	if err != nil {
+		return fmt.Errorf("worklet: read when %s's own work was filed: %w", handle, err)
+	}
+	for i := range items {
+		if at, ok := first[items[i].ID]; ok && items[i].Moved == 0 {
+			items[i].MovedAt = at.at
+		}
+	}
+	return nil
+}
+
+type seqInstant struct {
+	seq uint64
+	at  time.Time
+}
+
+func seqAt(ctx context.Context, tx *sql.Tx, query string, args []any) (map[string]seqInstant, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
 	defer func() { _ = rows.Close() }()
-	moved := make(map[string]uint64, len(items))
+	out := map[string]seqInstant{}
 	for rows.Next() {
 		var id string
-		var seq int64
-		if err := rows.Scan(&id, &seq); err != nil {
+		var seq, at int64
+		if err := rows.Scan(&id, &seq, &at); err != nil {
+			return nil, err
+		}
+		out[id] = seqInstant{seq: uint64(seq), at: store.DecodeTime(at)}
+	}
+	return out, rows.Err()
+}
+
+// loadFor stamps each item with whom its work is for: the writer of its last
+// assignment by somebody else, a credential with the apps it wrote under, else
+// its reporter; nil where that is the seat itself or nobody.
+func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	args := make([]any, 0, 2*len(items))
+	ids := make([]any, 0, len(items))
+	for _, item := range items {
+		args = append(args, item.ID, handle)
+		ids = append(ids, item.ID)
+	}
+	assigned := map[string]*types.WorkingFor{}
+	rows, err := tx.QueryContext(ctx, arms(len(items), readyAssignedArm), args...)
+	if err != nil {
+		return fmt.Errorf("worklet: read who assigned %s's ready work: %w", handle, err)
+	}
+	for rows.Next() {
+		var id, actor, kind, apps string
+		if err := rows.Scan(&id, &actor, &kind, &apps); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		moved[id] = uint64(seq)
+		assigned[id] = workingForWriter(AuthorKind(kind), actor, apps)
 	}
-	if err := rows.Err(); err != nil {
+	if err := closeRows(rows); err != nil {
+		return err
+	}
+	reporters := map[string]string{}
+	rows, err = tx.QueryContext(ctx, readyReporterStatement(len(ids)), ids...)
+	if err != nil {
+		return fmt.Errorf("worklet: read who reported %s's ready work: %w", handle, err)
+	}
+	for rows.Next() {
+		var id, reporter string
+		if err := rows.Scan(&id, &reporter); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		reporters[id] = reporter
+	}
+	if err := closeRows(rows); err != nil {
 		return err
 	}
 	for i := range items {
-		items[i].Moved = moved[items[i].ID]
+		switch w, ok := assigned[items[i].ID]; {
+		case ok:
+			items[i].For = w
+		case reporters[items[i].ID] != "" && reporters[items[i].ID] != handle:
+			items[i].For = &types.WorkingFor{Kind: types.WorkingForSeat,
+				Seat: reporters[items[i].ID]}
+		}
 	}
 	return nil
+}
+
+// closeRows closes rows and answers the error its walk ended on.
+func closeRows(rows *sql.Rows) error {
+	err := rows.Err()
+	if cerr := rows.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// workingForWriter is whom work a writer assigned is for: the writer's seat,
+// or the credential with the apps it wrote under.
+func workingForWriter(kind AuthorKind, actor, apps string) *types.WorkingFor {
+	if kind != AuthorOperator {
+		return &types.WorkingFor{Kind: types.WorkingForSeat, Seat: actor}
+	}
+	w := &types.WorkingFor{Kind: types.WorkingForCredential, Login: actor}
+	if apps != "" {
+		// A LIST THE APPLIER WROTE; one this build cannot read grants
+		// nothing, the closed end.
+		var grants []iam.Grant
+		if json.Unmarshal([]byte(apps), &grants) == nil {
+			w.Apps = grants
+		}
+	}
+	return w
 }

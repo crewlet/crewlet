@@ -632,19 +632,31 @@ the last word anybody said about that item.
   the order its lead set, then the rest by priority and due date, the order
   `my_work` lists them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
-  somebody else made to the item, and status. The fleet's completion ledger
+  somebody else made to the item, status and, for started work, the seat's own
+  last progress on it other than a comment. The fleet's completion ledger
   remembers it for seven days whichever node holds the seat, and a fleet claim
   keeps two nodes from both sending it during a move. A seat that declines an
   item, comments on it or records a blocker on it is not handed it again until
-  somebody else changes it or its status moves; a seat that started it is
-  handed it once more, as work in progress, when it is idle again.
-- **One per cooldown.** A fleet claim on the seat spaces its pickups by
-  `cooldown_seconds`, so a seat that declines one ready item after another is
-  offered the next at most once per cooldown.
+  somebody else changes it or its status moves; started work the seat makes
+  progress on is handed back when it is idle again, and a turn that changed
+  nothing does not bring it back.
+- **Past the first page.** Ready work is read twenty items at a time, so item
+  twenty-one onwards is handed over once the first twenty were, and a seat
+  whose whole ready set was handed over already is not asked about again until
+  the set changes. Each status is read to its first 200 items.
+- **Declines are spaced, work is not.** A fleet claim on the seat spaces a
+  pickup by `cooldown_seconds` only when it passes over an item the seat was
+  handed and left unchanged, so a seat that declines one item after another is
+  offered the next at most once per cooldown, and a seat that finishes an item
+  is handed the next at once.
+- **Worked for whom the item is for.** The turn is held to the apps of the
+  writer of the item's last assignment by somebody else, else its reporter,
+  and a credential to the apps it wrote under, exactly as the turn its
+  assignment woke ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
 The wake is a `task_assigned` naming the item, its status and why it was
-chosen, filed under the item's own conversation so the turn continues the
-item's session. Its brief names the four honest answers: start or continue
+chosen, stamped with the instant of the change its key names and filed under
+the item's own conversation so the turn continues the item's session. Its brief names the four honest answers: start or continue
 the work, record the blocker, hand the item back, or say on the item why it
 should wait. A company on a vendor tracker, or with no model, gets no pickups.
 

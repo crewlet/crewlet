@@ -1,10 +1,8 @@
 package pickup
 
-// Conditions is what the node holding a seat knows about it at one pass.
-//
-// Read once per seat per pass, by the engine, from the same sources its
-// delivery screening reads (internal/agent/inbox's Conditions), so a seat this
-// decides is idle is one a delivery would reach and run.
+// Conditions is what the node holding a seat knows about it at one pass, read
+// from the sources its delivery screening reads, so an idle seat is one a
+// delivery would reach and run.
 type Conditions struct {
 	// Owned is whether this node holds the seat's lease freshly enough to
 	// start work on it.
@@ -67,12 +65,9 @@ const (
 	SkipUnknown     Skip = "unknown"
 )
 
-// Idle reports whether a seat may be handed work now, and why not.
-//
-// THE ORDER IS THE ORDER OF CERTAINTY: what makes the seat not this node's to
-// decide comes first, then what a person decided, then what is running, then
-// what is waiting, and the settle last, because it is the one condition that
-// is only a matter of time.
+// Idle reports whether a seat may be handed work now, and why not: whose it
+// is first, then a person's decision, what runs, what waits, and the settle
+// last, the one condition that is only a matter of time.
 func Idle(c Conditions) (bool, Skip) {
 	switch {
 	case !c.Owned:

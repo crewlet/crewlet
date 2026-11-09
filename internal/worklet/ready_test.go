@@ -1,11 +1,14 @@
 package worklet_test
 
 import (
+	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -150,5 +153,111 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	r.drain()
 	if ids := readyIDs(r.readyWork("ana")); !slices.Contains(ids, "blocked") {
 		t.Errorf("ready work = %v after its blocker closed, want the dependent in it", ids)
+	}
+}
+
+// READY WORK SAYS WHOM EACH ITEM'S WORK IS FOR (ADR-0109): the writer of its
+// last assignment by somebody else, a credential with the apps it wrote under,
+// else its reporter; nobody for the seat's own work.
+func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
+	file := func(id, reporter string) {
+		t.Helper()
+		task := newTask(id)
+		task.Reporter = reporter
+		if _, err := pm.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	assign := func(w *worklet.Writer, id string) {
+		t.Helper()
+		to := "ana"
+		if _, err := w.UpdateTask(t.Context(), "op-assign-"+id, id, "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Assignee: &to}, worklet.ChangeAssignee,
+			&worklet.Notify{Kind: worklet.ChangeAssignee,
+				Snapshot: worklet.Snapshot{Assignee: "ana"}}); err != nil {
+			t.Fatalf("assign %s: %v", id, err)
+		}
+		r.drain()
+	}
+	file("by-token", "pm")
+	assign(r.writer.As("token:ci", worklet.AuthorOperator,
+		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}}), "by-token")
+	file("reported", "lead")
+	assign(r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}), "reported")
+	file("own", "ana")
+	assign(r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}), "own")
+
+	got := map[string]*types.WorkingFor{}
+	for _, item := range r.readyWork("ana").Items {
+		got[item.ID] = item.For
+	}
+	want := map[string]*types.WorkingFor{
+		"by-token": {Kind: types.WorkingForCredential, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantWorklet}},
+		"reported": {Kind: types.WorkingForSeat, Seat: "lead"},
+		"own":      nil,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the work is for %+v, want %+v", got, want)
+	}
+}
+
+// THE WAKE INSTANT IS THE CHANGE THE KEY NAMES, and the seat's progress on
+// started work is its own change other than a comment: a comment moves
+// neither, a field it sets moves the progress alone.
+func TestReadyWorkTimesAndProgressFollowTheKey(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
+	first := r.readyWork("ana").Items[0]
+	if first.MovedAt.IsZero() {
+		t.Fatal("an item somebody else filed has no instant for the change its key names")
+	}
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	c := worklet.Comment{ID: "c-1", Task: "started", Author: "ana", AuthorKind: worklet.AuthorAgent,
+		Body: "on it", CreatedAt: wednesday}
+	if _, err := ana.UpdateTask(t.Context(), "op-c", "started", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, nil); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	commented := r.readyWork("ana").Items[0]
+	if !commented.MovedAt.Equal(first.MovedAt) || commented.Progressed != first.Progressed {
+		t.Errorf("the seat's comment moved the instant %s -> %s or the progress %d -> %d",
+			first.MovedAt, commented.MovedAt, first.Progressed, commented.Progressed)
+	}
+	high := worklet.PriorityHigh
+	if _, err := ana.UpdateTask(t.Context(), "op-p", "started", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Priority: &high}, worklet.ChangeFields, nil); err != nil {
+		t.Fatalf("set the priority: %v", err)
+	}
+	r.drain()
+	if moved := r.readyWork("ana").Items[0]; moved.Progressed <= commented.Progressed ||
+		!moved.MovedAt.Equal(first.MovedAt) {
+		t.Errorf("the seat's field change left the progress at %d (was %d) or moved the instant",
+			moved.Progressed, commented.Progressed)
+	}
+}
+
+// READY WORK IS PAGED PAST THE FIRST PAGE, so item 21 onwards can be offered.
+func TestReadyWorkIsPaged(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range worklet.ReadyRows + 3 {
+		fileFor(t, r, fmt.Sprintf("t%02d", i), "ana", worklet.StatusTodo, worklet.PriorityNormal)
+	}
+	first := r.readyWork("ana")
+	if len(first.Items) != worklet.ReadyRows || !first.More || first.Total != worklet.ReadyRows+3 {
+		t.Fatalf("page 0 = %d items, more %v, total %d", len(first.Items), first.More, first.Total)
+	}
+	second, err := r.reader.ReadyWork(t.Context(), worklet.ReadyWorkQuery{
+		Handle: "ana", Level: statelog.ReadStale, Page: 1}, wednesday)
+	if err != nil || len(second.Items) != 3 || second.More || second.Fingerprint != first.Fingerprint {
+		t.Fatalf("page 1 = %d items, more %v (%v), want the last 3 under one fingerprint",
+			len(second.Items), second.More, err)
 	}
 }

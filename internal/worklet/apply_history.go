@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -94,15 +95,16 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
 			 operator_id, comment_id, excerpt, fields_json, turn_id,
 			 notified, late, log_seq, log_stream, log_generation, created_at,
-			 broker_at, effective_at, skew_ms, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 broker_at, effective_at, skew_ms, document, actor_apps)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
 		commentID, excerpt, fields, c.record.TurnID,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
-		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation))
+		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation),
+		appsColumn(c.record.ActorApps))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the history row at %s: %w", c.position, err)
 	}
@@ -510,4 +512,13 @@ func statedDeltas(c applyContext) map[string]Delta {
 		return nil
 	}
 	return c.record.Notify.Fields
+}
+
+// appsColumn is a writer's apps as `tracker_history.actor_apps` holds them: a
+// JSON list, or ” for a writer that carried none.
+func appsColumn(apps []iam.Grant) string {
+	if len(apps) == 0 {
+		return ""
+	}
+	return jsonOf(apps)
 }
