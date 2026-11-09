@@ -41,6 +41,7 @@ import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
+import type { AdvisorFinding } from "~/protocol/advisor.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -59,7 +60,7 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools";
+export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -69,6 +70,7 @@ export const SUBJECTS: Record<Subject, string> = {
   seat: "every seat's own state",
   round: "every round still in flight",
   tools: "every MCP server the agents call",
+  setup: "the company's setup",
 };
 
 /**
@@ -99,6 +101,7 @@ export const WHERE_OF: Record<Subject, Where> = {
   seat: "seat",
   round: "live",
   tools: "seat",
+  setup: "seat",
 };
 
 /**
@@ -224,6 +227,12 @@ export interface AttentionInput {
    * this only puts it into words.
    */
   mcpAlarms: readonly McpAlarm[];
+  /**
+   * The setup advisor's findings that block the company and are the owner's
+   * to fix: empty for a reader the advisor does not answer. The engine judged
+   * each one; this only puts it into the queue, opening the advisor.
+   */
+  setupBlockers: readonly AdvisorFinding[];
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
@@ -256,6 +265,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
+  const { setupBlockers } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -457,6 +467,23 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         ...(entry.seat ? { who: entry.seat } : {}),
       });
     }
+  }
+
+  // --- the company's setup -------------------------------------------------
+  // WHAT BLOCKS THE COMPANY AND IS THE OWNER'S TO FIX, from the advisor, with
+  // what to do as the detail; the fix itself is previewed on the advisor.
+  for (const f of setupBlockers) {
+    out.push({
+      id: `setup-${[f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("-")}`,
+      severity: "critical",
+      subject: "setup",
+      icon: "list-checks",
+      title: f.title,
+      detail: f.fix.sentence,
+      path: ["settings", "advisor"],
+      action: "Open the advisor",
+      clears: "Clears once the setup no longer raises it.",
+    });
   }
 
   // --- seats ---------------------------------------------------------------

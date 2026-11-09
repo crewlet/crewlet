@@ -10,6 +10,7 @@
 
 import { useMemo } from "react";
 import type { McpAlarm } from "~/contract/mcp.ts";
+import type { AdvisorFinding } from "~/protocol/advisor.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
@@ -21,6 +22,12 @@ import { useViewer } from "./viewer.ts";
 
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
+
+/** No setup blocker: a reader the advisor does not answer, or an answer not in yet. */
+const NO_SETUP_BLOCKERS: readonly AdvisorFinding[] = [];
+
+/** How often the queue asks the advisor again: a setup changes by revisions. */
+const ADVISOR_POLL_MS = 60_000;
 
 /**
  * Whether this reader is asked the MCP alarms: an administrator, the reader
@@ -40,7 +47,7 @@ function useReadsMcpAlarms(): boolean {
  * reader who is not asked their alarms.
  */
 export function useUnwatched(): readonly Subject[] {
-  return useReadsMcpAlarms() ? [] : ["tools"];
+  return useReadsMcpAlarms() ? [] : ["tools", "setup"];
 }
 
 export function useAttention(): Attention[] {
@@ -65,6 +72,21 @@ export function useAttention(): Attention[] {
     enabled: readsMcp,
   });
   const mcpAlarms = readsMcp && mcp?.reading === "admin" ? mcp.alarms : NO_MCP_ALARMS;
+  // THE SETUP'S BLOCKERS, asked of the same administrator, on the advisor's own
+  // poll: only the owner's and only what blocks, so a note never reaches here.
+  const { data: advisor } = useQuery("advisor", undefined, {
+    pollMs: ADVISOR_POLL_MS,
+    enabled: readsMcp,
+  });
+  const setupBlockers = useMemo(
+    () =>
+      // READ, NEVER TRUSTED AS TYPED: an engine that answers no advisor, or
+      // answers in another shape, raises nothing here.
+      readsMcp && Array.isArray(advisor?.findings)
+        ? advisor.findings.filter((f) => f.actor === "owner" && f.severity === "blocks")
+        : NO_SETUP_BLOCKERS,
+    [readsMcp, advisor],
+  );
   return useMemo(
     () =>
       attentionQueue({
@@ -77,7 +99,8 @@ export function useAttention(): Attention[] {
         now,
         nameOf,
         mcpAlarms,
+        setupBlockers,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms],
+    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms, setupBlockers],
   );
 }
