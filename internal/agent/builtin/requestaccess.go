@@ -101,7 +101,7 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	name := turn.Seat.Name
 	question := fmt.Sprintf("Allow %s to %s?", name, key.Does())
 	// THE ENGINE'S OWN OPTIONS, the one path a grant's reserved id is admitted on.
-	return t.comment.CallForTurn(decision.WithEngineOptions(ctx), turn, map[string]any{
+	posted := map[string]any{
 		"item": argString(args, "item"), "body": why, "ask": person, "asks": true,
 		"decision": map[string]any{
 			"question": question, "role": string(decision.RoleApprover),
@@ -113,7 +113,12 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 					"detail": "Nothing changes, and the agent is told."},
 			},
 		},
+	}
+	res, _, err := tools.Invoke(decision.WithEngineOptions(ctx), tools.Invocation{
+		Name: CommentOnWorkTool, Tool: t.comment, Args: tools.ArgsOf(t.comment, false, posted),
+		AsSeat: true, Turn: turn, Where: RequestAccessTool,
 	})
+	return res, err
 }
 
 // accessList is the catalogue's keys, as the alternatives a sentence offers.
