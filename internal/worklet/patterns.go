@@ -81,7 +81,6 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 	if err != nil {
 		return fmt.Errorf("worklet: read the window's agent comments: %w", err)
 	}
-	defer closeRows(rows)
 	byHandle := map[string]*NamedWithoutAsk{}
 	last := ""
 	for rows.Next() {
@@ -89,6 +88,7 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 		var recipient sql.NullString
 		var addressed sql.NullBool
 		if err := rows.Scan(&id, &ask, &recipient, &addressed); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an agent comment: %w", err)
 		}
 		if id != last {
@@ -111,7 +111,7 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 			named.Comments = append(named.Comments, id)
 		}
 	}
-	if err := rows.Err(); err != nil {
+	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read the window's agent comments: %w", err)
 	}
 	out.Named = make([]NamedWithoutAsk, 0, len(byHandle))
@@ -142,12 +142,12 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 	if err != nil {
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
 	}
-	defer closeRows(rows)
 	out.Overtaken = []string{}
 	for rows.Next() {
 		var ask string
 		var moot, superseded bool
 		if err := rows.Scan(&ask, &moot, &superseded); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an answer: %w", err)
 		}
 		out.Answers++
@@ -163,7 +163,7 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 			out.Overtaken = append(out.Overtaken, ask)
 		}
 	}
-	if err := rows.Err(); err != nil {
+	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
 	}
 	return nil
