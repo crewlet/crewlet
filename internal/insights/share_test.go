@@ -41,10 +41,11 @@ func (r *relay) sent() int {
 
 // harness is one node's sharer on a shared store, at a clock the test moves.
 type harness struct {
-	store   coord.InsightRecords
-	relay   *relay
-	now     time.Time
-	consent config.InsightsSharing
+	store      coord.InsightRecords
+	relay      *relay
+	now        time.Time
+	consent    config.InsightsSharing
+	consentErr error
 }
 
 func (h *harness) sharer() *insights.Sharer {
@@ -55,11 +56,16 @@ func (h *harness) sharer() *insights.Sharer {
 		Findings: func(context.Context) ([]advisor.Finding, error) {
 			return advisor.Detect(advisor.Evidence{Ledger: noops}, kindOf), nil
 		},
-		Consent: func() config.InsightsSharing { return h.consent },
-		Day:     func(at time.Time) string { return at.UTC().Format("2006-01-02") },
-		Delay:   func() time.Duration { return 6 * time.Hour },
-		Send:    h.relay.send,
-		Now:     func() time.Time { return h.now },
+		Consent: func(context.Context) (config.InsightsSharing, error) {
+			if h.consentErr != nil {
+				return config.InsightsSharing{}, h.consentErr
+			}
+			return h.consent, nil
+		},
+		Day:   func(at time.Time) string { return at.UTC().Format("2006-01-02") },
+		Delay: func() time.Duration { return 6 * time.Hour },
+		Send:  h.relay.send,
+		Now:   func() time.Time { return h.now },
 	}
 }
 
@@ -181,6 +187,22 @@ func TestOffMeansOffAcrossARestart(t *testing.T) {
 	h.pass(t, restarted)
 	if r, _ := h.record(t); r.Status != coord.InsightObserved {
 		t.Errorf("turned on again, the record is %s, want observed from scratch", r.Status)
+	}
+}
+
+// A CONSENT THAT CANNOT BE READ IS NEVER TAKEN FOR OFF: the pass stops and
+// forgets nothing, and the queue stands when the consent reads again.
+func TestAnUnreadConsentForgetsNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(config.InsightsReview)
+	s := h.sharer()
+	h.pass(t, s)
+	h.consentErr = errors.New("no data node answered")
+	if err := s.Evaluate(t.Context()); err == nil {
+		t.Fatal("Evaluate passed on a consent it could not read")
+	}
+	if _, found := h.record(t); !found {
+		t.Error("an unread consent forgot the record")
 	}
 }
 

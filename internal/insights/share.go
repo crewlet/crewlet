@@ -42,8 +42,9 @@ type Sharer struct {
 	Origin issuereport.Origin
 	// Findings is the advisor's answer's findings, read now.
 	Findings func(ctx context.Context) ([]advisor.Finding, error)
-	// Consent is the revision's consent, read on every pass.
-	Consent func() config.InsightsSharing
+	// Consent is the revision's consent, read on every pass. A consent that
+	// cannot be read stops the pass: it is never taken for off.
+	Consent func(ctx context.Context) (config.InsightsSharing, error)
 	// Day is the company day at an instant, as a `2006-01-02` label.
 	Day func(time.Time) string
 	// Delay is a fresh random wait within [MaxDelay].
@@ -55,18 +56,24 @@ type Sharer struct {
 
 // consenting reports whether the consent shares anything: on, and accepted for
 // this build's schema.
-func (s *Sharer) consenting() (config.InsightsSharing, bool) {
-	c := s.Consent()
+func (s *Sharer) consenting(ctx context.Context) (config.InsightsSharing, bool, error) {
+	c, err := s.Consent(ctx)
+	if err != nil {
+		return config.InsightsSharing{}, false, fmt.Errorf("insights: read the consent: %w", err)
+	}
 	on := c.Share == config.InsightsReview || c.Share == config.InsightsAuto
-	return c, on && c.Accepted == SchemaVersion
+	return c, on && c.Accepted == SchemaVersion, nil
 }
 
 // Evaluate reads the findings once: a class raised on two days in a row of one
 // ISO week becomes eligible, queued for review or scheduled. Without consent it
 // forgets every record that waits, which is what off means.
 func (s *Sharer) Evaluate(ctx context.Context) error {
-	consent, ok := s.consenting()
-	if !ok {
+	consent, ok, err := s.consenting(ctx)
+	switch {
+	case err != nil:
+		return err
+	case !ok:
 		return s.forget(ctx)
 	}
 	findings, err := s.Findings(ctx)
@@ -112,8 +119,8 @@ func (s *Sharer) observe(ctx context.Context, r Record, today string, consent co
 
 // SendDue sends every scheduled record whose time has come, under consent.
 func (s *Sharer) SendDue(ctx context.Context) error {
-	if _, ok := s.consenting(); !ok {
-		return nil
+	if _, ok, err := s.consenting(ctx); err != nil || !ok {
+		return err
 	}
 	records, err := s.Store.ListInsightRecords(ctx)
 	if err != nil {
@@ -166,7 +173,10 @@ func (s *Sharer) settle(ctx context.Context, claimed coord.InsightRecord, now ti
 // Decide is an administrator's answer to a queued record: send schedules it at
 // a random delay, and anything else declines it.
 func (s *Sharer) Decide(ctx context.Context, class, week string, send bool) (coord.InsightRecord, error) {
-	consent, ok := s.consenting()
+	consent, ok, err := s.consenting(ctx)
+	if err != nil {
+		return coord.InsightRecord{}, err
+	}
 	if !ok || consent.Share != config.InsightsReview {
 		return coord.InsightRecord{}, ErrNotQueued
 	}
