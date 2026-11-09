@@ -11,10 +11,8 @@ import (
 
 // A TRACKER HANDS ON EVERY TRANSITION ONCE.
 //
-// Its first evaluation hands on what it finds up as `firing_at_boot` — the
-// tracker cannot say whether that started now or before the node restarted —
-// and after it an instance raised is `fired` and one gone is `cleared`, each
-// ONCE however many evaluations it stands through. A per-log alarm is one
+// An instance raised is `fired` and one gone is `cleared`, each ONCE however
+// many evaluations it stands through. A per-log alarm is one
 // transition per log, as its log lines are: a log joining a kind already up is
 // a fire of its own and one leaving it a clear of its own. Each carries the
 // node, the alarm, the log, the measurement, when the instance was raised and
@@ -24,8 +22,7 @@ import (
 // observes as it always did.
 //
 // Mutation: hand on the firing set of every evaluation rather than its
-// changes, call the first evaluation's finds `fired`, or derive an id that
-// leaves out the change, and the case is red.
+// changes, or derive an id that leaves out the change, and the case is red.
 func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
@@ -50,7 +47,7 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 		alarms []statelog.Alarm
 		want   []string
 	}{
-		{[]statelog.Alarm{backup}, []string{"firing_at_boot backup_age"}},
+		{[]statelog.Alarm{backup}, []string{"fired backup_age"}},
 		{[]statelog.Alarm{backup}, nil},
 		{[]statelog.Alarm{backup, lag("4m behind"), trim("tracker")},
 			[]string{"fired apply_lag", "fired trim_blocked/tracker"}},
@@ -97,7 +94,7 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 		since  time.Time
 		detail string
 	}{
-		"firing_at_boot backup_age/":   {beat(0), "no backup for 3d"},
+		"fired backup_age/":            {beat(0), "no backup for 3d"},
 		"cleared backup_age/":          {beat(0), "no backup for 3d"},
 		"fired apply_lag/":             {beat(2), "4m behind"},
 		"cleared apply_lag/":           {beat(2), "5m behind"},

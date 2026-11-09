@@ -5917,7 +5917,7 @@ export interface TurnRow {
  *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
  *  (`id` the change as the Gitlet screens name it, `web!42`, `reason` the code
  *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
- *  `reason` its transition: `fired`, `cleared` or `firing_at_boot`). OPEN, for
+ *  `reason` its transition: `fired` or `cleared`). OPEN, for
  *  a kind a newer engine adds. */
 export interface TurnOrigin {
   kind:

@@ -3,6 +3,7 @@ package statelog
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"log/slog"
 	"maps"
 	"slices"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // alarmGauge is the instrument every firing alarm sets.
@@ -44,11 +46,10 @@ const alarmGauge = metrics.AlarmActive
 // health grant are woken by. A transition rather than a level for the log
 // line's reason — a wake per evaluation would wake a seat six times a minute
 // about one alarm — and the record the wake derives from, so nothing commits
-// beside it (ADR-0095). The first evaluation's finds are
-// [TransitionFiringAtBoot], never fired: the tracker cannot tell an alarm
-// that started then from one that stood through the node's restart, and that
-// second case is also how a clear the node did not live to hand on is
-// answered — what still stands is said again.
+// beside it (ADR-0095). A tracker that remembers ([Tracker.Remember]) keeps its
+// standing instances in the node's own file, so its first evaluation after a
+// restart says only what changed: a standing instance is not raised again, and
+// one that cleared while the node was down is cleared with its original instant.
 //
 // A Tracker is safe for concurrent use: the heartbeat evaluates every
 // [AlarmInterval], the trim tick evaluates again the moment its own
@@ -78,6 +79,10 @@ type Tracker struct {
 
 	// latest is the latest evaluation's alarms, for [Tracker.Latest].
 	latest []Alarm
+
+	// kept is where the instances up are kept across a restart, nil
+	// for a tracker that keeps them in memory alone.
+	kept *store.DB
 }
 
 // instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
@@ -106,10 +111,12 @@ type instance struct {
 	entry  string
 }
 
-// firing is one instance currently up.
+// firing is one instance currently up, and told whether whoever is handed its
+// transitions has taken its raise: only a told instance is kept across a restart.
 type firing struct {
 	since  time.Time
 	detail string
+	told   bool
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
@@ -160,10 +167,17 @@ func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 	return &Tracker{rec: rec, now: now, logger: log, firing: map[instance]firing{}}
 }
 
+// Remember makes the tracker keep the instances it has up in db, this node's
+// own file, and read them back at its first evaluation. Set it before then.
+func (t *Tracker) Remember(db *store.DB) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.kept = db
+}
+
 // OnTransition makes the tracker hand fn every transition it makes from now
-// on, each stamped as node's: an instance fired, cleared, or found up by the
-// tracker's first evaluation ([TransitionFiringAtBoot]) — one per instance, as
-// the log lines are, in the order the evaluation made them.
+// on, each stamped as node's: an instance fired or cleared, one per instance,
+// as the log lines are, in the order the evaluation made them.
 //
 // fn IS CALLED UNDER THE TRACKER'S LOCK, so two evaluations that race (the
 // heartbeat and the trim tick) hand their transitions on in the order the
@@ -230,13 +244,13 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// THE FIRST EVALUATION'S FINDS were up before the tracker looked, for
-	// all it can say: handed on as found at boot, never as fired.
-	raise := TransitionFired
+	// THE FIRST EVALUATION READS BACK WHAT STOOD BEFORE A RESTART, so only
+	// a change is a transition.
 	if !t.observed {
-		raise = TransitionFiringAtBoot
+		t.recall(ctx)
 	}
 	var made []AlarmTransition
+	moved := false
 	t.observed = true
 	t.latest = slices.Clone(alarms)
 	t.order = t.order[:0]
@@ -249,14 +263,15 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		if was, already := t.firing[r.key]; already {
 			// Still up. The detail may have moved (a lag grows), and
 			// that is not a transition.
-			t.firing[r.key] = firing{since: was.since, detail: r.detail}
+			t.firing[r.key] = firing{since: was.since, detail: r.detail, told: was.told}
 			continue
 		}
-		t.firing[r.key] = firing{since: now, detail: r.detail}
+		t.firing[r.key] = firing{since: now, detail: r.detail, told: t.handOn == nil}
+		moved = true
 		t.logger.WarnContext(ctx, "alarm_raised", r.key.attrs(
 			"detail", r.detail, "remedy", r.remedy)...)
 		if t.handOn != nil {
-			made = append(made, t.transition(r.key, raise, r.detail, now, now))
+			made = append(made, t.transition(r.key, TransitionFired, r.detail, now, now))
 		}
 	}
 	for _, key := range slices.SortedFunc(maps.Keys(t.firing), compareInstances) {
@@ -265,6 +280,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		}
 		was := t.firing[key]
 		delete(t.firing, key)
+		moved = true
 		t.logger.WarnContext(ctx, "alarm_cleared", key.attrs(
 			"for", spoken(now.Sub(was.since)), "detail", was.detail)...)
 		if t.handOn != nil {
@@ -273,6 +289,9 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	}
 	for _, tr := range made {
 		t.handOn(tr)
+	}
+	if moved {
+		t.keep(ctx)
 	}
 
 	if t.rec != nil {
@@ -285,6 +304,84 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		}
 	}
 	return alarms
+}
+
+// recall reads back the instances that stood when this node last kept them.
+// A file that cannot be read leaves nothing recalled, said once, and every
+// standing instance is raised again.
+func (t *Tracker) recall(ctx context.Context) {
+	if t.kept == nil {
+		return
+	}
+	err := t.kept.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT kind, domain, entry, since, detail FROM alarm_standing`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var key instance
+			var kind string
+			var since int64
+			var was firing
+			if err := rows.Scan(&kind, &key.domain, &key.entry, &since, &was.detail); err != nil {
+				return err
+			}
+			key.kind, was.since, was.told = Kind(kind), store.DecodeTime(since), true
+			t.firing[key] = was
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.logger.WarnContext(ctx, "alarm_standing_unread", "error", err.Error(),
+			"detail", "the alarms that stood before this node started could not be read, "+
+				"so every alarm up now is raised again")
+	}
+}
+
+// Told records that the raise with transition id was taken by whoever is told
+// of transitions, so its instance is kept across a restart from now on.
+func (t *Tracker) Told(ctx context.Context, id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key, was := range t.firing {
+		if !was.told && TransitionID(t.node, key.kind, key.domain, key.entry, TransitionFired, was.since) == id {
+			was.told = true
+			t.firing[key] = was
+			t.keep(ctx)
+			return
+		}
+	}
+}
+
+// keep writes the told instances up now over the ones kept before. An untold
+// raise is not kept, so a restart before it is taken raises it again.
+func (t *Tracker) keep(ctx context.Context) {
+	if t.kept == nil {
+		return
+	}
+	err := t.kept.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM alarm_standing`); err != nil {
+			return err
+		}
+		for key, was := range t.firing {
+			if !was.told {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO alarm_standing
+				(kind, domain, entry, since, detail) VALUES (?, ?, ?, ?, ?)`,
+				string(key.kind), key.domain, key.entry, store.EncodeTime(was.since), was.detail); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.logger.WarnContext(ctx, "alarm_standing_unkept", "error", err.Error(),
+			"detail", "the alarms up now could not be kept, so a restart before the next "+
+				"change raises the ones still up again")
+	}
 }
 
 // attrs is a transition line's attributes: the alarm, the log it stands on
