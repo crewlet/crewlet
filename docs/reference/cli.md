@@ -38,6 +38,7 @@ subcommand below is served by it.
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
 | `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
 | `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
+| `crewlet doctor [config] [-json] [-words]` | The [setup advisor](../guides/advisor.md)'s findings, read from a running node: one row per finding with its severity, who acts on it, its class, its subject and its evidence as counts. Titles and reasons, which name the company's own seats and schedules, only with `-words`. **Exits non-zero** while a finding blocks the company. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -2349,6 +2350,31 @@ poison under another `dlq.` subject, which this never reaches — is refused as
 other holds the id, the node says so rather than "no such entry": run it again.
 A discard the node did not answer may have been made; `dead-letters` lists what
 the feeds still hold.
+
+## `crewlet doctor`
+
+```
+crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]
+```
+
+The [setup advisor](../guides/advisor.md)'s findings about the running node's
+company, the most costly first: what its document costs it, and the patterns
+the engine read in its last 7 days of work. It is a client of
+[`GET /advisor`](api-endpoints.md), and the token in `CREWLET_API_TOKEN` takes
+`admin`.
+
+Each row is a finding's **severity** (`blocks`, `costs`, `note`), its **actor**
+(`owner` for a change you send, `engine` for a pattern the engine is
+reducing), its **class**, its **subject** (`company`, or a seat, unit or
+schedule by its handle) and its **evidence** as counts. That is all it prints
+by default, so the output can be pasted into an issue or a chat without
+carrying the company's own words; `-words` adds each finding's title and why.
+`-json` prints the node's answer as JSON for a script, its keys sorted.
+
+The command **exits non-zero** while any finding is `blocks`, so a script can
+hold a go-live or a configuration change on it; `costs` and `note` findings
+exit zero. It sends nothing: a fix is previewed and sent from the dashboard,
+or with `PUT /config` as the advisor's guide shows.
 
 ## `crewlet seats`
 

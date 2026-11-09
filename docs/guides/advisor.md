@@ -64,4 +64,6 @@ The engine does not grant access, change a model, move or remove a schedule, edi
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.com/advisor
 ```
 
+Or with `crewlet doctor`, which prints the classes, subjects and counts (`-words` adds the reasons) and exits non-zero while a finding blocks the company ([CLI reference](../reference/cli.md#crewlet-doctor)).
+
 The answer is `{"revision": "...", "findings": [...]}`, the most costly finding first; the patterns above are read over the 7 days before the request. See the [API reference](../reference/api-endpoints.md).

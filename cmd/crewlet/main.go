@@ -267,6 +267,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runFleet(environ, rest, stdout, stderr)
 	case "feeds":
 		return runFeeds(environ, rest, stdout, stderr)
+	case "doctor":
+		return runDoctor(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
@@ -327,6 +329,9 @@ Usage:
   crewlet feeds <cmd>         The wake feeds' dead letters, records no node could
                               read: dead-letters lists them, and discard gives
                               one's wake up for good
+  crewlet doctor              The setup advisor's findings from a running node:
+                              classes, subjects and counts (-words adds the
+                              reasons); exits non-zero when one blocks the company
   crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
