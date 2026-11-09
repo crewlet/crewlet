@@ -17,6 +17,7 @@ var fixtureDirs = []struct {
 	vocab scenario.Vocabulary
 }{
 	{"timelines", scenario.TimelineVocabulary},
+	{"../advisor/testdata", scenario.DocumentVocabulary},
 }
 
 // NO FIXTURE CARRIES A WORD FROM OUTSIDE ITS VOCABULARY, so a pattern measured

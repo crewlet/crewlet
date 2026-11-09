@@ -46,10 +46,20 @@ const (
 	// PatternHealthyCompany is the control: hand-offs, asks and answers that
 	// must keep waking the seats they concern whatever routing rule changes.
 	PatternHealthyCompany Pattern = "healthy_company"
+	// PatternAgentMentionsWithoutAsk is agents naming each other in comments
+	// that ask nothing, each one waking the other.
+	PatternAgentMentionsWithoutAsk Pattern = "agent_mentions_without_ask"
+	// PatternPersonRequestsWithoutAsk is an agent naming a person again and
+	// again with no question, so nothing reaches their Inbox as a decision.
+	PatternPersonRequestsWithoutAsk Pattern = "person_requests_without_ask"
+	// PatternAskOvertaken is a person answering questions that were asked
+	// again since, or whose item had already finished.
+	PatternAskOvertaken Pattern = "ask_overtaken"
 )
 
 // Patterns is every [Pattern] a timeline may declare.
-var Patterns = []Pattern{PatternHealthyCompany}
+var Patterns = []Pattern{PatternHealthyCompany, PatternAgentMentionsWithoutAsk,
+	PatternPersonRequestsWithoutAsk, PatternAskOvertaken}
 
 // Valid reports whether p is a declared pattern.
 func (p Pattern) Valid() bool { return slices.Contains(Patterns, p) }

@@ -2,10 +2,12 @@ package worklet_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/scenario"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -20,6 +22,59 @@ func TestTheHealthyCompanyWakesEverySeatItsWorkNeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	playTimeline(t, tl)
+}
+
+// EVERY ENGINE DETECTOR FIRES ON ITS OWN PATTERN'S TIMELINE AND ON NO OTHER,
+// read from the records the timeline wrote; the healthy company raises none.
+func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
+	t.Parallel()
+	want := map[scenario.Pattern]advisor.Class{
+		scenario.PatternHealthyCompany:           "",
+		scenario.PatternAgentMentionsWithoutAsk:  advisor.ClassAgentMentionsWithoutAsk,
+		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
+		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
+	}
+	for _, class := range advisor.EvidenceClasses() {
+		if !slices.Contains(slices.Collect(maps.Values(want)), class) {
+			t.Errorf("detector %s has no timeline it must fire on", class)
+		}
+	}
+	all, err := scenario.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range all {
+		expected, ok := want[tl.Pattern]
+		if !ok {
+			t.Errorf("timeline %s's pattern %s names no detector, nor none", tl.Name, tl.Pattern)
+			continue
+		}
+		t.Run(tl.Name, func(t *testing.T) {
+			t.Parallel()
+			d := playTimeline(t, tl)
+			end := wednesday.Add(time.Duration(tl.Steps[len(tl.Steps)-1].At+1) * time.Second)
+			work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+				Since: wednesday, Until: end, Level: statelog.ReadStale})
+			if err != nil {
+				t.Fatalf("WorkPatterns: %v", err)
+			}
+			var raised []advisor.Class
+			for _, f := range advisor.Detect(advisor.Evidence{Until: end, Work: work}, d.agent) {
+				if !slices.Contains(raised, f.Class) {
+					raised = append(raised, f.Class)
+				}
+			}
+			if expected == "" && len(raised) != 0 || expected != "" && !slices.Equal(raised, []advisor.Class{expected}) {
+				t.Errorf("raised %v, want only %q; read %+v", raised, expected, work)
+			}
+		})
+	}
+}
+
+// playTimeline runs every step of tl and holds each to the seats it declares woken.
+func playTimeline(t *testing.T, tl scenario.Timeline) *timelineDriver {
+	t.Helper()
 	d := newTimelineDriver(t, tl)
 	for i, st := range tl.Steps {
 		got := d.run(i, st)
@@ -28,7 +83,10 @@ func TestTheHealthyCompanyWakesEverySeatItsWorkNeeds(t *testing.T) {
 				got, st.Expect.Woken)
 		}
 	}
+	return d
 }
+
+func (d *timelineDriver) agent(handle string) bool { return d.tl.Kind(handle) == scenario.SeatAgent }
 
 // timelineDriver plays a timeline's steps as the tools do: the wake built from
 // the task before and after, the thread resolved by the reader.
@@ -50,6 +108,7 @@ func newTimelineDriver(t *testing.T, tl scenario.Timeline) *timelineDriver {
 func (d *timelineDriver) run(i int, st scenario.Step) []string {
 	d.t.Helper()
 	at := wednesday.Add(time.Duration(st.At) * time.Second)
+	d.r.at = at
 	kind := worklet.AuthorAgent
 	if d.tl.Kind(st.Actor) == scenario.SeatPerson {
 		kind = worklet.AuthorHuman
@@ -134,11 +193,10 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 // for, sorted, read off the log's records.
 func (d *timelineDriver) woken(before int, actor string) []string {
 	d.t.Helper()
-	agent := func(h string) bool { return d.tl.Kind(h) == scenario.SeatAgent }
 	out := []string{}
 	for _, n := range d.r.wakes(d.t)[before:] {
 		for _, c := range worklet.Route(worklet.Candidates(n), everyone, actor) {
-			if agent(c.Handle) && !slices.Contains(out, c.Handle) {
+			if d.agent(c.Handle) && !slices.Contains(out, c.Handle) {
 				out = append(out, c.Handle)
 			}
 		}

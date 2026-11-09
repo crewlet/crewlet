@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Handles is every handle a fixture may use: one per generic role, and owner.
@@ -88,12 +90,34 @@ func TimelineVocabulary(at []string, value string, key bool) bool {
 		SeatKind(value).Valid() || Pattern(value).Valid()
 }
 
-// CheckTree walks every .json file under fsys and reports each string value
-// the vocabulary refuses. An unreadable or undecodable file is an error.
+// documentWords is every string a company document fixture may hold besides
+// handles, a cron line and a placeholder id; a new word is added here, in review.
+var documentWords = []string{"Example", "Owner", "Team", "team", "PM", "Designer", "App",
+	"Backend", "QA", "SRE", "human", "agent", "default", "small", "claude-code", "opus",
+	"haiku", "standup", "health-check", "release-window", "post-release",
+	"Write the stand-up note.", "Check the service.", "Look for a release to ship.",
+	"Check the last release."}
+
+var (
+	cronLine    = regexp.MustCompile(`^[0-9*/,-]+( [0-9*/,-]+){4}$`)
+	placeholder = regexp.MustCompile(`^U0[A-Z0-9]+$`)
+)
+
+// DocumentVocabulary admits a company document fixture's own words: any key
+// (the schema's), and values from the closed list, the handles, a cron line or
+// a placeholder id.
+func DocumentVocabulary(_ []string, value string, key bool) bool {
+	return key || slices.Contains(documentWords, value) || slices.Contains(Handles, value) ||
+		cronLine.MatchString(value) || placeholder.MatchString(value)
+}
+
+// CheckTree walks every .json, .yaml and .yml file under fsys and reports each
+// string the vocabulary refuses. An unreadable or undecodable file is an error.
 func CheckTree(fsys fs.FS, vocab Vocabulary) ([]Violation, error) {
 	var out []Violation
 	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(name) != ".json" {
+		ext := path.Ext(name)
+		if err != nil || d.IsDir() || !slices.Contains([]string{".json", ".yaml", ".yml"}, ext) {
 			return err
 		}
 		raw, err := fs.ReadFile(fsys, name)
@@ -101,7 +125,12 @@ func CheckTree(fsys fs.FS, vocab Vocabulary) ([]Violation, error) {
 			return err
 		}
 		var doc any
-		if err := json.Unmarshal(raw, &doc); err != nil {
+		if ext == ".json" {
+			err = json.Unmarshal(raw, &doc)
+		} else {
+			err = yaml.Unmarshal(raw, &doc)
+		}
+		if err != nil {
 			return fmt.Errorf("scenario: decode %s: %w", name, err)
 		}
 		walk(doc, nil, func(at []string, value string, key bool) {
