@@ -407,6 +407,13 @@ contribution_requested, contribution_received
 # notification: what arrived from outside, and what the engine decided
 external_notification      # inbound from a third-party app webhook or chat socket
 notification_skipped       # dropped notification with reason (traceability)
+wake_held                  # an agent seat a change told and did not wake (its
+                           # notice row is written and no turn starts, as for
+                           # another agent's words that ask nothing): the
+                           # seat, and the origin it was told under, which
+                           # the turn ledger counts as the wake's `held`
+                           # disposition. One per change and seat, under the
+                           # id its wake would have had
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
