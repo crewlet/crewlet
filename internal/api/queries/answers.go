@@ -1107,6 +1107,9 @@ func Register(r *Registry, s Sources) {
 		r.Register("config_audit", Requires(iam.GrantAdmin), s.configAudit)
 		r.Register("config_diff", Requires(iam.GrantAdmin), s.configDiff)
 		r.Register("config_entities", Requires(iam.GrantAdmin), s.configEntities)
+		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
+		// document, so the administrator's as the document is.
+		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one
