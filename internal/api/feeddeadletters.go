@@ -113,7 +113,8 @@ func (a *App) serveDeadLetterDiscard(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoDeadLetter, httpjson.Detail{
 			"detail": err.Error(),
 			"hint": "GET /feeds/dead-letters lists every entry a wake feed holds, by id; " +
-				"a subscription's poison under another dlq. subject is no feed's to discard",
+				"a subscription's poison, kept beside them in the dead-letter stream, is no feed's to " +
+				"discard",
 		})
 	case errors.As(err, &unread):
 		// NEVER A 404: the entry may be on the feed that did not answer.
