@@ -143,10 +143,20 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 		Shedding:        !screen.AdmitsTriggers,
 		Draining:        e.shuttingDown.Load(),
 	}
+	awaits := c.ExecutorAwaits
+	c.ExecutorAwaits = false
 	if !pickup.IdleNow(c) {
 		// THE CHEAP ANSWERS FIRST: a seat that is busy is not asked
 		// about its budget, its provider or its inbox.
+		c.ExecutorAwaits = awaits
 		return c
+	}
+	if awaits {
+		// A PARKED RUN HOLDS THE PICKUP ONLY WHILE ITS BOX WAITS PAUSED for
+		// its answer; past its pause it still takes the answer when it comes.
+		if c.ExecutorAwaits = e.parkedHoldsPickup(ctx, seat.Handle); c.ExecutorAwaits {
+			return c
+		}
 	}
 	// THE QUESTION A RELAUNCH ASKS BEFORE IT RUNS, asked without a
 	// delivery: a budget window that would refuse the launch, a provider
@@ -158,6 +168,22 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 	// rather than queue work behind mail it cannot see.
 	c.MailWaiting = err != nil || waiting.Total() > 0
 	return c
+}
+
+// parkedHoldsPickup settles the seat's parked runs no build will resume and
+// reports whether one still waits within its pause; a store that cannot say
+// holds the pickup, as an inbox that cannot be read does.
+func (e *Engine) parkedHoldsPickup(ctx context.Context, handle string) bool {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return false
+	}
+	pausing, err := rt.coordinator.SettleParked(ctx, handle)
+	if err != nil {
+		log.DebugContext(ctx, "work_pickup_parked_unread", "handle", handle, "error", err.Error())
+		return true
+	}
+	return pausing
 }
 
 // notePickup records what a pass decided for a seat it found idle: counted

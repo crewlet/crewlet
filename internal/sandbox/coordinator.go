@@ -5585,6 +5585,35 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	}
 }
 
+// SettleParked ends the seat's parked runs no build will resume
+// ([CoordinatorOptions.Unresumable]) and reports whether one still holds its box
+// paused for its answer: the one parked state that keeps the seat from other work.
+func (c *Coordinator) SettleParked(ctx context.Context, handle string) (pausing bool, err error) {
+	fence, held := c.leaseOf(handle)
+	if !held {
+		return false, notHeld(ctx, handle, "", "settling its parked runs")
+	}
+	runs, err := c.pending.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: listing seat %s's parked runs: %w", handle, err)
+	}
+	settled := false
+	for _, run := range runs {
+		if !run.WaitsOn(run.LaunchID) {
+			continue
+		}
+		if c.settledUnresumable(ctx, run, fence) {
+			settled = true
+			continue
+		}
+		pausing = pausing || run.Status == StatusAwaiting
+	}
+	if settled {
+		c.syncSeat(ctx, handle)
+	}
+	return pausing, nil
+}
+
 // settledUnresumable ends a parked run no build will resume
 // ([CoordinatorOptions.Unresumable]) while it is still parked, and reports
 // whether it is over: ended here, kept for this node's retry, or ended by another.
