@@ -57,6 +57,8 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			[]advisor.Class{advisor.ClassAskOvertaken}},
 		"3 overtaken of 61 answers": {worklet.WorkPatterns{Answers: 61, Superseded: 1, Moot: 2}, nil},
 		"2 overtaken of 2 answers":  {worklet.WorkPatterns{Answers: 2, Moot: 2}, nil},
+		"one idle review": {worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{{Key: "W-1", Holder: "qa"}}},
+			[]advisor.Class{advisor.ClassReviewIdle}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -103,7 +105,8 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	}
 	work := worklet.WorkPatterns{AgentComments: 9, Answers: 3, Moot: 3, Overtaken: many[:5],
 		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, WokenComments: many[:5]},
-			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}}}
+			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}},
+		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}}}
 	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
 	if len(found) != len(advisor.WorkClasses()) {
 		t.Fatalf("raised %d findings, want one per class the work patterns raise", len(found))

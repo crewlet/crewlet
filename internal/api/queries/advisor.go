@@ -29,6 +29,7 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	work, err := s.Work.WorkPatterns(ctx, worklet.PatternsQuery{
 		Since: now.Add(-advisor.Window), Until: now, Level: statelog.ReadStale,
+		Reviewers: advisor.AgentHandles(company), QuietSince: now.Add(-advisor.ReviewQuiet),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("advisor: read the company's work patterns: %w", err)

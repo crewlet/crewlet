@@ -16,6 +16,18 @@ import (
 type PatternsQuery struct {
 	Since, Until time.Time
 	Level        statelog.ReadLevel
+	// Reviewers are the agent seats whose held reviews are read; one with no
+	// turn by its holder since QuietSince is idle.
+	Reviewers  []string
+	QuietSince time.Time
+}
+
+// IdleReview is an item in review its agent holder has taken no turn on.
+type IdleReview struct {
+	Task   string    `json:"task"`
+	Key    string    `json:"key"`
+	Holder string    `json:"holder"`
+	Since  time.Time `json:"since"`
 }
 
 // MaxPatternExamples bounds the records a pattern names as its evidence.
@@ -36,6 +48,8 @@ type WorkPatterns struct {
 	Superseded int      `json:"superseded"`
 	Moot       int      `json:"moot"`
 	Overtaken  []string `json:"overtaken"`
+	// IdleReviews are the reviewers' items in review idle since QuietSince.
+	IdleReviews []IdleReview `json:"idle_reviews"`
 }
 
 // NamedWithoutAsk is one seat agents' comments named without a question.
@@ -54,7 +68,7 @@ type NamedWithoutAsk struct {
 
 // WorkPatterns reads q's window of comments and answers.
 func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPatterns, error) {
-	if q.Level == "" || !q.Since.Before(q.Until) {
+	if q.Level == "" || !q.Since.Before(q.Until) || q.QuietSince.After(q.Until) {
 		return WorkPatterns{}, invalid("a patterns read names a level and a window "+
 			"that ends after it starts, not %q from %s to %s", q.Level, q.Since, q.Until)
 	}
@@ -68,7 +82,10 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		if err := readNamedWithoutAsk(ctx, tx, since, until, &out); err != nil {
 			return err
 		}
-		return readAnswers(ctx, tx, since, until, &out)
+		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
+			return err
+		}
+		return readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out)
 	})
 	return out, err
 }
@@ -181,6 +198,51 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 	}
 	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read the window's answers: %w", err)
+	}
+	return nil
+}
+
+// patternIdleReviewsStatement is every item in review one reviewer holds, in
+// review since before the quiet instant, with no turn by its holder since then.
+const patternIdleReviewsStatement = `SELECT t.id, t.key, t.assignee, t.status_entered_at
+FROM tracker_tasks t
+WHERE t.assignee = ? AND t.status_group = ?
+	AND t.status = 'in_review' AND t.removed_at IS NULL AND t.status_entered_at < ?
+	AND NOT EXISTS (SELECT 1 FROM tracker_turns u
+		WHERE u.task_id = t.id AND u.effective_at >= ? AND u.seat = t.assignee)
+ORDER BY t.status_entered_at, t.id`
+
+func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet time.Time,
+	out *WorkPatterns) error {
+	out.IdleReviews = []IdleReview{}
+	at := store.EncodeTime(quiet)
+	for _, reviewer := range reviewers {
+		if err := readIdleReviewsOf(ctx, tx, reviewer, at, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue.
+func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int64, out *WorkPatterns) error {
+	rows, err := tx.QueryContext(ctx, patternIdleReviewsStatement, reviewer,
+		string(StatusInReview.Group()), at, at)
+	if err != nil {
+		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
+	}
+	for rows.Next() {
+		var r IdleReview
+		var since int64
+		if err := rows.Scan(&r.Task, &r.Key, &r.Holder, &since); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("worklet: scan an idle review: %w", err)
+		}
+		r.Since = store.DecodeTime(since)
+		out.IdleReviews = append(out.IdleReviews, r)
+	}
+	if err := closeRows(rows); err != nil {
+		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
 	}
 	return nil
 }

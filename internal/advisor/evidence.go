@@ -16,6 +16,7 @@ const (
 	ClassAgentMentionsWithoutAsk  Class = "wake.agent_mentions_without_ask"
 	ClassPersonRequestsWithoutAsk Class = "person.requests_without_ask"
 	ClassAskOvertaken             Class = "ask.overtaken"
+	ClassReviewIdle               Class = "review.idle"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 )
@@ -34,8 +35,12 @@ const (
 	FixExternalStep FixKind = "external_step"
 )
 
-// Window is how far back every evidence class reads.
-const Window = 7 * 24 * time.Hour
+// Window is how far back every evidence class reads, and ReviewQuiet how long a
+// review its agent holder has not touched waits before it is idle.
+const (
+	Window      = 7 * 24 * time.Hour
+	ReviewQuiet = 24 * time.Hour
+)
 
 // Evidence is what the company did in the window that ends at Until.
 type Evidence struct {
@@ -75,6 +80,7 @@ var detectors = []detector{
 	{ClassAgentMentionsWithoutAsk, true, agentMentionsWithoutAsk},
 	{ClassPersonRequestsWithoutAsk, true, personRequestsWithoutAsk},
 	{ClassAskOvertaken, true, askOvertaken},
+	{ClassReviewIdle, true, reviewIdle},
 	{ClassNoVerifiedBackup, false, noVerifiedBackup},
 }
 
@@ -233,6 +239,38 @@ func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 			Sentence: "Take a backup now with `crewlet backup` or from the dashboard, then " +
 				"schedule it to a place off this server."},
 	}}
+}
+
+// reviewIdle is one finding per agent holding a review it has taken no turn on
+// for [ReviewQuiet]: a review is the holder's next move, and none came.
+func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
+	byHolder := map[string][]string{}
+	var holders []string
+	for _, r := range ev.Work.IdleReviews {
+		if _, ok := byHolder[r.Holder]; !ok {
+			holders = append(holders, r.Holder)
+		}
+		byHolder[r.Holder] = append(byHolder[r.Holder], r.Key)
+	}
+	var out []Finding
+	for _, h := range holders {
+		keys := byHolder[h]
+		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: h},
+			"A review waited a day for the agent holding it.",
+			fmt.Sprintf("%d items in review are held by %s, which has taken no turn on them "+
+				"in the last 24 hours, so the work behind them waits.", len(keys), h),
+			[]Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
+	}
+	return out
+}
+
+// AgentHandles is every agent seat's handle, in the chart's order.
+func AgentHandles(c *config.Company) []string {
+	var out []string
+	for _, role := range agentSeats(c) {
+		out = append(out, role.Seat().Handle())
+	}
+	return out
 }
 
 func appendExamples(records, more []string) []string {
