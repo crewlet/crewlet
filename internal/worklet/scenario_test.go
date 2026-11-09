@@ -1,6 +1,7 @@
 package worklet_test
 
 import (
+	"database/sql"
 	"fmt"
 	"maps"
 	"slices"
@@ -32,12 +33,15 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 	want := map[scenario.Pattern]advisor.Class{
 		scenario.PatternHealthyCompany:           "",
 		scenario.PatternAgentHandoffs:            "",
-		scenario.PatternAgentMentionsWithoutAsk:  advisor.ClassAgentMentionsWithoutAsk,
+		scenario.PatternAgentMentionsWithoutAsk:  "",
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
 	}
+	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
+	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
+	guarded := []advisor.Class{advisor.ClassAgentMentionsWithoutAsk}
 	for _, class := range advisor.WorkClasses() {
-		if !slices.Contains(slices.Collect(maps.Values(want)), class) {
+		if !slices.Contains(slices.Collect(maps.Values(want)), class) && !slices.Contains(guarded, class) {
 			t.Errorf("detector %s has no timeline it must fire on", class)
 		}
 	}
@@ -227,4 +231,90 @@ func (d *timelineDriver) woken(before int, actor string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// A COMMENT WHOSE AUTHOR STATED ASKS IS STAMPED AT THE VERSION THAT KEEPS IT, so
+// a node on a build before the rule retains it rather than applying it with no
+// statement, and two nodes never keep different notice rows for it.
+func TestAStatedCommentIsStampedSoAnOlderNodeRetainsIt(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"agent_handoffs", "agent_mentions_without_ask"} {
+		tl, err := scenario.Named(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := playTimeline(t, tl)
+		end, err := d.r.log.End(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stated, unstated := 0, 0
+		for seq := uint64(1); seq <= end; seq++ {
+			_, payload, _, ok, err := d.r.log.At(t.Context(), seq)
+			if err != nil || !ok {
+				t.Fatalf("read record %d: %v", seq, err)
+			}
+			rec, err := worklet.Decode(d.r.open(seq, payload))
+			if err != nil || rec.Notify == nil || rec.Notify.Kind != worklet.ChangeComment {
+				continue
+			}
+			switch rec.Notify.Snapshot.CommentAsks {
+			case nil:
+				unstated++
+				if rec.NoticeAsksKept || rec.V >= worklet.NoticeAsksVersion {
+					t.Errorf("%s: a comment that states nothing is version %d, kept %v; want below %d",
+						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
+				}
+			default:
+				stated++
+				if !rec.NoticeAsksKept || rec.V != worklet.NoticeAsksVersion {
+					t.Errorf("%s: a stated comment is version %d, kept %v; want %d, kept",
+						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
+				}
+			}
+		}
+		if stated == 0 || name == "agent_mentions_without_ask" && unstated == 0 {
+			t.Errorf("%s: read %d stated and %d unstated comments, want both kinds the timeline writes",
+				name, stated, unstated)
+		}
+	}
+}
+
+// A STATED REFERENCE THAT WOKE ITS SEAT IS COUNTED, AND AN UNKNOWN ONE IS NOT:
+// routing wakes no stated reference today, so the case writes the regression
+// by hand; a notice an older build kept no statement on is never counted.
+func TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot(t *testing.T) {
+	t.Parallel()
+	tl, err := scenario.Named("agent_mentions_without_ask")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := playTimeline(t, tl)
+	w, err := d.r.db.Writer(t.Context())
+	if err != nil {
+		t.Fatalf("take the writer: %v", err)
+	}
+	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_notifications SET addressed = 1
+			WHERE reason = 'mention' AND asks = 0`)
+		return err
+	}); err != nil {
+		t.Fatalf("wake the stated references by hand: %v", err)
+	}
+	_ = w.Close()
+	// EVERY INSTANT EITHER CLOCK STAMPS: the read is about the rows, not the window.
+	work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("WorkPatterns: %v", err)
+	}
+	woken, told, asked := 0, 0, 0
+	for _, n := range work.Named {
+		woken, told, asked = woken+n.Woken, told+n.Told, asked+n.Asked
+	}
+	if woken != 2 || asked != 0 || told != 8 {
+		t.Fatalf("read %d woken, %d asked of %d told; want the 2 stated references woken, "+
+			"and the 6 an older build wrote counted as neither", woken, asked, told)
+	}
 }

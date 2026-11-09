@@ -37,8 +37,12 @@ wrong, why it costs the company, where in the document it sits, and its fix.
   engine's (`actor: engine`, `fix.kind: none`): listed apart, never the
   owner's to-do. Evidence is typed numbers and at most five record ids.
 - **Evaluated on read.** Detectors run on each request rather than in a
-  background duty, so no finding is stored, none can go stale, and no two nodes
-  hold different copies. What must persist between reads (a finding standing
+  background duty, so no finding is stored and none can go stale. What they
+  read is applied alike on every node: a fact a record gained for them (a
+  comment author's statement kept on its notice rows) is written only from
+  records at the version that carries it, so a node behind that version
+  retains the record rather than keeping a different row, and a row an older
+  build wrote reads as unknown, never as a fact. What must persist between reads (a finding standing
   on consecutive days before it is shared, a notice for a persistent
   `blocks` finding) keeps its own state where it is built.
 

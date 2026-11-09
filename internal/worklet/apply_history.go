@@ -458,7 +458,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
 			store.EncodeTime(c.authored()), c.packed, c.position.Stream,
-			c.position.Generation, statedAsks(notify.Snapshot.CommentAsks))
+			c.position.Generation, statedAsks(c.record))
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the inbox row for %s at %s: %w",
 				candidate.Handle, c.position, err)
@@ -524,10 +524,12 @@ func appsColumn(record MutationRecord) string {
 }
 
 // statedAsks is a comment author's statement as the notice row keeps it: 1 or
-// 0, and NULL where the record states none.
-func statedAsks(asks *bool) any {
-	if asks == nil {
+// 0 from a record at [NoticeAsksVersion] or above that kept it, and NULL for
+// every other, so every node writes the same row.
+func statedAsks(record MutationRecord) any {
+	if record.V < NoticeAsksVersion || !record.NoticeAsksKept || record.Notify == nil ||
+		record.Notify.Snapshot.CommentAsks == nil {
 		return nil
 	}
-	return boolInt(*asks)
+	return boolInt(*record.Notify.Snapshot.CommentAsks)
 }

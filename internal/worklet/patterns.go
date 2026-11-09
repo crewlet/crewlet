@@ -42,7 +42,8 @@ type WorkPatterns struct {
 type NamedWithoutAsk struct {
 	Handle string `json:"handle"`
 	// Told counts the notices; Asked those whose author said the comment asks;
-	// Woken those that obliged an answer though the author did not say so.
+	// Woken those that obliged an answer though its author said it asks nothing.
+	// A notice whose record kept no statement (an older build's) is neither.
 	Told  int `json:"told"`
 	Asked int `json:"asked"`
 	Woken int `json:"woken"`
@@ -110,7 +111,9 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 		}
 		named.Told++
 		switch {
-		case asks.Valid && asks.Bool:
+		case !asks.Valid:
+			// An older build's record kept no statement: unknown, so neither.
+		case asks.Bool:
 			named.Asked++
 		case addressed.Bool:
 			named.Woken++
