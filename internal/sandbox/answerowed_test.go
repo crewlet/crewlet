@@ -24,7 +24,7 @@ func chatReply(conv ConversationRef, text string, trigger *events.Event) Reply {
 	if trigger == nil {
 		trigger = answerFrom(text)
 	}
-	return Reply{Conv: conv, Text: text, Events: []*events.Event{trigger}, Writer: askedSeat}
+	return Reply{Conv: conv, Text: text, Events: []*events.Event{trigger}, Writer: askedSeat, Says: true}
 }
 
 // askedSeat is the seat a case's questions are put to and its replies written
@@ -240,7 +240,7 @@ func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
 	reply := replyAt("use main", asked.Add(time.Second))
 	disposition, err = rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", Reply{
 		Conv: answerOnTheDM, Text: "how is it going?\n\nuse main",
-		Events: []*events.Event{early, reply}, Writer: askedSeat,
+		Events: []*events.Event{early, reply}, Writer: askedSeat, Says: true,
 	})
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("disposition = %q, %v, want %q", disposition, err, AnswerConsumed)
@@ -258,16 +258,16 @@ func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T)
 	parkOnAQuestion(t, rig)
 	run := rig.get("t1")
 	undated := replyAt("use main", time.Time{})
-	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{undated}}).qualifies(run) {
+	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{undated}, Says: true}).qualifies(run) {
 		t.Error("a delivery with no instant qualifies as the answer")
 	}
 	dated := replyAt("use main", run.AskedAt.Add(time.Minute))
-	if !(Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}}).qualifies(run) {
+	if !(Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}, Says: true}).qualifies(run) {
 		t.Fatal("the premise: a reply after the question qualifies")
 	}
 	unanchored := run
 	unanchored.AskedAt = time.Time{}
-	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}}).qualifies(unanchored) {
+	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}, Says: true}).qualifies(unanchored) {
 		t.Error("a reply qualifies as the answer to a question with no anchor")
 	}
 }
