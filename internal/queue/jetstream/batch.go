@@ -44,7 +44,12 @@ func (q *Queue) SubscribeBatch(
 			if ctx.Err() != nil {
 				return
 			}
-			if a.blocked() {
+			// THE LOOP TOP that [Queue.Loops] reports, as on the
+			// single-event loop: the gate is read once, and what it said
+			// is what the loop then does.
+			blocked := a.blocked()
+			a.reachedTop(blocked)
+			if blocked {
 				if sleep(ctx, a.q.fetchWait()) != nil {
 					return
 				}

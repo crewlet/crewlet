@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -186,6 +187,22 @@ type attachment struct {
 	// to.
 	detached atomic.Bool
 
+	// id names this attachment in [Queue.Loops], unique among this
+	// client's attachments for its whole life. Set before the loop starts.
+	id uint64
+
+	// top is where the consume loop last stood at the top of its cycle:
+	// how many tops it has reached, shifted left one, with the low bit set
+	// when it was blocked there. ONE WORD, written by the loop alone, so a
+	// reader never pairs one top's count with another top's gate. Reported
+	// by [Queue.Loops].
+	top atomic.Uint64
+
+	// ended is set once the consume loop has returned, under the queue's
+	// lock, so that Detach or Stop never keeps a loop that can no longer
+	// forget itself. See [Queue.loopEnded].
+	ended bool
+
 	// failures counts how many times each message has FAILED here, keyed
 	// on its stream sequence.
 	//
@@ -243,6 +260,18 @@ func (a *attachment) setPaused(v bool)   { a.paused.Store(v) }
 // blocked reports whether this consumer may take new work.
 func (a *attachment) blocked() bool {
 	return a.detached.Load() || a.quiesced.Load() || a.paused.Load() || a.q.held(a.key)
+}
+
+// reachedTop records that the consume loop stands at the top of a cycle, with
+// its gate shut when blocked: everything it fetched before is dispatched or
+// handed back, and a blocked loop fetches nothing until a verb opens its gate.
+// Only the loop writes it, so a load and a store cannot lose a top.
+func (a *attachment) reachedTop(blocked bool) {
+	next := (a.top.Load()>>1 + 1) << 1
+	if blocked {
+		next |= 1
+	}
+	a.top.Store(next)
 }
 
 // close stops this consumer taking new work and returns immediately.
@@ -493,6 +522,85 @@ func (q *Queue) Lingering(topic, group string) bool {
 	return false
 }
 
+// Loop is one consume loop of this client, as [Queue.Loops] reports it.
+type Loop struct {
+	// ID names the loop's attachment, unique among this client's
+	// attachments for its whole life.
+	ID           uint64
+	Topic, Group string
+	// Cycles is how many times the loop has stood at the top of its cycle,
+	// and Parked whether its gate was shut there the last time — held,
+	// quiesced, paused or detached — so that it fetched nothing after it.
+	Cycles uint64
+	Parked bool
+}
+
+// Loops reports every consume loop of this client that has not returned: each
+// attachment's, and each one Detach or Stop has let go of until its loop ends.
+//
+// Reported so the conformance suite can see it. A case asserting that nothing
+// more was delivered reads its journal once this backend has nothing left that
+// could deliver, and NOTHING ELSE THIS BACKEND EXPORTS SAYS THAT. A loop is the
+// one goroutine that dispatches for its attachment, and it dispatches only
+// between a fetch and its next loop top, so a loop that has ended, or has stood
+// at a top with its gate shut since the case's last verb, has nothing left to
+// hand a handler; the broker's own counts are snapshots, which cannot tell a
+// loop parked at its gate from one between two pulls. A loop that has been let
+// go of is still reported until it ends, because it can still be inside a
+// handler, or holding a fetch that delivers.
+func (q *Queue) Loops() []Loop {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []Loop
+	report := func(a *attachment) {
+		top := a.top.Load()
+		out = append(out, Loop{
+			ID: a.id, Topic: a.key.topic, Group: a.key.group,
+			Cycles: top >> 1, Parked: top&1 == 1,
+		})
+	}
+	for _, atts := range q.attachments {
+		for _, a := range atts {
+			report(a)
+		}
+	}
+	for a := range q.retired {
+		report(a)
+	}
+	slices.SortFunc(out, func(x, y Loop) int { return cmp.Compare(x.ID, y.ID) })
+	return out
+}
+
+// StreamSubscriptions reports how many of this client's live feeds
+// ([Queue.SubscribeStream]) are still consuming: opened, and with their
+// consumption not yet over.
+//
+// Reported so the conformance suite can see it. A case asserting that an
+// unsubscribed feed receives nothing reads it once the feed has stopped, and
+// THAT IS LATER THAN ITS UNSUBSCRIBE RETURNING: the client ends the
+// consumption on a goroutine of its own, and a message already in the
+// callback's path can still be handed over meanwhile. Read off the
+// consumption's own Closed signal, taken when the feed opened, which the client
+// closes once its callback has returned for the last time.
+func (q *Queue) StreamSubscriptions() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.feeds = consumingFeeds(q.feeds)
+	return len(q.feeds)
+}
+
+// consumingFeeds drops the feeds whose consumption has ended.
+func consumingFeeds(feeds []<-chan struct{}) []<-chan struct{} {
+	return slices.DeleteFunc(feeds, func(ended <-chan struct{}) bool {
+		select {
+		case <-ended:
+			return true
+		default:
+			return false
+		}
+	})
+}
+
 // --- attaching ------------------------------------------------------------
 
 // attach creates or reuses the durable consumer and starts a loop.
@@ -554,8 +662,9 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	paused := q.paused
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	fetching, abandon := context.WithCancel(context.WithoutCancel(ctx))
+	q.lastLoop++
 	a := &attachment{
-		q: q, key: key, cons: cons, lane: lane,
+		q: q, key: key, cons: cons, lane: lane, id: q.lastLoop,
 		log:    q.log.With("topic", topic, "group", group),
 		cancel: cancel, done: make(chan struct{}),
 		fetching: fetching, abandon: abandon,
@@ -564,15 +673,41 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	q.attachments[key] = append(q.attachments[key], a)
 	q.mu.Unlock()
 
-	go func() {
-		defer close(a.done)
-		// Released when the loop ends, however it ends: a detached
-		// attachment's loop exits on its own once its fetch runs out, and
-		// nothing else would release the fetch scope it no longer uses.
-		defer abandon()
-		loop(loopCtx, a)
-	}()
+	go a.run(loopCtx, loop)
 	return nil
+}
+
+// run is the consume loop's goroutine: the loop, and then the release of what
+// it held, however it ends.
+func (a *attachment) run(ctx context.Context, loop func(context.Context, *attachment)) {
+	defer close(a.done)
+	// Released when the loop ends, however it ends: a detached attachment's
+	// loop exits on its own once its fetch runs out, and nothing else would
+	// release the fetch scope it no longer uses.
+	defer a.abandon()
+	// Forgotten by [Queue.Loops] before done closes, however it ends.
+	defer a.q.loopEnded(a)
+	loop(ctx, a)
+}
+
+// retireLocked keeps the attachments this client has just let go of in
+// [Queue.Loops] until their loops return, each forgetting itself as it does
+// ([Queue.loopEnded]). A loop that has ended already is not kept: nothing
+// would forget it.
+func (q *Queue) retireLocked(atts []*attachment) {
+	for _, a := range atts {
+		if !a.ended {
+			q.retired[a] = struct{}{}
+		}
+	}
+}
+
+// loopEnded records that a's consume loop has returned, and forgets it.
+func (q *Queue) loopEnded(a *attachment) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	a.ended = true
+	delete(q.retired, a)
 }
 
 // openConsumer opens one durable consumer an attachment reads from, by its
@@ -612,7 +747,11 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 			if ctx.Err() != nil {
 				return
 			}
-			if a.blocked() {
+			// THE LOOP TOP that [Queue.Loops] reports: the gate is read
+			// once, and what it said is what the loop then does.
+			blocked := a.blocked()
+			a.reachedTop(blocked)
+			if blocked {
 				// Nothing is fetched while blocked, so nothing is held
 				// hostage — the pull model's quiet advantage over a
 				// pushed prefetch.
@@ -988,6 +1127,9 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	atts := q.attachments[key]
 	delete(q.attachments, key)
 	delete(q.holds, key)
+	// Let go of, and still reported by Loops until each loop returns:
+	// Detach does not join a running handler, so a loop may outlive it.
+	q.retireLocked(atts)
 	q.mu.Unlock()
 
 	for _, a := range atts {

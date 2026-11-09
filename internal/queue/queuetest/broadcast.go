@@ -270,7 +270,7 @@ func (s *suite) runBroadcast(t *testing.T) {
 		t.Run("a_broadcast_reaches_a_listener_in_a_peer_process", func(t *testing.T) {
 			t.Parallel()
 			q := s.start(ctx, t)
-			peer := startQueue(ctx, t, s.caps.Peer(t, q))
+			peer := s.startQueue(ctx, t, s.caps.Peer(t, q))
 			// BROADCAST THE INSTANT Listen RETURNS, on fresh subjects, for
 			// the reason the scatter's peer arm repeats: a Listen that
 			// returns before its server holds the interest loses this race

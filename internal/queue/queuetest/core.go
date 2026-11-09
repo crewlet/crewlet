@@ -99,8 +99,8 @@ func (s *suite) runCore(t *testing.T) {
 
 		dotted.awaitLabels(t, "the dotted topic's own event", "to-dotted")
 		under.awaitLabels(t, "the underscored topic's own event", "to-under")
-		dotted.staysAt(t, 1, "two topics collapsed onto one subscription")
-		under.staysAt(t, 1, "two topics collapsed onto one subscription")
+		dotted.staysAt(ctx, t, 1, "two topics collapsed onto one subscription")
+		under.staysAt(ctx, t, 1, "two topics collapsed onto one subscription")
 
 		// Group side: one topic, two groups differing only by . vs _. Distinct
 		// groups each get a copy; aliased ones would COMPETE for one.
@@ -128,7 +128,7 @@ func (s *suite) runCore(t *testing.T) {
 
 		shared.await(t, "exactly one member to take the event",
 			func(seen []string) bool { return len(seen) == 1 })
-		shared.staysAt(t, 1, "one event delivered to a two-member group")
+		shared.staysAt(ctx, t, 1, "one event delivered to a two-member group")
 	})
 
 	t.Run("members_of_a_group_compete", func(t *testing.T) {
@@ -302,7 +302,7 @@ func (s *suite) runCore(t *testing.T) {
 		publish(ctx, t, q, "topic.flaky", newEvent("t"))
 
 		j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
-		j.staysAt(t, 3, "an acknowledged event")
+		j.staysAt(ctx, t, 3, "an acknowledged event")
 	})
 
 	// A HANDLER RUNS UNDER ITS CONSUMER'S LIFETIME, NEVER ITS PUBLISHER'S.
@@ -427,7 +427,7 @@ func (s *suite) runCore(t *testing.T) {
 			awaitState(t, "the deferral to quiesce the attachment", func() bool {
 				return quiescing(q, topic, "grp")
 			})
-			seen.staysAt(t, 1, "a quiesced attachment")
+			seen.staysAt(ctx, t, 1, "a quiesced attachment")
 			if resumed, err := q.Unquiesce(ctx, topic, "grp"); err != nil || !resumed {
 				t.Fatalf("Unquiesce = (%v, %v), want (true, nil)", resumed, err)
 			}
@@ -474,7 +474,7 @@ func (s *suite) runCore(t *testing.T) {
 		deadLetters := s.needDeadLetters(t)
 		backlog := s.needBacklog(t)
 		// Three attempts total, however this backend's broker counts them.
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		subscribe(ctx, t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
@@ -485,7 +485,7 @@ func (s *suite) runCore(t *testing.T) {
 
 		j.await(t, "the configured number of delivery attempts",
 			func(seen []string) bool { return len(seen) == 3 })
-		j.staysAt(t, 3, "a dead-lettered event")
+		j.staysAt(ctx, t, 3, "a dead-lettered event")
 
 		awaitState(t, "the event to reach the dead-letter subject", func() bool {
 			return len(deadLetters(q, "topic", "grp")) == 1
@@ -536,7 +536,7 @@ func (s *suite) runCore(t *testing.T) {
 		// shared suite covering half a shared contract, which is the shape
 		// this whole package exists to prevent.
 		newQueueWithAttempts := s.needAttempts(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		var attempts int
@@ -602,7 +602,7 @@ func (s *suite) runCore(t *testing.T) {
 		publish(ctx, t, q, "topic.d", newEvent("e2"))
 
 		j.awaitLabels(t, "the first delivery", "e1")
-		j.staysAt(t, 1, "a deferral must stop the attachment taking new work")
+		j.staysAt(ctx, t, 1, "a deferral must stop the attachment taking new work")
 
 		awaitState(t, "both events to be back in order", func() bool {
 			return equalStrings(labelsOf(backlog(q, "topic.d", "grp")), []string{"e1", "e2"})
@@ -630,7 +630,7 @@ func (s *suite) runCore(t *testing.T) {
 		publish(ctx, t, q, "topic.b", newEvent("b1"))
 
 		b.awaitLabels(t, "an unpaused topic to keep flowing", "b1")
-		a.staysAt(t, 0, "a paused topic buffers rather than delivering")
+		a.staysAt(ctx, t, 0, "a paused topic buffers rather than delivering")
 
 		if err := q.ResumeTopic(ctx, "topic.a", "grp", "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
@@ -657,7 +657,7 @@ func (s *suite) runCore(t *testing.T) {
 		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
-		j.staysAt(t, 0, "one subsystem released its hold and un-gated another's")
+		j.staysAt(ctx, t, 0, "one subsystem released its hold and un-gated another's")
 
 		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "second-subsystem"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
@@ -681,7 +681,7 @@ func (s *suite) runCore(t *testing.T) {
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("t"))
 
 		free.awaitLabels(t, "the unheld group's copy", "t")
-		held.staysAt(t, 0, "the held group")
+		held.staysAt(ctx, t, 0, "the held group")
 	})
 
 	t.Run("resume_topic_unpaused_is_noop", func(t *testing.T) {
@@ -709,7 +709,7 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
 		publish(ctx, t, q, "topic.p", newEvent("after_pause"))
-		j.staysAt(t, 1, "a paused queue dispatched")
+		j.staysAt(ctx, t, 1, "a paused queue dispatched")
 
 		if history := s.caps.History; history != nil {
 			// Accepted, not dispatched: the distinction is the whole

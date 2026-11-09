@@ -63,7 +63,7 @@ func (s *suite) runReachability(t *testing.T) {
 			t.Fatalf("Quiesce with the broker up: %v", err)
 		}
 		publish(ctx, t, q, "reach.t", newEvent("held"))
-		j.staysAt(t, 0, "a quiesced attachment took new work with its broker up")
+		j.staysAt(ctx, t, 0, "a quiesced attachment took new work with its broker up")
 		// AND A SECOND MAILBOX THIS NODE CONSUMES, for the delete below to
 		// be asked about one it is attached to.
 		subscribe(ctx, t, q, "reach.d", "g", recordingHandler(newJournal()))
@@ -175,7 +175,7 @@ func (s *suite) runReachability(t *testing.T) {
 		// held mail is in a broker nobody can reach, and a backend that
 		// delivered it anyway would be certifying a fetch that cannot
 		// happen.
-		j.staysAt(t, 0, "an attachment resumed with its broker gone delivered mail "+
+		j.staysAt(ctx, t, 0, "an attachment resumed with its broker gone delivered mail "+
 			"that broker could not have handed out")
 		local(verbResult{"Detach", second(q.Detach(ctx, "reach.t", "g"))})
 	})

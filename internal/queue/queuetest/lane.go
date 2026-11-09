@@ -284,7 +284,7 @@ func (s *suite) runLane(t *testing.T) {
 		subscribeBatch(ctx, t, q, topic, "g", recordingBatchHandler(batches),
 			queue.DefaultBatchOptions())
 		publish(ctx, t, q, topic, person())
-		batches.staysAt(t, 0, "a priority event delivered past its topic's hold")
+		batches.staysAt(ctx, t, 0, "a priority event delivered past its topic's hold")
 		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}

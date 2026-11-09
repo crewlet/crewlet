@@ -141,7 +141,14 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		if err := q.Publish(ctx, topic, nil); err == nil {
 			t.Fatal("a nil event published successfully")
 		}
-		listened.staysAt(t, 0, "a refused publish reached a publish listener")
+		// READ AT ONCE, with nothing to wait for: a publish listener runs on
+		// the publishing goroutine (queue.PublishListener), so a refused
+		// Publish that reached one had called it before it returned.
+		//
+		// Mutation: hand the listeners the nil event before refusing it.
+		if got := listened.all(); len(got) != 0 {
+			t.Fatalf("a refused publish reached a publish listener: %v", got)
+		}
 		if backlog := s.optionalBacklog(t); backlog != nil {
 			if got := backlog(q, topic, group); len(got) != 0 {
 				t.Errorf("a refused nil publish left %d events in the mailbox", len(got))
@@ -304,7 +311,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// deferral that cost nothing would report 2 twice.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		headroom := newJournal()
 		var attempts int
@@ -350,7 +357,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 		headroom.awaitLabels(t, "the headroom to count down across the deferral "+
 			"exactly as it would across a failure", "2", "1", "0")
-		headroom.staysAt(t, 3, "the event outlived its budget")
+		headroom.staysAt(ctx, t, 3, "the event outlived its budget")
 		// AND THE BOUNDARY IS THE SAME ONE. The delivery that reported no
 		// headroom left is the last: the hand-back after it dead-letters,
 		// with a copy on the dead-letter subject rather than a healthy

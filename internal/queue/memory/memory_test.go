@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -41,6 +42,21 @@ func TestConformance(t *testing.T) {
 			return memory.New(memory.Contract(opts...))
 		},
 		queuetest.Capabilities{
+			// THE BROKER GOING IDLE, which is exact here: dispatch is
+			// inline, so a handler runs only inside a drain, and once the
+			// case's verbs have returned the drains left are the ones a
+			// linger window's flush starts. Idle waits for both, broker-
+			// wide, because a drain one client's verb starts runs every
+			// member's handler.
+			Settle: func(ctx context.Context, _ *testing.T, q queue.EventQueue) error {
+				select {
+				case <-q.(*memory.Queue).Broker().Idle():
+					return nil
+				case <-ctx.Done():
+					return fmt.Errorf("the broker still had a drain running or a linger "+
+						"window open: %w", ctx.Err())
+				}
+			},
 			Peer: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
 				return q.(*memory.Queue).Client()
 			},
@@ -72,6 +88,9 @@ func TestConformance(t *testing.T) {
 			},
 			Lingering: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Lingering(topic, group)
+			},
+			StreamSubscriptions: func(q queue.EventQueue) int {
+				return q.(*memory.Queue).StreamSubscriptions()
 			},
 			ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
 				t.Helper()

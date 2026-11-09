@@ -1852,6 +1852,15 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		cancel()
 		return nil, fmt.Errorf("consume stream %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
+	// THE END OF CONSUMPTION, taken now, while the consumption runs: the
+	// client closes this channel once its callback has returned for the last
+	// time, and a Closed asked for only after the subscription is gone
+	// answers closed at once, a callback still running or not. For
+	// [Queue.StreamSubscriptions].
+	ended := consumeCtx.Closed()
+	q.mu.Lock()
+	q.feeds = append(consumingFeeds(q.feeds), ended)
+	q.mu.Unlock()
 
 	var once sync.Once
 	return func(context.Context) error {

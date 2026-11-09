@@ -179,7 +179,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// case, which is where the two numbers a handler is told stop
 		// being the same number.
 		newQueueWithAttempts := s.needAttempts(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		var attempts int
@@ -258,7 +258,7 @@ func (s *suite) runBatch(t *testing.T) {
 		newQueueWithAttempts := s.needAttempts(t)
 		quiescing := s.needQuiescing(t)
 		const attempts = 6
-		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
 		const topic, group, conv = "t.mixed", "g", "c1"
 		older := newConvEvent("older", conv)
@@ -374,7 +374,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// the other conversation from the same flush.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
@@ -404,7 +404,7 @@ func (s *suite) runBatch(t *testing.T) {
 			}
 			return c1 == 3 && c2 == 1
 		})
-		attempts.staysAt(t, 4, "a dead-lettered partition kept being redelivered")
+		attempts.staysAt(ctx, t, 4, "a dead-lettered partition kept being redelivered")
 		awaitState(t, "c1's event to reach the dead-letter subject", func() bool {
 			return len(deadLetters(q, "t", "g")) == 1
 		})
@@ -491,7 +491,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("Stop: %v", err)
 		}
 		setupTook := time.Since(setup)
-		batches.staysAtRacing(t, 0, "a stopped queue flushed its linger window",
+		batches.staysAtRacing(ctx, t, 0, "a stopped queue flushed its linger window",
 			5*time.Second, setupTook)
 
 		// RETAINED, not dropped: the linger buffer IS the backlog, and a
@@ -521,7 +521,7 @@ func (s *suite) runBatch(t *testing.T) {
 		}
 		setupTook := time.Since(setup)
 		time.Sleep(racingWindow + quietFor)
-		batches.staysAtRacing(t, 0, "a paused queue flushed its linger window",
+		batches.staysAtRacing(ctx, t, 0, "a paused queue flushed its linger window",
 			racingWindow, setupTook)
 
 		if got := labelsOf(backlog(q, "t", "g")); !equalStrings(got, []string{"a"}) {
@@ -555,7 +555,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		time.Sleep(racingWindow + quietFor)
-		batches.staysAt(t, 0, "a held attachment dispatched its window")
+		batches.staysAt(ctx, t, 0, "a held attachment dispatched its window")
 
 		if err := q.ResumeTopic(ctx, "t.hold", "g", "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
@@ -803,7 +803,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the deferral did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the deferral did not stop the batch")
 
 		awaitState(t, "the whole batch to return in partition order", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.b", "grp")), []string{"a", "b", "c"})
@@ -845,7 +845,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the hold did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the hold did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.hold", "grp")), []string{"b", "c"})
 		})
@@ -908,7 +908,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the detach did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the detach did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.detach", "grp")), []string{"b", "c"})
 		})
@@ -968,7 +968,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the drain pause did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the drain pause did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.drain", "grp")), []string{"b", "c"})
 		})
@@ -1031,7 +1031,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// mischarged hand-back send a reader to opposite places.
 		newQueueWithAttempts := s.needAttempts(t)
 		const attempts = 5
-		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
 		const topic, group = "topic.charged", "grp"
 		fill := holdForOneBatch(ctx, t, q, topic, group)
@@ -1069,7 +1069,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		fill("a", "b")
 		j.awaitLabels(t, "only the first partition to be handled", "a")
-		j.staysAt(t, 1, "the hold did not stop the batch")
+		j.staysAt(ctx, t, 1, "the hold did not stop the batch")
 
 		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)

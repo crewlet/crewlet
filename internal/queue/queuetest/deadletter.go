@@ -257,7 +257,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		t.Parallel()
 		peerOf := s.needPeer(t)
 		q := s.start(ctx, t)
-		peer := startQueue(ctx, t, peerOf(t, q))
+		peer := s.startQueue(ctx, t, peerOf(t, q))
 		subject := topics.DeadLetter(lettersTopic+".shared", "grp")
 		kept := letterOf([]byte(`"kept by one node"`), []byte("its frame"))
 		keep(ctx, t, q, subject, kept)
@@ -290,7 +290,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// which kind it holds — kept with no header, its body the event.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 1))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
 		subscribe(ctx, t, q, "retired.t", "grp", func(context.Context, *events.Event) queue.Result {
 			return queue.Nak(errors.New("permanent failure"))
 		})

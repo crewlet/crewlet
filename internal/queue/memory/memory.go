@@ -199,15 +199,25 @@ type Broker struct {
 
 	// down is set by [Broker.Fail] and never cleared.
 	down bool
+
+	// busy counts what on this broker can still hand a subscription's
+	// handler a delivery: a drain running, and a linger window open. idle
+	// is closed exactly while busy is zero, and replaced by an open one
+	// when it leaves zero. See [Broker.Idle].
+	busy int
+	idle chan struct{}
 }
 
 // NewBroker returns an empty broker with no clients.
 func NewBroker() *Broker {
+	idle := make(chan struct{})
+	close(idle)
 	return &Broker{
 		subs:        map[subKey]*subscription{},
 		deadLetters: map[string][]letter{},
 		now:         func() time.Time { return time.Now().UTC() },
 		maxHistory:  defaultMaxHistory,
+		idle:        idle,
 	}
 }
 
@@ -550,7 +560,7 @@ func (q *Queue) dropMembersLocked(sub *subscription) int {
 	}
 	for _, m := range mine {
 		m.detached = true
-		m.closeWindowLocked()
+		q.broker.closeWindowLocked(m)
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })
 	if len(sub.members) == 0 {
@@ -1397,6 +1407,71 @@ func (q *Queue) Lingering(topic, group string) bool {
 		return false
 	}
 	return slices.ContainsFunc(sub.membersOf(q), func(m *consumer) bool { return m.window != nil })
+}
+
+// Idle returns a channel that is closed while nothing on this broker can hand
+// a subscription's handler a delivery: no drain is running and no linger
+// window is open, on any client of it.
+//
+// Reported so the conformance suite can see it. A case asserting that nothing
+// more was delivered reads its journal once the backend has nothing left that
+// could deliver, rather than after a window of elapsed time. Dispatch here is
+// inline, so a handler runs only inside a drain, and a drain starts only from a
+// verb or from a linger window's flush: once the verbs have returned, the
+// windows are what is left, and a window stays counted until it is closed
+// undelivered or the drain its flush starts has returned. A broker-wide answer,
+// because a drain one client's verb starts runs every member's handler.
+//
+// THE CHANNEL OF THE MOMENT IT IS ASKED: one returned while the broker is busy
+// is closed when it next goes idle, and a drain started afterwards is waited
+// for by asking again.
+func (b *Broker) Idle() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.idle
+}
+
+// busyLocked counts one more thing that can hand a handler a delivery — a
+// drain starting, or a linger window opening. See [Broker.Idle].
+func (b *Broker) busyLocked() {
+	if b.busy == 0 {
+		b.idle = make(chan struct{})
+	}
+	b.busy++
+}
+
+// restLocked counts one of them done, and wakes every [Broker.Idle] waiter
+// when it was the last. A rest with nothing busy cannot take the count
+// negative: it would leave a broker that never reads as idle again.
+func (b *Broker) restLocked() {
+	if b.busy == 0 {
+		return
+	}
+	b.busy--
+	if b.busy == 0 {
+		close(b.idle)
+	}
+}
+
+// StreamSubscriptions reports how many stream subscriptions THIS client holds
+// ([Queue.SubscribeStream]): registered, and neither unsubscribed nor ended by
+// a Stop.
+//
+// The twin's answer to the number the JetStream backend reports under the same
+// name, and reported so the conformance suite can see it: a case asserting that
+// an unsubscribed stream receives nothing reads it after the subscription is
+// gone. Here that is the moment its Unsubscribe returns, because publishing
+// reads the registrations under the same lock that removes one.
+func (q *Queue) StreamSubscriptions() int {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	n := 0
+	for _, s := range q.broker.streams {
+		if s.owner == q {
+			n++
+		}
+	}
+	return n
 }
 
 // History reports every event published through this broker, bounded by

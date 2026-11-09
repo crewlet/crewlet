@@ -331,6 +331,20 @@ type Queue struct {
 	paused      bool
 	closed      bool
 
+	// retired is every attachment Detach or Stop has let go of whose
+	// consume loop has not returned yet, and lastLoop the last id an
+	// attachment was given. Both for [Queue.Loops]: a loop let go of can
+	// still be inside a handler, and each forgets itself as it returns.
+	retired  map[*attachment]struct{}
+	lastLoop uint64
+
+	// feeds is the end of consumption of every live feed this client
+	// opened ([Queue.SubscribeStream]) that had not ended when it was last
+	// read, for [Queue.StreamSubscriptions]. Pruned of the ended ones
+	// whenever it is touched, so it holds no more than the feeds open at
+	// once since.
+	feeds []<-chan struct{}
+
 	// answering is the gate of each [Queue.Serve] registration of this
 	// client still standing, by its subject, for [Queue.Answering]. Made by
 	// the first registration, so a Queue built without one reads empty.
@@ -410,6 +424,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
+		retired:     map[*attachment]struct{}{},
 		lost:        newConnectionLoss(),
 	}
 
@@ -1932,6 +1947,9 @@ func (q *Queue) Stop(ctx context.Context) error {
 	q.closed = true
 	atts := q.attachmentsLocked()
 	q.attachments = map[attachKey][]*attachment{}
+	// Reported by Loops until each loop returns, as on a Detach: the wait
+	// below is bounded, and a loop inside a handler outlasts it.
+	q.retireLocked(atts)
 	// Pause holds are process-local state about attachments that no longer
 	// exist. Carrying them past a stop would leave a restarted queue
 	// silently deaf on subjects nothing is holding any more.

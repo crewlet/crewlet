@@ -42,6 +42,10 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 		return
 	}
 	sub.draining = true
+	// Counted for [Broker.Idle] from here until the last pass returns: every
+	// handler call this drain makes is inside that span, and a pass a second
+	// caller asks for runs inside it too.
+	b.busyLocked()
 	b.mu.Unlock()
 
 	for {
@@ -50,6 +54,7 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 		b.mu.Lock()
 		if !sub.drainAgain {
 			sub.draining = false
+			b.restLocked()
 			b.mu.Unlock()
 			return
 		}
@@ -682,6 +687,10 @@ func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *con
 	}
 	w := &lingerWindow{}
 	m.window = w
+	// Counted for [Broker.Idle] until it is closed undelivered or the drain
+	// its flush starts has returned: a window still open is a delivery the
+	// broker owes.
+	b.busyLocked()
 	// The window fires outside any caller's context — the publish that
 	// opened it has long returned — so the flush must not inherit that
 	// caller's cancellation, or a returned request would cancel a delivery
@@ -692,10 +701,10 @@ func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *con
 	w.timer = time.AfterFunc(linger, func() { b.flushWindow(flushCtx, sub, m, w) })
 }
 
-// closeWindowLocked cancels an open window without delivering. What it was
+// closeWindowLocked cancels m's open window without delivering. What it was
 // collecting is NOT lost: those events are in the mailbox, which outlives every
 // attachment.
-func (m *consumer) closeWindowLocked() {
+func (b *Broker) closeWindowLocked(m *consumer) {
 	w := m.window
 	if w == nil {
 		return
@@ -703,6 +712,9 @@ func (m *consumer) closeWindowLocked() {
 	m.window = nil
 	w.closed = true
 	w.timer.Stop()
+	// Closed undelivered, so it owes nothing: a flush already waiting on
+	// the lock reads closed and delivers nothing.
+	b.restLocked()
 }
 
 func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer, w *lingerWindow) {
@@ -716,6 +728,14 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 	deliverable := deliverableLocked(m)
 	backlog := len(sub.mail)
 	b.mu.Unlock()
+	// THE WINDOW STAYS COUNTED UNTIL ITS FLUSH HAS RUN ([Broker.Idle]): the
+	// drain below counts itself before this lets go, so the broker never
+	// reads as idle between the two.
+	defer func() {
+		b.mu.Lock()
+		b.restLocked()
+		b.mu.Unlock()
+	}()
 
 	if !deliverable {
 		// A stop or a pause during the window loses nothing: the events

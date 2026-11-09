@@ -630,7 +630,7 @@ func (s *suite) runScatter(t *testing.T) {
 		t.Run("a_scatter_reaches_a_peer_process", func(t *testing.T) {
 			t.Parallel()
 			q := s.start(ctx, t)
-			peer := startQueue(ctx, t, s.caps.Peer(t, q))
+			peer := s.startQueue(ctx, t, s.caps.Peer(t, q))
 
 			// ASKED THE INSTANT Serve RETURNS, and repeatedly on fresh
 			// subjects. A backend whose Serve returns before the broker

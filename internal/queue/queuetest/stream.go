@@ -37,9 +37,17 @@ func (s *suite) runStream(t *testing.T) {
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 		publish(ctx, t, q, "crewlet.notifications.inbound", newEvent("raw_webhook"))
 
-		j.awaitLabels(t, "only the matching subject",
-			"crewlet.events.agent_phase_started/agent_phase_started")
-		j.staysAt(t, 1, "a non-matching subject reached a stream subscriber")
+		// READ BEHIND A FENCE on the subscriber's own stream, published
+		// after both. The non-matching subject lives on another stream on
+		// the backend that ships, which the subscriber's consumer cannot
+		// read at all, so nothing there could reach it behind the fence
+		// that had not before it; the twin hands a feed its events inside
+		// each Publish.
+		//
+		// Mutation: match every subject in the twin's stream dispatch, and
+		// the webhook is in the journal ahead of the fence.
+		j.fenced(ctx, t, q, "a non-matching subject reached a stream subscriber",
+			"crewlet.events.fence", "crewlet.events.agent_phase_started/agent_phase_started")
 	})
 
 	t.Run("stream_star_matches_exactly_one_segment", func(t *testing.T) {
@@ -67,30 +75,53 @@ func (s *suite) runStream(t *testing.T) {
 		tryPublish(ctx, q, "crewlet.events.task.created", newEvent("too_deep"))
 		tryPublish(ctx, q, "crewlet.events", newEvent("too_shallow"))
 
-		j.awaitLabels(t, "the single-segment match", "crewlet.events.agent_phase_started/match")
-		j.staysAt(t, 1, "`*` matched something other than exactly one segment")
+		// READ BEHIND A FENCE published after the near-misses, on the same
+		// stream: the subscriber is handed that stream in its own order,
+		// so a near-miss its pattern let through arrives ahead of the
+		// fence, however late.
+		//
+		// Mutation: filter the feed's consumer on `crewlet.events.>`
+		// rather than on its own pattern, and too_deep arrives ahead of
+		// the fence.
+		j.fenced(ctx, t, q, "`*` matched something other than exactly one segment",
+			"crewlet.events.fence", "crewlet.events.agent_phase_started/match")
 	})
 
 	t.Run("stream_unsubscribe_stops_dispatch", func(t *testing.T) {
 		t.Parallel()
+		feeds := s.needStreamSubscriptions(t)
 		q := s.start(ctx, t)
 		j := newJournal()
-		unsubscribe, err := q.SubscribeStream(ctx, "crewlet.events.>",
-			func(_ context.Context, topic string, ev *events.Event) {
-				j.record(topic + "/" + labelOf(ev))
-			})
-		if err != nil {
-			t.Fatalf("SubscribeStream: %v", err)
-		}
+		unsubscribe := streamTo(ctx, t, q, "crewlet.events.>", j)
 
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 		j.awaitLabels(t, "the pre-unsubscribe event", "crewlet.events.agent_phase_started/agent_phase_started")
 
+		// THE COUNT HAS TO HAVE MATCHED ITS SUBJECT before it is read as
+		// gone: a backend that never counted this feed would read as one
+		// whose unsubscribe worked.
+		if got := feeds(q); got != 1 {
+			t.Fatalf("StreamSubscriptions = %d with one feed open, want 1", got)
+		}
 		if err := unsubscribe(ctx); err != nil {
 			t.Fatalf("unsubscribe: %v", err)
 		}
+		// WAITED UNTIL THE FEED HAS STOPPED CONSUMING, which on the
+		// backend that ships comes after its Unsubscribe returns. A feed
+		// is no consume loop Settle could wait out, and once it is gone
+		// there is nothing to fence behind; what is left is that nothing
+		// stands that could hand it anything. Bounded as liveness by
+		// awaitState: a feed that never stops consuming is what fails it.
+		awaitState(t, "the unsubscribed feed to stop consuming", func() bool { return feeds(q) == 0 })
 		publish(ctx, t, q, "crewlet.events.turn.guard_breach", newEvent("turn.guard_breach"))
-		j.staysAt(t, 1, "an unsubscribed stream kept receiving")
+		// READ AT ONCE, with nothing to wait for: nothing that could
+		// deliver it is left.
+		//
+		// Mutation: have the unsubscribe leave the feed's consumption
+		// running, and it never stops.
+		if got := j.all(); len(got) != 1 {
+			t.Fatalf("an unsubscribed stream kept receiving: %v", got)
+		}
 	})
 
 	t.Run("stream_handler_failure_does_not_break_publish", func(t *testing.T) {
@@ -128,12 +159,21 @@ func (s *suite) runStream(t *testing.T) {
 	})
 }
 
-func streamTo(ctx context.Context, t *testing.T, q queue.EventQueue, pattern string, j *journal) {
+// streamTo subscribes j to every event matching pattern, labelled by the
+// subject it arrived on, and returns the subscription's Unsubscribe.
+//
+// It marks j as a stream subscriber's, which staysAt refuses: a feed is no
+// consume loop, so Settle does not wait it out. Read one behind a fence
+// (journal.fenced) instead.
+func streamTo(ctx context.Context, t *testing.T, q queue.EventQueue, pattern string, j *journal) queue.Unsubscribe {
 	t.Helper()
-	if _, err := q.SubscribeStream(ctx, pattern,
+	j.streamed = true
+	unsubscribe, err := q.SubscribeStream(ctx, pattern,
 		func(_ context.Context, topic string, ev *events.Event) {
 			j.record(topic + "/" + labelOf(ev))
-		}); err != nil {
+		})
+	if err != nil {
 		t.Fatalf("SubscribeStream(%s): %v", pattern, err)
 	}
+	return unsubscribe
 }
