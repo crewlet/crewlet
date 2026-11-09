@@ -37,6 +37,11 @@
 // dispatcher, the seat's inbox and the chain's verdict together. ADR-0064 is
 // the decision.
 //
+// And it is where a turn failure a retry cannot cure (an image the runtime
+// refuses, every model refusing its credential) pauses its seat on its second
+// time in a row, until its settings change or a person resumes it
+// (failurehold.go). ADR-0117 is the decision.
+//
 // And it is where a remote MCP server's OAuth grant is kept and renewed: the
 // sign-in a person starts on one node and the vendor returns to another, the
 // refresh token sealed in the secret store's engine rows, each node's access

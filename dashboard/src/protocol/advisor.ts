@@ -28,7 +28,13 @@ export interface AdvisorOption {
 
 /** What fixes a finding. */
 export interface AdvisorFix {
-  kind: "config_change" | "open_setting" | "external_step" | "none" | (string & {});
+  kind:
+    | "config_change"
+    | "open_setting"
+    | "external_step"
+    | "draft_with_assistant"
+    | "none"
+    | (string & {});
   sentence: string;
   unchanged?: string;
   options: AdvisorOption[];
@@ -36,11 +42,13 @@ export interface AdvisorFix {
   setting?: string;
   /** Where an `external_step` is taken, where one was named. */
   url?: string;
+  /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
+  prompt?: string;
 }
 
 /** The one thing a finding is about. */
 export interface AdvisorSubject {
-  kind: "company" | "seat" | "schedule" | "integration" | (string & {});
+  kind: "company" | "seat" | "schedule" | "integration" | "alarm" | (string & {});
   seat?: string;
   unit?: string;
   schedule?: string;
@@ -62,10 +70,28 @@ export interface AdvisorFinding {
   fix: AdvisorFix;
 }
 
+/**
+ * One condition that reaches the administrators' Inbox: a finding that blocks
+ * the company and is the owner's to fix, or an alarm that has stood past its
+ * threshold. Open exactly while its condition holds, with nothing to answer.
+ */
+export interface AdvisorNotice {
+  /** The finding's class, or `alarm` for an alarm no finding carries. */
+  class: string;
+  /** The finding's subject, or `{ kind: "alarm", name }` naming the alarm's kind. */
+  subject: AdvisorSubject;
+  /** When the condition began, where the engine can say. */
+  since?: string;
+  /** The nodes an alarm stands on. */
+  nodes?: string[];
+}
+
 /** Every finding at one revision, the most costly first. */
 export interface AdvisorAnswer {
   revision: string;
   findings: AdvisorFinding[];
+  /** What reaches the administrators' Inbox; absent from an engine older than the notices. */
+  notices?: AdvisorNotice[];
   /**
    * What the answer could not read (`integrations`, `work`, `ledger`, `alarms`),
    * so a short list never reads as all clear.

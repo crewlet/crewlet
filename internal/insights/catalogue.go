@@ -48,6 +48,10 @@ const (
 type Fact struct {
 	Key    FactKey `json:"key"`
 	Values []Label `json:"values"`
+	// Floors are each label's lower bound, in order, and Reads the evidence
+	// keys the fact is read from (a sum's keys joined by "+"), none when folded.
+	Floors []int64  `json:"floors"`
+	Reads  []string `json:"reads,omitempty"`
 	// of reads the fact off one finding's evidence: its label, or false for a
 	// finding whose evidence cannot say.
 	of func(ev map[string]int64) (Label, bool)
@@ -93,7 +97,7 @@ func percent(num, den int64) (int64, bool) {
 
 // shareFact is a fact holding num/den of the evidence as a percent bucket.
 func shareFact(key FactKey, b bucket, num, den string) Fact {
-	return Fact{Key: key, Values: b.labels, of: func(ev map[string]int64) (Label, bool) {
+	return Fact{Key: key, Values: b.labels, Floors: b.floors, Reads: []string{num, den}, of: func(ev map[string]int64) (Label, bool) {
 		p, ok := percent(sum(ev, num), ev[den])
 		if !ok {
 			return "", false
@@ -104,14 +108,14 @@ func shareFact(key FactKey, b bucket, num, den string) Fact {
 
 // countFact is a fact holding one evidence count as a bucket.
 func countFact(key FactKey, b bucket, count string) Fact {
-	return Fact{Key: key, Values: b.labels, of: func(ev map[string]int64) (Label, bool) {
+	return Fact{Key: key, Values: b.labels, Floors: b.floors, Reads: []string{count}, of: func(ev map[string]int64) (Label, bool) {
 		return b.of(ev[count])
 	}}
 }
 
 // foldedFact is how many findings raised the class, as a bucket.
 func foldedFact(key FactKey) Fact {
-	return Fact{Key: key, Values: findingsBucket.labels, folded: true}
+	return Fact{Key: key, Values: findingsBucket.labels, Floors: findingsBucket.floors, folded: true}
 }
 
 // sum is the evidence keys named by keys, joined with "+", added up.
@@ -161,12 +165,13 @@ var catalogue = []Entry{{
 	Class: Class(advisor.ClassAgentMentionsWithoutAsk), Title: "Agents woke each other with comments that asked nothing",
 	Summary: "Wakes per 100 agent comments, and how many agents were woken.",
 	Facts: []Fact{
-		{Key: FactPer100, Values: per100Bucket.labels, of: func(ev map[string]int64) (Label, bool) {
-			if ev["agent_comments"] <= 0 || ev["woken"] < 0 {
-				return "", false
-			}
-			return per100Bucket.of(ev["woken"] * 100 / ev["agent_comments"])
-		}},
+		{Key: FactPer100, Values: per100Bucket.labels, Floors: per100Bucket.floors,
+			Reads: []string{"woken", "agent_comments"}, of: func(ev map[string]int64) (Label, bool) {
+				if ev["agent_comments"] <= 0 || ev["woken"] < 0 {
+					return "", false
+				}
+				return per100Bucket.of(ev["woken"] * 100 / ev["agent_comments"])
+			}},
 		countFact(FactSeats, findingsBucket, "agents"),
 	},
 	worse: byShare("woken", "agent_comments"),

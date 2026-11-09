@@ -85,7 +85,7 @@ func (s Sources) insightConsent(ctx context.Context) (config.InsightsSharing, er
 
 // insightFindings is the advisor's findings, as `GET /advisor` answers them.
 func (s Sources) insightFindings(ctx context.Context) ([]advisor.Finding, error) {
-	answer, err := s.advisorRead(ctx)
+	answer, err := s.advisorRead(ctx, s.clock())
 	if err != nil {
 		return nil, err
 	}

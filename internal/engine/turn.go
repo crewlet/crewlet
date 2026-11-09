@@ -123,6 +123,11 @@ type Dispatcher struct {
 	// failure, and its redelivery meets the backend's own sit-out.
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
 
+	// Failure pauses the seat on the second failure in a row a retry cannot
+	// cure (failurehold.go); a nil failure is a turn that worked and ends the
+	// run. An error is a pause that could not be taken, deferred as Budget's is.
+	Failure func(ctx context.Context, handle string, failed error) (reason string, parked bool, err error)
+
 	// Answer offers a delivery to a parked executor as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
 	// [sandbox.AnswerDisposition].
@@ -862,6 +867,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					return result
 				}
 			}
+			// AND A FAILURE A RETRY CANNOT CURE, the second time in a row:
+			// its seat is paused until its settings change or a person
+			// resumes it, rather than spending its deliveries on the refusal.
+			if d.Failure != nil {
+				result, held := d.parkOn(ctx, handle, "failure pause", func(ctx context.Context) (string, bool, error) {
+					return d.Failure(ctx, handle, err)
+				})
+				if held {
+					log.InfoContext(ctx, "turn_failure_paused", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
@@ -880,6 +898,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return d.abandon(ctx, handle, req, err, reason)
 	}
 	d.recordWorked(ctx, handle, req, result)
+	if d.Failure != nil {
+		// A TURN THAT WORKED ends its seat's run of failures; it pauses nothing.
+		_, _, _ = d.Failure(ctx, handle, nil)
+	}
 	return queue.Ack()
 }
 
