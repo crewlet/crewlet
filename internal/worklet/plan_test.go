@@ -1123,7 +1123,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	}
 	reads := map[string]indexedRead{
 		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
-		"an item's newest assignment": seek(subject, holdingSinceStatement, task),
+		"an item's newest assignment":   seek(subject, holdingSinceStatement, task),
 		"a task's own history":          seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
 		"a purged task's rows":          seek(subject, purgedHistoryStatement, purged),
 		"one change's routing":          seek(historyKey, routingRecordStatement, record),
