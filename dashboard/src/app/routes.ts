@@ -339,6 +339,7 @@ export type FramedScreen =
   | { screen: "storage" }
   | { screen: "code-settings" }
   | { screen: "diagnostics" }
+  | { screen: "advisor" }
   | { screen: "account" };
 
 /** Every screen the dashboard draws. */
@@ -799,6 +800,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     storage: { screen: "storage" },
     gitlet: { screen: "code-settings" },
     diagnostics: { screen: "diagnostics" },
+    advisor: { screen: "advisor" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
   if (plain) return tail.length ? none() : screen(plain);

@@ -10,6 +10,10 @@ flowchart LR
   P -->|Apply: PUT again under the entity tag| C[New revision]
 ```
 
+## Where you see it
+
+**Settings › Advisor** lists every finding, the most costly first, with what the engine is handling listed apart so it never reads as yours to do. **Review the change** opens the preview: pick an option where there is more than one, and the screen asks the engine to check the exact write (the fields it changes, before and after, and any warning it would add). Nothing is saved until you press **Apply**, which saves it as a revision by you.
+
 ## What it lists
 
 Every finding has a **title** (what is wrong), a **why** (what it costs), the **path** in the company document it sits at, a **severity** and its **fix**.

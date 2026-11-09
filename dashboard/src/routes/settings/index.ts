@@ -4,6 +4,7 @@ export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { Diagnostics } from "./Diagnostics.tsx";
+export { Advisor } from "./Advisor.tsx";
 export { FileStoragePage } from "./FileStorage.tsx";
 export { Fleet, NodePeek } from "./Fleet.tsx";
 export { GitletSettings } from "./Gitlet.tsx";
