@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -434,6 +435,12 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 	// key opens the task the wake meant — which it does not, once another
 	// task claimed it first. See [InboxNotice.Task].
 	task := notify.Snapshot.TaskID(c.subject())
+	// WHO THE CHANGE WOKE, by the notifier's own rule, so a notice row and the
+	// wake can never disagree about whether it started a turn.
+	woken := map[string]bool{}
+	for _, w := range routing.Waking(Heard(candidates, nil, c.record.Actor)) {
+		woken[w.Handle] = true
+	}
 	written := 0
 	for _, candidate := range candidates {
 		// THE CHANGE'S OWN AUTHOR GETS NO NOTICE OF IT, unless the reason
@@ -449,8 +456,8 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			INSERT INTO tracker_notifications
 				(record_id, recipient, subject_id, subject_key, task_id, kind,
 				 reason, addressed, fallback_only, fallback_rank, excerpt,
-				 created_at, log_seq, log_stream, log_generation, asks)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 created_at, log_seq, log_stream, log_generation, asks, starts_turn)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
 			historyID(c), candidate.Handle, c.subject().ID,
 			inboxSubjectKey(subjectKey, notify), task,
@@ -458,7 +465,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
 			store.EncodeTime(c.authored()), c.packed, c.position.Stream,
-			c.position.Generation, statedAsks(c.record))
+			c.position.Generation, statedAsks(c.record), boolInt(woken[candidate.Handle]))
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the inbox row for %s at %s: %w",
 				candidate.Handle, c.position, err)
