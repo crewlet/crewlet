@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 #
-# chromium-pin_test.sh — the own suite of the Chromium recipe (scripts/chromium.sh).
+# chromium-pin_test.sh — the own suite of the Chromium recipe (scripts/chromium.sh) and of the pin check
+# (scripts/chromium-pin-check.sh).
 #
-# No Go test reaches the recipe, and it regresses silently in the direction that matters: a recipe that unpacks into the
-# directory another checkout's suite is running its Chromium from, hands back a build it never checked, or prints
-# something on stdout beside the path it is asked for. So every case runs the REAL script — copied
-# beside a pin file the case writes, because it reads its pin beside itself — against local stand-ins: a Chrome for
-# Testing tree under file:// (<version>/<platform>/chrome-<platform>.zip), each zip holding a stand-in `chrome` that
-# answers --version, a stand-in `uname` that names the platform each case runs as, and, for the case that holds the
-# recipe's defaults, a stand-in curl that serves Chrome for Testing's own bucket from a local tree. It fetches no
-# Chromium and reads no network, and it needs bash, curl, zip, unzip and a SHA-256 tool.
+# No Go test reaches either script, and each regresses silently in the direction that matters: a recipe that unpacks
+# into the directory another checkout's suite is running its Chromium from, hands back a build it never checked, or
+# prints something on stdout beside the path it is asked for; a check that calls every pin current because it read
+# nothing, or carries a listing's text into the report it prints. So every case runs the REAL
+# script — copied beside a pin file the case writes, because both read their pin beside themselves — against local
+# stand-ins: a Chrome for Testing tree under file:// (<version>/<platform>/chrome-<platform>.zip), each zip holding a
+# stand-in `chrome` that answers --version, a release listing of LATEST_RELEASE_* files, a stand-in `uname` that names
+# the platform each case runs as, and, for the cases that hold each script's defaults, a stand-in curl that serves
+# Chrome for Testing's own addresses from a local tree. It fetches no Chromium and reads no network, and it needs
+# bash, curl, zip, unzip and a SHA-256 tool.
 set -euo pipefail
 
-# THE PERSON'S ENVIRONMENT, GONE before the first case, as scripts/git-pin_test.sh clears it and for its reasons:
-# every variable whose name begins CHROMIUM_ — the recipe's own knob, CHROMIUM_PIN_DOWNLOADS, among them — the cache
-# (CREWLET_CHROMIUM_CACHE, XDG_CACHE_HOME), curl's own configuration (CURL_HOME here, and HOME and XDG_CONFIG_HOME
-# made the suite's own below) and CDPATH. The suite's last case runs the whole suite again, by a relative path, under
-# a hostile environment holding every one of these and requires it green and the hostile directories untouched.
+# THE PERSON'S ENVIRONMENT, GONE before the first case, as scripts/git-pin_test.sh clears it and for its reasons: every
+# variable whose name begins CHROMIUM_ — the scripts' own knobs, CHROMIUM_PIN_DOWNLOADS and CHROMIUM_PIN_LISTING, among
+# them — the cache (CREWLET_CHROMIUM_CACHE, XDG_CACHE_HOME), curl's own configuration (CURL_HOME here, and HOME and
+# XDG_CONFIG_HOME made the suite's own below) and CDPATH. The suite's last case runs the whole suite again, by a
+# relative path, under a hostile environment holding every one of these and requires it green and the hostile
+# directories untouched.
 for name in $(compgen -e); do
 	case "$name" in
 	CHROMIUM_*) unset "$name" ;;
@@ -116,18 +120,21 @@ curlhome() {
 	echo "$1"
 }
 
-# offline <web>: a stand-in curl that serves each https://<host>/<path> it is asked for from <web>/<host>/<path> and
-# refuses every other address as `curl -f` refuses a 404, for a case that runs a script on its default addresses with
-# no network; prints the directory to put first on the case's PATH. The address asked for is the last argument, as
-# the recipe gives it.
+# offline <web> [status]: a stand-in curl that serves each https://<host>/<path> it is asked for from
+# <web>/<host>/<path> and refuses every other address as `curl -f` refuses an HTTP error, a 404 unless status names
+# another — writing the status line it answered into the file -D names, as curl dumps a server's headers — for a case
+# that runs a script on its default addresses with no network; prints the directory to put first on the case's PATH.
+# The address asked for is the last argument, as both scripts give it.
 offline() {
+	local missing="${2-404}"
 	mkdir -p "$1.bin"
 	cat >"$1.bin/curl" <<EOF
 #!/bin/sh
-out="" url=""
+out="" url="" headers=""
 while [ \$# -gt 0 ]; do
 	case \$1 in
 	-o) out=\$2 && shift ;;
+	-D) headers=\$2 && shift ;;
 	*) url=\$1 ;;
 	esac
 	shift
@@ -137,9 +144,11 @@ https://*) file="$1/\${url#https://}" ;;
 *) file="" ;;
 esac
 if [ -n "\$file" ] && [ -f "\$file" ]; then
+	[ -z "\$headers" ] || printf 'HTTP/2 200\r\n\r\n' >"\$headers"
 	exec cp "\$file" "\$out"
 fi
-echo "curl: (22) The requested URL returned error: 404 (\$url)" >&2
+[ -z "\$headers" ] || printf 'HTTP/2 $missing\r\n\r\n' >"\$headers"
+echo "curl: (22) The requested URL returned error: $missing (\$url)" >&2
 exit 22
 EOF
 	chmod +x "$1.bin/curl"
@@ -198,12 +207,12 @@ expect() {
 	fi
 }
 
-# scripts <case>: a scripts directory for the case — the recipe copied from this tree, byte for byte — printing its
-# path. The case writes the pin beside it.
+# scripts <case>: a scripts directory for the case — the two scripts copied from this tree, byte for byte — printing
+# its path. The case writes the pin beside them.
 scripts() {
 	local dir="$TMPROOT/$1/scripts"
 	mkdir -p "$dir"
-	cp "$SCRIPT_DIR/chromium.sh" "$dir/"
+	cp "$SCRIPT_DIR/chromium.sh" "$SCRIPT_DIR/chromium-pin-check.sh" "$dir/"
 	echo "$dir"
 }
 
@@ -395,7 +404,7 @@ refused nosha "chromium.sh refuses to fetch without a SHA-256 tool, naming both"
 
 # hashtool <dir> <fails|garbles> [pattern]: scripts/git-pin_test.sh's stand-in sha256sum, first on a PATH that puts
 # <dir> first. Over a file matching the pattern (every file without one) it fails having printed nothing, or prints a
-# line that is no SHA-256 and answers 0; over any other file it is the machine's own. The recipe reads sha256sum
+# line that is no SHA-256 and answers 0; over any other file it is the machine's own. Both scripts read sha256sum
 # first.
 real_sha256="$(command -v sha256sum || true)"
 hashtool() {
@@ -758,21 +767,304 @@ else
 	bad "a fetch sweeps a crashed fetcher's leftovers a day old and keeps a fresh one" "${why[@]}"
 fi
 
+# ============================================================================================================
+# scripts/chromium-pin-check.sh
+# ============================================================================================================
+
+# release <tree> <version> [platform...]: a release in a stand-in bucket, one small zip per platform (every one of the
+# four without a list) whose bytes name the release and the platform, so each digest is its own.
+release() {
+	local tree="$1" version="$2" platform
+	shift 2
+	[ $# -gt 0 ] || set -- linux64 linux-arm64 mac-x64 mac-arm64
+	for platform in "$@"; do
+		mkdir -p "$tree/$version/$platform"
+		echo "Chrome for Testing $version for $platform" >"$tree/$version/$platform/chrome-$platform.zip"
+	done
+}
+
+# listed <listing> <name> <answer>: the listing's LATEST_RELEASE_<name> answers exactly that, with no newline, as
+# Chrome for Testing's own files answer.
+listed() {
+	mkdir -p "$1"
+	printf '%s' "$3" >"$1/LATEST_RELEASE_$2"
+}
+
+# checkcase <case> [newest] [floor]: a scripts directory pinned at those versions (157.0.8103.38 and 153.0.8010.52
+# without them), with a listing naming them both current; prints its path.
+checkcase() {
+	local s
+	s="$(scripts "$1")"
+	pin "$s" "${2:-157.0.8103.38}" "$zero" "${3:-153.0.8010.52}" "$zero"
+	listed "$TMPROOT/$1/listing" STABLE "${2:-157.0.8103.38}"
+	listed "$TMPROOT/$1/listing" "$(printf '%s' "${3:-153.0.8010.52}" | cut -d. -f1)" "${3:-153.0.8010.52}"
+	echo "$s"
+}
+
+# pins <case> <scripts dir>: runs the check against the case's listing and downloads.
+pins() {
+	run env CHROMIUM_PIN_LISTING="file://$TMPROOT/$1/listing" CHROMIUM_PIN_DOWNLOADS="file://$TMPROOT/$1/downloads" \
+		"$2/chromium-pin-check.sh"
+}
+
+# httpsonly <name>: every download logged since the log was emptied follows a redirect to an https:// address alone,
+# where curl by default follows one to plain http:// too: the check's digests are the pins' trust anchor, and only
+# over bytes TLS protected. Read off the arguments, since the suite's addresses are file:// and redirect nowhere.
+httpsonly() {
+	local line why=()
+	while IFS= read -r line; do
+		case " $line " in
+		*" --proto-redir =https "*) ;;
+		*) why+=("a redirect off HTTPS followed: curl $line") ;;
+		esac
+	done <"$TMPROOT/curl.log"
+	[ -s "$TMPROOT/curl.log" ] || why+=("no download was made")
+	if [ ${#why[@]} -eq 0 ]; then ok "$1"; else bad "$1" "${why[@]}"; fi
+}
+
+s="$(checkcase current)"
+pins current "$s"
+expect "every pin the release its rule names -> 0" 0 "newest 157.0.8103.38 (Stable is 157.0.8103.38), floor 153.0.8010.52"
+
+# A patch of the newest pin's major is no reason to move it. Mutation: compare whole versions rather than majors -> 1
+# (red).
+s="$(checkcase patch)"
+listed "$TMPROOT/patch/listing" STABLE 157.0.8103.61
+release "$TMPROOT/patch/downloads" 157.0.8103.61
+: >"$TMPROOT/curl.log"
+pins patch "$s"
+expect "Stable moving a patch of the newest pin's major -> 0" 0 "Stable is 157.0.8103.61"
+if grep -q '157.0.8103.61/' "$TMPROOT/curl.log"; then
+	bad "Stable moving a patch downloads nothing of it" "$(cat "$TMPROOT/curl.log")"
+else
+	ok "Stable moving a patch downloads nothing of it"
+fi
+
+# A new major of Stable is the newest pin's bump: its version, the four digests of the zips the check downloaded and
+# hashed, and the pull request's title. Mutation: hash one platform's zip for all four -> red.
+s="$(checkcase major)"
+listed "$TMPROOT/major/listing" STABLE 158.0.8127.18
+release "$TMPROOT/major/downloads" 158.0.8127.18
+: >"$TMPROOT/curl.log"
+pins major "$s"
+# Mutation: drop the stall bound from the check's fetch -> red.
+bounded "every download the check makes ends when it stalls"
+# Mutation: drop --proto-redir from the check's fetch -> red.
+httpsonly "every download the check makes follows a redirect to HTTPS alone"
+expect "a new major of Stable -> 1 with its version" 1 "CHROMIUM_NEWEST_VERSION=158.0.8127.18"
+for platform in linux64 linux-arm64 mac-x64 mac-arm64; do
+	var="CHROMIUM_NEWEST_SHA256_$(printf '%s' "$platform" | tr 'a-z-' 'A-Z_')"
+	expect "a new major of Stable -> 1 with the SHA-256 of its $platform zip" 1 \
+		"$var=$(digest "$TMPROOT/major/downloads/158.0.8127.18/$platform/chrome-$platform.zip")"
+done
+expect "a newest pin behind names its pull request" 1 "\`build(deps): bump chromium from 157.0.8103.38 to 158.0.8127.18\`"
+if grep -q 'FLOOR' <<<"$out"; then bad "a new major of Stable moves no floor" "$out"; else ok "a new major of Stable moves no floor"; fi
+
+# The floor follows the newest patch of its own major. Mutation: compare the floor by major as the newest is -> 0
+# (red).
+s="$(checkcase floor)"
+listed "$TMPROOT/floor/listing" 153 153.0.8010.70
+release "$TMPROOT/floor/downloads" 153.0.8010.70
+pins floor "$s"
+expect "a newer patch of the floor's major -> 1 for that pin" 1 "CHROMIUM_FLOOR_VERSION=153.0.8010.70"
+expect "a floor behind names its pull request" 1 "\`build(deps): bump chromium's floor from 153.0.8010.52 to 153.0.8010.70\`"
+if grep -q 'CHROMIUM_NEWEST' <<<"$out"; then bad "a newer floor patch moves that pin alone" "$out"; else ok "a newer floor patch moves that pin alone"; fi
+
+# Both behind at once: one report, each pin's lines and title.
+s="$(checkcase both)"
+listed "$TMPROOT/both/listing" STABLE 158.0.8127.18
+listed "$TMPROOT/both/listing" 153 153.0.8010.70
+release "$TMPROOT/both/downloads" 158.0.8127.18
+release "$TMPROOT/both/downloads" 153.0.8010.70
+pins both "$s"
+expect "both pins behind -> 1, the newest's lines" 1 "CHROMIUM_NEWEST_VERSION=158.0.8127.18"
+expect "both pins behind -> 1, the floor's lines" 1 "CHROMIUM_FLOOR_VERSION=153.0.8010.70"
+
+# WHAT THE CHECK READS WHEN NOTHING NAMES IT: Chrome for Testing's own listing and bucket, whenever CHROMIUM_PIN_LISTING
+# and CHROMIUM_PIN_DOWNLOADS are unset, as the suite leaves them. A stand-in curl serves both from a local tree, so the
+# case reads no network: Stable a major ahead, so the check reads the listing and then every platform's zip. Mutation:
+# misspell the default listing or bucket -> 2 (red); drop the suite's CHROMIUM_ scrub -> the nested run's copy of this
+# case reads the developer's listing, which does not exist (red).
+s="$(scripts check-defaults)"
+pin "$s" 157.0.8103.38 "$zero" 153.0.8010.52 "$zero"
+web="$TMPROOT/check-defaults/web"
+listed "$web/googlechromelabs.github.io/chrome-for-testing" STABLE 158.0.8127.18
+listed "$web/googlechromelabs.github.io/chrome-for-testing" 153 153.0.8010.52
+release "$web/storage.googleapis.com/chrome-for-testing-public" 158.0.8127.18
+run env PATH="$(offline "$web"):$PATH" "$s/chromium-pin-check.sh"
+expect "the check reads Chrome for Testing's own listing and bucket when nothing names others" 1 \
+	"CHROMIUM_NEWEST_SHA256_MAC_ARM64=$(digest "$web/storage.googleapis.com/chrome-for-testing-public/158.0.8127.18/mac-arm64/chrome-mac-arm64.zip")"
+
+# A CURL CONFIGURATION CHANGES NOTHING THE CHECK PRINTS: scripts/git-pin_test.sh's case and its reason — the downloads
+# run inside the command substitutions that take a digest and a listing's answer. Mutation: let the check's fetch write
+# curl's stdout to its own -> red.
+s="$(checkcase curlrc)"
+listed "$TMPROOT/curlrc/listing" STABLE 158.0.8127.18
+release "$TMPROOT/curlrc/downloads" 158.0.8127.18
+pins curlrc "$s"
+plain="$out"
+CURL_HOME="$(curlhome "$TMPROOT/curlrc/curl")" pins curlrc "$s"
+why=()
+[ "$status" = 1 ] || why+=("exit $status, want 1")
+[ "$out" = "$plain" ] || why+=("its stdout is not the report a run without the curlrc printed:" "$plain")
+grep -qx 000 <<<"$err" || why+=("stderr lacks the curlrc's write-out, 000: the configuration was not read")
+if [ ${#why[@]} -eq 0 ]; then
+	ok "a curlrc that writes to curl's stdout changes nothing the check prints"
+else
+	bad "a curlrc that writes to curl's stdout changes nothing the check prints" "${why[@]}" \
+		"stdout:" "$out" "stderr:" "$err"
+fi
+
+# --- what the check can never call a pass ------------------------------------------------------------------------
+
+# A release missing a platform's zip is never proposed, and the platform is named. Mutation: skip a platform whose
+# download fails -> 1 with three digests (red).
+s="$(checkcase noarm)"
+listed "$TMPROOT/noarm/listing" STABLE 158.0.8127.18
+release "$TMPROOT/noarm/downloads" 158.0.8127.18 linux64 mac-x64 mac-arm64
+pins noarm "$s"
+expect "a release missing a platform's zip -> 2, naming it" 2 "" "has no linux-arm64 build"
+[ -z "$out" ] && ok "a release missing a platform's zip reports nothing" || bad "a release missing a platform's zip reports nothing" "$out"
+
+# The same at Chrome for Testing's own bucket, which answers a zip it does not hold with a 404: read off the status the
+# transfer ended on, which curl dumps beside the download. Mutation: say a build is missing only for a file:// tree
+# (curl's 37) -> "cannot download" (red).
+s="$(scripts noarm-bucket)"
+pin "$s" 157.0.8103.38 "$zero" 153.0.8010.52 "$zero"
+web="$TMPROOT/noarm-bucket/web"
+listed "$web/googlechromelabs.github.io/chrome-for-testing" STABLE 158.0.8127.18
+listed "$web/googlechromelabs.github.io/chrome-for-testing" 153 153.0.8010.52
+release "$web/storage.googleapis.com/chrome-for-testing-public" 158.0.8127.18 linux64 mac-x64 mac-arm64
+run env PATH="$(offline "$web"):$PATH" "$s/chromium-pin-check.sh"
+expect "a release the bucket answers 404 for on one platform -> 2, naming it" 2 "" "has no linux-arm64 build"
+
+# And where the bucket answers an object it does not hold with a 403, as one that does not let its listing be read
+# does: the same missing build. Mutation: read only the 404 as a missing build -> "cannot download" (red).
+s="$(scripts noarm-403)"
+pin "$s" 157.0.8103.38 "$zero" 153.0.8010.52 "$zero"
+web="$TMPROOT/noarm-403/web"
+listed "$web/googlechromelabs.github.io/chrome-for-testing" STABLE 158.0.8127.18
+listed "$web/googlechromelabs.github.io/chrome-for-testing" 153 153.0.8010.52
+release "$web/storage.googleapis.com/chrome-for-testing-public" 158.0.8127.18 linux64 mac-x64 mac-arm64
+run env PATH="$(offline "$web" 403):$PATH" "$s/chromium-pin-check.sh"
+expect "a release the bucket answers 403 for on one platform -> 2, naming it" 2 "" "has no linux-arm64 build"
+
+# A DOWNLOAD THAT FAILS FOR ANOTHER REASON IS NOT A MISSING BUILD: a zip whose transfer broke off (curl's 56, as a
+# connection reset gives it) is "cannot download", naming curl's status, and never "has no ... build", which is the
+# contingency a platform Chrome for Testing stopped publishing sets off. Mutation: report every failed download as a
+# missing build -> red.
+s="$(checkcase broken)"
+listed "$TMPROOT/broken/listing" STABLE 158.0.8127.18
+release "$TMPROOT/broken/downloads" 158.0.8127.18
+mkdir -p "$TMPROOT/broken/bin"
+cat >"$TMPROOT/broken/bin/curl" <<EOF
+#!/bin/sh
+for arg do url=\$arg; done
+case \$url in
+*.zip) echo "curl: (56) Recv failure: Connection reset by peer" >&2 && exit 56 ;;
+esac
+exec "$TMPROOT/tools/curl" "\$@"
+EOF
+chmod +x "$TMPROOT/broken/bin/curl"
+PATH="$TMPROOT/broken/bin:$PATH" pins broken "$s"
+expect "a zip whose download broke off -> 2, naming curl's status" 2 "" "(curl exit 56, HTTP none)"
+if grep -qF "has no" <<<"$err" || [ -n "$out" ]; then
+	bad "a zip whose download broke off is never called a missing build" "stdout: $out" "stderr: $err"
+else
+	ok "a zip whose download broke off is never called a missing build"
+fi
+
+s="$(scripts nolisting)"
+pin "$s" 157.0.8103.38 "$zero" 153.0.8010.52 "$zero"
+pins nolisting "$s"
+expect "a listing that does not load -> 2" 2 "" "cannot read the release listing"
+
+# A LISTING'S ANSWER IS A VERSION OR NOTHING. Anything else is refused before it is used: no download is asked for, the
+# report is empty, and the refusal says the answer's length and never its text — so a listing's words (a workflow
+# command, a path, a page) reach neither the report nor a URL. Mutation: take the
+# listing's answer without checking it -> it reaches a download and the refusal (red).
+for answer in "158.0.8127.18
+::error::injected" "../../158.0.8127.18" "<html>injected</html>" "158.0.8127" ""; do
+	s="$(checkcase notaversion)"
+	listed "$TMPROOT/notaversion/listing" STABLE "$answer"
+	: >"$TMPROOT/curl.log"
+	pins notaversion "$s"
+	why=()
+	[ "$status" = 2 ] || why+=("exit $status, want 2")
+	[ -z "$out" ] || why+=("it reported: $out")
+	grep -qF "that are not a Chrome for Testing version" <<<"$err" || why+=("it did not say the answer is no version")
+	if grep -qF "injected" <<<"$err$out" || grep -q 'downloads' "$TMPROOT/curl.log"; then
+		why+=("the answer reached the output or a download")
+	fi
+	if [ ${#why[@]} -eq 0 ]; then
+		ok "a listing answering $(printf '%s' "$answer" | wc -c | tr -d ' ') bytes that are no version -> 2, nothing of it used"
+	else
+		bad "a listing answering a value that is no version -> 2, nothing of it used" "${why[@]}" "$err"
+	fi
+	rm -rf "$TMPROOT/notaversion"
+done
+
+# A floor listing naming another major is not the floor's.
+s="$(checkcase othermajor)"
+listed "$TMPROOT/othermajor/listing" 153 154.0.8037.92
+pins othermajor "$s"
+expect "a floor listing naming another major -> 2" 2 "" "is not of the floor's major, 153"
+
+# A pin ahead of the listing means the listing is behind upstream, never that the pin should go back.
+s="$(checkcase ahead)"
+listed "$TMPROOT/ahead/listing" STABLE 156.0.8078.80
+pins ahead "$s"
+expect "a newest pin of a newer major than Stable -> 2" 2 "" "that listing is behind upstream"
+s="$(checkcase floorahead)"
+listed "$TMPROOT/floorahead/listing" 153 153.0.8010.30
+pins floorahead "$s"
+expect "a floor pin newer than its major's newest patch -> 2" 2 "" "that listing is behind upstream"
+
+# A hash that gives no digest is "cannot tell", never a pin's new line. Mutation: write whatever the hash printed ->
+# exit 1 with a digest that is no digest (red).
+for mode in fails garbles; do
+	s="$(checkcase "hash$mode")"
+	listed "$TMPROOT/hash$mode/listing" STABLE 158.0.8127.18
+	release "$TMPROOT/hash$mode/downloads" 158.0.8127.18
+	hashtool "$TMPROOT/hash$mode/tools" "$mode" '*.zip'
+	PATH="$TMPROOT/hash$mode/tools:$PATH" pins "hash$mode" "$s"
+	expect "a hash that $mode over a release's zip -> 2" 2 "" "cannot compute the SHA-256 of chrome-linux64.zip"
+done
+
+# The check finds its own directory whatever CDPATH holds. Mutation: drop the check's `unset CDPATH` -> it reads the
+# decoy's empty scripts/, finds no pin there, and answers 2 (red).
+s="$(checkcase cdpath-check)"
+mkdir -p "$TMPROOT/cdpath-check/decoy/scripts"
+run within "$TMPROOT/cdpath-check" env CDPATH="$TMPROOT/cdpath-check/decoy" \
+	CHROMIUM_PIN_LISTING="file://$TMPROOT/cdpath-check/listing" scripts/chromium-pin-check.sh
+expect "the check run by a relative path reads its own directory whatever CDPATH holds -> 0" 0 "every pin is the release"
+
+# THE PIN THIS TREE SHIPS is whole: its versions are four numbers and the floor pin's major has a listing name, so a
+# run against a listing naming exactly those answers 0 — never 2, which would mean the file is malformed.
+s="$(scripts shipped)"
+cp "$SCRIPT_DIR/chromium-pin.env" "$s/"
+shipped_newest="$(sed -n 's/^CHROMIUM_NEWEST_VERSION=//p' "$s/chromium-pin.env")"
+shipped_floor="$(sed -n 's/^CHROMIUM_FLOOR_VERSION=//p' "$s/chromium-pin.env")"
+listed "$TMPROOT/shipped/listing" STABLE "$shipped_newest"
+listed "$TMPROOT/shipped/listing" "${shipped_floor%%.*}" "$shipped_floor"
+pins shipped "$s"
+expect "the pin file this tree ships reads as current against a listing naming it" 0 "every pin is the release"
+
 # --- the suite reads nothing of the environment of the person running it ------------------------------------------
 
-# This suite started again under a developer's environment at its most hostile: every knob the recipe reads set to send
-# a case somewhere else (a cache of the developer's own, and downloads that do not exist), a curl configuration refusing
-# every protocol but https — every download a case makes with the real curl is file:// — in every place curl looks for
-# one: $CURL_HOME, $XDG_CONFIG_HOME, $HOME and $HOME/.config, with and without the dot. And it is run as `make
-# chromium-test` runs it, by a path relative to the tree, under a CDPATH whose one entry holds a scripts/ of its own,
-# empty. The nested run must pass, having run its cases, and leave every file of that environment exactly as it found
-# it.
+# This suite started again under a developer's environment at its most hostile: every knob the scripts read set to send
+# a case somewhere else (a cache of the developer's own, and a listing and downloads that do not exist), a curl
+# configuration refusing every protocol but https — every download a case makes with the real curl is file:// — in every
+# place curl looks for one: $CURL_HOME, $XDG_CONFIG_HOME, $HOME and $HOME/.config, with and without the dot. And it is
+# run as `make chromium-test` runs it, by a path relative to the tree, under a CDPATH whose one entry holds a scripts/
+# of its own, empty. The nested run must pass, having run its cases, and leave every file of that environment exactly as
+# it found it.
 #
 # Mutation: drop the CURL_HOME unset, or the XDG_CONFIG_HOME or the HOME pin -> the nested run's downloads are refused
 # (red). Mutation: drop the CHROMIUM_ scrub, or the CREWLET_CHROMIUM_CACHE or XDG_CACHE_HOME unset -> the nested run's
-# case that holds the recipe's defaults fetches from the developer's downloads or into the developer's cache (red).
-# Mutation: drop the CDPATH unset -> the nested run finds its own directory in the decoy, has no recipe to copy from it,
-# and fails at its first case (red).
+# cases that hold the scripts' defaults read the developer's listing and downloads, or fetch into the developer's cache
+# (red). Mutation: drop the CDPATH unset -> the nested run finds its own directory in the decoy, has no recipe to copy
+# from it, and fails at its first case (red).
 if [ -z "${CREWLET_PIN_TEST_NESTED-}" ]; then
 	dev="$TMPROOT/dev"
 	mkdir -p "$dev/curl/.config" "$dev/config" "$dev/home/.config" "$dev/cache" "$dev/xdg-cache" \
@@ -787,10 +1079,11 @@ if [ -z "${CREWLET_PIN_TEST_NESTED-}" ]; then
 	nested="$(within "$(dirname "$SCRIPT_DIR")" env CREWLET_PIN_TEST_NESTED=1 \
 		CURL_HOME="$dev/curl" XDG_CONFIG_HOME="$dev/config" HOME="$dev/home" CDPATH="$dev/cdpath" \
 		CREWLET_CHROMIUM_CACHE="$dev/cache" XDG_CACHE_HOME="$dev/xdg-cache" \
-		CHROMIUM_PIN_DOWNLOADS="file://$dev/no-downloads" \
+		CHROMIUM_PIN_DOWNLOADS="file://$dev/no-downloads" CHROMIUM_PIN_LISTING="file://$dev/no-listing" \
 		"$(basename "$SCRIPT_DIR")/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && status=0 || status=$?
 	after="$(devsnapshot)"
 	if [ "$status" -eq 0 ] && grep -q '^ok   a fetched build is published whole, its download removed$' <<<"$nested" &&
+		grep -q '^ok   every pin the release its rule names -> 0$' <<<"$nested" &&
 		grep -q ' 0 failed$' <<<"$nested" && [ "$before" = "$after" ]; then
 		ok "under a developer's environment the suite passes and touches nothing of it"
 	else

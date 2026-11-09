@@ -171,7 +171,9 @@ scripts/              # The two vendor dev-loop bootstraps, the DCO gate
                       #   against git-signing-key.asc) and their suite git-pin_test.sh;
                       #   and the Chromiums the suite drives: chromium-pin.env (the
                       #   Chrome for Testing pins), chromium.sh (the one recipe that
-                      #   fetches them) and its suite chromium-pin_test.sh
+                      #   fetches them), chromium-pin-check.sh (the weekly check
+                      #   against Chrome for Testing) and their suite
+                      #   chromium-pin_test.sh
 ```
 
 **`internal/README.md` maps every package** — what it is for, and the decisions it holds that a reader would be tempted to "fix" back to the obvious shape. Before you change a package, read its row there and its package doc (`go doc ./internal/<pkg>`), which is the authority. Change the code, the comment and the row together, and give a new package a row.
@@ -184,7 +186,7 @@ Before committing, ALWAYS run **`make check`** and fix what it reports. It is ev
 - `go mod tidy -diff` (`make tidy` applies the patch)
 - `scripts/check-signoff.sh` and its suite `scripts/check-signoff_test.sh`
 - `scripts/git-pin_test.sh` (`make git-test`) — the git recipe's and the weekly pin check's own suite; it reads no network, builds no git and needs GnuPG
-- `scripts/chromium-pin_test.sh` (`make chromium-test`) — the Chromium recipe's own suite; it reads no network, fetches no Chromium and needs `zip` and `unzip`
+- `scripts/chromium-pin_test.sh` (`make chromium-test`) — the Chromium recipe's and the weekly pin check's own suite; it reads no network, fetches no Chromium and needs `zip` and `unzip`
 - `go vet ./...` — the only vet: both test targets run `go test -vet=off`
 - `golangci-lint run` — use a prebuilt release; one built with a Go older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target

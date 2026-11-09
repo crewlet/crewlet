@@ -168,7 +168,7 @@ go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
 scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
-scripts/chromium-pin_test.sh   # the Chromium recipe's own suite (chromium-test)
+scripts/chromium-pin_test.sh   # the Chromium recipe's and the pin check's own suite (chromium-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...

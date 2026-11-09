@@ -616,16 +616,19 @@ signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/git-pin_test.sh
 
-# The OWN SUITE of the Chromium recipe (scripts/chromium.sh), for git-test's
-# reasons: shell no Go test reaches, failing silently where it matters — a
-# recipe that unpacks over a Chromium another checkout's suite is running, or
-# prints something on stdout beside the path it is asked for. It runs the real
-# script against a stand-in Chrome for Testing tree under file://, each zip
-# holding a stand-in `chrome`, so it fetches no Chromium and reads no network,
-# then runs itself once more, by a relative path, under a developer's most
-# hostile environment: about four seconds. It needs curl, zip, unzip and
-# sha256sum (or shasum).
-chromium-test: ## run the Chromium recipe's own suite (ci: build + vet)
+# The OWN SUITE of the Chromium recipe (scripts/chromium.sh) and of the weekly
+# pin check (scripts/chromium-pin-check.sh), for git-test's reasons: shell no
+# Go test reaches, each failing silently where it matters — a recipe that
+# unpacks over a Chromium another checkout's suite is running, or prints
+# something on stdout beside the path it is asked for; a check that calls
+# every pin current because it read nothing, or carries a listing's words into
+# the report it prints. It runs the real scripts against a stand-in Chrome for
+# Testing tree and release listing under file://, each zip holding a stand-in
+# `chrome`, so it fetches no Chromium and reads no network, then runs itself
+# once more, by a relative path, under a developer's most hostile environment:
+# about ten seconds, half of them that second run. It needs curl, zip, unzip
+# and sha256sum (or shasum).
+chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/chromium-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
