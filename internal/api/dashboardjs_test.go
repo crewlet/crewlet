@@ -2172,8 +2172,11 @@ const (
 	// next KiB: 5693 KiB. A conversation the engine holds, as a row in Needs
 	// you and a note on its item, on top of it, took it to 5694.2 KiB
 	// (5,830,844 bytes, +1,272, all script). The measured size's next KiB:
-	// 5695 KiB.
-	treeBudget = 5<<20 + 575<<10
+	// 5695 KiB. An agent's access request (its grant drawn in the engine's
+	// words, previewed and applied before the answer), merged on top of it,
+	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
+	// measured size's next KiB: 5697 KiB.
+	treeBudget = 5<<20 + 577<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
