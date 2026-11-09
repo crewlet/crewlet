@@ -940,9 +940,19 @@ func panickedEnding(panicked *turn.PanicError) executorkeep.Ending {
 func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	state, ok, err := execstate.Decode(req.Run.ExecuteState)
 	if err != nil {
-		// A state this build cannot read is a ROUTING failure, not a run
-		// failure: a peer on the version that wrote it can resume this, so
-		// the completion must go back rather than be settled here.
+		// A RETIRED STATE NO LIVE NODE READS IS SETTLED: no build ever will.
+		unresumable, judgeErr := r.engine.retiredState(ctx, err)
+		if judgeErr != nil {
+			log.WarnContext(ctx, "sandbox_parked_run_unjudged", "turn_id", req.Run.TurnID,
+				"error", judgeErr.Error(), "detail", "whether any build can resume this run "+
+					"could not be read, so the resume goes back to be tried again")
+		}
+		if unresumable != nil {
+			return unresumable
+		}
+		// Any other state this build cannot read is a ROUTING failure, not a
+		// run failure: a peer on the version that wrote it can resume this,
+		// so the completion must go back rather than be settled here.
 		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
@@ -2841,7 +2851,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
-		Recovered: e.reopenAgentRun,
+		Recovered:   e.reopenAgentRun,
+		Unresumable: e.parkedRunUnresumable,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT IS STILL WAITING ON
 		// THE RUN'S RECORD is recorded expired by the ending, before the
 		// record goes — see runsteer.go.
