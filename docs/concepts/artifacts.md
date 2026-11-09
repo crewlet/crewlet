@@ -285,15 +285,18 @@ What an **agent** may do is narrower than its shares, on purpose:
   for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for))
   — except on an artifact the agent owns, which anybody who uses the app and
   can message the agent may ask it to change. The somebody is whoever woke the
-  turn: a colleague's ask, or the first speaker of the message, comment or
-  remark it answers, on a vendor's surface or on Worklet, Doclet and Chatlet
-  alike. A turn woken by somebody the company does not know authors nothing,
-  and changes only what no app gates of the agent's own, such as its data. The ceiling holds the turn
-  somebody woke and no turn after it: a colleague the agent asks reads for the
-  agent, the turn the colleague's answer wakes is the agent's own, and what the
-  agent already knows — its memory, what it read in a turn nobody woke — is no
-  read at all, so an artifact refused to somebody in one turn can still reach
-  them through what the agent tells them later
+  turn: the first speaker of the message, comment or remark it answers, on a
+  vendor's surface or on Worklet, Doclet and Chatlet alike, or, where that
+  speaker is a colleague agent that asked in a turn worked for somebody, that
+  somebody, carried from the colleague's own turn. A turn woken by somebody
+  the company does not know authors nothing, and changes only what no app
+  gates of the agent's own, such as its data. The ceiling holds the turn
+  somebody woke and every turn its asks hand its work on to: a colleague the
+  agent asks and the turn the colleague's answer wakes both read for the same
+  somebody, while a colleague the agent's writes wake reads for the agent.
+  What the agent already knows (its memory, what it read in a turn nobody
+  woke) is no read at all, so an artifact refused to somebody in one turn can
+  still reach them through what the agent tells them later
   ([Reads made for somebody else](gitlet.md#reads-made-for-somebody-else)
   says the same of a repository).
 

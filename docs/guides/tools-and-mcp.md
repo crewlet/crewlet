@@ -226,9 +226,10 @@ for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-perso
 The exception is an artifact the agent owns, which anybody who uses the app
 and can message the agent may ask it to edit, as with all other agent work;
 reading and sharing are never exempt. A turn woken by somebody the company
-does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's: a
-colleague it asks reads for the agent, the turn the answer wakes is the agent's
-own, and what the agent already knows is no read
+does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's, and it
+follows the turn's asks: a colleague it asks and the turn the answer wakes read
+for the same somebody, while a colleague its writes wake reads for the agent,
+and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own

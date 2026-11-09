@@ -633,8 +633,9 @@ for them.
 the identity directory once per tool call, never once per turn, so an
 administrator who takes an app away stops the turn's very next call. A node
 that cannot read the directory refuses the call and says to try again; it never
-guesses. The bound is the turn's own: a colleague the agent asks answers in a
-turn the agent woke, and what the agent already knows it may still say.
+guesses. The bound is the turn's and every turn its asks hand on to: a
+colleague the agent asks works for the same person; what the agent already
+knows it may still say.
 
 ### Nobody confers what they do not hold
 
