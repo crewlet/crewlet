@@ -790,6 +790,12 @@ func taskReads() map[string]indexedRead {
 			claimsPageStatement, person, 21),
 		"the checklist items counted": seek("tracker_checklist_items_assignee_idx",
 			cappedCountStatement(claimsFrom, claimsWhere), person, TotalHintCeiling+1),
+		// A HELD ITEM'S WALK, one step at a time: what waits on an item, by
+		// the dependency key's blocker prefix.
+		"what waits on a held item": func() indexedRead {
+			statement, open := holdingWaitersStatement()
+			return seek(blockers, statement, append([]any{task}, open...)...)
+		}(),
 	} {
 		reads[name] = read
 	}
@@ -802,6 +808,7 @@ func taskReads() map[string]indexedRead {
 		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
 		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
 		"unblocked":     {unblockedBlock(person), queue},
+		"holding up":    {holdingBlock(person), queue},
 		// THE WORK PICKUP'S TWO READY BLOCKS, each a seek of the queue
 		// by the seat and the status group.
 		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
@@ -1115,6 +1122,8 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			len(marked), err)
 	}
 	reads := map[string]indexedRead{
+		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
+		"an item's newest assignment": seek(subject, holdingSinceStatement, task),
 		"a task's own history":          seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
 		"a purged task's rows":          seek(subject, purgedHistoryStatement, purged),
 		"one change's routing":          seek(historyKey, routingRecordStatement, record),

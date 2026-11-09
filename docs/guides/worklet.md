@@ -1170,26 +1170,37 @@ dropped. Silently ignoring a due date is the worst of the three outcomes: the
 write succeeds, the answer says `applied`, and the task simply has no due date
 — which a model reads as having set one.
 
-`my_work` is the call a turn opens with, and it answers **seven lists** rather
+`my_work` is the call a turn opens with, and it answers **eight lists** rather
 than one: the seat's priorities in the order somebody put them, the work it
 holds, the questions waiting on its answer (each with the literal call that
 answers it), the checklist items it claimed on **other people's** tasks, the
-work it was brought onto without owning, what moved on what it follows, and
-what just became workable. Each is a different claim on the reader's
-attention, and a seat that saw only its assignments would miss six of them.
-One call rather than seven because assembled separately a seat could see a
+work it was brought onto without owning, what moved on what it follows, what
+just became workable, and **what it is holding up**: the open work it holds
+that other open work waits on, the most waited on first. Each is a different
+claim on the reader's attention, and a seat that saw only its assignments would
+miss seven of them. One call rather than eight because assembled separately a seat could see a
 task in `assigned` that had already moved out of it by the time `priorities`
 was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
 
-Each list is a **page of at most 20**, and beside the seven lists the answer
+Each list is a **page of at most 20**, and beside the eight lists the answer
 carries `totals` — one `{total, capped}` per list, counted by the same
 predicate in the same read. The page is twenty; the claim is not, and a count
 taken from a list's length says 20 for the seat holding two hundred. `capped`
 means the count stopped at 10,000, so the number is a floor. `priorities` is
 cut **after** finished and removed entries are dropped, so a list whose head is
 done work still shows its first twenty open entries in the order they were put.
+
+A `holding_up` row is the task plus `blocks` (how many open items wait on it,
+directly or through another waiting item, each counted once, up to 512 with
+`blocks_capped` past it), `holders` (who holds that waiting work, the reader
+left out, at most eight) and `held_since` (when it was last assigned). It is
+the one list about who waits on the reader rather than what waits for them, and
+it is the same for a person, whose dashboard shows it under My work: a person
+holding a review or a decision as a work item can stall a team that nothing
+else tells them about. What to do with a row is the tracker's own actions, taken
+by the reader.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like

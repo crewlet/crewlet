@@ -392,8 +392,8 @@ func TestEveryMyWorkBlockHasATotal(t *testing.T) {
 	for name := range totals {
 		t.Errorf("MyWorkTotals carries %q, which is no block of MyWork", name)
 	}
-	if blocks != 7 {
-		t.Errorf("MyWork has %d blocks; the package doc names seven", blocks)
+	if blocks != 8 {
+		t.Errorf("MyWork has %d blocks; the package doc names eight", blocks)
 	}
 }
 

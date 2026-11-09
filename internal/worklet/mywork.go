@@ -15,20 +15,20 @@ import (
 
 // "Everything about me" — the one call a seat makes at the start of a turn.
 //
-// # ONE CALL, SEVEN LISTS, ONE TRANSACTION
+// # ONE CALL, EIGHT LISTS, ONE TRANSACTION
 //
-// A turn opens by asking what it is expected to do. Assembled from seven
-// separate reads that would be seven round trips, seven coverage probes and
-// seven different instants — so a seat could see a task in `assigned` that had
+// A turn opens by asking what it is expected to do. Assembled from eight
+// separate reads that would be eight round trips, eight coverage probes and
+// eight different instants — so a seat could see a task in `assigned` that had
 // already moved out of it by the time `priorities` was read, and spend its
 // turn on work somebody else had taken.
 //
 // It is its OWN reader method rather than a preset of the task query for the
 // reason §6 gives: `list_tasks` always answers one shape, and a preset that
-// returned seven lists would make every caller of that grammar handle a second
+// returned eight lists would make every caller of that grammar handle a second
 // one.
 //
-// # Why these seven, and not a longer list
+// # Why these eight, and not a longer list
 //
 // Each is a different CLAIM on the reader's attention, and a seat that saw
 // only its assignments would miss all but the first:
@@ -45,11 +45,15 @@ import (
 //   - `watching_recent` — what moved on the tasks it follows.
 //   - `unblocked_recent` — what became workable, which is the one block that
 //     is about a change rather than a state.
+//   - `holding_up` — the open work this person holds that somebody else's open
+//     work waits on, the most waited on first, with whom it holds up
+//     ([HoldingRow]). Every other block is about what waits on this person;
+//     this one is about who waits on them.
 //
 // # Each is bounded, and the bound is the same
 //
 // Twenty rows each. A turn-start block is read by a model beside its prompt,
-// and seven unbounded lists is an answer that crowds out the work.
+// and eight unbounded lists is an answer that crowds out the work.
 //
 // # And each is COUNTED in full beside its page
 //
@@ -72,7 +76,7 @@ const MyWorkAskBytes = 16 << 10
 
 // MyWorkRows is how many rows each block carries.
 //
-// TWENTY, and the same for all seven so no block can crowd out another: the
+// TWENTY, and the same for all eight so no block can crowd out another: the
 // whole answer is read as one prompt block, and a caller with two hundred
 // assignments would otherwise push its asks off the end of the context. A seat
 // with more than twenty of anything here has a queue problem the list cannot
@@ -162,6 +166,7 @@ type MyWorkTotals struct {
 	Collaborating   ClaimTotal `json:"collaborating"`
 	WatchingRecent  ClaimTotal `json:"watching_recent"`
 	UnblockedRecent ClaimTotal `json:"unblocked_recent"`
+	HoldingUp       ClaimTotal `json:"holding_up"`
 }
 
 // MyWork is the compound answer.
@@ -179,6 +184,7 @@ type MyWork struct {
 	Collaborating   []TaskRow      `json:"collaborating"`
 	WatchingRecent  []TaskRow      `json:"watching_recent"`
 	UnblockedRecent []TaskRow      `json:"unblocked_recent"`
+	HoldingUp       []HoldingRow   `json:"holding_up"`
 
 	// Totals is every block counted in full — see [MyWorkTotals]. A block's
 	// slice is a PAGE of at most [MyWorkRows]; its total is the claim.
@@ -312,6 +318,10 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 		unblockedBlock(handle), dayStart); err != nil {
 		return err
 	}
+	if out.HoldingUp, out.Totals.HoldingUp, err = readHolding(ctx, tx, handle,
+		dayStart); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -343,7 +353,7 @@ func assignedBlock(handle string) blockQuery {
 }
 
 // COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already in
-// `assigned` listed again here is one row spending two of the seven blocks —
+// `assigned` listed again here is one row spending two of the eight blocks —
 // and the distinction the block exists for is precisely "brought on without
 // owning".
 func collaboratingBlock(handle string) blockQuery {
