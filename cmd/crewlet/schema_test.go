@@ -54,11 +54,22 @@ func TestTheCheckedInSchemasAreWhatTheGeneratorEmits(t *testing.T) {
 // the generator fails here, before a relay could refuse its reports as unknown.
 func TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits(t *testing.T) {
 	t.Parallel()
+	checkCatalogue(t, issueReportCatalogue)
+}
+
+func TestTheCheckedInInsightsCatalogueIsWhatTheGeneratorEmits(t *testing.T) {
+	t.Parallel()
+	checkCatalogue(t, insightsCatalogue)
+}
+
+// checkCatalogue holds the checked-in export of name to what the generator emits.
+func checkCatalogue(t *testing.T, name string) {
+	t.Helper()
 	var out bytes.Buffer
-	if err := emitSchema([]string{issueReportCatalogue}, &out, io.Discard); err != nil {
+	if err := emitSchema([]string{name}, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(sourcetree.Root(t), "schema", issueReportCatalogue+".json")
+	path := filepath.Join(sourcetree.Root(t), "schema", name+".json")
 	checked, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
