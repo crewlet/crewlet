@@ -33,13 +33,16 @@ import (
 //     ([prompts.BuildContinuedRound]), the answer to its question, or what cut
 //     it off;
 //   - that it may end mid-call, where its harness was cut off when it was saved;
-//   - every call its run made through the seat's tools that the session had not
-//     been answered when it was saved — every call the round's log took after
-//     the read its save point is ([SessionBasis.Through]), so after the point it
-//     was saved at or in flight then, whatever the log dropped below it — with
-//     the call's outcome, held to the prior-work ledger's budgets; and how many
-//     more the log took after it and dropped from its middle, which it keeps
-//     only as a tally, with that tally ([prompts.CalledAfter]);
+//   - every call its run made through the seat's tools that the session may not
+//     have been answered when it was saved — every call the round's log took
+//     after the read its save point is ([SessionBasis.Through]), so after the
+//     point it was saved at or in flight then, whatever the log dropped below
+//     it — with the call's outcome, held to the prior-work ledger's budgets;
+//     and how many more the log took after it and dropped from its middle,
+//     which it keeps only as a tally, with that tally ([prompts.CalledAfter]) —
+//     of a session cut off, whose save point is the newest its launch was known
+//     to hold rather than where it ends, as calls it may already show, each
+//     shown both there and in the session one call;
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
 //     is never the session's, or taken at the last moment before a harness that
@@ -58,12 +61,15 @@ import (
 // those the log took through the point its capture was saved at, by the same
 // test the calls after it are told by ([ownCalls]), where the launch restores
 // it — because the continued model has those bodies in front of it; none for a
-// run that starts a session of its own. Armed once the launch has decided,
-// before the run starts, and put right where the run's box finds as it starts
-// that it cannot take the session up after all and starts one of its own: its
-// box says so before the run's first call ([Runner.sessionStarted]), and its
-// job's record keeps what it said for every later rebuild of the guard
-// ([Resume.Continued]).
+// run that starts a session of its own. A session cut off is saved at the
+// newest point its launch was known to hold, so a skill it loaded after that
+// point is not armed, and is loaded again before a call it covers: the safe
+// direction, since its body may never have reached the session. Armed once
+// the launch has decided, before the run starts, and put right where the
+// run's box finds as it starts that it cannot take the session up after all
+// and starts one of its own: its box says so before the run's first call
+// ([Runner.sessionStarted]), and its job's record keeps what it said for every
+// later rebuild of the guard ([Resume.Continued]).
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left: its first
 // launch the head its dispatch read, and a relaunch of a turn that has kept no
@@ -118,7 +124,12 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	if basis.Interrupted {
 		after = append(after, prompts.InterruptedSession)
 	}
-	after = append(after, prompts.CalledAfter(r.calledAfter(ctx, round, basis.Through, surface, b)))
+	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
+	// newest its launch is known to hold rather than where it ends
+	// (internal/sandbox's savepoint.go), so the calls after it may be in it.
+	called := r.calledAfter(ctx, round, basis.Through, surface, b)
+	called.Interrupted = basis.Interrupted
+	after = append(after, prompts.CalledAfter(called))
 	after = append(after, r.unreadSince(basis.NoteCursor)...)
 	after = append(after, renderedNotes(fresh)...)
 	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
@@ -206,11 +217,11 @@ func (r *Runner) checkoutName() string {
 }
 
 // calledAfter is what a session saved at through — its save point, how many of
-// round's calls its run's log had taken when the capture read it
-// ([SessionBasis.Through]) — was not answered of round: every call the log
-// still lists that it took after that read ([afterSave]), in the order the
-// bridge admitted them, and how many more it took after it and dropped from
-// its middle, with the round's tally of every call it dropped
+// round's calls its run's log had taken at the read the capture was placed by
+// ([SessionBasis.Through]) — is not known to have been answered of round:
+// every call the log still lists that it took after that read ([afterSave]),
+// in the order the bridge admitted them, and how many more it took after it
+// and dropped from its middle, with the round's tally of every call it dropped
 // ([droppedAfterSave]).
 //
 // THE LIST AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS

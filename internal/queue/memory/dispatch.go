@@ -635,11 +635,12 @@ func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int
 			delete(sub.redeliveries, ev.ID)
 			// KEPT AS ITS WIRE BYTES, beside every other dead letter, as
 			// the broker this twin stands for republishes the message's
-			// own data to the dead-letter stream: so DeadLettersOn lists
-			// it and DropDeadLetter removes it exactly as there. The
+			// own data to the dead-letter stream with no header of its
+			// own: so DeadLettersOn lists it, DeadLetterFrame reads its
+			// bytes and DropDeadLetter removes it exactly as there. The
 			// event was decoded from JSON, so it encodes again.
 			if wire, err := json.Marshal(ev); err == nil {
-				b.keepLocked(topics.DeadLetter(sub.topic, sub.group), wire)
+				b.keepLocked(topics.DeadLetter(sub.topic, sub.group), nil, wire)
 			}
 			dead = append(dead, deadLetter{ev: ev, redeliveries: count - 1})
 			continue

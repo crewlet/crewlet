@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,10 +59,12 @@ type node struct {
 
 // fleet is what the nodes of one case share: the dead-letter store — the
 // queue's own, the memory twin the conformance suite certifies beside the
-// broker the engine runs — and the claims.
+// broker the engine runs — the claims, and how many frames the store has
+// been asked for.
 type fleet struct {
 	letters *memory.Queue
 	claims  *claims
+	frames  *atomic.Int64
 }
 
 func newFleet(t *testing.T) fleet {
@@ -71,7 +74,19 @@ func newFleet(t *testing.T) fleet {
 		t.Fatalf("start the dead-letter store: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	return fleet{letters: q, claims: newClaims()}
+	return fleet{letters: q, claims: newClaims(), frames: new(atomic.Int64)}
+}
+
+// framesRead is the queue's dead-letter verbs, counting every frame read: the
+// one read that moves an entry's body, which only a replay makes.
+type framesRead struct {
+	*memory.Queue
+	frames *atomic.Int64
+}
+
+func (f framesRead) DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error) {
+	f.frames.Add(1)
+	return f.Queue.DeadLetterFrame(ctx, subject, seq)
 }
 
 // join builds one node of f, keeping its dead letters in f's store unless
@@ -89,7 +104,7 @@ func (f fleet) join(t *testing.T, keeps bool) *node {
 		Metrics: rec, Now: n.clock.now,
 	}
 	if keeps {
-		opts.DeadLetters = f.letters
+		opts.DeadLetters = framesRead{Queue: f.letters, frames: f.frames}
 	}
 	if n.feed, err = changefeed.New(opts); err != nil {
 		t.Fatalf("new feed: %v", err)
@@ -289,20 +304,22 @@ func TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("%d dead letters kept, want 1", len(entries))
 	}
-	letter, err := changefeed.DecodeDeadLetter(entries[0].Body)
+	letter, err := changefeed.DecodeDeadLetter(entries[0].Header)
 	if err != nil {
-		t.Fatalf("the entry does not read back: %v", err)
+		t.Fatalf("the entry's header does not read back: %v", err)
 	}
 	want := changefeed.DeadLetter{V: changefeed.DeadLetterVersion, Source: "work", Group: testGroup,
 		Stream: rec.Stream, Seq: rec.Position, Gen: rec.Gen, Key: rec.Key, OpID: rec.ID,
 		Reason: changefeed.DeferUnknownKey, StoredAt: rec.StoredAt, Delivered: 121, DeadLetteredAt: now}
 	got := letter
-	got.Frame, got.Detail = nil, ""
+	got.Detail = ""
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("the entry is %+v, want %+v", got, want)
 	}
-	if !bytes.Equal(letter.Frame, aFrame) {
-		t.Errorf("the entry keeps the frame %q, want %q byte for byte: a replay re-reads it", letter.Frame, aFrame)
+	frame, held, err := n.letters.DeadLetterFrame(t.Context(), subject, entries[0].Seq)
+	if err != nil || !held || !bytes.Equal(frame, aFrame) {
+		t.Errorf("the entry keeps the frame %q (held %v, %v), want %q byte for byte: a replay "+
+			"re-reads it", frame, held, err, aFrame)
 	}
 	if !strings.Contains(letter.Detail, "does not hold") {
 		t.Errorf("the entry's detail %q does not say what the node met", letter.Detail)
@@ -402,7 +419,7 @@ func TestARecordNoBuildHereCanTranslateBacksOffAndIsDeadLetteredPastTheAge(t *te
 		t.Fatalf("an untranslatable record past the hour was acked %d time(s) (kept first: %v) and "+
 			"handed back %v, want it kept and then let go", acks, keptAtAck, naks)
 	}
-	letter, err := changefeed.DecodeDeadLetter(n.kept(t)[0].Body)
+	letter, err := changefeed.DecodeDeadLetter(n.kept(t)[0].Header)
 	if err != nil || letter.Reason != changefeed.DeferUntranslatable {
 		t.Fatalf("the entry reads %+v (%v), want it kept as untranslatable", letter, err)
 	}
@@ -426,57 +443,99 @@ func TestARecordItsEstateDatesNothingForIsNeverDeadLettered(t *testing.T) {
 	}
 }
 
-// A DEAD LETTER KEEPS ITS FRAME RAW BESIDE A BOUNDED HEADER, so a record at its
-// log's ceiling still fits the transport.
+// A DEAD LETTER'S HEADER IS ONE BOUNDED LINE OF ASCII, so a record at its
+// log's ceiling is still kept, frame and all.
 //
 // The tracker's and the code log's records may be as large as the transport
-// carries; carried as base64 inside JSON a frame grows by a third, and such a
-// record's dead letter could never be kept. Raw after the header it costs the
-// header alone, and the header is bounded however long the error a node met.
-// An entry a newer build kept, and bytes that are no entry, are refused.
+// carries, and the entry's body is the record's frame whole, so what the
+// header may cost is what the transport leaves beside a frame at the ceiling
+// once the queue has framed the keep. Its fields are bounded however long the
+// error a node met, every byte past the ASCII escaped — the header crosses the
+// wire as a header of the message, one line of ASCII — and it reads back as
+// what was kept. A header a newer build kept, one with no version, none at all
+// and bytes that are no header are refused.
 //
-// Mutation: put the frame in the JSON, and the largest record's entry is past
-// the transport; stop cutting the detail, and the header is.
-func TestADeadLetterKeepsItsFrameRawBesideABoundedHeader(t *testing.T) {
+// Mutation: stop cutting the detail, and the header outgrows the room beside
+// the frame; leave a rune past the ASCII unescaped, and the queue refuses the
+// header; keep the frame inside the header, and nothing fits.
+func TestADeadLettersHeaderIsOneBoundedLineOfASCII(t *testing.T) {
 	t.Parallel()
 	// THE LARGEST FRAME A LOG ADMITS: its largest record and the seal, which
 	// statelog's appendOverhead bounds under three hundred bytes.
 	frame := bytes.Repeat([]byte{0xff}, statelog.MaxTransportRecordBytes+300)
-	frame[17] = '\n'
 	letter := changefeed.DeadLetter{
-		Source: "work", Group: worklet.FeedGroup, Stream: "CREWLET_TRACKER_LOG", Seq: 1 << 40,
-		Gen: 7, Key: "crewlet.tracker.log.task." + strings.Repeat("k", 200), OpID: "op-01JABCDEF",
-		Reason: changefeed.DeferUntranslatable, Detail: strings.Repeat("\x01\"<>", 4096),
+		Source: "work", Group: worklet.FeedGroup, Stream: "CREWLET_TRACKER_LOG", Seq: math.MaxUint64,
+		Gen: math.MaxUint64, Key: "crewlet.tracker.log.task." + strings.Repeat("k", 512),
+		OpID: "op-01JABCDEF", Reason: changefeed.DeferUntranslatable,
+		Detail:   strings.Repeat("\x01\x7f\"<>é\xff", 4096),
 		StoredAt: time.Unix(1_700_000_000, 0).UTC(), Delivered: math.MaxUint64,
-		DeadLetteredAt: time.Unix(1_700_003_600, 0).UTC(), Frame: frame,
+		DeadLetteredAt: time.Unix(1_700_003_600, 0).UTC(),
 	}
-	body, err := changefeed.EncodeDeadLetter(letter)
+	header, err := changefeed.EncodeDeadLetter(letter)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	// THE BROKER'S OWN HEADER for the expected stream rides on the keep
-	// too: a few dozen bytes, granted a hundred here.
-	if len(body)+100 > queue.MaxPayloadBytes {
-		t.Fatalf("the entry of a record at its log's ceiling is %d bytes, past the transport's %d: "+
-			"it could never be kept", len(body), queue.MaxPayloadBytes)
+	if err := queue.LetterHeader(header); err != nil {
+		t.Fatalf("the header is no line the queue keeps: %v", err)
 	}
-	back, err := changefeed.DecodeDeadLetter(body)
+	if room := queue.MaxPayloadBytes - queue.LetterFraming - len(frame); len(header) > room {
+		t.Fatalf("the header of a record at its log's ceiling is %d bytes, past the %d the "+
+			"transport leaves beside its frame: it could never be kept", len(header), room)
+	}
+	// AND THE QUEUE KEEPS IT, through the twin that refuses exactly what
+	// the broker refuses.
+	if err := newFleet(t).letters.KeepDeadLetter(t.Context(), subject, header, frame); err != nil {
+		t.Fatalf("a record at its log's ceiling was not kept: %v", err)
+	}
+	back, err := changefeed.DecodeDeadLetter(header)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !bytes.Equal(back.Frame, frame) || back.Seq != letter.Seq || back.Key != letter.Key ||
-		back.Delivered != letter.Delivered || !back.StoredAt.Equal(letter.StoredAt) {
-		t.Errorf("the entry did not read back as it was kept")
+	if back.Seq != letter.Seq || back.Key != letter.Key || back.Delivered != letter.Delivered ||
+		!back.StoredAt.Equal(letter.StoredAt) || back.Detail == "" {
+		t.Errorf("the header did not read back as it was kept: %+v", back)
 	}
 
 	for name, bad := range map[string][]byte{
-		"a newer build's entry":    []byte(`{"v":2,"source":"work"}` + "\nframe"),
-		"an entry with no version": []byte(`{"source":"work"}` + "\nframe"),
-		"bytes with no header":     []byte("frame"),
+		"a newer build's header":     []byte(`{"v":2,"source":"work"}`),
+		"a header with no version":   []byte(`{"source":"work"}`),
+		"no header at all":           nil,
+		"bytes that are no header":   []byte("frame"),
+		"an old header line, framed": []byte(`{"v":1,"source":"work"}` + "\nframe"),
 	} {
 		if _, err := changefeed.DecodeDeadLetter(bad); err == nil {
 			t.Errorf("%s was read as a dead letter", name)
 		}
+	}
+}
+
+// A RUNE ABOVE U+FFFF IS SPELLED AS ITS SURROGATE PAIR, and read back as itself.
+//
+// The header is ASCII, so every rune past it is a JSON escape — and a `\u`
+// escape names four hex digits, so a rune above U+FFFF has only one spelling:
+// its UTF-16 surrogate pair, two escapes. Spelled as its own code point it
+// would be read back as another rune and a stray digit.
+//
+// Mutation: escape the rune as `\u%04x` of itself, and the detail reads back
+// as U+1F60 and a 0.
+func TestARuneAboveTheBMPIsSpelledAsItsSurrogatePair(t *testing.T) {
+	t.Parallel()
+	detail := "met \U0001F600 and é"
+	header, err := changefeed.EncodeDeadLetter(changefeed.DeadLetter{Source: "work", Group: testGroup,
+		Stream: "CREWLET_TRACKER_LOG", Seq: 7, Key: "item/u1", Reason: changefeed.DeferUnknownKey,
+		Detail: detail})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !bytes.Contains(header, []byte(`\ud83d\ude00`)) {
+		t.Errorf("the header %s does not spell U+1F600 as its surrogate pair", header)
+	}
+	back, err := changefeed.DecodeDeadLetter(header)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if back.Detail != detail {
+		t.Errorf("the detail reads back as %q, want %q", back.Detail, detail)
 	}
 }
 
@@ -536,12 +595,13 @@ func keptRecord(clk *clock) changefeed.Record {
 // entry's wake through the claim a delivery passes and drops the entry; the
 // second is the same record, whose wake this replay has just settled, so it is
 // dropped with nothing published again — never left as though the claim this
-// replay took were a peer's. The wake carries the record's own place, as a
-// delivered one does.
+// replay took were a peer's — and its frame never read. The wake carries the
+// record's own place, as a delivered one does.
 //
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,
-// and the store keeps it.
+// and the store keeps it; read a frame before the header says the record is
+// settled, and two are read.
 func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -558,6 +618,11 @@ func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	}
 	if got := newer.pub.count(); got != 1 {
 		t.Fatalf("the replay published %d wake(s) for one record kept twice, want one", got)
+	}
+	// ONE FRAME READ, the entry it derived the wake from: the second entry
+	// of the same record is settled by its header alone.
+	if got := f.frames.Load(); got != 1 {
+		t.Errorf("the replay read %d frames, want the one it derived the wake from", got)
 	}
 	w, _ := events.DataAs[*types.RawWebhook](newer.pub.first(t))
 	at, err := statelog.ParsePosition(w.Trigger)
@@ -691,7 +756,7 @@ func TestAnEntryANewerBuildKeptIsLeft(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	if err := f.letters.KeepDeadLetter(t.Context(), subject,
-		[]byte(`{"v":2,"source":"work","seq":7}`+"\nframe")); err != nil {
+		[]byte(`{"v":2,"source":"work","seq":7}`), []byte("frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	n := f.join(t, true)

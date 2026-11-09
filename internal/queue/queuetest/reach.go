@@ -200,7 +200,7 @@ func (s *suite) runReachability(t *testing.T) {
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and
 // under ctx, and reports what each answered. The complement of the attachment
-// verbs runReachability sends itself, and together with them the nineteen
+// verbs runReachability sends itself, and together with them the twenty-one
 // lifecycleVerbs sends.
 func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
 	topic := ns + ".broker"
@@ -248,8 +248,12 @@ func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResul
 			}
 			return err
 		}},
-		{"KeepDeadLetter", func() error { return q.KeepDeadLetter(ctx, letters, []byte("reach")) }},
+		{"KeepDeadLetter", func() error { return q.KeepDeadLetter(ctx, letters, []byte("reach"), []byte("reach")) }},
 		{"DeadLettersOn", func() error { return keptErr(q.DeadLettersOn(ctx, letters)) }},
+		{"DeadLetterFrame", func() error { return frameErr(q.DeadLetterFrame(ctx, letters, absentLetter)) }},
+		{"DeadLetterMarks", func() error {
+			return marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))
+		}},
 		{"DropDeadLetter", func() error { return q.DropDeadLetter(ctx, letters, absentLetter) }},
 	}
 	out := make([]verbResult, len(sends))

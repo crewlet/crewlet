@@ -12464,11 +12464,15 @@ node read it (`newer_record`, `newer_envelope`, `unknown_key` or
 `untranslatable`) and
 the `detail` that node met, the record's `stored_at`, how many times it had
 been `delivered`, when it was `dead_lettered_at`, and when the broker
-`kept_at` the entry and `expires_at` lets it go. Never its frame. An entry a
-newer build kept is still listed, by its id and the broker's instants, with
-`decode_error` saying why this build cannot read it — and it can still be
-discarded. A feed whose subject could not be listed carries `list_error` and
-`entries: null`, never an empty list: an unread feed is not an empty one.
+`kept_at` the entry and `expires_at` lets it go — all of it the header the
+feed kept the entry under, which is read without the entry's frame: no listing
+moves one. A feed's entries are read from one copy of the dead-letter stream,
+which can be a moment behind the stream's leader, so an entry kept a moment ago
+can be missing from one answer and in the next. An entry a newer build kept is
+still listed, by its id and the broker's instants, with `decode_error` saying
+why this build cannot read it — and it can still be discarded. A feed whose
+subject could not be listed carries `list_error` and `entries: null`, never an
+empty list: an unread feed is not an empty one.
 
 ```json
 {
@@ -12518,7 +12522,7 @@ of a discard carries `detail` and `hint`:
 |---|---|---|
 | `400` | `confirm_required` | `?confirm=` does not repeat the id |
 | `400` | `dead_letter_invalid` | The id is not a whole number above zero |
-| `404` | `no_dead_letter` | No wake feed's subject holds the id: never an entry, one a replay, its expiry or another discard took first, or an entry on another `dlq.` subject |
+| `404` | `no_dead_letter` | No wake feed's subject holds the id: never an entry, one a replay, its expiry or another discard took first, an entry on another `dlq.` subject, or one kept so recently the copy the listing read has not caught up, which a discard asked again finds |
 | `503` | `unavailable` | A feed's subject could not be listed and no other holds the id, so whether it is that feed's is unknown and nothing was discarded; or the broker did not answer the drop, which may have landed. A `Retry-After` where waiting may clear it; list the dead letters before asking again |
 | `500` | `dead_letter_discard_failed` | Anything else; list the dead letters before asking again |
 

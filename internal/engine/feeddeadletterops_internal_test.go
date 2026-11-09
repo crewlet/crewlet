@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,21 +30,25 @@ import (
 // ---- the operator's listing and discard ------------------------------- //
 
 // subjectBox is a dead-letter store keyed by subject, as the broker's is: ONE
-// sequence across every subject, a listing a case can break per subject, and a
-// drop that refuses a sequence held on another subject and answers one already
-// gone as done — the queue contract's three answers.
+// sequence across every subject, a listing a case can break per subject, marks
+// that count the feeds' subjects, and a drop that refuses a sequence held on
+// another subject and answers one already gone as done — the queue contract's
+// answers.
 type subjectBox struct {
 	mu    sync.Mutex
 	seq   uint64
 	held  map[string][]queue.Kept
 	fails map[string]error
+	// frames is how many frames anything read through the box: no
+	// operator's listing or discard reads one.
+	frames int
 }
 
 func newSubjectBox() *subjectBox {
 	return &subjectBox{held: map[string][]queue.Kept{}, fails: map[string]error{}}
 }
 
-func (b *subjectBox) KeepDeadLetter(context.Context, string, []byte) error {
+func (b *subjectBox) KeepDeadLetter(context.Context, string, []byte, []byte) error {
 	return errors.New("no case here keeps through the box: it dates its entries itself")
 }
 
@@ -54,6 +59,35 @@ func (b *subjectBox) DeadLettersOn(_ context.Context, subject string) ([]queue.K
 		return nil, err
 	}
 	return slices.Clone(b.held[subject]), nil
+}
+
+func (b *subjectBox) DeadLetterFrame(_ context.Context, subject string, seq uint64) ([]byte, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.frames++
+	if slices.ContainsFunc(b.held[subject], func(k queue.Kept) bool { return k.Seq == seq }) {
+		return []byte("sealed frame"), true, nil
+	}
+	return nil, false, nil
+}
+
+func (b *subjectBox) DeadLetterMarks(_ context.Context, under string) (queue.Marks, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	marks := queue.Marks{Counts: map[string]uint64{}, Last: b.seq}
+	for subject, kept := range b.held {
+		if strings.HasPrefix(subject, under+".") && len(kept) > 0 {
+			marks.Counts[subject] = uint64(len(kept))
+		}
+	}
+	return marks, nil
+}
+
+// framesRead is how many frames anything read through the box.
+func (b *subjectBox) framesRead() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.frames
 }
 
 func (b *subjectBox) DropDeadLetter(_ context.Context, subject string, seq uint64) error {
@@ -72,14 +106,14 @@ func (b *subjectBox) DropDeadLetter(_ context.Context, subject string, seq uint6
 	return nil
 }
 
-// keep holds body on subject as the broker would at kept, letting it go at
-// expires, and answers its sequence.
-func (b *subjectBox) keep(subject string, body []byte, kept, expires time.Time) uint64 {
+// keep holds an entry kept under header on subject as the broker would at
+// kept, letting it go at expires, and answers its sequence.
+func (b *subjectBox) keep(subject string, header []byte, kept, expires time.Time) uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.seq++
 	b.held[subject] = append(b.held[subject], queue.Kept{Seq: b.seq, StoredAt: kept,
-		Expires: expires, Body: body})
+		Expires: expires, Header: header})
 	return b.seq
 }
 
@@ -106,15 +140,14 @@ var (
 	codeFeed = changefeed.Source{Name: code.Source, Group: code.FeedGroup}
 )
 
-// letterBytes is d as an entry's bytes, its frame a few bytes nobody reads.
+// letterBytes is d as the header its entry is kept under.
 func letterBytes(t *testing.T, d changefeed.DeadLetter) []byte {
 	t.Helper()
-	d.Frame = []byte("sealed frame")
-	body, err := changefeed.EncodeDeadLetter(d)
+	header, err := changefeed.EncodeDeadLetter(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return body
+	return header
 }
 
 // letterOn is a dead letter the src feed kept of the record at seq on its log,
@@ -140,7 +173,7 @@ func discardedCount(rec *metrics.Recorder, src changefeed.Source) uint64 {
 
 // operatorOf is an engine's operator surface over store, accounting in claims,
 // counting in rec, dated at now.
-func operatorOf(t *testing.T, store changefeed.DeadLetters, claims expiryClaims,
+func operatorOf(t *testing.T, store deadLetterStore, claims expiryClaims,
 	rec *metrics.Recorder, now time.Time) (*FeedDeadLetters, *deadLetterLedger) {
 
 	t.Helper()
@@ -175,9 +208,9 @@ func TestTheListingNamesEveryDeclaredFeedEveryEntryAndEveryFeedItCouldNotRead(t 
 	work, page := changefeed.DeadLetterSubject(workFeed), changefeed.DeadLetterSubject(pageFeed)
 	read := box.keep(work, letterBytes(t, letterOn(workFeed, 1234, now.Add(-2*time.Hour))),
 		now.Add(-2*time.Hour), now.Add(month-2*time.Hour))
-	newer := box.keep(work, []byte(`{"v":2,"source":"work"}`+"\nsealed frame"),
+	newer := box.keep(work, []byte(`{"v":2,"source":"work"}`),
 		now.Add(-time.Hour), now.Add(month-time.Hour))
-	box.keep(topics.DeadLetter("crewlet.agent.ana.inbox", "agent-ana"), []byte("poison"),
+	box.keep(topics.DeadLetter("crewlet.agent.ana.inbox", "agent-ana"), nil,
 		now.Add(-time.Hour), now.Add(month-time.Hour))
 	box.fail(page, fmt.Errorf("jetstream: list the dead letters: %w", queue.ErrUnavailable))
 	ops, _ := operatorOf(t, box, nil, nil, now)
@@ -234,6 +267,11 @@ func TestTheListingNamesEveryDeclaredFeedEveryEntryAndEveryFeedItCouldNotRead(t 
 			t.Errorf("the %s feed, holding nothing, reads %+v: want an empty list", f.Source, f)
 		}
 	}
+	// FROM THE HEADERS ALONE: an operator decides by what the feed recorded
+	// of the record, and its frame may be as large as its log admits.
+	if n := box.framesRead(); n != 0 {
+		t.Errorf("the listing read %d frames, want none", n)
+	}
 }
 
 // A DISCARD DROPS THE ENTRY IT NAMES AND NOTHING ELSE, ANSWERS IT, AND LOGS AND
@@ -263,12 +301,12 @@ func TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt(t *testing.T) {
 	now := time.Now().UTC()
 	work, chat := changefeed.DeadLetterSubject(workFeed), changefeed.DeadLetterSubject(chatFeed)
 	poisonOn := topics.DeadLetter("crewlet.agent.ana.inbox", "agent-ana")
-	for subject, body := range map[string][]byte{
-		work:     letterBytes(t, letterOn(workFeed, 1234, now)),
-		chat:     letterBytes(t, letterOn(chatFeed, 77, now)),
-		poisonOn: []byte("a poison message"),
+	for subject, entry := range map[string]struct{ header, body []byte }{
+		work:     {letterBytes(t, letterOn(workFeed, 1234, now)), []byte("sealed frame")},
+		chat:     {letterBytes(t, letterOn(chatFeed, 77, now)), []byte("sealed frame")},
+		poisonOn: {nil, []byte("a poison message")},
 	} {
-		if err := q.KeepDeadLetter(t.Context(), subject, body); err != nil {
+		if err := q.KeepDeadLetter(t.Context(), subject, entry.header, entry.body); err != nil {
 			t.Fatalf("keep on %s: %v", subject, err)
 		}
 	}
@@ -382,6 +420,10 @@ func TestADiscardThatCouldNotListEveryFeedIsNeverANoSuchEntry(t *testing.T) {
 	if box.holds(work, held) {
 		t.Error("the discarded entry is still held")
 	}
+	// FOUND BY ITS HEADER, never its frame: a discard reads none.
+	if n := box.framesRead(); n != 0 {
+		t.Errorf("the discards read %d frames, want none", n)
+	}
 }
 
 // A DISCARD IS ACCOUNTED FOR, SO NO NODE COUNTS IT AS A WAKE THE RETENTION
@@ -427,8 +469,9 @@ func TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost(t *testing.T
 	ops, here := operatorOf(t, box, claims, recHere, now)
 	watchHere := newDeadLetterWatch(here, claims, recHere)
 	watchPeer := newDeadLetterWatch(newDeadLetterLedger(box, claims), claims, recPeer)
-	watchHere.read(t.Context(), workFeed, now)
-	watchPeer.read(t.Context(), workFeed, now)
+	feeds := map[string]changefeed.Source{"tracker": workFeed}
+	watchHere.read(t.Context(), feeds, now)
+	watchPeer.read(t.Context(), feeds, now)
 
 	// AN OPERATOR DISCARDS ONE, AND THE RETENTION TAKES THE OTHER.
 	if _, err := ops.Discard(t.Context(), FeedDeadLetterDiscard{ID: discardedSeq}); err != nil {
@@ -438,8 +481,8 @@ func TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost(t *testing.T
 		t.Fatal(err)
 	}
 	beat := now.Add(statelog.AlarmInterval)
-	watchHere.read(t.Context(), workFeed, beat)
-	watchPeer.read(t.Context(), workFeed, beat)
+	watchHere.read(t.Context(), feeds, beat)
+	watchPeer.read(t.Context(), feeds, beat)
 
 	if got := expired(recHere) + expired(recPeer); got != 1 {
 		t.Errorf("the fleet counted %d lost wake(s) as expired, want the one the retention "+
