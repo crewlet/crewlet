@@ -153,6 +153,34 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
+// lateCallsHeader introduces the calls of the round its record took only after
+// the run that made them was replaced ([AfterSave.Late]): calls an earlier run
+// of the work made that were still running when a relaunch carried the work on,
+// and that finished after. TOLD UNDER WORDS OF THEIR OWN, WHATEVER THE SESSION'S
+// END, since no point tells them and each of the other headings is untrue of
+// them: the session above may show such a call with no outcome, or with an
+// interrupted one, its harness having died, given up on it or been replaced
+// before the call returned; and an earlier brief may have told it, since every
+// continuation of the work tells it again. So it is said to be ONE call, made
+// once, whose outcome as told here stands — never one the session lacks.
+const lateCallsHeader = "## Calls that finished after the run that made them was replaced" +
+	"\nAn earlier run of this work made these calls through your tools, and they finished only after that run was" +
+	" cut off or replaced, so the session above may show one with no outcome or as interrupted, and an earlier" +
+	" message may have told it. Each is ONE call, made once, not two, and the outcome told here stands: a call" +
+	" marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked `→ error` did not take" +
+	" effect."
+
+// lateSubmission tells a run that a successful `submit_work` among the calls
+// under [lateCallsHeader] is no submission of the work it carries on: the run
+// that made it was replaced before the call returned, the run carrying the work
+// on was never told it, and the work's submission is the one a run carrying it
+// on makes (internal/agent/runner's sinceAnswer). Read as the work's, it would
+// leave a run that took it for done ending without its own, and the work
+// collected as one that submitted nothing.
+const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's submission:" +
+	" the run that made it was replaced before it returned. When your work is done, call `" +
+	toolname.SubmitWork + "` yourself."
+
 // AfterSave is what a session's run did through the seat's tools after the
 // session was saved, as a run that continues the session is told it
 // ([CalledAfter]).
@@ -187,15 +215,46 @@ type AfterSave struct {
 	// calls may be in it as well. They are told under [calledSinceHeader],
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
+
+	// Late are the calls of the round its record took only after the run that
+	// made them was replaced by a relaunch that carried the work on
+	// (sandbox.BridgeCall.Late), as the prior-work ledger renders them within
+	// its budgets, "" for none: none of them is among Calls. Told in a section
+	// of their own, under [lateCallsHeader], whatever Interrupted says.
+	Late string
+
+	// LateSubmission says a successful `submit_work` is among Late, which is
+	// told as no submission of the work ([lateSubmission]).
+	LateSubmission bool
 }
 
 // CalledAfter is the section telling a run that continues a session what its
 // run did through the seat's tools after the session was saved: the calls the
 // record lists, then how many more it kept only in a tally and that tally, the
 // way every other reader of a long run's calls is told what was dropped — of a
-// session cut off, as calls it may already show ([AfterSave.Interrupted]). ""
-// where the run did nothing after the save.
+// session cut off, as calls it may already show ([AfterSave.Interrupted]) —
+// and then, in a section of its own, the calls that finished only after the run
+// that made them was replaced ([AfterSave.Late]). "" where there is none of
+// either.
 func CalledAfter(after AfterSave) string {
+	var sections []string
+	if since := calledSince(after); since != "" {
+		sections = append(sections, since)
+	}
+	if late := strings.TrimSpace(after.Late); late != "" {
+		parts := []string{lateCallsHeader, late}
+		if after.LateSubmission {
+			parts = append(parts, lateSubmission)
+		}
+		sections = append(sections, strings.Join(parts, "\n"))
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// calledSince is [CalledAfter]'s section of the calls after the save — or,
+// of a session cut off, since the newest point it is known to hold — "" where
+// the record lists none and dropped none.
+func calledSince(after AfterSave) string {
 	calls := strings.TrimSpace(after.Calls)
 	if calls == "" && after.Dropped <= 0 {
 		return ""

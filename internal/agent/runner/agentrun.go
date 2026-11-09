@@ -1238,9 +1238,11 @@ func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 // under the call that spawned them.
 const runRound = 1
 
-// sinceAnswer is the calls of a round made after a person's answer last
-// carried it on: those placed after `answered` ([Resume.Answered]), or every
-// call where no answer has.
+// sinceAnswer is the calls of a round its submission may be read from — what
+// the collection replays ([replaySubmission]) and what says a lost job's round
+// was already submitted ([Resume.carriedRound]): those made after a person's
+// answer last carried it on, placed after `answered` ([Resume.Answered]), or
+// every call where no answer has — and none the log took late.
 //
 // ONLY WHAT THE RUN DID KNOWING THE ANSWER. A run carried on by a person's
 // answer keeps the calls it made before the question (ADR-0068), and a
@@ -1252,13 +1254,21 @@ const runRound = 1
 // may be gone from it, and the asking job may have called `submit_work` after
 // its question as well as before it. A call with no place (zero) is not after
 // any answer.
+//
+// AND NEVER A LATE CALL ([BridgedCall.Late]): the log took it after its job
+// was replaced, so after the cut was taken — its place, which its own job's
+// session gave it, can fall past the cut though it was made before the answer
+// — and after the brief of the job carrying the round on was built. That job
+// was never told it, and every later continuation of the round is told it as
+// no submission of the round ([prompts.AfterSave.LateSubmission]): the
+// round's submission is the one a run carrying the round on makes. Replayed, a
+// late submission would stand for the carried-on run's work, or stand over it
+// where its place sorts after; read as the round's, a lost round would be
+// collected on it rather than carried on.
 func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
-	if answered <= 0 {
-		return bridged
-	}
 	out := make([]BridgedCall, 0, len(bridged))
 	for _, call := range bridged {
-		if call.Seq > answered {
+		if !call.Late && (answered <= 0 || call.Seq > answered) {
 			out = append(out, call)
 		}
 	}

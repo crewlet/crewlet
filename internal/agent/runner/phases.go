@@ -476,6 +476,15 @@ type BridgedCall struct {
 	// call an older build appended, which every save point reads as after it.
 	Appended int
 
+	// Late is a call the round's log took after its job was replaced by a
+	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
+	// an earlier job of the round, which no brief of the round told and the
+	// session of the job that made it may not hold. HELD BY NO SAVE POINT
+	// ([heldAt]), so every continuation of the round is told it, under words
+	// of its own, and no rebuilt guard counts a load it made; and never the
+	// round's submission ([sinceAnswer]).
+	Late bool
+
 	// StartedAt is when the call was handed to the seat's surface, and
 	// Duration how long the surface took to answer — measured at the bridge,
 	// since the call ran inside the harness's own loop. Both zero on a call
