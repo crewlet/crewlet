@@ -215,6 +215,38 @@ func (h *Held) Count() int {
 	return h.n
 }
 
+// Fence is how many leader reads the broker held, and the case had not yet
+// taken, among those nc sent before Fence was called — every one of them,
+// however late the broker hands it over, which [Held.Count] read straight
+// after the read that sent them cannot promise.
+//
+// A FENCE, through the reads' own path: a request of Fence's own, published
+// on nc to the held subject, reaches the interception after every message nc
+// published before it, since a subscriber hears one connection's messages in
+// the order they were published, and Fence takes each read until the fence.
+// So nc must be the connection the reads were sent on, and the reads must
+// still be held: a fence sent after [Held.Release] reaches the stream's
+// leader instead, and Fence waits for ctx. The fence is counted by
+// [Held.Count] and taken here.
+func (h *Held) Fence(ctx context.Context, nc *nats.Conn) (int, error) {
+	fence := fmt.Sprintf("jsapitest.fence.%d", heldSeq.Add(1))
+	if err := nc.PublishRequest(h.subject, fence, nil); err != nil {
+		return 0, fmt.Errorf("jsapitest: send the fence on %s: %w", h.subject, err)
+	}
+	taken := 0
+	for {
+		r, err := h.Next(ctx)
+		if err != nil {
+			return taken, fmt.Errorf("jsapitest: the fence on %s never arrived, after %d reads: %w",
+				h.subject, taken, err)
+		}
+		if r.Reply() == fence {
+			return taken, nil
+		}
+		taken++
+	}
+}
+
 // DropFirst makes the broker DROP the next n leader reads asked on subject —
 // each reaches a subscriber that never answers, as a member that still
 // believes in a leader its group just lost drops one — and lets every read
