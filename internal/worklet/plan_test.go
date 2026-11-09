@@ -1127,15 +1127,14 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	}
 	reads := map[string]indexedRead{
 		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
-		"an item's newest assignment":           seek(subject, holdingSinceStatement, task),
-		"the advisor's idle review handed over": seek(subject, patternAssignedStatement, task),
-		"a task's own history":                  seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
-		"a purged task's rows":                  seek(subject, purgedHistoryStatement, purged),
-		"one change's routing":                  seek(historyKey, routingRecordStatement, record),
-		"where a change sits":                   seek(historyKey, recordPositionStatement, record),
-		"a person's inbox":                      seek(historyKey, page[0].sql, page[0].args...),
-		"an inbox's unread marks below":         seek(historyKey, marked[1].sql, marked[1].args...),
-		"the repair's horizon":                  seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
+		"when an item last changed hands": seek(subject, handedOverStatement, task),
+		"a task's own history":            seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"a purged task's rows":            seek(subject, purgedHistoryStatement, purged),
+		"one change's routing":            seek(historyKey, routingRecordStatement, record),
+		"where a change sits":             seek(historyKey, recordPositionStatement, record),
+		"a person's inbox":                seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's unread marks below":   seek(historyKey, marked[1].sql, marked[1].args...),
+		"the repair's horizon":            seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,
 			at(9_000), at(9_500), 64),
 		"a subject's effective instant": seek(subject, effectiveAtStatement,

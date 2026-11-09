@@ -19,6 +19,13 @@ var Handles = []string{"owner", "pm", "designer", "app", "backend", "qa", "sre"}
 // Statuses is every item status a timeline may name.
 var Statuses = []string{"todo", "in_progress", "in_review", "done", "cancelled"}
 
+// Choices are the options a decision step offers, by id, and ChoiceLabels
+// their words.
+var (
+	Choices      = []string{"take", "hold"}
+	ChoiceLabels = map[string]string{"take": "Take it.", "hold": "Hold it."}
+)
+
 // PhraseClass is the kind of words a comment carries.
 type PhraseClass string
 
@@ -73,7 +80,7 @@ type Vocabulary func(path []string, value string, key bool) bool
 // timelineKeys is every object key a timeline file has.
 var timelineKeys = []string{"name", "pattern", "seats", "steps", "handle", "kind", "at",
 	"actor", "verb", "item", "say", "mentions", "ask", "asks", "answers", "assignee", "status",
-	"watcher", "expect", "woken"}
+	"watcher", "expect", "woken", "recommend", "choose"}
 
 // TimelineVocabulary admits a timeline's own words and nothing else. A name is
 // a pattern, optionally numbered, so a file name carries no words either.
@@ -87,7 +94,7 @@ func TimelineVocabulary(at []string, value string, key bool) bool {
 	return slices.Contains(Handles, value) || itemKey.MatchString(value) ||
 		changeKey.MatchString(value) || slices.Contains(Statuses, value) ||
 		PhraseClass(value).Valid() || Verb(value).Valid() ||
-		SeatKind(value).Valid() || Pattern(value).Valid()
+		SeatKind(value).Valid() || Pattern(value).Valid() || slices.Contains(Choices, value)
 }
 
 // documentWords is every string a company document fixture may hold besides
