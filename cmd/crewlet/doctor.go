@@ -18,7 +18,8 @@ import (
 const doctorUsage = "usage: crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]"
 
 // exitBlocked is the doctor's status while a finding blocks the company: apart
-// from 1, which says the command could not ask.
+// from 1, which says the command could not ask or the node could not read a
+// source.
 const exitBlocked = 2
 
 // runDoctor prints the setup advisor's findings: classes, subjects by kind and
@@ -68,6 +69,15 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 		}
 		return &exitError{code: exitBlocked, err: fmt.Errorf("%s the company cannot work as configured: %s",
 			words.Count(count, "finding says", "findings say"), words.And(blocking))}
+	}
+	// A SOURCE THE NODE COULD NOT READ FAILS CLOSED, as a failure to ask: a
+	// block it holds is missing from the list, so no gate may pass on it.
+	if len(answer.Unread) > 0 {
+		if *asJSON {
+			return errSilent
+		}
+		return fmt.Errorf("the node could not read %s, so a finding that blocks may be missing",
+			words.And(answer.Unread))
 	}
 	return nil
 }

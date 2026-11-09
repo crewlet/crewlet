@@ -120,15 +120,27 @@ func TestTheDoctorExitsZeroWhenNothingBlocks(t *testing.T) {
 	}
 }
 
-// WHAT THE NODE COULD NOT READ IS SAID, so an empty or short list never reads
-// as all clear; and two integrations are two subjects.
+// WHAT THE NODE COULD NOT READ IS SAID AND FAILS CLOSED: an empty or short
+// list never reads as all clear, and exits 1 as a failure to ask, with -json
+// as without it, unless a listed finding blocks; two integrations are two
+// subjects.
 func TestTheDoctorSaysWhatItCouldNotReadAndNamesEachIntegrationApart(t *testing.T) {
 	t.Parallel()
-	out, _, err := cli(t, "doctor", doctorNode(t, advisor.Answer{Revision: "rev-10",
-		Findings: []advisor.Finding{}, Unread: []string{advisor.UnreadIntegrations}}))
-	if err != nil || !strings.Contains(out, "No findings at revision rev-10.") ||
+	unread := doctorNode(t, advisor.Answer{Revision: "rev-10",
+		Findings: []advisor.Finding{}, Unread: []string{advisor.UnreadIntegrations}})
+	out, _, err := cli(t, "doctor", unread)
+	var exit *exitError
+	if err == nil || errors.As(err, &exit) || !strings.Contains(out, "No findings at revision rev-10.") ||
 		!strings.Contains(out, `Not read: "integrations".`) {
-		t.Fatalf("an answer with integrations unread printed %q and exited %v", out, err)
+		t.Fatalf("an answer with integrations unread printed %q and exited %v, want status 1", out, err)
+	}
+	if _, _, err := cli(t, "doctor", "-json", unread); err == nil || errors.As(err, &exit) {
+		t.Errorf("-json with integrations unread exited %v, want status 1", err)
+	}
+	blocked := doctorNode(t, advisor.Answer{Revision: "rev-12",
+		Findings: doctorAnswer.Findings[:1], Unread: []string{advisor.UnreadIntegrations}})
+	if _, _, err := cli(t, "doctor", blocked); !errors.As(err, &exit) || exit.code != exitBlocked {
+		t.Errorf("a listed block with integrations unread exited %v, want status %d", err, exitBlocked)
 	}
 	integration := func(name string) advisor.Finding {
 		return advisor.Finding{Class: "integration.credential_rejected", Severity: advisor.SeverityNote,
