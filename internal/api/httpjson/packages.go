@@ -35,7 +35,7 @@ var goPackages = map[string]bool{
 	"extension": true, "externaltest": true, "fixedwait": true, "fleetsecrets": true, "flock": true,
 	"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "googlecloud": true, "home": true, "host": true, "hostbox": true,
 	"httpjson": true, "httprelay": true, "httpx": true, "httpxtest": true, "iam": true,
-	"iamapi": true, "iamdomain": true, "inbox": true, "insights": true, "integration": true, "issuereport": true,
+	"iamapi": true, "iamdomain": true, "inbox": true, "insights": true, "integration": true, "notice": true, "issuereport": true,
 	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
 	"jira": true, "jsapi": true, "jsapitest": true, "jsinflight": true, "jsoncarry": true, "jsonform": true,
 	"jsprovision": true, "jwks": true, "kept": true, "keyset": true,

@@ -330,7 +330,8 @@ assistant_turn_completed   # one segment of a person's Ask Crewlet
                            # every step's tool, route pattern, outcome,
                            # status and bytes; never an argument, an answer
                            # or the question
-seat_paused                # a person paused a seat (paused_by,
+seat_paused                # a person, or the engine for a failure a
+                           # retry cannot cure, paused a seat (paused_by,
                            # paused_by_kind and operator_id from
                            # iam.ActorFor, reason, stop_running, paused_at).
                            # Published once per CHANGE by the caller whose

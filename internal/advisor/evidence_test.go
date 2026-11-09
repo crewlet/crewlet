@@ -191,8 +191,9 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
 		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000)}
 	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
-	if len(found) != len(advisor.WorkClasses())+len(advisor.LedgerClasses()) {
-		t.Fatalf("raised %d findings, want one per class the work patterns and the ledger raise", len(found))
+	// Every class but approval.rubber_stamp, the owner's, held on its own below.
+	if len(found) != len(advisor.WorkClasses())-1+len(advisor.LedgerClasses()) {
+		t.Fatalf("raised %d findings, want one per engine class the work patterns and the ledger raise", len(found))
 	}
 	// A COUNT NAMES NO RECORD: these classes read totals, not rows to open.
 	counts := append([]advisor.Class{advisor.ClassNoticeLoad}, advisor.LedgerClasses()...)
@@ -308,4 +309,45 @@ func TestAnUnreadSourceRaisesNothingAndIsNamed(t *testing.T) {
 
 func hasClass(a advisor.Answer, class advisor.Class) bool {
 	return slices.ContainsFunc(a.Findings, func(f advisor.Finding) bool { return f.Class == class })
+}
+
+// A PERSON WHO TAKES ONE AGENT'S RECOMMENDATION NEARLY EVERY TIME is told so,
+// as the owner's call: the fix is a draft Ask Crewlet writes for review, never
+// a change, and below the threshold nothing is said.
+func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                 string
+		decided, recommended int
+		want                 bool
+	}{
+		{"nine in ten of twenty", 20, 18, true},
+		{"every one of thirty", 30, 30, true},
+		{"too few to say", 19, 19, false},
+		{"often declined", 20, 17, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			work := worklet.WorkPatterns{Decisions: []worklet.DecisionTally{
+				{Person: "owner", Asker: "pm", Decided: tc.decided, Recommended: tc.recommended}}}
+			found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
+			if (len(found) == 1) != tc.want || len(found) > 1 {
+				t.Fatalf("raised %+v, want a finding %v", found, tc.want)
+			}
+			if !tc.want {
+				return
+			}
+			f := found[0]
+			if f.Class != advisor.ClassApprovalRubberStamp || f.Actor != advisor.ActorOwner ||
+				f.Severity != advisor.SeverityNote || f.Subject.Seat != "pm" ||
+				f.Fix.Kind != advisor.FixDraftWithAssistant || len(f.Fix.Options) != 0 {
+				t.Errorf("finding = %+v, want the owner's note about pm with a draft to review", f)
+			}
+			for _, want := range []string{"owner", "pm", strconv.Itoa(tc.decided), "Show me the change"} {
+				if !strings.Contains(f.Fix.Prompt, want) {
+					t.Errorf("the draft's prompt %q does not say %q", f.Fix.Prompt, want)
+				}
+			}
+		})
+	}
 }

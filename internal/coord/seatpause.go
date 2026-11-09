@@ -11,7 +11,7 @@ import (
 )
 
 // A SEAT PAUSE is a person's decision that one seat stops taking work until
-// somebody lifts it.
+// somebody lifts it, or the engine's, for a failure a retry cannot cure.
 //
 // # Who has to agree on it
 //
@@ -78,10 +78,22 @@ type SeatPause struct {
 	// At is when the seat was paused.
 	At time.Time `json:"at"`
 
+	// Failure is the failure the engine paused the seat for, nil on a pause a
+	// person or an agent took: an apply that changes what it depends on lifts it.
+	Failure *SeatFailure `json:"failure,omitempty"`
 	// Version is the store's version of the record as it was read. OPAQUE,
 	// like [MailboxRecord.Version]: pass back exactly what a read or a
 	// write handed you. Not on the wire; ignored by CreateSeatPause.
 	Version uint64 `json:"-"`
+}
+
+// SeatFailure is a failure that will repeat until a person changes something,
+// which the engine paused a seat for rather than retry it.
+type SeatFailure struct {
+	// Kind names the failure in the engine's closed table of them.
+	Kind string `json:"kind"`
+	// Basis is a fingerprint of the settings the failure depends on.
+	Basis string `json:"basis"`
 }
 
 // Validate reports why a pause cannot be written.
@@ -102,6 +114,10 @@ func (p SeatPause) Validate() error {
 			"(iam.ActorFor's kind): agent, human, operator or system")
 	case p.At.IsZero():
 		return errors.New("coord: a seat pause needs the instant it was taken")
+	case p.Failure != nil && (p.Failure.Kind == "" || p.Failure.Basis == ""):
+		return errors.New("coord: a failure's pause needs the failure's kind and the basis it failed on")
+	case p.Failure != nil && p.ByKind != iam.ActorSystem:
+		return errors.New("coord: only the engine pauses a seat for a failure")
 	}
 	return nil
 }

@@ -160,6 +160,7 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
+		e.liftChangedFailurePauses(ctx, c)
 		// AND ITS PENDING ACCESS REVIEW, so a handle used again starts with
 		// none. See accessreview.go.
 		e.clearRemovedSeatReviews(ctx, c)

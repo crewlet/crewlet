@@ -27,6 +27,9 @@ const (
 	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
+	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
+	// recommendation on almost every decision it asked of them.
+	ClassApprovalRubberStamp Class = "approval.rubber_stamp"
 )
 
 // AreaWork holds the patterns in how the company's work moves, and
@@ -34,6 +37,7 @@ const (
 const (
 	AreaWork       Area = "work"
 	AreaDurability Area = "durability"
+	AreaApprovals  Area = "approvals"
 )
 
 // Window is how far back every evidence class reads: a week holds every
@@ -130,6 +134,7 @@ var detectors = []detector{
 	{ClassPickupStillWaiting, sourceLedger, pickupStillWaiting},
 	{ClassAuxiliaryShare, sourceLedger, auxiliaryShare},
 	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
+	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -144,6 +149,10 @@ const (
 	// minOvertaken and overtakenPercent: 3 answers a week, and 5% of them.
 	minOvertaken     = 3
 	overtakenPercent = 5
+	// minDecided and recommendedPercent: about three decisions a working day
+	// from one agent, nine in ten of them taken as it recommended.
+	minDecided         = 20
+	recommendedPercent = 90
 )
 
 // The load and ledger thresholds, each a share no healthy week reaches.
@@ -306,6 +315,41 @@ func askOvertaken(ev Evidence, _ func(string) SeatKind) []Finding {
 			overtaken, w.Answers, w.Superseded, w.Moot),
 		[]Fact{{Key: "answers", Value: int64(w.Answers)}, {Key: "superseded", Value: int64(w.Superseded)},
 			{Key: "moot", Value: int64(w.Moot)}}, w.Overtaken)}
+}
+
+// approvalRubberStamp is one finding per person and asking agent whose
+// decisions the person took as recommended almost every time: the decision
+// stays the person's, and a policy letting the agent act on such a class is
+// the owner's call, so the fix is a draft the owner reviews, never a change.
+func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, d := range ev.Work.Decisions {
+		if d.Decided < minDecided || d.Recommended*100 < recommendedPercent*d.Decided {
+			continue
+		}
+		out = append(out, Finding{
+			Class: ClassApprovalRubberStamp, Severity: SeverityNote, Actor: ActorOwner,
+			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: d.Asker},
+			Title: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions.",
+				d.Person, d.Asker, d.Recommended, d.Decided),
+			Why: fmt.Sprintf("In the last 7 days %s asked %s %d decisions and the recommended "+
+				"option was taken %d times. Each one still costs a press and makes the agent "+
+				"wait. Whether %s may act on some kinds of them without asking is your call.",
+				d.Asker, d.Person, d.Decided, d.Recommended, d.Asker),
+			Evidence: []Fact{{Key: "decided", Value: int64(d.Decided)},
+				{Key: "recommended", Value: int64(d.Recommended)}},
+			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
+				Sentence:  "Draft a policy with Ask Crewlet, and review it before it is saved.",
+				Unchanged: "Nothing changes until you approve the policy Ask Crewlet drafts.",
+				Prompt: fmt.Sprintf("In the last 7 days %s chose %s's recommended option in %d of "+
+					"%d decisions it asked. Read those decisions, tell me which kinds of them were "+
+					"always taken as recommended, and draft a change to the company's policies "+
+					"that lets %s act on those kinds without asking, keeping every other decision "+
+					"with the person. Show me the change before making it.",
+					d.Person, d.Asker, d.Recommended, d.Decided, d.Asker)},
+		})
+	}
+	return out
 }
 
 // noVerifiedBackup reads the backup alarm, at the backup policy's own age: the

@@ -10,7 +10,7 @@
 
 import { useMemo } from "react";
 import type { McpAlarm } from "~/contract/mcp.ts";
-import type { AdvisorFinding } from "~/protocol/advisor.ts";
+import type { AdvisorFinding, AdvisorNotice } from "~/protocol/advisor.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
@@ -23,8 +23,9 @@ import { useViewer } from "./viewer.ts";
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
 
-/** No setup blocker: a reader the advisor does not answer, or an answer not in yet. */
-const NO_SETUP_BLOCKERS: readonly AdvisorFinding[] = [];
+/** No notice or finding: a reader the advisor does not answer, or an answer not in yet. */
+const NO_NOTICES: readonly AdvisorNotice[] = [];
+const NO_FINDINGS: readonly AdvisorFinding[] = [];
 
 /** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
 const NO_SETUP_UNREAD: readonly string[] = [];
@@ -50,7 +51,7 @@ function useReadsMcpAlarms(): boolean {
  * reader who is not asked their alarms.
  */
 export function useUnwatched(): readonly Subject[] {
-  return useReadsMcpAlarms() ? [] : ["tools", "setup"];
+  return useReadsMcpAlarms() ? [] : ["tools", "setup", "alarms"];
 }
 
 export function useAttention(): Attention[] {
@@ -75,21 +76,16 @@ export function useAttention(): Attention[] {
     enabled: readsMcp,
   });
   const mcpAlarms = readsMcp && mcp?.reading === "admin" ? mcp.alarms : NO_MCP_ALARMS;
-  // THE SETUP'S BLOCKERS, asked of the same administrator, on the advisor's own
-  // poll: only the owner's and only what blocks, so a note never reaches here.
+  // THE PLATFORM NOTICES, asked of the same administrator on the advisor's own
+  // poll: what blocks the setup and the alarms that have stood, nothing else.
   const { data: advisor } = useQuery("advisor", undefined, {
     pollMs: ADVISOR_POLL_MS,
     enabled: readsMcp,
   });
-  const setupBlockers = useMemo(
-    () =>
-      // READ, NEVER TRUSTED AS TYPED: an engine that answers no advisor, or
-      // answers in another shape, raises nothing here.
-      readsMcp && Array.isArray(advisor?.findings)
-        ? advisor.findings.filter((f) => f.actor === "owner" && f.severity === "blocks")
-        : NO_SETUP_BLOCKERS,
-    [readsMcp, advisor],
-  );
+  // READ, NEVER TRUSTED AS TYPED: an engine that answers no advisor, or one
+  // older than the notices, raises nothing here.
+  const notices = readsMcp && Array.isArray(advisor?.notices) ? advisor.notices : NO_NOTICES;
+  const findings = readsMcp && Array.isArray(advisor?.findings) ? advisor.findings : NO_FINDINGS;
   const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
   return useMemo(
     () =>
@@ -103,7 +99,8 @@ export function useAttention(): Attention[] {
         now,
         nameOf,
         mcpAlarms,
-        setupBlockers,
+        notices,
+        findings,
         setupUnread,
       }),
     [
@@ -116,7 +113,8 @@ export function useAttention(): Attention[] {
       now,
       nameOf,
       mcpAlarms,
-      setupBlockers,
+      notices,
+      findings,
       setupUnread,
     ],
   );
