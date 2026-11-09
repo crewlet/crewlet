@@ -569,6 +569,138 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 	}
 }
 
+// A HELD PACK WHOSE CHECKS CANNOT BE MADE IS REFUSED, AND SAYS WHICH. Every
+// check of a pack beside a harness that may still work reads a list the pack
+// wrote in its staging directory, or compares two with grep, and one that
+// cannot be made is a refusal as a difference is, never a pass: the files it
+// listed and its marker removed under the tar, as a pack in the same
+// directory once cleared them; the inodes it listed removed; its marker alone
+// removed, which the look for what was written walks by; a find that could
+// not walk the whole session as it listed its files, or the transcripts it
+// reads back; the list of what its archive holds removed as a transcript is
+// read back; each comparison grep could not answer (its exit 2: a list it
+// could not read, an answer it could not write); and a comparison whose
+// answer was never written, as bash reads a redirection that failed — exit 1,
+// and no file. Each is refused, the save and the take of a job still working
+// alike, saying what could not be done; and nothing is moved to the pack's
+// destination, recorded as a digest the box holds, or left in its staging
+// directory.
+//
+// Mutation: read grep's exit 2, or an answer that is not there, as no
+// difference; or leave unchecked the read back of the files listed or of what
+// the archive holds, or the find of the files, of what was written or of the
+// transcripts; and a case goes red.
+func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		// tar, where set, is what tar's stand-in does once it has packed
+		// ([afterTar]), "$1" the archive in the pack's staging directory;
+		// readBack answers the calls it hands others first ([tarStandIn]).
+		tar, readBack string
+		// find and grep, where set, are the scripts of stand-ins for the box.
+		find, grep func(t *testing.T) string
+		check      string
+	}{
+		{name: "the files it listed and its marker removed under the tar",
+			tar:   `d=$(dirname "$1"); rm -f "$d/files" "$d/inodes" "$d/sizes" "$d/marker"`,
+			check: "the pack could not read back its list of the session's files"},
+		{name: "the inodes it listed removed under the tar",
+			tar:   `rm -f "$(dirname "$1")/inodes"`,
+			check: "the pack could not compare the files' inodes before and after tar"},
+		{name: "its marker removed under the tar",
+			tar:   `rm -f "$(dirname "$1")/marker"`,
+			check: "the pack could not list the files written since its marker"},
+		{name: "a find that could not walk the whole session as it listed its files",
+			// THE MANIFEST'S FIND, the one whose words end in -type f.
+			find:  func(t *testing.T) string { return faultyFind(t, `*" -type f "`) },
+			check: "the files of the session could not be listed"},
+		{name: "a find that could not walk the whole session as it listed the transcripts it reads back",
+			// THE TRANSCRIPTS' FIND, the one asking for what is named as one
+			// (`-name`), never the look for what was written (`! -name`).
+			find:  func(t *testing.T) string { return faultyFind(t, `*" -type f -name "*`) },
+			check: "the pack could not list the transcripts it reads back"},
+		{name: "what its archive holds removed as a transcript is read back",
+			readBack: `if [ "$1" = -xzOf ]; then rm -f "$(dirname "$2")/members"; exec "$tar" "$@"; fi`,
+			check:    "the pack could not read back the list of what its archive holds"},
+		{name: "the sizes it listed before and after tar compared by a grep that could not answer",
+			grep:  func(t *testing.T) string { return faultyGrep(t, "sizes.after", "sizes", "exit 2") },
+			check: "the pack could not compare the files' sizes before and after tar"},
+		{name: "the files it listed and what its archive holds compared by a grep that could not answer",
+			grep:  func(t *testing.T) string { return faultyGrep(t, "members", "files", "exit 2") },
+			check: "the pack could not compare the files it listed with what its archive holds"},
+		{name: "what was written and what its archive holds compared by a grep that could not answer",
+			grep:  func(t *testing.T) string { return faultyGrep(t, "members", "written", "exit 2") },
+			check: "the pack could not compare the files written since its marker with what its archive holds"},
+		{name: "the transcripts it reads back and what its archive holds compared by a grep that could not answer",
+			grep:  func(t *testing.T) string { return faultyGrep(t, "transcripts", "members", "exit 2") },
+			check: "the pack could not compare the transcripts it reads back with what its archive holds"},
+		{name: "a comparison whose answer was never written, as bash reads a redirection that failed",
+			grep: func(t *testing.T) string {
+				return faultyGrep(t, "inodes.after", "inodes", `rm -f "$(dirname "$3")/moved"; exit 1`)
+			},
+			check: "the pack could not compare the files' inodes before and after tar"},
+	}
+	for _, tc := range cases {
+		for _, pack := range heldPacks {
+			t.Run(pack.name+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				runner, b := sessionBox(t, "2.1.310")
+				runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+				p := paths(b)
+				forgetCapture(t, b)
+				packed := `exec "$tar" -czf "$@"` + "\n"
+				if tc.tar != "" {
+					packed = afterTar(tc.tar)
+				}
+				writeBoxStandIn(t, b, p.BinDir()+"/tar", tarStandIn(t, packed, tc.readBack))
+				if tc.find != nil {
+					writeBoxStandIn(t, b, p.BinDir()+"/find", tc.find(t))
+				}
+				if tc.grep != nil {
+					writeBoxStandIn(t, b, p.BinDir()+"/grep", tc.grep(t))
+				}
+				err := pack.make(t, runner, b)
+				if err == nil || !strings.Contains(err.Error(), tc.check) {
+					t.Fatalf("the pack answered %v, want it refused saying %q", err, tc.check)
+				}
+				if boxHas(t, b, pack.dest(p)) {
+					t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+				}
+				if left := pack.staged(t, b); len(left) > 0 {
+					t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
+				}
+				if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
+					t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
+				}
+			})
+		}
+	}
+}
+
+// faultyFind is a stand-in `find` for a box's bin directory that, on the call
+// whose words match pattern — a case pattern over them, padded with a space
+// each side — walks as this machine's find does and then exits 1, as a find
+// that met an error on some path of its walk does; every other call goes to
+// this machine's find.
+func faultyFind(t *testing.T, pattern string) string {
+	t.Helper()
+	find := shQuote(hostTool(t, "find"))
+	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") " + find + ` "$@"; exit 1;; esac` + "\nexec " + find +
+		` "$@"` + "\n"
+}
+
+// faultyGrep is a stand-in `grep` for a box's bin directory that, on the one
+// comparison a pack makes of its list named patterns with its list named input
+// (`-f <staging directory>/<patterns> <staging directory>/<input>`), does what
+// answer says instead — exits 2, say, as a grep that could not read a list or
+// write its answer does; every other call goes to this machine's grep.
+func faultyGrep(t *testing.T, patterns, input, answer string) string {
+	t.Helper()
+	return "#!/bin/sh\ncase \" $* \" in *\"/" + patterns + " \"*\"/" + input + " \"*) " + answer + ";; esac\nexec " +
+		shQuote(hostTool(t, "grep")) + ` "$@"` + "\n"
+}
+
 // stampedEntry is a file or a directory of a session a case stamps, named as
 // the pack names it — relative to the harness's configuration directory — with
 // what a file holds, and whether it is stamped an hour AHEAD of the box's clock

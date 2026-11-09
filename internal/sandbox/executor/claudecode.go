@@ -793,6 +793,16 @@ func claudePack(paths Paths, at packAt) string {
 //     manifest, archived and removed, which no check of the manifest reads,
 //     and one written as tar read it and removed before WRITTEN or the
 //     prefix's check looked, neither of which reads a file that is gone.
+//   - EVERY CHECK FAILS CLOSED: a list the pack could not write or read
+//     back, and a comparison grep could not make — its exit 2, or an answer
+//     it could not write — refuse the pack as a difference would, never read
+//     as nothing having changed, which a check resting on grep's exit 0
+//     alone, or on a list holding a line, would read them as: a disk filled
+//     under a harness still writing would hold a pack whose checks compared
+//     nothing. And the lists are this pack's alone, in a staging directory
+//     of its own — a pack on demand's ([Paths.SessionPackStaging]), a
+//     save's taker's ([Paths.SessionSaveStaging]) — so no other pack of the
+//     box clears them under it.
 //
 // A `.jsonl` that only grew is the one change taken: a transcript or a
 // subagent's thread appended to while tar read it is archived as tar first
@@ -848,6 +858,13 @@ func claudeHeldTar(cfg, staged string) string {
 	return strings.Join([]string{
 		`( st=` + q(staged),
 		`why() { printf '%s\n' "$*" > "$st/error"; exit 1; }`,
+		// A COMPARISON THAT CANNOT BE MADE REFUSES: grep's exit 0 is a
+		// difference and its 1 none, while its 2 — a list it could not read,
+		// an answer it could not write — and an answer that is not there are
+		// neither, and a check that took them for "none" would hold a pack
+		// it never compared.
+		`differs() { w=$1 o=$2; shift 2; grep "$@" > "$o"; r=$?; { [ "$r" -le 1 ] && [ -e "$o" ]; } || ` +
+			`why "the pack could not compare $w: grep exited $r"; return "$r"; }`,
 		// THE TOOLS.
 		`for c in ` + heldTools + `; do command -v "$c" > /dev/null 2>&1 || why "this box has no $c, which a ` +
 			`pack beside a working harness checks what it packed with"; done`,
@@ -869,10 +886,14 @@ func claudeHeldTar(cfg, staged string) string {
 		// THE MANIFEST, and the plaintext it adds up to. The files as find
 		// names them, as tar names its members; their inodes and sizes as
 		// ls and wc print them, compared only with what the same command
-		// prints after the tar.
-		`find "$@" -type f > "$st/files" 2> /dev/null`,
-		`find "$@" -type f -exec ls -i {} + 2> /dev/null | sed 's/^ *//' > "$st/inodes"`,
-		`find "$@" -type f -exec wc -c {} + 2> /dev/null | sed 's/^ *//' | grep -v '^[0-9]* total$' > "$st/sizes"`,
+		// prints after the tar. A list that could not be written refuses the
+		// pack, as every list below does: a find that could not walk the
+		// whole session leaves a file out of every check made of the list.
+		`find "$@" -type f > "$st/files" 2> /dev/null || why 'the files of the session could not be listed'`,
+		`find "$@" -type f -exec ls -i {} + 2> /dev/null | sed 's/^ *//' > "$st/inodes" || ` +
+			`why 'the files of the session could not be listed'`,
+		`find "$@" -type f -exec wc -c {} + 2> /dev/null | sed 's/^ *//' | grep -v '^[0-9]* total$' > "$st/sizes" || ` +
+			`why 'the files of the session could not be listed'`,
 		`[ -s "$st/files" ] && [ -s "$st/inodes" ] && [ -s "$st/sizes" ] || why 'the files of the session could not be listed'`,
 		`p=0; while read -r n f; do case $n in ''|*[!0-9]*) why "a file's size could not be read: $f";; esac; ` +
 			`p=$((p + n)); done < "$st/sizes"`,
@@ -891,45 +912,56 @@ func claudeHeldTar(cfg, staged string) string {
 		// GONE: a file the manifest listed, before REPLACED reads its absence
 		// as another file's inode.
 		`while IFS= read -r f; do [ -e "$f" ] || [ -L "$f" ] || why "a file was removed while the session ` +
-			`was packed: $f"; done < "$st/files"`,
+			`was packed: $f"; done < "$st/files" || why "the pack could not read back its list of the session's files"`,
 		// REPLACED.
-		`find "$@" -type f -exec ls -i {} + 2> /dev/null | sed 's/^ *//' > "$st/inodes.after"`,
+		`find "$@" -type f -exec ls -i {} + 2> /dev/null | sed 's/^ *//' > "$st/inodes.after" || ` +
+			`why 'the files of the session could not be listed again'`,
 		`[ -s "$st/inodes.after" ] || why 'the files of the session could not be listed again'`,
-		`if grep -vxF -f "$st/inodes.after" "$st/inodes" > "$st/moved"; then read -r n f < "$st/moved"; ` +
-			`why "a file was replaced by another while the session was packed: $f"; fi`,
+		`if differs "the files' inodes before and after tar" "$st/moved" -vxF -f "$st/inodes.after" "$st/inodes"; ` +
+			`then read -r n f < "$st/moved"; why "a file was replaced by another while the session was packed: $f"; fi`,
 		// SHRANK.
-		`find "$@" -type f -exec wc -c {} + 2> /dev/null | sed 's/^ *//' | grep -v '^[0-9]* total$' > "$st/sizes.after"`,
+		`find "$@" -type f -exec wc -c {} + 2> /dev/null | sed 's/^ *//' | grep -v '^[0-9]* total$' > ` +
+			`"$st/sizes.after" || why 'the files of the session could not be listed again'`,
 		`[ -s "$st/sizes.after" ] || why 'the files of the session could not be listed again'`,
-		`if grep -vxF -f "$st/sizes.after" "$st/sizes" > "$st/resized"; then while read -r n f; do ` +
-			`c=$(wc -c < "$f") && [ "$((c))" -ge "$n" ] || why "a file shrank while the session was ` +
-			`packed: $f"; done < "$st/resized"; fi`,
+		`if differs "the files' sizes before and after tar" "$st/resized" -vxF -f "$st/sizes.after" "$st/sizes"; ` +
+			`then while read -r n f; do c=$(wc -c < "$f") && [ "$((c))" -ge "$n" ] || why "a file shrank while ` +
+			`the session was packed: $f"; done < "$st/resized" || why 'the pack could not read back the sizes it ` +
+			`compared'; fi`,
 		// MISSING.
-		`if grep -vxF -f "$st/members" "$st/files" > "$st/missing"; then read -r f < "$st/missing"; ` +
-			`why "a file is not in the archive the pack made: $f"; fi`,
+		`if differs "the files it listed with what its archive holds" "$st/missing" -vxF -f "$st/members" ` +
+			`"$st/files"; then read -r f < "$st/missing"; why "a file is not in the archive the pack made: $f"; fi`,
 		// WRITTEN: a member that is not a transcript.
-		`find "$@" -type f ! -name '*.jsonl' -newer "$st/marker" > "$st/written" 2> /dev/null`,
-		`if [ -s "$st/written" ] && grep -xF -f "$st/members" "$st/written" > "$st/rewritten"; then ` +
-			`read -r f < "$st/rewritten"; why "a file was written while the session was packed: $f"; fi`,
+		`find "$@" -type f ! -name '*.jsonl' -newer "$st/marker" > "$st/written" 2> /dev/null || ` +
+			`why 'the pack could not list the files written since its marker'`,
+		`if differs "the files written since its marker with what its archive holds" "$st/rewritten" ` +
+			`-xF -f "$st/members" "$st/written"; then read -r f < "$st/rewritten"; why "a file was written ` +
+			`while the session was packed: $f"; fi`,
 		// NOT A PREFIX: the session's own transcript, the first operand, on
 		// every pack whatever find reads of it, and every other transcript
 		// member written since the marker, each read back out of the archive
 		// as a stream — the list of them never empty, since it names the
 		// transcript. cksum prints the bytes it read beside its sum, so the
 		// member's length is its own word, and an extraction that failed is
-		// told apart from an empty member by the mark its failure leaves,
-		// which a pipeline's status cannot say.
-		`{ printf '%s\n' "$1"; find "$@" -type f -name '*.jsonl' -newer "$st/marker"; } > "$st/transcripts" 2> /dev/null`,
-		`if grep -xF -f "$st/transcripts" "$st/members" > "$st/prefixes"; then ` +
-			`while IFS= read -r f; do ` +
-			`a=$( { tar -xzOf "$st/capture" "$f" < /dev/null 2> /dev/null || : > "$st/unread"; } | cksum ) && ` +
-			`[ ! -e "$st/unread" ] || why "a transcript could not be read back out of the archive the pack ` +
+		// told apart from an empty member by a mark its failure empties,
+		// which a pipeline's status cannot say: written before the
+		// extraction, and emptied rather than written by its failure, which
+		// a full disk can never keep from happening.
+		`{ printf '%s\n' "$1" && find "$@" -type f -name '*.jsonl' -newer "$st/marker"; } > "$st/transcripts" ` +
+			`2> /dev/null || why 'the pack could not list the transcripts it reads back'`,
+		`if differs "the transcripts it reads back with what its archive holds" "$st/prefixes" ` +
+			`-xF -f "$st/transcripts" "$st/members"; then ` +
+			`while IFS= read -r f; do printf x > "$st/read" || why 'the pack could not mark a transcript it reads ` +
+			`back'; a=$( { tar -xzOf "$st/capture" "$f" < /dev/null 2> /dev/null || : > "$st/read"; } | cksum ) && ` +
+			`[ -s "$st/read" ] || why "a transcript could not be read back out of the archive the pack ` +
 			`made: $f"; b=$(head -c "${a#* }" "$f" | cksum) && [ "$a" = "$b" ] || why "a transcript was ` +
 			`rewritten in place while the session was packed, so what the archive holds of it is not the start ` +
-			`of the file: $f"; done < "$st/prefixes"; fi`,
+			`of the file: $f"; done < "$st/prefixes" || why 'the pack could not read back the transcripts it ` +
+			`listed'; fi`,
 		// GONE, LAST: every member of the archive, once every check that
 		// reads a live file has read it.
 		`while IFS= read -r f; do case $f in */) ;; *) [ -e "$f" ] || [ -L "$f" ] || why "a file was ` +
-			`removed while the session was packed: $f";; esac; done < "$st/members"`,
+			`removed while the session was packed: $f";; esac; done < "$st/members" || why 'the pack could not ` +
+			`read back the list of what its archive holds'`,
 		`) 2> /dev/null`,
 	}, "\n")
 }
