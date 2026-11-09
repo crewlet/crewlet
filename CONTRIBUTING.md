@@ -1660,9 +1660,10 @@ Testing builds the suite drives, each by version and the SHA-256 of its zip on
 each of the four platforms the engine is released for (`linux64`,
 `linux-arm64`, `mac-x64`, `mac-arm64`): the **newest**, Chrome for Testing's
 Stable channel, and the **floor**, the newest patch of the oldest major the
-engine drives. No release carries either — the engine image has no Chromium —
-so a bump changes what the suite certifies and nothing a deployment runs. The
-`Chromiums` leg of [`pins.yml`](.github/workflows/pins.yml) runs
+engine's CDP client drives, `internal/browser/cdp.MinMajor`. No release
+carries either — the engine image has no Chromium — so a bump changes what the
+suite certifies and nothing a deployment runs. The `Chromiums` leg of
+[`pins.yml`](.github/workflows/pins.yml) runs
 [`scripts/chromium-pin-check.sh`](scripts/chromium-pin-check.sh) beside the git
 leg every Monday:
 
@@ -1706,8 +1707,10 @@ title the pull request as the report does:
 `build(deps): bump chromium from <a> to <b>` for the newest pin,
 `build(deps): bump chromium's floor from <a> to <b>` for the floor.
 
-**Raising the floor** is never a bump: it moves the floor pin to the newest
-patch of the new major, in a pull request that argues the new floor.
+**Raising the floor** is never a bump: it is a change to `cdp.MinMajor`,
+argued in `internal/browser/cdp/floor.go` with what it measured, and it moves
+the floor pin to the newest patch of the new major in the same pull request —
+`TestThePinsMeetTheFloor` fails while the pin's major and `MinMajor` disagree.
 
 [`scripts/chromium-pin_test.sh`](scripts/chromium-pin_test.sh) (`make
 chromium-test`, in `make check` and ci.yml's `build + vet`) is the own suite of

@@ -10,11 +10,11 @@
 # THE PINS. The newest pin follows Chrome for Testing's Stable channel (LATEST_RELEASE_STABLE), and is behind only
 # when Stable names a newer MAJOR: a patch changes no protocol, and the suite drives only pages it serves on loopback,
 # so following patches would open the issue every week for nothing. The floor pin is the newest patch of its own major
-# (LATEST_RELEASE_<major>, the major its version names): a floor build stops getting patches within weeks of its
-# major's release, so it settles. For every pin that is behind, the check downloads the release's zip for each of the
-# four platforms the engine is released for — linux64, linux-arm64, mac-x64 and mac-arm64 — computes each one's
-# SHA-256, and prints the pin's new lines with the pull request that moves it. A release missing any of the four is
-# never proposed: a pin the suite cannot fetch on a supported platform is a gate that platform skips.
+# (LATEST_RELEASE_<major>), which internal/browser/cdp.MinMajor names: a floor build stops getting patches within weeks
+# of its major's release, so its leg settles. For every pin that is behind, the check downloads the release's zip for
+# each of the four platforms the engine is released for — linux64, linux-arm64, mac-x64 and mac-arm64 — computes each
+# one's SHA-256, and prints the pin's new lines with the pull request that moves it. A release missing any of the four
+# is never proposed: a pin the suite cannot fetch on a supported platform is a gate that platform skips.
 #
 # THE TRUST ANCHOR IS THE DOWNLOAD. No signature exists for a Chrome for Testing build, unlike git's signed tarballs, so
 # what a digest rests on is Google's bucket served over HTTPS, read here, and the reviewed pull request that pastes it;
@@ -220,7 +220,8 @@ EOF
 	cat <<EOF
 A bump replaces a pin's lines in scripts/chromium-pin.env, runs \`make chromium\` (it fetches the new build and checks
 it against the digest) and \`make check\`, and lands as its own pull request under the title
-above. The floor only moves to a newer patch of its major.
+above. The floor only moves to a newer patch of its major; raising it is a change to
+internal/browser/cdp.MinMajor, argued in its floor.go, that moves this pin with it.
 EOF
 	exit 1
 fi

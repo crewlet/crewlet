@@ -31,7 +31,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
 		"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 		"backup": true, "backuptest": true, "brandformat": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
-		"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "chatlet": true, "checkrun": true, "edits": true,
+		"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "cdp": true, "chatlet": true, "checkrun": true, "edits": true,
 		"harness": true, "clientsource": true, "clocktest": true, "cloudflare": true,
 		"harnessprofile": true, "executor": true, "coalesce": true, "gitlet": true, "gitletcluster": true, "gitletfault": true, "codeindex": true, "codesearch": true, "gitlettest": true, "colleague": true, "collect": true,
 		"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
