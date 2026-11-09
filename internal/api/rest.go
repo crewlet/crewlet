@@ -91,6 +91,9 @@ var namedRoutes = []struct {
 	// WHAT THE COMPANY REPORTED AND WHAT A REPORT WOULD SAY. The write is the
 	// setting's own, `diagnostics.issue_reports.enabled` under /config.
 	{method: "GET", pattern: "/diagnostics/issue-reports", what: "issue_reports"},
+	// WHAT THE COMPANY'S SETUP COSTS IT, each finding with its fix. The
+	// fixes are written through the /config entity routes, never here.
+	{method: "GET", pattern: "/advisor", what: "advisor"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

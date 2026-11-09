@@ -2151,8 +2151,15 @@ const (
 	// size's next KiB: 5681 KiB. The access change review's Inbox note and the
 	// access save's review callout, merged on top of it, took it to 5681.3 KiB
 	// (5,817,698 bytes, +1,104, all script). The measured size's next KiB:
-	// 5682 KiB.
-	treeBudget = 5<<20 + 562<<10
+	// 5682 KiB. My work's Holding up section (a person's open work that other
+	// work waits on, how much and on whom), on top of it, took it to 5683.5 KiB
+	// (5,819,942 bytes, +1,703 over the tree it was built on, all script). The
+	// measured size's next KiB: 5684 KiB. Settings › Advisor (the setup
+	// findings, a change's preview from the entity route's dry run and what the
+	// integrations need from a person), merged on top of it, took it to 5689.4
+	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
+	// 5690 KiB.
+	treeBudget = 5<<20 + 570<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
