@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // The second way an answer reaches a parked run — named by its turn — and the
@@ -308,6 +310,81 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 	ev = events.New(given, events.TraceContext{})
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerConsumed {
 		t.Fatalf("an offered choice after it = %q, %v, want consumed", d, err)
+	}
+}
+
+// AN ANSWER BY TURN PAST A PAGE IS REFUSED AS TOO LARGE, AND SAID. The record
+// holds an answer by turn to the bound `answer_executor` holds it to
+// ([MaxAnswerTextBytes]), so one that did not come through the tool is held
+// all the same: spent unrecorded, the run still waiting on its question, and
+// the refusal recorded as `too_large` with what it said and what an answer
+// may — and none of its words — never as `declined`, which names an answer the
+// run held and let go.
+//
+// Mutation: drop the record's own measure, and the answer is recorded and
+// resumes the run.
+func TestAnAnswerByTurnPastAPageIsRefusedAsTooLarge(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launchWithNoConversation(t, rig, "t1")
+	parksOnAQuestion(t, rig, "t1")
+
+	given, _ := givenAgainst(t, rig, "t1")
+	given.Answer = strings.Repeat("a", MaxAnswerTextBytes+1)
+	ev := events.New(given, events.TraceContext{})
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerNotMine {
+		t.Fatalf("AnswerByTurn = %q, %v, want the answer spent", d, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Answer != nil {
+		t.Fatalf("the run is %q with answer %+v, want it still waiting on its question", got.Status, got.Answer)
+	}
+	if rig.fireRetries() != 0 || len(rig.resumer.calls()) != 0 {
+		t.Fatal("an answer past a page resumed the run")
+	}
+	records := rig.answeredRecords()
+	if len(records) != 1 || records[0].Outcome != types.AnswerTooLarge || records[0].Via != types.AnswerViaOperator ||
+		records[0].AnswerBytes != MaxAnswerTextBytes+1 || records[0].AnswerMaxBytes != MaxAnswerTextBytes ||
+		records[0].Answer != "" || records[0].AnsweredBy != "founder" {
+		t.Fatalf("recorded %+v, want one too_large by its giver, with what it said past what an answer "+
+			"may and none of its words", records)
+	}
+}
+
+// AN ANSWER BY TURN IS MEASURED AS ITS AUTHOR GAVE IT, the string
+// `answer_executor` measured: trimmed, and before any secret in it is
+// redacted. A redaction's marker is longer than many a secret it replaces, so
+// a page that names a password, accepted by the tool, would be past the page
+// once redacted, and measured there it was refused after the tool had told
+// its giver it was taken. Measured as given, it is recorded — redacted, as
+// every answer is.
+//
+// Mutation: measure the answer redacted, or untrimmed, and the page is
+// refused as too large.
+func TestAnAnswerByTurnIsMeasuredAsItsAuthorGaveIt(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launchWithNoConversation(t, rig, "t1")
+	parksOnAQuestion(t, rig, "t1")
+
+	const secret = `password=""`
+	page := strings.Repeat("a", MaxAnswerTextBytes-len(secret)-1) + " " + secret
+	if len(page) != MaxAnswerTextBytes || len(redact.Secrets(page)) <= MaxAnswerTextBytes {
+		t.Fatalf("the premise: a page (%d bytes) that its redaction takes past the page (%d bytes)",
+			len(page), len(redact.Secrets(page)))
+	}
+	given, _ := givenAgainst(t, rig, "t1")
+	given.Answer = "\n  " + page + "  \n"
+	ev := events.New(given, events.TraceContext{})
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerConsumed {
+		t.Fatalf("AnswerByTurn = %q, %v, want a page as its author gave it recorded", d, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered && got.Status != StatusResumed {
+		t.Fatalf("the run is %q, want it answered", got.Status)
+	}
+	for _, r := range rig.answeredRecords() {
+		if r.Outcome == types.AnswerTooLarge {
+			t.Fatalf("recorded %+v: a page as its author gave it was refused as too large", r)
+		}
 	}
 }
 

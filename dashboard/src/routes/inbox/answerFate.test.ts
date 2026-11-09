@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { answerFate, type GivenAnswer } from "./answerFate.ts";
+import { answerFate, closedAt, type GivenAnswer } from "./answerFate.ts";
 
 /**
  * WHAT BECAME OF AN ANSWER IS READ OFF THE RUN'S RECORD, never assumed from
@@ -70,5 +70,50 @@ test("an executor whose ending is decided is over, whatever its status says", ()
   expect(answerFate(given, ended, true, true)).toBe("taken");
   expect(answerFate(given, { ...ended, status: "awaiting_clarification" as const }, true)).toBe(
     "ended",
+  );
+});
+
+/**
+ * A REPLY TOO LONG FOR THE EXECUTOR IS NO ANSWER (ADR-0114). A reply in the
+ * conversation that reached the question first and was too long to take closed
+ * it with none of it reaching the executor: the record names that reply where
+ * an answer would be, and says it was refused (`answer_refused`). An answer
+ * given after it was not used — refused, never superseded by "another answer",
+ * which would tell the person the executor carries on with one — and the line
+ * beside it says a reply too long to take closed the question, never that it
+ * was answered.
+ *
+ * Mutation: ignore `answer_refused` in the fate, and the press reads
+ * `superseded`; ignore it in the caption, and it reads "Answered by @miles".
+ */
+test("a reply too long for the executor closed its question with no answer", () => {
+  const given: GivenAnswer = {
+    answer: { kind: "reply", text: "use main" },
+    launchId: "q1",
+    answerId: "a1",
+  };
+  const closed = {
+    status: "answered" as const,
+    launch_id: "q1",
+    declined_answers: [] as string[],
+    answer_ids: ["r1", "r2"],
+    answer_refused: { messages: 2, bytes: 600 << 10, max_bytes: 512 << 10 },
+  };
+  expect(answerFate(given, closed, true)).toBe("refused");
+  expect(answerFate(given, { ...closed, status: "resumed" as const }, true)).toBe("refused");
+  expect(answerFate(given, { ...closed, answer_refused: null }, true)).toBe("superseded");
+
+  const now = Date.parse("2026-11-09T12:00:00Z");
+  const record = { answered_by: "miles", answered_at: "2026-11-09T11:30:00Z" };
+  const refusedLine = closedAt({ ...record, answer_refused: closed.answer_refused }, now, true);
+  expect(refusedLine).toMatch(
+    /^A reply by @miles too long for the executor to take closed the question at .+\.$/,
+  );
+  expect(refusedLine).not.toContain("Answered");
+  expect(closedAt({ ...record, answer_refused: null }, now, true)).toMatch(
+    /^Answered by @miles at /,
+  );
+  expect(closedAt({ ...record, answer_refused: closed.answer_refused }, now, false)).not.toContain(
+    "@miles",
   );
 });

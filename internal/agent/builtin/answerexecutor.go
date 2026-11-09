@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -22,28 +23,6 @@ import (
 
 // AnswerExecutorTool is the tool's wire name.
 const AnswerExecutorTool = "answer_executor"
-
-// MaxRunAnswerBytes bounds one answer to a parked executor.
-//
-// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
-// because the answer travels where the question does, beside it. It is sealed onto the
-// run's coordination row with the delivery it came in, which every status flip
-// and every listing of active runs reads whole until the run is carried on;
-// and then it is that run's prompt — the asking run's next message in its own
-// harness session, after the question it answers, or, where that session cannot
-// go on, a fresh run's brief beside the round's own — which the run's harness
-// re-sends with every request it makes from then on, each charged to the
-// budget in full, cached or not. So every byte of an answer is paid for again
-// at every step the run takes after it.
-//
-// A person's answer to a harness's question is a sentence or a
-// paragraph. One past a page is a document, and belongs on a page or the work
-// item, which the run reads with its own tools when it needs it rather than at
-// every step.
-//
-// NOT [ToolAnswerBytes], which bounds what a tool answers a model: no tool's
-// answer carries this one.
-const MaxRunAnswerBytes = sandbox.MaxAskContextBytes
 
 // RunDesk is what answer_executor needs: the run an answer names, the way to
 // put the answer on the control topic of the seat that holds it, and who gave
@@ -173,7 +152,7 @@ func (t *answerExecutor) Parameters() map[string]any {
 				"description": fmt.Sprintf("Your answer to the executor's question, as "+
 					"its harness should read it: the whole answer to an open question, "+
 					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
-					"a page the executor can read, and say where it is.", MaxRunAnswerBytes>>10),
+					"a page the executor can read, and say where it is.", sandbox.MaxAnswerTextBytes>>10),
 			},
 		},
 		"required": []any{"turn_id", "launch_id"},
@@ -212,13 +191,19 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case answer == "" && choice == "":
 		return failed(AnswerExecutorTool + " needs a `choice` naming the option chosen, or an " +
 			"`answer` saying what the harness should be told, or both."), nil
-	case len(answer) > MaxRunAnswerBytes:
+	case len(answer) > sandbox.MaxAnswerTextBytes:
+		// THE BOUND AN ANSWER IS HELD TO, refused here at its source with
+		// why and the figure, before anything is delivered — ON THE STRING
+		// THE COORDINATOR MEASURES WHERE IT RECORDS: the answer as given,
+		// trimmed, before any secret in it is redacted
+		// ([sandbox.MaxAnswerTextBytes]), so an answer this accepts is never
+		// refused there for a redaction marker it did not write.
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it becomes the executor's next message, or a fresh launch's brief where the "+
 			"executor cannot carry on in its own session, and its harness reads it again "+
 			"at every step after. Put the detail on a page the executor can read, and answer "+
 			"with where it is.",
-			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
+			kib(len(answer)), sandbox.MaxAnswerTextBytes>>10)), nil
 	}
 
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
@@ -239,8 +224,15 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
 		// was and when, rather than taken quietly: an answer is recorded the
 		// moment the seat takes it, so a second person answering the same
-		// question finds it answered here.
+		// question finds it answered here. A REFUSAL CLOSED THE QUESTION THE
+		// SAME WAY, and is never told as an answer the executor resumes
+		// with: the reply was too large to take, the executor is resumed
+		// told so, and it asks again if it still needs the answer (ADR-0114).
 		by := t.deps.Desk.Answerer(run)
+		if refusal, isRefusal := run.Refused(); isRefusal {
+			return toPerson(refused(tools.RefusalAlreadyAnswered, refusedAlready(run, refusal, by)),
+				caveat.RefusedReplyFirst(by)), nil
+		}
 		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run, by)),
 			caveat.AnsweredAlready(by)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
@@ -333,6 +325,36 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
 		run.Question)
 	return read.answer(ctx, AnswerExecutorTool, result, "")
+}
+
+// refusedAlready is the refusal an answer gets for a question a reply too
+// large to take reached first, as the model reads it: whose reply (by, as the
+// refusal's seal names them, or "someone" where it does not open here), when
+// its refusal was recorded (RFC 3339), its figures — never a word of it, which
+// no record of the run keeps — and that the executor is resumed told it did
+// not reach it and asks again if it still needs an answer, which is the
+// question to answer then.
+//
+// NEVER WORDED AS AN ANSWER, which the run did not get: told the question was
+// answered, the person's assistant would tell them the executor carries on
+// with a reply it was given none of. And WORDED AS WHAT IS RECORDED: the
+// refusal is the question's outcome now, and the resume that tells the
+// executor is owed, not done — a refusal let go of before any turn told it
+// puts the question back to waiting, which its own record then says.
+func refusedAlready(run sandbox.PendingRun, refusal sandbox.AnswerRefusal, by string) string {
+	if by == "" {
+		by = "someone"
+	}
+	when := ""
+	if !run.Answer.RecordedAt.IsZero() {
+		when = " at " + run.Answer.RecordedAt.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("A reply from %s in the conversation reached this question first%s. It came "+
+		"to %s as the engine records an answer, past the %s an answer to an executor can carry, so it "+
+		"was not taken: it was refused as the question's outcome, the question no longer waits, the "+
+		"executor is resumed told the reply did not reach it, and your answer was not used. If the "+
+		"executor still needs an answer it asks again, with a question of its own: answer that one.",
+		by, when, kept.SizeUp(refusal.Bytes), kept.Size(refusal.MaxBytes))
 }
 
 // answeredAlready is the refusal an answer gets for a question already

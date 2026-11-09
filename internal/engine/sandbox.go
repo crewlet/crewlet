@@ -1048,7 +1048,24 @@ func runRecordOf(run sandbox.PendingRun, account runAccount) runner.RunRecord {
 		Pushed:        account.Pushed,
 		PushedElided:  account.PushedElided,
 		PushedUnread:  account.PushedUnread,
+		// AND THE REPLIES ITS ROUND'S QUESTIONS GOT THAT WERE REFUSED as too
+		// large to hand the run, for the round's reviewer, which reads the
+		// round from its calls and finds none of them there (ADR-0114).
+		RefusedReplies: refusedRepliesOf(run.RoundRefusals),
 	}
+}
+
+// refusedRepliesOf is the round's refused replies as the runner carries them to
+// its reviewer: figures alone, as the row keeps them.
+func refusedRepliesOf(refusals []sandbox.RoundRefusal) []turn.RefusedReply {
+	if len(refusals) == 0 {
+		return nil
+	}
+	out := make([]turn.RefusedReply, 0, len(refusals))
+	for _, r := range refusals {
+		out = append(out, turn.RefusedReply{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes})
+	}
+	return out
 }
 
 // resumedTurn is the turn a parked run is re-entered as.
@@ -1762,6 +1779,12 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
 		Label: asked.Label, Withdrawn: asked.Withdrawn,
+	}
+	if refused := asked.Refused; refused != nil {
+		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
+		// not reach it, with its figures, in the engine's words (ADR-0114).
+		out.Refused = &runner.RefusedReply{Messages: refused.Messages(), Bytes: refused.Bytes,
+			MaxBytes: refused.MaxBytes}
 	}
 	if held := asked.Held; held != nil {
 		call := held.Call

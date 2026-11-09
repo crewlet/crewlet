@@ -94,10 +94,13 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,691,500  (with 2,998,378 to spare)
+//	every other field, measured ..... 1,700,752  (with 2,989,126 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
-// ([MaxRunTitleBytes], twice) and a colleague's question; the ask and its
+// ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
+// refusal beside its answer ([PendingRun.AnswerRefusal], a hundred delivery
+// ids at most, two figures and where it was posted, [MaxRefusalAddressBytes])
+// and the round's refusals kept for its review ([maxRoundRefusals]); the ask and its
 // decision, and the seats it is put to ([MaxAudienceHandles]); a held call's
 // sealed result and the call a person approved, on the held call and owed to
 // the log ([OwedCall]); the branch and the notes ([MaxNoteSealedBytes]); the
@@ -166,13 +169,28 @@ const (
 	// are, weighs tens of KiB. What it does not hold is a batch of pages,
 	// which a reply that will be the run's next prompt — read again by its
 	// harness at every step after — has no business being. A reply past it
-	// is not recorded as the answer ([ErrAnswerTooLarge]) and goes its way as
-	// the ordinary message it is, so nothing of it is lost, and the refusal is
-	// recorded for its author as `executor_answered` with the outcome
-	// too_large (events' AnswerTooLarge), which the dashboard draws and the
-	// conversation they replied in does not; an answer by turn is held far
-	// under it at its source (internal/agent/builtin's MaxRunAnswerBytes).
+	// is not recorded as the answer ([ErrAnswerTooLarge]): its REFUSAL is,
+	// in the answer's place — the figures and the deliveries' ids, none of
+	// its words, a few KiB at most ([PendingStore.RecordRefusal]) — and the
+	// run is resumed told that the reply did not reach it, so it asks again
+	// for less or carries on (ADR-0114); nothing of the reply is lost, since
+	// its delivery stays on the seat's inbox until the refusal leaves the
+	// run. NOT LOWERED for that: a log or a configuration pasted whole, the
+	// answer a coding run's question typically gets, is taken whole. An
+	// answer by turn is held far under it, at its source and where it is
+	// recorded ([MaxAnswerTextBytes]).
 	MaxAnswerBytes = 512 << 10
+
+	// MaxRefusalAddressBytes bounds where a refused reply was posted, as the
+	// row holds it ([AnswerRefusal.Address]): ids — the transport, the
+	// conversation and its thread, the message and its sender — which a
+	// Slack thread reply, the widest a shipped surface stamps, keeps in
+	// under a KiB. Four KiB keeps every surface's whole with room for one
+	// that stamps more, and a reply whose address is past it is refused
+	// with none (its resume raises no indicator) rather than a page of
+	// metadata carried twice on the row, in the clear and in the answer's
+	// seal.
+	MaxRefusalAddressBytes = 4 << 10
 
 	// MaxHeldArgsBytes bounds a held call's arguments as the row holds them
 	// once sealed ([HeldCall.Arguments]): AEAD-sealed and written as one
@@ -328,26 +346,34 @@ var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its 
 // ErrAnswerTooLarge is a reply past its share of the row ([MaxAnswerBytes]) as
 // the answer it would be recorded as — its seal and its deliveries — or as the
 // copies letting it go would owe the seat: refused by
-// [PendingStore.RecordAnswer] before anything is written, as an
+// [PendingStore.RecordAnswer] before anything is written, and only to a run
+// the write finds still waiting on the question, as an
 // [*AnswerTooLargeError] naming what it weighs. Nothing of the reply is lost
-// by it: a chat reply goes its way as the ordinary message it is, the refusal
-// is recorded for its author as `executor_answered` with the outcome too_large
-// ([Coordinator.TryResumeFromAnswer]), and the run waits on its question.
+// by it: a chat reply's REFUSAL is recorded as the question's outcome
+// ([PendingStore.RecordRefusal]) and resumes the run told so, its delivery
+// kept until the refusal leaves the run ([AnswerRefused]), and the refusal is
+// announced as `executor_answered` with the outcome too_large
+// ([Coordinator.TryResumeFromAnswer], ADR-0114).
 var ErrAnswerTooLarge = errors.New("sandbox: the reply is past a recorded answer's share of the run's row")
 
 // AnswerTooLargeError is [ErrAnswerTooLarge] for one reply: what it weighs as
 // the row would hold it (the answer, or the copies letting it go would owe,
 // whichever is more) and what an answer may weigh there — the two figures the
-// refusal's `executor_answered` record carries.
+// refusal records ([AnswerRefusal]), its `executor_answered` record carries,
+// and the run is told.
 type AnswerTooLargeError struct {
 	TurnID string
 	Weighs int
 	May    int
 }
 
+// Error states what the answer weighs ROUNDED UP ([kept.SizeUp]) beside the
+// bound in [kept.Size]'s units, which round down: rounded down too, a reply a
+// byte past the bound read "weighs 512 KiB ..., and an answer may weigh
+// 512 KiB" in the log line that refuses it.
 func (e *AnswerTooLargeError) Error() string {
 	return fmt.Sprintf("sandbox: the answer to run %s weighs %s on its row, and an answer may weigh %s",
-		e.TurnID, kept.Size(e.Weighs), kept.Size(e.May))
+		e.TurnID, kept.SizeUp(e.Weighs), kept.Size(e.May))
 }
 
 // Unwrap is [ErrAnswerTooLarge], which every caller tests for.
@@ -742,14 +768,27 @@ func answerFits(turnID string, answer RecordedAnswer) error {
 	return nil
 }
 
+// addressBytes is what an address weighs as the row's encoder writes it.
+func addressBytes(address map[string]string) int {
+	if len(address) == 0 {
+		return 0
+	}
+	n := 2 // the braces
+	for k, v := range address {
+		n += kept.Quoted(k) + 1 + kept.Quoted(v) + 1 // the colon, and the comma
+	}
+	return n
+}
+
 // HeldArgsFit reports why held call arguments sealed as sealed are past their
 // share of the row ([MaxHeldArgsBytes]), nil where they are within it: what the
 // holder asks before it records the question, and the store again as it writes
-// it.
+// it. The figure past the bound is stated rounded up ([kept.SizeUp]), so
+// arguments a byte past it never read as the bound itself.
 func HeldArgsFit(sealed string) error {
 	if n := kept.Quoted(sealed); n > MaxHeldArgsBytes {
 		return fmt.Errorf("sandbox: the call's arguments weigh %s once sealed, and a held call's may "+
-			"weigh %s: %w", kept.Size(n), kept.Size(MaxHeldArgsBytes), ErrHeldCallTooLarge)
+			"weigh %s: %w", kept.SizeUp(n), kept.Size(MaxHeldArgsBytes), ErrHeldCallTooLarge)
 	}
 	return nil
 }

@@ -120,6 +120,43 @@ func TestTheRunsDeliveredRefsReachTheReviewer(t *testing.T) {
 	}
 }
 
+// A QUESTION ASKED AGAIN AFTER ITS REPLY WAS REFUSED IS NO DUPLICATE (ADR-0114).
+// A reply too large for the run to take is refused by the engine, which tells
+// the run to ask again with `ask_and_wait` for a shorter form or another way to
+// receive it, or to carry on and say the reply did not reach it — and none of
+// that is in the round's calls, where the question asked again reads as the
+// same question sent twice. So the engine says, beside the log, what it
+// refused (each reply's message count and figures, rounded up, none of its
+// words), what it told the run, and that a question asked again after it is
+// that follow-up, which the duplicate rule does not hold against the agent.
+// Rendered only where a reply was refused, so the header every review carries
+// is unchanged by it.
+//
+// Mutation: drop the section, and the reviewer judges the re-ask by the
+// duplicate rule alone; drop the section's last sentence, and it says what was
+// refused and nothing of what the duplicate rule makes of the question asked
+// again.
+func TestAReviewerIsToldOfARepliedQuestionsRefusal(t *testing.T) {
+	t.Parallel()
+	p := BuildReview(engineer(), ReviewInput{
+		ToolLog: "- ask_and_wait(...) → success\n- ask_and_wait(...) → success",
+		RefusedReplies: RefusedReplies([]RefusedReply{{Messages: 3, Bytes: 512<<10 + 1, MaxBytes: 512 << 10},
+			{Messages: 1, Bytes: 3 << 20, MaxBytes: 512 << 10}}),
+	}).Text
+	contains(t, p, "\n## Replies the agent did not get\n",
+		"the agent was given none of it", "ask again with `ask_and_wait`", "did not reach it",
+		"- a reply of 3 messages, 513 KiB as the engine records an answer, past the 512 KiB",
+		"- a reply of 1 message, 3.0 MiB as the engine records an answer")
+	contains(t, p, "A question it asked again after such a reply is that follow-up, not the same "+
+		"question sent twice: the duplicate rule does not hold it against the agent.")
+	order(t, p, "\n## What the agent did\n", "\n## Replies the agent did not get\n")
+
+	none := BuildReview(engineer(), ReviewInput{RefusedReplies: RefusedReplies(nil)}).Text
+	if strings.Contains(none, "\n## Replies the agent did not get\n") {
+		t.Errorf("a round with no refused reply rendered the section:\n%s", none)
+	}
+}
+
 func TestReviewPromptRendersTheEvidenceTimeline(t *testing.T) {
 	t.Parallel()
 	p := BuildReview(engineer(), ReviewInput{

@@ -6920,13 +6920,14 @@ could wait out the executor's pause TTL behind them. The answer is to the
 resumes the executor only while it still waits on that one: if somebody else's
 answer resumed it meanwhile and it has asked something new since, yours is
 announced `not_awaiting` rather than taken as the answer to a question you
-never saw. What it became is read off the executor's own row in
+never saw — and so is one a reply too large for the executor to take reached
+first, which closed the question with no answer (`answer_refused`, below). What it became is read off the executor's own row in
 [`GET /executors`](#get-executors): `answered` or `resumed` on that
 `launch_id` once it was taken, `answer_id` among its `declined_answers` if
 every attempt to resume the executor with it failed and it was let go of (the
 executor waits on its question again, and you answer it again), or a new
 `launch_id` if the executor moved past the question first. It is also announced on the event stream
-as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer),
+as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer, whose refusal closes the question and is to resume the executor told so — followed by `declined` on the chat route if that refusal is let go of before any turn told the executor, the question then waiting again — or an answer by turn past 16 KiB, measured trimmed and before any secret in it is redacted, as this tool measures it),
 naming who answered: their name, its kind and the credential. A node that stops
 on the way to the resume leaves the recorded answer for the seat's next holder
 rather than losing it. An `unknown` outcome is a delivery the broker never
@@ -6935,7 +6936,7 @@ finds that question no longer waiting.
 
 **Who may answer**: whoever asked for the work — the seat its requester holds — or whoever leads the executor's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
-It refuses `stale_version` for a `launch_id` that is not the launch the executor waits on now, the question you read having been answered and followed by another. It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the executor's row in `GET /executors` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for an executor that is not waiting for an answer, or has no
+It refuses `stale_version` for a `launch_id` that is not the launch the executor waits on now, the question you read having been answered and followed by another. It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the executor's row in `GET /executors` carries both as values (`answered_by`, `answered_at`). A reply in the conversation too large for the executor to take closes the question the same way, and the refusal says that reply was not taken and the executor asks again if it still needs an answer (`answer_refused` on its row). It refuses `not_running` for an executor that is not waiting for an answer, or has no
 record at all (one that ended has none). It is
 served on every company, whether it runs Worklet, Doclet and Chatlet or not: the executors' record is the
 fleet's, and a company on Jira runs executors too.
@@ -12530,8 +12531,9 @@ of a discard carries `detail` and `hint`:
 Every seat's [executor run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
 `reseed`, `answered` and `resumed` run records. An `answered` run has a
-person's reply recorded as the answer to its question and is owed the resume
-that answer drives; it is no longer waiting on anybody, so `audience=` — what
+person's reply recorded as the answer to its question — or, where
+`answer_refused` is set, a reply too large to take recorded as the question's
+refusal, with none of its words — and is owed the resume that record drives; it is no longer waiting on anybody, so `audience=` — what
 is waiting on one person — lists only runs still waiting (`awaiting_clarification`
 or `reseed`).
 
@@ -12611,6 +12613,21 @@ of the delivery each arrived in, which `answer_executor` answers as `answer_id`.
 answer named there was not used: the run could not be resumed with it and
 waits on its question again, so the person who gave it is asked to answer
 again rather than left looking at a question that never moves.
+
+`answer_ids`, `answered_by` and `answered_at` name the answer recorded on the
+run, by the deliveries it arrived in, who gave it (as its seal opens on this
+node) and when — never what it said. `answer_refused` is set where that record
+is a **refusal** ([ADR-0114](../../adr/0114-a-reply-too-large-for-its-run-is-its-questions-refusal.md)):
+a reply in the conversation too large for the run to take as its answer, which
+closed the question with none of it reaching the run: the run is owed a resume
+that tells it the reply did not reach it, so it asks again or carries on. A
+refusal let go of before any turn told the run (every attempt at that resume
+failed, or its seal does not open) leaves the run waiting on its question
+again, with `answer_refused` null and the reply's id among
+`declined_answers`. It carries `{messages, bytes, max_bytes}` — how many
+messages the reply was, what it came to as the run's record would hold it, and
+what an answer may — and never the reply's words, which no record of the run
+keeps; it is `null` on every other row.
 
 `launch_id` names the job the row holds now. A turn can launch more than
 one — a reviewer that sends the work back, or a person's answer carrying a

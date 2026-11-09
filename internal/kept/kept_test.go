@@ -273,6 +273,65 @@ func TestManySmallValuesGiveWayAsAContainerAndAShapeAsAWhole(t *testing.T) {
 	}
 }
 
+// A SIZE PAST A BOUND READS PAST IT, AND A SIZE WITHIN ONE NEVER DOES. A
+// refusal states what was refused in SizeUp beside the bound in Size, and Size
+// rounds whole KiB down: stated in Size, a reply one byte past an answer's
+// 16 KiB read "16 KiB, and an answer may be at most 16 KiB". So every size
+// from a byte short of each bound a refusal states to a few past it reads
+// against that bound as it compares, a figure is never more than one unit
+// past what it states, and one that rounds up to a whole MiB is said in MiB.
+//
+// Mutation: round SizeUp's KiB down, and the byte past a bound reads as the
+// bound; drop its MiB clause's lower edge to 1 MiB, and a size a few bytes
+// short of one reads "1024 KiB".
+func TestASizePastItsBoundReadsPastIt(t *testing.T) {
+	t.Parallel()
+	value := func(s string) float64 {
+		t.Helper()
+		number, unit, ok := strings.Cut(s, " ")
+		f, err := strconv.ParseFloat(number, 64)
+		if !ok || err != nil {
+			t.Fatalf("%q is not a number and a unit", s)
+		}
+		switch unit {
+		case "MiB":
+			return f * (1 << 20)
+		case "KiB":
+			return f * (1 << 10)
+		case "bytes":
+			return f
+		}
+		t.Fatalf("%q states no unit this package writes", s)
+		return 0
+	}
+	for _, bound := range []int{1 << 10, 16 << 10, 512 << 10, 1 << 20, 8 << 20} {
+		stated := value(kept.Size(bound))
+		for n := bound - 2; n <= bound+2; n++ {
+			got := value(kept.SizeUp(n))
+			if past := n > bound; past != (got > stated) {
+				t.Errorf("%d bytes against a bound of %s reads %s: past=%v, want %v",
+					n, kept.Size(bound), kept.SizeUp(n), got > stated, past)
+			}
+			unit := float64(1 << 10)
+			if n > 1<<20-1<<10 {
+				unit = 0.1 * (1 << 20)
+			}
+			if got < float64(n) || got-float64(n) >= unit {
+				t.Errorf("%d bytes reads %s, which is not that size rounded up to a unit",
+					n, kept.SizeUp(n))
+			}
+		}
+	}
+	for n, want := range map[int]string{
+		1000: "1000 bytes", 1 << 10: "1 KiB", 16<<10 + 1: "17 KiB",
+		1<<20 - 1<<10: "1023 KiB", 1<<20 - 1: "1.0 MiB", 1<<20 + 1: "1.1 MiB",
+	} {
+		if got := kept.SizeUp(n); got != want {
+			t.Errorf("SizeUp(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 // THIS PACKAGE IMPORTS THE STANDARD LIBRARY AND THE ENGINE'S TEXT ENCODER ONLY.
 // It is a leaf because the writer of a run's row and the condensation of a
 // parked turn both read its rule from heights neither can import the other

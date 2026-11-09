@@ -28,7 +28,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { overflowing } from "~/testing.tsx";
-import { BridgeLog, BridgeSummary, ExecutorScreen } from "./Executors.tsx";
+import { BridgeLog, BridgeSummary, ExecutorScreen, doingLine } from "./Executors.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -1163,4 +1163,26 @@ test("a stopped executor asks for no live output of its job", async () => {
     screen.getByText(/Stopped by jane; the engine is recording how its turn ended/),
   ).toBeTruthy();
   expect(asked.some((a) => a.what === "executor_tail")).toBe(false);
+});
+
+/**
+ * A REFUSED REPLY IS NO ANSWER ON THE BOARD (ADR-0114). An executor whose
+ * question a reply too long for it to take closed is answered and then resumed
+ * to be told so, with none of the reply: the board says that, never that it
+ * resumes after an answer it was never given.
+ *
+ * Mutation: read the status alone, and the board says "Answered. Resuming."
+ */
+test("an executor closed by a reply too long to take is not drawn as answered", () => {
+  const refused = { messages: 1, bytes: 600 << 10, max_bytes: 512 << 10 };
+  const row = (status: ExecutorRow["status"], answer_refused: typeof refused | null) =>
+    ({ status, answer_refused }) as unknown as ExecutorRow;
+  expect(doingLine(row("answered", refused))).toBe(
+    "A reply was too long to take. Resuming to tell the executor.",
+  );
+  expect(doingLine(row("resumed", refused))).toBe(
+    "Resuming to tell the executor a reply was too long to take.",
+  );
+  expect(doingLine(row("answered", null))).toBe("Answered. Resuming.");
+  expect(doingLine(row("resumed", null))).toBe("Resuming after an answer.");
 });

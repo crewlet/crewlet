@@ -139,6 +139,7 @@ func richReviewInput() ReviewInput {
 		OpenQuestions:     "Which channel next week? 🤔",
 		Produced:          producedReport,
 		ToolLog:           "- `slack_post` → success",
+		RefusedReplies:    RefusedReplies([]RefusedReply{{Messages: 2, Bytes: 600 << 10, MaxBytes: 512 << 10}}),
 		EarlierIterations: iterationLedger,
 		Delivered:         DeliveredRefs([]string{"acme/api#41 — fix the flake 🧪"}, 2),
 		OffersA2A:         true,

@@ -554,6 +554,11 @@ type RunRecord struct {
 	// more than once, so it is what tells one collected run's record from
 	// the next.
 	LaunchID string
+
+	// RefusedReplies are the replies the round's questions got that the
+	// engine refused as too large to hand the run ([turn.Work.RefusedReplies],
+	// sandbox.PendingRun.RoundRefusals), carried to the round's reviewer.
+	RefusedReplies []turn.RefusedReply
 }
 
 // Sandboxed reports whether the record names the run's harness or its box: whether
@@ -859,7 +864,10 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Calls:         calls(w.surface),
 		Refs:          w.run.DeliveredRefs,
 		RefsElided:    w.run.RefsElided,
-		Rescued:       !submitted,
+		// AND WHAT THE RUN WAS NEVER GIVEN, for its reviewer: a reply
+		// refused as too large is in no call of the round's.
+		RefusedReplies: w.run.RefusedReplies,
+		Rescued:        !submitted,
 	}, describe(w.surface)
 }
 
@@ -906,6 +914,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
 		ToolLog:           reviewLog(w, r.cfg.SkipNames),
+		RefusedReplies:    refusedReplies(w.RefusedReplies),
 		Delivered:         prompts.DeliveredRefs(w.Refs, w.RefsElided),
 		EarlierIterations: r.priorWork(ctx, history),
 		OffersA2A:         offersA2A,
@@ -1980,6 +1989,16 @@ func reviewLog(w turn.Work, skip []string) string {
 		text += "\n" + elided
 	}
 	return text
+}
+
+// refusedReplies is the round's refused replies as the review prompt renders
+// them ([prompts.RefusedReplies]).
+func refusedReplies(replies []turn.RefusedReply) string {
+	out := make([]prompts.RefusedReply, 0, len(replies))
+	for _, r := range replies {
+		out = append(out, prompts.RefusedReply{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes})
+	}
+	return prompts.RefusedReplies(out)
 }
 
 // calls converts a surface's record into ledger calls.

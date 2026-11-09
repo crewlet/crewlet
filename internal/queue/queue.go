@@ -289,7 +289,9 @@ const (
 	DeferHoldRefused DeferCause = "hold_refused"
 	// DeferParked is a seat parked on its token budget or its models' limit.
 	DeferParked DeferCause = "parked"
-	// DeferAnswerOwed is a delivery whose answer a parked run is still owed.
+	// DeferAnswerOwed is a delivery whose answer a parked run is still owed,
+	// or a reply too large to be one, kept while the refusal recorded for it
+	// is still its run's.
 	DeferAnswerOwed DeferCause = "answer_owed"
 )
 

@@ -907,11 +907,22 @@ export interface ExecutorRow {
   /**
    * The answer recorded on the run, by the deliveries it arrived in, who gave
    * it and when. The first recorded answer wins: an answer whose id is not
-   * here was not used. Empty on a run with no recorded answer.
+   * here was not used. Empty on a run with no recorded answer. Where
+   * `answer_refused` is set, what these name is a reply too large for the
+   * executor to take, which closed the question with none of it reaching the
+   * executor: no answer at all.
    */
   answer_ids?: string[];
   answered_by?: string;
   answered_at?: string;
+  /**
+   * Set where the reply recorded on the run was REFUSED as too large for the
+   * executor to take (ADR-0114): it closed the question, the executor is
+   * resumed told it did not reach it, and it asks again if it still needs an
+   * answer. Never the reply's words, which no record keeps. Null on every
+   * other row; absent on a row from an engine that does not say.
+   */
+  answer_refused?: ExecutorAnswerRefused | null;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
   /**
@@ -995,6 +1006,17 @@ export interface ExecutorEnding {
   at: string;
   reason: string;
   stopped_by: string;
+}
+
+/**
+ * A reply refused as too large for its executor to take: how many messages it
+ * was, what it came to as the run's record would hold it, and what an answer
+ * may come to there.
+ */
+export interface ExecutorAnswerRefused {
+  messages: number;
+  bytes: number;
+  max_bytes: number;
 }
 
 /** One call a bridged run made. */

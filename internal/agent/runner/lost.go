@@ -142,7 +142,14 @@ func (a *Asked) reseed(b provenance.Boundary) string       { return a.Reseed(b) 
 func (a *Asked) keeps() bool                               { return true }
 func (a *Asked) branch() string                            { return a.Branch }
 func (a *Asked) refusal() error                            { return nil }
-func (a *Asked) what() string                              { return "carrying on the run with its answer" }
+
+// what names the carrying on, an answer's or a refused reply's.
+func (a *Asked) what() string {
+	if a.Refused != nil {
+		return "carrying on the run told the reply to its question was too large to reach it"
+	}
+	return "carrying on the run with its answer"
+}
 
 // A lost job's session is never continued IN PLACE: what its box holds is
 // what its harness was cut off in, and the kept capture of it — whose archive

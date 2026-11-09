@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReviewHeader is the reviewer's contract: the rules that decide its one
@@ -142,6 +144,12 @@ type ReviewInput struct {
 	// Produced is the executor's final prose — its run's closing reply.
 	Produced string
 
+	// RefusedReplies is the replies to the round's questions that the engine
+	// refused as too large to hand the agent, rendered by [RefusedReplies]:
+	// in no call of the round's, which shows a question asked again after
+	// one as the same question asked twice. Empty renders no section.
+	RefusedReplies string
+
 	// Delivered is the branches and pull requests the executor's run
 	// reported delivering, rendered by [DeliveredRefs]. The one evidence of
 	// its local work besides its own report, since that work is in no log.
@@ -223,6 +231,9 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 		b.Heading("blocked_by", "\n## What blocked it (the agent's account)", in.Evidence)
 	}
 	b.Heading("tool_log", "\n## What the agent did", orNone(in.ToolLog))
+	if in.RefusedReplies != "" {
+		b.Heading("refused_replies", "\n## Replies the agent did not get", in.RefusedReplies)
+	}
 	if in.OpenQuestions != "" {
 		b.Heading("open_questions", "\n## Open questions the agent raised", in.OpenQuestions)
 	}
@@ -252,6 +263,47 @@ func DeliveredRefs(refs []string, elided int) string {
 	}
 	if elided > 0 {
 		lines = append(lines, fmt.Sprintf("- (and %d more the agent reported)", elided))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// RefusedReply is a reply to a question the round's agent asked that the engine
+// refused as too large to hand it: how many messages it was, what it came to as
+// the engine records an answer, and what an answer may — never its words.
+type RefusedReply struct {
+	Messages, Bytes, MaxBytes int
+}
+
+// RefusedReplies renders the round's refused replies for the reviewer — what
+// the engine did and told the agent, then one line per reply, oldest first —
+// or "" when there were none.
+//
+// THE ENGINE'S OWN ACCOUNT, beside the agent's: the review's evidence is the
+// round's calls, and the reply is in none of them, so a question the agent
+// asked again reads as asked twice and its word that a reply never reached it
+// as an excuse, unless the engine says what it refused and what it told the
+// agent to do (ADR-0114). Figures only: the reply's words reached nobody.
+//
+// AND WHAT THE DUPLICATE RULE MAKES OF IT, SAID HERE rather than in
+// [ReviewHeader]: the section is rendered only for a round that had a reply
+// refused, while the header is every review's, byte for byte across a turn's
+// rounds and paid for on every one of them — the exception belongs beside the
+// one fact that makes it hold.
+func RefusedReplies(replies []RefusedReply) string {
+	if len(replies) == 0 {
+		return ""
+	}
+	lines := []string{"A person replied to a question the agent asked in this round, and the engine " +
+		"did not take the reply: it was past what an answer to the agent can carry, so the agent was " +
+		"given none of it. The engine told the agent so, and to ask again with `" + toolname.AskAndWait +
+		"` for a shorter form or another way to receive it if it still needed the answer, or else to " +
+		"carry on without it and say in its reply that the reply did not reach it. A question it asked " +
+		"again after such a reply is that follow-up, not the same question sent twice: the duplicate " +
+		"rule does not hold it against the agent.", ""}
+	for _, r := range replies {
+		lines = append(lines, fmt.Sprintf("- a reply of %s, %s as the engine records an answer, past "+
+			"the %s an answer to the agent can carry", words.Count(max(r.Messages, 1), "message",
+			"messages"), kept.SizeUp(r.Bytes), kept.Size(r.MaxBytes)))
 	}
 	return strings.Join(lines, "\n")
 }

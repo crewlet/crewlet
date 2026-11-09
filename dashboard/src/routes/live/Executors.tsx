@@ -398,8 +398,14 @@ export function AwaitingBanner({
   );
 }
 
-/** What the executor is doing, for one nobody is being waited on by. */
-function doingLine(run: ExecutorRow): string {
+/**
+ * What the executor is doing, for one nobody is being waited on by.
+ *
+ * A REFUSED REPLY IS NO ANSWER: a reply too long for the executor to take
+ * closed its question (`answer_refused`), and it is resumed to be told so,
+ * with none of the reply. "Answered" there said it carries on with an answer.
+ */
+export function doingLine(run: ExecutorRow): string {
   if (run.ending) return endingLine(run.ending);
   switch (run.status) {
     case "launching":
@@ -407,9 +413,13 @@ function doingLine(run: ExecutorRow): string {
     case "running":
       return "The harness is working.";
     case "answered":
-      return "Answered. Resuming.";
+      return run.answer_refused
+        ? "A reply was too long to take. Resuming to tell the executor."
+        : "Answered. Resuming.";
     case "resumed":
-      return "Resuming after an answer.";
+      return run.answer_refused
+        ? "Resuming to tell the executor a reply was too long to take."
+        : "Resuming after an answer.";
     default:
       return "Waiting on a person.";
   }

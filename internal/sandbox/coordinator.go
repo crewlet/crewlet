@@ -706,6 +706,12 @@ type CoordinatorOptions struct {
 	// A take whose claim is given back leaves the answer on the row; a
 	// copy handed back goes under an id of its own ([declinedCopyID]).
 	//
+	// A REFUSAL IS SPENT ONLY ONCE A TURN THAT TOOK IT KEEPS IT
+	// ([Coordinator.spendRefused]), never at the take or its let-go: the row
+	// carries none of its reply, so the delivery the seat's inbox keeps for
+	// it is the reply, and one let go of comes round unspent as the
+	// ordinary message it is ([AnswerRefused]).
+	//
 	// FAILS OPEN, like every completion write: the answer goes where it was
 	// going either way, and the cost of a write that did not land is a copy
 	// that may run as a turn of its own — a duplicate, which is recoverable,
@@ -715,9 +721,21 @@ type CoordinatorOptions struct {
 	// WasSpent reports whether a delivery is recorded as worked in the same
 	// ledger [CoordinatorOptions.Spent] writes, for an answer by turn that
 	// comes round on the control topic after it was spent
-	// ([Coordinator.OnAnswerGiven]). FAILS OPEN, as every ledger read does:
-	// unreadable, the delivery reaches [Coordinator.AnswerByTurn], which finds
-	// what the run says about it. Nil reads every delivery as unspent.
+	// ([Coordinator.OnAnswerGiven]), and for a refused reply's delivery whose
+	// refusal another attempt's turn kept ([Coordinator.refusedReply]).
+	// FAILS OPEN, as every ledger read does: unreadable, the answer by turn
+	// reaches [Coordinator.AnswerByTurn], which finds what the run says about
+	// it, and the refused reply is decided by what its run's row says — kept
+	// while the refusal is still the run's, spent where the relaunch that told
+	// the run carried its round on from the refused question
+	// ([PendingRun.RoundRefusals]), and otherwise the ordinary message it is,
+	// which runs as a duplicate only where another attempt's turn kept the
+	// refusal and its run has ended since, leaving no row to say so. NEVER THE
+	// WORD on a delivery whose refusal this node's own attempt kept: that is
+	// spent on the attempt's account, whatever the ledger says. A copy that
+	// comes round once the refusal has left the row is the dispatcher's to
+	// drop, by the same ledger and as every redelivered event is. Nil reads
+	// every delivery as unspent.
 	WasSpent func(ctx context.Context, handle string, ev *events.Event) bool
 
 	// After schedules f to run after d, in its own goroutine, and returns a
@@ -2740,17 +2758,28 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //   - No conversation keys at all, no run awaiting this one, or none the
 //     delivery qualifies for: [AnswerNotMine]. Nothing is owed it.
 //   - The delivery is already the recorded answer of one of the seat's runs:
-//     [AnswerConsumed]. It is a copy of an answer, never a second one.
+//     [AnswerConsumed]. It is a copy of an answer, never a second one. A copy
+//     of a refused reply is kept again, [AnswerRefused], until a turn took
+//     the refusal ([Coordinator.refusedReply]).
 //   - The seat's runs could not be read: whichever answer THIS NODE'S OWN
 //     COUNT supports — see [Coordinator.answerLookupFailed]. No awaiting run
 //     on the seat: [AnswerNotMine]. An awaiting run: [AnswerDeferred].
 //   - The reply is past what the run's row carries as an answer
-//     ([ErrAnswerTooLarge], [MaxAnswerBytes]): [AnswerNotMine]. Nothing was
-//     written, so nothing is owed it but the ordinary message it is, which
-//     keeps every word of it; the run waits on its question, and the refusal
-//     is recorded for the reply's author as `executor_answered` with the
-//     outcome too_large ([types.AnswerTooLarge]) — on the dashboard, and never
-//     in the conversation they replied in.
+//     ([ErrAnswerTooLarge], [MaxAnswerBytes]), decided against the run as the
+//     store finds it, still waiting on the question: [AnswerRefused]. Its
+//     REFUSAL is recorded as the question's outcome instead — its
+//     deliveries, when it was posted and the figures, none of its words
+//     ([PendingStore.RecordRefusal]) — announced once as `executor_answered`
+//     with the outcome too_large ([types.AnswerTooLarge]), and resumed like
+//     an answer: the run is told, in the engine's words, that the person
+//     replied and the reply did not reach it, and asks again under a question
+//     of its own or carries on without it (ADR-0114). The delivery is kept
+//     until the refusal leaves the run ([Coordinator.refusedReply]), and is
+//     [AnswerConsumed] at once where the inline attempt's own turn kept the
+//     refusal, as an answer's is at its record. To a run
+//     answered another way, moved on or ending since it was matched, nothing
+//     is refused or recorded, and the reply is the ordinary message every
+//     reply after an answer is.
 //   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
 //     landed, so this is the ambiguous case, resolved towards the run — the
 //     delivery comes back and, if the record did land, is recognised as the
@@ -2806,10 +2835,22 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			// A COPY OF AN ANSWER ALREADY RECORDED. Spent as the answer
 			// it is — and if this node is not already driving its
 			// resume, it starts: the node that recorded it may have
-			// stopped before it could.
+			// stopped before it could. A copy of a REFUSAL'S delivery is
+			// the delivery kept for it, and is kept again until the
+			// refusal leaves the run ([Coordinator.refusedReply]) — spent
+			// at once where the attempt this copy starts kept it.
 			c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
+			kept := false
 			if recorded.Status == StatusAnswered && !c.owes(recorded.TurnID) {
-				c.resumeOwed(ctx, recorded)
+				kept = c.resumeOwed(ctx, recorded)
+			}
+			if _, refused := recorded.Refused(); refused {
+				// AND ITS RECORD PUBLISHED AGAIN, under the one identity
+				// the run, its question and the delivery derive: the node
+				// that recorded the refusal may have stopped before it
+				// published it, and a record that landed is the same row.
+				c.announceRefusal(ctx, recorded, trigger)
+				return c.refusedReply(ctx, recorded, reply, kept), nil
 			}
 			return AnswerConsumed, nil
 		}
@@ -2842,31 +2883,22 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			mayAnswer = true
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
+		refused := false
 		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
-			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), and so not the
-			// run's: nothing was written, and the reply goes its way as the
-			// ordinary message it is — every word of it reaches the seat,
-			// which a cut answer or a reply dropped at the broker would not.
-			// The run waits on its question.
-			//
-			// AND THE REFUSAL IS RECORDED FOR ITS AUTHOR, with what it weighed
-			// and what an answer may and none of its words
-			// ([types.AnswerTooLarge]): the reply was written as the answer,
-			// and the record is where a person reads that it was not taken —
-			// the dashboard draws it on the turn's page and in the activity
-			// feed. NOTHING IS POSTED IN THE CONVERSATION THEY REPLIED IN, so
-			// a person who reads only that takes the run to be carrying on
-			// with the reply, and the next thing they say there, an "any
-			// luck?", is what the question is answered with where it fits.
-			log.WarnContext(ctx, "sandbox_answer_too_large", "turn_id", run.TurnID, "agent", handle,
-				"conversation", reply.Conv.Identity, "error", err.Error(),
-				"detail", "a reply past what a run's row carries as its answer is handled as the "+
-					"ordinary message it is, the refusal is recorded as executor_answered with the "+
-					"outcome too_large, and the run waits on its question")
-			by := chatAnswerer(trigger)
-			by.tooLarge = tooLarge
-			c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerTooLarge, by)
-			return AnswerNotMine, nil
+			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), refused by the
+			// store against the run as it found it, still waiting on the
+			// question — so ITS REFUSAL IS THE QUESTION'S OUTCOME
+			// (ADR-0114): recorded in the answer's place, with the figures
+			// and none of the words, and resumed like an answer, the run told
+			// in the engine's own words that the person replied and the reply
+			// did not reach it. Recorded on the same terms as an answer, so a
+			// run answered another way or moved on since is the reply's
+			// ordinary loss, read again below. Left waiting, as it once was,
+			// the question took the person's next short message ("any
+			// luck?") as its answer, and the reply went to the seat as a
+			// message nobody had asked about.
+			recorded, won, err = c.recordRefusal(ctx, run, reply, tooLarge)
+			refused = true
 		}
 		if errors.Is(err, ErrSeatNotHeld) {
 			// THE SEAT'S HOLDER'S TO RECORD: nothing was written, and the
@@ -2881,6 +2913,17 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			// a copy of it that finds the record is spent above.
 			return c.deferAnswer(ctx, run, trigger,
 				fmt.Errorf("sandbox: recording the answer %s is waiting on: %w", run.TurnID, err))
+		}
+		if won && refused {
+			// THE DELIVERY IN HAND IS DECIDED BY WHAT THE INLINE ATTEMPT
+			// DID with the refusal — kept by its turn, the delivery is
+			// spent here and now, as an answer's is at its record — and
+			// otherwise off the row as the attempt left it
+			// ([Coordinator.refusedReply]).
+			c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
+			c.announceRefusal(ctx, recorded, trigger)
+			kept := c.resumeOwed(ctx, recorded)
+			return c.refusedReply(ctx, recorded, reply, kept), nil
 		}
 		if won {
 			c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
@@ -2987,7 +3030,10 @@ func (c *Coordinator) owes(turnID string) bool {
 //   - [AnswerNotMine] — the run is not waiting for this answer (another
 //     answer was recorded first, it is running a job, or it has moved on to a
 //     question of its own), the question let this very answer go
-//     (`declined`, below), or the run is gone: its record deleted, or its
+//     (`declined`, below), the answer is past what a run may take as one
+//     (`too_large`: what it says past [MaxAnswerTextBytes], measured as
+//     `answer_executor` measures it, or what the row would hold of it past
+//     [MaxAnswerBytes]), or the run is gone: its record deleted, or its
 //     ending decided, which takes no answer whatever its record still waits
 //     on. Spent: announced as such, and there is nothing else for the
 //     delivery to become.
@@ -3143,6 +3189,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
+		// WHAT IT SAYS, MEASURED AS `answer_executor` MEASURED IT: the answer
+		// as its author gave it, trimmed, before any secret in it is
+		// redacted — the one string both ends hold to [MaxAnswerTextBytes],
+		// so an answer the tool accepted is never refused here for a
+		// redaction it did not write, and one that did not come through the
+		// tool is held to the bound it would have been. Before the choice is
+		// read, in the order the tool reads them.
+		if said := len(strings.TrimSpace(given.Answer)); said > MaxAnswerTextBytes {
+			return c.answerByTurnTooLarge(ctx, run, given, "words", said, MaxAnswerTextBytes)
+		}
 		words, answer, err := answerGivenOf(run, given, trigger, c.now())
 		if err != nil {
 			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_executor`
@@ -3157,19 +3213,14 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.record(ctx, run, words, answer)
-		if errors.Is(err, ErrAnswerTooLarge) {
+		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
 			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), refused before
-			// anything was written, which no attempt changes: let go of,
-			// as an answer a run could not be resumed with is, the person
-			// to answer again. `answer_executor` holds an answer far under
-			// the share before it delivers one (MaxRunAnswerBytes), so this
-			// is an answer that never came through it.
-			log.ErrorContext(ctx, "sandbox_answer_too_large",
-				"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
-				"error", err.Error(), "detail", "an answer by turn past what a run's row carries "+
-					"is let go of unrecorded, and the run waits on its question")
-			answered(run, types.AnswerDeclined)
-			return AnswerNotMine, nil
+			// anything was written, which no attempt changes: the row's own
+			// backstop, which an answer within [MaxAnswerTextBytes] does not
+			// reach even at its worst (see
+			// TestAnAnswerByTurnAtItsSourcesBoundFitsARecordedAnswersShare),
+			// refused the same way, on the row's figures.
+			return c.answerByTurnTooLarge(ctx, run, given, "record", tooLarge.Weighs, tooLarge.May)
 		}
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
@@ -3209,6 +3260,30 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 // spaces the next attempt — the pacing a run that keeps refusing should get,
 // rather than reads back to back.
 const answerRecordRounds = 3
+
+// answerByTurnTooLarge spends an answer by turn past what its run may take as
+// one, refused before anything was written — what it says past
+// [MaxAnswerTextBytes] (measured "words"), or, behind that, what the row would
+// hold of it past [MaxAnswerBytes] ("record") — and records the refusal:
+// `executor_answered` too_large, with what it came to and what an answer may
+// and none of its words, the question still waiting. It has no ordinary form
+// to go on as, and no conversation behind it to be told in, so the record is
+// what says it was not taken — never `declined`, which names an answer its run
+// held and let go.
+func (c *Coordinator) answerByTurnTooLarge(ctx context.Context, run PendingRun,
+	given types.ExecutorAnswerGiven, measured string, weighs, may int,
+) (AnswerDisposition, error) {
+	log.ErrorContext(ctx, "sandbox_answer_too_large",
+		"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
+		"measured", measured, "bytes", weighs, "max_bytes", may,
+		"detail", "an answer by turn past what its run may take as an answer is spent "+
+			"unrecorded, and the run waits on its question")
+	c.announceAnswered(ctx, run, types.AnswerViaOperator, types.AnswerTooLarge, answerer{
+		by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
+		choice: given.Choice, answerBytes: weighs, answerMaxBytes: may,
+	})
+	return AnswerNotMine, nil
+}
 
 // OnAnswerGiven settles one answer BY TURN off the seat's control topic: an
 // error hands the delivery back, and nil spends it.
@@ -3339,9 +3414,10 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
-	// tooLarge is what a reply too large to be recorded as the answer
-	// weighed, and what an answer may weigh ([types.AnswerTooLarge]).
-	tooLarge *AnswerTooLargeError
+	// answerBytes is what an answer refused as too large came to, and
+	// answerMaxBytes what an answer may, on the measure it was refused on
+	// ([types.AnswerTooLarge]); zero on every other outcome.
+	answerBytes, answerMaxBytes int
 }
 
 // chatAnswerer is who a chat reply came from: the sender as the transport's
@@ -3363,6 +3439,16 @@ func chatAnswerer(trigger *events.Event) answerer {
 func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 	via types.AnswerVia, outcome types.AnswerOutcome, by answerer,
 ) {
+	c.announceAnsweredAs(ctx, run, via, outcome, by, recordIdentity{})
+}
+
+// announceAnsweredAs is [Coordinator.announceAnswered] under the identity as,
+// a fresh one where as is zero: a record the same fact publishes again carries
+// the id and the instant it did, which the event store keeps as one row
+// ([recordIdentity]).
+func (c *Coordinator) announceAnsweredAs(ctx context.Context, run PendingRun,
+	via types.AnswerVia, outcome types.AnswerOutcome, by answerer, as recordIdentity,
+) {
 	payload := types.ExecutorAnswered{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
@@ -3376,13 +3462,19 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		Decision: run.Decision, AudienceHandles: slices.Clone(run.AudienceHandles),
 		Choice: by.choice, Answer: by.said,
 	}
-	if by.tooLarge != nil {
-		payload.AnswerBytes, payload.AnswerMaxBytes = by.tooLarge.Weighs, by.tooLarge.May
+	if by.answerBytes > 0 {
+		payload.AnswerBytes, payload.AnswerMaxBytes = by.answerBytes, by.answerMaxBytes
 	}
 	if !run.AskedAt.IsZero() {
 		payload.AskedAt = run.AskedAt.UTC()
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
+	if as.id != uuid.Nil {
+		ev.ID = as.id
+	}
+	if !as.at.IsZero() {
+		ev.Timestamp = as.at.UTC()
+	}
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(payload.EventType()), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_answer_announce_failed",
@@ -3539,6 +3631,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// finds the run reaped and nothing on it to recognise the copy
 			// by. Spent only once the turn returned, it ran as a second
 			// turn. See [CoordinatorOptions.Spent].
+			//
+			// NOT A REFUSAL'S, which carries no copy of its reply: its
+			// delivery, kept on the seat's inbox, is the only one there is,
+			// and a take is given back by a turn that broke before it
+			// reached anybody — after which the refusal may be let go of,
+			// and the delivery is what goes back to the seat. It is spent
+			// once the turn that took it keeps it ([Coordinator.spendRefused]).
 			c.spend(ctx, run.AgentHandle, *run.Answer)
 		} else {
 			c.markResumeBegun(ctx, run, carry)
@@ -3637,7 +3736,9 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// it is SPENT: this is the one branch that deliberately keeps
 			// the claim, and handing the delivery back to the ordinary
 			// route would run a second turn on a message the resumed one
-			// has already acted on.
+			// has already acted on. A refusal it took included, whose
+			// delivery the take left unspent ([Coordinator.spendRefused]).
+			c.spendRefused(ctx, run)
 			return AnswerConsumed, nil
 		}
 		// PAST THE TURN'S DEADLINE NOTHING WAITS AND NOTHING IS RETRIED. A
@@ -3742,6 +3843,10 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// message.
 		return AnswerDeferred, err
 	}
+	// THE TURN RAN, so a refusal it took is kept, and the delivery the
+	// seat's inbox kept for it is spent now ([Coordinator.spendRefused]):
+	// the run was told, and a copy of the delivery is a reply it already has.
+	c.spendRefused(ctx, run)
 
 	latest, err := c.current(ctx, run)
 	if err != nil {
@@ -3872,7 +3977,16 @@ func (c *Coordinator) settleAbandoned(ctx context.Context, run PendingRun, note 
 	return ours
 }
 
-// spend is [CoordinatorOptions.Spent] for one recorded answer.
+// spend is [CoordinatorOptions.Spent] for one recorded answer: its deliveries,
+// as the answer carries them.
+//
+// BEFORE AN ANSWER IS LET GO OF, this is what makes its copies the reply: the
+// original coming round after them is a reply already handed back. A REFUSAL
+// CARRIES NO DELIVERY, so letting one go spends nothing — and that is what
+// sends its reply back the way it came: the delivery itself, kept on the
+// seat's inbox, comes round as the ordinary message it is ([AnswerRefused]).
+// A refusal's delivery is spent by id, once a turn keeps it
+// ([Coordinator.spendRefused]).
 func (c *Coordinator) spend(ctx context.Context, handle string, answer RecordedAnswer) {
 	if c.spent == nil {
 		return
@@ -3880,6 +3994,50 @@ func (c *Coordinator) spend(ctx context.Context, handle string, answer RecordedA
 	if evs := answer.decodedEvents(); len(evs) > 0 {
 		c.spent(ctx, handle, evs)
 	}
+}
+
+// spendRefused is [CoordinatorOptions.Spent] for the refusal run holds, once a
+// turn that took it KEEPS it: the deliveries its reply was made of, by the ids
+// it names ([AnswerRefusal.EventIDs]), since it carries none of them — so the
+// delivery the seat's inbox kept for it is dropped when it comes round rather
+// than run as a turn: the run was told about it, and the person is answered by
+// what the run does next. Nothing for a run that holds no refusal.
+//
+// KEPT means the turn returned having run, broke after it began (and is never
+// retried), or died holding it, as the reap of its claim finds
+// ([Coordinator.reapTail]) — never the take alone, which a turn that broke
+// before it reached anybody gives back; the refusal is then owed again, and
+// may yet be let go of, sending the kept delivery back to the seat as the
+// ordinary message it is. Spent at the take, that delivery was dropped as
+// worked and the reply lost.
+//
+// BY ID ALONE, which is all the completion ledger keys a delivery on and all a
+// refusal keeps of it: an id that does not parse names no delivery this
+// engine minted, and is skipped.
+func (c *Coordinator) spendRefused(ctx context.Context, run PendingRun) {
+	refusal, refused := run.Refused()
+	if !refused || c.spent == nil {
+		return
+	}
+	evs := make([]*events.Event, 0, len(refusal.EventIDs))
+	for _, id := range refusal.EventIDs {
+		if parsed, err := uuid.Parse(id); err == nil {
+			evs = append(evs, &events.Event{ID: parsed})
+		}
+	}
+	if len(evs) > 0 {
+		c.spent(ctx, run.AgentHandle, evs)
+	}
+}
+
+// spendTaken is what a turn that TOOK run's answer and died holding it spends:
+// the answer's deliveries, or the refusal's ([Coordinator.spendRefused]).
+func (c *Coordinator) spendTaken(ctx context.Context, run PendingRun) {
+	if run.Answer == nil {
+		return
+	}
+	c.spend(ctx, run.AgentHandle, *run.Answer)
+	c.spendRefused(ctx, run)
 }
 
 // current is a claimed run as its record stands after the resumed turn
@@ -4344,7 +4502,10 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		}, trace)
 	} else {
 		detail := ending.Detail
-		if ending.Returned {
+		switch {
+		case run.EndingReturnsRefusal:
+			detail += refusedReturnedDetail
+		case ending.Returned:
 			detail += replyReturnedDetail
 		}
 		ev = events.New(types.ExecutorFailed{
@@ -4450,8 +4611,15 @@ func (e ending) decision() Decision {
 type failureNote struct{ reason, detail, errorKind string }
 
 // replyReturnedDetail is what an announcement adds when the ending hands a
-// person's answer back to the seat ([RecordedEnding.Returned]).
-const replyReturnedDetail = "; the answer a person gave it goes back to the seat"
+// person's answer back to the seat ([RecordedEnding.Returned]), and
+// refusedReturnedDetail when what goes back is a reply too large for the run to
+// take, whose refusal it held untold ([PendingRun.EndingReturnsRefusal]): no
+// answer, and nothing the run was given or told.
+const (
+	replyReturnedDetail   = "; the answer a person gave it goes back to the seat"
+	refusedReturnedDetail = "; a reply too large for it to take, which it was never told of, goes back " +
+		"to the seat as the message it was"
+)
 
 // errEndingOwed marks an ending that is KEPT for this node's retry
 // ([Coordinator.oweEnding]): its decision could not be confirmed, or a step of
@@ -5006,7 +5174,7 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 		case err == nil, errors.Is(err, ErrAnswerTaken):
 			// NOT THIS ATTEMPT'S TO LET GO: the delete reads the row and
 			// refuses for anything it still owes.
-			run.Answer = nil
+			run.Answer, run.AnswerRefusal = nil, nil
 			return run, nil
 		case !errors.Is(err, ErrHandBackOwed):
 			return PendingRun{}, err
@@ -5556,8 +5724,9 @@ func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string
 	if taken {
 		// THE TURN TOOK THE REPLY AND DIED WITH IT: spent, so the
 		// delivery that carried it — unacknowledged, if the node took it
-		// inline — is dropped when it comes round to this holder.
-		c.spend(ctx, run.AgentHandle, *run.Answer)
+		// inline, or kept for a refusal — is dropped when it comes round to
+		// this holder.
+		c.spendTaken(ctx, run)
 	}
 	// Fenced on the lease this node just took, so a record a newer owner has
 	// already claimed is left to that owner, and neither ended nor announced
@@ -6014,8 +6183,17 @@ type AskedRun struct {
 
 	// Withdrawn is whether the run's own seat gave the answer: it withdrew
 	// the question, or the held call (as Deny), with Answer its reason
-	// (ADR-0111). Derived from who answered, never carried apart from it.
+	// (ADR-0111). Derived from who answered, never carried apart from it,
+	// and never set beside Refused: a refused reply is no answer at all.
 	Withdrawn bool
+
+	// Refused is set where the question's outcome is no answer but the
+	// REFUSAL of a reply too large to be one ([PendingRun.AnswerRefusal]):
+	// what the run is told of it — how many messages the reply was and the
+	// figures — in place of an answer, and Answer and By are empty. NEVER AN
+	// EMPTY ANSWER: every reader that hands the run its answer tells it the
+	// refusal instead where this is set (ADR-0114).
+	Refused *AnswerRefusal
 }
 
 // WithdrawnBy reports an answer given by the run's own seat: an agent seat
@@ -6025,8 +6203,16 @@ func WithdrawnBy(run PendingRun, by, byKind string) bool {
 }
 
 // askedRun is what run's recorded answer resumes it with: the words its seal
-// opened to ([AnswerSeal.Open]), never anything else on the row about them.
+// opened to ([AnswerSeal.Open]), never anything else on the row about them —
+// and for a refusal, the refusal those words carry, in place of an answer.
 func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
+	if answer.Refusal != nil {
+		refusal := *answer.Refusal
+		return &AskedRun{
+			Question: redact.Secrets(run.Question), Branch: run.Branch, SessionID: run.SessionRan(),
+			BoxKept: run.SandboxID != "", Refused: &refusal,
+		}
+	}
 	text, err := AnswerText(run.Decision, answer.Choice, answer.Text)
 	if err != nil {
 		// UNREACHABLE: a choice is checked against the question it answers

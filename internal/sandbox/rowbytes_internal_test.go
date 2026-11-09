@@ -331,6 +331,25 @@ func worstRow(t *testing.T) PendingRun {
 		LostClaims: math.MaxInt, FirstLostAt: worstAt}, func(a *RecordedAnswer, pad string) {
 		a.Events = []json.RawMessage{json.RawMessage(`"` + pad + `"`)}
 	})
+	// A REFUSAL BESIDE IT, AT ITS BOUND, which the row never holds beside an
+	// answer at its share (its own answer weighs a few KiB): one delivery's
+	// ids at the most a drain hands one partition (internal/config's
+	// `notification_coalesce_max_batch`, at most 100), its two figures at
+	// their widest, and where it was posted at [MaxRefusalAddressBytes] in the
+	// bytes that escape the most. And the round's refusals kept for its
+	// review, as many as it keeps, each at its widest.
+	address := map[string]string{"transport": ""}
+	pad := MaxRefusalAddressBytes - addressBytes(address)
+	address["transport"] = markup(pad/6) + plain(pad%6)
+	if got := addressBytes(address); got != MaxRefusalAddressBytes {
+		t.Fatalf("the worst address weighs %d, want its bound %d", got, MaxRefusalAddressBytes)
+	}
+	refusal := &AnswerRefusal{EventIDs: ids(100), Bytes: math.MaxInt, MaxBytes: math.MaxInt, Address: address}
+	roundRefusals := make([]RoundRefusal, maxRoundRefusals)
+	for i := range roundRefusals {
+		roundRefusals[i] = RoundRefusal{Job: uuid.NewString(), Messages: math.MaxInt, Bytes: math.MaxInt,
+			MaxBytes: math.MaxInt}
+	}
 	handBack := paddedTo(t, MaxAnswerBytes, []HandedBack{{ID: uuid.NewString(), Original: uuid.NewString()}},
 		func(h *[]HandedBack, pad string) {
 			(*h)[0].Event = json.RawMessage(`"` + pad + `"`)
@@ -432,7 +451,8 @@ func worstRow(t *testing.T) PendingRun {
 		OwedCall:          &OwedCall{Round: uuid.NewString(), Call: approved},
 		ParkedInputTokens: math.MaxInt, ParkedOutputTokens: math.MaxInt,
 		ParkedCacheReadTokens: math.MaxInt, ParkedCacheWriteTokens: math.MaxInt,
-		AskedAt: worstAt, Answer: &answer, DeclinedAnswers: handles(maxDeclinedAnswers), HandBack: handBack,
+		AskedAt: worstAt, Answer: &answer, AnswerRefusal: refusal, DeclinedAnswers: handles(maxDeclinedAnswers),
+		HandBack: handBack, EndingReturnsRefusal: true, RoundRefusals: roundRefusals,
 		Ending: &RecordedEnding{ID: uuid.NewString(), At: worstAt, Reason: plain(64), Detail: markup(1 << 10),
 			Returned: true, Unused: true, Reclaim: true},
 		Stop: &RunStop{By: markup(128), ByKind: plain(32), OperatorID: plain(64), Reason: markup(4 * 500),
@@ -631,19 +651,19 @@ func encoded(t *testing.T, run PendingRun) int {
 // AN ANSWER BY TURN AT ITS SOURCE'S BOUND FITS A RECORDED ANSWER'S SHARE. An
 // answer by turn has no ordinary message to fall back on, so one the row could
 // not carry would be one a person was told was taken and the run never was:
-// `answer_executor` holds an answer to a page (internal/agent/builtin's
-// MaxRunAnswerBytes, which is MaxAskContextBytes), and that page at its worst —
-// every byte one the encoder escapes six-fold, sealed with the longest names,
-// and carried again as the delivery it came in — fits [MaxAnswerBytes], as the
-// row holds it and as the copy a let-go of it would owe.
+// `answer_executor` and the record both hold an answer to a page
+// ([MaxAnswerTextBytes], which is MaxAskContextBytes), and that page at its
+// worst — every byte one the encoder escapes six-fold, sealed with the longest
+// names, and carried again as the delivery it came in — fits [MaxAnswerBytes],
+// as the row holds it and as the copy a let-go of it would owe.
 //
-// Mutation: raise MaxRunAnswerBytes past what a recorded answer's share
+// Mutation: raise MaxAnswerTextBytes past what a recorded answer's share
 // holds, or shrink the share under it, and this goes red.
 func TestAnAnswerByTurnAtItsSourcesBoundFitsARecordedAnswersShare(t *testing.T) {
 	t.Parallel()
 	run := PendingRun{TurnID: strings.Repeat("t", 64), LaunchID: uuid.NewString()}
 	given := types.ExecutorAnswerGiven{TurnID: run.TurnID, LaunchID: run.LaunchID,
-		Answer: strings.Repeat("<", MaxAskContextBytes), AnsweredBy: strings.Repeat("<", 128),
+		Answer: strings.Repeat("<", MaxAnswerTextBytes), AnsweredBy: strings.Repeat("<", 128),
 		AnsweredByKind: strings.Repeat("k", 32), OperatorID: strings.Repeat("o", 64)}
 	trigger := events.New(given, events.TraceContext{})
 	words, answer, err := answerGivenOf(run, given, trigger, worstAt)
