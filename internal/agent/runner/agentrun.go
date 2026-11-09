@@ -214,8 +214,11 @@ type AgentRunRequest struct {
 // [AgentRunRequest.Continue].
 type Continuation struct {
 	// SessionID is the asking run's harness session; Brief its next prompt —
-	// the answer, and the notes [AgentRunRequest.Notes] carries: only those,
-	// because the session already holds every note it read before it asked.
+	// what carries it on; where the job's harness is not known to have ended
+	// its own run, that the session was cut off or may have been, every call
+	// of the round and every note the turn has read, any of which such a copy
+	// may lack ([Runner.inPlaceAfter]); and the notes [AgentRunRequest.Notes]
+	// carries, which no copy has read.
 	SessionID string
 	Brief     string
 
@@ -611,8 +614,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
 	// a fresh run's after every note the turn read, as any brief does; the
-	// asking run's own session after the answer alone, since that session
-	// already holds every note it read.
+	// asking run's own session after the answer — and, where its harness is
+	// not known to have ended its own run, after every note the turn has
+	// read, which such a copy may lack ([Runner.inPlaceAfter]): a copy whose
+	// harness ended its own run holds every note it read, and its brief's.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -638,6 +643,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
 	}
+	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
+	// that carries the round on in the job's box rather than from its kept
+	// capture, built here for the same reason ([Runner.inPlaceAfter]).
+	inPlaceAfter := r.inPlaceAfter(ctx, carry, round, built)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
 	// after the session's save, each past its budget, are rewritten by the
@@ -686,6 +695,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the message that woke the turn is ([Asked.Continuation]).
 	fence := r.cfg.Turn.Context.FenceBoundary()
 	continued := carry.continuation(fence)
+	for _, part := range inPlaceAfter {
+		continued += "\n\n" + part
+	}
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
@@ -698,7 +710,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// to its question and what the call the person approved returned, now
 	// that it is made.
 	inPlace := carry.session()
-	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls}
+	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls,
+		endedOwnRun: r.cfg.Resume.HarnessEnd.EndedOwnRun()}
 	if carry.keeps() {
 		switch {
 		case basis.Continues():

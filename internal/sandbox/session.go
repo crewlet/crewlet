@@ -1289,15 +1289,26 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 // by is zero where the read has no deadline.
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)
-	var by time.Time
-	if d, ok := ctx.Deadline(); ok {
-		by = d.Add(-discardGrace)
+	by := recordsBy(ctx)
+	if !by.IsZero() {
 		if last := by.Add(-discardGrace); last.Before(deadline) {
 			deadline = last
 		}
 	}
 	take, cancel := context.WithDeadline(ctx, deadline)
 	return take, cancel, by
+}
+
+// recordsBy is the instant by which a read's records made after its take must
+// be made — the take's own ([Coordinator.takeContext]) and how its job's
+// harness ended ([Coordinator.markHarnessEnd]) — so its pause and its answer
+// keep their room ([discardGrace]); zero where the read has no deadline.
+func recordsBy(ctx context.Context) time.Time {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}
+	}
+	return d.Add(-discardGrace)
 }
 
 // stampContext is the context the one record a take makes only once is made

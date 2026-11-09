@@ -63,6 +63,7 @@ func (r Rotated) Reseed() string {
 
 // A rotated round's words are the engine's own, which no fence token touches.
 func (r *Rotated) session() string                         { return r.SessionID }
+func (r *Rotated) boxKept() bool                           { return r.BoxKept }
 func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
 func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
 func (r *Rotated) keeps() bool                             { return true }

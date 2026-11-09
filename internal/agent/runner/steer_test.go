@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // founderNote is a note a bound person sent through their session: By is the
@@ -474,10 +475,12 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 
 // A FRESH SESSION'S BRIEF CARRIES EVERY READ NOTE; A CONTINUED ONE'S ONLY THE NEW.
 // A run carried on with a person's answer continues the asking run's own harness
-// session where it can, which already holds every note it read — so its
-// prompt is the answer and the notes since; a fresh run started instead holds
-// nothing, so its brief carries every note the turn read and then the new ones.
-// Both take the new notes once, named to the launch.
+// session where it can, which — its harness having ended its own run — already
+// holds every note it read, so its prompt is the answer and the notes since; a
+// fresh run started instead holds nothing, so its brief carries every note the
+// turn read and then the new ones. Both take the new notes once, named to the
+// launch. (A copy whose harness may have been cut off is told the turn's notes
+// again: TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead.)
 func TestABriefCarriesTheNotesItsSessionLacks(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -496,8 +499,10 @@ func TestABriefCarriesTheNotesItsSessionLacks(t *testing.T) {
 		resume: &runner.Resume{State: parked.State, Bridged: before,
 			Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				SessionID: "sess-ask", BoxKept: true},
+			Run: runner.RunRecord{LaunchID: "job-0"}, HarnessEnd: sandbox.HarnessEndOwnRun,
 			Steered: []steer.Read{{Note: carried, Reading: steer.Reading{Phase: types.PhaseExecute,
-				Iteration: 1, Round: 1, Boundary: types.SteerBoundaryToolBatch, Launch: "job-0"}}}},
+				Iteration: 1, Round: 1, Boundary: types.SteerBoundaryToolBatch, Launch: "job-0",
+				Order: 1}}}},
 	})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 		t.Fatalf("Resume: %v", err)
