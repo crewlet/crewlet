@@ -70,9 +70,11 @@ type Evidence struct {
 	Ledger []usage.TurnLedgerRow
 	// Backup is the node's backup alarm as its latest evaluation stands.
 	Backup Backup
-	// WorkUnread, LedgerUnread and AlarmsUnread say the caller could not read
-	// that source, so its classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread bool
+	// Paused is every agent seat the engine paused for a failure (ADR-0117).
+	Paused []PausedSeat
+	// WorkUnread, LedgerUnread, AlarmsUnread and PausesUnread say the caller
+	// could not read that source, so its classes raise nothing and the answer names it.
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread bool
 }
 
 // source is the record a detector reads.
@@ -85,6 +87,8 @@ const (
 	sourceLedger
 	// sourceAlarms is the node's alarms, [Evidence.Backup].
 	sourceAlarms
+	// sourcePauses is the seats' pauses, [Evidence.Paused].
+	sourcePauses
 )
 
 // unread reports whether ev could not read src.
@@ -96,6 +100,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.LedgerUnread
 	case sourceAlarms:
 		return ev.AlarmsUnread
+	case sourcePauses:
+		return ev.PausesUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -176,13 +182,13 @@ const (
 	auxiliaryPercent = 15
 )
 
-// EvidenceClasses is every class a detector raises.
+// EvidenceClasses is every class a detector or a paused seat raises.
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return out
+	return append(out, pausedClasses()...)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
@@ -209,6 +215,9 @@ func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, d.detect(ev, kind)...)
+	}
+	if !ev.unread(sourcePauses) {
+		out = append(out, pausedSeats(ev)...)
 	}
 	sortFindings(out)
 	return out
@@ -241,6 +250,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.AlarmsUnread {
 		answer.Unread = append(answer.Unread, UnreadAlarms)
+	}
+	if ev.PausesUnread {
+		answer.Unread = append(answer.Unread, UnreadPauses)
 	}
 	return answer
 }

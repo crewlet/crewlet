@@ -592,6 +592,10 @@ type Sources struct {
 	// evaluated: false mid-boot and on a node running no state log. Nil says false.
 	AlarmsEvaluated func() bool
 
+	// Pauses lists every seat's pause, which the advisor reads for the seats
+	// the engine paused on a failure (ADR-0117). Nil on a node with no pause store.
+	Pauses SeatPauseLister
+
 	// Secrets is the fleet's secret rows, metadata only, which a model's
 	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
 	Secrets SecretRows

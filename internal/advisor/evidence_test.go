@@ -378,3 +378,39 @@ func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 		})
 	}
 }
+
+// A SEAT THE ENGINE PAUSED FOR A FAILURE IS THE OWNER'S TO FIX: one blocking
+// finding per failure kind, naming every agent it holds, with that kind's fix;
+// a kind this build does not know raises nothing, and an unread store nothing.
+func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
+	t.Parallel()
+	ev := advisor.Evidence{Paused: []advisor.PausedSeat{
+		{Handle: "ops", Name: "Ops", Failure: "sandbox_configuration"},
+		{Handle: "app", Name: "App", Failure: "sandbox_configuration"},
+		{Handle: "pm", Name: "PM", Failure: "models_refused"},
+		{Handle: "qa", Name: "QA", Failure: "a_later_kind"},
+	}}
+	found := advisor.Detect(ev, kindOf)
+	byClass := map[advisor.Class]advisor.Finding{}
+	for _, f := range found {
+		byClass[f.Class] = f
+	}
+	if len(found) != 2 {
+		t.Fatalf("raised %+v, want one finding for the sandbox and one for the models", found)
+	}
+	box := byClass[advisor.ClassSandboxUnstartable]
+	if box.Severity != advisor.SeverityBlocks || box.Actor != advisor.ActorOwner ||
+		box.Subject.Kind != advisor.SubjectCompany || !strings.Contains(box.Title, "App and Ops are paused") ||
+		box.Fix.Kind != advisor.FixOpenSetting || box.Fix.Setting != "providers.sandbox" {
+		t.Errorf("the sandbox finding = %+v, want the owner's block naming both, opening the sandbox", box)
+	}
+	models := byClass[advisor.ClassModelsCredential]
+	if models.Subject.Seat != "pm" || !strings.Contains(models.Title, "PM is paused") ||
+		models.Fix.Kind != advisor.FixExternalStep || !strings.Contains(models.Fix.Sentence, "Settings, Models") {
+		t.Errorf("the models finding = %+v, want PM's, its credentials replaced under Settings", models)
+	}
+	ev.PausesUnread = true
+	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
+		t.Errorf("an unread pause store raised %+v", found)
+	}
+}

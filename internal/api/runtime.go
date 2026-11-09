@@ -271,6 +271,10 @@ type NodeRuntime interface {
 	MCPChecker() mcpapi.Checker
 	MCPChecks() queries.MCPCheckReader
 
+	// SeatPauses lists every seat's pause from the coordination store, nil on
+	// a node with no fleet store.
+	SeatPauses() queries.SeatPauseLister
+
 	// IssueReports reads the company's issue reports and what one would say,
 	// nil on a node with no reporter.
 	IssueReports() queries.IssueReportReader
