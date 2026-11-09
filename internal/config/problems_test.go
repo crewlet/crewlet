@@ -674,8 +674,9 @@ func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	//
 	// AND A REACHABLE PERSON'S SEAT, so the one warning counted is the
 	// reference: a company with no human seat is advised that nobody can
-	// join it.
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n"+
+	// join it. The agent holds health_tools for the same reason: a company
+	// whose agents hear no alarm is advised so.
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n    health_tools: true\n"+
 		"  - name: Founder\n    kind: human\n"+
 		"    contact:\n      slack_user_id: U0FOUNDER\n")
 	if err := cfg.ValidateAdmission(); err != nil {

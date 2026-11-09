@@ -23,6 +23,7 @@
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { IssueReportsAnswer } from "./issueReports.ts";
+import type { AdvisorAnswer } from "./advisor.ts";
 import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
@@ -1589,6 +1590,8 @@ export interface ConfigWarning {
   /** Display text: what it names. */
   to: string;
   message: string;
+  /** What an advisory is about, for the setup advisor; absent on most warnings. */
+  class?: string;
 }
 
 /** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
@@ -7849,6 +7852,7 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   issue_reports: IssueReportsAnswer;
+  advisor: AdvisorAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
   backups: BackupsAnswer;

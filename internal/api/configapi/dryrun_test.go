@@ -245,6 +245,11 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	// human seat, and this draft declares none. The check is where a builder
 	// hears it, before an operator meets the refusal of their first
 	// invitation.
+	// THE SETUP CLASSES ASIDE: a draft of agents on one model, none holding
+	// health_tools, also raises the advisories the setup advisor fixes
+	// (internal/config's own tests judge those), and this case is about the
+	// two above.
+	answer.Warnings = slices.DeleteFunc(answer.Warnings, func(w config.Warning) bool { return w.Class != "" })
 	if len(answer.Warnings) != 2 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
 		answer.Warnings[0].Path != "roles[0].manages[1]" || answer.Warnings[0].Seat != "ceo" {
 		t.Errorf("warnings = %+v, want the dangling manages entry, located, "+
@@ -615,7 +620,9 @@ func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
 			if w.Introduced == nil {
 				t.Fatalf("warning %+v says nothing about whether the write introduces it", w)
 			}
-			if w.Seat != "" {
+			// A person's seat's warnings only: the setup classes are about
+			// every agent here and judged in internal/config.
+			if w.Seat != "" && w.Class == "" {
 				out[w.Seat] = *w.Introduced
 			}
 		}
