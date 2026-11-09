@@ -637,6 +637,22 @@ func Catalogue() []Instrument {
 				"waiting, which has no other symptom at all.",
 		},
 
+		// ---- the work pickup ------------------------------------------
+		{
+			Name: WorkPickups, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "What each work pickup decided for an idle agent seat this " +
+				"node holds (ADR-0112): `woken` when it handed the seat its " +
+				"next ready item, `nothing_ready` when the seat holds no " +
+				"ready work, `all_offered` when it was handed every ready " +
+				"item at its current version already, `cooldown` and " +
+				"`claimed` when the fleet's claims held it back, and " +
+				"`unknown` when a read, a claim or the publish failed; the " +
+				"`work_pickup_skipped` line names the error. Ready work that " +
+				"sits while this counts only `cooldown` or `all_offered` is " +
+				"seats declining it.",
+		},
+
 		// ---- the object store's S3 requests ---------------------------
 		{
 			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,

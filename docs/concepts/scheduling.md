@@ -572,6 +572,9 @@ scheduling:
   jitter_seconds: 0          # max per-schedule deterministic spread (see below)
   catchup_min_seconds: 120   # lower clamp on the catchup window (at least 1)
   catchup_max_seconds: 7200  # upper clamp on the catchup window
+  work_pickup:
+    enabled: true            # hand an idle agent seat its next ready item
+    cooldown_seconds: 600    # least time between two pickups of one seat, 60..1800
 ```
 
 There is no zone here: a schedule that names none fires on the company's
@@ -599,6 +602,56 @@ spread firing: each schedule gets a **deterministic** offset in
 fanned out across that window. The canonical fire minute still forms the
 idempotency key, so dedup is unaffected. Default `0` fires exactly on the
 minute.
+
+---
+
+## The work pickup
+
+A schedule fires on a clock. The **work pickup** is the engine's own
+cadence for the work an agent seat already holds: when a seat is idle and
+holds assigned work that is ready, the node holding it hands it its next item
+([ADR-0112](../../adr/0112-an-idle-seat-is-handed-its-next-ready-item-once-per-item-version.md)).
+It exists because every other wake comes from a change. An assignment wakes
+its assignee once, and a turn that did not start the work (the seat was busy,
+it answered a chat message first, it said it would come back to the item) was
+the last word anybody said about that item.
+
+- **Idle** is decided by the node that holds the seat, once a minute: no turn
+  of the seat dispatching, no executor run holding it or waiting on a person's
+  answer, nothing waiting in its inbox, not paused, not parked on a token
+  budget or a provider limit, no budget window or provider limit that would
+  refuse its next launch, and the node neither shedding nor draining. All of
+  that must hold on two passes in a row, so the writes of the turn that just
+  ended are on the node's copy first: a seat is handed its next item within
+  about two minutes of going idle.
+- **Ready** is Worklet's: assigned to the seat, `in_progress` or `todo`,
+  waiting on no open blocker, past its start date, and not held on a question
+  the seat itself asked on the item that nobody has answered. Work in review
+  is not ready.
+- **Next** is work the seat already started first, then its priority list in
+  the order its lead set, then the rest by priority and due date, the order
+  `my_work` lists them in.
+- **Once per item version.** A pickup is made once per seat, item, last change
+  somebody else made to the item, and status. The fleet's completion ledger
+  remembers it for seven days whichever node holds the seat, and a fleet claim
+  keeps two nodes from both sending it during a move. A seat that declines an
+  item, comments on it or records a blocker on it is not handed it again until
+  somebody else changes it or its status moves; a seat that started it is
+  handed it once more, as work in progress, when it is idle again.
+- **One per cooldown.** A fleet claim on the seat spaces its pickups by
+  `cooldown_seconds`, so a seat that declines one ready item after another is
+  offered the next at most once per cooldown.
+
+The wake is a `task_assigned` naming the item, its status and why it was
+chosen, filed under the item's own conversation so the turn continues the
+item's session. Its brief names the four honest answers: start or continue
+the work, record the blocker, hand the item back, or say on the item why it
+should wait. A company on a vendor tracker, or with no model, gets no pickups.
+
+`crewlet.work.pickups{outcome}` counts what each pickup decided for an idle
+seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,
+`unknown`), and every pickup logs `work_pickup_woken` with the seat, the item
+and why; a pickup that could not be sent logs `work_pickup_skipped` at warn.
 
 ---
 

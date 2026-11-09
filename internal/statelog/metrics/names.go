@@ -150,6 +150,7 @@ const (
 	StorePoolWait                    = "crewlet.store.pool.wait"
 	StoreWalBytes                    = "crewlet.store.wal.bytes"
 	TrackerFeedUnreadable            = "crewlet.tracker.feed.unreadable"
+	WorkPickups                      = "crewlet.work.pickups"
 	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"

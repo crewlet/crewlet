@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The seat's WAKE, and it is the only task event left.
@@ -36,11 +37,12 @@ func init() {
 	events.Register[TaskAssigned]()
 }
 
-// TaskAssigned hands a schedule's task to a seat. This is also the agent's
-// wake: it is what the scheduler publishes into an inbox, and the scheduler is
-// its ONE producer — a hand-off between seats is a tracker assignment or a
-// colleague's ask, each with a wake of its own. Its docs used to name a
-// "delegation path" as a second producer; nothing in this tree publishes one.
+// TaskAssigned hands a seat work of its own: a schedule's task, or its next
+// ready work item. It is the agent's wake for both, and it has TWO producers:
+// the scheduler, which fills [TaskAssigned.Description] and
+// [TaskAssigned.Schedule], and the work pickup (ADR-0112), which fills
+// [TaskAssigned.Pickup] alone. A hand-off between seats is a tracker
+// assignment or a colleague's ask, each with a wake of its own.
 type TaskAssigned struct {
 	// TaskID is the fire's run id — scope, schedule, instant and runner —
 	// kept for telemetry and the feed's detail. It names one FIRE and no
@@ -100,6 +102,61 @@ type TaskAssigned struct {
 	// seat is told it is catching up once rather than handed the same duty
 	// once per missed tick.
 	Missed []MissedFire `json:"missed,omitempty"`
+	// Pickup is the work item the work pickup hands an idle seat, and why
+	// it chose that one; nil on a schedule's fire.
+	Pickup *WorkPickup `json:"pickup,omitempty"`
+}
+
+// WorkPickup is the item a pickup names. Every field is the tracker's own
+// value, never anybody's prose, so the brief carries no words to fence.
+type WorkPickup struct {
+	// Item is the task's id, Key its address and Status where it stands.
+	Item   string `json:"item"`
+	Key    string `json:"key"`
+	Status string `json:"status"`
+	// Version is the task's version the pickup was derived from: the
+	// pickup is made once per (seat, item, version).
+	Version uint64 `json:"version"`
+	// Why is what put the item first ([PickupWhy]).
+	Why PickupWhy `json:"why"`
+	// Ready is how many ready items the seat holds, this one included.
+	Ready int `json:"ready"`
+}
+
+// PickupWhy is what put an item first in a seat's ready work.
+type PickupWhy string
+
+const (
+	// PickupInProgress is an item the seat already started, which comes
+	// before any it has not.
+	PickupInProgress PickupWhy = "in_progress"
+	// PickupPriorityList is the first item of the seat's priority list,
+	// the order somebody arranged for it.
+	PickupPriorityList PickupWhy = "priority_list"
+	// PickupQueue is the first ready item by priority, then due date.
+	PickupQueue PickupWhy = "queue"
+)
+
+// Valid reports whether a reason off the wire is one this build knows.
+func (w PickupWhy) Valid() bool {
+	switch w {
+	case PickupInProgress, PickupPriorityList, PickupQueue:
+		return true
+	}
+	return false
+}
+
+// sentence is the reason as the brief says it.
+func (w PickupWhy) sentence() string {
+	switch w {
+	case PickupInProgress:
+		return "It is in progress and nothing is working on it now, so it comes before work you have not started."
+	case PickupPriorityList:
+		return "It is the first ready item on your priority list, the order your lead set for you."
+	case PickupQueue:
+		return "It is your first ready item by priority, then due date."
+	}
+	return ""
 }
 
 // MissedFire is one earlier fire a scheduled run stands for.
@@ -113,11 +170,18 @@ type MissedFire struct {
 // TriggerOrigin is the schedule that fired ([Originated]), or nothing for a
 // task no schedule names.
 func (e TaskAssigned) TriggerOrigin() TriggerOrigin {
+	if p := e.Pickup; p != nil {
+		return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
+	}
 	if e.Schedule == "" {
 		return TriggerOrigin{}
 	}
 	return TriggerOrigin{Kind: OriginSchedule, ID: e.Schedule}
 }
+
+// PickupReason is the origin reason a pickup's turn is started under, beside
+// the tracker's own routing reasons.
+const PickupReason = "pickup"
 
 // EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
 // is what the scheduler publishes to start a turn.
@@ -141,6 +205,9 @@ func (e TaskAssigned) AgentID() string { return e.Agent }
 // the turn's ask it made two fires of one schedule unalike to every
 // similarity search, by the one part that differs on every fire.
 func (e TaskAssigned) Brief() string {
+	if p := e.Pickup; p != nil {
+		return p.brief()
+	}
 	var b strings.Builder
 	if e.Schedule != "" {
 		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
@@ -195,8 +262,38 @@ func (e TaskAssigned) missedLine() string {
 // to a similarity search by the one part that differs on every fire. The id
 // stays on the payload, where telemetry and the feed's detail read it.
 func (e TaskAssigned) SummaryFor(actor string) string {
+	if p := e.Pickup; p != nil {
+		return lead(actor, "was handed its next ready work item "+p.Key)
+	}
 	if e.Schedule != "" {
 		return lead(actor, "was assigned scheduled work "+e.Schedule)
 	}
 	return lead(actor, "was assigned a task")
+}
+
+// brief is the pickup's ask: which item, why it was chosen, and the four
+// honest ways to answer it.
+//
+// THE WAYS OUT ARE NAMED because the pickup is made once per item version: a
+// seat that answers with a promise and changes nothing is not reminded until
+// the item changes, so "later" has to be said on the item, where a person
+// sees it, or not at all.
+func (p WorkPickup) brief() string {
+	var b strings.Builder
+	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
+	b.WriteString("Your next item is " + p.Key + " (" + p.Status + ").")
+	if why := p.Why.sentence(); why != "" {
+		b.WriteString(" " + why)
+	}
+	if p.Ready > 1 {
+		b.WriteString(" You hold " + strconv.Itoa(p.Ready) + " ready items in all.")
+	}
+	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then do one of these in this turn:\n" +
+		"- start or continue the work now;\n" +
+		"- if something outside your control blocks it, record the blocker on the item " +
+		"(waiting_on) or ask the person who can unblock it;\n" +
+		"- if it is not yours to do, hand it back or reassign it;\n" +
+		"- if it should wait, say why with " + toolname.CommentOnWorkItem + ".\n" +
+		"You will not be handed this item again until it changes.")
+	return b.String()
 }

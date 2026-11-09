@@ -258,7 +258,7 @@ sequenceDiagram
     Note over PM: Agent creates subtask, transitions ticket, posts<br/>comment — all through MCP tools, same as a human would
 ```
 
-The `task_assigned` event type (`types.TaskAssigned`) exists for engine-internal work injection (the [Scheduler](scheduling.md) publishes it to a seat's inbox for cron-style recurring tasks, `internal/schedule/scheduler.go`) and never for the PM-tool webhook pipeline, which produces `external_notification` instead. The two are deliberately different types: one is the engine giving a seat work, the other is the world telling a seat something happened.
+The `task_assigned` event type (`types.TaskAssigned`) exists for engine-internal work injection (the [Scheduler](scheduling.md) publishes it to a seat's inbox for cron-style recurring tasks, `internal/schedule/scheduler.go`, and the [work pickup](scheduling.md#the-work-pickup) to hand an idle seat its next ready item, `internal/pickup`) and never for the PM-tool webhook pipeline, which produces `external_notification` instead. The two are deliberately different types: one is the engine giving a seat work, the other is the world telling a seat something happened.
 
 ---
 

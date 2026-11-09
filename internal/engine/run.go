@@ -1207,6 +1207,10 @@ type Engine struct {
 	// one company's fires. reconcileScheduler arms and disarms it instead.
 	scheduler schedulerLoop
 
+	// pickup is the work pickup's loop over the agent seats this node holds
+	// (ADR-0112), and which of them its last pass found idle.
+	pickup pickupLoop
+
 	// onboarded remembers which seats this PROCESS has seen onboarded.
 	//
 	// On the engine rather than on an epoch, because it is a fact about
@@ -2606,6 +2610,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.startMemorySync(ctx)
 	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
+	// BESIDE THE SCHEDULER, the other producer of a seat's own work: it
+	// reads the company on every pass, so no apply re-arms it.
+	e.startPickups(ctx)
 	// AFTER the epoch is current, because the dispatcher resolves a turn's
 	// seat against it — and before notifications, so a turn woken by the
 	// first inbound message already has somewhere to write what it learns.
@@ -3214,6 +3221,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryFill()
 	e.stopLearning()
 	e.stopScheduler()
+	e.stopPickups()
 	// GITLET'S GIT SURFACE WITH THEM, and not with the publishers it shares a
 	// reason with further down (the committer and the estate subject, which
 	// it still stops before): its git reads are answered for peers on this

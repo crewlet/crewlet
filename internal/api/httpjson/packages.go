@@ -50,7 +50,7 @@ var goPackages = map[string]bool{
 	"objectives": true, "query": true,
 	"opkey": true, "org": true, "orgchart": true, "origin": true, "paced": true, "pagepolicy": true,
 	"panics": true,
-	"period": true, "phase": true, "placement": true,
+	"period": true, "phase": true, "pickup": true, "placement": true,
 	"plainjson": true, "prefetch": true, "procgroup": true,
 	"procgrouptest": true, "prompts": true,
 	"presence": true, "provenance": true,

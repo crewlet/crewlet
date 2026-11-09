@@ -802,6 +802,10 @@ func taskReads() map[string]indexedRead {
 		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
 		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
 		"unblocked":     {unblockedBlock(person), queue},
+		// THE WORK PICKUP'S TWO READY BLOCKS, each a seek of the queue
+		// by the seat and the status group.
+		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
+		"ready (waiting)": {readyBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
 		page, args := taskRowsStatement(set, block.query.terms)
@@ -1125,6 +1129,8 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
+		"who last changed a seat's ready work": seek(subject, readyMovedStatement(3),
+			task, "t-0008", "t-0009", "ana"),
 		"an asker's next record after an ask closed": seek(subject, followUpStatement,
 			task, "ana", record),
 		"what resolved an ask": seek(subject, resolvedStatement,
