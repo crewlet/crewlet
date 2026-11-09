@@ -2158,8 +2158,10 @@ const (
 	// findings, a change's preview from the entity route's dry run and what the
 	// integrations need from a person), merged on top of it, took it to 5689.4
 	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
-	// 5690 KiB.
-	treeBudget = 5<<20 + 570<<10
+	// 5690 KiB. The advisor's go-live check and its blockers in Needs you,
+	// merged on top of it, took it to 5691.1 KiB (5,827,714 bytes, +1,793, all
+	// script). The measured size's next KiB: 5692 KiB.
+	treeBudget = 5<<20 + 572<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
