@@ -515,3 +515,10 @@ func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
 
 	return routing.Route(candidates, registry, actor, Reason.WakesActor)
 }
+
+// Heard is [Route] without its last step: everybody told, woken or not.
+func Heard(candidates []routing.Candidate[Reason], registry func(string) bool,
+	actor string) []routing.Candidate[Reason] {
+
+	return routing.Heard(candidates, registry, actor, Reason.WakesActor)
+}

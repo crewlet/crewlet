@@ -103,6 +103,10 @@ type Routed struct {
 	// Zero keeps the delivery's own instant, which is right for a vendor
 	// edge's random id and for a record that carries no instant.
 	WakeAt time.Time
+
+	// Held is a recipient the change told and does not wake: nothing is
+	// delivered, and an agent seat's held wake is recorded ([types.WakeHeld]).
+	Held bool
 }
 
 // Recipient is an addressee, in any of the forms a third-party app can name one.
@@ -485,6 +489,9 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		s.skip(ctx, r.Source, r.To.Handle, ReasonNoSeat, nil)
 		return nil
 	}
+	if r.Held {
+		return s.held(ctx, ev, r, party)
+	}
 	if deliverable, why := Deliverable(prompts, reg, r.Inbound, party); !deliverable {
 		log.InfoContext(ctx, "notification_skipped", "source", r.Source,
 			"handle", party.Handle, "reason", string(why))
@@ -657,6 +664,29 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	}
 	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,
 		"agent_id", party.AgentID.String())
+	return nil
+}
+
+// held records an agent seat's held wake, once per change and seat: under the
+// id its wake would have had, so a redelivery collapses onto the same record. A
+// person, or a seat with no id, has no turn to hold and records nothing.
+func (s *Service) held(ctx context.Context, ev *events.Event, r Routed, party Party) error {
+	if party.AgentID == uuid.Nil || party.Human {
+		return nil
+	}
+	rec := events.New(types.WakeHeld{Agent: party.AgentID.String(), AgentHandle: party.Handle,
+		NotificationSource: r.Source, Origin: r.Origin},
+		events.TraceContext{TraceID: ev.TraceID, ParentSpanID: ev.SpanID})
+	if r.WakeID != uuid.Nil {
+		rec.ID = r.WakeID
+		if !r.WakeAt.IsZero() {
+			rec.Timestamp = r.WakeAt.UTC()
+		}
+	}
+	rec.Source = "notify." + r.Source
+	if err := s.queue.Publish(ctx, topics.Event(types.WakeHeld{}.EventType()), rec); err != nil {
+		return fmt.Errorf("notify: record %s's held wake: %w", party.Handle, err)
+	}
 	return nil
 }
 

@@ -33,7 +33,7 @@ func catalogue() []events.Payload {
 		ScheduledFireSuperseded{},
 		// notification.go
 		ExternalNotification{}, TurnTriggerSkipped{},
-		NotificationsCoalesced{}, NotificationSkipped{},
+		NotificationsCoalesced{}, NotificationSkipped{}, WakeHeld{},
 		// a2a.go
 		A2ARequest{}, A2AMessage{},
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
@@ -207,6 +207,7 @@ var wireTypes = []string{
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",
+	"wake_held",
 	"work_pickup",
 }
 
@@ -377,6 +378,7 @@ var wireTags = map[string][]string{
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
+	"wake_held":                     {"agent_handle", "agent_id", "notification_source", "origin"},
 	"a2a_request":                   {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis", "working_for"},
 	"a2a_message":                   {"channel_id", "content", "question", "sender", "sender_role", "working_for"},
 	"a2a_channel_opened":            {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},

@@ -347,6 +347,14 @@ func (b *Builder[R]) wakes(reason R) bool {
 func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 	actor string, wakesActor func(R) bool) []Candidate[R] {
 
+	return Waking(Heard(candidates, registry, actor, wakesActor))
+}
+
+// Heard is [Route] without its fifth step: every candidate told of the change,
+// woken or not. Those it holds and [Route] drops are the change's held wakes.
+func Heard[R ~string](candidates []Candidate[R], registry func(string) bool,
+	actor string, wakesActor func(R) bool) []Candidate[R] {
+
 	employed := func(handle string) bool { return registry == nil || registry(handle) }
 	var ordinary, fallback []Candidate[R]
 	for _, c := range candidates {
@@ -364,7 +372,7 @@ func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 		}
 	}
 	if len(ordinary) > 0 {
-		return waking(ordinary)
+		return ordinary
 	}
 	// THE RANK DECIDES, never the place in the slice a caller assembled —
 	// stable, so two links a caller gave one rank keep the order it gave.
@@ -373,15 +381,30 @@ func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 	})
 	for _, c := range fallback {
 		if employed(c.Handle) {
-			return waking([]Candidate[R]{c})
+			return []Candidate[R]{c}
 		}
 	}
 	return nil
 }
 
-// waking is [Route]'s fifth step: the candidates whose notice starts a turn,
+// Held is the candidates heard that are not among woken, in heard's order.
+func Held[R ~string](heard, woken []Candidate[R]) []Candidate[R] {
+	reached := make(map[string]bool, len(woken))
+	for _, c := range woken {
+		reached[c.Handle] = true
+	}
+	var out []Candidate[R]
+	for _, c := range heard {
+		if !reached[c.Handle] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Waking is [Route]'s fifth step: the candidates whose notice starts a turn,
 // in the order given, and nil when none does.
-func waking[R ~string](heard []Candidate[R]) []Candidate[R] {
+func Waking[R ~string](heard []Candidate[R]) []Candidate[R] {
 	var out []Candidate[R]
 	for _, c := range heard {
 		if c.Wakes {

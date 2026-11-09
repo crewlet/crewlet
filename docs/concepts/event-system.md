@@ -407,6 +407,13 @@ contribution_requested, contribution_received
 # notification: what arrived from outside, and what the engine decided
 external_notification      # inbound from a third-party app webhook or chat socket
 notification_skipped       # dropped notification with reason (traceability)
+wake_held                  # an agent seat a change told and did not wake (its
+                           # notice row is written and no turn starts, as for
+                           # another agent's words that ask nothing): the
+                           # seat, and the origin it was told under, which
+                           # the turn ledger counts as the wake's `held`
+                           # disposition. One per change and seat, under the
+                           # id its wake would have had
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
@@ -880,10 +887,10 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
-**Stored, not fed.** Three types are rows like every other and are kept out of
+**Stored, not fed.** Some types are rows like every other and are kept out of
 the activity feed: `auxiliary_spend`, which is accounting rather than activity,
-`code_fetched`, which is an audit, and `code_check_finished`, which is
-counted rather than watched. The feed is a ring of the whole
+`code_fetched`, which is an audit, and `code_check_finished` and `wake_held`,
+which are counted rather than watched. The feed is a ring of the whole
 company's last few hundred events — every node's is fed by a fleet-wide
 broadcast — and a turn writes several auxiliary records beside its own phases,
 a compaction a burst, while a busy company's readers of its unit repositories —
