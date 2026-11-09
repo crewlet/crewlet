@@ -284,3 +284,14 @@ func (e *Engine) LatestAlarms() []statelog.Alarm {
 	}
 	return tracker.Latest()
 }
+
+// AlarmsEvaluated reports whether this node's alarm table has been evaluated,
+// which an empty [Engine.LatestAlarms] cannot tell from none standing.
+func (e *Engine) AlarmsEvaluated() bool {
+	tracker := e.alarms.Load()
+	if tracker == nil {
+		return false
+	}
+	_, evaluated := tracker.Standing()
+	return evaluated
+}

@@ -189,6 +189,10 @@ func (d *timelineDriver) update(i int, st scenario.Step, writer *worklet.Writer,
 	case scenario.VerbStatus:
 		status := worklet.Status(st.Status)
 		patch.Status, change = &status, worklet.ChangeStatus
+		if st.Assignee != "" {
+			// ONE CHANGE THAT ALSO HANDS IT OVER, recorded under its status.
+			patch.Assignee = &st.Assignee
+		}
 	case scenario.VerbWatch:
 		patch.Watch, change = &worklet.WatchIntent{Handle: st.Watcher, Watch: true}, worklet.ChangeWatchers
 	case scenario.VerbComment:

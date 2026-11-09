@@ -588,6 +588,10 @@ type Sources struct {
 	// count, the gauge and the log lines were told. Nil answers no alarm.
 	Alarms func() []statelog.Alarm
 
+	// AlarmsEvaluated reports whether this node's alarm table has been
+	// evaluated: false mid-boot and on a node running no state log. Nil says false.
+	AlarmsEvaluated func() bool
+
 	// Secrets is the fleet's secret rows, metadata only, which a model's
 	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
 	Secrets SecretRows

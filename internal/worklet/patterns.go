@@ -228,8 +228,9 @@ func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet 
 
 // patternAssignedStatement is when an item last changed hands, a seek of its own
 // history; an item never reassigned has no row and was held from its filing.
-const patternAssignedStatement = `SELECT h.created_at FROM tracker_history h
-	WHERE h.subject_id = ? AND h.kind = 'assignee' ORDER BY h.log_seq DESC LIMIT 1`
+const patternAssignedStatement = `SELECT h.effective_at FROM tracker_history h
+	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
+	ORDER BY h.log_seq DESC LIMIT 1`
 
 // readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue,
 // leaving out one it was handed after the quiet instant: its wait starts then.

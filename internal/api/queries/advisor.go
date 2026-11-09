@@ -4,12 +4,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -37,14 +38,28 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	now := s.clock()
+	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, s.clock())), nil
+}
+
+// advisorEvidence is what the company did in the week before now. A SOURCE THAT
+// FAILS IS NAMED AS UNREAD, never the whole answer lost: the document's
+// findings and the integrations' need no tracker read.
+func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, now time.Time) advisor.Evidence {
+	ev := advisor.Evidence{Until: now}
 	window := advisor.PatternsWindow(now, company)
 	window.Level = statelog.ReadStale
 	work, err := s.Work.WorkPatterns(ctx, window)
 	if err != nil {
-		return nil, fmt.Errorf("advisor: read the company's work patterns: %w", err)
+		log.WarnContext(ctx, "advisor_work_patterns_unreadable", "error", err.Error())
+		ev.WorkUnread = true
 	}
-	return advisor.ReadWithEvidence(in, advisor.Evidence{Until: now, Work: work, Backup: backupEvidence(s.latestAlarms())}), nil
+	ev.Work = work
+	if s.AlarmsEvaluated == nil || !s.AlarmsEvaluated() {
+		ev.AlarmsUnread = true
+	} else {
+		ev.Backup = backupEvidence(s.latestAlarms())
+	}
+	return ev
 }
 
 // backupEvidence is whether the latest evaluation holds the backup alarm, and
