@@ -28,6 +28,8 @@ providers:
   llm:
     zulu:
       model: claude-sonnet-5
+    small:
+      model: claude-haiku-4-5
   embeddings:
     type: openai
     model: text-embedding-3-large
@@ -48,6 +50,10 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    # Health held and learning on a smaller model, so the setup advisor's
+    # advisories stay out of the two this case is about.
+    health_tools: true
+    llm_auxiliary: small
     manages: [nobody]
 `
 

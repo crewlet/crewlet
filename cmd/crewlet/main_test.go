@@ -1772,6 +1772,17 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	}, {
 		Kind: config.WarningAdvisory, Path: "roles",
 		Segments: config.Path{"roles"},
+	}, {
+		// AND THE SETUP ADVISOR'S, each with its class: no agent hears an
+		// alarm, and both agents learn on the model they work on.
+		Kind: config.WarningAdvisory, Path: "roles[0].health_tools",
+		Segments: config.Path{"roles", 0, "health_tools"}, Class: config.ClassHealthUnheld,
+	}, {
+		Kind: config.WarningAdvisory, Path: "roles[0].llm_auxiliary", Seat: "ceo",
+		Segments: config.Path{"roles", 0, "llm_auxiliary"}, Class: config.ClassAuxiliaryModel,
+	}, {
+		Kind: config.WarningAdvisory, Path: "roles[1].llm_auxiliary", Seat: "cto",
+		Segments: config.Path{"roles", 1, "llm_auxiliary"}, Class: config.ClassAuxiliaryModel,
 	}}
 	if len(got.Warnings) != len(want) {
 		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
@@ -1835,6 +1846,10 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 		config.WarningDanglingReference + " units[0].lead",
 		// A COMPANY OF AGENTS ALONE: no human seat to invite anybody onto.
 		config.WarningAdvisory + " roles",
+		// No agent holding health_tools, and two learning on their own model.
+		config.WarningAdvisory + " roles[0].health_tools",
+		config.WarningAdvisory + " roles[0].llm_auxiliary",
+		config.WarningAdvisory + " roles[1].llm_auxiliary",
 	}
 	if !slices.Equal(located, want) {
 		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
