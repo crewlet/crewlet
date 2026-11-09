@@ -818,10 +818,18 @@ The consequences worth stating plainly:
   dead letter in `CREWLET_DLQ`, and let go, and `feed_dead_lettered` is raised
   from the first one. The first node whose feed starts able to read an entry
   replays it, derives its wake once and drops it — so a stalled roll is
-  finished by restarting the remaining nodes onto the new build. An entry
-  nothing replays is kept for `stream.event_retention_hours` and then
-  expires, and its wake with it (`crewlet.tracker.feed.dead_letter_expired`).
-  See [Dead letters](../concepts/event-system.md#dead-letters).
+  finished by restarting the remaining nodes onto the new build.
+  [`crewlet feeds dead-letters`](../reference/cli.md#crewlet-feeds-dead-letters)
+  lists every entry by id, with the record it holds, why no node read it and
+  how long it has left. An entry no node will ever read — a record sealed
+  under a key you have retired from every node, one no build translates — is
+  abandoned with
+  [`crewlet feeds discard <id> -confirm <id>`](../reference/cli.md#crewlet-feeds-discard),
+  which loses its wake for good
+  (`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays
+  or discards is kept for `stream.event_retention_hours` and then expires,
+  and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
+  [Dead letters](../concepts/event-system.md#dead-letters).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two

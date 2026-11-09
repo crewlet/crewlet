@@ -410,6 +410,8 @@ every other route.
 | `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Takes `admin`** (see [The broker's membership](#the-brokers-membership)) |
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Takes `admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
+| `GET` | `/feeds/dead-letters` | Every wake feed's dead letters — the records no node could read in the hour each was handed back — by feed, each entry by the id a discard names and what its feed kept of the record, never its frame; a feed that could not be listed is named with its error. **Takes `admin`** (see [The wake feeds' dead letters](#the-wake-feeds-dead-letters)) |
+| `POST` | `/feeds/dead-letters/{id}/discard` | Give one entry's wake up for good, whichever feed's subject holds it. `?confirm=` repeats the id; an id no wake feed holds is `404 no_dead_letter`. **Takes `admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/diagnostics/issue-reports` | The company's [engine issue reports](../guides/engine-issue-reports.md): whether they are on, the relay, every report sent with its status, the bytes it sent and the issue the relay named, and what a report of each class would say. **Takes `admin`**. The setting itself is `diagnostics.issue_reports.enabled`, written under `/config` |
@@ -940,7 +942,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
 | `gitlet` | Every door to the company's code ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)): git under `/git/`, the reads under `/gitlet/*` and every `code_*` question but who read a repository and the Gitlet nodes' cache report, the inbox's code half, `code_mark_inbox` and the socket's `inbox_changed` push for that half, a turn's `code_change` origin, and the code tools of `/operator/mcp` and `/operator/act`. A principal without it is refused `403 unauthorized` naming `gitlet` before any repository is read. Behind it, WHICH repository and what on it is the repository's grant ([Gitlet](#gitlet-git-and-gitlet)): a person maintains every one, a credential bound to no seat reads every one and pushes none. Who read a repository (`GET /gitlet/repos/{name}/readers`, `code_repo_readers`), a verify (`/gitlet/repos/{name}/verify`) and `code_status` are `admin`'s instead |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/feeds/dead-letters*`, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, an executor's tail (`/executors/{turn_id}/tail`), and the seat's executor sessions with each one's transcript (`/agents/{id}/sessions`, `/agents/{id}/sessions/{turn_id}`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -977,8 +979,8 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the three purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`, `POST /artifacts/{id}/purge`), chat's three destructions (`POST /chatlet/channels/{channel_id}/erase` and `/prune`, `PUT /chatlet/channels/{channel_id}/retention`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
-| none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work, knowledge, artifact and chat verb but the three purges and chat's three destructions: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*`, both `POST /fleet/broker/remove*` and `POST /feeds/dead-letters/{id}/discard`), the three purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`, `POST /artifacts/{id}/purge`), chat's three destructions (`POST /chatlet/channels/{channel_id}/erase` and `/prune`, `PUT /chatlet/channels/{channel_id}/retention`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| none | | Every read, the three deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`, `GET /feeds/dead-letters`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work, knowledge, artifact and chat verb but the three purges and chat's three destructions: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -12431,6 +12433,93 @@ as every other control of the deployment does, and both are refused during a
 | `503` | `no_member` | No live member could carry the removal — including when the only live member is the one being removed, which never carries its own, and when every member asked holds no key the request is signed under (bring `secrets.keys` into agreement across the fleet) |
 | `504` | `outcome_unknown` | The member carrying it did not answer, or answered with nothing this node can believe — not signed by the fleet, or not the answer to this request; it may have committed the removal first — read the group before asking again |
 | `500` | `broker_remove_failed` | Anything else; read the group before asking again |
+
+### The wake feeds' dead letters
+
+```
+GET  /feeds/dead-letters
+POST /feeds/dead-letters/{id}/discard?confirm={id}
+```
+
+Every domain whose records wake somebody — Worklet's, Doclet's, chat's and
+Gitlet's — has a wake feed: one durable consumer the fleet's data nodes share.
+A record no node could read in the hour it was handed back is kept as a **dead
+letter** in `CREWLET_DLQ`, its sealed frame inside, until the first node whose
+feed starts able to read it replays it or the stream's age bound lets it go
+([Dead letters](../concepts/event-system.md#dead-letters)). These two routes
+are an operator's view of those entries, and the one decision about them a
+person makes.
+
+**`GET /feeds/dead-letters`** answers every wake feed this build declares, in
+one order, whatever logs the answering node is running: the entries are the
+broker's, so every node answers alike. `at` is the answering node's clock,
+which each entry's age and time left are read against. An entry is listed by
+its `id` — the broker's sequence for it, unique across every dead-letter
+subject and never reused, which is what a discard names — and by what its feed
+kept of the record: the `stream`, `position` and `generation` it was delivered
+from, the `key` it arrived on and its `op_id` (`generation` and `op_id` are
+absent where the node that gave up never read the envelope), the `reason` no
+node read it (`newer_record`, `newer_envelope`, `unknown_key` or
+`untranslatable`) and
+the `detail` that node met, the record's `stored_at`, how many times it had
+been `delivered`, when it was `dead_lettered_at`, and when the broker
+`kept_at` the entry and `expires_at` lets it go. Never its frame. An entry a
+newer build kept is still listed, by its id and the broker's instants, with
+`decode_error` saying why this build cannot read it — and it can still be
+discarded. A feed whose subject could not be listed carries `list_error` and
+`entries: null`, never an empty list: an unread feed is not an empty one.
+
+```json
+{
+  "at": "2026-11-09T12:00:00Z",
+  "feeds": [
+    {"source": "work", "group": "crewlet-tracker-feed", "subject": "dlq.changefeed.work.crewlet-tracker-feed.…", "entries": [
+      {"id": 41, "source": "work", "stream": "CREWLET_TRACKER_LOG", "position": 1234, "generation": 1,
+       "key": "crewlet.tracker.task.T-1", "op_id": "0192f4c7-…", "reason": "unknown_key",
+       "detail": "the frame is sealed under a key this node does not hold (it holds [k1])",
+       "stored_at": "2026-11-09T09:00:00Z", "delivered": 312, "dead_lettered_at": "2026-11-09T10:00:00Z",
+       "kept_at": "2026-11-09T10:00:00Z", "expires_at": "2026-12-09T10:00:00Z"},
+      {"id": 57, "source": "work", "kept_at": "2026-11-09T11:00:00Z", "expires_at": "2026-12-09T11:00:00Z",
+       "decode_error": "changefeed: the dead letter is version 2, and this build reads up to 1: a newer build kept it"}
+    ]},
+    {"source": "page", "group": "crewlet-pages-feed", "subject": "dlq.changefeed.page.crewlet-pages-feed.…", "entries": null,
+     "list_error": "nats: no responders available for request"},
+    {"source": "chat", "group": "crewlet-chat-feed", "subject": "dlq.changefeed.chat.crewlet-chat-feed.…", "entries": []},
+    {"source": "code", "group": "crewlet-code-feed", "subject": "dlq.changefeed.code.crewlet-code-feed.…", "entries": []}
+  ]
+}
+```
+
+**`POST /feeds/dead-letters/{id}/discard`** gives one entry's wake up for good:
+for an entry no build will ever read — a record sealed under a key retired
+from every node, one no build translates and none will — which would otherwise
+keep `feed_dead_lettered` raised for the whole retention. `confirm` repeats the
+id. The node lists the wake feeds' subjects until one holds the id and drops it
+there, through the same ledger a replay's drop passes, so it takes the claim on
+the entry's going that the alarm reading's expiry count takes and no node
+counts it as a wake the retention lost. It reaches only the wake feeds' own
+subjects: a subscription's poison under another `dlq.` subject is never
+discarded here. The answer is the entry it dropped, in the listing's shape. The
+node logs `changefeed_dead_letter_discarded` at warn, naming who pressed it —
+the author, their kind and the credential — and counts
+`crewlet.tracker.feed.dead_letter_discarded`. An entry a replay, its expiry or
+another discard took in the moment between the listing and the drop was not
+removed by this request: it is answered `no_dead_letter` and counted nowhere,
+since a replayed wake was published. `crewlet feeds discard` is a client of it.
+
+**Both routes take `admin`**, and the discard a
+[recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are), as
+every other control of the deployment does; the discard is refused during a
+[drain](#during-a-drain), and the listing is served through one. Every refusal
+of a discard carries `detail` and `hint`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `confirm_required` | `?confirm=` does not repeat the id |
+| `400` | `dead_letter_invalid` | The id is not a whole number above zero |
+| `404` | `no_dead_letter` | No wake feed's subject holds the id: never an entry, one a replay, its expiry or another discard took first, or an entry on another `dlq.` subject |
+| `503` | `unavailable` | A feed's subject could not be listed and no other holds the id, so whether it is that feed's is unknown and nothing was discarded; or the broker did not answer the drop, which may have landed. A `Retry-After` where waiting may clear it; list the dead letters before asking again |
+| `500` | `dead_letter_discard_failed` | Anything else; list the dead letters before asking again |
 
 ### `GET /executors`
 

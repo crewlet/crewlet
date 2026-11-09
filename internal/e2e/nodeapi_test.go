@@ -340,6 +340,9 @@ func wireAPI(
 		// THE FLEET BROKER'S MEMBERSHIP, through the engine's own surface,
 		// as `crewlet run` wires it.
 		FleetBroker: e.FleetBroker(),
+		// THE WAKE FEEDS' DEAD LETTERS, through the engine's one ledger, as
+		// cmd/crewlet hands them: api.New requires them.
+		DeadLetters: feedDeadLetters(e),
 		Backup:      copier,
 		// THE MOVE OF THE COMPANY'S FILES to an S3 bucket, which only the
 		// engine can make, as cmd/crewlet hands it: api.New requires it.
@@ -480,6 +483,17 @@ func stopInReverse(stops []func()) {
 func nodeGate(e *engine.Engine) api.NodeGate {
 	if g := e.NodeGate(); g != nil {
 		return g
+	}
+	return nil
+}
+
+// feedDeadLetters is the engine's operator surface over the wake feeds' dead
+// letters as the API's seam, or nil on an engine keeping none — cmd/crewlet's
+// own rule, so the harness wires the dead letters exactly as `crewlet run`
+// does.
+func feedDeadLetters(e *engine.Engine) api.FeedDeadLetters {
+	if d := e.FeedDeadLetters(); d != nil {
+		return d
 	}
 	return nil
 }

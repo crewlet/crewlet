@@ -11,14 +11,15 @@ import (
 
 // EVERY DEPLOYMENT WRITE ASKS FOR A RECENT PROOF, AND NO READ DOES.
 //
-// The deployment's own controls — a budget reset, a backup, the retention and
-// capacity gestures — change what the engine does for everybody on it, so each
-// asks for a proof inside `api.auth.session.step_up`; the two reads beside them
-// (the maintenance status, the reanchor confirmation value) change nothing and
-// ask for none. Walked over the routes this surface actually mounts, so a
-// route added later is decided by the same rule without anybody adding it
-// here. Internal because the route list is the mount's own and the walk must
-// not stand the deployment up to read it.
+// The deployment's own controls — a backup, the object store's migration, the
+// retention and capacity gestures, the fleet broker's removals, a dead letter's
+// discard — change what the engine does for everybody on it, so each asks for
+// a proof inside `api.auth.session.step_up`; the reads beside them (the
+// maintenance status, the reanchor confirmation value, the dead letters'
+// listing) change nothing and ask for none. Walked over the routes this
+// surface actually mounts, so a route added later is decided by the same rule
+// without anybody adding it here. Internal because the route list is the
+// mount's own and the walk must not stand the deployment up to read it.
 func TestEveryDeploymentWriteAsksForARecentProofAndNoReadDoes(t *testing.T) {
 	t.Parallel()
 	var patterns []string

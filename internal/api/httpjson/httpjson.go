@@ -951,6 +951,26 @@ const (
 	// was lost.
 	CodeBrokerRemoveFailed Code = "broker_remove_failed"
 
+	// THE WAKE FEEDS' DEAD LETTERS: an operator's discard of one entry, under
+	// /feeds/dead-letters. Each refusal carries `detail` and `hint`, and
+	// `crewlet feeds discard` reads them; a feed that could not be listed is
+	// `unavailable`, which a client already knows never to read as empty.
+
+	// CodeDeadLetterInvalid is a discard naming its entry by something that
+	// is no dead letter's id: the broker's sequence, a whole number above
+	// zero. 400 with nothing removed.
+	CodeDeadLetterInvalid Code = "dead_letter_invalid"
+	// CodeNoDeadLetter is a discard of an id no wake feed's dead letters
+	// hold: never one, one a replay, its expiry or another discard took
+	// first, or a subscription's poison under another `dlq.` subject, which
+	// is no feed's to discard. 404 with nothing removed.
+	CodeNoDeadLetter Code = "no_dead_letter"
+	// CodeDeadLetterDiscardFailed is a discard whose drop failed for a reason
+	// waiting does not clear. 500: the reason is in the detail, and the
+	// dead letters are listed before asking again, since the drop may have
+	// landed although its answer was lost.
+	CodeDeadLetterDiscardFailed Code = "dead_letter_discard_failed"
+
 	// A PROJECT'S FILE BYTES: the streamed download, the upload and the
 	// removal under /worklet/files/{project}/{path}. The listing is a
 	// question and refuses as every question does.
@@ -1560,6 +1580,14 @@ var codes = map[Code]string{
 		"one, or ask again once one answers.",
 	CodeBrokerRemoveFailed: "The removal failed. Read the broker listing before " +
 		"asking again: it may have been made although its answer was lost.",
+
+	CodeDeadLetterInvalid: "That is not a dead letter's id, so nothing was " +
+		"discarded. Name the entry by the id the dead-letter listing shows.",
+	CodeNoDeadLetter: "No wake feed holds a dead letter by that id, so nothing " +
+		"was discarded.",
+	CodeDeadLetterDiscardFailed: "The dead letter was not discarded. List the " +
+		"dead letters before asking again: it may be gone although the answer " +
+		"was lost.",
 
 	CodeNoProject: "There is no project by that key.",
 	CodeNoFile:    "That project keeps no file at that path.",

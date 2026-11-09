@@ -17,20 +17,23 @@ import (
 //
 // A wake feed keeps a record it handed back for an hour as a dead letter in the
 // queue's dead-letter stream, and its start replays what it kept
-// (internal/changefeed). Two things on a node touch those entries: its feeds,
-// through [deadLetterLedger], and the alarm reading every beat takes, through
-// [deadLetterWatch] — which raises `feed_dead_lettered` from the first entry,
-// ages each one on every beat, and counts an entry the retention let go before
-// anybody replayed it.
+// (internal/changefeed). Three things on a node touch those entries: its feeds,
+// through [deadLetterLedger]; an operator's listing and discard, through the
+// same ledger ([FeedDeadLetters], feeddeadletterops.go); and the alarm reading
+// every beat takes, through [deadLetterWatch] — which raises
+// `feed_dead_lettered` from the first entry, ages each one on every beat, and
+// counts an entry the retention let go before anybody replayed or discarded it.
 
 // deadLetterLedger is the queue's dead-letter verbs as this node's wake feeds
-// call them, ACCOUNTING FOR every entry a feed's replay dropped.
+// and its operator surface call them, ACCOUNTING FOR every entry either drops:
+// a feed's replay, or an operator's discard.
 //
 // WHY IT ACCOUNTS: the reading counts an entry that vanished at its retention
 // as EXPIRED — a wake lost for good — and an entry a replay dropped vanishes
-// too, with its wake published. Told apart by age alone, a replay of an entry
-// within a beat of its expiry would read as a lost wake. So a drop takes the
-// claim the expiry count takes ([goneKey]) — whoever takes it first is the one
+// too, with its wake published, as does one an operator discarded, whose loss
+// is counted as theirs. Told apart by age alone, either within a beat of the
+// entry's expiry would read as the retention's loss. So a drop takes the claim
+// the expiry count takes ([goneKey]) — whoever takes it first is the one
 // account of where the entry went, on every node — and remembers the drop on
 // this node besides, for a claim store that could not be reached.
 type deadLetterLedger struct {
@@ -73,25 +76,45 @@ func (l *deadLetterLedger) DeadLettersOn(ctx context.Context, subject string) ([
 }
 
 // DropDeadLetter implements [changefeed.DeadLetters], accounting for the entry
-// once it is gone.
+// once it is gone ([deadLetterLedger.drop]).
 func (l *deadLetterLedger) DropDeadLetter(ctx context.Context, subject string, seq uint64) error {
+	_, err := l.drop(ctx, subject, seq)
+	return err
+}
+
+// drop removes the entry seq from subject and accounts for its going,
+// reporting whether this drop is THE account of where it went: the claim was
+// taken here — or there is no claim store to take it in, or one that could not
+// answer, which fails open towards this drop — rather than by a replay, an
+// expiry count or a discard that took it first.
+//
+// A REPLAY DOES NOT ASK, since its wake is published whoever accounts for the
+// entry. A DISCARD DOES ([FeedDeadLetters.Discard]): the queue answers a drop
+// of an entry already gone as done, so a discard whose entry somebody else
+// accounted for first removed nothing, and must neither count a wake lost nor
+// say it discarded one — a wake a replay published is no loss at all.
+func (l *deadLetterLedger) drop(ctx context.Context, subject string, seq uint64) (bool, error) {
 	if err := l.store.DropDeadLetter(ctx, subject, seq); err != nil {
-		return err
+		return false, err
 	}
 	at := letterAt{subject, seq}
 	l.mu.Lock()
 	l.dropped[at] = struct{}{}
 	l.mu.Unlock()
-	if l.claims != nil {
+	if l.claims == nil {
+		return true, nil
+	}
+	won, err := l.claims.Claim(ctx, goneKey(at), expiredClaimTTL, l.now())
+	if err != nil {
 		// A CLAIM THAT FAILS ACCOUNTS FOR NOTHING, and the drop stands: a
 		// node that then counts the entry as expired reports a wake lost
-		// that was published, the side a count of losses may err on.
-		if _, err := l.claims.Claim(ctx, goneKey(at), expiredClaimTTL, l.now()); err != nil {
-			log.DebugContext(ctx, "changefeed_dead_letter_drop_unaccounted",
-				"subject", subject, "seq", seq, "error", err.Error())
-		}
+		// that was published or discarded, the side a count of losses may
+		// err on.
+		log.DebugContext(ctx, "changefeed_dead_letter_drop_unaccounted",
+			"subject", subject, "seq", seq, "error", err.Error())
+		return true, nil
 	}
-	return nil
+	return won, nil
 }
 
 // droppedHere reports whether this node dropped the entry.
@@ -157,10 +180,10 @@ func (e *Engine) feedSources(running []*runningLog) map[string]changefeed.Source
 // only has to cover a node whose reads failed across that moment. One whose
 // reads failed for longer than half an hour can misjudge an entry that went
 // while they did: count an expiry the fleet already counted, or count as
-// expired one a replay dropped — a loss counted that was not one, on an outage
-// that raised its own alarms long before, rather than a loss counted by
-// nobody. The key names one entry on one subject, which is never kept again,
-// so the longest window costs nothing but the row.
+// expired one a replay or a discard dropped — a loss counted that was not the
+// retention's, on an outage that raised its own alarms long before, rather
+// than a loss counted by nobody. The key names one entry on one subject, which
+// is never kept again, so the longest window costs nothing but the row.
 const expiredClaimTTL = coord.MaxClaimTTL
 
 // expiryClaims is the fleet's claims, narrowed to the one verb an entry's
@@ -184,19 +207,21 @@ type expiryClaims interface {
 // # An entry that vanished at its expiry is a wake lost
 //
 // The broker lets an entry go at its retention without telling anybody, and an
-// entry that goes is either replayed — its wake published — or expired, its
-// wake lost for good. So an entry the last listing held and this one does not
-// is counted as expired (`crewlet.tracker.feed.dead_letter_expired`) when it
-// is past its expiry by this listing, however many listings failed in between,
-// or was within a beat ([statelog.AlarmInterval]) of it when last seen, since
-// the broker's clock and this node's are not one. It is counted by whichever
-// node first takes the claim on its going ([goneKey]), which a replay that
-// dropped it took first ([deadLetterLedger]), so it is counted ONCE FLEET-WIDE
-// and never for an entry somebody replayed, though every data node reads the
-// subject on every beat. What is NOT counted is an expiry across a restart of
-// every node that saw it: a node starts with no sight of what it had seen. And
-// a replay whose claim could not be taken, as near its expiry, would be
-// counted by a peer — a count of losses erring towards a loss.
+// entry that goes is replayed — its wake published — discarded by an operator,
+// whose loss `crewlet.tracker.feed.dead_letter_discarded` counts, or expired,
+// its wake lost for good. So an entry the last listing held and this one does
+// not is counted as expired (`crewlet.tracker.feed.dead_letter_expired`) when
+// it is past its expiry by this listing, however many listings failed in
+// between, or was within a beat ([statelog.AlarmInterval]) of it when last
+// seen, since the broker's clock and this node's are not one. It is counted by
+// whichever node first takes the claim on its going ([goneKey]), which a
+// replay or a discard that dropped it took first ([deadLetterLedger]), so it
+// is counted ONCE FLEET-WIDE and never for an entry somebody replayed or
+// discarded, though every data node reads the subject on every beat. What is
+// NOT counted is an expiry across a restart of every node that saw it: a node
+// starts with no sight of what it had seen. And a replay or a discard whose
+// claim could not be taken, as near its expiry, would be counted by a peer — a
+// count of losses erring towards a loss.
 type deadLetterWatch struct {
 	// ledger is the store the listings are read through and the drops this
 	// node made; nil reads nothing.
@@ -267,7 +292,8 @@ func (w *deadLetterWatch) read(ctx context.Context, src changefeed.Source,
 
 // countExpired counts every entry prior held that kept does not, that this
 // node did not drop, and that was within a beat of its expiry when prior saw
-// it — once across the fleet, and never for one a replay accounted for.
+// it — once across the fleet, and never for one a replay or a discard
+// accounted for.
 func (w *deadLetterWatch) countExpired(ctx context.Context, src changefeed.Source,
 	subject string, prior letterSight, kept []queue.Kept, now time.Time) {
 
@@ -281,15 +307,17 @@ func (w *deadLetterWatch) countExpired(ctx context.Context, src changefeed.Sourc
 		case held[k.Seq], w.ledger.droppedHere(at):
 			continue
 		case k.Expires.IsZero():
-			// KEPT BY NO RETENTION, so none let it go: a replay.
+			// KEPT BY NO RETENTION, so none let it go: a replay or a
+			// discard.
 			continue
 		case k.Expires.After(now) && prior.at.Add(statelog.AlarmInterval).Before(k.Expires):
 			// GONE BEFORE ITS EXPIRY: not yet due by this listing, and more
-			// than a beat from it when last seen — a replay, here or on a
-			// peer. ONE DUE BY NOW IS JUDGED BY THE CLAIM however long ago
-			// it was last seen, so an expiry while this node's listings
-			// failed is still counted; the beat's slack covers a broker
-			// whose clock runs a little ahead of this node's.
+			// than a beat from it when last seen — a replay or a discard,
+			// here or on a peer. ONE DUE BY NOW IS JUDGED BY THE CLAIM
+			// however long ago it was last seen, so an expiry while this
+			// node's listings failed is still counted; the beat's slack
+			// covers a broker whose clock runs a little ahead of this
+			// node's.
 			continue
 		}
 		if !w.firstToCount(ctx, at, now) {
@@ -324,10 +352,11 @@ func (w *deadLetterWatch) firstToCount(ctx context.Context, at letterAt, now tim
 	return won
 }
 
-// goneKey is the claim an entry's going is accounted for under: the replay
-// that dropped it takes it, and so does the reading that counts its expiry, so
-// whoever takes it first is the one account of where the entry went. The
-// entry's subject and sequence, which no later entry ever carries again.
+// goneKey is the claim an entry's going is accounted for under: the replay or
+// the discard that dropped it takes it, and so does the reading that counts
+// its expiry, so whoever takes it first is the one account of where the entry
+// went. The entry's subject and sequence, which no later entry ever carries
+// again.
 func goneKey(at letterAt) string {
 	return changefeed.ClaimKey("dead_letter_gone", at.subject+"@"+strconv.FormatUint(at.seq, 10))
 }

@@ -168,9 +168,10 @@ adr/                      # Architecture decision records — a decision that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, backup, retention, worklet, objects,
-                          #   fleet, seats, artifacts, chatlet, secrets, config,
-                          #   iam, llm, search, assistant, and the six
-                          #   integration CLIs — gitlab/github/jira/slack
+                          #   gitlet, fleet, feeds, seats, artifacts, chatlet,
+                          #   secrets, config, iam, llm, search, assistant,
+                          #   and the six integration CLIs —
+                          #   gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/

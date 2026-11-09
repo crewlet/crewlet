@@ -663,10 +663,22 @@ func Catalogue() []Instrument {
 				"(stream.event_retention_hours) let go before any node replayed " +
 				"them: wakes lost for good. Counted once across the fleet, by the " +
 				"first data node whose alarm reading saw the entry within a beat " +
-				"of its expiry and then gone, through a claim a replay that drops " +
-				"an entry takes first, so a replayed entry is never counted. An " +
-				"expiry across a restart of every data node is not counted: a " +
-				"node starts with no sight of what it had seen.",
+				"of its expiry and then gone, through a claim a replay or a discard " +
+				"that drops an entry takes first, so a replayed or discarded entry " +
+				"is never counted. An expiry across a restart of every data node is " +
+				"not counted: a node starts with no sight of what it had seen.",
+		},
+		{
+			Name: TrackerFeedDeadLetterDiscarded, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"source"},
+			Shows: "Dead letters an operator discarded (`crewlet feeds discard`, " +
+				"`POST /feeds/dead-letters/{id}/discard`): wakes given up for good " +
+				"by somebody's decision rather than lost to the retention. Counted " +
+				"once across the fleet, by the node that served the discard, " +
+				"through the claim a replay and the expiry count take, so an entry " +
+				"a replay, its expiry or another discard took first is not counted; " +
+				"each is a `changefeed_dead_letter_discarded` line naming who " +
+				"pressed it.",
 		},
 
 		// ---- the work pickup ------------------------------------------
