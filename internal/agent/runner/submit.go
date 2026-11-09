@@ -184,8 +184,8 @@ func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string
 	}
 }
 
-// NotDeliveredOn is the clause both of [citations]' surface-named refusals
-// open with: a turn that claims delivery while nothing reached the surface it
+// NotDeliveredOn is the clause each of [citations]' surface-named refusals
+// opens with: a turn that claims delivery while nothing reached the surface it
 // was asked on.
 //
 // ONE SPELLING, EXPORTED, because a test that scripts a model has to recognise
@@ -240,8 +240,10 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 		// count it.
 		remedy := turn.Remedy(s, reply)
 		on := reply.Surface
+		named := on != "" && s.Reaches(on)
+		acted := turn.ActedWith(calls, s)
 		switch {
-		case on != "" && s.Reaches(on) && turn.Delivered(calls, s):
+		case named && turn.Delivered(calls, s):
 			// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine
 			// was called" reads as plainly false to a model looking at its
 			// own successful write to another surface, and a refusal a model
@@ -249,12 +251,25 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 			return fmt.Errorf("%s — a call that reached somewhere else does not "+
 				"answer the person waiting. %s Do that before reporting the work "+
 				"delivered", NotDeliveredOn(on), remedy)
-		case on != "" && s.Reaches(on):
+		case named && acted != "":
+			// ACTED, AND REACHED NOBODY WAITING THERE: an ask, a reaction, a
+			// publish. "No call in this turn has reached anybody", said to
+			// it, is false, so it is told what it did call
+			// ([turn.ActedWith]), as every correction that finds the turn
+			// acted but delivered nothing is.
+			return fmt.Errorf("%s: this turn called %s, but none of that reached the person "+
+				"waiting there. %s Do that before reporting the work delivered",
+				NotDeliveredOn(on), acted, remedy)
+		case named:
 			// And only when it is TRUE. "A call that reached somewhere else"
 			// said to a turn that reached nowhere sends the model looking for
 			// a write it never made.
 			return fmt.Errorf("%s: no call in this turn has reached anybody. %s Do "+
 				"that before reporting the work delivered", NotDeliveredOn(on), remedy)
+		case acted != "":
+			return fmt.Errorf("nothing has been delivered yet: this turn called %s, but none of "+
+				"that delivers anything to the person waiting. %s Do that before reporting the "+
+				"work delivered", acted, remedy)
 		}
 		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the "+
 			"engine has been called successfully in this turn. %s Do that before "+

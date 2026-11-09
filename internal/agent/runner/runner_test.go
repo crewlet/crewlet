@@ -313,6 +313,56 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 	}
 }
 
+// A REFUSAL THAT FINDS NO DELIVERY SAYS WHAT THE TURN DID CALL. A turn that
+// asked a colleague or reacted, and then claimed the work delivered, was told
+// "no call in this turn has reached anybody", or that no tool acting outside
+// the engine had been called — false against its own successful call, and a
+// refusal a model can see is false is one it argues with. It is told what it
+// called and that none of it reached the person waiting, still opening with
+// the clause a scripted model recognises; a turn that only read is told what
+// it was told before.
+//
+// Mutation: drop either acted case, and the colleague ask is told it reached
+// nobody or called nothing.
+func TestANothingDeliveredRefusalSaysWhatTheTurnCalled(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue:      []string{"get_work_item", "comment_on_work_item", "ask"},
+		Deliveries:     map[string]string{"comment_on_work_item": "work"},
+		KnownReads:     []string{"get_work_item"},
+		KnownOpenWorld: []string{"comment_on_work_item", "ask"},
+	}
+	surface := func() turn.Surface { return s }
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	record := func(name string) func() []ledger.Call {
+		return func() []ledger.Call { return []ledger.Call{{Name: name}} }
+	}
+
+	asked := mustErr(t, decodeWork(turn.ToolReply("work"), record("ask"), surface), claim)
+	if !strings.HasPrefix(asked.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(asked.Error(), `called "ask"`) ||
+		strings.Contains(asked.Error(), "no call in this turn has reached anybody") {
+		t.Errorf("on `work`: refusal = %v; want it to open with %q and name the ask", asked,
+			NotDeliveredOn("work"))
+	}
+	unnamed := mustErr(t, decodeWork(turn.ToolReply(""), record("ask"), surface), claim)
+	if !strings.HasPrefix(unnamed.Error(), "nothing has been delivered yet") ||
+		!strings.Contains(unnamed.Error(), `called "ask"`) ||
+		strings.Contains(unnamed.Error(), "no tool that acts outside the engine") {
+		t.Errorf("on no surface: refusal = %v; want it to name the ask", unnamed)
+	}
+
+	for reply, want := range map[string]string{
+		"work": "no call in this turn has reached anybody",
+		"":     "no tool that acts outside the engine has been called",
+	} {
+		read := mustErr(t, decodeWork(turn.ToolReply(reply), record("get_work_item"), surface), claim)
+		if !strings.Contains(read.Error(), want) {
+			t.Errorf("on %q: refusal = %v; want a turn that only read told %q", reply, read, want)
+		}
+	}
+}
+
 // A colleague's ask is answered by the engine on the channel it opened, and an
 // unaddressed turn owes nobody a posted answer — so demanding a citation in
 // either case would loop a turn that did exactly the right thing.
