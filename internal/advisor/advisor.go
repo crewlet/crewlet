@@ -9,8 +9,8 @@
 // data: for a configuration change, one entity write per option, which the
 // dashboard sends to the entity route's dry run (ADR-0055) to draw the
 // preview from the server's own answer, and then sends again, from the
-// administrator's session and under the revision the finding was built from,
-// only when they press Apply. ADR-0115 records the rule.
+// administrator's session and under the entity's own tag, only when they press
+// Apply. ADR-0115 records the rule.
 //
 // # One detection, read where it is decided
 //
@@ -140,8 +140,7 @@ type Finding struct {
 }
 
 // Answer is every finding about the company at one revision, the most costly
-// first. Revision is the one every change was built from, and the one its
-// write is sent under (`If-Match`).
+// first. Revision is the one the findings were read at.
 type Answer struct {
 	Revision string    `json:"revision"`
 	Findings []Finding `json:"findings"`

@@ -7,7 +7,7 @@ flowchart LR
   D[Company document] -->|the same checks crewlet validate runs| A[GET /advisor]
   A -->|finding and its change| Y[You]
   Y -->|PUT the change with dry_run=true| P[Preview: the server's own answer]
-  P -->|Apply: PUT again under If-Match| C[New revision]
+  P -->|Apply: PUT again under the entity tag| C[New revision]
 ```
 
 ## What it lists
@@ -34,11 +34,11 @@ Every other warning the document raises is listed too, in the words `crewlet val
 
 A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace) and `summary`. To apply one:
 
-1. `GET /config/{entity}/{id}` and replace the fields `set` names.
-2. `PUT /config/{entity}/{id}?dry_run=true` with that body, the `summary` as `X-Summary`, and `If-Match: "<revision>"` from the advisor's answer. The answer is the preview: what the write would change and any warning it would introduce. Nothing is stored.
-3. Send the same `PUT` without `dry_run`. It is recorded as a revision by you, like any change you make.
+1. `GET /config/{entity}/{id}`: the entity and its own `ETag`. Replace the fields `set` names.
+2. `PUT /config/{entity}/{id}?dry_run=true` with that body and `If-Match` set to that `ETag`. The answer is the preview: whether the company would still be valid and any warning the write would introduce. Nothing is stored.
+3. Send the same `PUT` without `dry_run`, with the `summary` as `X-Summary`. It is recorded as a revision by you, like any change you make.
 
-If the company changed since the advisor answered, the write is refused for its `If-Match` instead of overwriting the newer revision; read the advisor again for a change built on the current one. A company whose document is managed elsewhere (Tier A's `api.auth.company_writers`) refuses the write; make the same change in its source instead.
+If the entity changed after your read, the write is refused for its `If-Match` instead of overwriting the change; read it again. A company whose document is managed elsewhere (Tier A's `api.auth.company_writers`) refuses the write; make the same change in its source instead.
 
 ## What never happens on its own
 

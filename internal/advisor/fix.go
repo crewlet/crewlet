@@ -49,9 +49,9 @@ const (
 )
 
 // Change is one write of one entity: GET /config/{entity}/{id}, Set's
-// top-level fields replaced in it, and PUT back to the same path, first
-// with `dry_run=true` for the preview and then for real, under the answer's
-// revision and with Summary as the revision's summary.
+// top-level fields replaced in it, and PUT back to the same path under the
+// tag that GET answered, first with `dry_run=true` for the preview and then
+// for real, with Summary as the revision's summary.
 type Change struct {
 	Entity  string         `json:"entity"`
 	ID      string         `json:"id"`

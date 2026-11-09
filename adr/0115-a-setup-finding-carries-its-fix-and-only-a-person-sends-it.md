@@ -22,9 +22,9 @@ wrong, why it costs the company, where in the document it sits, and its fix.
   option: the entity, its id, the top-level fields to set and the revision
   summary. The dashboard sends it to the entity route's dry run (ADR-0055) and
   draws the preview from that answer, then sends it for real from the
-  administrator's own session, under the revision the finding was read at
-  (`If-Match`), so a document that moved in between is refused rather than
-  overwritten. `internal/advisor` imports no store, coordination, state log
+  administrator's own session, under the entity's own tag as its read
+  answered it (`If-Match`), so an entity that moved in between is refused
+  rather than overwritten. `internal/advisor` imports no store, coordination, state log
   or API package, so it has no way to send one.
 - **The answer is read off the redacted document**, so no change a fix carries
   can hold a value redaction hides.
