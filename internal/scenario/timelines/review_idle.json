@@ -1,0 +1,31 @@
+{
+  "name": "review_idle",
+  "pattern": "review_idle",
+  "seats": [
+    {"handle": "owner", "kind": "person"},
+    {"handle": "app", "kind": "agent"},
+    {"handle": "qa", "kind": "agent"}
+  ],
+  "steps": [
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "app",
+     "expect": {"woken": ["app"]}},
+    {"at": 10, "actor": "owner", "verb": "file", "item": "W-2", "assignee": "app",
+     "expect": {"woken": ["app"]}},
+    {"at": 600, "actor": "app", "verb": "status", "item": "W-1", "status": "in_review",
+     "expect": {"woken": []}},
+    {"at": 610, "actor": "app", "verb": "assign", "item": "W-1", "assignee": "qa",
+     "expect": {"woken": ["qa"]}},
+    {"at": 700, "actor": "app", "verb": "status", "item": "W-2", "status": "in_review",
+     "expect": {"woken": []}},
+    {"at": 710, "actor": "app", "verb": "assign", "item": "W-2", "assignee": "qa",
+     "expect": {"woken": ["qa"]}},
+    {"at": 720, "actor": "owner", "verb": "file", "item": "W-3", "assignee": "app",
+     "expect": {"woken": ["app"]}},
+    {"at": 750, "actor": "app", "verb": "status", "item": "W-3", "status": "in_review",
+     "expect": {"woken": []}},
+    {"at": 90000, "actor": "qa", "verb": "turn", "item": "W-2",
+     "expect": {"woken": []}},
+    {"at": 90010, "actor": "app", "verb": "assign", "item": "W-3", "assignee": "qa",
+     "expect": {"woken": ["qa"]}}
+  ]
+}

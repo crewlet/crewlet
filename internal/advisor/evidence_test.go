@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -58,6 +59,9 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			[]advisor.Class{advisor.ClassAskOvertaken}},
 		"3 overtaken of 61 answers": {worklet.WorkPatterns{Answers: 61, Superseded: 1, Moot: 2}, nil},
 		"2 overtaken of 2 answers":  {worklet.WorkPatterns{Answers: 2, Moot: 2}, nil},
+		"one idle review": {worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{{Key: "W-1", Holder: "qa"}}},
+			[]advisor.Class{advisor.ClassReviewIdle}},
+		"no idle review": {worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{}}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -104,7 +108,8 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	}
 	work := worklet.WorkPatterns{AgentComments: 9, Answers: 3, Moot: 3, Overtaken: many[:5],
 		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, WokenComments: many[:5]},
-			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}}}
+			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}},
+		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}}}
 	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
 	if len(found) != len(advisor.WorkClasses()) {
 		t.Fatalf("raised %d findings, want one per class the work patterns raise", len(found))
@@ -166,5 +171,21 @@ func TestReadWithEvidenceAddsTheEnginesPatternsToTheDocuments(t *testing.T) {
 	if len(got.Findings) != len(static.Findings)+len(want) || got.Revision != "rev-1" {
 		t.Errorf("%d findings at %s, want the document's %d and %d more at rev-1",
 			len(got.Findings), got.Revision, len(static.Findings), len(want))
+	}
+}
+
+// THE TRACKER READ COVERS THE WEEK BEFORE NOW and calls a review idle after a
+// day untouched, over every agent seat and no person.
+func TestThePatternsWindowIsAWeekAndAReviewIsIdleAfterADay(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	q := advisor.PatternsWindow(now, liveShape(t))
+	if !q.Until.Equal(now) || !q.Since.Equal(now.Add(-7*24*time.Hour)) ||
+		!q.QuietSince.Equal(now.Add(-24*time.Hour)) {
+		t.Errorf("the window is %s to %s, quiet since %s; want the week before %s and a day", q.Since,
+			q.Until, q.QuietSince, now)
+	}
+	if !slices.Equal(q.Reviewers, []string{"pm", "designer", "app", "backend", "qa", "sre"}) {
+		t.Errorf("the reviewers are %v, want every agent seat in the chart's order", q.Reviewers)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // advisor answers `advisor`: every finding about the fleet's company at the
@@ -39,9 +38,9 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 		})
 	}
 	now := s.clock()
-	work, err := s.Work.WorkPatterns(ctx, worklet.PatternsQuery{
-		Since: now.Add(-advisor.Window), Until: now, Level: statelog.ReadStale,
-	})
+	window := advisor.PatternsWindow(now, company)
+	window.Level = statelog.ReadStale
+	work, err := s.Work.WorkPatterns(ctx, window)
 	if err != nil {
 		return nil, fmt.Errorf("advisor: read the company's work patterns: %w", err)
 	}

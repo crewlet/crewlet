@@ -58,11 +58,14 @@ const (
 	// PatternAskOvertaken is a person answering questions that were asked
 	// again since, or whose item had already finished.
 	PatternAskOvertaken Pattern = "ask_overtaken"
+	// PatternReviewIdle is an item in review its agent holder never takes a
+	// turn on.
+	PatternReviewIdle Pattern = "review_idle"
 )
 
 // Patterns is every [Pattern] a timeline may declare.
 var Patterns = []Pattern{PatternHealthyCompany, PatternAgentHandoffs, PatternAgentMentionsWithoutAsk,
-	PatternPersonRequestsWithoutAsk, PatternAskOvertaken}
+	PatternPersonRequestsWithoutAsk, PatternAskOvertaken, PatternReviewIdle}
 
 // Valid reports whether p is a declared pattern.
 func (p Pattern) Valid() bool { return slices.Contains(Patterns, p) }
@@ -101,17 +104,21 @@ const (
 	VerbStatus Verb = "status"
 	// VerbWatch adds Watcher to the item's watchers.
 	VerbWatch Verb = "watch"
+	// VerbTurn is a turn Actor takes on the item, charged to it.
+	VerbTurn Verb = "turn"
 )
 
 // Verbs is every [Verb].
-var Verbs = []Verb{VerbFile, VerbComment, VerbAssign, VerbStatus, VerbWatch}
+var Verbs = []Verb{VerbFile, VerbComment, VerbAssign, VerbStatus, VerbWatch, VerbTurn}
 
 // Valid reports whether v is a declared verb.
 func (v Verb) Valid() bool { return slices.Contains(Verbs, v) }
 
 // Step is one action by one seat on one item.
 type Step struct {
-	// At is the step's offset from the timeline's start, in seconds.
+	// At orders the step, in seconds from the timeline's start. A driver stamps
+	// records with the clock the broker stamps them by, so At says only what
+	// comes first, never how long passed.
 	At int `json:"at"`
 
 	Actor string `json:"actor"`
@@ -284,6 +291,7 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		VerbAssign:  {"assignee"},
 		VerbStatus:  {"status"},
 		VerbWatch:   {"watcher"},
+		VerbTurn:    {},
 	}[st.Verb]
 	required := map[Verb]string{
 		VerbComment: "say", VerbAssign: "assignee", VerbStatus: "status", VerbWatch: "watcher",

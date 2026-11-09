@@ -36,6 +36,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		scenario.PatternAgentMentionsWithoutAsk:  "",
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
+		scenario.PatternReviewIdle:               advisor.ClassReviewIdle,
 	}
 	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
 	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
@@ -58,9 +59,16 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		t.Run(tl.Name, func(t *testing.T) {
 			t.Parallel()
 			d := playTimeline(t, tl)
-			end := wednesday.Add(time.Duration(tl.Steps[len(tl.Steps)-1].At+1) * time.Second)
+			end := time.Now().UTC().Add(time.Microsecond)
+			var agents []string
+			for _, s := range tl.Seats {
+				if s.Kind == scenario.SeatAgent {
+					agents = append(agents, s.Handle)
+				}
+			}
 			work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
-				Since: wednesday, Until: end, Level: statelog.ReadStale})
+				Since: d.start, Until: end, Level: statelog.ReadStale,
+				Reviewers: agents, QuietSince: d.quietSince()})
 			if err != nil {
 				t.Fatalf("WorkPatterns: %v", err)
 			}
@@ -104,10 +112,28 @@ func (d *timelineDriver) kind(handle string) advisor.SeatKind {
 	return advisor.SeatUnknown
 }
 
+// quietSince is just after the last item still in review entered it. The
+// tracker stamps a status and a turn by the broker's clock, which a timeline's
+// offsets do not move, so the quiet instant is read off the records themselves.
+func (d *timelineDriver) quietSince() time.Time {
+	d.t.Helper()
+	var last time.Time
+	for _, id := range d.ids {
+		task := d.r.task(d.t, id).Task
+		if task.Status == worklet.StatusInReview && task.StatusEnteredAt.After(last) {
+			last = task.StatusEnteredAt
+		}
+	}
+	return last.Add(time.Microsecond)
+}
+
 // timelineDriver plays a timeline's steps as the tools do: the wake built from
 // the task before and after, the thread resolved by the reader.
 type timelineDriver struct {
-	t        *testing.T
+	t *testing.T
+	// start is the instant before the first step; every step is stamped with
+	// the clock the broker stamps its records by, its offset only ordering it.
+	start    time.Time
 	r        *roundTrip
 	tl       scenario.Timeline
 	ids      map[string]string
@@ -116,14 +142,14 @@ type timelineDriver struct {
 }
 
 func newTimelineDriver(t *testing.T, tl scenario.Timeline) *timelineDriver {
-	return &timelineDriver{t: t, r: newRoundTrip(t), tl: tl,
+	return &timelineDriver{t: t, r: newRoundTrip(t), tl: tl, start: time.Now().UTC(),
 		ids: map[string]string{}, comments: map[int]string{}}
 }
 
 // run applies step i and answers which agent seats its notice starts a turn for.
 func (d *timelineDriver) run(i int, st scenario.Step) []string {
 	d.t.Helper()
-	at := wednesday.Add(time.Duration(st.At) * time.Second)
+	at := time.Now().UTC()
 	d.r.at = at
 	kind := worklet.AuthorAgent
 	if d.tl.Kind(st.Actor) == scenario.SeatPerson {
@@ -168,6 +194,13 @@ func (d *timelineDriver) update(i int, st scenario.Step, writer *worklet.Writer,
 	case scenario.VerbComment:
 		change = worklet.ChangeComment
 		patch, wake = d.comment(i, st, kind, id, current, at)
+	case scenario.VerbTurn:
+		if _, err := writer.RecordTurn(d.t.Context(), opID, worklet.TurnRecord{
+			Task: id, Seat: st.Actor, TurnID: fmt.Sprintf("run-%d", i), Trigger: "work_pickup",
+		}); err != nil {
+			d.t.Fatalf("step %d: turn on %s: %v", i, st.Item, err)
+		}
+		return
 	default:
 		d.t.Fatalf("step %d: verb %q has no driver here", i, st.Verb)
 	}
@@ -316,5 +349,35 @@ func TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot(t *testing.T) {
 	if woken != 2 || asked != 0 || told != 8 {
 		t.Fatalf("read %d woken, %d asked of %d told; want the 2 stated references woken, "+
 			"and the 6 an older build wrote counted as neither", woken, asked, told)
+	}
+}
+
+// AN IDLE REVIEW IS ONE ITS HOLDER TOOK NO TURN ON SINCE: of two reviews held
+// by one agent, the one it turned to is not idle and the other is.
+func TestAnIdleReviewIsOneItsHolderLeftAlone(t *testing.T) {
+	t.Parallel()
+	tl, err := scenario.Named("review_idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := playTimeline(t, tl)
+	work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: d.start, Until: time.Now().UTC().Add(time.Microsecond), Level: statelog.ReadStale,
+		Reviewers: []string{"app", "qa"}, QuietSince: d.quietSince()})
+	if err != nil {
+		t.Fatalf("WorkPatterns: %v", err)
+	}
+	if len(work.IdleReviews) != 1 || work.IdleReviews[0].Task != d.ids["W-1"] ||
+		work.IdleReviews[0].Holder != "qa" {
+		t.Fatalf("idle reviews %+v, want only W-1, held by qa", work.IdleReviews)
+	}
+	// A QUIET INSTANT BEFORE ANY REVIEW BEGAN finds none idle: a review that
+	// has not waited the whole quiet period is not idle, however untouched.
+	early, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: d.start, Until: time.Now().UTC().Add(time.Microsecond), Level: statelog.ReadStale,
+		Reviewers: []string{"app", "qa"}, QuietSince: d.start})
+	if err != nil || len(early.IdleReviews) != 0 {
+		t.Fatalf("with the quiet instant before every review, idle reviews %+v (%v), want none",
+			early.IdleReviews, err)
 	}
 }

@@ -646,6 +646,8 @@ func taskReads() map[string]indexedRead {
 			"P01", "P01", "a000001", "t-00002"),
 		"the advisor's answers in a window": seek(key, patternAnswersStatement,
 			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
+		"the advisor's idle reviews": seek("tracker_tasks_queue_idx", patternIdleReviewsStatement,
+			"qa", string(GroupActive), store.EncodeTime(planNow), store.EncodeTime(planNow)),
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
@@ -1125,14 +1127,15 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	}
 	reads := map[string]indexedRead{
 		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
-		"an item's newest assignment":   seek(subject, holdingSinceStatement, task),
-		"a task's own history":          seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
-		"a purged task's rows":          seek(subject, purgedHistoryStatement, purged),
-		"one change's routing":          seek(historyKey, routingRecordStatement, record),
-		"where a change sits":           seek(historyKey, recordPositionStatement, record),
-		"a person's inbox":              seek(historyKey, page[0].sql, page[0].args...),
-		"an inbox's unread marks below": seek(historyKey, marked[1].sql, marked[1].args...),
-		"the repair's horizon":          seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
+		"an item's newest assignment":           seek(subject, holdingSinceStatement, task),
+		"the advisor's idle review handed over": seek(subject, patternAssignedStatement, task),
+		"a task's own history":                  seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"a purged task's rows":                  seek(subject, purgedHistoryStatement, purged),
+		"one change's routing":                  seek(historyKey, routingRecordStatement, record),
+		"where a change sits":                   seek(historyKey, recordPositionStatement, record),
+		"a person's inbox":                      seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's unread marks below":         seek(historyKey, marked[1].sql, marked[1].args...),
+		"the repair's horizon":                  seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,
 			at(9_000), at(9_500), 64),
 		"a subject's effective instant": seek(subject, effectiveAtStatement,

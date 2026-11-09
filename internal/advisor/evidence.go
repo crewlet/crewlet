@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -16,6 +17,7 @@ const (
 	ClassAgentMentionsWithoutAsk  Class = "wake.agent_mentions_without_ask"
 	ClassPersonRequestsWithoutAsk Class = "person.requests_without_ask"
 	ClassAskOvertaken             Class = "ask.overtaken"
+	ClassReviewIdle               Class = "review.idle"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 )
@@ -27,8 +29,22 @@ const (
 	AreaDurability Area = "durability"
 )
 
-// Window is how far back every evidence class reads.
-const Window = 7 * 24 * time.Hour
+// Window is how far back every evidence class reads: a week holds every
+// weekday's schedule and the slow answers of a person away for a day.
+// ReviewQuiet is how long a review its agent holder has not touched waits
+// before it is idle: a day, because an agent takes many turns a day.
+const (
+	Window      = 7 * 24 * time.Hour
+	ReviewQuiet = 24 * time.Hour
+)
+
+// PatternsWindow is the tracker read the evidence classes need at now: the
+// window before it and every agent seat's reviews, quiet since ReviewQuiet ago.
+// The caller names the read level.
+func PatternsWindow(now time.Time, c *config.Company) worklet.PatternsQuery {
+	return worklet.PatternsQuery{Since: now.Add(-Window), Until: now,
+		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet)}
+}
 
 // Evidence is what the company did in the window that ends at Until.
 type Evidence struct {
@@ -68,6 +84,7 @@ var detectors = []detector{
 	{ClassAgentMentionsWithoutAsk, true, agentMentionsWithoutAsk},
 	{ClassPersonRequestsWithoutAsk, true, personRequestsWithoutAsk},
 	{ClassAskOvertaken, true, askOvertaken},
+	{ClassReviewIdle, true, reviewIdle},
 	{ClassNoVerifiedBackup, false, noVerifiedBackup},
 }
 
@@ -227,6 +244,39 @@ func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 			Sentence: "Take a backup now with `crewlet backup` or from the dashboard, then " +
 				"schedule it to a place off this server."},
 	}}
+}
+
+// reviewIdle is one finding per agent holding a review it has taken no turn on
+// for [ReviewQuiet]: a review is the holder's next move, and none came.
+func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
+	byHolder := map[string][]string{}
+	var holders []string
+	for _, r := range ev.Work.IdleReviews {
+		if _, ok := byHolder[r.Holder]; !ok {
+			holders = append(holders, r.Holder)
+		}
+		byHolder[r.Holder] = append(byHolder[r.Holder], r.Key)
+	}
+	var out []Finding
+	for _, h := range holders {
+		keys := byHolder[h]
+		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: h},
+			"Work in review waited a day for the agent holding it.",
+			fmt.Sprintf("%s held by %s had no turn by it on the item in the last 24 hours "+
+				"(a turn on a linked pull request counts on the change, not the item), so "+
+				"the work behind them waits.", words.Count(len(keys), "item in review", "items in review"), h),
+			[]Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
+	}
+	return out
+}
+
+// AgentHandles is every agent seat's handle, in the chart's order.
+func AgentHandles(c *config.Company) []string {
+	var out []string
+	for _, role := range agentSeats(c) {
+		out = append(out, role.Seat().Handle())
+	}
+	return out
 }
 
 func appendExamples(records, more []string) []string {
