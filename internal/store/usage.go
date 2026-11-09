@@ -350,19 +350,19 @@ type usageRecord struct {
 // its JSON being read.
 const seatNamedSQL = `e.agent_id != ''`
 
-// usageRecords are the twelve records a day is derived from, taken from their
+// usageRecords are the thirteen records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions, the
 // collected launches and the auxiliary records the spend is summed from, the
 // completions a turn's figures are read off, the turn's SUMMARY record
 // (`agent_turn_completed`), the knowledge reads, the superseded fires, the
-// reads of unit repositories, and the changes opened, reviews given, checks
-// failed and ejections on Gitlet ([DB.usageCode]). The auxiliary
-// record is one of them so the fingerprint moves when it lands: a flush writes
-// it up to one ledger interval after its last call, stamped with that call's
-// instant, and a day whose only change was that row would otherwise never be
-// re-derived. A collected launch is one for the reason every spend record is:
-// it is the executor's spend, published when its box is read rather than when
-// any phase of its turn completes. The summary record is one for the same
+// reads of unit repositories, the held wakes ([DB.usageHeld]), and the changes
+// opened, reviews given, checks failed and ejections on Gitlet ([DB.usageCode]).
+// The auxiliary record is one of them so the fingerprint moves when it lands: a
+// flush writes it up to one ledger interval after its last call, stamped with
+// that call's instant, and a day whose only change was that row would otherwise
+// never be re-derived. A collected launch is one for the reason every spend
+// record is: it is the executor's spend, published when its box is read rather
+// than when any phase of its turn completes. The summary record is one for the same
 // reason as the auxiliary record: a turn whose ending record states no tally
 // is read off its records ([DB.usageLegacyTurns]), whether it failed off the
 // summary, and a summary row that lands in a later custody batch than its
@@ -371,7 +371,9 @@ const seatNamedSQL = `e.agent_id != ''`
 // it is a fire this node's seat did not run ([DB.usageSchedules]), filed on
 // the day it was recorded, which is when the seat came back to its waiting
 // fires rather than when the scheduler sent them, and a day whose only change
-// was that record would otherwise never be derived again.
+// was that record would otherwise never be derived again. A held wake is one
+// for the same reason: the turn ledger counts it, and nothing else need land
+// on its day.
 //
 // A CHECK'S ENDINGS ONLY WHERE THEY NAME A SEAT ([seatNamedSQL]): every push of
 // every change ends each check its file defines, passes and candidate, tip
@@ -392,6 +394,7 @@ func usageRecords() []usageRecord {
 		{kind: types.KnowledgeRead{}.EventType()},
 		{kind: types.ScheduledFireSuperseded{}.EventType()},
 		{kind: types.CodeFetched{}.EventType()},
+		{kind: types.WakeHeld{}.EventType()},
 		{kind: types.ChangeOpened{}.EventType()},
 		{kind: types.ReviewSubmitted{}.EventType()},
 		{kind: types.CodeCheckFinished{}.EventType(), where: seatNamedSQL},

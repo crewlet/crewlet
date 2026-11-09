@@ -68,3 +68,29 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 		t.Errorf("refusals %+v, want %+v", turns.Refusals, want)
 	}
 }
+
+// A HELD WAKE MOVES ITS DAY'S FINGERPRINT: it is counted into the ledger, so a
+// day whose only change is a held wake landing must be derived again.
+func TestAHeldWakeMovesTheDaysFingerprint(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	w := usageDayOf(day, day.Add(24*time.Hour))
+	before, err := db.UsageMark(t.Context(), w)
+	if err != nil {
+		t.Fatalf("fingerprint the empty day: %v", err)
+	}
+	rec := usageRecord(t, "h1", "wake_held", day.Add(time.Hour), "seat-1", types.WakeHeld{Agent: "seat-1",
+		AgentHandle: "dev", NotificationSource: "chat",
+		Origin: types.TriggerOrigin{Kind: types.OriginChatMessage, ID: "m-1", Reason: "quiet"}})
+	if err := db.Events().Append(t.Context(), rec); err != nil {
+		t.Fatalf("append the held wake: %v", err)
+	}
+	after, err := db.UsageMark(t.Context(), w)
+	if err != nil {
+		t.Fatalf("fingerprint the day: %v", err)
+	}
+	if after == before {
+		t.Error("a held wake landed and the day's fingerprint did not move, so the day is never derived again")
+	}
+}
