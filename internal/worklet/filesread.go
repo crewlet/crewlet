@@ -24,7 +24,7 @@ type FileQuery struct {
 	Removed bool
 
 	// After is the path the previous page ended on, and Limit the page's
-	// size, 0 for [DefaultFilePage].
+	// size: 0 for [DefaultFilePage], and held to [MaxFilePage] ([filePage]).
 	After string
 	Limit int
 
@@ -40,6 +40,28 @@ const (
 	DefaultFilePage = 200
 	MaxFilePage     = 1000
 )
+
+// filePage is the page a listing answers for the limit it asked for:
+// [DefaultFilePage] for none, and never more than [MaxFilePage].
+//
+// HELD TO THE CAP, NEVER REFUSED, as most of the tracker's listings hold a
+// caller to theirs ([Reader.Tasks], [Reader.Projects], [Reader.Inbox],
+// [commentPage]): a page is how much of the listing one read answers, so a
+// caller asking for more is answered the largest page, with [FileListing.Next]
+// to go on from. Refusing it sent the caller round again for a page this
+// answer could have been, in an error no surface could tell from this node's
+// own failure: a seat was told the tracker had broken, and the query surface
+// answered 500.
+func filePage(asked int) int {
+	switch {
+	case asked <= 0:
+		return DefaultFilePage
+	case asked > MaxFilePage:
+		return MaxFilePage
+	default:
+		return asked
+	}
+}
 
 // FileRow is one file as a listing shows it — everything but the object its
 // bytes are in, which only a reader of the bytes needs.
@@ -87,14 +109,7 @@ func (r *Reader) Files(ctx context.Context, q FileQuery) (FileListing, error) {
 	}
 	q.Project = ProjectKey(q.Project)
 	folder := strings.Trim(strings.TrimSpace(q.Folder), "/")
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = DefaultFilePage
-	case limit > MaxFilePage:
-		return FileListing{}, fmt.Errorf("worklet: a file page is at most %d, "+
-			"asked for %d", MaxFilePage, limit)
-	}
+	limit := filePage(q.Limit)
 	var listing FileListing
 	served, err := r.log.Read(ctx, q.Freshness.Query(fileListScope(q.Project), true),
 		func(tx *sql.Tx) error {
