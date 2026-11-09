@@ -136,7 +136,9 @@ type Finding struct {
 	// Path is where in the company document the finding is located.
 	Path     string `json:"path"`
 	Evidence []Fact `json:"evidence"`
-	Fix      Fix    `json:"fix"`
+	// Records names at most five records behind the evidence, by id.
+	Records []string `json:"records,omitempty"`
+	Fix     Fix      `json:"fix"`
 }
 
 // Answer is every finding about the company at one revision, the most costly
@@ -153,15 +155,21 @@ func Read(c *config.Company, revision string) Answer {
 	for _, w := range c.Warnings() {
 		findings = append(findings, fromWarning(c, w))
 	}
+	sortFindings(findings)
+	return Answer{Revision: revision, Findings: findings}
+}
+
+// sortFindings orders findings the most costly first, then by area and class.
+func sortFindings(findings []Finding) {
 	slices.SortStableFunc(findings, func(a, b Finding) int {
 		return cmp.Or(
 			cmp.Compare(a.Severity.rank(), b.Severity.rank()),
 			cmp.Compare(a.Area, b.Area),
 			cmp.Compare(a.Class, b.Class),
 			cmp.Compare(a.Path, b.Path),
+			cmp.Compare(a.Subject.Seat, b.Subject.Seat),
 		)
 	})
-	return Answer{Revision: revision, Findings: findings}
 }
 
 // fromWarning is w as a finding, in its class's words and with its fix.

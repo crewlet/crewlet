@@ -30,6 +30,16 @@ The advisor reads the same checks `crewlet validate`, every `/config` write and 
 
 Every other warning the document raises is listed too, in the words `crewlet validate` prints, with the setting to open (`config.advisory`, `config.reference`, `config.admission`).
 
+## Patterns the engine is handling
+
+Beside the document's findings, the advisor reads what the company did over the last 7 days, from the records alone and with no model call, and lists the patterns the engine is reducing. Each is `actor: engine`, `source: evidence` and `note`, names at most five records behind it (`records`) and offers nothing to send (`fix.kind: none`): it is information, never a to-do.
+
+| Finding | Listed when (last 7 days) |
+|---|---|
+| Agents woke each other with comments that asked nothing (`wake.agent_mentions_without_ask`) | Agents' comments that asked nothing woke an agent they named at least 5 times, and at least once per 100 agent comments. |
+| Agents named a person without asking them a question (`person.requests_without_ask`), one per person | An agent's comment named the person at least 5 times with no question attached, so nothing in it reached their Inbox as a decision. |
+| People answered questions that no longer needed an answer (`ask.overtaken`) | At least 3 answers, and at least 5% of a person's answers to an agent's question, went to a question its asker had asked again on the item since, or whose item had already finished. |
+
 ## Previewing and applying a change
 
 A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace) and `summary`. To apply one:
@@ -52,4 +62,4 @@ The engine does not grant access, change a model, move or remove a schedule, edi
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.com/advisor
 ```
 
-The answer is `{"revision": "...", "findings": [...]}`, the most costly finding first. See the [API reference](../reference/api-endpoints.md).
+The answer is `{"revision": "...", "findings": [...]}`, the most costly finding first; the patterns above are read over the 7 days before the request. See the [API reference](../reference/api-endpoints.md).
