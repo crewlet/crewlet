@@ -41,7 +41,8 @@ import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
-import type { AdvisorFinding } from "~/protocol/advisor.ts";
+import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
+import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -60,7 +61,7 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup";
+export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup" | "alarms";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -71,6 +72,7 @@ export const SUBJECTS: Record<Subject, string> = {
   round: "every round still in flight",
   tools: "every MCP server the agents call",
   setup: "the company's setup",
+  alarms: "every alarm the engine raised",
 };
 
 /**
@@ -102,6 +104,7 @@ export const WHERE_OF: Record<Subject, Where> = {
   round: "live",
   tools: "seat",
   setup: "seat",
+  alarms: "seat",
 };
 
 /**
@@ -228,11 +231,23 @@ export interface AttentionInput {
    */
   mcpAlarms: readonly McpAlarm[];
   /**
-   * The setup advisor's findings that block the company and are the owner's
-   * to fix: empty for a reader the advisor does not answer. The engine judged
-   * each one; this only puts it into the queue, opening the advisor.
+   * The platform notices the advisor answers: empty for a reader it does not
+   * answer. The engine decided each one and when it ends; this only words it.
    */
-  setupBlockers: readonly AdvisorFinding[];
+  notices: readonly AdvisorNotice[];
+  /** The advisor's findings, where a notice about one finds its words and fix. */
+  findings: readonly AdvisorFinding[];
+}
+
+/** Whether a finding is about the subject a notice names. */
+function sameSubject(a: AdvisorSubject, b: AdvisorSubject): boolean {
+  return (
+    a.kind === b.kind &&
+    a.seat === b.seat &&
+    a.unit === b.unit &&
+    a.schedule === b.schedule &&
+    a.name === b.name
+  );
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
@@ -265,7 +280,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
-  const { setupBlockers } = input;
+  const { notices, findings } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -469,10 +484,34 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     }
   }
 
-  // --- the company's setup -------------------------------------------------
-  // WHAT BLOCKS THE COMPANY AND IS THE OWNER'S TO FIX, from the advisor, with
-  // what to do as the detail; the fix itself is previewed on the advisor.
-  for (const f of setupBlockers) {
+  // --- the platform notices -------------------------------------------------
+  // WHAT THE ENGINE SAYS NEEDS AN ADMINISTRATOR, open for as long as it holds.
+  // A finding's notice is the finding's own words, its fix previewed on the
+  // advisor; an alarm's opens the section that draws it. An MCP alarm is
+  // drawn per server above, so its notice is not drawn twice.
+  for (const n of notices) {
+    const at = n.since ? { at: n.since } : {};
+    if (n.class === "alarm") {
+      const kind = n.subject.name ?? "";
+      if (kind === "" || kind.startsWith("mcp_")) continue;
+      const home = alarmHome(kind);
+      out.push({
+        id: `alarm-${kind}`,
+        severity: "critical",
+        subject: "alarms",
+        icon: "triangle-alert",
+        title: `${alarmKindTitle(kind)} has not cleared`,
+        detail: "The engine raised this alarm and it has not cleared on its own.",
+        ...(n.nodes?.length ? { technical: `Standing on ${n.nodes.join(", ")}.` } : {}),
+        ...(drawnOnBackups(kind) ? alarmsLink() : { path: home.path }),
+        action: `Open ${home.label}`,
+        clears: "Clears when the alarm clears.",
+        ...at,
+      });
+      continue;
+    }
+    const f = findings.find((f) => f.class === n.class && sameSubject(f.subject, n.subject));
+    if (!f) continue;
     out.push({
       id: `setup-${[f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("-")}`,
       severity: "critical",
@@ -483,6 +522,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       path: ["settings", "advisor"],
       action: "Open the advisor",
       clears: "Clears once the setup no longer raises it.",
+      ...at,
     });
   }
 

@@ -16,7 +16,18 @@ flowchart LR
 
 **Settings › Advisor** lists every finding, the most costly first, with what the engine is handling listed apart so it never reads as yours to do. **Review the change** opens the preview: pick an option where there is more than one, and the screen asks the engine to check the exact write (the fields it changes, before and after, and any warning it would add). Nothing is saved until you press **Apply**, which saves it as a revision by you.
 
-A finding that **blocks** the company and is yours to fix also waits in your **Inbox** under **Needs you**, and counts on **Home**, with what to do and a button that opens the advisor. It leaves both once the setup no longer raises it. Findings that cost or are worth knowing stay on the advisor alone, so they never crowd the decisions your agents are waiting on.
+A finding that **blocks** the company and is yours to fix also waits in every administrator's **Inbox** under **Needs you**, and counts on **Home**, with what to do and a button that opens the advisor, as a [platform notice](#platform-notices). It leaves both once the setup no longer raises it. Findings that cost or are worth knowing stay on the advisor alone, so they never crowd the decisions your agents are waiting on.
+
+## Platform notices
+
+A platform notice is how something only an administrator can fix reaches every administrator, whether or not any agent holds `health_tools`. There are two kinds:
+
+| Notice | Raised while | Opens |
+|---|---|---|
+| A finding that blocks the company and is yours to fix | The advisor lists it. | The advisor, with the finding's fix. |
+| An alarm that has not cleared (`alarm`) | An alarm has stood on any server for at least 30 minutes (the deferral grace, where the engine itself stops waiting for a condition to clear on its own). One notice names every server it stands on, and a restart keeps when it was raised. | The section that draws the alarm: Backups & retention's alarm list, Models, or Gitlet. An MCP server's alarm is already its own row in Needs you. |
+
+A condition both raise is one notice: the `backup_age` alarm is the advisor's no-verified-backup finding, with that finding's fix. A notice has nothing to answer and nothing to mark read: it ends when its condition does. Whoever is an administrator when the Inbox is read sees it, so a person made an administrator sees every notice already open ([ADR-0116](../../adr/0116-an-administrator-notice-is-read-off-its-condition.md)).
 
 ## What it lists
 
@@ -77,4 +88,4 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.co
 
 Or with `crewlet doctor`, which prints the classes, subjects by kind and ordinal, and counts (`-words` adds the handles and the reasons) and exits 2 while a finding blocks the company, or 1 while the node could not read a source, so a block it holds is never passed over ([CLI reference](../reference/cli.md#crewlet-doctor)).
 
-The answer is `{"revision": "...", "findings": [...], "unread": [...]}`, the most costly finding first; the patterns above are read over the 7 days before the request. `unread` names each source the server could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers and reviews, whose patterns are then left out) and `alarms` (the node's alarm table has not been evaluated yet, as right after a start, so the backup finding cannot be judged). `crewlet doctor` fails while any source is unread. See the [API reference](../reference/api-endpoints.md).
+The answer is `{"revision": "...", "findings": [...], "notices": [...], "unread": [...]}`, the most costly finding first and the longest-standing notice first; the patterns above are read over the 7 days before the request. A notice is `{"class", "subject", "since", "nodes"}`: the finding's class and subject, or `alarm` with the alarm's kind as the subject's `name`. `unread` names each source the server could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers and reviews, whose patterns are then left out) and `alarms`, named once for either cause (the node's alarm table has not been evaluated yet, as right after a start, so the backup finding cannot be judged; or the fleet's alarms could not be read, so a standing alarm may have no notice). `crewlet doctor` fails while any source is unread. See the [API reference](../reference/api-endpoints.md).

@@ -156,7 +156,8 @@ type Answer struct {
 }
 
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
-// work patterns, and the alarm evaluation this node could not read.
+// work patterns, and the alarms (this node's evaluation or the fleet's marks)
+// that could not be read.
 const (
 	UnreadIntegrations = "integrations"
 	UnreadWork         = "work"
