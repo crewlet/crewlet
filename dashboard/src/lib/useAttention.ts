@@ -31,7 +31,7 @@ const NO_FINDINGS: readonly AdvisorFinding[] = [];
 const NO_SETUP_UNREAD: readonly string[] = [];
 
 /** How often the queue asks the advisor again: a setup changes by revisions. */
-const ADVISOR_POLL_MS = 60_000;
+export const ADVISOR_POLL_MS = 60_000;
 
 /**
  * Whether this reader is asked the MCP alarms: an administrator, the reader
@@ -51,7 +51,7 @@ function useReadsMcpAlarms(): boolean {
  * reader who is not asked their alarms.
  */
 export function useUnwatched(): readonly Subject[] {
-  return useReadsMcpAlarms() ? [] : ["tools", "setup", "alarms"];
+  return useReadsMcpAlarms() ? [] : ["tools", "setup", "alarms", "holds"];
 }
 
 export function useAttention(): Attention[] {

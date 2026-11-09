@@ -39,7 +39,7 @@ func TestEveryFailureKindIsClassified(t *testing.T) {
 			t.Errorf("sandbox reason %q pauses its seat as %q, which the table does not word", why, kind)
 		}
 	}
-	reached := map[failureKind]bool{failureModelsRefused: true}
+	reached := map[failureKind]bool{failureModelsRefused: true, failureContextExhausted: true}
 	for _, kind := range whyFailures {
 		reached[kind] = true
 	}
@@ -126,7 +126,9 @@ func TestOnlyARunOfOneFailurePausesTheSeat(t *testing.T) {
 		if _, parked, err := e.failureHold(ctx, "ceo", imageRefused); parked || err != nil {
 			t.Fatalf("the first failure paused (%v, %v)", parked, err)
 		}
-		if _, parked, err := e.failureHold(ctx, "ceo", between); parked || err != nil {
+		if between == nil {
+			e.failureCleared("ceo")
+		} else if _, parked, err := e.failureHold(ctx, "ceo", between); parked || err != nil {
 			t.Fatalf("%v between paused (%v, %v)", between, parked, err)
 		}
 		if _, parked, err := e.failureHold(ctx, "ceo", imageRefused); parked || err != nil {

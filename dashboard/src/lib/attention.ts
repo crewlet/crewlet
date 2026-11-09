@@ -43,6 +43,7 @@ import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
 import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
+import { HELD_CLASS, HELD_REASON, heldItem } from "./heldConversation.ts";
 import { unreadSentences } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -62,7 +63,8 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup" | "alarms";
+export type Subject =
+  "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup" | "alarms" | "holds";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -74,6 +76,7 @@ export const SUBJECTS: Record<Subject, string> = {
   tools: "every MCP server the agents call",
   setup: "the company's setup",
   alarms: "every alarm the engine raised",
+  holds: "every conversation the engine holds",
 };
 
 /**
@@ -106,6 +109,7 @@ export const WHERE_OF: Record<Subject, Where> = {
   tools: "seat",
   setup: "seat",
   alarms: "seat",
+  holds: "seat",
 };
 
 /**
@@ -509,6 +513,28 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         ...(drawnOnBackups(kind) ? alarmsLink() : { path: home.path }),
         action: `Open ${home.label}`,
         clears: "Clears when the alarm clears.",
+        ...at,
+      });
+      continue;
+    }
+    // A CONVERSATION THE ENGINE HOLDS: nothing to decide, and the row says what
+    // releases it, opening the item it is about where there is one.
+    if (n.class === HELD_CLASS) {
+      const seat = n.subject.seat ?? "";
+      const item = heldItem(n);
+      out.push({
+        id: `held-${seat}-${n.subject.name ?? ""}`,
+        severity: "caution",
+        subject: "holds",
+        icon: "pause",
+        title: `Held by the engine: ${HELD_REASON}`,
+        detail:
+          "The engine stopped retrying this after 2 identical failures and is holding the " +
+          "conversation. There is nothing for you to decide.",
+        path: item ? ["worklet", item] : ["company", "org", "seats", seat],
+        action: item ? "Open the item" : "Open the seat",
+        clears: "Clears when somebody writes on the conversation or the seat's models change.",
+        ...(seat ? { who: seat } : {}),
         ...at,
       });
       continue;

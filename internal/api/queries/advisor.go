@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
@@ -36,9 +38,13 @@ type advisorAnswer struct {
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	fleet, fleetKnown := s.fleetAlarms(ctx)
+	held, heldKnown := s.heldConversations(ctx)
+	noticed := func(a advisor.Answer) advisorAnswer {
+		return noticedWith(a, fleet, fleetKnown, held, heldKnown, now)
+	}
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, fleet, fleetKnown, now), nil
+		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}), nil
 	}
 	if err != nil {
 		return nil, revisionRefusal("advisor", err)
@@ -51,17 +57,41 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), fleet, fleetKnown, now), nil
+	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now))), nil
 }
 
-// noticed is the answer with the notices its findings and the fleet's alarms
-// raise. `alarms` is named unread once, whether this node's evaluation or the
-// fleet's marks could not be read.
-func noticed(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, now time.Time) advisorAnswer {
+// noticedWith is the answer with the notices its findings, the fleet's alarms
+// and the held conversations raise. `alarms` is named unread once, whether this
+// node's evaluation or the fleet's marks could not be read; `holds` where the
+// held conversations could not be.
+func noticedWith(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, held []notice.Notice,
+	heldKnown bool, now time.Time) advisorAnswer {
+
 	if !fleetKnown && !slices.Contains(a.Unread, advisor.UnreadAlarms) {
 		a.Unread = append(a.Unread, advisor.UnreadAlarms)
 	}
-	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, now)}
+	if !heldKnown {
+		a.Unread = append(a.Unread, advisor.UnreadHolds)
+	}
+	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, held, now)}
+}
+
+// heldConversations is a notice per conversation the engine holds, named by
+// its seat's handle; false where the holds cannot be read.
+func (s Sources) heldConversations(ctx context.Context) ([]notice.Notice, bool) {
+	if s.Holds == nil {
+		return nil, true
+	}
+	holds, err := s.Holds.ListConversationHolds(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_conversation_holds_unread", "error", err.Error())
+		return nil, false
+	}
+	handles := s.seatHandles()
+	return notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) {
+		handle, known := handles[seat]
+		return handle, known
+	}), true
 }
 
 // advisorEvidence is what the company did in the week before now. A SOURCE THAT

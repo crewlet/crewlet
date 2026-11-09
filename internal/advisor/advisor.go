@@ -163,6 +163,8 @@ const (
 	UnreadWork         = "work"
 	UnreadLedger       = "ledger"
 	UnreadAlarms       = "alarms"
+	// UnreadHolds is a fleet whose held conversations could not be read.
+	UnreadHolds = "holds"
 )
 
 // Inputs is what one answer is read from.

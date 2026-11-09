@@ -1,8 +1,8 @@
-# ADR-0117: A failure a retry cannot cure pauses its seat, once
+# ADR-0117: A failure a retry cannot cure pauses its seat or holds its conversation, once
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`
+- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 
@@ -29,6 +29,25 @@ It ends in one of two ways. A person resumes the seat, or an apply changes the
 settings the failure depended on, which lifts the pause as the engine. A
 failure that still holds after either pauses the seat again on its second time.
 
+**A conversation whose context does not fit is held, not its seat.** A run
+that ran out of context after the conversation's previous run did, the second
+time on a fresh session (so the brief alone does not fit, not a long session),
+holds that conversation: one record per (seat, conversation) in the
+coordination store. Its wakes are settled without a turn and recorded as
+skipped, and the seat's other conversations go on. A person writing on the
+conversation lifts the hold and that delivery runs, and so does a change of
+the seat's models, which a hold is judged against the next time it is read. A
+seat the company removes takes its holds with it.
+
+**A held conversation is told, and is never released by a timer.** Each hold is
+a platform notice of the engine's cause (ADR-0116, class `conversation.held`),
+which reaches every administrator while the hold stands and leaves with it, and
+the item a held conversation is about says "Held by the engine" on its page.
+There is nothing to decide: the notice says what releases it. A timed release
+would run the same brief into the same models again, twice, which is the loop
+the hold ends; a person who reads the notice and writes on the conversation is
+the release that can change the answer.
+
 ## Why the obvious alternative is wrong
 
 A park of its own beside the budget and provider parks would be this node's
@@ -40,9 +59,11 @@ will not, and a longer backoff only spends the same 25 deliveries more slowly.
 
 ## What this does not decide
 
-A failure tied to one conversation rather than the seat (a context that does
-not fit) is not in the table. The first failure of a run still costs one
-retry: the count is each node's, so a restart between the two failures costs
-one more. A pull the local runtime cannot tell apart from a refused image is
-classed as the configuration's, so a pull that fails twice on a network blip
-pauses the seat until a person resumes it.
+The first failure of a run still costs one
+retry: the count is each node's, so a restart or a move between the two
+failures costs one more, for a seat pause and a conversation hold alike. A held
+conversation's wakes are recorded as worked, not as held turns in the usage
+ledger, and the turn a person's message releases carries that message; the
+conversation's thread still holds every message the hold settled. A container that would not start is the configuration's only when the runtime
+holds its image; one it does not hold failed to arrive, and is left to the
+retry like any provider that did not answer.

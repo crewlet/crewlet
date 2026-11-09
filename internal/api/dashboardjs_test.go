@@ -2169,8 +2169,11 @@ const (
 	// platform notices in Needs you, the rubber-stamp finding's draft with Ask
 	// Crewlet and the advisor's every unread source, merged on top of it, took it
 	// to 5692.9 KiB (5,829,572 bytes, +1,858, all script). The measured size's
-	// next KiB: 5693 KiB.
-	treeBudget = 5<<20 + 573<<10
+	// next KiB: 5693 KiB. A conversation the engine holds, as a row in Needs
+	// you and a note on its item, on top of it, took it to 5694.2 KiB
+	// (5,830,844 bytes, +1,272, all script). The measured size's next KiB:
+	// 5695 KiB.
+	treeBudget = 5<<20 + 575<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
