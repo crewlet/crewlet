@@ -633,10 +633,12 @@ the last word anybody said about that item.
 - **Ready** is Worklet's: assigned to the seat, `in_progress` or `todo`,
   waiting on no open blocker, past its start date, and not held on a question
   the seat itself asked on the item that nobody has answered. Work in review
-  is not ready.
-- **Next** is work the seat already started first, then its priority list in
-  the order its lead set, then the rest by priority and due date, the order
-  `my_work` lists them in.
+  is ready on the same terms for the seat that holds it when somebody else
+  moved it into review (or filed it there): a seat handed a review takes it up,
+  and never reviews what it submitted itself.
+- **Next** is work the seat already started first, then the reviews it holds,
+  then its priority list in the order its lead set, then the rest by priority
+  and due date, the order `my_work` lists them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the
