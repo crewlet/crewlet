@@ -69,3 +69,11 @@ export interface AdvisorAnswer {
   /** What the answer could not read (`integrations`), so a short list never reads as all clear. */
   unread: string[];
 }
+
+/** `GET /advisor/access`: the change that grants an agent one access it asked for. */
+export interface AccessFixAnswer {
+  seat: string;
+  access: string;
+  revision: string;
+  fix: AdvisorFix;
+}

@@ -2160,8 +2160,10 @@ const (
 	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
 	// 5690 KiB. The advisor's go-live check and its blockers in Needs you,
 	// merged on top of it, took it to 5691.1 KiB (5,827,714 bytes, +1,793, all
-	// script). The measured size's next KiB: 5692 KiB.
-	treeBudget = 5<<20 + 572<<10
+	// script). The measured size's next KiB: 5692 KiB. An agent's access request
+	// (its grant previewed and applied before the answer, in the Advisor's change
+	// dialog) took it to 5692.7 KiB (5,829,360 bytes, +1,646, all script): 5693 KiB.
+	treeBudget = 5<<20 + 573<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
