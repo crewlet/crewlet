@@ -3,6 +3,7 @@ package advisor
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -317,27 +318,44 @@ func askOvertaken(ev Evidence, _ func(string) SeatKind) []Finding {
 			{Key: "moot", Value: int64(w.Moot)}}, w.Overtaken)}
 }
 
-// approvalRubberStamp is one finding per person and asking agent whose
-// decisions the person took as recommended almost every time: the decision
+// approvalRubberStamp is one finding per asking agent whose decisions a person
+// took as recommended almost every time, naming every such person: the decision
 // stays the person's, and a policy letting the agent act on such a class is
 // the owner's call, so the fix is a draft the owner reviews, never a change.
 func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
-	var out []Finding
+	type stamped struct {
+		people               []words.Said
+		decided, recommended int
+	}
+	byAsker := map[string]*stamped{}
 	for _, d := range ev.Work.Decisions {
 		if d.Decided < minDecided || d.Recommended*100 < recommendedPercent*d.Decided {
 			continue
 		}
+		s := byAsker[d.Asker]
+		if s == nil {
+			s = &stamped{}
+			byAsker[d.Asker] = s
+		}
+		s.people = append(s.people, words.Said(d.Person))
+		s.decided += d.Decided
+		s.recommended += d.Recommended
+	}
+	var out []Finding
+	for _, asker := range slices.Sorted(maps.Keys(byAsker)) {
+		s := byAsker[asker]
+		people := words.And(s.people)
 		out = append(out, Finding{
 			Class: ClassApprovalRubberStamp, Severity: SeverityNote, Actor: ActorOwner,
-			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: d.Asker},
+			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: asker},
 			Title: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions.",
-				d.Person, d.Asker, d.Recommended, d.Decided),
+				people, asker, s.recommended, s.decided),
 			Why: fmt.Sprintf("In the last 7 days %s asked %s %d decisions and the recommended "+
 				"option was taken %d times. Each one still costs a press and makes the agent "+
 				"wait. Whether %s may act on some kinds of them without asking is your call.",
-				d.Asker, d.Person, d.Decided, d.Recommended, d.Asker),
-			Evidence: []Fact{{Key: "decided", Value: int64(d.Decided)},
-				{Key: "recommended", Value: int64(d.Recommended)}},
+				asker, people, s.decided, s.recommended, asker),
+			Evidence: []Fact{{Key: "decided", Value: int64(s.decided)},
+				{Key: "recommended", Value: int64(s.recommended)}},
 			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
 				Sentence:  "Draft a policy with Ask Crewlet, and review it before it is saved.",
 				Unchanged: "Nothing changes until you approve the policy Ask Crewlet drafts.",
@@ -346,7 +364,7 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 					"always taken as recommended, and draft a change to the company's policies "+
 					"that lets %s act on those kinds without asking, keeping every other decision "+
 					"with the person. Show me the change before making it.",
-					d.Person, d.Asker, d.Recommended, d.Decided, d.Asker)},
+					people, asker, s.recommended, s.decided, asker)},
 		})
 	}
 	return out
