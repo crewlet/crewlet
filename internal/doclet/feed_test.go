@@ -468,8 +468,9 @@ func TestAnAgentsPageCommentThatAsksNothingWakesNoAgent(t *testing.T) {
 }
 
 // AN ANSWER ON A PAGE REACHES THE AGENT THAT ASKED (ADR-0113): a page has no
-// answer record, so an agent that asked in a comment's thread is woken by any
-// reply there by somebody else, whatever it names and whether it asks.
+// answer record, so while an agent's ask is open any reply in its thread by
+// somebody else wakes it, whatever the reply names and whether it asks; the
+// answer of a seat it named closes the ask, and the replies after wake nobody.
 func TestAPageReplyWakesTheAgentThatAskedInItsThread(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -489,11 +490,14 @@ func TestAPageReplyWakesTheAgentThatAskedInItsThread(t *testing.T) {
 		}
 		return routedTo(r.routeVia(r.lastRecord(), nil, roster))
 	}
+	if got := reply(agent("c"), "section 4 changed last week", ptr(false)); !slices.Contains(got, "a") {
+		t.Errorf("c's reply in a's open thread reached %v, want a", got)
+	}
 	if got := reply(agent("b"), "@a yes, still accurate", ptr(false), "a"); !slices.Contains(got, "a") {
 		t.Fatalf("b's answer reached %v, want a, who asked", got)
 	}
-	if got := reply(agent("c"), "and section 4 too", ptr(false)); !slices.Contains(got, "a") {
-		t.Errorf("c's reply in a's thread reached %v, want a", got)
+	if got := reply(agent("c"), "and section 4 too", ptr(false)); slices.Contains(got, "a") {
+		t.Errorf("c's reply after b answered reached %v, want not a", got)
 	}
 	if got := reply(agent("a"), "thanks both", ptr(false)); slices.Contains(got, "a") ||
 		slices.Contains(got, "b") || slices.Contains(got, "c") {
@@ -576,9 +580,10 @@ func (p *pageThread) say(who, replyTo string, asks bool, body string, mentions .
 	return posted.ID, agents
 }
 
-// TWO AGENTS THAT ASKED EACH OTHER ON A PAGE STOP AFTER ONE ROUND (ADR-0113):
-// an agent awaits only while its newest comment in the thread asks, so the
-// acknowledgements after the answers wake nobody.
+// A PAGE ASK STAYS OPEN UNTIL SOMEBODY ELSE ANSWERS IT (ADR-0113): a
+// clarifying question back and its answer do not close the first ask, so its
+// answer still reaches the agent that asked, and the acknowledgements after
+// the two answers wake nobody.
 func TestTwoAskersOnAPageStopAfterOneRound(t *testing.T) {
 	t.Parallel()
 	p := newPageThread(t)
@@ -586,23 +591,30 @@ func TestTwoAskersOnAPageStopAfterOneRound(t *testing.T) {
 	if !slices.Equal(woke, []string{"b"}) {
 		t.Fatalf("a's question woke %v, want b", woke)
 	}
-	if _, woke = p.say("b", root, true, "@a which version?", "a"); !slices.Equal(woke, []string{"a"}) {
-		t.Fatalf("b's question back woke %v, want a", woke)
-	}
-	if _, woke = p.say("a", root, false, "v2"); !slices.Equal(woke, []string{"b"}) {
-		t.Fatalf("a's answer woke %v, want b, who asked", woke)
-	}
-	for i, line := range []struct{ who, body string }{
-		{"b", "then yes, accurate"}, {"a", "thanks"}, {"b", "you're welcome"}, {"a", "cheers"},
+	for i, step := range []struct {
+		who, body string
+		asks      bool
+		want      []string
+	}{
+		{"b", "@a which version do you mean?", true, []string{"a"}},
+		{"a", "v2", false, []string{"b"}},
+		{"b", "then yes, section 3 is accurate", false, []string{"a"}},
+		{"a", "thanks", false, nil},
+		{"b", "you're welcome", false, nil},
+		{"a", "cheers", false, nil},
 	} {
-		if _, woke = p.say(line.who, root, false, line.body); len(woke) != 0 {
-			t.Fatalf("acknowledgement %d (%s: %q) woke %v, want nobody", i, line.who, line.body, woke)
+		var mentions []string
+		if step.asks {
+			mentions = []string{"a"}
+		}
+		if _, woke = p.say(step.who, root, step.asks, step.body, mentions...); !slices.Equal(woke, step.want) {
+			t.Fatalf("step %d (%s: %q) woke %v, want %v", i, step.who, step.body, woke, step.want)
 		}
 	}
 }
 
 // A CO-ASKER'S NUDGE ON A PAGE WAKES NOBODY WHO AWAITS THE SAME SEAT, while
-// the addressee's reply still wakes the agent that asked.
+// the addressee's answer wakes both agents that asked.
 func TestAPageCoAskersNudgeLeavesTheOtherAskerAsleep(t *testing.T) {
 	t.Parallel()
 	p := newPageThread(t)
@@ -611,8 +623,11 @@ func TestAPageCoAskersNudgeLeavesTheOtherAskerAsleep(t *testing.T) {
 	if _, woke := p.say("c", root, false, "any word?"); len(woke) != 0 {
 		t.Fatalf("c's nudge woke %v, want nobody: c only awaits the seat a awaits", woke)
 	}
-	if _, woke := p.say("b", root, false, "yes, both still hold"); !slices.Equal(woke, []string{"a"}) {
-		t.Errorf("b's answer woke %v, want a, still awaiting", woke)
+	if _, woke := p.say("b", root, false, "yes, both still hold"); !slices.Equal(woke, []string{"a", "c"}) {
+		t.Errorf("b's answer woke %v, want a and c, both still awaiting", woke)
+	}
+	if _, woke := p.say("a", root, false, "thanks"); len(woke) != 0 {
+		t.Errorf("a's thanks woke %v, want nobody: b answered both asks", woke)
 	}
 }
 
@@ -627,6 +642,11 @@ func TestATopLevelPageAnswerNamingTheAskerWakesIt(t *testing.T) {
 	}
 	if _, woke := p.say("c", "", false, "@a noted.", "a"); len(woke) != 0 {
 		t.Errorf("c's top-level remark woke %v, want nobody: a asked b, not c", woke)
+	}
+	// THE TOP-LEVEL ANSWER CLOSED THE ASK: neither b naming a again nor a
+	// reply in a's thread wakes a.
+	if _, woke := p.say("b", "", false, "@a section 4 too.", "a"); len(woke) != 0 {
+		t.Errorf("b's second top-level remark woke %v, want nobody: the ask was answered", woke)
 	}
 }
 

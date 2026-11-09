@@ -26,14 +26,15 @@ var (
 		quiet: "whoever's question it answers (`answers`) and anyone with an open " +
 			"question in the thread are woken.",
 	}
-	// pageAsks is a page comment's: a page has no answer record, so an agent
-	// whose last word in a thread asks hears every reply in it.
+	// pageAsks is a page comment's: an ask stays open, and every reply in
+	// its thread wakes its author, until somebody else answers it.
 	pageAsks = asksSurface{
 		asked: "The colleagues you @-mention are woken, and every later reply in " +
-			"this comment's thread wakes you until you post there a comment that " +
-			"asks nothing.",
-		quiet: "the agents still waiting on an answer in this comment's thread " +
-			"(or, at the top level, the ones you name who asked you) are woken.",
+			"this comment's thread wakes you until one of them answers it with a " +
+			"comment that asks nothing (anybody, if you named nobody).",
+		quiet: "the agents with an open ask in this comment's thread (or, at the " +
+			"top level, the ones you name whose open ask named you) are woken, and " +
+			"the asks it answers close.",
 	}
 )
 

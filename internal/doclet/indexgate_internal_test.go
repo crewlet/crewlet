@@ -189,6 +189,7 @@ func pageReads(t *testing.T) map[string]pageIndexed {
 		address   = "pages_heads_address_idx"
 		parent    = "pages_heads_parent_idx"
 		thread    = "pages_comments_page_idx"
+		openAsks  = "pages_comments_open_asks_idx"
 		trashed   = "pages_heads_trashed_idx"
 	)
 	ids := []string{"p-0001", "p-0002"}
@@ -208,8 +209,9 @@ func pageReads(t *testing.T) map[string]pageIndexed {
 		"a child re-filed":                seek(heads, refileChildStatement, "p", 1, "{}", "p-0001", 1, 1),
 		"a head at a version":             seek(heads, headAtStatement, "p-0001"),
 		"a held comment":                  seek(comments, heldCommentStatement, "c"),
-		"a reply's thread":                seek(thread, threadCommentsStatement, "p-0001", "c", "c", 200),
-		"a page's comments, newest first": seek(thread, pageCommentsStatement, "p-0001", 200),
+		"a thread's open asks":            seek(openAsks, openInThreadStatement, "p-0001", "c", "c", 64),
+		"a page's open asks":              seek(openAsks, openOnPageStatement, "p-0001", 64),
+		"an ask answered":                 seek(comments, closeAskStatement, "c", "p-0001"),
 		"a comment removed":               seek(comments, removeCommentStatement, "c", 1),
 		"a page's watchers cleared":       seek(watchers, clearWatchersStatement, "p-0001"),
 		"a revision retired":              seek(revs, retireRevisionStatement, "p-0001", 1),
