@@ -11,7 +11,7 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
   ledger:
     "The agents' turns couldn't be read, so the patterns the engine finds in them are missing.",
   alarms:
-    "The engine's alarms haven't been checked since it started, so whether a backup is missing can't be said yet.",
+    "The engine's alarms couldn't be read, as right after a start, so whether a backup is missing can't be said yet.",
 };
 
 /** One sentence per unread source, in the answer's order; a source with no words of its own is named. */
