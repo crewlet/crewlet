@@ -130,7 +130,7 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 // ONLY WORDS ADDRESSED TO THE CONVERSATION ANSWER A PARKED QUESTION: a chat
 // message, a work item or page comment does; a field or status change, a page
 // save, an alarm and a work pickup on the same conversation never do, whoever
-// wrote them.
+// wrote them. A notification no prompt classifies is answered as before.
 func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) {
 	t.Parallel()
 	prompts := notify.NewPrompts(slack.Prompt(), worklet.Prompt{}, doclet.Prompt{}, alarmwake.Prompt{})
@@ -150,6 +150,7 @@ func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) 
 		{"a page save", notice(doclet.Source, string(doclet.ChangeSaved)), false},
 		{"an alarm", notice(alarmwake.Source, "fired"), false},
 		{"a work pickup", events.New(types.WorkPickup{}, events.TraceContext{}), false},
+		{"a notification no prompt classifies", notice("unregistered", "message"), true},
 	} {
 		if got := replySays(prompts, nil, "app", []*events.Event{tc.ev}); got != tc.says {
 			t.Errorf("%s: says = %v, want %v", tc.name, got, tc.says)

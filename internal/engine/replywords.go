@@ -27,7 +27,8 @@ func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 
 // replySays is whether a delivery carries words its writer addressed to the
 // conversation ([sandbox.Reply.Says]): one of its notifications read from a
-// surface a writer speaks on, never a field change, an alarm or a pickup.
+// surface a writer speaks on, or one no prompt classifies; never a field change,
+// an alarm or a pickup.
 func replySays(prompts notify.Prompts, parties notify.Parties, self string, evs []*events.Event) bool {
 	for _, ev := range evs {
 		n, ok := events.DataAs[*types.ExternalNotification](ev)
@@ -36,7 +37,7 @@ func replySays(prompts notify.Prompts, parties notify.Parties, self string, evs 
 		}
 		labels := notify.SalientLabels(prompts, *n, parties, self)
 		if len(labels) > 0 && !slices.ContainsFunc(labels, func(l provenance.Label) bool {
-			return !l.Source.Said()
+			return !l.Source.Said() && l.Source != provenance.SourceNotification
 		}) {
 			return true
 		}
