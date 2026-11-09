@@ -161,8 +161,10 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	ledger := newBridgeLedger(rt.pending, reopened.Meter)
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
-	// after the last one the log records, and a resume reads them by it.
-	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: calls.LastSeq()}
+	// after the last one the log records, and a resume reads them by it. And
+	// IN ITS OWN ROUND, as the row names the job: a call still running when a
+	// relaunch carries the round on is listed in the round's log, marked late.
+	job := run.NamedJob(calls.LastSeq())
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: reopened.Surface, Ledger: ledger,

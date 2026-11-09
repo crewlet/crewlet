@@ -447,7 +447,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
 		// middle among them: the session continued is that round's job's.
 		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
-			absorbed: r.cfg.Resume.Absorbed}
+			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
 		briefs.kept = r.keptSession(ctx, basis, collected, built, fresh, "").led(r.sendBackLead(notes))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
@@ -594,7 +594,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	round := roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed}
+	round := roundCalls{bridged: bridgedCalls, elided: elided, lateElided: r.cfg.Resume.LateElided,
+		absorbed: absorbed}
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

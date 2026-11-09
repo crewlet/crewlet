@@ -755,7 +755,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
 	defer origin.Stamp(&err)
-	ledger.bind(job.LaunchID)
+	ledger.bind(job)
 	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {

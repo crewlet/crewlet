@@ -447,7 +447,9 @@ func heldAt(call BridgedCall, through *int) bool {
 // droppedAfterSave is how many of the calls round's log took after the save
 // point through it dropped from its middle, which no list can tell a session
 // one by one: the log's appends past the point, less the calls it still lists
-// numbered past it.
+// numbered past it — and every LATE call it dropped, whatever its number
+// ([roundCalls.lateElided]): no save point holds a late call, and a dropped
+// one keeps no mark to be told by.
 //
 // EXACT, because every append is numbered one past the last
 // ([BridgedCall.Appended]) and each call the log took is listed or counted
@@ -455,7 +457,9 @@ func heldAt(call BridgedCall, through *int) bool {
 // and the numbers past the point the log does not list are the dropped ones.
 // A listed call with no number is not subtracted, its place unknown, so a log
 // an older build appended to may over-count, held to the dropped calls the
-// round counts at all; it never under-counts.
+// round counts at all; it never under-counts. So may a dropped late call past
+// the point, counted among those past it and again as late: the same
+// over-count, under the same hold.
 func droppedAfterSave(round roundCalls, through int) int {
 	dropped := ledger.Count(round.elided)
 	pastPoint := len(round.bridged) + dropped - through
@@ -464,7 +468,7 @@ func droppedAfterSave(round roundCalls, through int) int {
 			pastPoint--
 		}
 	}
-	return min(max(pastPoint, 0), dropped)
+	return min(max(pastPoint, 0)+round.lateElided, dropped)
 }
 
 // unreadSince is every note the turn has read that a session saved with cursor

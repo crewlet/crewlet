@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -58,7 +59,9 @@ import (
 //
 // AND WITH ITS PLACE IN THE ORDER THE LOG TOOK THE ROUND'S CALLS
 // ([sandbox.BridgeCall.Appended]), which a relaunch that continues a kept
-// session tells the calls after its save point by (runner.SessionBasis.Through).
+// session tells the calls after its save point by (runner.SessionBasis.Through),
+// and WHETHER THE LOG TOOK IT LATE, after its job was replaced
+// ([sandbox.BridgeCall.Late]), which no save point holds.
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -75,6 +78,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			},
 			Seq:         call.Seq,
 			Appended:    call.Appended,
+			Late:        call.Late,
 			StartedAt:   call.StartedAt,
 			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:      call.Origin,
@@ -145,19 +149,22 @@ func decodeBridgeArgs(raw string) map[string]any {
 // ([bridgeLedger.carrying]): a session that ends while the collection's carry
 // is still out ends once that carry is done, and its own carry takes up what
 // that one could not land. A call that none of those carried is on no record,
-// and the engine's log names it, call by call: a carry the log refused for its
-// next job
+// and the engine's log names it, call by call: a carry the log refused because
+// a relaunch had started a new round, or the run had ended
 // ([bridgeLedger.afterTheirJob]), whichever append made it, and one the store
 // did not take, or a call whose own record failed once the session had ended
 // ([bridgeLedger.unrecorded]).
 //
-// ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
-// ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
-// names the job, so a call that outlives its job never lands among the next
-// one's calls (see [sandbox.PendingStore.AppendBridgeCall]). It used to learn the job
-// from the row on its first append, and a session whose FIRST call outlived its
-// job — a delegated worker still running when the reviewer relaunched — learned
-// the next job's name and filed its call and its spend there.
+// ONE PER SESSION, so one per job, and BOUND TO THAT JOB AND ITS ROUND BEFORE
+// ITS BOX EXISTS ([bridgeLedger.bind], handed to
+// [sandbox.LaunchRequest.Opened]): every append names both, so a call that
+// outlives its job is listed in the round it was made in, marked late and its
+// spend nobody's, where a relaunch carried the round on, and dropped where a
+// relaunch started a new round — never one of the next job's own calls (see
+// [sandbox.PendingStore.AppendBridgeCall]). It used to learn the job from the
+// row on its first append, and a session whose FIRST call outlived its job — a
+// delegated worker still running when the reviewer relaunched — learned the
+// next job's name and filed its call and its spend there.
 type bridgeLedger struct {
 	store sandbox.PendingStore
 
@@ -188,8 +195,9 @@ type bridgeLedger struct {
 
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
-	// store opened it.
-	launch string
+	// store opened it, and round the round that job works in
+	// ([sandbox.OpenedJob.Round]).
+	launch, round string
 	// owed are this session's appends that did not land as far as it
 	// knows, whole, in the order they were made: carried by the next append
 	// that lands, or by [bridgeLedger.Settle] or [bridgeLedger.End].
@@ -264,11 +272,13 @@ func newBridgeLedger(store sandbox.PendingStore, meter *runner.BridgedSpend) *br
 	return l
 }
 
-// bind names the job this session serves. Called once, by the launch, the
-// moment the store has opened the job and before its box exists.
-func (l *bridgeLedger) bind(launch string) {
+// bind names the job this session serves, and the round it works in. Called
+// once, by the launch, the moment the store has opened the job and before its
+// box exists — or by the node that serves the job again once it takes its seat
+// over — with the job as the row names it ([sandbox.PendingRun.NamedJob]).
+func (l *bridgeLedger) bind(job sandbox.OpenedJob) {
 	l.mu.Lock()
-	l.launch = launch
+	l.launch, l.round = job.LaunchID, job.Round
 	l.mu.Unlock()
 }
 
@@ -291,7 +301,7 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		return nil
 	}
 	l.mu.Lock()
-	launch := l.launch
+	launch, round := l.launch, l.round
 	l.mu.Unlock()
 	if launch == "" {
 		l.logger().WarnContext(ctx, "bridge_ledger_unbound", "run_id", runID, "tool", call.Name,
@@ -307,7 +317,10 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	l.owed = nil
 	l.mu.Unlock()
 	a := sandbox.BridgeAppend{
-		Launch: launch,
+		// THE JOB AND ITS ROUND: the log lists the call as its job's own
+		// while it is open for the job, and as a late call of the round once
+		// a relaunch has carried the round on ([sandbox.BridgeCall.Late]).
+		Launch: launch, Round: round,
 		Call: sandbox.BridgeCall{
 			Name: call.Name,
 			// ENCODED HERE, once. The log is JSON in the coordination
@@ -363,10 +376,13 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		return err
 	}
 	if !recorded {
-		// THE ORDINARY END OF A JOB for the call itself: its log is gone, or
-		// takes the next one's calls. NOT for what it carried: each call the
+		// THE ORDINARY END OF A ROUND for the call itself: its log is gone, or
+		// takes a new round's calls. NOT for what it carried: each call the
 		// session owed was one the log did not hold, and none of them is on
-		// any record now — said call by call, as a carry's would be.
+		// any record now — said call by call, as a carry's would be. A late
+		// call of a round carried on never comes here: the log lists it,
+		// marked, and the run's record says so where a person reads its
+		// calls — `late` on the runs answer.
 		if len(owed) > 0 {
 			l.afterTheirJob(ctx, runID, launch, owed)
 		}
@@ -384,7 +400,9 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	// returned. A call the gate refused is no end (the run goes on) and
 	// tells nobody. Told even where the call's spend could not be written to
 	// the row after it: the call is in, and the next call that lands carries
-	// the spend.
+	// the spend. And told of a late call of the round too, which names a job
+	// the row has moved on from: no waiter polls a job for a nudge that names
+	// another ([sandbox.Nudge]).
 	if l.nudge != nil && ((sandbox.EndsRun(call.Name) && !call.Failed) || call.Held) {
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
@@ -483,13 +501,25 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 // attempt after it can still do is write that spend — the store finds the
 // calls listed, writes the log nothing and the record again — so its answer
 // says nothing of the calls: one that finds the store out of reach wrote
-// nothing, and one that finds the log moved on to the run's next job, or gone
-// with the run, says only that the spend can no longer reach this job's
-// record, which ends the retry. Where an attempt landed, the error answered is
-// the spend's, as the last attempt that landed answered it: nil once one wrote
-// it. Answered by its last attempt alone, a call the log held was owed again,
-// said to be on no record of the run, and its submission's waiter was never
-// told the work was in.
+// nothing, and one that finds the job replaced says only that the spend can no
+// longer reach this job's record, which ends the retry. Where an attempt
+// landed, the error answered is the spend's, as the last attempt that landed
+// answered it: nil once one wrote it. Answered by its last attempt alone, a
+// call the log held was owed again, said to be on no record of the run, and
+// its submission's waiter was never told the work was in.
+//
+// A REPLACED JOB IS ANSWERED ONE WAY, WHICHEVER RELAUNCH REPLACED IT: with the
+// spend's error of an attempt that landed before, and nil where none did. The
+// store answers a relaunch that started a new round, or the run's end, as not
+// recorded, and one that carried the round on as recorded beside
+// [sandbox.ErrJobReplaced], the calls listed in the round's log; either way
+// the job's record takes no spend after it. So a call whose first append is
+// late answers no error — its spend is no job's, by design, and nothing
+// failed — and one whose earlier attempt landed without its spend answers that
+// attempt's error in both cases: the write of what it cost failed while the
+// job could still take it, which a relaunch after does not undo. Answered nil
+// after a carried-on round alone, the same failure went unsaid there and said
+// after a new round's.
 func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
 	landed := false
 	// spend is what the last attempt that landed answered beside it: why the
@@ -498,13 +528,14 @@ func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandb
 	for attempt := 1; ; attempt++ {
 		recorded, err := l.store.AppendBridgeCall(ctx, runID, a)
 		switch {
+		case recorded && errors.Is(err, sandbox.ErrJobReplaced), landed && !recorded && err == nil:
+			// THE JOB WAS REPLACED — its round carried on, its calls in the
+			// round's log; or a new round started, or the run ended, since
+			// an attempt put them in it: the spend can no longer reach this
+			// job's record, and nothing is left to try again.
+			return true, spend
 		case recorded:
 			landed, spend = true, err
-		case landed && err == nil:
-			// THE LOG HAS MOVED ON, or gone with the run, since an attempt put
-			// the calls in it: the spend can no longer reach this job's record,
-			// and nothing is left to try again.
-			return true, spend
 		}
 		if err != nil && attempt < appendAttempts && sleepCtx(ctx, appendRetryWaits[attempt-1]) {
 			continue
@@ -549,11 +580,14 @@ func (l *bridgeLedger) owing() int {
 // ways:
 //
 //   - THE LOG HAS MOVED ON (`bridge_owed_calls_after_their_job`): the store
-//     answered, and the run's log is no longer open for the job the calls
-//     were made in — a relaunch replaced the job before its owed calls were
-//     carried (the relaunch's opening ends this session only once the log
-//     takes the new job's calls), or the run ended and its log is gone. No
-//     record of the run will hear of them, and the session forgets them.
+//     answered, and the run's log is open neither for the job the calls were
+//     made in nor for its round — a relaunch started a new round before its
+//     owed calls were carried (the relaunch's opening ends this session only
+//     once the log takes the new job's calls), or the run ended and its log is
+//     gone. No record of the run will hear of them, and the session forgets
+//     them. A relaunch that CARRIED THE ROUND ON is no such case: the log
+//     lists the calls as late calls of the round ([sandbox.BridgeCall.Late]),
+//     and the carry lands.
 //   - THE STORE DID NOT TAKE THE CARRY (`bridge_owed_calls_unrecorded`):
 //     every attempt within the bound failed, the store out of reach from the
 //     calls through this carry. They stay owed, for the session's next append
@@ -589,14 +623,14 @@ func (l *bridgeLedger) carry(ctx context.Context, runID string, ending bool) boo
 	defer l.carrying.Unlock()
 	l.mu.Lock()
 	l.ended = l.ended || ending
-	launch, owed := l.launch, l.owed
+	launch, round, owed := l.launch, l.round, l.owed
 	l.owed = nil
 	l.mu.Unlock()
 	if launch == "" || len(owed) == 0 {
 		return false
 	}
-	recorded, err := l.appendRetrying(ctx, runID, sandbox.BridgeAppend{Launch: launch, Owed: owed,
-		Spent: l.spent()})
+	recorded, err := l.appendRetrying(ctx, runID, sandbox.BridgeAppend{Launch: launch, Round: round,
+		Owed: owed, Spent: l.spent()})
 	switch {
 	case err != nil && !recorded:
 		// SAID AS THE SESSION STANDS once they are handed back, as an
@@ -621,16 +655,17 @@ func (l *bridgeLedger) carry(ctx context.Context, runID string, ending bool) boo
 }
 
 // afterTheirJob says, call by call, owed appends an append took to a log that
-// is no longer open for the job they were made in — a relaunch replaced it, or
-// the run ended and its log is gone — whether a carry of the session's took them
-// or a later call of the old job did: no record of the run will hear of them,
-// the session forgets them, and this line is all that is left of them.
+// is open neither for the job they were made in nor for its round — a relaunch
+// started a new round, or the run ended and its log is gone — whether a carry
+// of the session's took them or a later call of the old job did: no record of
+// the run will hear of them, the session forgets them, and this line is all
+// that is left of them.
 func (l *bridgeLedger) afterTheirJob(ctx context.Context, runID, launch string, owed []sandbox.OwedAppend) {
 	l.logger().WarnContext(ctx, "bridge_owed_calls_after_their_job", "run_id", runID,
 		"launch_id", launch, "calls", len(owed), "owed", owedCalls(owed),
 		"detail", "the calls ran, but by the time the store took their carry the run's log no "+
-			"longer took the calls of the job they were made in: a relaunch replaced it, or the run "+
-			"ended; they are on no record of the run")
+			"longer took the calls of the round they were made in: a relaunch started a new round, "+
+			"or the run ended; they are on no record of the run")
 }
 
 // unrecorded says, call by call, owed appends the store did not take within

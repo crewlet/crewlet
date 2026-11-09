@@ -533,7 +533,9 @@ type SessionCapture struct {
 	// zero (savepoint.go), since its harness may have made, and had answered,
 	// calls it never wrote. Every call the log takes after that read is
 	// numbered past it ([BridgeCall.Appended]), and is one the session may not
-	// have been answered: a launch that continues the session is told each,
+	// have been answered, as is a late call ([BridgeCall.Late]) whatever its
+	// number, or a dropped late one ([BridgeLog.LateElided]), counted: a
+	// launch that continues the session is told each,
 	// with its outcome — whatever its place in the order the calls were made,
 	// so a call in flight at the read is told however many places the log's
 	// bound dropped below it — and how many of them the bound dropped from the

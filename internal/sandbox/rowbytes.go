@@ -272,7 +272,9 @@ const (
 	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare
 	// with both its places at their widest — the place it was admitted at and
 	// the one its round's log took it at, [BridgeCall.Appended], whose 31
-	// bytes at their widest the 600 held room for), and what is left — 1,958
+	// bytes at their widest the 600 held room for — and its late mark set,
+	// [BridgeCall.Late], whose 12 bytes it held room for too: 576 measured
+	// with every one of them), and what is left — 1,958
 	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
 	// ([BridgeCall.Extra]), which this build carries unread.
 	MaxBridgeCallBytes = 16 << 10
@@ -280,9 +282,12 @@ const (
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
 	// run's NEWEST SUCCESSFUL SUBMISSION — the `submit_work` the collection
 	// replays as the round's outcome (internal/agent/runner's
-	// replaySubmission), which therefore has to be in the log whole. Every
-	// other call's arguments, an earlier submission's included, are held to
-	// [MaxBridgeArgsBytes].
+	// replaySubmission), which therefore has to be in the log whole — and
+	// NEVER A LATE ONE ([BridgeCall.Late]), which the collection never
+	// replays: a job a relaunch replaced made it, and the round's submission is
+	// the one the job carrying the round on makes. Every other call's
+	// arguments, an earlier submission's and a late one's included, are held
+	// to [MaxBridgeArgsBytes].
 	//
 	// TWICE [MaxSubmissionBytes], what the live tool accepts: the tool weighs
 	// the submission as it reads it, its arguments in their canonical form,
@@ -433,8 +438,15 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 }
 
 // submitted reports whether call is a submission the collection could replay:
-// a `submit_work` the surface did not refuse.
-func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !call.Failed }
+// a `submit_work` the surface did not refuse, and the log did not take late
+// ([BridgeCall.Late]) — which the collection never takes for the round's
+// (internal/agent/runner's sinceAnswer), so a late one given the round's
+// whole share would cut the round's own submission to the ordinary one, and
+// the collection, refusing a cut submission, would read the round as one that
+// submitted nothing.
+func submitted(call BridgeCall) bool {
+	return call.Name == SubmitWorkTool && !call.Failed && !call.Late
+}
 
 // appendCall adds one finished call to the log, with absorbed — the calls the
 // run's call log took in from the call's own work — and holds the log to its
@@ -455,6 +467,15 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // than carried at whatever size it came. Keeping a call already kept changes
 // nothing ([keptCall]).
 //
+// THE NEWEST AS THE COLLECTION READS IT, which replays it: of the submissions
+// it could replay ([submitted], never a late one), the one placed last in the
+// order the bridge admitted them ([BridgeCall.Seq]), and of two at one place —
+// a session opened again on the job while a call of the closed one was still
+// in flight reuses its place — the one the log took last, as the collection's
+// stable sort by place leaves it. A share kept on any other leaves the one the
+// collection replays cut, which it refuses, and the round reads as one that
+// submitted nothing.
+//
 // AND THE CALL IS NUMBERED AS THE ROUND'S NEXT APPEND ([BridgeCall.Appended]),
 // here and nowhere else, before the bound drops anything: this is the one
 // writer of what the log lists and of what it counts without listing, so the
@@ -472,6 +493,11 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.Calls, l.Elided, elided = appendBounded(l.Calls, l.Elided, next)
 	for _, call := range elided {
 		dropped = fold(dropped, identity(call), elidedTally)
+		// AND A LATE ONE COUNTED AS LATE, its mark gone with the call
+		// ([BridgeLog.LateElided]).
+		if call.Late {
+			l.LateElided++
+		}
 	}
 	for _, e := range absorbed {
 		if e.Calls <= 0 {
@@ -482,7 +508,7 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.ElidedCalls, l.AbsorbedCalls = dropped, taken
 	newest := -1
 	for i, call := range l.Calls {
-		if submitted(call) && (newest < 0 || call.Seq > l.Calls[newest].Seq) {
+		if submitted(call) && (newest < 0 || call.Seq >= l.Calls[newest].Seq) {
 			newest = i
 		}
 	}

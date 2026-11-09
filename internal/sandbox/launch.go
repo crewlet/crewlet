@@ -406,6 +406,13 @@ type OpenedJob struct {
 	// the run's row holds ([PendingRun.LaunchID]).
 	LaunchID string
 
+	// Round is the round the job works in ([PendingRun.Round]), as the write
+	// that named the job decided it: what every append of the job's calls
+	// names beside the job ([BridgeAppend.Round]), so a call still running
+	// when a relaunch carries the round on to a later job is still listed in
+	// the round's log, marked late ([BridgeCall.Late]).
+	Round string
+
 	// LastSeq is the place of the last bridged call the run's log keeps from
 	// before this job ([BridgeLog.LastSeq]): zero for a job whose round
 	// starts its log afresh, and the asking job's last call for a job that
@@ -418,6 +425,15 @@ type OpenedJob struct {
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
 	LastSeq int
+}
+
+// NamedJob is the job r's row names, as what serves its box is told it
+// ([OpenedJob]), its calls numbered after lastSeq: the job and the round it
+// works in, off the one row. ONE CONSTRUCTOR for the launch that opens the job
+// and for a node that serves it again after taking its seat over
+// (internal/engine's reopenAgentRun), so neither names a job without its round.
+func (r PendingRun) NamedJob(lastSeq int) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -680,7 +696,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.OpenedAfter})
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

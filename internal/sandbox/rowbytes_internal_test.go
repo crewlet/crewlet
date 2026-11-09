@@ -52,7 +52,7 @@ func worstCall(t *testing.T, name string) BridgeCall {
 	server := strings.Repeat("s", 32)
 	return BridgeCall{
 		Name: name, Args: string(args), Output: strings.Repeat("<", 64<<10),
-		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, StartedAt: worstAt,
+		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, Late: true, StartedAt: worstAt,
 		DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server, Source: "mcp:" + server,
 		Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
 		HeldID: uuid.NewString(),
@@ -484,8 +484,10 @@ func worstRow(t *testing.T) PendingRun {
 // dropped, by names that escape the most, so the tally of their identities
 // folds to its last step; each call's own work tallied the same way, so the
 // identities it made fold too; the most tool names the turn's earlier rounds
-// fold to ([MaxPriorCalls]); and the log's identifiers — its job, its round,
-// the answer it was cut for — at their widest.
+// fold to ([MaxPriorCalls]); the log's identifiers — its job, its round, the
+// answer it was cut for — at their widest; and its count of the late calls it
+// dropped ([BridgeLog.LateElided]) at the most it can be, every call it drops a
+// late one, as every call but the newest submission is.
 //
 // A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND, in the change that adds it:
 // one of the calls' comes out of [BridgeLogBytes], and any other out of the
@@ -505,7 +507,9 @@ func worstLog(t *testing.T) BridgeLog {
 		call.Seq = i + 1
 		call.Failed = i%2 == 0
 		if i == MaxBridgeCalls+elidedWorst-1 {
-			call.Name, call.Failed = SubmitWorkTool, false
+			// AND NOT LATE: the whole share is never a late submission's
+			// ([submitted]), so the log's worst is its own job's.
+			call.Name, call.Failed, call.Late = SubmitWorkTool, false, false
 		}
 		worker := []ElidedCall{{Name: fmt.Sprintf("worker_%04d_%s", i, strings.Repeat("<", 300)),
 			Digest: fmt.Sprintf("%064x", i), Calls: 1}}
@@ -619,6 +623,10 @@ func TestTheWholeLogFitsItsBudget(t *testing.T) {
 		t.Errorf("the log keeps %d calls with %d dropped and %d counted (known %v), want %d with %d "+
 			"counted and the elision unknown", len(bridged.Calls), bridged.Elided,
 			elidedCount(bridged.Unlisted()), bridged.ElisionKnown(), MaxBridgeCalls, elidedWorst)
+	}
+	if bridged.LateElided != elidedWorst {
+		t.Errorf("the log counts %d of its %d dropped calls late, want every one: the count is measured at "+
+			"the most it can be", bridged.LateElided, elidedWorst)
 	}
 	if n := elidedCount(bridged.Absorbed()); n != MaxBridgeCalls+elidedWorst {
 		t.Errorf("the calls' own work is counted %d times, want %d", n, MaxBridgeCalls+elidedWorst)

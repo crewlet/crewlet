@@ -391,6 +391,13 @@ type Resume struct {
 	// record ([turn.Work.Absorbed]), and read by nothing else.
 	Absorbed []ledger.Elided
 
+	// LateElided is how many of Elided's calls the log took late
+	// (sandbox.BridgeLog.LateElided): dropped, they keep no mark, so a
+	// relaunch that continues a kept session counts them among the calls
+	// dropped after its save point whatever that point is
+	// ([droppedAfterSave]), since no save point holds a late call.
+	LateElided int
+
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
 	// has: off the run's log (sandbox.BridgeLog.AnsweredThrough). Only a

@@ -129,12 +129,14 @@ func submitted(calls []ledger.Call) bool {
 // them: the calls it lists ([BridgedCall]), in the order the bridge admitted
 // them — a call whose own append reached the log only with a later one among
 // them — and the identities of the calls it counts without listing: the round's
-// own that it dropped from the middle (elided), and the ones its calls' own
-// work made in the run's call log (absorbed).
+// own that it dropped from the middle (elided), how many of those it had taken
+// late (lateElided, [Resume.LateElided]), and the ones its calls' own work made
+// in the run's call log (absorbed).
 type roundCalls struct {
-	bridged  []BridgedCall
-	elided   []ledger.Elided
-	absorbed []ledger.Elided
+	bridged    []BridgedCall
+	elided     []ledger.Elided
+	lateElided int
+	absorbed   []ledger.Elided
 }
 
 // seedCalls records into a resumed run's log every call the turn made before

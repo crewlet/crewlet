@@ -1777,6 +1777,10 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// dropped, and the calls the log absorbed from their own work.
 		Elided:   identitiesOf(in.Bridged.Unlisted()),
 		Absorbed: identitiesOf(in.Bridged.Absorbed()),
+		// AND HOW MANY OF THE DROPPED WERE LATE, which a continuation is
+		// told past whatever its save point: no save point holds a late
+		// call, and a dropped one keeps no mark.
+		LateElided: in.Bridged.LateElided,
 		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the log recorded it
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
