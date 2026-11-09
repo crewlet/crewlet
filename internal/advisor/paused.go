@@ -36,10 +36,11 @@ type pausedFailure struct {
 // internal/engine.TestEveryFailurePauseHasTheAdvisorsFix holds it to.
 var pausedFailures = map[string]pausedFailure{
 	"sandbox_configuration": {
-		class: ClassSandboxUnstartable, because: "their sandbox could not start as configured",
+		class: ClassSandboxUnstartable, because: "the sandbox could not start as configured",
 		fix: Fix{Kind: FixOpenSetting, Setting: "providers.sandbox",
-			Sentence: "Correct the sandbox settings, such as its image or template. " +
-				"Saving the change resumes the paused agents."},
+			Sentence: "Correct the sandbox settings, such as its image or template. Saving the " +
+				"change resumes the paused agents; if the fix was made at the provider instead, " +
+				"resume each paused agent from its page."},
 	},
 	"sandbox_refused": {
 		class: ClassSandboxCredential, because: "the sandbox provider refused the engine's credential",
@@ -53,10 +54,10 @@ var pausedFailures = map[string]pausedFailure{
 				"paused agent from its page."},
 	},
 	"models_refused": {
-		class: ClassModelsCredential, because: "every model they can use refused its credential",
-		fix: Fix{Kind: FixOpenSetting, Setting: "providers.llm",
-			Sentence: "Replace the models' credentials, then resume each paused agent from its " +
-				"page. Changing the models they run on resumes them as well."},
+		class: ClassModelsCredential, because: "no model would accept its credential",
+		fix: Fix{Kind: FixExternalStep, Setting: "providers.llm",
+			Sentence: "Replace the models' credentials under Settings, Models, then resume each " +
+				"paused agent from its page. Changing the models they run on resumes them as well."},
 	},
 }
 

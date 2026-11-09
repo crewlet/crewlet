@@ -922,10 +922,11 @@ gitlab-down: ## stop the GitLab stack
 # schema/*.schema.json are generated and never hand-edited —
 # cmd/crewlet/schema_test.go regenerates them and compares, so a config field
 # added without running this is a failing test rather than a stale file.
-schema: ## regenerate schema/ from the config models and the issue report catalogue
+schema: ## regenerate schema/ from the config models and the issue report and insights catalogues
 	$(GO) run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 	$(GO) run ./cmd/crewlet schema company -o schema/company.schema.json
 	$(GO) run ./cmd/crewlet schema issue-report-catalogue -o schema/issue-report-catalogue.json
+	$(GO) run ./cmd/crewlet schema insights-catalogue -o schema/insights-catalogue.json
 
 # docs/reference/metrics.md is generated from the instrument catalogue for the
 # same reason and with the same guard — internal/statelog/metrics regenerates

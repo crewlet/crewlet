@@ -314,6 +314,33 @@ func hasClass(a advisor.Answer, class advisor.Class) bool {
 // A PERSON WHO TAKES ONE AGENT'S RECOMMENDATION NEARLY EVERY TIME is told so,
 // as the owner's call: the fix is a draft Ask Crewlet writes for review, never
 // a change, and below the threshold nothing is said.
+// ONE FINDING PER AGENT, naming every person who takes its recommendation:
+// two people stamping one agent are one row, and one person stamping two
+// agents is a row for each, so no two findings share their row's key.
+func TestARubberStampIsOneFindingPerAgent(t *testing.T) {
+	t.Parallel()
+	work := worklet.WorkPatterns{Decisions: []worklet.DecisionTally{
+		{Person: "admin2", Asker: "pm", Decided: 22, Recommended: 21},
+		{Person: "owner", Asker: "cto", Decided: 20, Recommended: 20},
+		{Person: "owner", Asker: "pm", Decided: 20, Recommended: 18},
+	}}
+	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
+	if len(found) != 2 {
+		t.Fatalf("raised %d findings, want one for cto and one for pm: %+v", len(found), found)
+	}
+	bySeat := map[string]advisor.Finding{}
+	for _, f := range found {
+		bySeat[f.Subject.Seat] = f
+	}
+	pm := bySeat["pm"]
+	if !strings.Contains(pm.Title, "admin2 and owner") || !strings.Contains(pm.Title, "39 of 42") {
+		t.Errorf("pm's finding says %q, want both people and their 39 of 42", pm.Title)
+	}
+	if bySeat["cto"].Title == "" || strings.Contains(bySeat["cto"].Title, "admin2") {
+		t.Errorf("cto's finding = %+v, want owner's alone", bySeat["cto"])
+	}
+}
+
 func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -379,8 +406,8 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 	}
 	models := byClass[advisor.ClassModelsCredential]
 	if models.Subject.Seat != "pm" || !strings.Contains(models.Title, "PM is paused") ||
-		models.Fix.Setting != "providers.llm" {
-		t.Errorf("the models finding = %+v, want PM's, opening the models", models)
+		models.Fix.Kind != advisor.FixExternalStep || !strings.Contains(models.Fix.Sentence, "Settings, Models") {
+		t.Errorf("the models finding = %+v, want PM's, its credentials replaced under Settings", models)
 	}
 	ev.PausesUnread = true
 	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
