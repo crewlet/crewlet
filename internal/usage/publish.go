@@ -1176,11 +1176,19 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		ledger := make([]LedgerRow, 0, len(s.Turns.Ledger))
 		for _, l := range s.Turns.Ledger {
 			t := l.Tokens
-			ledger = append(ledger, LedgerRow{Wake: l.Wake, Outcome: l.Outcome, Turns: l.Turns,
+			ledger = append(ledger, LedgerRow{Wake: l.Wake, Disposition: l.Disposition,
+				Outcome: l.Outcome, Turns: l.Turns,
 				Input: int64(t.Input), Output: int64(t.Output), CacheRead: int64(t.CacheRead),
 				CacheWrite: int64(t.CacheWrite), AuxInput: int64(t.AuxInput), AuxOutput: int64(t.AuxOutput)})
 		}
 		rec.Ledger, rec.LedgerElided = capLedger(ledger)
+		rec.LedgerUntallied = s.Turns.Untallied
+		refusals := make([]RefusalRow, 0, len(s.Turns.Refusals))
+		for _, f := range s.Turns.Refusals {
+			refusals = append(refusals, RefusalRow{Server: f.Server, Tool: f.Tool, Class: f.Class,
+				Calls: int64(f.Calls)})
+		}
+		rec.Refusals, rec.RefusalsElided = capRefusals(refusals)
 		out = append(out, rec)
 	}
 	for _, person := range d.People {
@@ -1371,6 +1379,24 @@ func capLedger(rows []LedgerRow) ([]LedgerRow, int) {
 		rows = rows[:LedgerPerSeatDay]
 	}
 	slices.SortFunc(rows, compareLedgerKey)
+	return rows, elided
+}
+
+// capRefusals keeps the [RefusalsPerSeatDay] most-refused rows and counts the
+// rest, in key order.
+func capRefusals(rows []RefusalRow) ([]RefusalRow, int) {
+	if len(rows) == 0 {
+		return nil, 0
+	}
+	elided := 0
+	if len(rows) > RefusalsPerSeatDay {
+		slices.SortStableFunc(rows, func(a, b RefusalRow) int {
+			return cmp.Or(cmp.Compare(b.Calls, a.Calls), compareRefusalKey(a, b))
+		})
+		elided = len(rows) - RefusalsPerSeatDay
+		rows = rows[:RefusalsPerSeatDay]
+	}
+	slices.SortFunc(rows, compareRefusalKey)
 	return rows, elided
 }
 

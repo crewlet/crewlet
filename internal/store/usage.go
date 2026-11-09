@@ -245,18 +245,26 @@ type UsageTurns struct {
 	// LastEndedAt is the newest end in the window, zero when none ended.
 	LastEndedAt time.Time
 
-	// Ledger is the tallied turns that ended in the window by what woke them
-	// and what they did ([types.TurnTally]), in (wake, outcome) order; a turn
-	// whose end states no wake or outcome is in none of them.
+	// Ledger is the seat's wakes in the window by what woke them, what became
+	// of them and, for the turns they started, what those did
+	// ([types.TurnTally]), in (wake, disposition, outcome) order.
 	Ledger []UsageLedger
+
+	// Untallied is the ended turns whose end stated no wake or outcome (ended
+	// by a build before the ledger), which are in no ledger row.
+	Untallied int64
+
+	// Refusals are the ended turns' refused calls per (server, tool, class).
+	Refusals []types.RefusalTally
 }
 
-// UsageLedger is one seat's turns under one wake and one outcome, and what they
-// spent: each figure the turns' own tallies added up.
+// UsageLedger is one seat's wakes under one wake and one disposition: for
+// `started`, the turns under one outcome and what they spent, each figure the
+// turns' own tallies added up; for `held`, how many notices held the seat.
 type UsageLedger struct {
-	Wake, Outcome string
-	Turns         int64
-	Tokens        types.TurnTokens
+	Wake, Disposition, Outcome string
+	Turns                      int64
+	Tokens                     types.TurnTokens
 }
 
 // UsageRead is one (backend, page, via) a seat reached in the window, with
@@ -980,6 +988,7 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 		unaccepted, tallied       int64
 		wake, outcome             string
 		tokens                    types.TurnTokens
+		refusals                  string
 	}
 	turns, err := func() ([]ended, error) {
 		query, args := usageEndedTurnsSQL(w)
@@ -994,7 +1003,7 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 			if err := rows.Scan(&e.id, &e.agent, &e.at, &e.handle, &e.role, &e.durationMS,
 				&e.failed, &e.reviews, &e.sentBack, &e.unaccepted, &e.tallied, &e.wake, &e.outcome,
 				&e.tokens.Input, &e.tokens.Output, &e.tokens.CacheRead, &e.tokens.CacheWrite,
-				&e.tokens.AuxInput, &e.tokens.AuxOutput); err != nil {
+				&e.tokens.AuxInput, &e.tokens.AuxOutput, &e.refusals); err != nil {
 				return nil, fmt.Errorf("store: scan the usage day's ended turns: %w", err)
 			}
 			out = append(out, e)
@@ -1056,22 +1065,80 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 		if at := DecodeTime(e.at); at.After(s.Turns.LastEndedAt) {
 			s.Turns.LastEndedAt = at
 		}
-		if e.wake != "" && e.outcome != "" {
-			s.Turns.Ledger = addLedger(s.Turns.Ledger, e.wake, e.outcome, e.tokens)
+		switch {
+		case e.wake != "" && e.outcome != "":
+			s.Turns.Ledger = addLedger(s.Turns.Ledger, e.wake, string(types.DispositionStarted),
+				e.outcome, 1, e.tokens)
+		default:
+			s.Turns.Untallied++
+		}
+		if e.refusals != "" {
+			var refused []types.RefusalTally
+			if err := json.Unmarshal([]byte(e.refusals), &refused); err != nil {
+				return fmt.Errorf("store: read turn %s's refused calls: %w", e.id, err)
+			}
+			s.Turns.Refusals = types.SumRefusals(s.Turns.Refusals, refused)
 		}
 	}
-	return nil
+	return d.usageHeld(ctx, w, seat, name)
 }
 
-// addLedger counts one turn into its (wake, outcome) row, kept in key order.
-func addLedger(rows []UsageLedger, wake, outcome string, tokens types.TurnTokens) []UsageLedger {
-	i, found := slices.BinarySearchFunc(rows, [2]string{wake, outcome}, func(r UsageLedger, k [2]string) int {
-		return cmp.Or(cmp.Compare(r.Wake, k[0]), cmp.Compare(r.Outcome, k[1]))
+// usageHeldSQL counts the window's held wakes per seat and origin, off the
+// `wake_held` records the notify spine writes once per change and seat.
+const usageHeldSQL = `
+	SELECT e.agent_id, MAX(COALESCE(json_extract(e.payload, '$.agent_handle'), '')),
+	       COALESCE(json_extract(e.payload, '$.origin.kind'), ''),
+	       COALESCE(json_extract(e.payload, '$.origin.reason'), ''),
+	       CASE WHEN json_extract(e.payload, '$.origin.kind') = 'schedule'
+	            THEN COALESCE(json_extract(e.payload, '$.origin.id'), '') ELSE '' END,
+	       COUNT(DISTINCT e.event_id)
+	  FROM crewlet_events AS e
+	 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+	   AND e.agent_id != '' AND ` + keptRowSQL + `
+	 GROUP BY e.agent_id, 3, 4, 5`
+
+// usageHeld counts each seat's held wakes into its ledger, under the key a woken
+// turn from the same notice would take ([types.WakeHeld.Wake]).
+func (d *DB) usageHeld(ctx context.Context, w UsageWindow,
+	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
+
+	rows, err := d.sql.QueryContext(ctx, usageHeldSQL, types.WakeHeld{}.EventType(),
+		EncodeTime(w.Start), EncodeTime(w.End))
+	if err != nil {
+		return fmt.Errorf("store: read the usage day's held wakes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			agent, handle string
+			origin        types.TriggerOrigin
+			count         int64
+		)
+		if err := rows.Scan(&agent, &handle, &origin.Kind, &origin.Reason, &origin.ID, &count); err != nil {
+			return fmt.Errorf("store: scan the usage day's held wakes: %w", err)
+		}
+		s := seat(agent)
+		name(s, handle, "")
+		s.Turns.Ledger = addLedger(s.Turns.Ledger, types.WakeHeld{Origin: origin}.Wake(),
+			string(types.DispositionHeld), "", count, types.TurnTokens{})
+	}
+	return rows.Err()
+}
+
+// addLedger counts n wakes into their (wake, disposition, outcome) row, kept in
+// key order.
+func addLedger(rows []UsageLedger, wake, disposition, outcome string, n int64,
+	tokens types.TurnTokens) []UsageLedger {
+
+	key := [3]string{wake, disposition, outcome}
+	i, found := slices.BinarySearchFunc(rows, key, func(r UsageLedger, k [3]string) int {
+		return cmp.Or(cmp.Compare(r.Wake, k[0]), cmp.Compare(r.Disposition, k[1]),
+			cmp.Compare(r.Outcome, k[2]))
 	})
 	if !found {
-		rows = slices.Insert(rows, i, UsageLedger{Wake: wake, Outcome: outcome})
+		rows = slices.Insert(rows, i, UsageLedger{Wake: wake, Disposition: disposition, Outcome: outcome})
 	}
-	rows[i].Turns++
+	rows[i].Turns += n
 	rows[i].Tokens = rows[i].Tokens.Plus(tokens)
 	return rows
 }
@@ -1104,7 +1171,8 @@ func usageEndedTurnsSQL(w UsageWindow) (string, []any) {
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.cache_read'), 0)),
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.cache_write'), 0)),
 		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.aux_input'), 0)),
-		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.aux_output'), 0))
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.tokens.aux_output'), 0)),
+		       MAX(COALESCE(json_extract(e.payload, '$.turn.refusals'), ''))
 		  FROM crewlet_events AS e
 		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
 		   AND e.turn_id != '' AND e.agent_id != ''

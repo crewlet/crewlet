@@ -65,6 +65,22 @@ func (c CommittedChange) Outcome() TurnOutcome {
 	return OutcomeNothing
 }
 
+// WakeDisposition is what became of a wake: a turn started, or the seat was
+// told and not woken.
+type WakeDisposition string
+
+// The dispositions this build counts.
+const (
+	DispositionStarted WakeDisposition = "started"
+	DispositionHeld    WakeDisposition = "held"
+)
+
+// WakeDispositions is the closed set.
+var WakeDispositions = []WakeDisposition{DispositionStarted, DispositionHeld}
+
+// Valid reports whether d is one of [WakeDispositions].
+func (d WakeDisposition) Valid() bool { return slices.Contains(WakeDispositions, d) }
+
 // TurnTokens is a turn's model spend: its own and delegated calls (Input,
 // Output and the cached share), and its in-turn auxiliary calls apart.
 type TurnTokens struct {

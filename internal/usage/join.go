@@ -96,7 +96,7 @@ const (
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
 		       duration_hist, last_ended_at, reads_elided, tools_elided,
 		       changes_opened, reviews_given, findings_received, checks_failed, ejections,
-		       ledger_elided
+		       ledger_elided, refusals_elided, ledger_untallied
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -114,8 +114,13 @@ const (
 		  FROM usage_tool_calls
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatLedgerSQL = `
-		SELECT wake, outcome, turns, input, output, cache_read, cache_write, aux_input, aux_output
+		SELECT wake, disposition, outcome, turns, input, output, cache_read, cache_write,
+		       aux_input, aux_output
 		  FROM usage_turn_ledger
+		 WHERE day = ? AND node = ? AND agent_id = ?`
+	appliedSeatRefusalsSQL = `
+		SELECT server, tool, class, calls
+		  FROM usage_tool_refusals
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedPersonSQL = `
 		SELECT role, phase, worker, model, provider_key, input, output,
@@ -171,7 +176,8 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
 				&rec.ToolsElided, &code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived,
-				&code.ChecksFailed, &code.Ejections, &rec.LedgerElided); {
+				&code.ChecksFailed, &code.Ejections, &rec.LedgerElided, &rec.RefusalsElided,
+				&rec.LedgerUntallied); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -197,7 +203,10 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			if rec.Tools, err = appliedTools(ctx, tx, s); err != nil {
 				return err
 			}
-			rec.Ledger, err = appliedLedger(ctx, tx, s)
+			if rec.Ledger, err = appliedLedger(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Refusals, err = appliedRefusals(ctx, tx, s)
 			return err
 		case KindPerson:
 			var err error
@@ -353,13 +362,32 @@ func appliedLedger(ctx context.Context, tx *sql.Tx, s Subject) ([]LedgerRow, err
 	var out []LedgerRow
 	for rows.Next() {
 		var l LedgerRow
-		if err := rows.Scan(&l.Wake, &l.Outcome, &l.Turns, &l.Input, &l.Output, &l.CacheRead,
-			&l.CacheWrite, &l.AuxInput, &l.AuxOutput); err != nil {
+		if err := rows.Scan(&l.Wake, &l.Disposition, &l.Outcome, &l.Turns, &l.Input, &l.Output,
+			&l.CacheRead, &l.CacheWrite, &l.AuxInput, &l.AuxOutput); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
 	}
 	slices.SortFunc(out, compareLedgerKey)
+	return out, rows.Err()
+}
+
+// appliedRefusals reads a seat-day's refused calls, in key order.
+func appliedRefusals(ctx context.Context, tx *sql.Tx, s Subject) ([]RefusalRow, error) {
+	rows, err := tx.QueryContext(ctx, appliedSeatRefusalsSQL, s.Day, s.Node, s.Seat)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RefusalRow
+	for rows.Next() {
+		var f RefusalRow
+		if err := rows.Scan(&f.Server, &f.Tool, &f.Class, &f.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	slices.SortFunc(out, compareRefusalKey)
 	return out, rows.Err()
 }
 
@@ -440,6 +468,9 @@ func Join(derived, applied Record) Record {
 			applied.Tools, applied.ToolsElided)
 		out.Ledger, out.LedgerElided = joinLedger(derived.Ledger, derived.LedgerElided,
 			applied.Ledger, applied.LedgerElided)
+		out.Refusals, out.RefusalsElided = joinRefusals(derived.Refusals, derived.RefusalsElided,
+			applied.Refusals, applied.RefusalsElided)
+		out.LedgerUntallied = max(derived.LedgerUntallied, applied.LedgerUntallied)
 	case KindPerson:
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
@@ -684,6 +715,30 @@ func joinLedger(d []LedgerRow, dElided int, a []LedgerRow, aElided int) ([]Ledge
 	}
 	held := max(len(d)+dElided, len(a)+aElided, len(all))
 	kept, _ := capLedger(all)
+	return kept, held - len(kept)
+}
+
+// joinRefusals joins two seat-days' refused calls on [joinTools]' terms: each
+// count at the larger of the two, a row only the fleet holds kept, the union
+// capped again by the derivation's rule ([capRefusals]).
+func joinRefusals(d []RefusalRow, dElided int, a []RefusalRow, aElided int) ([]RefusalRow, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[refusalKey]int, len(all))
+	for i, f := range all {
+		at[keyOfRefusal(f)] = i
+	}
+	for _, f := range a {
+		if i, ok := at[keyOfRefusal(f)]; ok {
+			all[i].Calls = max(all[i].Calls, f.Calls)
+			continue
+		}
+		all = append(all, f)
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capRefusals(all)
 	return kept, held - len(kept)
 }
 

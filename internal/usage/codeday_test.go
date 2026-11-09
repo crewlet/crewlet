@@ -53,7 +53,7 @@ func TestASeatsCodeDayIsStampedByWhatItCounts(t *testing.T) {
 		}
 	}
 	ledgered := seatRecord("node-a", "2026-09-23", "seat-1", "m")
-	ledgered.Ledger = []usage.LedgerRow{{Wake: "work_item:assignee", Outcome: "moved", Turns: 1}}
+	ledgered.Ledger = []usage.LedgerRow{{Wake: "work_item:assignee", Disposition: "started", Outcome: "moved", Turns: 1}}
 	if v, err := stamp(ledgered); err != nil || v != 7 {
 		t.Errorf("a seat's day carrying its turn ledger is stamped %d (%v), want 7", v, err)
 	}

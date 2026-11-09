@@ -93,6 +93,11 @@ func (r Reader) TurnLedger(ctx context.Context, q SpendQuery) ([]TurnLedgerRow, 
 	return TurnLedger(ctx, r.Estate, q)
 }
 
+// ToolRefusals is [ToolRefusals] over r's estate.
+func (r Reader) ToolRefusals(ctx context.Context, q SpendQuery) ([]ToolRefusalRow, error) {
+	return ToolRefusals(ctx, r.Estate, q)
+}
+
 // ToolsElided is [ToolsElided] over r's estate.
 func (r Reader) ToolsElided(ctx context.Context, from, to string) (int64, error) {
 	return ToolsElided(ctx, r.Estate, from, to)

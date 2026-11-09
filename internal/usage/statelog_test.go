@@ -114,10 +114,16 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	case "Record.ToolsElided":
 		rec.ToolsElided = 3
 	case "Record.Ledger":
-		rec.Ledger = []usage.LedgerRow{{Wake: "work_item:assignee", Outcome: "moved", Turns: 2,
+		rec.Ledger = []usage.LedgerRow{{Wake: "work_item:assignee", Disposition: "started", Outcome: "moved", Turns: 2,
 			Input: 1_000, Output: 200}}
 	case "Record.LedgerElided":
 		rec.LedgerElided = 3
+	case "Record.LedgerUntallied":
+		rec.LedgerUntallied = 2
+	case "Record.Refusals":
+		rec.Refusals = []usage.RefusalRow{{Tool: "merge_change", Class: "forbidden", Calls: 2}}
+	case "Record.RefusalsElided":
+		rec.RefusalsElided = 1
 	case "Fire.ScheduledAt":
 		rec.Fires[0].ScheduledAt = rec.Fires[0].At
 	case "Fire.FireLabel":
