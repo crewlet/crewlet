@@ -1142,7 +1142,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
-		"who last changed a seat's ready work": seek(subject, arms(2, readyMovedArm),
+		"what last woke a seat to its ready work": seek("tracker_notifications_woke_idx", arms(2, readyMovedArm),
 			task, "ana", "t-0008", "ana"),
 		"when a seat's own ready work was filed": seek(subject, arms(2, readyFirstArm),
 			task, "t-0008"),

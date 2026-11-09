@@ -473,7 +473,7 @@ const (
 	//
 	// Every figure is of SIGNED records (ADR-0031).
 	//
-	// So the code log takes 1.85–8.26 of the mutation log's day — 0.40 on
+	// So the code log takes 1.84–8.24 of the mutation log's day — 0.40 on
 	// its push records alone (0.49 of the tracker's records) — and TWO
 	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
 	// thirds of the mutation log's ceiling fills in 0.36 of the mutation

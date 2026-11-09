@@ -196,6 +196,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
 			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks}}
 		record.NoticeAsksKept = true
+	case "MutationRecord.NoticeWokeKept":
+		// AN AGENT'S COMMENT THAT TELLS AN AGENT IT DOES NOT WAKE, whose notice
+		// rows keep that it did not.
+		asks := false
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks,
+				MentionedAgents: []string{"ada"}}}
+		record.NoticeWokeKept = true
 	case "Snapshot.CommentAsks":
 		// AN AGENT'S COMMENT STATING IT ASKS NOTHING, which every build must
 		// carry: the statement is what makes its mentions references.

@@ -305,18 +305,24 @@ func TestAStatedCommentIsStampedSoAnOlderNodeRetainsIt(t *testing.T) {
 			if err != nil || rec.Notify == nil || rec.Notify.Kind != worklet.ChangeComment {
 				continue
 			}
+			// A RECORD THAT TELLS SOMEBODY IT DOES NOT WAKE is stamped at the
+			// version that keeps that decision, whatever its statement.
+			woke := worklet.NoticeAsksVersion
+			if rec.NoticeWokeKept {
+				woke = worklet.NoticeWokeVersion
+			}
 			switch rec.Notify.Snapshot.CommentAsks {
 			case nil:
 				unstated++
-				if rec.NoticeAsksKept || rec.V >= worklet.NoticeAsksVersion {
+				if rec.NoticeAsksKept || (!rec.NoticeWokeKept && rec.V >= worklet.NoticeAsksVersion) {
 					t.Errorf("%s: a comment that states nothing is version %d, kept %v; want below %d",
 						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
 				}
 			default:
 				stated++
-				if !rec.NoticeAsksKept || rec.V != worklet.NoticeAsksVersion {
+				if !rec.NoticeAsksKept || rec.V != woke {
 					t.Errorf("%s: a stated comment is version %d, kept %v; want %d, kept",
-						name, rec.V, rec.NoticeAsksKept, worklet.NoticeAsksVersion)
+						name, rec.V, rec.NoticeAsksKept, woke)
 				}
 			}
 		}
