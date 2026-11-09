@@ -489,6 +489,18 @@ func DeadLetter(topic, group string) string {
 	return DeadLetterPrefix + subjectSafe(topic) + "." + subjectSafe(group) + "." + id
 }
 
+// DeadLettersUnder is the literal subject the dead letters of every topic
+// under head lie beneath: [DeadLetter] of any `head.…` topic and any group is
+// a subject `DeadLettersUnder(head).…`, and no other topic's is.
+//
+// THE HEAD [DeadLetter] READS, segment for segment: the head is rewritten as
+// each segment of a topic is, so the subtree a reader counts is exactly the
+// subjects a keeper of those topics writes — a wake feed's start and its alarm
+// read `dlq.changefeed.…` as every feed's dead letters and nothing else's.
+func DeadLettersUnder(head string) string {
+	return DeadLetterPrefix + subjectSafe(head)
+}
+
 // subjectSafe rewrites the parts of a name that would stop the result from
 // being a publishable subject.
 //

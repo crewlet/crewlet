@@ -39,11 +39,16 @@ import (
 // [deadLetterLedger], which takes the claim the expiry count takes ([goneKey]),
 // so the entry is accounted for once fleet-wide, as discarded.
 //
-// # Every node answers alike
+// # Every node answers alike, and reads no frame
 //
 // The entries are the broker's, so every node serving the API lists the same
-// ones; and which feeds exist is the register's declaration
-// ([declaredFeedSources]), never the logs this node happens to have running.
+// ones — each from a copy of the dead-letter stream that can be a moment
+// behind the broker's own ([queue.EventQueue.DeadLettersOn]) — and which feeds
+// exist is the register's declaration ([declaredFeedSources]), never the logs
+// this node happens to have running. A listing and a discard read the header
+// each entry is kept under and never its frame: what an operator decides by is
+// what the feed recorded of the record, and a record may be as large as its
+// log admits.
 
 // FeedDeadLetters is the wake feeds' dead letters, for the operator surfaces.
 type FeedDeadLetters struct {
@@ -170,11 +175,11 @@ type FeedDeadLetter struct {
 	KeptAt    time.Time `json:"kept_at"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
-	// DecodeError is why this build could not read the entry — a newer
-	// build kept it, or the bytes are no entry at all — absent where it
-	// could. Such an entry is still listed, by everything the broker says
-	// of it, and can still be discarded: a build that cannot read an entry
-	// can still let it go.
+	// DecodeError is why this build could not read the entry's header — a
+	// newer build kept it, or it is no feed's header at all — absent where
+	// it could. Such an entry is still listed, by everything the broker
+	// says of it, and can still be discarded: a build that cannot read an
+	// entry can still let it go.
 	DecodeError string `json:"decode_error,omitempty"`
 }
 
@@ -206,7 +211,7 @@ func (f *FeedDeadLetters) List(ctx context.Context) FeedDeadLetterListing {
 // broker says of it, and what its header says where this build can read it.
 func letterOf(src changefeed.Source, k queue.Kept) FeedDeadLetter {
 	out := FeedDeadLetter{ID: k.Seq, Source: src.Name, KeptAt: k.StoredAt, ExpiresAt: k.Expires}
-	letter, err := changefeed.DecodeDeadLetter(k.Body)
+	letter, err := changefeed.DecodeDeadLetter(k.Header)
 	if err != nil {
 		out.DecodeError = err.Error()
 		return out
@@ -232,7 +237,9 @@ type FeedDeadLetterDiscard struct {
 // ErrNoDeadLetter is a discard naming an id no wake feed's dead letters hold:
 // never one, an entry a replay, its expiry or another discard took first, or
 // an entry on another `dlq.` subject — a subscription's poison, which is no
-// feed's to discard. Nothing was removed.
+// feed's to discard. Nothing was removed. An entry kept a moment ago can read
+// as none while the copy the listing read catches up, and a discard asked
+// again finds it.
 var ErrNoDeadLetter = errors.New("engine: no wake feed holds a dead letter by that id")
 
 // DeadLettersUnread is a discard whose id no wake feed that could be listed

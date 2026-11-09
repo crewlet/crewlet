@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/changefeed`
-- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt`, `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`, and for an operator's discard `internal/engine.TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt` and `internal/engine.TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost`
+- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt`, `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`, for the reads of an entry `internal/queue/jetstream.TestAListingMovesNoFrameAndLeavesNoConsumer`, `internal/queue/jetstream.TestAWakeFeedsLargestEntryIsKept`, `internal/changefeed.TestARuneAboveTheBMPIsSpelledAsItsSurrogatePair`, `internal/engine.TestABeatWhoseMarksDidNotMoveListsNothing`, `internal/engine.TestAKeepAndAnExpiryInOneBeatAreBothSeen`, `internal/engine.TestAnEntryThatGoesWhileNothingIsKeptLeavesTheReading` and `internal/engine.TestAListingThatDisagreesWithTheMarksIsListedAgain`, and for an operator's discard `internal/engine.TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt` and `internal/engine.TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost`
 - **Cost-when-tried:** both failure modes were already in the tree when this was written. The Mattermost socket path SWALLOWS a failed publish — a wake lost with a logged line and no retry — and the webhook path is correct only because the vendor retries it, which is a property of somebody else's product rather than of this engine.
 - **Tag-status:** unreleased
 
@@ -99,15 +99,34 @@ reaches `MaxAckPending` (`5019-5022`), and gives a consumer that sets none 1000
 new wake of the domain. The feed therefore bounds it: a record handed back for
 an hour from its stored instant is DEAD-LETTERED — kept in `CREWLET_DLQ` on
 `dlq.changefeed.<source>.<group>.<digest>` as a self-contained entry, its
-sealed frame inside so it needs its log for nothing, and only then
-acknowledged; a keep that fails hands the record back again. An hour is a
-judgment call stated as one: an order of magnitude past a roll's minutes
+sealed frame the entry's body so it needs its log for nothing, and what the
+feed recorded of the record — where it was delivered from, why no node read
+it — the entry's one header, `Crewlet-Dead-Letter`, a line of compact JSON in
+ASCII (a rune past it escaped, one above U+FFFF as its surrogate pair) — and
+only then acknowledged; a keep that fails hands the record back again. An hour
+is a judgment call stated as one: an order of magnitude past a roll's minutes
 (ADR-0109) and the keyring runbook's restart of every node. The entry is kept
 for the dead-letter stream's age, `stream.event_retention_hours`, and then
 expires, its wake with it, counted once across the fleet as
 `crewlet.tracker.feed.dead_letter_expired`. The alarm `feed_dead_lettered` is
 raised per log from the first entry, naming each entry's age and the time it
 has left.
+
+NOTHING BUT A REPLAY READS A FRAME. The alarm's reading runs on every beat of
+every data node, and a stalled roll can dead-letter thousands of records, each
+as large as its log admits, so it asks the dead-letter stream's leader one
+question a beat — each feed subject's count of entries and the stream's last
+sequence (`DeadLetterMarks`) — and lists a feed's entries, by their headers
+alone, only when that answer moved: every feed subject that holds or held
+entries when the last sequence moved, since a subscription's poison moves it
+too and a keep beside an expiry on one subject leaves its count where it was,
+and otherwise only a subject whose count moved, since nothing but a keep
+moves the last sequence and every going lowers a count. The pinned server has
+no headers-only read of one message, so a listing is a headers-only consumer,
+which reads one replica and may be a moment behind the leader: a listing is
+taken as current only once its counts are the leader's, and listed again on
+the next beat until they are. An operator's listing and discard read headers
+too; a replay reads each frame it acts on by its sequence, from the leader.
 
 What clears an entry is a REPLAY, an operator's DISCARD, or its expiry. A
 feed's start lists its domain's dead letters and opens each frame exactly as a
