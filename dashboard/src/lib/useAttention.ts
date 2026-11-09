@@ -26,6 +26,9 @@ const NO_MCP_ALARMS: readonly McpAlarm[] = [];
 /** No setup blocker: a reader the advisor does not answer, or an answer not in yet. */
 const NO_SETUP_BLOCKERS: readonly AdvisorFinding[] = [];
 
+/** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
+const NO_SETUP_UNREAD: readonly string[] = [];
+
 /** How often the queue asks the advisor again: a setup changes by revisions. */
 const ADVISOR_POLL_MS = 60_000;
 
@@ -87,6 +90,7 @@ export function useAttention(): Attention[] {
         : NO_SETUP_BLOCKERS,
     [readsMcp, advisor],
   );
+  const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
   return useMemo(
     () =>
       attentionQueue({
@@ -100,7 +104,20 @@ export function useAttention(): Attention[] {
         nameOf,
         mcpAlarms,
         setupBlockers,
+        setupUnread,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms, setupBlockers],
+    [
+      agents,
+      runs,
+      budget,
+      engine,
+      connected,
+      authRejected,
+      now,
+      nameOf,
+      mcpAlarms,
+      setupBlockers,
+      setupUnread,
+    ],
   );
 }

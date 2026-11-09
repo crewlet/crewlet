@@ -30,6 +30,7 @@ import {
 import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
+import { unreadSentences } from "~/lib/advisorUnread.ts";
 import { refusalWords } from "~/lib/ceilings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -72,20 +73,22 @@ export function Advisor() {
         every change before it is made; the engine never makes one on its own.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
-        {data && data.unread.includes("integrations") && (
+        {data && data.unread.length > 0 && (
           <Callout variant="warning" title="Some of the setup couldn't be read">
-            This server couldn&rsquo;t read the integrations&rsquo; last check, so anything they
-            need from you is missing below.
+            {unreadSentences(data.unread).join(" ")}
           </Callout>
         )}
         {data && <GoLiveCheck owner={owner} unread={data.unread} />}
+        {/* NOTHING TO CHANGE ONLY WHEN EVERY SOURCE WAS READ: an unread one may hold the blocker. */}
         {data &&
           (owner.length === 0 ? (
-            <EmptyState
-              size="compact"
-              title="Nothing to change"
-              description="Your company's setup raises nothing worth changing right now."
-            />
+            data.unread.length === 0 && (
+              <EmptyState
+                size="compact"
+                title="Nothing to change"
+                description="Your company's setup raises nothing worth changing right now."
+              />
+            )
           ) : (
             <AttentionList
               items={owner.map((f) => findingItem(f, () => setOpen(f)))}

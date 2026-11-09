@@ -56,6 +56,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     nameOf: (key) => key,
     mcpAlarms: [],
     setupBlockers: [],
+    setupUnread: [],
     ...over,
   };
 }
@@ -822,4 +823,17 @@ test("a finding that blocks the company is a condition a person decides", () => 
   expect(row?.detail).toBe("Replace the credential.");
   expect(row?.path).toEqual(["settings", "advisor"]);
   expect(conditionsToDecide(queue)).toContainEqual(row);
+});
+
+// A SOURCE THE ADVISOR COULD NOT READ IS ONE ROW, saying what it leaves out, so
+// a blocker it would have raised never drops out of the queue unsaid.
+test("an advisor that could not read everything says so, once", () => {
+  expect(attentionQueue(input()).filter((a) => a.subject === "setup")).toEqual([]);
+  const queue = attentionQueue(input({ setupUnread: ["alarms", "work"] }));
+  const rows = queue.filter((a) => a.id === "setup-unread");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.title).toBe("The advisor couldn't read everything");
+  expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
+  expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
+  expect(rows[0]?.path).toEqual(["settings", "advisor"]);
 });

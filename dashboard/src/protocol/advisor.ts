@@ -66,6 +66,9 @@ export interface AdvisorFinding {
 export interface AdvisorAnswer {
   revision: string;
   findings: AdvisorFinding[];
-  /** What the answer could not read (`integrations`), so a short list never reads as all clear. */
+  /**
+   * What the answer could not read (`integrations`, `work`, `ledger`, `alarms`),
+   * so a short list never reads as all clear.
+   */
   unread: string[];
 }

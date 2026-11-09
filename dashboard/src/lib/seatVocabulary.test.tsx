@@ -68,6 +68,7 @@ function queue(agents: AgentRow[]) {
     nameOf: (key) => key,
     mcpAlarms: [],
     setupBlockers: [],
+    setupUnread: [],
   };
   return attentionQueue(input);
 }

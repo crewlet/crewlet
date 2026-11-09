@@ -273,6 +273,21 @@ test("a step outside the engine says what to do and links where to do it", async
 test("integrations the server couldn't read are said, so a short list is not all clear", async () => {
   await mount({ revision: "r1", findings: [], unread: ["integrations"] });
   expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
+  expect(screen.getByText(/integrations' last check couldn't be read/)).toBeTruthy();
+});
+
+// EVERY UNREAD SOURCE IS SAID IN ITS OWN WORDS, and while any is unread an empty
+// owner list never reads "Nothing to change": the source may hold the blocker.
+test.each([
+  ["work", /last 7 days of work couldn't be read/],
+  ["ledger", /agents' turns couldn't be read/],
+  ["alarms", /whether a backup is missing can't be said yet/],
+  ["future_source", /couldn't read future_source/],
+])("an unread %s source is said, and nothing reads as all clear", async (key, words) => {
+  await mount({ revision: "r1", findings: [ENGINE], unread: [key] });
+  expect(screen.getByText("Some of the setup couldn't be read")).toBeTruthy();
+  expect(screen.getByText(words)).toBeTruthy();
+  expect(screen.queryByText("Nothing to change")).toBeNull();
 });
 
 /** The go-live check's steps as drawn, label and state. */

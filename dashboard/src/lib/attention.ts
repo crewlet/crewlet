@@ -42,6 +42,7 @@ import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorFinding } from "~/protocol/advisor.ts";
+import { unreadSentences } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -233,6 +234,8 @@ export interface AttentionInput {
    * each one; this only puts it into the queue, opening the advisor.
    */
   setupBlockers: readonly AdvisorFinding[];
+  /** What the advisor could not read, for the same reader; empty when it read everything. */
+  setupUnread: readonly string[];
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
@@ -265,7 +268,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
-  const { setupBlockers } = input;
+  const { setupBlockers, setupUnread } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -483,6 +486,21 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       path: ["settings", "advisor"],
       action: "Open the advisor",
       clears: "Clears once the setup no longer raises it.",
+    });
+  }
+  // A SOURCE THE ADVISOR COULD NOT READ IS SAID, so a blocker it would have
+  // raised never leaves the queue without a word.
+  if (setupUnread.length > 0) {
+    out.push({
+      id: "setup-unread",
+      severity: "caution",
+      subject: "setup",
+      icon: "list-checks",
+      title: "The advisor couldn't read everything",
+      detail: unreadSentences(setupUnread).join(" "),
+      path: ["settings", "advisor"],
+      action: "Open the advisor",
+      clears: "Clears once the advisor reads every source again.",
     });
   }
 
