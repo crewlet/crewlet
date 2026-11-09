@@ -527,6 +527,22 @@ finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round and an executor run it has out ends
 **at once** (see *Stop now* below).
 
+**The engine pauses a seat too, for a failure a retry cannot cure.** When a
+seat's turn fails the same way twice in a row for a reason that will not go
+away on its own (the sandbox runtime refuses the box as configured, the sandbox
+provider refuses the engine's credential or its billing, or every model the
+seat can use refuses its credential), the engine pauses the seat as `engine`
+(`paused_by_kind: system`) with the reason in words, instead of redelivering
+the turn into the same refusal. The delivery that failed waits at the head of
+the inbox. The pause records the failure and a fingerprint of the settings it
+depends on: a person resuming the seat ends it, and so does an apply that
+changes those settings (the seat's sandbox and the company's, or its models
+and the company's), which lifts it as the engine. If the failure still holds,
+the seat pauses again on its second time
+([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)).
+Any other failure is retried on a backoff that doubles from one second to
+thirty, each wait spread by a fifth either way.
+
 **Who may pause a seat** is the seat's holder — the person the identity
 directory binds to it — whoever leads it, or an administrator (`admin`);
 resuming it is the same, and neither is ever a seat's to do. No app is asked:
