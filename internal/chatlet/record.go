@@ -30,7 +30,9 @@ import (
 // # What each version added
 //
 //   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 2: an agent's statement that its message asks something, and the seats
+//     a message held back and asked (ADR-0113).
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -49,7 +51,6 @@ const baseRecordVersion = 1
 // versionedFields is every field a chat record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
 //
-// EMPTY, because nothing has been gained yet: every shape here is version 1's.
 // Adding a field to a record, a payload or a document is adding a row here,
 // moving [RecordVersion] to its version, and giving the domain's statelogtest
 // candidate a record that carries it — on the tracker's terms, which are the
@@ -61,7 +62,12 @@ const baseRecordVersion = 1
 // ([RecordEnvelope.InstallsGate]), so both are read by every build for ever
 // and [Encode] refuses either one carrying a versioned field: a field a later
 // erase or prune needs is a field that belongs on another record.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "MessagePost.Asks", Since: 2, Op: string(OpPost), Path: []string{"mutation", "asks"}},
+	{Name: "Notify.Asks", Since: 2, Path: []string{"notify", "asks"}},
+	{Name: "Notify.Held", Since: 2, Path: []string{"notify", "held"}},
+	{Name: "Notify.Asked", Since: 2, Path: []string{"notify", "asked"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -237,7 +243,7 @@ type MutationRecord struct {
 // about what a record means.
 type Reason string
 
-// The nine reasons.
+// The twelve reasons.
 //
 // `reply` and `reply_to_own_root` are one event split in two, and the split is
 // the whole point of the vocabulary: a reply in a thread you merely take part
@@ -288,6 +294,28 @@ const (
 	// to silence is a person talking to an empty screen.
 	ReasonAnswerer Reason = "answerer"
 
+	// ReasonAnswer is a message that answers a question this recipient
+	// asked its author: one of the author's open receipts in this thread
+	// (in a direct conversation, anywhere in it) is on a message this
+	// recipient wrote. It wakes whatever else the message is, because the
+	// asker is waiting on it, and obliges nothing: the answer closes a
+	// question rather than opening one (ADR-0113).
+	ReasonAnswer Reason = "answer"
+
+	// ReasonNamed is an AGENT'S message that names this recipient and asks
+	// nothing ([Routing.Asks]). The mention still wakes, because a seat an
+	// agent names should know, and obliges no answer, because an agent that
+	// says nothing asks for nothing: obliged, the named seat answered an
+	// acknowledgement with an acknowledgement that named the first seat
+	// back (ADR-0113).
+	ReasonNamed Reason = "named"
+
+	// ReasonOwing is a reply in a thread where this recipient was asked
+	// something and has not answered yet: one of its receipts in the thread
+	// is still open. What is said there while it owes the answer is part of
+	// what it was asked (ADR-0113).
+	ReasonOwing Reason = "owing"
+
 	// ReasonReply is a reply in a thread this recipient takes part in.
 	ReasonReply Reason = "reply"
 
@@ -304,7 +332,7 @@ const (
 	ReasonFollowAll Reason = "follow_all"
 )
 
-// Reasons are the nine, IN PRECEDENCE ORDER: a recipient appears once, under
+// Reasons are the twelve, IN PRECEDENCE ORDER: a recipient appears once, under
 // the first of these that applies to them.
 //
 // # The ordering, and the two rules it is built from
@@ -327,7 +355,8 @@ const (
 // computes a precedence; recipients.go walks this slice.
 var Reasons = []Reason{
 	ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
-	ReasonAnswerer, ReasonReply, ReasonCollective, ReasonFollow, ReasonFollowAll,
+	ReasonAnswerer, ReasonAnswer, ReasonNamed, ReasonReply,
+	ReasonCollective, ReasonFollow, ReasonFollowAll, ReasonOwing,
 }
 
 // Valid reports whether a reason off the wire is one this build knows.
@@ -339,11 +368,13 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // the thread you started, a person's `@channel`, and the room's answerer.
 // Each is a person or a colleague speaking TO this recipient.
 //
-// THE OTHER FOUR ARE NOT, and each would be a false obligation: an agent's
-// collective address is news spoken to the room, a plain reply reaches
-// everybody who ever posted in the thread, and both follow reasons are
-// standing arrangements the recipient made rather than anything this message
-// did. A seat that treats them as addressed answers every remark in every
+// THE OTHER SEVEN ARE NOT, and each would be a false obligation: an answer
+// closes a question rather than opening one, an agent's mention that asks
+// nothing and an agent's collective address are news, a follow-up in a thread
+// where the seat owes an answer adds to an obligation it already has, a plain
+// reply reaches everybody who ever posted in the thread, and both follow
+// reasons are standing arrangements the recipient made rather than anything
+// this message did. A seat that treats them as addressed answers every remark in every
 // room it follows, which is a company that talks to itself instead of
 // working.
 //
@@ -428,6 +459,24 @@ type Notify struct {
 	// subtract and can never forget to. At most [MaxRecipients].
 	Recipients []Recipient `json:"recipients,omitempty"`
 
+	// Asks is the author's statement that an AGENT'S message asks
+	// something of the seats it reaches ([Routing.Asks]); false on a
+	// person's message, which always does.
+	Asks bool `json:"asks,omitempty"`
+
+	// Held are the seats this message would have woken before ADR-0113
+	// and does not: an agent's message that asks nothing, or a message
+	// addressed to the seats it names. Each still reads the message in the
+	// room; the list is what the parser reports, so an operator sees what
+	// the rule kept quiet. At most [MaxRecipients].
+	Held []Recipient `json:"held,omitempty"`
+
+	// Asked are the seats an AGENT'S asking message asked: the seats it
+	// woke, the people it named, and the other side of a direct
+	// conversation. Each gets a receipt, and its answer wakes the author
+	// ([ReasonAnswer]). At most [MaxRecipients] + [MaxMentions].
+	Asked []string `json:"asked,omitempty"`
+
 	// WakesTruncated says the routing reached fewer seats than the
 	// message named, because a collective address exceeded
 	// [MaxCollectiveRecipients].
@@ -495,6 +544,14 @@ func (n *Notify) Validate() error {
 			"the maximum is %d — the arms are disjoint reasons over the same "+
 			"people, so a set this size is a routing that stopped deduplicating",
 			len(n.Recipients), MaxRecipients)
+	}
+	if len(n.Held) > MaxRecipients {
+		return invalid("notify.held", "a notification holds %d seats back and "+
+			"the maximum is %d", len(n.Held), MaxRecipients)
+	}
+	if len(n.Asked) > MaxRecipients+MaxMentions {
+		return invalid("notify.asked", "a notification asks %d seats and the "+
+			"maximum is %d", len(n.Asked), MaxRecipients+MaxMentions)
 	}
 	for _, r := range n.Recipients {
 		if r.Handle == "" {

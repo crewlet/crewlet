@@ -248,7 +248,8 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows += thread
 
-	receipts, err := writeReceipts(ctx, tx, at, message, seq, reachedHandles(message.Reach))
+	receipts, err := writeReceipts(ctx, tx, at, message, seq,
+		receiptHandles(message, at.record.Notify))
 	if err != nil {
 		return 0, "", err
 	}
@@ -1104,6 +1105,20 @@ func answerReceipts(ctx context.Context, tx *sql.Tx, at applyContext, kind Kind,
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// receiptHandles is whom a post owes a receipt to: the seats a PERSON'S post
+// reached, and the seats an AGENT'S asking post asked ([Notify.Asked]), so the
+// answer of either kind of question is marked when it lands, and an agent's
+// wakes its asker ([ReasonAnswer]).
+func receiptHandles(message Message, n *Notify) []string {
+	if message.AuthorKind == AuthorAgent {
+		if n == nil {
+			return nil
+		}
+		return n.Asked
+	}
+	return reachedHandles(message.Reach)
 }
 
 // reachedHandles is the seats a reach names, in its order.

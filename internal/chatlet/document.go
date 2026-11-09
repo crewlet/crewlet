@@ -198,6 +198,11 @@ type Message struct {
 	// newest hundred messages on every poll.
 	Collective bool `json:"collective,omitempty"`
 
+	// Asks is an agent author's statement that the message asks something
+	// of the seats it reaches ([Routing.Asks]), kept so an edit routes the
+	// way the post did.
+	Asks bool `json:"asks,omitempty"`
+
 	// Reach is who a PERSON'S post reached and why: the seats its record
 	// routed it to ([Notify.Recipients]), in the order the routing reached
 	// them, written by the applier from that record. Nil on everything

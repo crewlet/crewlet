@@ -1925,6 +1925,13 @@ type NewMessage struct {
 	// Collective says the message addressed the whole room (`@channel`).
 	Collective bool
 
+	// Asks says an AGENT'S message asks something of the seats it reaches
+	// and expects an answer. Without it an agent's message wakes only the
+	// seats it names, the seats whose questions it answers and the seats
+	// that still owe an answer in its thread (ADR-0113). A person's message
+	// asks whatever it says, and this is ignored for one.
+	Asks bool
+
 	// WHAT MAKES A POST IDEMPOTENT is the actor's key ([Actor.OpKey]): a
 	// re-run turn posts once, and so does a person's retried request. It
 	// derives the MESSAGE'S id, which is also its operation's — see the head
@@ -2109,10 +2116,11 @@ func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, r
 		return out, err
 	}
 	named := s.employed(mentions)
+	asks := in.Asks && actor.Kind == AuthorAgent
 	out.payload = MessagePost{
 		V: DocumentVersion, MessageID: id, Body: in.Body,
 		ThreadRoot: root, Mentions: named,
-		Collective: in.Collective, Links: in.Links,
+		Collective: in.Collective, Links: in.Links, Asks: asks,
 		Author: actor.Name(), AuthorKind: actor.Kind,
 		// THE RULE [reachable] JUST APPLIED, carried for the applier to
 		// apply again at the record's position.
@@ -2123,12 +2131,12 @@ func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, r
 		ThreadRoot: root, Author: out.payload.Author,
 		AuthorKind: out.payload.AuthorKind, Body: in.Body,
 		Links: in.Links, Mentions: named,
-		Collective: in.Collective,
+		Collective: in.Collective, Asks: asks,
 	}
 	out.routing = Routing{
 		ChannelKind: room.Kind, AuthorKind: actor.Kind,
 		Members: held, Mentions: named, Collective: in.Collective,
-		ThreadRoot: root, RootAuthor: rootAuthor,
+		ThreadRoot: root, RootAuthor: rootAuthor, Asks: asks,
 	}
 	out.notify, err = s.notifyOf(ctx, tx, actor, room, out.message, out.routing)
 	if err != nil {
@@ -2455,6 +2463,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 				woken, truncated := ResolveMentions(Routing{
 					ChannelKind: room.Kind, AuthorKind: actor.Kind,
 					Members: members, Mentions: without(named, held.Mentions),
+					Asks: held.Asks,
 				})
 				notify = &Notify{
 					MessageID: messageID, ChannelID: room.ID,
@@ -3013,11 +3022,22 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		if err != nil {
 			return nil, err
 		}
-		routing.ThreadParticipants, routing.Followers = parties, followers
+		owing, err := owingTx(ctx, tx, room.ID, routing.ThreadRoot, actor.Name())
+		if err != nil {
+			return nil, err
+		}
+		routing.ThreadParticipants, routing.Followers, routing.Owing = parties, followers, owing
 	}
+	answers, err := answersTx(ctx, tx, room, routing.ThreadRoot, actor.Name())
+	if err != nil {
+		return nil, err
+	}
+	routing.Answers = answers
 	routing.Answerer = s.answerer(room, actor, routing)
 
 	candidates, truncated := Resolve(routing)
+	woken := Route(candidates, s.roster.Seat, actor.Name())
+	held := Route(Held(routing, candidates), s.roster.Seat, actor.Name())
 	return &Notify{
 		MessageID: message.ID, ChannelID: room.ID, ChannelName: room.Name,
 		ChannelKind: room.Kind, ThreadRoot: message.ThreadRoot,
@@ -3029,9 +3049,92 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		// roster IT has — a seat may have left between the commit and
 		// the wake — through this same function, which is why the two
 		// can disagree about nothing.
-		Recipients:     RecipientsOf(Route(candidates, s.roster.Seat, actor.Name())),
+		Recipients:     RecipientsOf(woken),
 		WakesTruncated: truncated,
+		Asks:           routing.Asks,
+		Held:           RecipientsOf(held),
+		Asked:          askedOf(room, actor, routing, woken),
 	}, nil
+}
+
+// askedOf is whom an AGENT'S asking message asked ([Notify.Asked]): the seats
+// it woke, the people it named and, in a direct conversation, everybody else
+// in it. Each gets a receipt, so the answer wakes the asker. Nil for a
+// person's message, whose receipts are its reach, and for an agent's message
+// that asks nothing, which no answer is owed.
+func askedOf(room Channel, actor Actor, routing Routing, woken []Candidate) []string {
+	if actor.Kind != AuthorAgent || !routing.Asks {
+		return nil
+	}
+	seen := map[string]bool{actor.Name(): true}
+	var out []string
+	add := func(handle string) {
+		if handle != "" && !seen[handle] {
+			seen[handle] = true
+			out = append(out, handle)
+		}
+	}
+	for _, c := range woken {
+		add(c.Handle)
+	}
+	for _, handle := range routing.mentioned() {
+		add(handle)
+	}
+	if room.Kind.Direct() {
+		for _, handle := range memberHandles(routing.Members) {
+			add(handle)
+		}
+	}
+	return out
+}
+
+// answersTx is the authors of the messages whose receipts author still owes
+// in this thread, and in a direct conversation anywhere in it: the seats this
+// message answers ([ReasonAnswer]). Nothing for a top-level post in a named
+// room, which answers nobody's thread, the rule the applier marks receipts by
+// ([answerReceipts]).
+func answersTx(ctx context.Context, tx *sql.Tx, room Channel, root, author string) (
+	[]string, error) {
+
+	query := `
+		SELECT DISTINCT m.author_handle
+		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
+		  JOIN chat_messages m ON m.id = r.message_id
+		 WHERE r.channel_id = ? AND r.handle = ? AND r.answer_id = ''
+		   AND m.author_handle <> ? AND m.deleted_at IS NULL`
+	args := []any{room.ID, author, author}
+	switch {
+	case room.Kind.Direct():
+	case root != "":
+		query += ` AND r.thread_key = ?`
+		args = append(args, root)
+	default:
+		return nil, nil
+	}
+	query += ` ORDER BY m.author_handle LIMIT ?`
+	args = append(args, MaxThreadParticipants)
+	return handlesTx(ctx, tx, query, args...)
+}
+
+// owingTx is the seats asked something in this thread, other than the author,
+// that have not answered yet ([ReasonOwing]): an open receipt on a message that
+// still stands and still asks them, which is an agent's asking message, or a
+// person's message that still names them. A receipt a person's message gave a
+// seat it merely reached (a follower of the room) asked it nothing, and a
+// message taken back, or edited to drop the name, asks nobody.
+func owingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string) (
+	[]string, error) {
+
+	return handlesTx(ctx, tx, `
+		SELECT DISTINCT r.handle
+		  FROM chat_receipts r INDEXED BY chat_receipts_open_idx
+		  JOIN chat_messages m ON m.id = r.message_id
+		 WHERE r.channel_id = ? AND r.thread_key = ? AND r.answer_id = ''
+		   AND r.handle <> ? AND m.deleted_at IS NULL
+		   AND (m.author_kind = ? OR EXISTS (SELECT 1 FROM chat_mentions x
+		        WHERE x.message_id = m.id AND x.handle = r.handle))
+		 ORDER BY r.handle LIMIT ?`,
+		channelID, root, author, string(AuthorAgent), MaxThreadParticipants)
 }
 
 // answerer resolves the seat a person's post in this room is answered by when

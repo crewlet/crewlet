@@ -825,8 +825,25 @@ func addressesRoom(body string) bool {
 // already sent. An operator's assistant over MCP names neither, and each of its
 // posts is a new message — exactly as a person pressing send twice says it
 // twice, since nothing redelivers that call.
-func (d ChatDeps) message(body string, links []string) chatlet.NewMessage {
-	return ChatMessage(d.Mentions, body, links)
+func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMessage {
+	in := ChatMessage(d.Mentions, body, links)
+	in.Asks = asks
+	return in
+}
+
+// asksParam is the `asks` argument every posting tool takes: an agent's own
+// statement that its message asks something, which is what lets it wake the
+// colleagues it does not name (ADR-0113).
+func asksParam() map[string]any {
+	return map[string]any{
+		"type": "boolean",
+		"description": "true when this message asks something of the colleagues " +
+			"it reaches and you need their answer to go on. Left off, it wakes " +
+			"only the colleagues you @-mention (who are told it asks nothing), " +
+			"whoever's question it answers, and anyone in the thread who still " +
+			"owes an answer; everybody else reads it when they next open the " +
+			"room. Leave it off for acknowledgements, thanks and status notes.",
+	}
 }
 
 // ChatMessage is what a post carries, read from the words a person or a model
@@ -896,6 +913,14 @@ func postReceipt(written chatlet.Written, channelID string) map[string]any {
 	if len(written.Message.Mentions) > 0 {
 		out["mentioned"] = written.Message.Mentions
 	}
+	if written.Message.AuthorKind == chatlet.AuthorAgent && !written.Message.Asks {
+		// SAID BACK, so a seat that meant to ask learns at once that its
+		// words reached only whom they name (ADR-0113).
+		out["asks"] = false
+		out["wakes"] = "only the colleagues it names, whoever's question it " +
+			"answers and anyone in the thread who still owes an answer; post " +
+			"again with asks: true if you need an answer from the room"
+	}
 	if written.Message.Collective {
 		// SAID BACK, because the model did not pass a flag: it wrote
 		// `@channel` in prose and the engine read it as an address, so
@@ -951,6 +976,7 @@ func (t *postMessage) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"channel", "body"},
 	}
@@ -977,7 +1003,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	again := callRepeat(turn, actor.OpKey, PostMessageTool)
 	written, err := t.deps.Writer.Post(ctx, actor, id,
-		t.deps.message(body, argStrings(args, "links")))
+		t.deps.message(body, argStrings(args, "links"), argBool(args, "asks")))
 	if err != nil {
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1023,6 +1049,7 @@ func (t *replyInThread) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs, %s. No file attachments.",
 					chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"channel", "reply_to", "body"},
 	}
@@ -1053,7 +1080,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	again := callRepeat(turn, actor.OpKey, ReplyInThreadTool)
 	written, err := t.deps.Writer.Reply(ctx, actor, id, replyTo,
-		t.deps.message(body, argStrings(args, "links")))
+		t.deps.message(body, argStrings(args, "links"), argBool(args, "asks")))
 	if err != nil {
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
@@ -1094,6 +1121,7 @@ func (t *sendDM) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
+			"asks": asksParam(),
 		},
 		"required": []any{"to", "body"},
 	}
@@ -1130,7 +1158,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	again := callRepeat(turn, actor.OpKey, SendDMTool)
-	said := t.deps.message(body, argStrings(args, "links"))
+	said := t.deps.message(body, argStrings(args, "links"), argBool(args, "asks"))
 	// WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS WRITTEN. A body
 	// over the cap is refused by the post however the room is found, so
 	// opening the conversation first only left a room in every

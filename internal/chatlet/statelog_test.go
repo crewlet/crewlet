@@ -41,13 +41,13 @@ func TestTheChatDomainIsACertifiedDomain(t *testing.T) {
 			// from test code would be a schema the suite proved and the
 			// migration did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE, empty while every shape here is
-			// version 1's — and so no Carrying: the suite asks for a
-			// record per field, and there is none to build.
-			Fields: chatlet.VersionedFields(),
-			Kinds:  suiteKinds(),
-			Rows:   chatlet.NewRows,
-			Write:  suiteWrite,
+			// THE VERSIONED-FIELD TABLE, each field carried by a record
+			// built through the production encoder ([carryingSuiteRecord]).
+			Fields:   chatlet.VersionedFields(),
+			Carrying: carryingSuiteRecord,
+			Kinds:    suiteKinds(),
+			Rows:     chatlet.NewRows,
+			Write:    suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -58,6 +58,47 @@ func TestTheChatDomainIsACertifiedDomain(t *testing.T) {
 			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
 			EncodeTrimmed: chatlet.EncodeTrimmed,
 		}
+	})
+}
+
+// carryingSuiteRecord is an agent's post carrying one versioned field, through
+// the production encoder, which stamps it at the field's version.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	post := chatlet.MessagePost{
+		V: chatlet.DocumentVersion, MessageID: "message-carrying",
+		Body: "the suite carries a field", Author: "suite-agent",
+		AuthorKind: chatlet.AuthorAgent,
+	}
+	n := &chatlet.Notify{
+		MessageID: post.MessageID, ChannelID: "carrying",
+		ChannelKind: chatlet.KindPublic, Author: post.Author,
+		AuthorKind: post.AuthorKind,
+	}
+	switch field.Name {
+	case "MessagePost.Asks":
+		post.Asks = true
+		n = nil
+	case "Notify.Asks":
+		n.Asks = true
+	case "Notify.Held":
+		n.Held = []chatlet.Recipient{{Handle: "colleague", Reason: chatlet.ReasonFollowAll}}
+	case "Notify.Asked":
+		n.Asked = []string{"colleague"}
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	body, err := json.Marshal(post)
+	if err != nil {
+		return nil, err
+	}
+	return chatlet.Encode(chatlet.MutationRecord{
+		RecordEnvelope: chatlet.RecordEnvelope{
+			OpID: "suite-carrying", Op: chatlet.OpPost,
+			Subject:   chatlet.MessageSubject("carrying"),
+			Scope:     chatlet.ScopeSet{Subject: true},
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "suite-node",
+		},
+		Mutation: body, Actor: post.Author, ActorKind: post.AuthorKind, Notify: n,
 	})
 }
 

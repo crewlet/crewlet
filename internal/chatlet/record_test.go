@@ -240,8 +240,8 @@ func TestEveryRecordThatDeletesOrFencesInstallsAGate(t *testing.T) {
 // noise, and nothing downstream could tell.
 func TestThePrecedenceOrderPutsEveryAddressedReasonFirst(t *testing.T) {
 	t.Parallel()
-	if len(chatlet.Reasons) != 9 {
-		t.Fatalf("the vocabulary has %d reasons, want 9", len(chatlet.Reasons))
+	if len(chatlet.Reasons) != 12 {
+		t.Fatalf("the vocabulary has %d reasons, want 12", len(chatlet.Reasons))
 	}
 	seenUnaddressed := false
 	for _, r := range chatlet.Reasons {
