@@ -3960,6 +3960,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// ([seatParks.forget]).
 	e.forgetBudgetPark(ctx, seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
+	// AND WHAT IT READ OF THE SEAT'S HELD CONVERSATIONS: the next holder reads its own.
+	e.conversations.forget(seat.ID)
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
 	// holder serves from now on: left open here they would pin the seat's
 	// surface in a process that no longer speaks for it, and every box

@@ -128,6 +128,10 @@ type Dispatcher struct {
 	// run. An error is a pause that could not be taken, deferred as Budget's is.
 	Failure func(ctx context.Context, handle string, failed error) (reason string, parked bool, err error)
 
+	// Held reports whether the delivery's conversation is held because its
+	// context did not fit (conversationhold.go): its wakes are settled unrun.
+	Held func(ctx context.Context, handle, conversation string, evs []*events.Event) bool
+
 	// Answer offers a delivery to a parked executor as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
 	// [sandbox.AnswerDisposition].
@@ -663,6 +667,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 	}
 
+	// A HELD CONVERSATION starts no turn: its wakes are settled unrun and
+	// counted, and a person writing on it is what lifts the hold.
+	if d.Held != nil && d.Held(ctx, handle, conversationIdentityOf(surviving), surviving) {
+		return d.settleHeld(ctx, handle, surviving)
+	}
+
 	routing := inbox.Route(surviving, d.ledgered)
 
 	// THE MERGE, here and only here, because this is the last frame that
@@ -996,21 +1006,37 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 	// its artifact is whichever round closed last, and nothing here files it
 	// as this turn's answer. What its conversation's next turn is told of it
 	// is whatever end the turn left on the executor log.
-	if d.Completions != nil {
-		for _, ev := range req.Events {
-			if ev == nil || !d.ledgered(ev.Type) {
-				continue
-			}
-			key := workkey.Derive([]string{ev.ID.String()})
-			if err := d.Completions.Record(ctx, handle, key, "",
-				d.now()); err != nil {
-				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
-					"error", err, "detail", "the trigger may be redelivered and "+
-						"repeat this turn's work")
-			}
+	d.recordUnrun(ctx, handle, req.Events)
+	d.noteAbandoned(ctx, handle, req.Events, cause, reason)
+	return queue.Ack()
+}
+
+// recordUnrun records evs worked without a turn, so a redelivery is dropped.
+func (d *Dispatcher) recordUnrun(ctx context.Context, handle string, evs []*events.Event) {
+	if d.Completions == nil {
+		return
+	}
+	for _, ev := range evs {
+		if ev == nil || !d.ledgered(ev.Type) {
+			continue
+		}
+		key := workkey.Derive([]string{ev.ID.String()})
+		if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
+			log.WarnContext(ctx, "unrun_trigger_not_recorded", "seat", handle,
+				"error", err, "detail", "the trigger may be redelivered and run")
 		}
 	}
-	d.noteAbandoned(ctx, handle, req.Events, cause, reason)
+}
+
+// errConversationHeld is why a held conversation's wake was settled unrun.
+var errConversationHeld = errors.New("its context did not fit its models twice in a row")
+
+// settleHeld settles a held conversation's delivery without a turn.
+func (d *Dispatcher) settleHeld(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+	log.InfoContext(ctx, "turn_conversation_held", "seat", handle, "events", len(evs),
+		"detail", "the conversation is held until a person writes on it or the seat's models change")
+	d.recordUnrun(ctx, handle, evs)
+	d.noteAbandoned(ctx, handle, evs, errConversationHeld, "its conversation is held")
 	return queue.Ack()
 }
 

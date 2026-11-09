@@ -3,10 +3,12 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -137,4 +139,16 @@ func DecodeWaitingNotice(payload []byte) (WaitingNotice, error) {
 	var n WaitingNotice
 	err := json.Unmarshal(payload, &n)
 	return n, err
+}
+
+// PersonWrote reports whether a person wrote anything n delivers: n itself, or
+// any message coalesced into it, which share n's writer.
+func PersonWrote(reg Parties, n types.ExternalNotification) bool {
+	copies := []Inbound{{Source: n.NotificationSource, EventType: n.SourceEventType,
+		Sender: n.Sender, Metadata: n.Metadata, Writer: n.Writer}}
+	for _, m := range n.Messages {
+		copies = append(copies, Inbound{Source: n.NotificationSource, EventType: m.SourceEventType,
+			Sender: m.Sender, Metadata: m.Metadata, Writer: n.Writer})
+	}
+	return slices.ContainsFunc(copies, func(in Inbound) bool { return WrittenByPerson(reg, in) })
 }

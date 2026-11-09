@@ -50,6 +50,8 @@ var failureRules = map[failureKind]failureRule{
 	failureSandboxRefused:  {says: "the sandbox provider refused the engine's credential, twice in a row"},
 	failureSandboxBilling:  {says: "the sandbox provider refused for billing, twice in a row"},
 	failureModelsRefused:   {says: "every model it can use refused its credential, twice in a row", models: true},
+	failureContextExhausted: {says: "its context did not fit its models twice in a row, " +
+		"the second time on a fresh session", models: true},
 }
 
 // whyFailures classifies every [sandbox.Why]: an empty kind is a failure that

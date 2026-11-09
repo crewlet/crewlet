@@ -62,7 +62,10 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
-	mailboxes            map[uuid.UUID]coord.MailboxRecord
+	// conversationHolds is each seat's held conversations, by conversation key.
+	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
+	conversationHoldRevision uint64
+	mailboxes                map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -167,36 +170,37 @@ var _ coord.Fleet = (*Fleet)(nil)
 // NewFleet returns an empty twin.
 func NewFleet() *Fleet {
 	return &Fleet{
-		windows:       map[windowKey]int{},
-		claims:        map[string]time.Time{},
-		worked:        map[string]workedEntry{},
-		applies:       map[string]coord.NodeApply{},
-		budgets:       map[string]coord.Tally{},
-		channels:      map[string]coord.Channel{},
-		follows:       map[string]followEntry{},
-		chatReads:     map[string]coord.ChatReadState{},
-		fires:         map[string]map[string]time.Time{},
-		custody:       map[string]string{},
-		rebases:       map[string]rebaseEntry{},
-		runs:          map[string]coord.Record{},
-		runParts:      map[runPartKey]coord.Record{},
-		secrets:       map[string]coord.SecretRecord{},
-		integrations:  map[string][]byte{},
-		seatAccess:    map[string]map[string][]byte{},
-		accessReviews: map[string]accessReview{},
-		mailboxes:     map[uuid.UUID]coord.MailboxRecord{},
-		pauses:        map[uuid.UUID]coord.SeatPause{},
-		uploads:       map[string]versioned{},
-		retries:       newRetryRecords(),
-		signIns:       newSignInRecords(),
-		listings:      newListingRecords(),
-		restarts:      newRestartRecords(),
-		checks:        newCheckRecords(),
-		sshTests:      newSSHTestRecords(),
-		issueReports:  newIssueReportRecords(),
-		grants:        newGrantRecords(),
-		mcpSignIns:    newMCPSignInRecords(),
-		accepted:      newAcceptedRecords(),
+		windows:           map[windowKey]int{},
+		claims:            map[string]time.Time{},
+		worked:            map[string]workedEntry{},
+		applies:           map[string]coord.NodeApply{},
+		budgets:           map[string]coord.Tally{},
+		channels:          map[string]coord.Channel{},
+		follows:           map[string]followEntry{},
+		chatReads:         map[string]coord.ChatReadState{},
+		fires:             map[string]map[string]time.Time{},
+		custody:           map[string]string{},
+		rebases:           map[string]rebaseEntry{},
+		runs:              map[string]coord.Record{},
+		runParts:          map[runPartKey]coord.Record{},
+		secrets:           map[string]coord.SecretRecord{},
+		integrations:      map[string][]byte{},
+		seatAccess:        map[string]map[string][]byte{},
+		accessReviews:     map[string]accessReview{},
+		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
+		pauses:            map[uuid.UUID]coord.SeatPause{},
+		uploads:           map[string]versioned{},
+		retries:           newRetryRecords(),
+		signIns:           newSignInRecords(),
+		listings:          newListingRecords(),
+		restarts:          newRestartRecords(),
+		checks:            newCheckRecords(),
+		sshTests:          newSSHTestRecords(),
+		issueReports:      newIssueReportRecords(),
+		grants:            newGrantRecords(),
+		mcpSignIns:        newMCPSignInRecords(),
+		accepted:          newAcceptedRecords(),
 	}
 }
 

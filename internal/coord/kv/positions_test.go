@@ -134,7 +134,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 	ctx := context.Background()
 
-	// One key per class, all in the one register. All EIGHT of them, and
+	// One key per class, all in the one register. All NINE of them, and
 	// `maintenance` beside `maintenance-ack` is the adversarial pair: one
 	// class name is a STRING PREFIX of the other, so a filter built by
 	// concatenation rather than by the grammar would hand every
@@ -143,6 +143,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	classes := []string{
 		"node", "floor", "hold", "backup",
 		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
+		coord.ConversationHoldClass,
 	}
 	for _, class := range classes {
 		key := coord.DocumentKey(class, "n-1")
