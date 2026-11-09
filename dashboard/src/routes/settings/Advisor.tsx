@@ -29,7 +29,9 @@ import {
 } from "@crewlethq/ui";
 import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { useAssistantControl, type AssistantControl } from "~/app/assistant/control.ts";
 import { href } from "~/app/router.tsx";
+import { unreadSentences } from "~/lib/advisorUnread.ts";
 import { refusalWords } from "~/lib/ceilings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -63,6 +65,7 @@ export function Advisor() {
     pollMs: POLL_MS,
   });
   const [open, setOpen] = useState<AdvisorFinding | null>(null);
+  const assistant = useAssistantControl();
   const owner = data?.findings.filter((f) => f.actor === "owner") ?? [];
   const engine = data?.findings.filter((f) => f.actor === "engine") ?? [];
   return (
@@ -72,28 +75,33 @@ export function Advisor() {
         every change before it is made; the engine never makes one on its own.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
-        {data && data.unread.includes("integrations") && (
+        {data && data.unread.length > 0 && (
           <Callout variant="warning" title="Some of the setup couldn't be read">
-            This server couldn&rsquo;t read the integrations&rsquo; last check, so anything they
-            need from you is missing below.
+            {unreadSentences(data.unread).join(" ")}
           </Callout>
         )}
         {data && <GoLiveCheck owner={owner} unread={data.unread} />}
+        {/* NOTHING TO CHANGE ONLY WHEN EVERY SOURCE WAS READ: an unread one may hold the blocker. */}
         {data &&
           (owner.length === 0 ? (
-            <EmptyState
-              size="compact"
-              title="Nothing to change"
-              description="Your company's setup raises nothing worth changing right now."
-            />
+            data.unread.length === 0 && (
+              <EmptyState
+                size="compact"
+                title="Nothing to change"
+                description="Your company's setup raises nothing worth changing right now."
+              />
+            )
           ) : (
             <AttentionList
-              items={owner.map((f) => findingItem(f, () => setOpen(f)))}
+              items={owner.map((f) => findingItem(f, () => setOpen(f), assistant))}
               labels={OWNER_LABELS}
             />
           ))}
         {engine.length > 0 && (
-          <AttentionList items={engine.map((f) => findingItem(f, null))} labels={ENGINE_LABELS} />
+          <AttentionList
+            items={engine.map((f) => findingItem(f, null, null))}
+            labels={ENGINE_LABELS}
+          />
         )}
       </QueryState>
       {open && (
@@ -158,10 +166,26 @@ function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: strin
 }
 
 /** One finding as a row of the list: what is wrong, why, and its one action. */
-function findingItem(f: AdvisorFinding, review: (() => void) | null): AttentionItem {
+function findingItem(
+  f: AdvisorFinding,
+  review: (() => void) | null,
+  assistant: AssistantControl | null,
+): AttentionItem {
   const subject = f.subject.name ?? "";
   let action;
-  if (review && f.fix.kind === "config_change" && f.fix.options.length > 0) {
+  if (review && assistant && f.fix.kind === "draft_with_assistant" && f.fix.prompt) {
+    // A DRAFT IS ASKED OF ASK CREWLET, whose own preview binds the approval.
+    const prompt = f.fix.prompt;
+    action = assistant.unavailable ? (
+      <Text as="span" tone="secondary">
+        {assistant.unavailable.short}
+      </Text>
+    ) : (
+      <Button size="small" onClick={() => assistant.ask(prompt)}>
+        Draft with Ask Crewlet
+      </Button>
+    );
+  } else if (review && f.fix.kind === "config_change" && f.fix.options.length > 0) {
     action = (
       <Button size="small" onClick={review}>
         Review the change

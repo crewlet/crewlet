@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/scenario"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -37,12 +38,17 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
 		scenario.PatternReviewIdle:               advisor.ClassReviewIdle,
+		scenario.PatternApprovalRubberStamp:      advisor.ClassApprovalRubberStamp,
 	}
 	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
 	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
 	guarded := []advisor.Class{advisor.ClassAgentMentionsWithoutAsk}
+	// A LOAD IS HUNDREDS OF NOTICES, which no timeline spells out step by step;
+	// its read is held by TestAPersonsNoticeLoadIsEveryNoticeSentThemInTheWindow.
+	counted := []advisor.Class{advisor.ClassNoticeLoad}
 	for _, class := range advisor.WorkClasses() {
-		if !slices.Contains(slices.Collect(maps.Values(want)), class) && !slices.Contains(guarded, class) {
+		if !slices.Contains(slices.Collect(maps.Values(want)), class) && !slices.Contains(guarded, class) &&
+			!slices.Contains(counted, class) {
 			t.Errorf("detector %s has no timeline it must fire on", class)
 		}
 	}
@@ -235,6 +241,10 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 	if thread.Answers != "" {
 		c.Answers = &thread.Answers
 	}
+	if st.Recommend != "" {
+		c.Decision = scenarioDecision(st.Recommend)
+	}
+	c.Choice = st.Choose
 	d.comments[i] = c.ID
 	patch := worklet.TaskPatch{Comment: c,
 		Watch: &worklet.WatchIntent{Handle: st.Actor, Watch: true, Auto: true}}
@@ -389,5 +399,76 @@ func TestAnIdleReviewIsOneItsHolderLeftAlone(t *testing.T) {
 	if err != nil || len(early.IdleReviews) != 0 {
 		t.Fatalf("with the quiet instant before every review, idle reviews %+v (%v), want none",
 			early.IdleReviews, err)
+	}
+}
+
+// scenarioDecision is a decision step's question: the fixed choices, one
+// recommended, in the timeline's own words.
+func scenarioDecision(recommend string) *decision.Decision {
+	d := &decision.Decision{Question: scenario.Phrase(scenario.SayQuestion, 0),
+		Role: decision.RoleApprover, Recommended: recommend, Rationale: "It keeps the work moving."}
+	for _, id := range scenario.Choices {
+		d.Options = append(d.Options, decision.Option{ID: id, Label: scenario.ChoiceLabels[id]})
+	}
+	return d
+}
+
+// A PERSON'S NOTICE LOAD IS EVERY NOTICE SENT THEM IN THE WINDOW, and how many
+// of those were put to them, read beside the rows themselves; a person sent
+// nothing reads zero rather than going missing.
+func TestAPersonsNoticeLoadIsEveryNoticeSentThemInTheWindow(t *testing.T) {
+	t.Parallel()
+	tl, err := scenario.Named("ask_overtaken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := playTimeline(t, tl)
+	want := map[string]worklet.NoticeLoad{}
+	if err := d.r.db.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), `SELECT recipient, addressed FROM tracker_notifications`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var handle string
+			var addressed bool
+			if err := rows.Scan(&handle, &addressed); err != nil {
+				return err
+			}
+			load := want[handle]
+			load.Handle = handle
+			load.Notices++
+			if addressed {
+				load.Addressed++
+			}
+			want[handle] = load
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the notices: %v", err)
+	}
+	if owner := want["owner"]; owner.Addressed == 0 || owner.Addressed == owner.Notices {
+		t.Fatalf("the timeline sent the owner %+v, want notices asking them something among others", want["owner"])
+	}
+	people := []string{"owner", "nobody"}
+	for _, c := range []struct {
+		name         string
+		since, until time.Time
+		want         []worklet.NoticeLoad
+	}{
+		{"the timeline's window", d.start, time.Now().UTC().Add(time.Microsecond),
+			[]worklet.NoticeLoad{want["owner"], {Handle: "nobody"}}},
+		{"a window that ended before it", d.start.Add(-time.Hour), d.start,
+			[]worklet.NoticeLoad{{Handle: "owner"}, {Handle: "nobody"}}},
+	} {
+		work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+			Since: c.since, Until: c.until, Level: statelog.ReadStale, People: people})
+		if err != nil {
+			t.Fatalf("WorkPatterns: %v", err)
+		}
+		if !slices.Equal(work.Notices, c.want) {
+			t.Errorf("%s: read %+v, want %+v", c.name, work.Notices, c.want)
+		}
 	}
 }
