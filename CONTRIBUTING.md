@@ -108,13 +108,24 @@ when the recipe asks it its version, naming that `deb.deps`.
 (`test`, `test-solo`, `test-norace`) depends on `make chromium` and names the
 two builds — `CREWLET_TEST_CHROMIUM` and `CREWLET_TEST_CHROMIUM_FLOOR`, each
 the path `scripts/chromium.sh newest` or `floor` prints (the Makefile's
-`CHROMIUM_ENV`) — as it names the pinned gits: Chrome for Testing's Stable and
-the newest patch of `cdp.MinMajor`, the oldest major the CDP client drives.
-Never the machine's own Chrome, which has no exact version to pin and carries
-no floor, and never the Chromium Playwright installs for the dashboard's
-layout suites (below): that one is pinned to the Playwright release that
-drives it, checksummed by nothing, and fetched by npm, which the engine's
-suite does not need.
+`CHROMIUM_ENV`) — and requires them, as it requires every program the suite
+needs (`CREWLET_REQUIRE_PREREQUISITES=1`). Every case that drives a real
+browser runs on both (`internal/browser/chromiumtest`'s `Each`), so what it
+asserts holds at both ends of what the engine promises to drive: Chrome for
+Testing's Stable and the newest patch of `cdp.MinMajor`, the oldest major the
+CDP client drives — unless its doc says why the floor adds nothing to its
+claim, and it runs on the newest alone. A one-package loop names them by hand,
+as three statements, each substitution its own:
+`newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$floor" go test ./internal/browser/chromiumtest/`
+— a bare `go test` without them skips those cases, saying so, and runs the
+rest. A Chromium named there is held to its pin's major by what it answers to
+`--version`: the newest at or above `cdp.MinMajor`, the floor of that major
+exactly, since a newer build in the floor's place is a floor nobody is
+testing. Never the machine's own Chrome, which has no exact version to pin
+and carries no floor, and never the Chromium Playwright installs for the
+dashboard's layout suites (below): that one is pinned to the Playwright
+release that drives it, checksummed by nothing, and fetched by npm, which the
+engine's suite does not need.
 
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the

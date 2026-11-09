@@ -482,12 +482,16 @@ chromium: ## fetch the pinned Chromiums the suite drives (scripts/chromium-pin.e
 	@for pin in $(CHROMIUM_PINS); do scripts/chromium.sh $$pin >/dev/null || exit 1; done
 
 # THE CHROMIUMS EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES: the newest and the
-# floor's builds, in CREWLET_TEST_CHROMIUM and CREWLET_TEST_CHROMIUM_FLOOR.
+# floor's builds, in CREWLET_TEST_CHROMIUM and CREWLET_TEST_CHROMIUM_FLOOR,
+# which internal/browser/chromiumtest reads — a case that drives Chromium
+# drives both, but for one whose doc says why the floor adds nothing to its
+# claim, and a build that is not named fails the case under REQUIRED (below).
 # Each from scripts/chromium.sh, which a target's `chromium` prerequisite has
 # already fetched, so here it only prints the path. STATEMENTS, as GIT_ENV's
 # are and for its reason: a prefix whose command failed would name an empty
-# path, which reads as unset rather than as the recipe's failure. A recipe
-# line starts with it, and what follows it runs with both named.
+# path, and the cases would report it as unset rather than say the recipe
+# failed. A recipe line starts with it, and what follows it runs with both
+# named.
 CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
 	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
