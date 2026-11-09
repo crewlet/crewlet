@@ -695,16 +695,17 @@ type BridgeCall struct {
 
 	// Late marks a call its round's log took AFTER ITS JOB WAS REPLACED: still
 	// running when a relaunch that carries the round on — a loss's, a person's
-	// answer's, a replaced sign-in's — opened the log to a later job, and
-	// finished only after its harness died, gave up on it or was replaced. A
-	// call of the round all the same, whose effect happened: listed and
-	// numbered as every call is, but its spend is never the later job's
-	// ([PendingStore.AppendBridgeCall]). THE LOG'S TO GIVE, as a call's number
-	// is: set by the append that takes the call once the log is open to a
-	// later job of the round ([BridgeLog.take]), which replaces whatever a
-	// caller handed in — and never on the call a person approved, which the
-	// store appends for its own round and the relaunch's lead tells
-	// ([approvedCall]).
+	// answer's, a replaced sign-in's — was readied, and finished only after its
+	// harness died, gave up on it or was replaced. A call of the round all the
+	// same, whose effect happened: listed and numbered as every call is, but
+	// its spend is never the later job's ([PendingStore.AppendBridgeCall]).
+	// THE LOG'S TO GIVE, as a call's number is, in two writes alone: the append
+	// that takes the call once the log is open to a later job of the round
+	// ([BridgeLog.take]), which replaces whatever a caller handed in; and that
+	// opening itself, for a call the log took after the read the relaunch's
+	// briefs were built from ([PendingRun.BriefRead]). Never the call a person
+	// approved, which the store appends for its own round and the relaunch's
+	// lead tells ([approvedCall]).
 	//
 	// HELD BY NO SAVE POINT. No brief of the round told it — it landed after
 	// the read the briefs of the job carrying the round on were built from —
@@ -1812,6 +1813,21 @@ type PendingRun struct {
 	// round, whose log starts empty.
 	Continues bool `json:"-"`
 
+	// BriefRead is TRANSIENT as well, an instruction to
+	// [PendingStore.BeginLaunch] beside [PendingRun.Continues]: how many calls
+	// the round's log had taken at the read the relaunch's briefs were built
+	// from ([Continuation.BriefRead]), nil for none known. The write that
+	// opens the job's log to a job carrying the round on marks LATE
+	// ([BridgeCall.Late]) every call of the round it took after that read —
+	// one of the replaced job's, still running as the relaunch was readied,
+	// which no brief of the round told — but the call a person approved,
+	// which the relaunch's lead tells; and counts as late any of them the log
+	// has dropped from its middle since ([BridgeLog.LateElided]). The same
+	// mark a call the log takes after the opening gets, so no save point
+	// holds either. Never persisted: a read is the relaunch's, and an opening
+	// that never landed is the next relaunch's to make, after its own read.
+	BriefRead *int `json:"-"`
+
 	// Steer is the notes a person sent the run's turn from the run's launch
 	// to its turn's end, sealed, with the seat anchor authority to send one
 	// is decided on — see [RunSteer] and notes.go. Kept by every reset of the
@@ -2693,6 +2709,9 @@ type PendingStore interface {
 	// it, but the segment that pays for a job pays what the job's record held
 	// at its claim ([ResumeRequest.Engine]). So a call that outlives its
 	// job's claim can leave the task short of the turn's cost, never past it.
+	// Where it lands after the read a relaunch's briefs were built from, the
+	// opening that carries the round on marks it late as well
+	// ([PendingRun.BriefRead]).
 	//
 	// HELD TO THE LOG'S BUDGET ([BridgeLogBytes]): the call is kept within
 	// its own share ([MaxBridgeCallBytes]) — its largest argument values left

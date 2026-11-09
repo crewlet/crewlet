@@ -800,12 +800,14 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool) sandbox.
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
-// layer's terms, nil for every other launch.
+// layer's terms, nil for every other launch — with the read its briefs were
+// built from, past which the job's opening marks the round's calls late
+// ([sandbox.Continuation.BriefRead]).
 func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	if c == nil {
 		return nil
 	}
-	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief}
+	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead}
 	if c.SignInReplaced {
 		out.Reason = sandbox.FollowUpSignInReplaced
 	}

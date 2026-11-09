@@ -473,6 +473,19 @@ type Continuation struct {
 	// Reason is why the round is carried on, where the job's collection
 	// acts on it ([LaunchRecord.FollowUp]); empty otherwise.
 	Reason FollowUpReason
+
+	// BriefRead is how many calls the round's log had taken at the read the
+	// launch's briefs were built from ([ResumeRequest.BridgedRead]): every
+	// call of the round a brief of this launch can tell. The opening of the
+	// job's log marks every call of the round the log took after it late
+	// ([BridgeCall.Late]) — calls of the job this one replaces that landed
+	// while the relaunch was readied, after the read and before the log moved
+	// on, which no brief of the round told and which a later capture of this
+	// job, placed by its own read, would otherwise count as held — but the
+	// call a person approved, which the brief's lead tells
+	// ([PendingRun.BriefRead]). NIL marks none: a launch that knows no such
+	// read.
+	BriefRead *int
 }
 
 // LaunchResult reports what a launch produced.
@@ -622,8 +635,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// names this node with this job's box ([BoxRef.Node]).
 		LaunchNode: c.node,
 		// The round carried on, whose earlier calls the log keeps — see
-		// [PendingRun.Continues].
-		Continues: req.Continue != nil,
+		// [PendingRun.Continues] — and the read its briefs were built from,
+		// past which the opening marks the round's calls late
+		// ([PendingRun.BriefRead]).
+		Continues: req.Continue != nil, BriefRead: briefReadOf(req.Continue),
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
@@ -1366,4 +1381,13 @@ func followUpOf(c *Continuation) FollowUpReason {
 		return ""
 	}
 	return c.Reason
+}
+
+// briefReadOf is the read c's briefs were built from ([Continuation.BriefRead]),
+// nil for a launch that carries no round on or knows no such read.
+func briefReadOf(c *Continuation) *int {
+	if c == nil {
+		return nil
+	}
+	return c.BriefRead
 }

@@ -996,6 +996,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Company:      company,
 		Run:          req.Run,
 		Bridged:      req.Bridged,
+		BridgedRead:  req.BridgedRead,
 		State:        state,
 		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
 		Answer:       req.Answer,
@@ -1180,6 +1181,10 @@ type resumeInput struct {
 	// ([sandbox.ResumeRequest.Bridged]); empty on a close that judges no
 	// calls.
 	Bridged sandbox.BridgeLog
+	// BridgedRead is how many calls the log had taken at that read
+	// ([sandbox.ResumeRequest.BridgedRead]).
+	BridgedRead int
+
 	State   execstate.State
 	Turn    *turnctx.Turn
 	Answer  string
@@ -1785,6 +1790,10 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
 		Answered: in.Bridged.AnsweredThrough,
+		// AND HOW MANY CALLS THE READ SAW, which a relaunch that carries the
+		// round on hands its launch: the opening marks every call the log
+		// took after it late ([sandbox.Continuation.BriefRead]).
+		BridgedRead: in.BridgedRead,
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).

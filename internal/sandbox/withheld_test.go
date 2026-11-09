@@ -90,16 +90,28 @@ func TestAResumeIsHandedTheApprovedCallOnce(t *testing.T) {
 // refused, so the claim is given back and the answer tried again. The next
 // opening that would append it never came, so the later attempt finds the
 // call on the row alone: the resume it hands the runner holds it, once, as the
-// round's own.
+// round's own. And the count of the read it hands beside them
+// ([ResumeRequest.BridgedRead]) is the log's own, the call on the row alone not
+// among it: the log takes that call for good only at its own append or the
+// opening, numbered after any call of the job that lands in between, which the
+// opening marks late by this count.
 //
 // Mutation: drop withHeld from the coordinator's resume read
 // ([Coordinator.resumeAndSettle]), and the later attempt's turn is judged on
-// a round that never made the call it was allowed.
+// a round that never made the call it was allowed; count the read once the
+// held call is added, or count none, and the count is not the log's.
 func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
+	// ONE CALL OF THE JOB'S OWN, in its log beside the call the row alone
+	// will hold.
+	launched := rig.get("t1")
+	if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
+		Round: launched.Round, Call: BridgeCall{Name: "read_work_item", Seq: 1, StartedAt: rig.now}}); err != nil || !ok {
+		t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+	}
 	id := parksOnAHeldCall(t, rig, "t1")
 
 	// THE FIRST ATTEMPT makes the call and records it, then its relaunch is
@@ -167,5 +179,9 @@ func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 	if held != 1 {
 		t.Fatalf("the resume holds the approved call %d times in %+v, want once", held,
 			requests[0].Bridged.Calls)
+	}
+	if got := requests[0].BridgedRead; got != 1 {
+		t.Errorf("the resume is handed a read of %d calls, want the 1 its log took: the call on the row alone "+
+			"is no call of the log's yet", got)
 	}
 }

@@ -233,6 +233,15 @@ type Continuation struct {
 	// in its box, which its floor is made of. Zero where no capture measured
 	// it, which holds the launch to the static floor.
 	ContextTokens int64
+
+	// BriefRead is how many calls the round's log had taken at the read
+	// every brief of the launch was built from ([Resume.BridgedRead]): the
+	// launch's opening of the job's log marks every call of the round the log
+	// took after it late ([BridgedCall.Late]) — calls of the job before that
+	// landed while the relaunch was readied, which no brief told — but the
+	// call a person approved, which the lead tells. NIL marks none: a launch
+	// built from no such read.
+	BriefRead *int
 }
 
 // SessionDecision is how a launch decided its run takes up a session, told
@@ -574,6 +583,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	began := time.Now()
 	logged := bridgedLedger(bridgedCalls)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
+	read := r.cfg.Resume.BridgedRead
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
@@ -755,6 +765,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// it whether the turn kept it or not: the floor of a launch
 			// that continues it in its box.
 			ContextTokens: basis.ContextTokens,
+			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
+			// opening marks late what the log took after it: the job before's
+			// calls that landed while this relaunch was readied, the call a
+			// person approved but excepted, which the lead tells.
+			BriefRead: &read,
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),

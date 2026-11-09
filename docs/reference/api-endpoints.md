@@ -12680,10 +12680,10 @@ appended after its save ([A relaunch continues the turn's
 session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 It is absent on a call an older engine appended. `late: true` marks a call the
 round's log took only after the job that made it was replaced by a relaunch
-that carried the round on — one still running when the relaunch opened the log
-to the next job, which no brief of the round told: a continued session is told
-it whatever its save, it is never the round's submission, and what it cost is
-charged to no job. The call a person approved is never marked.
+that carried the round on — one still running as the relaunch was readied,
+which no brief of the round told: a continued session is told it whatever its
+save, it is never the round's submission, and what it cost is charged to no
+job. The call a person approved is never marked.
 `bridge_calls_elided` counts the calls of the round the log does not list —
 dropped from the middle of a long run's log; a call whose own append reached
 the log only with a later one is listed, once, as the call it is — and

@@ -328,7 +328,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			owed = &OwedCall{Round: heldRound, Call: *h.Call}
 		}
 		existing.OwedCall = owed
-		opening = logOpening{round: existing.Round, answered: existing.AnsweredJob, owed: owed}
+		opening = logOpening{round: existing.Round, answered: existing.AnsweredJob, owed: owed,
+			told: run.BriefRead}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		// ONE PAST THE ROW'S, in the write that names the job, so the
@@ -482,6 +483,12 @@ type logOpening struct {
 	// write where the log lacks it, before the opening decides what the job
 	// keeps.
 	owed *OwedCall
+
+	// told is how many calls the round's log had taken at the read the
+	// relaunch's briefs were built from ([PendingRun.BriefRead]), nil for none
+	// known: an opening that carries the round on marks every call of it the
+	// log took after that read late ([BridgeLog.lateAfter]).
+	told *int
 }
 
 // opened is l as the opening o of job launch leaves it — see
@@ -498,8 +505,46 @@ func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
 		if o.answered != "" && l.CutFor != o.answered {
 			next.AnsweredThrough, next.CutFor = l.LastSeq(), o.answered
 		}
+		if o.told != nil {
+			next = next.lateAfter(*o.told)
+		}
 	}
 	return next
+}
+
+// lateAfter is l with every call it took after told marked late
+// ([BridgeCall.Late]) — but a call a person approved, which the relaunch's lead
+// tells — and every one of those it no longer lists, dropped from its middle
+// since, counted late ([BridgeLog.LateElided]): what an opening that carries
+// the round on makes of the calls the log took after the read its relaunch's
+// briefs were built from ([PendingRun.BriefRead]).
+//
+// THE SAME MARK AS A CALL TAKEN AFTER THE OPENING ([BridgeLog.take]), FOR THE
+// SAME REASON. Such a call is one of the job this opening replaces — a worker
+// still running, a call its harness gave up on — that landed while the
+// relaunch was readied: after its briefs were built, which never told it, and
+// before the log moved on, so as that job's own. Unmarked, a later capture of
+// the job this opening names, placed by its own read, counts it among the
+// calls its session holds, and no continuation of the round is ever told it.
+//
+// A LIST OF ITS OWN, since l is a copy whose list its caller may still hold.
+// A call taken after told with no number — an older build's append, in a fleet
+// mid-upgrade — is counted among the dropped ones: an over-count, the safe
+// direction, and it is told at every save point anyway.
+func (l BridgeLog) lateAfter(told int) BridgeLog {
+	l.Calls = slices.Clone(l.Calls)
+	listed := 0
+	for i, call := range l.Calls {
+		if call.Appended <= told {
+			continue
+		}
+		listed++
+		if !call.Approved {
+			l.Calls[i].Late = true
+		}
+	}
+	l.LateElided += max(l.Appends()-told-listed, 0)
+	return l
 }
 
 // openLog opens turnID's log to job launch, answering the place of the last
