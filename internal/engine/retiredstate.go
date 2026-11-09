@@ -20,8 +20,9 @@ import (
 // parkedRunUnresumable is [sandbox.CoordinatorOptions.Unresumable]: the run's
 // parked state judged as a resume would decode it, then the item it asked about.
 func (e *Engine) parkedRunUnresumable(ctx context.Context, run sandbox.PendingRun) (*sandbox.Unresumable, error) {
-	_, _, err := execstate.Decode(run.ExecuteState)
-	if retired, err := e.retiredState(ctx, err); retired != nil || err != nil {
+	_, _, decoded := execstate.Decode(run.ExecuteState)
+	retired, err := e.retiredState(ctx, decoded)
+	if retired != nil || err != nil {
 		return retired, err
 	}
 	return e.itemFinished(ctx, run)
