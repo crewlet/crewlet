@@ -53,6 +53,10 @@ Beside the document's findings, the advisor reads what the company did over the 
 
 One finding read from the engine's own state is yours: **Your company has no recent verified backup** (`durability.no_verified_backup`, `blocks`), listed while the `backup_age` alarm stands, at the backup policy's own age. Its fix is a step outside the company document (`fix.kind: external_step`): take a backup now with `crewlet backup` or from the dashboard, then schedule it to a place off the server ([Backups](backup.md)).
 
+## Access an agent asks for
+
+An agent that needs more access asks for it with `request_access`, naming one grant from a closed list: watching the engine's health, or a write permission of its own GitHub App (pull requests, contents, checks, issues). It reaches you as a decision in your Inbox, **Allow it** or **Not now**, with the agent's reason. **Allow it** opens the same preview as a fix here: the exact change to that agent's role, built by the engine for that agent alone, checked by the engine's dry run. Nothing is saved until you press **Apply**, and the question is answered only once the grant is saved. **Not now** answers at once and changes nothing. `GET /advisor/access?seat=<handle>&access=<grant>` returns the change for a script.
+
 ## Previewing and applying a change
 
 A change is one entity write: `entity` (`roles` or `units`), `id` (a seat's handle or a unit's id), `set` (the top-level fields to replace) and `summary`. To apply one:

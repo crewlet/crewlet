@@ -27,15 +27,15 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 ### Worklet and Doclet
 
-Twenty-three more, registered **only where the company runs Worklet or Doclet**
+Twenty-four more, registered **only where the company runs Worklet or Doclet**
 (`tracker.backend: worklet` / `knowledge.backend: doclet`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
-learns to distrust the whole catalogue. The seventeen below are the item, file and page
+learns to distrust the whole catalogue. The eighteen below are the item, file and page
 tools; the other six read the catalogue, the projects and the activity feed,
 and [Worklet](worklet.md#what-a-seat-can-do) lists the tracker's
-eighteen in full.
+nineteen in full.
 
 | Tool | Description |
 |------|-------------|
@@ -44,6 +44,7 @@ eighteen in full.
 | `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `status` says where it starts (default `todo`). With no `assignee` it goes to the project's default assignee, else to triage for the lead, and the answer's `assignee` says which. `ask` (with an optional `decision`) files it as a question to that person, in one record |
 | `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
+| `request_access` | Ask a person for one more kind of access from a closed list, as a decision on the work item that needs it; the person previews the exact change and applies it, or declines. |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's, as a re-route is |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |

@@ -94,6 +94,8 @@ var namedRoutes = []struct {
 	// WHAT THE COMPANY'S SETUP COSTS IT, each finding with its fix. The
 	// fixes are written through the /config entity routes, never here.
 	{method: "GET", pattern: "/advisor", what: "advisor"},
+	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
+	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

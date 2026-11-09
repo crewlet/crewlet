@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -61,4 +62,46 @@ func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
 		return advisor.Backup{Standing: true, Logs: logs}
 	}
 	return advisor.Backup{}
+}
+
+// AccessFixAnswer is `advisor_access`: the change that grants an agent one
+// access it asked for, built from the fleet's company, never applied here.
+type AccessFixAnswer struct {
+	Seat     string            `json:"seat"`
+	Access   advisor.AccessKey `json:"access"`
+	Revision string            `json:"revision"`
+	Fix      advisor.Fix       `json:"fix"`
+}
+
+// advisorAccess answers `advisor_access`: the grant change for `seat` and
+// `access`, read off the redacted document. A key the catalogue does not
+// name, a seat that holds it or cannot take it, or no such agent is refused
+// in its own words.
+func (s Sources) advisorAccess(ctx context.Context, p Params) (any, error) {
+	seat, key := strings.TrimSpace(p.String("seat")), advisor.AccessKey(strings.TrimSpace(p.String("access")))
+	if !key.Valid() {
+		return nil, badParams("access", string(key), accessKeyNames())
+	}
+	company, revision, err := s.Config.FleetCompany(ctx)
+	if err != nil {
+		return nil, revisionRefusal("advisor_access", err)
+	}
+	fix, err := advisor.AccessFix(company.Redact(), seat, key)
+	switch {
+	case errors.Is(err, advisor.ErrAccessHeld):
+		return nil, fmt.Errorf("%w: %s can already %s", ErrBadParams, seat, key.Does())
+	case errors.Is(err, advisor.ErrAccessNotTakable):
+		return nil, fmt.Errorf("%w: %s has nothing this access could be added to", ErrBadParams, seat)
+	case err != nil:
+		return nil, fmt.Errorf("%w: %s is not an agent seat of this company", ErrBadParams, seat)
+	}
+	return AccessFixAnswer{Seat: seat, Access: key, Revision: revision, Fix: fix}, nil
+}
+
+func accessKeyNames() []string {
+	out := []string{}
+	for _, k := range advisor.AccessKeys() {
+		out = append(out, string(k))
+	}
+	return out
 }

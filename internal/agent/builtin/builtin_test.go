@@ -279,7 +279,9 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.UpdateWorkItemTool: true,
 		builtin.CommentOnWorkTool:  true,
 		// A withdrawal posts its reason where the person asked reads it.
-		builtin.WithdrawAskTool:   true,
+		builtin.WithdrawAskTool: true,
+		// An access request posts a question the person it asks reads.
+		builtin.RequestAccessTool: true,
 		builtin.WritePageTool:     true,
 		builtin.SavePageTool:      true,
 		builtin.CommentOnPageTool: true,
