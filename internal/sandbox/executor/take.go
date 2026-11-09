@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -259,6 +261,11 @@ func (t *takenBody) Close() error {
 // file that a process its harness started, outliving it, writes as it packs.
 // An OpenCode export leaves out the message still being written, either way.
 //
+// EVERY PACK IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionPackStaging]),
+// named here for that pack alone: two reads of one job at once — a stop's and
+// a collection's — may each pack it, and two packs in one directory clear each
+// other's files and can move each other's archives.
+//
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the
 // run's environment, which no row keeps; a harness the seat's environment
@@ -270,8 +277,9 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	if !ok {
 		return sandbox.SessionArchive{}, nil, nil
 	}
+	pack := uuid.NewString()
 	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return carries.Pack(paths, session, working)
+		return carries.Pack(paths, session, paths.SessionPackStaging(pack), working)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, nil, err

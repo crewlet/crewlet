@@ -49,7 +49,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.ClaudeSkillsSettings(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
-		p.SessionPackStaging(), p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
+		p.SessionPackStaging("a-pack"), p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
 		p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
@@ -223,8 +223,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// and report their loads to an endpoint that is over.
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
 	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-		p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin()} {
+		p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()} {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}

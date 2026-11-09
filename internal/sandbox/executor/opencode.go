@@ -288,8 +288,8 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // Pack exports session now, as a run's script exports the session it worked in
 // once the run ends ([carrier], [openCodeCapture]) — through a private server of
 // its own (`--standalone`), since the run's server, with the address and the
-// password only its script held, may be gone: the same export, into its own
-// staging directory, its digest kept.
+// password only its script held, may be gone: the same export, into staged,
+// this pack's own staging directory, its digest kept.
 //
 // IT ENDS [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
 // session ([openCodeNotHeld]) — a run whose harness failed before it made one —
@@ -308,13 +308,13 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // database beside the run's live server. Whether the job may still be working
 // changes nothing of the export, which holds only the messages that settled
 // either way, so the pack reads nothing of it.
-func (OpenCode) Pack(paths Paths, session string, _ bool) string {
+func (OpenCode) Pack(paths Paths, session, staged string, _ bool) string {
 	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
-		openCodePack(paths, paths.SessionPackStaging(), "--standalone") +
+		openCodePack(paths, staged, "--standalone") +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
@@ -709,9 +709,9 @@ func openCodeCapture(paths Paths) string {
 // (`--server "$url"`), or for a pack made on demand, once the run's server may
 // be gone, a private one of its own (`--standalone`), as the run's script asks
 // the box's database before its server starts ([openCodeSessionGate]) — and
-// packing in the staging directory staged ([Paths.SessionPackStaging] for
-// such a pack). ONE PACK for both, so either is the same export of the same
-// session, and each keeps its digest.
+// packing in the staging directory staged (such a pack's own
+// [Paths.SessionPackStaging]). ONE PACK for both, so either is the same export
+// of the same session, and each keeps its digest.
 //
 // AN EXPORT CARRIES THE SESSION'S SETTLED MESSAGES AND NOTHING ELSE
 // (core/src/session/transfer.ts at 2.0.32 and 2.2.5): not a message still

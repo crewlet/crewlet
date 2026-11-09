@@ -3,6 +3,7 @@ package executor_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,7 +150,8 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	forgetCapture(t, b)
 	// WHAT A PACK ON DEMAND AND ANOTHER TAKER'S SAVE ARE STAGING as this one
 	// packs.
-	elsewhere := []string{p.SessionPackStaging() + "/capture", p.SessionSaveStaging(takerB) + "/capture"}
+	elsewhere := []string{p.SessionPackStaging("another-pack") + "/capture",
+		p.SessionSaveStaging(takerB) + "/capture"}
 	for _, staged := range elsewhere {
 		if err := b.WriteFile(t.Context(), staged, []byte("another pack's archive, half made")); err != nil {
 			t.Fatal(err)
@@ -440,8 +442,8 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 				if boxHas(t, b, pack.dest(p)) {
 					t.Errorf("the refused pack left an archive at %s", pack.dest(p))
 				}
-				if boxHas(t, b, pack.staging(p)) {
-					t.Errorf("the refused pack left its staging directory, %s", pack.staging(p))
+				if left := pack.staged(t, b); len(left) > 0 {
+					t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
 				}
 				if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
 					t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
@@ -467,20 +469,26 @@ func madeAndRemoved(f sessionFiles) string {
 // heldPacks are the packs made beside a harness that may still work, each held
 // to the rule of such a pack: a save, and a take of a job its box would not
 // end, which packs it on demand (sandbox.SessionTake.Pack) — each with the
-// path it moves its archive over and the directory it stages it in.
+// path it moves its archive over and what it left of the directory it stages
+// it in.
 var heldPacks = []struct {
-	name    string
-	make    func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
-	dest    func(p executor.Paths) string
-	staging func(p executor.Paths) string
+	name   string
+	make   func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
+	dest   func(p executor.Paths) string
+	staged func(t *testing.T, b sandbox.Sandbox) []string
 }{
 	{name: "a save",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
 			_, err := runner.PackSave(t.Context(), b, takerA)
 			return err
 		},
-		dest:    func(p executor.Paths) string { return p.SessionSave(takerA) },
-		staging: func(p executor.Paths) string { return p.SessionSaveStaging(takerA) }},
+		dest: func(p executor.Paths) string { return p.SessionSave(takerA) },
+		staged: func(t *testing.T, b sandbox.Sandbox) []string {
+			if staging := paths(b).SessionSaveStaging(takerA); boxHas(t, b, staging) {
+				return []string{staging}
+			}
+			return nil
+		}},
 	{name: "a take of a job still working",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
 			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
@@ -489,8 +497,21 @@ var heldPacks = []struct {
 			}
 			return err
 		},
-		dest:    func(p executor.Paths) string { return p.SessionCapture() },
-		staging: func(p executor.Paths) string { return p.SessionPackStaging() }},
+		dest:   func(p executor.Paths) string { return p.SessionCapture() },
+		staged: packStagingLeft},
+}
+
+// packStagingLeft is every staging directory a pack on demand left in box: each
+// is named for its pack alone (executor.Paths.SessionPackStaging), so it is
+// found by its pattern rather than named.
+func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
+	t.Helper()
+	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).WorkDir())+"/session-pack-staging.*; do "+
+		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
+	if err != nil {
+		t.Fatalf("asking the box for its packs' staging directories: %v", err)
+	}
+	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
 }
 
 // A PACK BESIDE A WORKING HARNESS PROVES THE SESSION'S OWN TRANSCRIPT WHATEVER
@@ -538,8 +559,8 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 			if boxHas(t, b, pack.dest(p)) {
 				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
 			}
-			if boxHas(t, b, pack.staging(p)) {
-				t.Errorf("the refused pack left its staging directory, %s", pack.staging(p))
+			if left := pack.staged(t, b); len(left) > 0 {
+				t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
 			}
 			if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
 				t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
@@ -792,8 +813,8 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 			if boxHas(t, b, pack.dest(p)) {
 				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
 			}
-			if boxHas(t, b, pack.staging(p)) {
-				t.Errorf("the refused pack left its staging directory, %s", pack.staging(p))
+			if left := pack.staged(t, b); len(left) > 0 {
+				t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
 			}
 			if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
 				t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
@@ -893,6 +914,88 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	}
 	if errB != nil {
 		t.Errorf("pack B, whose marker came after the task file was rewritten, was refused: %v", errB)
+	}
+}
+
+// TWO PACKS ON DEMAND OF ONE BOX AT ONCE BOTH HOLD, each staged in a directory
+// of its own. Two reads of one job at once — a stop's and a collection's — each
+// take its session, and each packs it now where the job left no archive or its
+// box would not end it. Here the first pack's tar, once it has packed, holds
+// until the second pack's has packed too, so the second pack starts — and
+// clears and fills its staging directory — while the first is still at work:
+// beside a harness that may still work and once it is gone alike, each pack
+// holds, each hands back a whole archive of the session, and neither leaves a
+// staging directory behind.
+//
+// Mutation: stage every pack on demand in one directory, and the second pack's
+// start clears the first's files — one moves the other's archive over the
+// job's capture as its own, and the other's move finds nothing to move — so one
+// of the two is refused.
+func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
+	t.Parallel()
+	for _, working := range []bool{true, false} {
+		name := "beside a harness that may still work"
+		if !working {
+			name = "once its harness is gone"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, "2.1.310")
+			_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			p := paths(b)
+			forgetCapture(t, b)
+			flags := filepath.Join(b.Home(), "two-at-once")
+			if err := os.MkdirAll(flags, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			first, second := flags+"/first-packed", flags+"/second-packed"
+			// THE FIRST TAR TO CLAIM IS THE FIRST PACK'S: it packs, says so, and
+			// holds — thirty seconds at most, and then fails, so an interleaving
+			// that did not happen fails the case — until the second pack's tar
+			// has packed and said so.
+			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+shQuote(flags+"/claimed")+
+				` 2> /dev/null; then "$tar" -czf "$@"; st=$?; : > `+shQuote(first)+`; i=0; while [ ! -e `+
+				shQuote(second)+` ] && [ "$i" -lt 300 ]; do `+shQuote(hostTool(t, "sleep"))+` 0.1; `+
+				`i=$((i + 1)); done; [ -e `+shQuote(second)+` ] || exit 3; exit "$st"; fi`+"\n"+
+				`"$tar" -czf "$@"; st=$?; : > `+shQuote(second)+`; exit "$st"`+"\n"))
+			type packed struct {
+				body io.ReadCloser
+				err  error
+			}
+			packs := make(chan packed, 2)
+			for range 2 {
+				go func() {
+					_, body, err := runner.PackCapture(t.Context(), b, working)
+					packs <- packed{body: body, err: err}
+				}()
+			}
+			results := []packed{<-packs, <-packs}
+			for _, got := range results {
+				if got.body != nil {
+					t.Cleanup(func() { _ = got.body.Close() })
+				}
+			}
+			for _, flag := range []string{first, second} {
+				if _, err := os.Stat(flag); err != nil {
+					t.Errorf("the packs never ran as the case has them: no %s", flag)
+				}
+			}
+			for _, got := range results {
+				switch {
+				case got.err != nil:
+					t.Errorf("a pack made beside another of the same box was refused: %v", got.err)
+				case got.body == nil:
+					t.Error("a pack made beside another of the same box handed back no archive")
+				default:
+					if _, ok := archiveMembers(t, got.body)[filesOf(ran.SessionID).transcript]; !ok {
+						t.Error("a pack made beside another of the same box handed back no transcript")
+					}
+				}
+			}
+			if left := packStagingLeft(t, b); len(left) > 0 {
+				t.Errorf("the packs left their staging directories: %s", strings.Join(left, ", "))
+			}
+		})
 	}
 }
 
@@ -1283,5 +1386,35 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	}
 	if got := boxFile(t, b, p.SessionDigests()); got != digests || got == "" {
 		t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
+	}
+}
+
+// THE CLEAR BEFORE EVERY RUN REMOVES EVERY PACK ON DEMAND'S STAGING DIRECTORY,
+// whichever read made it: each is named for its pack alone
+// (executor.Paths.SessionPackStaging), so the clear removes what matches their
+// pattern, and two that packs cut short left — their node stopped as they
+// packed — outlive no clear.
+//
+// Mutation: leave the packs' staging directories out of the clear, or quote
+// their pattern so it matches nothing, and they outlive it.
+func TestTheClearBeforeEveryRunRemovesEveryPacksStagingDirectory(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	p := paths(b)
+	cut := []string{p.SessionPackStaging("a-pack-cut-short"), p.SessionPackStaging("another-cut-short")}
+	for _, staged := range cut {
+		if err := b.WriteFile(t.Context(), staged+"/capture", []byte("part of a pack")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := packStagingLeft(t, b); len(got) != len(cut) {
+		t.Fatalf("the box holds %d packs' staging directories before the clear, want the %d the case left: %s",
+			len(got), len(cut), strings.Join(got, ", "))
+	}
+	if err := runner.ClearArtifacts(t.Context(), b); err != nil {
+		t.Fatalf("ClearArtifacts: %v", err)
+	}
+	if left := packStagingLeft(t, b); len(left) > 0 {
+		t.Errorf("the clear left packs' staging directories: %s", strings.Join(left, ", "))
 	}
 }

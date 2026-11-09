@@ -629,8 +629,8 @@ type packAt struct {
 	// staged is the directory the archive is made in, and dest the path it is
 	// moved over whole once it is made: the run's script's own pair
 	// ([Paths.SessionStaging], [Paths.SessionCapture]), a pack on demand's
-	// ([Paths.SessionPackStaging], the same capture), or a save's, its
-	// taker's own ([Paths.SessionSaveStaging], [Paths.SessionSave]).
+	// (its own [Paths.SessionPackStaging], the same capture), or a save's,
+	// its taker's own ([Paths.SessionSaveStaging], [Paths.SessionSave]).
 	staged, dest string
 
 	// working says the pack is made beside a harness that may still be
@@ -736,20 +736,20 @@ func claudePack(paths Paths, at packAt) string {
 //     than any write made before the walk set it, so the walk hides no write
 //     from a marker — not from this pack's, written after the walk, nor from
 //     that of another pack of the session running beside this one, as two
-//     takers' saves, or a save and the take of a job still working, may, each
-//     in a staging directory of its own. Set to the reference's time instead,
-//     a walk that ran late, its find held up on a busy box, would set a file
-//     the harness rewrote under the other pack's tar back behind that pack's
-//     marker, and that pack would keep the file torn. What another pack's
-//     walk sets after this pack's marker reads as written here, which costs
-//     this pack, never a torn file. Every earlier time is left as it is,
-//     which costs the session nothing, the harness's own retention sweep
-//     being held off ([claudeRetentionDays]). A find that compares whole
-//     seconds, as busybox's does, leaves a file stamped later than the
-//     reference within the reference's own second, which it never reads as
-//     newer than the marker either, the marker being written in that second
-//     or after it. A file the walk could not set is left in the future, where
-//     the checks below read it as written.
+//     takers' saves, a save and the take of a job still working, or two takes
+//     of one job at once may, each in a staging directory of its own. Set to
+//     the reference's time instead, a walk that ran late, its find held up on
+//     a busy box, would set a file the harness rewrote under the other pack's
+//     tar back behind that pack's marker, and that pack would keep the file
+//     torn. What another pack's walk sets after this pack's marker reads as
+//     written here, which costs this pack, never a torn file. Every earlier
+//     time is left as it is, which costs the session nothing, the harness's
+//     own retention sweep being held off ([claudeRetentionDays]). A find that
+//     compares whole seconds, as busybox's does, leaves a file stamped later
+//     than the reference within the reference's own second, which it never
+//     reads as newer than the marker either, the marker being written in that
+//     second or after it. A file the walk could not set is left in the
+//     future, where the checks below read it as written.
 //   - A MARKER, and then a wait until this box's own find reads a file written
 //     now as newer than it — busybox's find compares whole seconds (measured
 //     on 1.37.0: a file written 200 ms after the marker, in the same second,
@@ -1303,10 +1303,10 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into its own staging directory and over the job's capture, its digest kept —
-// ending [packNothing] where the harness wrote no transcript, and [packFailed]
-// where it did and no archive was made, its error stream saying why
-// ([Runner.PackCapture]).
+// into staged, this pack's own staging directory, and over the job's capture,
+// its digest kept — ending [packNothing] where the harness wrote no transcript,
+// and [packFailed] where it did and no archive was made, its error stream
+// saying why ([Runner.PackCapture]).
 //
 // HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
 // working says the job may still be working — one its box would not end, its
@@ -1316,9 +1316,9 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // that is over has no harness left to write under a pack, and the working
 // rule would cost it the wait for the box's clock, and refuse a file that a
 // process its harness started, outliving it, writes as it packs.
-func (ClaudeCode) Pack(paths Paths, session string, working bool) string {
+func (ClaudeCode) Pack(paths Paths, session, staged string, working bool) string {
 	return claudeOnDemand(paths, session,
-		packAt{staged: paths.SessionPackStaging(), dest: paths.SessionCapture(), working: working})
+		packAt{staged: staged, dest: paths.SessionCapture(), working: working})
 }
 
 // PackSave packs a save of session now, beside a harness that may still be
