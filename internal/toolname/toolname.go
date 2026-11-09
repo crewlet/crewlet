@@ -130,6 +130,10 @@ const (
 	CreateWorkItem = "create_work_item"
 )
 
+// WithdrawAsk withdraws a seat's own question or held call; here because the
+// access review (internal/accessreview), below the builtins, names it.
+const WithdrawAsk = "withdraw_ask"
+
 // WriteProject is the tracker's one project write a seat holds. The tracker
 // owns it, and it is here because internal/caveat, which the tracker imports,
 // words what a task filed to triage tells the model when its project's

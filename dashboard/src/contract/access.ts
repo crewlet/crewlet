@@ -409,12 +409,29 @@ interface AccessSeatPlan {
   step_up?: boolean;
 }
 
+/**
+ * One agent whose access the draft changes, by the closed change list it is
+ * told, with open work raised under its access now: it reviews that work once
+ * the draft is saved.
+ */
+interface AccessSeatReview {
+  handle: string;
+  /** Its open questions, what its executor waits on, and its work in progress or blocked. */
+  open: number;
+  /** The tracker stopped counting at its ceiling, so `open` is a floor. */
+  at_least?: boolean;
+  /** The change lines it will be told, at most twenty. */
+  changes: string[];
+}
+
 export interface AccessPlanAnswer {
   kind: string;
   revision: string;
   plans: AccessSeatPlan[];
   /** Saving this draft asks for a fresh step-up (D10). */
   step_up?: boolean;
+  /** Absent where the open work could not be counted. */
+  reviews?: AccessSeatReview[];
 }
 
 /** The control of one seat's lane an `access_not_offered` refusal is about. */

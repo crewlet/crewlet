@@ -170,6 +170,14 @@ A node's [alarms](../reference/alarms.md) wake the seats that may read the deplo
 - **Nobody sent it.** The wake names no sender and no actor, so the turn it starts is the seat's own work, as the engine's own notice on a work item is: no [requester ceiling](gitlet.md#reads-made-for-somebody-else) bounds what the seat reads in it, and `code_status` beside `fleet_health` answers on the seat's own grant.
 - **The outbox is bounded.** It holds 2048 transitions while the broker refuses them, retrying from two seconds and doubling to the alarm interval, and past that drops the oldest, counted on `crewlet.alarm.transitions.dropped`; `crewlet.alarm.transitions{change}` counts the ones the broker took.
 
+### Access review wakes
+
+A seat whose access changed, with open work waiting on a person, is asked for one review turn ([An agent whose access changed reviews its open work](agent-runtime.md#an-agent-whose-access-changed-reviews-its-open-work)). The node holding the seat publishes the request on `crewlet.notifications.inbound` as a delivery of source `access_review`, the alarms' route ([ADR-0111](../../adr/0111-an-agent-whose-access-changed-reviews-its-open-work-once.md)):
+
+- **The delivery is the record, and it can be made again.** What it says is derived from the company document, the seat access ledger, the access log and the seat's pending review in the coordination store, so a request the node did not live to publish is published by the seat's next holder, which checks when it takes the seat, and a publish the broker refused is retried from two minutes, doubling to fifteen. A write to the seat access ledger measures the seat it names too.
+- **One wake per change.** Its id is derived from the seat, the told record the change is measured from, the digest it is measured to and the instant the pending review first measured it, so a republish, or the same request from another node, collapses into the wake it already made, while the same change made again after a revert is a wake of its own. Every copy carries the told record's instant.
+- **One conversation per seat, and nobody sent it.** Reviews waiting together merge into one turn, the wake names no sender and no actor, and a review whose seat was already told the change (by any turn) is acked without one.
+
 ### A seat's mailbox exists before the seat is running
 
 A durable subscription **is** the mailbox, and it exists independently of whether anyone is consuming it. That is not a detail — publishing to a topic that no subscription covers **drops the event silently**, with nothing anywhere reporting a loss. On the shipped backend that is the broker's own rule rather than a convention the engine could soften: the agent and notification streams use interest retention, which keeps a message exactly while some durable consumer that has not acked it exists.

@@ -30,6 +30,7 @@ import { settled } from "~/test/settle.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
+import { engineFile } from "~/test/engineFiles.ts";
 
 // THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
 // sets `seam.twice` to stand a pane in that tells the screen of one answer
@@ -911,6 +912,47 @@ describe("the list", () => {
     );
     const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
     expect(said).toBe("Answered. Nothing else is waiting on you.");
+  });
+});
+
+describe("a question asked before its agent's access changed", () => {
+  // THE PERSON ANSWERS KNOWING THE AGENT MAY NOT BE ABLE TO ACT ON IT: the row
+  // and the reading pane say the question was asked before the agent's access
+  // changed, with the change, short. Mutation: drop the note and an approval
+  // the agent can no longer act on reads like any other.
+  test("its row and its pane say so, with the change", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = {
+      ...askItem(),
+      access_changed: {
+        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
+      },
+    };
+    mount({ answers: { decisions: decisionsOf(ask) } });
+    await settle();
+    const note =
+      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain(note);
+    expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);
+  });
+
+  // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
+  // is told only that the access changed.
+  test("a reader sent no change lines is told only that it changed", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Asked before this agent's access changed.");
+    expect(list.textContent).not.toContain("level");
+  });
+
+  test("a question asked under the access the agent holds now says nothing of it", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(document.body.textContent).not.toContain("access changed");
   });
 });
 
@@ -2305,6 +2347,49 @@ describe("the pane", () => {
       await waitFor(() => expect(sent).toHaveLength(1));
       expect(sent[0]).toEqual({ method: "POST", body: { answer: "once" } });
       expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // An operate call's reason, as the engine words it (`make ssh-held-words`),
+    // is one paragraph reading exactly as the agent wrote it, with no link,
+    // picture, heading, code or emphasis of its own.
+    test("an operate call's reason reads as the agent's words, with no Markdown of its own", async () => {
+      const held = engineFile<Record<string, { question: string; context: string }>>(
+        "internal/agent/builtin/testdata/ssh_operate_held.json",
+      ).markdown!;
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = {
+        ...heldRun({
+          server: "ssh",
+          tool: "ssh_operate",
+          raw: "ssh_operate",
+          fixed: true,
+          approvers: "ssh",
+        }),
+        question: held.question,
+        question_context: held.context,
+      };
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const said =
+        "# Approve [the release](https://evil.example/approve) ![status](https://evil.example/pixel.png) " +
+        "```rm -rf /``` <b>now</b> **urgent** for @founder on ENG-9, see https://evil.example/ok";
+      const reason = [...document.querySelectorAll(".crewlet-reading-pane__lead p")].find(
+        (p) => p.textContent === said,
+      );
+      expect(reason, "the reason is one paragraph of the agent's words").toBeTruthy();
+      expect(
+        reason!.querySelector("a, img, h1, h2, h3, h4, h5, h6, pre, code, strong, em, b"),
+      ).toBeNull();
+      const lead = document.querySelector(".crewlet-reading-pane__lead")!;
+      expect(lead.querySelector("img")).toBeNull();
+      expect(lead.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+      expect(lead.querySelectorAll("pre")).toHaveLength(1);
+      expect(lead.querySelector("pre")!.textContent).toBe("logrotate --force /etc/logrotate.conf");
     });
   });
 

@@ -332,6 +332,12 @@ func (h *HeldCall) called(who, whose string) string {
 // heldContinuation is [Asked.Continuation] for a held call.
 func (a Asked) heldContinuation(b provenance.Boundary) string {
 	var w strings.Builder
+	if a.Withdrawn {
+		w.WriteString("## You withdrew your call\n\n")
+		w.WriteString(a.Held.called("You", "your") + " " + a.withdrew(b) + "\n\n")
+		w.WriteString("The call was not made.\n\n" + withdrawnTail)
+		return w.String()
+	}
 	w.WriteString("## Your call was answered\n\n")
 	w.WriteString(a.Held.called("You", "your") + " " + a.Held.what(a.heldBy(b)) + "\n\n")
 	w.WriteString(a.Held.told(b) + "\n\n")
@@ -342,6 +348,14 @@ func (a Asked) heldContinuation(b provenance.Boundary) string {
 // heldReseed is [Asked.Reseed] for a held call.
 func (a Asked) heldReseed(b provenance.Boundary) string {
 	var w strings.Builder
+	if a.Withdrawn {
+		w.WriteString("## A run before you on this task called a tool that asks a person " +
+			"first, and your seat withdrew the call\n\n")
+		w.WriteString(a.Held.called("It", "its") + " " + a.withdrew(b) + "\n\n")
+		w.WriteString("The call was not made.\n\n")
+		w.WriteString(a.freshMachine("under your access as it stands now"))
+		return w.String()
+	}
 	w.WriteString("## A run before you on this task called a tool that asks a person first\n\n")
 	w.WriteString(a.Held.called("It", "its") + " " + a.Held.what(a.heldBy(b)) + "\n\n")
 	w.WriteString(a.Held.told(b) + "\n\n")

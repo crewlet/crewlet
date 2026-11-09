@@ -6011,6 +6011,17 @@ type AskedRun struct {
 	// with the answer's choice and the writes that make it at most once;
 	// nil for every other question (ADR-0077).
 	Held *HeldResume
+
+	// Withdrawn is whether the run's own seat gave the answer: it withdrew
+	// the question, or the held call (as Deny), with Answer its reason
+	// (ADR-0111). Derived from who answered, never carried apart from it.
+	Withdrawn bool
+}
+
+// WithdrawnBy reports an answer given by the run's own seat: an agent seat
+// answers no question but its own run's, and only to withdraw it.
+func WithdrawnBy(run PendingRun, by, byKind string) bool {
+	return by != "" && by == run.AgentHandle && byKind == string(iam.ActorAgent)
 }
 
 // askedRun is what run's recorded answer resumes it with: the words its seal
@@ -6030,7 +6041,8 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionRan(),
-		BoxKept: run.SandboxID != "",
-		Label:   answer.Label,
+		BoxKept:   run.SandboxID != "",
+		Label:     answer.Label,
+		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
 	}
 }

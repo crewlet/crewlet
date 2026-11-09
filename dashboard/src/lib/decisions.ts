@@ -31,9 +31,28 @@ export interface SeatCondition {
 }
 
 export type DecisionSubject =
-  | { kind: "ask"; at: string; ask: WorkAskRow }
-  | { kind: "run"; at: string; run: ExecutorRow }
+  | { kind: "ask"; at: string; ask: WorkAskRow; accessChanged?: string[] }
+  | { kind: "run"; at: string; run: ExecutorRow; accessChanged?: string[] }
   | { kind: "seat"; at?: string; seat: SeatCondition };
+
+/** How many change lines a note names before it counts the rest. */
+const NOTED_LINES = 1;
+
+/**
+ * The note on a question an agent asked before its access changed: the
+ * change, short, so a person answering it knows the agent may no longer be
+ * able to act on the answer. Undefined for a question asked under the access
+ * the agent holds now.
+ */
+export function accessNote(subject: DecisionSubject): string | undefined {
+  if (subject.kind === "seat" || subject.accessChanged === undefined) return undefined;
+  const lines = subject.accessChanged;
+  if (lines.length === 0) return "Asked before this agent's access changed.";
+  const shown = lines.slice(0, NOTED_LINES).join(" ");
+  const rest = lines.length - NOTED_LINES;
+  const more = rest > 0 ? ` (and ${rest} more ${rest === 1 ? "change" : "changes"})` : "";
+  return `Asked before this agent's access changed: ${shown}${more}`;
+}
 
 /**
  * The seats the engine stopped for a spent budget, each with the window that
@@ -60,8 +79,11 @@ export function decisionSubjects(
 ): DecisionSubject[] {
   const subjects: DecisionSubject[] = [];
   for (const item of answer?.items ?? []) {
-    if (item.kind === "ask" && item.ask) subjects.push({ kind: "ask", at: item.at, ask: item.ask });
-    if (item.kind === "run" && item.run) subjects.push({ kind: "run", at: item.at, run: item.run });
+    const accessChanged = item.access_changed?.lines;
+    if (item.kind === "ask" && item.ask)
+      subjects.push({ kind: "ask", at: item.at, ask: item.ask, accessChanged });
+    if (item.kind === "run" && item.run)
+      subjects.push({ kind: "run", at: item.at, run: item.run, accessChanged });
   }
   for (const seat of seats) subjects.push({ kind: "seat", at: seat.at, seat });
   subjects.sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0));

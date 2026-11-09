@@ -1800,6 +1800,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	SeatAccess
+	AccessReviews
 	Mailboxes
 	ObjectStores
 	TrashReaps

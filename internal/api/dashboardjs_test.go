@@ -2148,8 +2148,11 @@ const (
 	// card, a seat's Code tab, a work item's changes and the palette's
 	// repositories and code search locked as Worklet's are), merged on top of it,
 	// took it to 5680.1 KiB (5,816,420 bytes, +1,024, all script). The measured
-	// size's next KiB: 5681 KiB.
-	treeBudget = 5<<20 + 561<<10
+	// size's next KiB: 5681 KiB. The access change review's Inbox note and the
+	// access save's review callout, merged on top of it, took it to 5681.3 KiB
+	// (5,817,698 bytes, +1,104, all script). The measured size's next KiB:
+	// 5682 KiB.
+	treeBudget = 5<<20 + 562<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
