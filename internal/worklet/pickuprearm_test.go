@@ -18,80 +18,81 @@ import (
 func TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	ctx := t.Context()
 	fileFor(t, r, "w-1", "ana", worklet.StatusTodo, worklet.PriorityNormal)
 	parties := registry(t, "ana", "qa", "pm", "designer")
-	task := func() worklet.Task {
-		t.Helper()
-		detail, err := r.reader.Task(ctx, "w-1", worklet.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
-		if err != nil {
-			t.Fatalf("read w-1: %v", err)
-		}
-		return detail.Task
-	}
-	no, yes := false, true
-	comment := func(op, author string, kind worklet.AuthorKind, asks *bool, mentions ...string) func() {
+	// change writes one change to w-1 as author, its notification built as the
+	// write paths build it from the item before and after.
+	change := func(op, author string, kind worklet.AuthorKind, patch worklet.TaskPatch,
+		changeKind worklet.ChangeKind, after func(*worklet.Task), wake func(*worklet.Wake)) func() {
 		return func() {
 			t.Helper()
-			before := task()
-			c := worklet.Comment{ID: op, Task: "w-1", Author: author, AuthorKind: kind, Body: "noted",
-				Mentions: mentions, CreatedAt: wednesday}
-			wake := worklet.Wake{Kind: worklet.ChangeComment, Before: before, After: before, Comment: &c,
-				Mentions: mentions, Asks: asks}
-			if kind == worklet.AuthorAgent {
-				wake.MentionedAgents = mentions
+			detail, err := r.reader.Task(t.Context(), "w-1", worklet.DetailWants{},
+				statelog.Freshness{Level: statelog.ReadSession})
+			if err != nil {
+				t.Fatalf("read w-1: %v", err)
 			}
-			if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(ctx, op, "w-1", "ENG",
-				worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, wake.Notify(nil)); err != nil {
-				t.Fatalf("comment %s: %v", op, err)
+			w := worklet.Wake{Kind: changeKind, Before: detail.Task, After: detail.Task}
+			if after != nil {
+				after(&w.After)
+			}
+			if wake != nil {
+				wake(&w)
+			}
+			if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(t.Context(), op, "w-1", "ENG",
+				worklet.NoIfMatch, patch, changeKind, w.Notify(nil)); err != nil {
+				t.Fatalf("%s: %v", op, err)
 			}
 			r.drain()
 		}
 	}
-	watch := func() {
-		t.Helper()
-		before := task()
-		after := before
-		after.Watchers = append(slices.Clone(before.Watchers), "designer")
-		wake := worklet.Wake{Kind: worklet.ChangeWatchers, Before: before, After: after}.Notify(nil)
-		if _, err := r.writer.As("qa", worklet.AuthorAgent, worklet.Provenance{}).UpdateTask(ctx, "op-watch", "w-1",
-			"ENG", worklet.NoIfMatch, worklet.TaskPatch{Watch: &worklet.WatchIntent{Handle: "designer", Watch: true}},
-			worklet.ChangeWatchers, wake); err != nil {
-			t.Fatalf("watch: %v", err)
-		}
-		r.drain()
+	no, yes := false, true
+	comment := func(op, author string, kind worklet.AuthorKind, asks *bool, mentions ...string) func() {
+		c := worklet.Comment{ID: op, Task: "w-1", Author: author, AuthorKind: kind, Body: "noted",
+			Mentions: mentions, CreatedAt: wednesday}
+		return change(op, author, kind, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, nil,
+			func(w *worklet.Wake) {
+				w.Comment, w.Mentions, w.Asks = &c, mentions, asks
+				if kind == worklet.AuthorAgent {
+					w.MentionedAgents = mentions
+				}
+			})
 	}
-	start := func() {
-		t.Helper()
-		before := task()
-		after := before
-		after.Status, after.StatusGroup = worklet.StatusInProgress, worklet.StatusInProgress.Group()
-		wake := worklet.Wake{Kind: worklet.ChangeStatus, Before: before, After: after}.Notify(nil)
-		status := worklet.StatusInProgress
-		if _, err := r.writer.As("qa", worklet.AuthorAgent, worklet.Provenance{}).UpdateTask(ctx, "op-start", "w-1",
-			"ENG", worklet.NoIfMatch, worklet.TaskPatch{Status: &status}, worklet.ChangeStatus, wake); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		r.drain()
-	}
+	watch := change("op-watch", "qa", worklet.AuthorAgent,
+		worklet.TaskPatch{Watch: &worklet.WatchIntent{Handle: "designer", Watch: true}}, worklet.ChangeWatchers,
+		func(t *worklet.Task) { t.Watchers = append(slices.Clone(t.Watchers), "designer") }, nil)
+	started := worklet.StatusInProgress
+	start := change("op-start", "qa", worklet.AuthorAgent, worklet.TaskPatch{Status: &started},
+		worklet.ChangeStatus, func(t *worklet.Task) { t.Status, t.StatusGroup = started, started.Group() }, nil)
+	urgent := worklet.PriorityUrgent
+	prioritise := change("op-priority", "pm", worklet.AuthorHuman, worklet.TaskPatch{Priority: &urgent},
+		worklet.ChangeFields, func(t *worklet.Task) { t.Priority = urgent }, nil)
+	holder := "ana"
+	reassign := change("op-reassign", "qa", worklet.AuthorAgent, worklet.TaskPatch{Assignee: &holder},
+		worklet.ChangeAssignee, nil, nil)
+	// asRouted is a row whose wake is routing's own call, held only to the
+	// invariant: the key moves exactly when the holder is woken.
+	asRouted := (*bool)(nil)
 	for _, row := range []struct {
 		name   string
 		change func()
-		wakes  bool
+		wakes  *bool
 	}{
-		{"another agent's comment that asks nothing and names nobody", comment("c-1", "qa", worklet.AuthorAgent, &no), false},
-		{"another agent adds a watcher", watch, false},
-		{"another agent's comment that asks the holder", comment("c-2", "qa", worklet.AuthorAgent, &yes, "ana"), true},
-		{"the holder's own comment", comment("c-3", "ana", worklet.AuthorAgent, &no), false},
-		{"a person's comment that names nobody", comment("c-4", "pm", worklet.AuthorHuman, nil), true},
-		{"another agent moves the status", start, true},
+		{"another agent's comment that asks nothing and names nobody", comment("c-1", "qa", worklet.AuthorAgent, &no), &no},
+		{"another agent's comment that names the holder and asks nothing", comment("c-2", "qa", worklet.AuthorAgent, &no, "ana"), &no},
+		{"another agent adds a watcher", watch, &no},
+		{"another agent assigns the item to its holder again", reassign, asRouted},
+		{"another agent's comment that asks the holder", comment("c-3", "qa", worklet.AuthorAgent, &yes, "ana"), &yes},
+		{"the holder's own comment", comment("c-4", "ana", worklet.AuthorAgent, &no), &no},
+		{"a person's comment that names nobody", comment("c-5", "pm", worklet.AuthorHuman, nil), &yes},
+		{"a person raises the priority", prioritise, &yes},
+		{"another agent moves the status", start, &yes},
 	} {
 		before := r.readyWork("ana").Items[0].Moved
 		row.change()
 		woke := r.wokeByLast(parties, "ana")
 		moved := r.readyWork("ana").Items[0].Moved != before
-		if woke != row.wakes {
-			t.Errorf("%s woke the holder %v, want %v", row.name, woke, row.wakes)
+		if row.wakes != nil && woke != *row.wakes {
+			t.Errorf("%s woke the holder %v, want %v", row.name, woke, *row.wakes)
 		}
 		if moved != woke {
 			t.Errorf("%s moved the pickup's key %v while it woke the holder %v: the two must agree", row.name, moved, woke)

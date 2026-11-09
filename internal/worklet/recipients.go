@@ -516,6 +516,25 @@ func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
 	return routing.Route(candidates, registry, actor, Reason.WakesActor)
 }
 
+// noticeWakes is, for the handles a change's notice rows go to, which it woke
+// by the notifier's own rule, and whether it tells any of them without waking
+// them. Every handle reads employed: the runtime registry is not the record's,
+// so a seat it no longer holds can be marked woken where the parser falls back
+// to its lead instead.
+func noticeWakes(n *Notify, actor string) (map[string]bool, bool) {
+	candidates := Candidates(n)
+	woken := map[string]bool{}
+	for _, c := range routing.Waking(Heard(candidates, nil, actor)) {
+		woken[c.Handle] = true
+	}
+	for _, c := range candidates {
+		if c.Hears(actor, Reason.WakesActor) && !woken[c.Handle] {
+			return woken, true
+		}
+	}
+	return woken, false
+}
+
 // Heard is [Route] without its last step: everybody told, woken or not.
 func Heard(candidates []routing.Candidate[Reason], registry func(string) bool,
 	actor string) []routing.Candidate[Reason] {

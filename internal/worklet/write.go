@@ -2083,6 +2083,9 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		ActorAppsKept: len(w.recordedApps(notify)) > 0,
 		// THE NOTICE ROWS KEEP THE STATEMENT from this version on.
 		NoticeAsksKept: notify != nil && notify.Snapshot.CommentAsks != nil,
+		// AND WHETHER IT WOKE EACH RECIPIENT, from this version on, where it
+		// tells somebody it does not wake.
+		NoticeWokeKept: tellsWithoutWaking(notify, w.Actor),
 		OperatorID:     w.OperatorID,
 		TurnID:         w.TurnID,
 		Chain:          w.Chain,

@@ -50,7 +50,9 @@ import (
 // ([Snapshot.MentionedAgents]).
 // Version 6 is a notice row that keeps that statement
 // ([MutationRecord.NoticeAsksKept]).
-const RecordVersion = 6
+// Version 7 is a notice row that keeps whether the change woke its recipient
+// ([MutationRecord.NoticeWokeKept]).
+const RecordVersion = 7
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -59,6 +61,10 @@ const AppsKeptVersion = 4
 // NoticeAsksVersion is the version from which the applier keeps a comment
 // author's statement on its notice rows; every older record leaves it NULL.
 const NoticeAsksVersion = 6
+
+// NoticeWokeVersion is the version from which the applier keeps on a notice row
+// whether the change woke its recipient; every older record reads it as woken.
+const NoticeWokeVersion = 7
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -109,6 +115,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.CommentAsks", Since: 5, Path: []string{"notify", "snapshot", "comment_asks"}},
 	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
 	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
+	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -814,6 +821,12 @@ type MutationRecord struct {
 	// the rule leaves the column NULL on every node.
 	NoticeAsksKept bool `json:"notice_asks_kept,omitempty"`
 
+	// NoticeWokeKept marks a record that tells somebody it does not wake, whose
+	// notice rows keep whether each recipient was woken
+	// (`tracker_notifications.starts_turn`). Version 7, so a record older than
+	// the rule reads as waking every recipient on every node.
+	NoticeWokeKept bool `json:"notice_woke_kept,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -945,7 +958,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
-	"notice_asks_kept", "operator_id", "turn_id", "chain", "kind", "notify",
+	"notice_asks_kept", "notice_woke_kept", "operator_id", "turn_id", "chain", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

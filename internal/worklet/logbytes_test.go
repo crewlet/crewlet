@@ -1232,7 +1232,7 @@ func (referenceChart) UnitLead(string) string    { return referenceLead }
 const (
 	publishedCreateBytes  = 5_266
 	publishedCommentBytes = 3_037
-	publishedEditBytes    = 1_157
+	publishedEditBytes    = 1_181
 	publishedTurnBytes    = 1_608
 
 	// AT HALF THE TEXT, a 1 KiB description and a 512-byte comment. An edit
