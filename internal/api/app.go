@@ -1439,11 +1439,18 @@ func (o Options) missing() error {
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO (the maintenance status, the reanchor confirmation value and
-// the wake feeds' dead letters), because `/worklet/retention*` is the
-// deployment's surface whole, which is what the `retention` question already
-// declares: a map of which machine holds what, the value a reanchor must echo,
-// and the records no node could read, are not the company's working state.
+// THE READS TOO. The maintenance status and the reanchor confirmation value,
+// because `/worklet/retention*` is the deployment's surface whole, which is
+// what the `retention` question already declares: a map of which machine holds
+// what, and the value a reanchor must echo, are not the company's working
+// state. And the wake feeds' dead letters, for a reason of their own: each
+// entry is what a roll or a retired key left behind, a record no node could
+// read in the hour its feed handed it back, and the listing is read by the
+// operator who decides whether to give its wake up for good. It names each
+// record by the header its feed kept (where it was delivered from, its key and
+// operation id, why no node read it and what that node met), never its frame;
+// and those keys and details are a tracker, page, chat or code record's, so
+// the listing is admin's as the company-wide trail is.
 //
 // # A write asks for a recent proof of identity, and a read does not
 //
