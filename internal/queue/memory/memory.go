@@ -619,10 +619,11 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// A DEAD-LETTER SUBJECT KEEPS WHAT IS PUBLISHED TO IT, subscription or
 	// none: on the broker this twin stands for it is a stream kept by age
 	// rather than by interest, so a publish there is retained, and DeadLettersOn
-	// lists it. Dropped here, as every unsubscribed publish is, the twin
+	// lists it — with no header, since a publish carries none, and the event's
+	// bytes its body. Dropped here, as every unsubscribed publish is, the twin
 	// certified a dead letter that vanished where the broker keeps it.
 	if strings.HasPrefix(topic, topics.DeadLetterPrefix) {
-		q.broker.keepLocked(topic, wire)
+		q.broker.keepLocked(topic, nil, wire)
 	}
 
 	// Every subscription on this topic gets its own copy — that is what a
@@ -1317,8 +1318,9 @@ func (q *Queue) Waiting(_ context.Context, topic, group string) (queue.Waiting, 
 // space so the dashboard's crewlet.events.> stream cannot re-surface a poison
 // event as if it were live.
 //
-// DECODED FROM WHAT THE SUBJECT KEEPS, the bytes [Queue.DeadLettersOn] lists,
-// so a dead letter dropped or let go is gone from both readings at once.
+// DECODED FROM WHAT THE SUBJECT KEEPS, the bodies [Queue.DeadLetterFrame]
+// reads of the entries [Queue.DeadLettersOn] lists, so a dead letter dropped or
+// let go is gone from both readings at once.
 func (q *Queue) DeadLetters(topic, group string) []*events.Event {
 	q.broker.mu.Lock()
 	defer q.broker.mu.Unlock()

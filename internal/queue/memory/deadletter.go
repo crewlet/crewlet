@@ -19,38 +19,52 @@ import (
 // certify a caller that reads an entry the broker had already let go.
 const deadLetterRetention = 30 * 24 * time.Hour
 
-// letter is one entry a dead-letter subject holds.
+// letter is one entry a dead-letter subject holds: its header and its body
+// KEPT APART, as the broker this twin stands for carries the header as a
+// header of the message and the body as its payload — so a listing here hands
+// over the header alone and moves no body, exactly as the broker's does.
 type letter struct {
 	seq      uint64
 	storedAt time.Time
+	header   []byte
 	body     []byte
 }
 
-// KeepDeadLetter implements queue.EventQueue: body kept on subject until the
-// retention lets it go or DropDeadLetter removes it, in the broker rather than
-// in this client, so a peer lists it and a stop does not lose it.
-func (q *Queue) KeepDeadLetter(_ context.Context, subject string, body []byte) error {
+// KeepDeadLetter implements queue.EventQueue: body kept on subject under
+// header until the retention lets it go or DropDeadLetter removes it, in the
+// broker rather than in this client, so a peer lists it and a stop does not
+// lose it.
+func (q *Queue) KeepDeadLetter(_ context.Context, subject string, header, body []byte) error {
 	if err := deadLetterSubject(subject); err != nil {
 		return err
 	}
-	// THE SAME CEILING THE BROKER ENFORCES, for Publish's reason: an entry
-	// kept here and refused there is the one direction a twin must never be
-	// wrong in.
-	if len(body) > queue.MaxPayloadBytes {
-		return fmt.Errorf("memory: keep a dead letter on %s: %d bytes exceeds the %d-byte limit: %w",
-			subject, len(body), queue.MaxPayloadBytes, queue.ErrTooLarge)
+	if err := queue.LetterHeader(header); err != nil {
+		return fmt.Errorf("memory: keep a dead letter on %s: %w", subject, err)
+	}
+	// THE CONTRACT'S CEILING FOR A KEEP, the one the broker is held to as
+	// well ([queue.LetterFraming]): an entry kept here and refused there is
+	// the one direction a twin must never be wrong in.
+	if size := len(header) + len(body) + queue.LetterFraming; size > queue.MaxPayloadBytes {
+		return fmt.Errorf("memory: keep a dead letter on %s: %d bytes of header and body exceed "+
+			"the %d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
+			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)
 	}
 	q.broker.mu.Lock()
 	defer q.broker.mu.Unlock()
 	if err := q.reachLocked(); err != nil {
 		return err
 	}
-	q.broker.keepLocked(subject, slices.Clone(body))
+	q.broker.keepLocked(subject, slices.Clone(header), slices.Clone(body))
 	return nil
 }
 
 // DeadLettersOn implements queue.EventQueue: every entry subject holds, oldest
-// first, each with the instant its retention lets it go.
+// first, each with the instant its retention lets it go and the header it was
+// kept under — never its body.
+//
+// ALWAYS CURRENT, which the contract does not promise and a caller must not
+// lean on: the broker this twin stands for may answer from a copy behind it,
+// and the reader that has to know holds the listing to DeadLetterMarks.
 func (q *Queue) DeadLettersOn(_ context.Context, subject string) ([]queue.Kept, error) {
 	if err := deadLetterSubject(subject); err != nil {
 		return nil, err
@@ -67,9 +81,60 @@ func (q *Queue) DeadLettersOn(_ context.Context, subject string) ([]queue.Kept, 
 	out := make([]queue.Kept, 0, len(letters))
 	for _, l := range letters {
 		out = append(out, queue.Kept{Seq: l.seq, StoredAt: l.storedAt,
-			Expires: l.storedAt.Add(deadLetterRetention), Body: slices.Clone(l.body)})
+			Expires: l.storedAt.Add(deadLetterRetention), Header: slices.Clone(l.header)})
 	}
 	return out, nil
+}
+
+// DeadLetterFrame implements queue.EventQueue: the body the entry seq of
+// subject was kept with, not held where the entry is gone, and refused for a
+// seq that names an entry of another subject.
+func (q *Queue) DeadLetterFrame(_ context.Context, subject string, seq uint64) ([]byte, bool, error) {
+	if seq == 0 {
+		return nil, false, fmt.Errorf("memory: read a dead letter on %s: sequence 0 names no entry", subject)
+	}
+	if err := deadLetterSubject(subject); err != nil {
+		return nil, false, err
+	}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if err := q.reachLocked(); err != nil {
+		return nil, false, err
+	}
+	if other, held := q.broker.ownerLocked(seq); held && other != subject {
+		return nil, false, fmt.Errorf("memory: dead letter %d is on %s, not %s; nothing was read",
+			seq, other, subject)
+	}
+	for _, l := range q.broker.lettersLocked(subject) {
+		if l.seq == seq {
+			return slices.Clone(l.body), true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// DeadLetterMarks implements queue.EventQueue: how many entries every
+// dead-letter subject under under holds, and the last sequence the broker gave
+// any entry.
+func (q *Queue) DeadLetterMarks(_ context.Context, under string) (queue.Marks, error) {
+	if err := deadLetterSubject(under); err != nil {
+		return queue.Marks{}, err
+	}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if err := q.reachLocked(); err != nil {
+		return queue.Marks{}, err
+	}
+	marks := queue.Marks{Counts: map[string]uint64{}, Last: q.broker.lastLetter}
+	for _, subject := range slices.Collect(maps.Keys(q.broker.deadLetters)) {
+		if !strings.HasPrefix(subject, under+".") {
+			continue
+		}
+		if held := len(q.broker.lettersLocked(subject)); held > 0 {
+			marks.Counts[subject] = uint64(held)
+		}
+	}
+	return marks, nil
 }
 
 // DropDeadLetter implements queue.EventQueue: the entry seq removed from
@@ -87,13 +152,11 @@ func (q *Queue) DropDeadLetter(_ context.Context, subject string, seq uint64) er
 	if err := q.reachLocked(); err != nil {
 		return err
 	}
-	named := func(l letter) bool { return l.seq == seq }
-	for _, other := range slices.Collect(maps.Keys(q.broker.deadLetters)) {
-		if other != subject && slices.ContainsFunc(q.broker.lettersLocked(other), named) {
-			return fmt.Errorf("memory: dead letter %d is on %s, not %s; nothing was dropped",
-				seq, other, subject)
-		}
+	if other, held := q.broker.ownerLocked(seq); held && other != subject {
+		return fmt.Errorf("memory: dead letter %d is on %s, not %s; nothing was dropped",
+			seq, other, subject)
 	}
+	named := func(l letter) bool { return l.seq == seq }
 	if kept := slices.DeleteFunc(q.broker.lettersLocked(subject), named); len(kept) > 0 {
 		q.broker.deadLetters[subject] = kept
 	} else {
@@ -116,12 +179,12 @@ func (q *Queue) reachLocked() error {
 	return nil
 }
 
-// keepLocked appends body to subject under the next sequence, stamped on the
-// broker's clock.
-func (b *Broker) keepLocked(subject string, body []byte) {
+// keepLocked appends body to subject under header and the next sequence,
+// stamped on the broker's clock.
+func (b *Broker) keepLocked(subject string, header, body []byte) {
 	b.lastLetter++
 	b.deadLetters[subject] = append(b.lettersLocked(subject),
-		letter{seq: b.lastLetter, storedAt: b.now(), body: body})
+		letter{seq: b.lastLetter, storedAt: b.now(), header: header, body: body})
 }
 
 // lettersLocked is what subject holds now: the entries the retention has let
@@ -137,6 +200,17 @@ func (b *Broker) lettersLocked(subject string) []letter {
 	}
 	b.deadLetters[subject] = kept
 	return kept
+}
+
+// ownerLocked is the subject whose entry seq is, and whether any subject still
+// holds it.
+func (b *Broker) ownerLocked(seq uint64) (string, bool) {
+	for _, subject := range slices.Collect(maps.Keys(b.deadLetters)) {
+		if slices.ContainsFunc(b.lettersLocked(subject), func(l letter) bool { return l.seq == seq }) {
+			return subject, true
+		}
+	}
+	return "", false
 }
 
 // deadLetterSubject reports why subject cannot hold a dead letter, or nil when

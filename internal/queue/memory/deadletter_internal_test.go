@@ -49,11 +49,11 @@ func TestADeadLetterPastTheRetentionIsGone(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	subject := topics.DeadLetter("changefeed.work", "crewlet-tracker-feed")
-	if err := q.KeepDeadLetter(ctx, subject, []byte("old")); err != nil {
+	if err := q.KeepDeadLetter(ctx, subject, []byte("old"), []byte("old frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	clk.step(deadLetterRetention - time.Second)
-	if err := q.KeepDeadLetter(ctx, subject, []byte("young")); err != nil {
+	if err := q.KeepDeadLetter(ctx, subject, []byte("young"), []byte("young frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	kept, err := q.DeadLettersOn(ctx, subject)
@@ -64,10 +64,22 @@ func TestADeadLetterPastTheRetentionIsGone(t *testing.T) {
 		t.Errorf("the old entry expires at %v, want %v", kept[0].Expires, want)
 	}
 
+	old := kept[0].Seq
 	clk.step(time.Second)
 	kept, err = q.DeadLettersOn(ctx, subject)
-	if err != nil || len(kept) != 1 || string(kept[0].Body) != "young" {
+	if err != nil || len(kept) != 1 || string(kept[0].Header) != "young" {
 		t.Fatalf("at the old entry's retention the subject lists %d entries (%v), want the young one alone",
 			len(kept), err)
+	}
+	// AND EVERY OTHER READING SAYS SO: the marks count the young entry
+	// alone, and the old one's frame is no longer held.
+	marks, err := q.DeadLetterMarks(ctx, topics.DeadLettersUnder("changefeed"))
+	if err != nil || marks.Counts[subject] != 1 {
+		t.Errorf("at the old entry's retention the marks count %v (%v), want the young entry alone",
+			marks.Counts, err)
+	}
+	if frame, held, err := q.DeadLetterFrame(ctx, subject, old); err != nil || held {
+		t.Errorf("at its retention the old entry's frame reads %q, held %v (%v): want it gone",
+			frame, held, err)
 	}
 }

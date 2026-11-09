@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -155,7 +157,7 @@ const DeadLetterAge = time.Hour
 // letter rather than keeping it for a build or a keyring that cannot help.
 var ErrForeignFrame = errors.New("changefeed: the frame is not one this fleet wrote")
 
-// DeadLetterVersion is the version of the [DeadLetter] entry this build
+// DeadLetterVersion is the version of the [DeadLetter] header this build
 // writes, and the newest it reads.
 const DeadLetterVersion = 1
 
@@ -165,26 +167,41 @@ const DeadLetterVersion = 1
 // A QUARTER KIBIBYTE, because the header has to stay inside what a stored
 // record keeps beside its payload: a record at its log's ceiling
 // (statelog.MaxTransportRecordBytes, the transport's eight mebibytes less four
-// kibibytes) is a frame of that plus its seal, and the entry carries the frame
-// whole, so its header, the newline and the broker's own header for the
-// expected stream all share the 3.7 KiB left of the transport's ceiling. Every
-// other field is a name, a number or an instant; the detail is an error's own
-// words, whose first quarter kibibyte names its cause, and escaped by JSON at
-// the worst (every byte a control character, six bytes each) it is a
-// kibibyte and a half — so the header stays inside the room for any record a
+// kibibytes) is a frame of that plus its seal, under three hundred bytes, and
+// the entry is that frame whole, so its header and what the transport frames
+// it with ([queue.LetterFraming]) share the 3.7 KiB left of the transport's
+// ceiling. Every other field is a name, a number or an instant; the detail is
+// an error's own words, whose first quarter kibibyte names its cause.
+//
+// THE WORST CASE IS A DETAIL OF CONTROL CHARACTERS: the header is ASCII
+// ([EncodeDeadLetter]), so every byte outside it is escaped, and the costliest
+// escape per byte the detail holds is a control character's — or a DEL, or a
+// byte that is not UTF-8 — at six bytes each, `\u001b`. A rune past the ASCII
+// costs less for each of its bytes: two bytes are one escape of six, three
+// bytes one of six, and four bytes — a rune above U+FFFF — a surrogate pair of
+// two escapes, twelve bytes, three for each. So the detail is a kibibyte and a
+// half at the worst, and the header stays inside the room for any record a
 // log admits.
 const deadLetterDetailBytes = 256
 
-// DeadLetter is one record a feed stopped handing back ([DeadLetterAge]): what
-// it was, why no node read it, and the record itself.
+// DeadLetter is what a feed records of one record it stopped handing back
+// ([DeadLetterAge]): what it was and why no node read it — the HEADER of the
+// entry it keeps, which the queue keeps beside the record's frame
+// ([queue.EventQueue.KeepDeadLetter]) and lists without it.
 //
-// SELF-CONTAINED: the frame the broker delivered rides in the entry
-// ([DeadLetter.Frame]), so a replay re-reads the record without its log —
-// which trims it on its own schedule, and could have trimmed it before the
-// node able to read it starts — and through the same verification a delivery
-// passes ([Records.Reopen]), never trusting what the node that gave up made of
-// it. It is kept for as long as every dead letter is (`CREWLET_DLQ`, the event
-// stream's `stream.event_retention_hours`), and then it expires.
+// SELF-CONTAINED: the entry's body is the frame the broker delivered, so a
+// replay re-reads the record without its log — which trims it on its own
+// schedule, and could have trimmed it before the node able to read it starts —
+// and through the same verification a delivery passes ([Records.Reopen]),
+// never trusting what the node that gave up made of it. It is kept for as long
+// as every dead letter is (`CREWLET_DLQ`, the event stream's
+// `stream.event_retention_hours`), and then it expires.
+//
+// THE FRAME IS NOT A FIELD: everything that reads an entry's header — the
+// alarm's reading on every beat of every data node, an operator's listing, a
+// discard looking for its entry — reads it without the frame, and only the
+// replay, which acts on the record, reads the frame
+// ([queue.EventQueue.DeadLetterFrame]).
 type DeadLetter struct {
 	V int `json:"v"`
 
@@ -215,10 +232,6 @@ type DeadLetter struct {
 	StoredAt       time.Time `json:"stored_at"`
 	Delivered      uint64    `json:"delivered"`
 	DeadLetteredAt time.Time `json:"dead_lettered_at"`
-
-	// Frame is the record's bytes exactly as the broker delivered them:
-	// carried after the header, never inside it ([EncodeDeadLetter]).
-	Frame []byte `json:"-"`
 }
 
 // at is where the record was delivered from, as [Records.Reopen] is told it:
@@ -229,38 +242,77 @@ func (d DeadLetter) at() Record {
 		Delivered: d.Delivered}
 }
 
-// EncodeDeadLetter is d as an entry's bytes: its header as one line of JSON,
-// then the frame, raw.
+// EncodeDeadLetter is d as the header its entry is kept under: one line of
+// compact JSON in printable ASCII ([queue.LetterHeader]), which the queue keeps
+// beside the frame and every listing answers.
 //
-// THE FRAME IS NOT A JSON FIELD, because JSON would carry it as base64, four
-// bytes for every three, and the tracker's and the code log's records may be
-// as large as the transport carries — so a record at its log's ceiling could
-// never be kept, and would circle at the head of its consumer for ever. Raw
-// after the header it costs the header alone ([deadLetterDetailBytes]). The
-// header is compact JSON, which escapes every newline inside a string, so the
-// first newline is the one that ends it.
+// ASCII, because the JetStream backend carries the header as a header of the
+// message, `Crewlet-Dead-Letter`, and a NATS header's value is one line of
+// ASCII (internal/queue's LetterHeader has the transport's reason). Compact
+// JSON already escapes every control character, so no carriage return or line
+// feed reaches the line; every rune past the ASCII, and the one character
+// below it JSON leaves bare, DEL, is written as its JSON escape too —
+// `é` — and a rune above U+FFFF as its UTF-16 SURROGATE PAIR, two escapes,
+// `😀`, which is the only spelling JSON has for one: a single `\u`
+// escape names four hex digits, so `ὠ0` would be read back as U+1F60 and a
+// stray `0`. JSON reads the escapes back as the runes they spell
+// ([DecodeDeadLetter]), so a header carries any text it carried before, at the
+// cost [deadLetterDetailBytes] bounds.
+//
+// UNESCAPED `<`, `>` AND `&`, so a subject or a detail holding them costs its
+// own byte rather than six.
+//
+// NOT THE FRAME, which the queue keeps as the entry's body, raw: carried in
+// the header — or inside JSON at all, as base64, four bytes for every three —
+// a record at its log's ceiling could never be kept, and would circle at the
+// head of its consumer for ever.
 func EncodeDeadLetter(d DeadLetter) ([]byte, error) {
 	d.V = DeadLetterVersion
 	d.Detail = textcut.Within(d.Detail, deadLetterDetailBytes)
-	var header bytes.Buffer
-	enc := json.NewEncoder(&header)
-	// UNESCAPED, so a subject or a detail holding `<`, `>` or `&` costs its
-	// own byte rather than six.
+	var line bytes.Buffer
+	enc := json.NewEncoder(&line)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(d); err != nil {
 		return nil, fmt.Errorf("changefeed: encode the dead letter of %s@%d: %w", d.Stream, d.Seq, err)
 	}
-	// Encode ends the line with the newline the frame follows.
-	return append(header.Bytes(), d.Frame...), nil
+	// Encode ends the document with a newline, which no header holds.
+	return asciiOnly(bytes.TrimSuffix(line.Bytes(), []byte{'\n'})), nil
 }
 
-// DecodeDeadLetter reads an entry's bytes back, refusing one a newer build
+// asciiOnly is compact JSON with every byte outside printable ASCII written as
+// the JSON escape of the rune it begins ([EncodeDeadLetter]): only a string
+// can hold such a byte, and an escape is what JSON reads back as the rune.
+func asciiOnly(doc []byte) []byte {
+	out := make([]byte, 0, len(doc))
+	for len(doc) > 0 {
+		if b := doc[0]; b >= ' ' && b <= '~' {
+			out = append(out, b)
+			doc = doc[1:]
+			continue
+		}
+		// encoding/json writes valid UTF-8 — a byte that is not is already
+		// `�` — so this is a whole rune; one that is not decodes as
+		// the replacement rune, which is what JSON would have written.
+		r, size := utf8.DecodeRune(doc)
+		doc = doc[size:]
+		if r > 0xffff {
+			hi, lo := utf16.EncodeRune(r)
+			out = fmt.Appendf(out, `\u%04x\u%04x`, hi, lo)
+			continue
+		}
+		out = fmt.Appendf(out, `\u%04x`, r)
+	}
+	return out
+}
+
+// DecodeDeadLetter reads an entry's header back, refusing one a newer build
 // wrote — whose header this build cannot be sure it reads whole — and bytes
-// that are not an entry.
-func DecodeDeadLetter(body []byte) (DeadLetter, error) {
-	header, frame, ok := bytes.Cut(body, []byte{'\n'})
-	if !ok {
-		return DeadLetter{}, errors.New("changefeed: the entry has no header line, so it is no dead letter")
+// that are not a header: an entry a subscription's backend kept, whose header
+// is empty, among them.
+func DecodeDeadLetter(header []byte) (DeadLetter, error) {
+	if len(header) == 0 {
+		return DeadLetter{}, errors.New("changefeed: the entry was kept with no header, so it is " +
+			"no dead letter of a feed")
 	}
 	var version struct {
 		V int `json:"v"`
@@ -279,9 +331,12 @@ func DecodeDeadLetter(body []byte) (DeadLetter, error) {
 	if err := json.Unmarshal(header, &d); err != nil {
 		return DeadLetter{}, fmt.Errorf("changefeed: read a dead letter's header: %w", err)
 	}
-	d.Frame = frame
 	return d, nil
 }
+
+// deadLetterHead is the topic every feed's dead letters are kept under:
+// [DeadLetterTopic]'s first segment, and the head of [DeadLettersUnder].
+const deadLetterHead = "changefeed"
 
 // DeadLetterTopic is the topic half of a feed's dead-letter subject: its
 // source's name under `changefeed.`.
@@ -292,7 +347,7 @@ func DecodeDeadLetter(body []byte) (DeadLetter, error) {
 // head an operator greps names the estate whose wake it is — the feed's
 // [Source.Name], `work`, `page`, `chat` or `code`, the source column every
 // published wake carries.
-func DeadLetterTopic(src Source) string { return "changefeed." + src.Name }
+func DeadLetterTopic(src Source) string { return deadLetterHead + "." + src.Name }
 
 // DeadLetterSubject is where a feed keeps what it dead-letters, and where its
 // start replays them from: [topics.DeadLetter] of its [DeadLetterTopic] and its
@@ -302,3 +357,9 @@ func DeadLetterTopic(src Source) string { return "changefeed." + src.Name }
 func DeadLetterSubject(src Source) string {
 	return topics.DeadLetter(DeadLetterTopic(src), src.Group)
 }
+
+// DeadLettersUnder is the subtree every feed's dead-letter subject lies under
+// ([topics.DeadLettersUnder] of the feeds' head): what the alarm's reading
+// counts on every beat ([queue.EventQueue.DeadLetterMarks]) to tell whether any
+// feed's entries moved, in one request whatever they hold.
+func DeadLettersUnder() string { return topics.DeadLettersUnder(deadLetterHead) }
