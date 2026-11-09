@@ -540,6 +540,12 @@ changes those settings (the seat's sandbox and the company's, or its models
 and the company's), which lifts it as the engine. If the failure still holds,
 the seat pauses again on its second time
 ([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)).
+A conversation whose context does not fit is held rather than the seat: when a
+run runs out of context after the conversation's previous run did, the second
+time on a fresh session, the engine stops starting turns on that conversation
+(`conversation_hold` in the coordination store) while the seat's other
+conversations go on. Its wakes are recorded as skipped. A person writing on the
+conversation lifts the hold and runs, and so does a change of the seat's models.
 Any other failure is retried on a backoff that doubles from one second to
 thirty, each wait spread by a fifth either way.
 
