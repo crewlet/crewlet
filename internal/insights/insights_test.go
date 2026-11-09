@@ -258,7 +258,7 @@ func TestARecordsInstantIsItsISOWeek(t *testing.T) {
 
 // A RECORD IS SEALED: it has no exported field, so outside this package a
 // record is one [insights.Records] made or the zero record, which fails Valid,
-// and decoding one from JSON leaves it the zero record too.
+// and it cannot be decoded from JSON at all.
 func TestARecordBuiltOutsideThePackageFailsValid(t *testing.T) {
 	t.Parallel()
 	for field := range reflect.TypeFor[insights.Record]().Fields() {
@@ -269,11 +269,8 @@ func TestARecordBuiltOutsideThePackageFailsValid(t *testing.T) {
 	if err := (insights.Record{}).Valid(); err == nil {
 		t.Error("the zero record passed Valid")
 	}
-	var decoded insights.Record
-	forged := `{"schema":1,"class":"wake.noop_share","week":"2030-W02","version":"main",` +
-		`"facts":{"share":"75+","seats":"4+"}}`
-	if err := json.Unmarshal([]byte(forged), &decoded); err == nil && decoded.Valid() == nil {
-		t.Error("a record decoded from JSON passed Valid")
+	if _, decodes := any(&insights.Record{}).(json.Unmarshaler); decodes {
+		t.Error("Record decodes from JSON, so a forged body could become one")
 	}
 }
 
