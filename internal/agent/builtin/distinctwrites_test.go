@@ -49,7 +49,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 		trk := newFakeTracker()
 		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 		for _, body := range []string{"started on it", "done, see the PR"} {
-			if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+			if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 				"item": "ENG-1", "body": body,
 			}); got.Failed {
 				t.Fatalf("comment %q failed: %s", body, got.Output)
@@ -197,7 +197,7 @@ func TestAWriteMadeAgainAfterADifferentOneIsANewOperation(t *testing.T) {
 		trk := newFakeTracker()
 		surface := workSurface(t, trk, builtin.CommentOnWorkTool)
 		for _, body := range []string{"blocked on review", "unblocked", "blocked on review"} {
-			executeWork(t, surface, builtin.CommentOnWorkTool, map[string]any{
+			executeWork(t, surface, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 				"item": "ENG-1", "body": body,
 			})
 		}

@@ -25,6 +25,8 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 	task := worklet.Task{Assignee: "backend-engineer"}
 	agent := Actor{Handle: "qa", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	person := Actor{Handle: "miles", Kind: worklet.AuthorHuman}
+	// asking is the agent whose comment says it asks; its handle marks it.
+	asking := Actor{Handle: "pm", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	const (
 		quiet = iota
 		notWoken
@@ -47,9 +49,13 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 		"an answer to a question":         {task, agent, worklet.Comment{Answers: &question}, nil, quiet, nil},
 		"an answer naming its choice":     {task, person, worklet.Comment{Answers: &question, Choice: "yes"}, nil, quiet, nil},
 		"a question":                      {task, agent, worklet.Comment{Ask: "backend-engineer"}, nil, quiet, nil},
-		"a remark that mentions":          {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
-		"the assignee's own remark":       {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}, worklet.Comment{}, nil, quiet, nil},
-		"a task nobody holds":             {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
+		"a remark that mentions":          {task, person, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
+		"an agent's mention that asks":    {task, asking, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
+		"an agent's mention asking nothing": {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}},
+			nil, notWoken, nil},
+		"the assignee's own remark": {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent,
+			WrittenFor: types.ForTurn(nil)}, worklet.Comment{}, nil, quiet, nil},
+		"a task nobody holds": {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -59,7 +65,8 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 				Snapshot: worklet.Snapshot{
 					Assignee: c.task.Assignee, CommentAuthorKind: c.actor.Kind,
 					CommentAsk: comment.Ask, ThreadParticipants: c.thread,
-					ThreadOwing: c.owing,
+					ThreadOwing: c.owing, CommentAsks: statedOf(c.actor, asking),
+					MentionedAgents: comment.Mentions,
 				}}
 			got := unaddressedCaveat(c.task, c.actor, &comment, notify)
 			switch {
@@ -79,4 +86,13 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// statedOf is an agent's statement of whether its comment asks, true for asking.
+func statedOf(actor, asking Actor) *bool {
+	if actor.Kind != worklet.AuthorAgent {
+		return nil
+	}
+	asks := actor.Handle == asking.Handle
+	return &asks
 }

@@ -317,8 +317,9 @@ const (
 	ReasonAnswer Reason = "answer"
 
 	// ReasonNamed is an AGENT'S message that names this recipient and asks
-	// nothing ([Routing.Asks]): it wakes, and obliges no answer, so an
-	// acknowledgement is not answered back (ADR-0113).
+	// nothing ([Routing.Asks]). An earlier build woke it under this reason;
+	// this one names nobody under it, so the mention is a reference
+	// (ADR-0113), and it stays valid for the records already written.
 	ReasonNamed Reason = "named"
 
 	// ReasonOwing is a reply in a thread where this recipient was asked

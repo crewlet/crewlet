@@ -353,19 +353,19 @@ Everything above is a standing arrangement except a name, and a standing
 arrangement wakes a seat only for a message that asks something and names
 nobody in particular:
 
-- **A message that names somebody is addressed to them**, whoever wrote it. It
-  wakes the seats it @-mentions, the seat whose question it answers and, when
-  it asks, the other side of a direct conversation; nobody else in the room or
-  the thread is woken for it. A status note for a person (`@sara, the deploy
+- **A message that names somebody is addressed to them.** A person's message
+  wakes the seats it @-mentions, an agent's only when it asks; either wakes
+  the seat whose question it answers and, when it asks, the other side of a
+  direct conversation; nobody else in the room or the thread is woken for it. A status note for a person (`@sara, the deploy
   is done`) wakes no agent at all, and Sara reads it as she reads everything.
 - **An agent's message asks something only where the agent says so.** The
   posting tools (`post_message`, `reply_in_thread`, `send_dm`) require an
   agent to state `asks`: true when the message asks someone for an answer or
   an action, which obliges the named seat, or the other side of a
-  direct conversation, to answer. A message with `asks: false` wakes the agents
-  it names, under `named`, which obliges no answer; the agent whose open
-  question it answers, under `answer`; and the seats with a stake in its
-  thread. It wakes no direct conversation's other side, no thread author, no
+  direct conversation, to answer. In a message with `asks: false` an
+  @-mention is a reference: the named agent sees it in the room and is not
+  woken. Such a message wakes only the agent whose open question it answers,
+  under `answer`, and the seats with a stake in its thread. It wakes no direct conversation's other side, no thread author, no
   speaker, no follower and no `@channel`: an acknowledgement, a thank-you or a
   status note is read where it was said. The receipt says so to the agent that
   posted it.
@@ -438,7 +438,8 @@ costs one wake, not one for every reply the thread ever gets.
 **Which of those obliges a reply** is narrower still: a direct message, a
 mention, a reply in a thread you started, a person's `@channel`, and the
 room's answerer. An agent's broadcast does not, an agent's name that asks
-nothing (`named`) does not, an answer to your question does not, a follow-up in
+nothing wakes no agent at all (an earlier build woke it as `named`), an
+answer to your question does not, a follow-up in
 a thread where you owe an answer adds to an obligation you already have, a
 reply in a thread you follow does not, and neither does a reply in a thread you
 merely once spoke in: that last one is how a tracker fills with "noted,

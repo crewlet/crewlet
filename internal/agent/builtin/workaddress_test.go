@@ -92,7 +92,7 @@ func TestEveryReceiptNamesAKeysDuplicateByItsID(t *testing.T) {
 		removed bool
 	}{
 		{builtin.UpdateWorkItemTool, map[string]any{"status": "in_progress"}, false},
-		{builtin.CommentOnWorkTool, map[string]any{"body": "is this the one?"}, false},
+		{builtin.CommentOnWorkTool, map[string]any{"asks": false, "body": "is this the one?"}, false},
 		{worklet.MergeWorkItemTool, map[string]any{"into": "ENG-2"}, false},
 		{worklet.RemoveWorkItemTool, map[string]any{}, false},
 		{worklet.RestoreWorkItemTool, map[string]any{}, true},
@@ -208,7 +208,7 @@ func TestAnUnknownWriteOnAKeysDuplicateSendsTheCallerToItsID(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string]map[string]any{
 		builtin.UpdateWorkItemTool:  {"item": "dup", "status": "done"},
-		builtin.CommentOnWorkTool:   {"item": "dup", "body": "done, see the PR"},
+		builtin.CommentOnWorkTool:   {"asks": false, "item": "dup", "body": "done, see the PR"},
 		worklet.MergeWorkItemTool:   {"item": "dup", "into": "ENG-2"},
 		worklet.MoveWorkItemTool:    {"item": "dup", "project": "OPS"},
 		worklet.RemoveWorkItemTool:  {"item": "dup"},

@@ -885,8 +885,12 @@ func (t *commentOnPage) Name() string { return CommentOnPageTool }
 
 func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
-		"that it has gone stale. Anyone you @-mention by handle is woken; " +
-		"people watching the page are told. If the answer is a change to the " +
+		"that it has gone stale. With `asks: true`, anyone you @-mention by " +
+		"handle is woken, and so are you by every later reply in its thread " +
+		"until a seat you named answers it; with `asks: false` an @-mention is " +
+		"a reference, and the comment wakes only agents with an open ask in " +
+		"its thread, and answers those asks. People watching the page are " +
+		"told. If the answer is a change to the " +
 		"page, make the change with " + SavePageTool + " rather than describing it here. " +
 		"Pass `edit` with the id of a comment YOU wrote to replace what it " +
 		"says instead of adding another."
@@ -903,8 +907,9 @@ func (t *commentOnPage) Parameters() map[string]any {
 			"body": map[string]any{
 				"type": "string",
 				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle to reach them specifically.",
+					"colleague by handle, with `asks: true`, to reach them specifically.",
 			},
+			"asks": asksParam(pageAsks),
 			"reply_to": map[string]any{
 				"type":        "string",
 				"description": "The id of the comment you are answering.",
@@ -940,7 +945,12 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	actor.OpKey = callOpKey(turn, t.Name(), nil, args, actor.OpKey)
 	ref := strings.TrimSpace(argString(args, "page"))
 	body := strings.TrimSpace(argString(args, "body"))
+	// AN EDIT SAYS NOTHING NEW TO ANYBODY, so only a new remark states it.
+	asks, refused := asksOf(CommentOnPageTool, args, actor.Kind == doclet.AuthorAgent &&
+		strings.TrimSpace(argString(args, "edit")) == "")
 	switch {
+	case refused != nil:
+		return *refused, nil
 	case ref == "":
 		return failed(CommentOnPageTool + " needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	case body == "":
@@ -983,6 +993,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	in := doclet.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
+		Asks:    &asks,
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

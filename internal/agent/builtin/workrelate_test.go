@@ -155,7 +155,7 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Seats: askable,
 	})
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "which of these do you want?", "ask": "pm",
 	})
 	if got.Failed {
@@ -186,7 +186,7 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	// AND AN UNKNOWN HANDLE IS REFUSED, because an ask addressed to a
 	// spelling wakes nobody and leaves a question open on the board for
 	// ever.
-	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "nobody",
 	}); !got.Failed {
 		t.Error("an ask to a handle the company does not have was accepted")
@@ -205,7 +205,7 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Seats: askable,
 	})
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "noting this for later",
 	})
 	if got.Failed {
@@ -234,7 +234,7 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	}
 	// AND AN ASK SILENCES IT, because then somebody IS being asked.
 	trk.patched = nil
-	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "pm",
 	}); strings.Contains(got.Output, "warnings") {
 		t.Errorf("a comment that asks the assignee still warns: %s", got.Output)
@@ -285,7 +285,7 @@ func TestACommentMadeAgainReportsWhatItsPostDid(t *testing.T) {
 			reg := workRegistry(t, builtin.WorkDeps{
 				Reader: trk, Writer: trk.as, Seats: askable,
 			})
-			got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+			got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 				"item": "ENG-1", "body": "after the audit",
 			})
 			answer := decodeAnswer(t, got)
@@ -323,7 +323,7 @@ func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Seats: askable,
 	})
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "yes, the second", "answers": "c-1",
 	})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalAlreadyAnswered {

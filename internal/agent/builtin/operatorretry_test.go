@@ -140,10 +140,10 @@ func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 		trk := newFakeTracker()
 		reg := retrySurface(t, trk, nil)
 		first := callNoTurn(t, reg, builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": "noted"})
+			map[string]any{"asks": false, "item": "ENG-1", "body": "noted"})
 		op, _ := answerOf(t, first)["op_id"].(string)
 		callNoTurn(t, reg, builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": "noted", "op_id": op})
+			map[string]any{"asks": false, "item": "ENG-1", "body": "noted", "op_id": op})
 		if len(trk.patched) != 2 {
 			t.Fatalf("the two calls wrote %d comments", len(trk.patched))
 		}

@@ -33,9 +33,12 @@ import (
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
 //   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
-//   - 3: whom an agent's record that wakes somebody was written for
+//   - 3: an agent's comment stating whether it asks ([Notify.Asks],
+//     [CommentPatch.Asks]), the open asks it answers ([CommentPatch.Closes])
+//     and the agents it wakes for their open asks ([Notify.Awaiting]).
+//   - 4: whom an agent's record that wakes somebody was written for
 //     ([MutationRecord.WorkingFor], ADR-0109).
-const RecordVersion = 3
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -62,7 +65,11 @@ const baseRecordVersion = 1
 // been released" does not exempt a new field from its row.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
-	{Name: "MutationRecord.WorkingFor", Since: 3, Path: []string{"working_for"}},
+	{Name: "Notify.Asks", Since: 3, Path: []string{"notify", "asks"}},
+	{Name: "Notify.Awaiting", Since: 3, Path: []string{"notify", "awaiting"}},
+	{Name: "CommentPatch.Asks", Since: 3, Path: []string{"mutation", "comment", "asks"}},
+	{Name: "CommentPatch.Closes", Since: 3, Path: []string{"mutation", "comment", "closes"}},
+	{Name: "MutationRecord.WorkingFor", Since: 4, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -269,7 +276,7 @@ type MutationRecord struct {
 	// and one that wakes nobody (a gate among them). NOT APPLIED to any row:
 	// the change feed reads it, and the turn the record wakes works for them
 	// (notify.FirstPartyWriter), never for the writing seat, which holds every
-	// app. Version 3: an older build retains a record carrying it rather than
+	// app. Version 4: an older build retains a record carrying it rather than
 	// waking a seat for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
@@ -337,6 +344,15 @@ type Notify struct {
 	// Mentions are the handles a body named, which are woken whether or
 	// not they watch.
 	Mentions []string `json:"mentions,omitempty"`
+
+	// Asks is an agent's statement, on every comment it writes, of whether
+	// the comment asks; false wakes no agent but Awaiting (ADR-0113). Nil
+	// on a person's and an older build's, which route as they always did.
+	Asks *bool `json:"asks,omitempty"`
+
+	// Awaiting are the agents that asked something in a reply's thread,
+	// woken by any reply there by somebody else (ADR-0113).
+	Awaiting []string `json:"awaiting,omitempty"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`

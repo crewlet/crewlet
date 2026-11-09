@@ -14,7 +14,8 @@ import (
 // key, a field by its name.
 
 // UnaddressedComment is a comment from somebody other than the assignee that
-// neither asks nor mentions anybody, and does not ask the assignee anything.
+// asks nobody, its @-mentions references or absent, and does not ask the
+// assignee anything.
 // woken says whether it wakes them at all: a reply in a thread they wrote in
 // does, and they may absorb it without replying; another agent's remark does
 // not, and waits in their inbox until they next open the item, so a colleague
@@ -23,18 +24,19 @@ func UnaddressedComment(assignee string, woken bool) Caveat {
 	if woken {
 		return Caveat{code: CodeUnaddressedComment,
 			agent: fmt.Sprintf("%s is woken by this but is not asked to answer it. "+
-				"Use ask: %s, or @-mention them, if you are expecting a reply.",
-				assignee, assignee),
+				"Use ask: %s, or @-mention them with asks: true, if you are "+
+				"expecting a reply.", assignee, assignee),
 			person: fmt.Sprintf("@%s will see this comment, but it does not ask "+
 				"them anything. Ask them a question or mention them if you expect "+
 				"a reply.", assignee),
 		}
 	}
 	return Caveat{code: CodeUnaddressedComment,
-		agent: fmt.Sprintf("%s is not woken by this comment: it neither "+
-			"@-mentions nor asks them, so it waits in their inbox until they next "+
-			"open the item. Use ask: %s, or @-mention them, if you need them to "+
-			"act on it.", assignee, assignee),
+		agent: fmt.Sprintf("%s is not woken by this comment: it does not ask "+
+			"them anything (an @-mention without asks: true is a reference), so "+
+			"it waits in their inbox until they next open the item. Use ask: %s, "+
+			"or @-mention them with asks: true, if you need them to act on it.",
+			assignee, assignee),
 		person: fmt.Sprintf("@%s will find this comment in their inbox, but it "+
 			"does not alert them, because it neither mentions nor asks them. "+
 			"Mention them or ask them a question if you need them to act on it.",

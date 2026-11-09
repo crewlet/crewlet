@@ -49,8 +49,8 @@ func TestAnOpIDBroughtBackWithAnotherCallIsRefusedBeforeAnyWrite(t *testing.T) {
 			call{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "waiting_on": map[string]any{"add": []any{"ENG-2"}}}},
 			call{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "waiting_on": map[string]any{"add": []any{"ENG-3"}}}}},
 		"a comment on another item": {
-			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "see the PR"}},
-			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-2", "body": "see the PR"}}},
+			call{builtin.CommentOnWorkTool, map[string]any{"asks": false, "item": "ENG-1", "body": "see the PR"}},
+			call{builtin.CommentOnWorkTool, map[string]any{"asks": false, "item": "ENG-2", "body": "see the PR"}}},
 		"a merge into another item": {
 			call{worklet.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-1"}},
 			call{worklet.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-3"}}},
@@ -71,7 +71,7 @@ func TestAnOpIDBroughtBackWithAnotherCallIsRefusedBeforeAnyWrite(t *testing.T) {
 			call{worklet.SaveWorkViewTool, view("v-2")}},
 		"another tool": {
 			call{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "done"}},
-			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "done"}}},
+			call{builtin.CommentOnWorkTool, map[string]any{"asks": false, "item": "ENG-1", "body": "done"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

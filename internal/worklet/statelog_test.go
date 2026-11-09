@@ -191,6 +191,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE WHOSE HISTORY ROW KEEPS ITS APPS.
 		record.Actor, record.ActorKind, record.OperatorID = "token:ci", worklet.AuthorOperator, "token:ci"
 		record.ActorApps, record.ActorAppsKept = []iam.Grant{iam.GrantWorklet}, true
+	case "Snapshot.CommentAsks":
+		// AN AGENT'S COMMENT STATING IT ASKS NOTHING, which every build must
+		// carry: the statement is what makes its mentions references.
+		asks := false
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks}}
+	case "Snapshot.MentionedAgents":
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent,
+				MentionedAgents: []string{"ada"}}}
 	case "Snapshot.ThreadAwaiting":
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadAwaiting: []string{"ada"}}}

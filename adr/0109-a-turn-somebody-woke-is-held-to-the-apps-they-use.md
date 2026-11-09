@@ -136,7 +136,7 @@ stated, or an older node's write, and it reads every decoded actor as stated, ne
 for a key an older node never sends.
 
 **On the record, only where it wakes somebody.** `MutationRecord.WorkingFor` rides an agent's
-record that wakes somebody, applied to no row: Worklet at record version 5, Doclet at 3, Chatlet
+record that wakes somebody, applied to no row: Worklet at record version 6, Doclet at 4, Chatlet
 at 3. A record that wakes nobody, a gate, an erase or a prune among them, carries none and stays at
 the version every build reads, as `ActorApps` does.
 

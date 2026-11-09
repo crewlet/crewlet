@@ -49,7 +49,7 @@ func TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing
 				what, record.WorkingFor, record.V, want, version)
 		}
 	}
-	expect("the comment made for ada", ada, 3)
+	expect("the comment made for ada", ada, 4)
 
 	if _, err := r.store.Rename(t.Context(), forAda, page.Page.ID, "Runbook, current", true); err != nil {
 		t.Fatalf("dev renames quietly: %v", err)

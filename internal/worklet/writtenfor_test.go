@@ -40,7 +40,7 @@ func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) 
 		want       *types.WorkingFor
 		version    int
 	}{
-		{"t-for-ada", worklet.AuthorAgent, types.ForTurn(ada), true, ada, 5},
+		{"t-for-ada", worklet.AuthorAgent, types.ForTurn(ada), true, ada, 6},
 		{"t-quiet-for-ada", worklet.AuthorAgent, types.ForTurn(ada), false, nil, 1},
 		{"t-by-a-turn-nobody-woke", worklet.AuthorAgent, types.ForTurn(nil), true, nil, 1},
 	} {
