@@ -116,7 +116,9 @@ func (v Verb) Valid() bool { return slices.Contains(Verbs, v) }
 
 // Step is one action by one seat on one item.
 type Step struct {
-	// At is the step's offset from the timeline's start, in seconds.
+	// At orders the step, in seconds from the timeline's start. A driver stamps
+	// records with the clock the broker stamps them by, so At says only what
+	// comes first, never how long passed.
 	At int `json:"at"`
 
 	Actor string `json:"actor"`

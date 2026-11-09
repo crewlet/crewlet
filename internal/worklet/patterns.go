@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -69,8 +70,9 @@ type NamedWithoutAsk struct {
 // WorkPatterns reads q's window of comments and answers.
 func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPatterns, error) {
 	if q.Level == "" || !q.Since.Before(q.Until) || q.QuietSince.After(q.Until) {
-		return WorkPatterns{}, invalid("a patterns read names a level and a window "+
-			"that ends after it starts, not %q from %s to %s", q.Level, q.Since, q.Until)
+		return WorkPatterns{}, invalid("a patterns read names a level, a window that ends "+
+			"after it starts and a quiet instant inside it, not %q from %s to %s, quiet since %s",
+			q.Level, q.Since, q.Until, q.QuietSince)
 	}
 	var out WorkPatterns
 	_, err := r.log.Read(ctx, statelog.Query{
@@ -224,13 +226,20 @@ func readIdleReviews(ctx context.Context, tx *sql.Tx, reviewers []string, quiet 
 	return nil
 }
 
-// readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue.
+// patternAssignedStatement is when an item last changed hands, a seek of its own
+// history; an item never reassigned has no row and was held from its filing.
+const patternAssignedStatement = `SELECT h.created_at FROM tracker_history h
+	WHERE h.subject_id = ? AND h.kind = 'assignee' ORDER BY h.log_seq DESC LIMIT 1`
+
+// readIdleReviewsOf reads one reviewer's idle reviews, a seek of its own queue,
+// leaving out one it was handed after the quiet instant: its wait starts then.
 func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int64, out *WorkPatterns) error {
 	rows, err := tx.QueryContext(ctx, patternIdleReviewsStatement, reviewer,
 		string(StatusInReview.Group()), at, at)
 	if err != nil {
 		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
 	}
+	var candidates []IdleReview
 	for rows.Next() {
 		var r IdleReview
 		var since int64
@@ -239,10 +248,26 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, at int6
 			return fmt.Errorf("worklet: scan an idle review: %w", err)
 		}
 		r.Since = store.DecodeTime(since)
-		out.IdleReviews = append(out.IdleReviews, r)
+		candidates = append(candidates, r)
 	}
 	if err := closeRows(rows); err != nil {
 		return fmt.Errorf("worklet: read %s's idle reviews: %w", reviewer, err)
+	}
+	for _, r := range candidates {
+		var assigned int64
+		err := tx.QueryRowContext(ctx, patternAssignedStatement, r.Task).Scan(&assigned)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("worklet: read when %s changed hands: %w", r.Task, err)
+		case assigned >= at:
+			continue
+		default:
+			if t := store.DecodeTime(assigned); t.After(r.Since) {
+				r.Since = t
+			}
+		}
+		out.IdleReviews = append(out.IdleReviews, r)
 	}
 	return nil
 }

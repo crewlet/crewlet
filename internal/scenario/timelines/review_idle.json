@@ -19,7 +19,13 @@
      "expect": {"woken": []}},
     {"at": 710, "actor": "app", "verb": "assign", "item": "W-2", "assignee": "qa",
      "expect": {"woken": ["qa"]}},
+    {"at": 720, "actor": "owner", "verb": "file", "item": "W-3", "assignee": "app",
+     "expect": {"woken": ["app"]}},
+    {"at": 750, "actor": "app", "verb": "status", "item": "W-3", "status": "in_review",
+     "expect": {"woken": []}},
     {"at": 90000, "actor": "qa", "verb": "turn", "item": "W-2",
-     "expect": {"woken": []}}
+     "expect": {"woken": []}},
+    {"at": 90010, "actor": "app", "verb": "assign", "item": "W-3", "assignee": "qa",
+     "expect": {"woken": ["qa"]}}
   ]
 }

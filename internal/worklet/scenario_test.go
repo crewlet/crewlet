@@ -371,4 +371,13 @@ func TestAnIdleReviewIsOneItsHolderLeftAlone(t *testing.T) {
 		work.IdleReviews[0].Holder != "qa" {
 		t.Fatalf("idle reviews %+v, want only W-1, held by qa", work.IdleReviews)
 	}
+	// A QUIET INSTANT BEFORE ANY REVIEW BEGAN finds none idle: a review that
+	// has not waited the whole quiet period is not idle, however untouched.
+	early, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
+		Since: d.start, Until: time.Now().UTC().Add(time.Microsecond), Level: statelog.ReadStale,
+		Reviewers: []string{"app", "qa"}, QuietSince: d.start})
+	if err != nil || len(early.IdleReviews) != 0 {
+		t.Fatalf("with the quiet instant before every review, idle reviews %+v (%v), want none",
+			early.IdleReviews, err)
+	}
 }

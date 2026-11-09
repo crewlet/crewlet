@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -35,12 +36,22 @@ const (
 	FixExternalStep FixKind = "external_step"
 )
 
-// Window is how far back every evidence class reads, and ReviewQuiet how long a
-// review its agent holder has not touched waits before it is idle.
+// Window is how far back every evidence class reads: a week holds every
+// weekday's schedule and the slow answers of a person away for a day.
+// ReviewQuiet is how long a review its agent holder has not touched waits
+// before it is idle: a day, because an agent takes many turns a day.
 const (
 	Window      = 7 * 24 * time.Hour
 	ReviewQuiet = 24 * time.Hour
 )
+
+// PatternsWindow is the tracker read the evidence classes need at now: the
+// window before it and every agent seat's reviews, quiet since ReviewQuiet ago.
+// The caller names the read level.
+func PatternsWindow(now time.Time, c *config.Company) worklet.PatternsQuery {
+	return worklet.PatternsQuery{Since: now.Add(-Window), Until: now,
+		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet)}
+}
 
 // Evidence is what the company did in the window that ends at Until.
 type Evidence struct {
@@ -256,9 +267,10 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 	for _, h := range holders {
 		keys := byHolder[h]
 		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: h},
-			"A review waited a day for the agent holding it.",
-			fmt.Sprintf("%d items in review are held by %s, which has taken no turn on them "+
-				"in the last 24 hours, so the work behind them waits.", len(keys), h),
+			"Work in review waited a day for the agent holding it.",
+			fmt.Sprintf("%s held by %s had no turn by it on the item in the last 24 hours "+
+				"(a turn on a linked pull request counts on the change, not the item), so "+
+				"the work behind them waits.", words.Count(len(keys), "item in review", "items in review"), h),
 			[]Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
 	}
 	return out
