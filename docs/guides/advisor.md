@@ -14,6 +14,8 @@ flowchart LR
 
 **Settings › Advisor** lists every finding, the most costly first, with what the engine is handling listed apart so it never reads as yours to do. **Review the change** opens the preview: pick an option where there is more than one, and the screen asks the engine to check the exact write (the fields it changes, before and after, and any warning it would add). Nothing is saved until you press **Apply**, which saves it as a revision by you.
 
+A finding that **blocks** the company and is yours to fix also waits in your **Inbox** under **Needs you**, and counts on **Home**, with what to do and a button that opens the advisor. It leaves both once the setup no longer raises it. Findings that cost or are worth knowing stay on the advisor alone, so they never crowd the decisions your agents are waiting on.
+
 ## What it lists
 
 Every finding has a **title** (what is wrong), a **why** (what it costs), the **path** in the company document it sits at, a **severity** and its **fix**.
