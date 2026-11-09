@@ -57,6 +57,28 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 	}
 }
 
+// THE BACKUP FINDING IS THE OWNER'S AND BLOCKS, while the backup alarm stands
+// and only then; it is a step outside the document, with nothing to send.
+func TestTheBackupFindingBlocksWhileTheBackupAlarmStands(t *testing.T) {
+	t.Parallel()
+	if got := advisor.Detect(advisor.Evidence{}, agentsOnly); len(got) != 0 {
+		t.Fatalf("no standing alarm raised %v", got)
+	}
+	got := advisor.Detect(advisor.Evidence{Backup: advisor.Backup{Standing: true, Logs: 12}}, agentsOnly)
+	if len(got) != 1 {
+		t.Fatalf("a standing backup alarm raised %d findings, want 1", len(got))
+	}
+	f := got[0]
+	if f.Class != advisor.ClassNoVerifiedBackup || f.Severity != advisor.SeverityBlocks ||
+		f.Actor != advisor.ActorOwner || f.Fix.Kind != advisor.FixExternalStep ||
+		len(f.Fix.Options) != 0 || f.Fix.Sentence == "" {
+		t.Errorf("the backup finding is %+v, want the owner's, blocking, an external step", f)
+	}
+	if len(f.Evidence) != 1 || f.Evidence[0] != (advisor.Fact{Key: "logs", Value: 12}) {
+		t.Errorf("the backup finding's evidence is %v, want logs=12", f.Evidence)
+	}
+}
+
 // AN EVIDENCE FINDING IS THE ENGINE'S, never the owner's to-do: it offers no
 // change to send, and names at most five records behind it.
 func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
@@ -69,8 +91,8 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, Comments: many[:5]},
 			{Handle: "qa", Told: 4, Woken: 4, Comments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}}}
 	found := advisor.Detect(advisor.Evidence{Work: work}, agentsOnly)
-	if len(found) != len(advisor.EvidenceClasses()) {
-		t.Fatalf("raised %d findings, want one per class", len(found))
+	if len(found) != len(advisor.WorkClasses()) {
+		t.Fatalf("raised %d findings, want one per class the work patterns raise", len(found))
 	}
 	for _, f := range found {
 		if f.Actor != advisor.ActorEngine || f.Source != advisor.SourceEvidence ||

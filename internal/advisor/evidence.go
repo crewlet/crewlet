@@ -15,13 +15,23 @@ const (
 	ClassAgentMentionsWithoutAsk  Class = "wake.agent_mentions_without_ask"
 	ClassPersonRequestsWithoutAsk Class = "person.requests_without_ask"
 	ClassAskOvertaken             Class = "ask.overtaken"
+	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
+	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 )
 
-// AreaWork holds the patterns in how the company's work moves.
-const AreaWork Area = "work"
+// AreaWork holds the patterns in how the company's work moves, and
+// AreaDurability what keeps the company's records safe.
+const (
+	AreaWork       Area = "work"
+	AreaDurability Area = "durability"
+)
 
 // FixNone is a finding the engine acts on: nothing for the owner to send.
-const FixNone FixKind = "none"
+// FixExternalStep is one the owner takes outside the company document.
+const (
+	FixNone         FixKind = "none"
+	FixExternalStep FixKind = "external_step"
+)
 
 // Window is how far back every evidence class reads.
 const Window = 7 * 24 * time.Hour
@@ -30,20 +40,31 @@ const Window = 7 * 24 * time.Hour
 type Evidence struct {
 	Until time.Time
 	Work  worklet.WorkPatterns
+	// Backup is the node's backup alarm as its latest evaluation stands.
+	Backup Backup
+}
+
+// Backup is whether the backup alarm stands, and over how many logs.
+type Backup struct {
+	Standing bool
+	Logs     int
 }
 
 // detector raises one class's findings from the evidence; isAgent tells an
 // agent seat's handle from a person's. It reads records only and calls no model.
 type detector struct {
-	class  Class
+	class Class
+	// work marks a detector that reads the tracker's [worklet.WorkPatterns].
+	work   bool
 	detect func(ev Evidence, isAgent func(string) bool) []Finding
 }
 
 // detectors is every evidence class's detector.
 var detectors = []detector{
-	{ClassAgentMentionsWithoutAsk, agentMentionsWithoutAsk},
-	{ClassPersonRequestsWithoutAsk, personRequestsWithoutAsk},
-	{ClassAskOvertaken, askOvertaken},
+	{ClassAgentMentionsWithoutAsk, true, agentMentionsWithoutAsk},
+	{ClassPersonRequestsWithoutAsk, true, personRequestsWithoutAsk},
+	{ClassAskOvertaken, true, askOvertaken},
+	{ClassNoVerifiedBackup, false, noVerifiedBackup},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -65,6 +86,17 @@ func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
 		out = append(out, d.class)
+	}
+	return out
+}
+
+// WorkClasses is every class a detector raises from the tracker's patterns.
+func WorkClasses() []Class {
+	var out []Class
+	for _, d := range detectors {
+		if d.work {
+			out = append(out, d.class)
+		}
 	}
 	return out
 }
@@ -168,6 +200,25 @@ func askOvertaken(ev Evidence, _ func(string) bool) []Finding {
 			overtaken, w.Answers, w.Superseded, w.Moot),
 		[]Fact{{Key: "answers", Value: int64(w.Answers)}, {Key: "superseded", Value: int64(w.Superseded)},
 			{Key: "moot", Value: int64(w.Moot)}}, w.Overtaken)}
+}
+
+// noVerifiedBackup reads the backup alarm, at the backup policy's own age: the
+// one threshold the trim, the alarm and this finding share.
+func noVerifiedBackup(ev Evidence, _ func(string) bool) []Finding {
+	if !ev.Backup.Standing {
+		return nil
+	}
+	return []Finding{{
+		Class: ClassNoVerifiedBackup, Severity: SeverityBlocks, Actor: ActorOwner,
+		Source: SourceEvidence, Area: AreaDurability, Subject: Subject{Kind: SubjectCompany},
+		Title: "Your company has no recent verified backup.",
+		Why: "No verified backup within the backup policy's age has been recorded, so a lost " +
+			"disk would lose the company's records, and the engine keeps every log until one is.",
+		Evidence: []Fact{{Key: "logs", Value: int64(ev.Backup.Logs)}},
+		Fix: Fix{Kind: FixExternalStep, Options: []Option{},
+			Sentence: "Take a backup now with `crewlet backup` or from the dashboard, then " +
+				"schedule it to a place off this server."},
+	}}
 }
 
 func appendExamples(records, more []string) []string {

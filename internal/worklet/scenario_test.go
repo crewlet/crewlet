@@ -35,7 +35,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
 	}
-	for _, class := range advisor.EvidenceClasses() {
+	for _, class := range advisor.WorkClasses() {
 		if !slices.Contains(slices.Collect(maps.Values(want)), class) {
 			t.Errorf("detector %s has no timeline it must fire on", class)
 		}

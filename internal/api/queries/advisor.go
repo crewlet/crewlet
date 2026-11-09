@@ -34,5 +34,21 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 		return nil, fmt.Errorf("advisor: read the company's work patterns: %w", err)
 	}
 	return advisor.ReadWithEvidence(company.Redact(), revision,
-		advisor.Evidence{Until: now, Work: work}), nil
+		advisor.Evidence{Until: now, Work: work, Backup: backupEvidence(s.latestAlarms())}), nil
+}
+
+// backupEvidence is whether the latest evaluation holds the backup alarm, and
+// over how many logs.
+func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
+	for _, a := range alarms {
+		if a.Kind != statelog.KindBackupAge {
+			continue
+		}
+		logs := 0
+		for _, d := range a.Domains {
+			logs += len(d.Domains)
+		}
+		return advisor.Backup{Standing: true, Logs: logs}
+	}
+	return advisor.Backup{}
 }
