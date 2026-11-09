@@ -141,6 +141,7 @@ func everySeam(t *testing.T) queries.Sources {
 		FleetBroker: emptyBroker{},
 
 		IssueReports: issuereport.New(issuereport.Config{Store: coordmemory.NewFleet()}),
+		Insights:     coordmemory.NewFleet(),
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
