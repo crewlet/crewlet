@@ -394,9 +394,10 @@ export function managedModelSentence(managedBy: readonly string[]): string {
 
 /**
  * What is left to do once the company exists: write the principles every
- * agent reads, connect the tools it works in, and give it a model provider,
- * on Settings › Models or from a terminal. The company this card follows is
- * in the store and in no file, which is where the terminal steps start
+ * agent reads, connect the tools it works in, give it a model provider (on
+ * Settings › Models or from a terminal), and check its setup on the advisor.
+ * The company this card follows is in the store and in no file, which is
+ * where the terminal steps start
  * (`contract/providersteps.ts` says why each one is the one it is). On a
  * document another system manages, `managedBy` names it, and the card says the
  * model is added there instead ([managedModelSentence]).
@@ -412,7 +413,7 @@ export function NextSteps({
     <Card as="section">
       <Card.Header
         icon={<CheckGlyph size="sm" />}
-        subtitle="three steps left"
+        subtitle="four steps left"
         actions={
           <Button size="small" variant="ghost" onClick={onDismiss}>
             Dismiss
@@ -472,6 +473,18 @@ export function NextSteps({
               Agents can’t work until one is added. {managedModelSentence(managedBy)}
             </span>
           )}
+        </div>
+        <div className="col gap-1">
+          <strong>Check the setup before the agents start</strong>
+          <span className="t-caption">
+            The advisor lists what would block the company or cost it, and previews each fix before
+            you make it.
+          </span>
+          <div className="row">
+            <ButtonLink variant="secondary" size="small" href={href(["settings", "advisor"])}>
+              Open the advisor
+            </ButtonLink>
+          </div>
         </div>
       </div>
     </Card>
