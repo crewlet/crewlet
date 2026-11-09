@@ -39,7 +39,7 @@ func TestEveryFailureKindIsClassified(t *testing.T) {
 			t.Errorf("sandbox reason %q pauses its seat as %q, which the table does not word", why, kind)
 		}
 	}
-	reached := map[failureKind]bool{failureModelsRefused: true}
+	reached := map[failureKind]bool{failureModelsRefused: true, failureContextExhausted: true}
 	for _, kind := range whyFailures {
 		reached[kind] = true
 	}
