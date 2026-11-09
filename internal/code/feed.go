@@ -83,23 +83,28 @@ func (t *Translator) Source() changefeed.Source {
 
 // Translate decides whether rec wakes anybody.
 //
-// # The ways a record wakes nobody, each an ACK
+// # The ways a record wakes nobody, each an ACK, and the one deferral
 //
 // A record on a subject no change is about — a name, an eviction, a
 // generation, the company's activation, a person's marks, the barrier and the
 // trimmed record — is machinery or bookkeeping, and so is every record of a
 // repository's checks but an attempt's ending: its queue, its start, a
 // dispatch and a sweep carry no routing, and are acknowledged off the
-// envelope, never decoded ([wakesAnybody]). A record this build
-// cannot decode past its envelope is a newer build's, whose routing rules it
-// does not have. A record about a repository or a change that carries no
-// routing is one that concerns nobody: every record from before changes
-// existed, a push that moves no change, a compaction. And a record whose
-// routing tells only its own actor, or only persons, has no seat to wake.
+// envelope, never decoded ([wakesAnybody]). A record about a repository or a
+// change that carries no routing is one that concerns nobody: every record
+// from before changes existed, a push that moves no change, a compaction. And
+// a record whose routing tells only its own actor, or only persons, has no
+// seat to wake.
 //
 // Each is a DECISION, and a decision is handling: acknowledged rather than
 // returned, because a record returned for having nothing to say comes back for
 // ever and every wake behind it waits.
+//
+// A record this build cannot decode past its envelope is NOT one: it is a
+// newer build's, whose routing rules this node does not have, so it has
+// decided nothing about it. It is DEFERRED to a peer on that build
+// ([changefeed.Defer]), never acknowledged: the feed's consumer is the
+// fleet's, so a record acked here is one no peer would ever see (#838).
 func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -113,10 +118,12 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 		// A RECORD FROM A NEWER BUILD. Its envelope decoded, so this node
 		// knows what it is about and that it cannot read its rules — and
 		// waking somebody from a payload it cannot decode would be inventing
-		// a notification.
+		// a notification. It is DEFERRED to a peer on the newer build, never
+		// answered "no wake": the feed's consumer is the fleet's, so a
+		// record this node acked is one no peer would ever see (#838).
 		var future *ErrFutureVersion
 		if errors.As(err, &future) {
-			return changefeed.Delivery{}, false, nil
+			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
 		}
 		return changefeed.Delivery{}, false, fmt.Errorf("code: read the record on %s: %w", rec.Key, err)
 	}

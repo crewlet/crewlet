@@ -60,17 +60,20 @@ func (t *Translator) Source() changefeed.Source {
 // Translate decides whether a record wakes anybody, and hands the parser the
 // whole thing.
 //
-// # The three ways a record wakes nobody, and why each is an ACK
+// # The two ways a record wakes nobody, why each is an ACK, and the deferral
 //
 // A record with NO NOTIFICATION is a change nobody asked to hear about — a
-// rank move, a pointer flip, a turn's spend. A record this build cannot decode
-// past its envelope is one whose notification rules it does not have. And a
-// record on a subject that is not an object anybody watches — a barrier, a
-// generation, an eviction — is machinery.
+// rank move, a pointer flip, a turn's spend. And a record on a subject that is
+// not an object anybody watches — a barrier, a generation, an eviction — is
+// machinery. Both are DECISIONS, and a decision is handling: they are acked
+// rather than naked, because a record naked for having nothing to say comes
+// back for ever.
 //
-// All three are DECISIONS, and a decision is handling: they are acked rather
-// than naked, because a record naked for having nothing to say comes back for
-// ever.
+// A record this build cannot decode past its envelope is NOT one: its
+// notification rules are a newer build's, and this node has decided nothing
+// about it. It is deferred to a peer that has them ([changefeed.Defer]), since
+// the feed's consumer is the fleet's and a record acked here is one no peer
+// would ever see (#838).
 func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -86,11 +89,13 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 		// A RECORD FROM A NEWER BUILD. Its envelope decoded, so this
 		// node knows what it is about and knows it cannot read the
 		// rules — and waking somebody from a payload it cannot decode
-		// would be inventing a notification. A peer on the newer build
-		// wins the next redelivery; this one is handled, not lost.
+		// would be inventing a notification. It is DEFERRED to a peer on
+		// the newer build, never answered "no wake": the feed's consumer
+		// is the fleet's, so a record this node acked is one no peer
+		// would ever see (#838).
 		var future *ErrFutureVersion
 		if errors.As(err, &future) {
-			return changefeed.Delivery{}, false, nil
+			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
 		}
 		return changefeed.Delivery{}, false, fmt.Errorf(
 			"worklet: read the record on %s: %w", rec.Key, err)

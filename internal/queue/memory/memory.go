@@ -11,7 +11,9 @@
 //     replays them in order when a consumer attaches. Seat ownership rests
 //     entirely on that — a seat between owners must hold its mail, not lose it.
 //     Publishing to a topic with no subscription drops the event, which is why
-//     EnsureSubscription exists.
+//     EnsureSubscription exists — but for a DEAD-LETTER subject, which keeps
+//     what reaches it by age, as the broker's dead-letter stream does (see
+//     deadletter.go).
 //   - Members of a group COMPETE: each event goes to exactly one of them, in
 //     rotation. Delivering always to the first-registered member made the
 //     double-attach split-brain — two nodes consuming one seat — invisible, so
@@ -172,12 +174,25 @@ type subKey struct{ topic, group string }
 // parked in the middle of a drain is what it looks like from the outside.
 // Gather what a line needs, unlock, then log.
 type Broker struct {
-	mu          sync.Mutex
-	subs        map[subKey]*subscription
-	streams     []*streamSub
-	servers     []*serveSub
-	listeners   []*listenSub
-	deadLetters map[string][]*events.Event
+	mu        sync.Mutex
+	subs      map[subKey]*subscription
+	streams   []*streamSub
+	servers   []*serveSub
+	listeners []*listenSub
+
+	// deadLetters is every dead-letter subject's entries, oldest first —
+	// a subscription's retired events and what a reader kept
+	// ([Queue.KeepDeadLetter]) alike, as one stream holds both on the
+	// broker this twin stands for — and lastLetter the last sequence an
+	// entry was given: broker-wide, so a sequence names an entry on no
+	// other subject. See deadletter.go.
+	deadLetters map[string][]letter
+	lastLetter  uint64
+
+	// now is the broker's clock, which an entry is stamped and let go
+	// by. The wall clock; only an in-package case replaces it, to reach a
+	// retention no test could wait out.
+	now func() time.Time
 
 	history    []*events.Event
 	maxHistory int
@@ -190,7 +205,8 @@ type Broker struct {
 func NewBroker() *Broker {
 	return &Broker{
 		subs:        map[subKey]*subscription{},
-		deadLetters: map[string][]*events.Event{},
+		deadLetters: map[string][]letter{},
+		now:         func() time.Time { return time.Now().UTC() },
 		maxHistory:  defaultMaxHistory,
 	}
 }
@@ -227,10 +243,11 @@ func (b *Broker) Client(opts ...Option) *Queue {
 //
 // From then on every verb that has to REACH the broker answers [ErrBrokerDown]
 // on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
-// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast
-// and Listen. The verbs about a client's OWN attachments (Quiesce, Unquiesce,
-// Detach, PauseTopic, ResumeTopic) still answer, because on the broker this twin
-// stands for they are the client's own state and touch no server, and a node
+// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast,
+// Listen and the three dead-letter verbs. The verbs about a client's OWN
+// attachments (Quiesce, Unquiesce, Detach, PauseTopic, ResumeTopic) still
+// answer, because on the broker this twin stands for they are the client's own
+// state and touch no server, and a node
 // that cannot prove it owns a seat quiesces it on exactly the outage this
 // models. Nothing is delivered, and no client is stopped by it: a queue whose
 // broker went away is still live, which is the difference between
@@ -599,6 +616,14 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return ErrBrokerDown
 	}
 	q.broker.recordHistoryLocked(&received)
+	// A DEAD-LETTER SUBJECT KEEPS WHAT IS PUBLISHED TO IT, subscription or
+	// none: on the broker this twin stands for it is a stream kept by age
+	// rather than by interest, so a publish there is retained, and DeadLettersOn
+	// lists it. Dropped here, as every unsubscribed publish is, the twin
+	// certified a dead letter that vanished where the broker keeps it.
+	if strings.HasPrefix(topic, topics.DeadLetterPrefix) {
+		q.broker.keepLocked(topic, wire)
+	}
 
 	// Every subscription on this topic gets its own copy — that is what a
 	// consumer GROUP is. Competition happens between the members of one
@@ -1291,10 +1316,24 @@ func (q *Queue) Waiting(_ context.Context, topic, group string) (queue.Waiting, 
 // topics.DeadLetter(topic, group), deliberately OUTSIDE the crewlet.* subject
 // space so the dashboard's crewlet.events.> stream cannot re-surface a poison
 // event as if it were live.
+//
+// DECODED FROM WHAT THE SUBJECT KEEPS, the bytes [Queue.DeadLettersOn] lists,
+// so a dead letter dropped or let go is gone from both readings at once.
 func (q *Queue) DeadLetters(topic, group string) []*events.Event {
 	q.broker.mu.Lock()
 	defer q.broker.mu.Unlock()
-	return slices.Clone(q.broker.deadLetters[topics.DeadLetter(topic, group)])
+	var out []*events.Event
+	for _, l := range q.broker.lettersLocked(topics.DeadLetter(topic, group)) {
+		var ev events.Event
+		if err := json.Unmarshal(l.body, &ev); err != nil {
+			// NOT AN EVENT, which only a KeepDeadLetter on this pair's
+			// own subject can have put here: a reader's bytes, which no
+			// subscription retired and this capability does not report.
+			continue
+		}
+		out = append(out, &ev)
+	}
+	return out
 }
 
 // Attachments reports every (topic, group) pair THIS client is attached to.

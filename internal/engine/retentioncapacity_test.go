@@ -397,8 +397,9 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 // one of those fields was left at its zero value, so four conditions in a
 // twenty-row table could not fire — and three of them are the only report
 // their subject has: a gated record is recoverable by nothing, an
-// untranslatable change record blocks every wake behind it, and a company that
-// has outgrown its log's sizing has no other symptom until the log is full.
+// untranslatable change record is a wake nobody gets until a build that reads
+// it runs, and a company that has outgrown its log's sizing has no other
+// symptom until the log is full.
 func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()

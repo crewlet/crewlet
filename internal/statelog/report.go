@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -761,6 +762,13 @@ type DomainInputs struct {
 	FloorUnknownFor   time.Duration
 	FloorUnknownCause string
 
+	// FeedDeadLetters is what this log's wake feed holds dead-lettered, as
+	// [Reading] defines it — empty for a log with no feed, and for one whose
+	// feed holds none. A log whose dead letters could not be read this time
+	// carries the last reading that answered, aged to now: an entry is not
+	// gone because one listing failed.
+	FeedDeadLetters []FeedDeadLetter
+
 	// LinearizableReads and LinearizableReadsExpected are this log's
 	// observed daily read rate and its census, as [Reading] defines them —
 	// evaluated per log, because each log was sized for its own census.
@@ -791,11 +799,11 @@ type ReportInputs struct {
 	// Reading is this node's alarm reading, MINUS the conditions that are
 	// per domain: a log's headroom, its ceiling against its window, a
 	// blocked trim, the age of the backup its trim counts, a record held
-	// past the deferral grace, an unreadable floor and a read rate past the
-	// census are evaluated per domain here, from the domain rows and
-	// [DomainInputs], so a fleet reports which log is full, blocked,
-	// uncovered, holding, refusing or read past its sizing rather than that
-	// something is.
+	// past the deferral grace, an unreadable floor, its wake feed's dead
+	// letters and a read rate past the census are evaluated per domain here,
+	// from the domain rows and [DomainInputs], so a fleet reports which log
+	// is full, blocked, uncovered, holding, refusing, losing wakes or read
+	// past its sizing rather than that something is.
 	Reading Reading
 
 	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
@@ -1291,6 +1299,9 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			DeferredRecord:    held.DeferredRecord,
 			FloorUnknownFor:   held.FloorUnknownFor,
 			FloorUnknownCause: held.FloorUnknownCause,
+			// AND WHAT ITS WAKE FEED GAVE UP ON, as this node last read
+			// the dead-letter stream.
+			FeedDeadLetters: held.FeedDeadLetters,
 			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
 			LinearizableReads:         held.LinearizableReads,
 			LinearizableReadsExpected: held.LinearizableReadsExpected,
@@ -1405,9 +1416,9 @@ func pastWindow(d DomainReport) uint64 {
 // urgent than current's, which decides whose measurement the alarm leads with:
 // the log with the least headroom left, the ceiling that holds the least of its
 // window, the trim held longest, the log with no backup at all or else the
-// oldest one, the record held longest, the floor unreadable longest and the
-// read rate furthest past its census. A tie keeps the log the report reached
-// first, which is the report's own order.
+// oldest one, the record held longest, the floor unreadable longest, the dead
+// letter nearest its expiry and the read rate furthest past its census. A tie
+// keeps the log the report reached first, which is the report's own order.
 func morePressing(kind Kind, r, current Reading) bool {
 	switch kind {
 	case KindLogHeadroom:
@@ -1435,6 +1446,10 @@ func morePressing(kind Kind, r, current Reading) bool {
 		return r.DeferredAge > current.DeferredAge
 	case KindFloorUnknown:
 		return r.FloorUnknownFor > current.FloorUnknownFor
+	case KindFeedDeadLettered:
+		// THE ENTRY WITH THE LEAST TIME LEFT: its wake is the next one the
+		// retention takes. Both hold one, or the rule would not have fired.
+		return soonestExpiry(r.FeedDeadLetters) < soonestExpiry(current.FeedDeadLetters)
 	case KindCensusDrift:
 		if r.LinearizableReadsExpected <= 0 || current.LinearizableReadsExpected <= 0 {
 			return false
@@ -1443,6 +1458,16 @@ func morePressing(kind Kind, r, current Reading) bool {
 			float64(current.LinearizableReads)/float64(current.LinearizableReadsExpected)
 	}
 	return false
+}
+
+// soonestExpiry is the least time any of letters has left, and the longest
+// duration there is for none.
+func soonestExpiry(letters []FeedDeadLetter) time.Duration {
+	soonest := time.Duration(math.MaxInt64)
+	for _, l := range letters {
+		soonest = min(soonest, l.ExpiresIn)
+	}
+	return soonest
 }
 
 // tableIndex is a kind's position in [table], which is the order alarms are

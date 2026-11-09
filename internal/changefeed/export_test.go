@@ -1,6 +1,19 @@
 package changefeed
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// Handle settles one message as a running feed would, on the caller's
+// goroutine, so a case reads what the feed decided without racing it.
+func Handle(ctx context.Context, f *Feed, msg *Message) { f.handle(ctx, msg) }
+
+// Replay is the feed's start replaying its dead letters through records, and
+// whether the listing answered.
+func Replay(ctx context.Context, f *Feed, records Records) bool {
+	return f.replay(ctx, f.translator.Source(), records)
+}
 
 // ReopenBase sets a feed's reopen schedule before it runs, so a case watches
 // the schedule play out in milliseconds rather than seconds. The ceiling stays

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
@@ -198,6 +199,13 @@ type retention struct {
 	// nothing to report.
 	feeds func(now time.Time, out *statelog.Reading)
 
+	// feedSources is the wake feed each log declares, by domain — the
+	// source whose dead-letter subject its row reads — and feedLetters the
+	// watch that reads them on every report (feeddeadletters.go). A log
+	// with no entry declares no feed; a nil watch reads none.
+	feedSources map[string]changefeed.Source
+	feedLetters *deadLetterWatch
+
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
 	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
@@ -324,6 +332,8 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		refs:        e.refsNearLimit,
 		entries:     e.entriesReading,
 		feeds:       e.feedsReading,
+		feedSources: e.feedSources(s.running()),
+		feedLetters: newDeadLetterWatch(e.deadLetterLedger, e.backends.Fleet, e.metrics),
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},

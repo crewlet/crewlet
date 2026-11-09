@@ -631,10 +631,42 @@ func Catalogue() []Instrument {
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
-				"wake. Every domain feed's consumer is deliberately uncapped, so " +
-				"such a record is never dropped — it redelivers for ever at " +
-				"the head of the consumer with every wake behind it " +
-				"waiting, which has no other symptom at all.",
+				"wake, once per delivery. Such a record is handed back for a node " +
+				"that can read it, with a backoff, and dead-lettered once it is an " +
+				"hour old, so its wake waits until then and has no other symptom; " +
+				"`feed_unreadable` fires on it. Upgrade the node past it.",
+		},
+		{
+			Name: TrackerFeedDeferred, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"source", "reason"},
+			Shows: "Change records handed back for a peer that can read them, " +
+				"once per delivery: a version (`newer_record`) or an envelope " +
+				"(`newer_envelope`) a newer build writes, or a frame sealed under " +
+				"a key this node does not hold (`unknown_key`). A rolling upgrade's " +
+				"or a key rotation's ordinary traffic for its minutes; one that " +
+				"keeps rising after the roll is a node left on the older build or " +
+				"the old keyring, whose records are dead-lettered after an hour.",
+		},
+		{
+			Name: TrackerFeedDeadLettered, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"source", "reason"},
+			Shows: "Change records a feed stopped handing back after an hour " +
+				"and kept as a dead letter in CREWLET_DLQ, frame and all, by why " +
+				"(the deferral reasons, or `untranslatable`). Each is a wake " +
+				"nobody has had until a node whose feed starts able to read it " +
+				"replays it; `feed_dead_lettered` is raised from the first.",
+		},
+		{
+			Name: TrackerFeedDeadLetterExpired, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"source"},
+			Shows: "Dead letters the dead-letter stream's retention " +
+				"(stream.event_retention_hours) let go before any node replayed " +
+				"them: wakes lost for good. Counted once across the fleet, by the " +
+				"first data node whose alarm reading saw the entry within a beat " +
+				"of its expiry and then gone, through a claim a replay that drops " +
+				"an entry takes first, so a replayed entry is never counted. An " +
+				"expiry across a restart of every data node is not counted: a " +
+				"node starts with no sight of what it had seen.",
 		},
 
 		// ---- the object store's S3 requests ---------------------------

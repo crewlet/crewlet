@@ -807,6 +807,21 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
+- **A roll finishes within the hour, or its wakes are dead-lettered.**
+  Every node pulls each domain's wake feed from one durable consumer, so a
+  node on the older build that meets a record the newer build wrote — or a
+  node not yet restarted onto a key a keyring rotation added — hands the
+  record back for a peer that can read it, waiting from two seconds to thirty
+  between attempts, rather than acknowledge it for the whole fleet
+  (`crewlet.tracker.feed.deferred` counts each). A record no node has read
+  within an hour of being stored is kept whole, its sealed frame inside, as a
+  dead letter in `CREWLET_DLQ`, and let go, and `feed_dead_lettered` is raised
+  from the first one. The first node whose feed starts able to read an entry
+  replays it, derives its wake once and drops it — so a stalled roll is
+  finished by restarting the remaining nodes onto the new build. An entry
+  nothing replays is kept for `stream.event_retention_hours` and then
+  expires, and its wake with it (`crewlet.tracker.feed.dead_letter_expired`).
+  See [Dead letters](../concepts/event-system.md#dead-letters).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two

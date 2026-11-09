@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/changefeed`
-- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`
+- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt` and `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`
 - **Cost-when-tried:** both failure modes were already in the tree when this was written. The Mattermost socket path SWALLOWS a failed publish — a wake lost with a logged line and no retry — and the webhook path is correct only because the vendor retries it, which is a property of somebody else's product rather than of this engine.
 - **Tag-status:** unreleased
 
@@ -71,3 +71,53 @@ the inbound stream's message and nothing trails a commit. With one publisher
 there is no change to claim, so the deterministic per-recipient wake id —
 derived from the transition's own id — is the layer that collapses a
 republish; the decision above holds through it unchanged.
+
+## Amendment — a record a node cannot read is deferred to a peer, and dead-lettered after an hour
+
+The durable consumer is ONE GROUP for the fleet, so an acknowledgement is the
+fleet's: a record one node acknowledges is a record no node sees again. The
+feed acknowledged every record it could not read — a version or an envelope a
+newer build writes, a frame sealed under a key the node did not hold — as
+though not reading it were a decision, and so lost the wake a node on the newer
+build, or one holding the key, would have derived (#838). `ActorApps` records
+lost their wakes that way on every older node of a roll.
+
+Such a record is now DEFERRED: handed back for redelivery, never acknowledged
+bare, whether the opener met it (an unknown key, a newer envelope) or the
+translator did (its future-version arm answers `changefeed.Defer`, never "no
+wake"). It is handed back with a BACKOFF — two seconds, doubling with every
+delivery, to the domain consumer's thirty-second ack window — so a moment with
+only older nodes up does not spin the consumer. A record no build on the node
+can translate is handed back the same way, still counted as `feed_unreadable`.
+
+The broker caps no redelivery of a domain feed's consumer (`MaxDeliver: -1`, so
+a budget never drops a wake silently), and a deferral cannot circle for ever:
+pinned nats-server v2.15.2 keeps a delayed NAK in the consumer's pending set
+(`server/consumer.go:3297-3313`), stops delivering new messages once that set
+reaches `MaxAckPending` (`5019-5022`), and gives a consumer that sets none 1000
+(`604`, `697-705`) — so a thousand records no node will read would stall every
+new wake of the domain. The feed therefore bounds it: a record handed back for
+an hour from its stored instant is DEAD-LETTERED — kept in `CREWLET_DLQ` on
+`dlq.changefeed.<source>.<group>.<digest>` as a self-contained entry, its
+sealed frame inside so it needs its log for nothing, and only then
+acknowledged; a keep that fails hands the record back again. An hour is a
+judgment call stated as one: an order of magnitude past a roll's minutes
+(ADR-0109) and the keyring runbook's restart of every node. The entry is kept
+for the dead-letter stream's age, `stream.event_retention_hours`, and then
+expires, its wake with it, counted once across the fleet as
+`crewlet.tracker.feed.dead_letter_expired`. The alarm `feed_dead_lettered` is
+raised per log from the first entry, naming each entry's age and the time it
+has left.
+
+What clears an entry is a REPLAY or its expiry. A feed's start lists its
+domain's dead letters and opens each frame exactly as a delivery is opened —
+verified, its envelope read, the translator asked — and publishes what it can
+now read through the same claim a delivery passes, then drops the entry; an
+entry it still cannot read is left for a node that can, and a frame the fleet
+did not write is dropped. The start is the moment that matters, because what
+makes an entry readable arrives with a restart: a newer build, or a key, since
+a node's verifier is built once at boot.
+
+A TAMPERED frame — a MAC that fails under a key the node holds — is still
+acknowledged and skipped: no node should act on a frame this fleet did not
+write. ADR-0031's sentence on the feed is corrected to say so.

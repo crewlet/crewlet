@@ -224,6 +224,14 @@ type Engine struct {
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
 
+	// deadLetterLedger is the queue's dead-letter verbs as this node's wake
+	// feeds call them, accounting for every entry a replay drops so the
+	// alarm reading never counts it as a lost wake (feeddeadletters.go). ONE
+	// PER PROCESS, built in [New] over the node's queue and the fleet's
+	// claims, so every feed's replay and the reading share it. Nil on an
+	// engine literal a case builds without a queue.
+	deadLetterLedger *deadLetterLedger
+
 	// objectives is the node's service objective meter, which every
 	// artifacts recording site counts its events into and the alarm table
 	// reads the burn rates from: ONE per process, so a burn is judged over
@@ -1860,6 +1868,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		checkTokens:         checkTokens,
 		sessions:            sessions,
 		metrics:             opts.Metrics,
+		deadLetterLedger:    newDeadLetterLedger(backends.Queue, backends.Fleet),
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
 		incarnation:         incarnation,
