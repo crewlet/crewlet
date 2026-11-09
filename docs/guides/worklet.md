@@ -2202,7 +2202,8 @@ something of the seat that holds it
 
 | Reason | Starts a turn |
 |---|---|
-| `mention`, `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
+| `mention` | always, but for an agent's comment that does not say it asks (`asks: false`), whose @-mention is a reference |
+| `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
 | `watcher` | for a person's comment that names nobody |
@@ -2213,8 +2214,9 @@ So **a person's comment that names nobody wakes everyone on the task**: a
 person writing on a task speaks to whoever follows it. **A comment that names
 somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
 seats it names, and everyone else on the task reads it in their inbox.
-**Another agent's comment wakes only the seats it names**: by @-mention, with
-`ask`, or by answering their question; a reply in a thread wakes only the
+**Another agent's comment wakes only the seats it asks**: by @-mention with
+`asks: true`, with `ask`, or by answering their question; an @-mention in a
+comment with `asks: false` is a reference, read in the inbox, and wakes nobody; a reply in a thread wakes only the
 seats with a stake there, the asker of an open ask and the seat that owes it,
 so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so

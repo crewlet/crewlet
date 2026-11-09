@@ -149,6 +149,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// nothing to learn from the change they just made.
 	refused := 0
 	routed := routing.Route(b.Candidates(), employs(reg, &refused), actor, nil)
+	if agentReference(record) {
+		routed = peopleOnly(routed, reg)
+	}
 	if refused > 0 {
 		log.Debug("pages_unknown_recipients_dropped", "count", refused,
 			"page", base.Metadata[MetaTitle])
@@ -201,6 +204,30 @@ func employs(reg *notify.Registry, refused *int) func(string) bool {
 		*refused++
 		return false
 	}
+}
+
+// agentReference reports an agent's comment that does not say it asks: its
+// mentions are references and it wakes no agent, while the people it reaches
+// are told as before (ADR-0113).
+func agentReference(record MutationRecord) bool {
+	n := record.Notify
+	return record.ActorKind == AuthorAgent && !n.Asks &&
+		(n.Kind == ChangeComment || n.Kind == ChangeCommentEdited)
+}
+
+// peopleOnly keeps the routed people, whom an agent's reference still tells. A
+// nil registry tells nobody apart and keeps everybody, as [employs] admits them.
+func peopleOnly(routed []routing.Candidate[string], reg *notify.Registry) []routing.Candidate[string] {
+	if reg == nil {
+		return routed
+	}
+	out := routed[:0:0]
+	for _, c := range routed {
+		if party, ok := reg.ByHandle(c.Handle); ok && party.Human {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // LeadWorthy reports whether a change reaches the container's lead when

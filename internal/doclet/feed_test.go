@@ -162,7 +162,8 @@ func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
 				Apps: []iam.Grant{iam.GrantDoclet}}},
 	} {
 		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
-			doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}); err != nil {
+			doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"},
+				Asks: true}); err != nil {
 			t.Fatalf("comment as %s: %v", c.actor.Handle, err)
 		}
 		var wake *notify.Routed
@@ -423,6 +424,40 @@ func TestAPageWakeLinksToTheDashboardsAddressOfThePage(t *testing.T) {
 	for _, c := range r.routeWith(record, doclet.ParserOptions{}, nil) {
 		if url, ok := c.Inbound.Metadata["url"]; ok {
 			t.Errorf("a parser with no base linked the wake to %q, want no link", url)
+		}
+	}
+}
+
+// AN AGENT'S PAGE COMMENT THAT ASKS NOTHING WAKES NO AGENT (ADR-0113): its
+// mention is a reference and its watchers are not woken by it, while the
+// same comment saying it asks, or a person's comment, reaches them.
+func TestAnAgentsPageCommentThatAsksNothingWakesNoAgent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	roster := chart(t, "jane", "swe", "bob")
+	for _, c := range []struct {
+		actor doclet.Actor
+		asks  bool
+		want  []string
+	}{
+		{agent("swe"), false, []string{"jane"}},
+		{agent("swe"), true, []string{"bob", "jane"}},
+		{author("jane"), false, []string{"bob"}},
+	} {
+		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
+			doclet.NewComment{Body: "Nothing for @bob, it still reads right.",
+				Mentions: []string{"bob"}, Asks: c.asks}); err != nil {
+			t.Fatalf("comment as %s: %v", c.actor.Handle, err)
+		}
+		var got []string
+		for _, routed := range r.routeVia(r.lastRecord(), nil, roster) {
+			got = append(got, routed.To.Handle)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s's comment with asks=%v reached %v, want %v", c.actor.Handle, c.asks,
+				got, c.want)
 		}
 	}
 }

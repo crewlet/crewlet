@@ -304,8 +304,8 @@ func trackerFamily(t *testing.T, key string) familyRig {
 	tool := builtin.CommentOnWorkTool
 	return familyRig{
 		tool:  tool,
-		one:   map[string]any{"item": "ENG-1", "body": "noted"},
-		other: map[string]any{"item": "ENG-1", "body": "noted, and the fix is up"},
+		one:   map[string]any{"item": "ENG-1", "body": "noted", "asks": false},
+		other: map[string]any{"item": "ENG-1", "body": "noted, and the fix is up", "asks": false},
 		on: map[bindSurface]familyTool{
 			onSeatTurn: {tool: asSeatCallable(t, registered(t, builtin.Deps{
 				Work: builtin.WorkDeps{Reader: trk, Writer: trk.as}}, tool)),

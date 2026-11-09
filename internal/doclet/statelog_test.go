@@ -165,6 +165,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
 		rec.Actor, rec.ActorKind, rec.OperatorID = "token:ci", doclet.AuthorOperator, "token:ci"
 		rec.ActorApps = []iam.Grant{iam.GrantDoclet}
+	case "Notify.Asks":
+		// AN AGENT'S COMMENT THAT SAYS IT ASKS the seats it reaches.
+		rec.Actor, rec.ActorKind = "ana", doclet.AuthorAgent
+		rec.Notify = &doclet.Notify{Kind: doclet.ChangeComment, PageID: "p-1", Asks: true}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

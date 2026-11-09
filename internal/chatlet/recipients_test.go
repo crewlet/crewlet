@@ -305,7 +305,7 @@ func TestASeatIsNeverWokenByItsOwnMessage(t *testing.T) {
 	routed, _ := chatlet.Resolve(chatlet.Routing{
 		ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorAgent,
 		Members:  members("eng", "ops"),
-		Mentions: []string{"eng", "ops"},
+		Mentions: []string{"eng", "ops"}, Asks: true,
 	})
 	woken := chatlet.Route(routed, agents().Seat, "eng")
 

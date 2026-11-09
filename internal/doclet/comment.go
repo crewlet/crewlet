@@ -36,6 +36,10 @@ type NewComment struct {
 	// not they watch, and each is subscribed.
 	Mentions []string
 
+	// Asks is an agent author's statement that the comment asks something
+	// ([Notify.Asks]).
+	Asks bool
+
 	Quiet bool
 }
 
@@ -102,6 +106,9 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				scope := ScopeSet{Subject: true, Container: head.Container}
 				notify := s.notifyOf(in.Quiet, ChangeComment, head,
 					excerpt(body), mentions)
+				if notify != nil {
+					notify.Asks = in.Asks && actor.Kind == AuthorAgent
+				}
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 			},
 		}

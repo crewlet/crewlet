@@ -3367,11 +3367,13 @@ func (t *commentOnWorkItem) Description() string {
 // constant so a test can hold the words.
 const commentToolDescription = "Post a comment on a work item. Everyone " +
 	"following the item finds it in their inbox, but your comment wakes a " +
-	"colleague to act on it only when you @-mention them by handle, put a " +
-	"question to them with `ask`, or reply (`reply_to`) in a thread they wrote " +
-	"in. A comment that does none of these wakes nobody, not even the item's " +
-	"assignee or its reporter: it waits until they next open the item. So " +
-	"name whoever you need to act, and say what you need from them. Post ONE " +
+	"colleague to act on it only when it asks them: an @-mention with " +
+	"`asks: true`, a question put to them with `ask`, or a reply (`reply_to`) " +
+	"in a thread where they asked or were asked something still open. An " +
+	"@-mention with `asks: false` is a reference and wakes nobody, and a " +
+	"comment that asks nothing wakes nobody, not even the item's assignee or " +
+	"its reporter: it waits until they next open the item. So name whoever " +
+	"you need to act, and say what you need from them. Post ONE " +
 	"substantive comment when you have something to say: running commentary " +
 	"is noise on a surface other people read, and an acknowledgement that " +
 	"asks nothing needs no comment at all. `ask` puts a question to somebody, " +
@@ -3390,8 +3392,9 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 			"body": map[string]any{
 				"type": "string",
 				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle to wake them to act on it.",
+					"colleague by handle, with `asks: true`, to wake them to act on it.",
 			},
+			"asks": asksParam(),
 			"ask": map[string]any{
 				"type": "string",
 				"description": "A colleague's handle: this comment is a " +
@@ -3449,7 +3452,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	body := strings.TrimSpace(argString(args, "body"))
 	choice := strings.TrimSpace(argString(args, "choice"))
 	rawDecision, decided := args["decision"]
+	agent := actor.Kind == worklet.AuthorAgent
+	asks, refused := asksOf(CommentOnWorkTool, args, agent)
 	switch {
+	case refused != nil:
+		return *refused, nil
 	case ref == "":
 		return failed(worklet.CommentOnWorkTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	case body == "" && choice == "":
@@ -3634,6 +3641,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// there rather than refused.
 		After:   patched(before.Task, patch),
 		Comment: comment, Mentions: comment.Mentions,
+		// AN AGENT'S OWN STATEMENT, and a question it puts with `ask` asks.
+		Asks:            agent && (asks || comment.Ask != ""),
 		Thread:          thread.ThreadParties,
 		AnswersDecision: thread.AnswersDecision,
 	}.Notify(t.deps.Leads)
@@ -3743,7 +3752,7 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment,
 	// themselves.
 	case task.Assignee == "" || task.Assignee == actor.Handle:
 		return caveat.Caveat{}
-	case comment.Ask != "" || len(comment.Mentions) > 0:
+	case comment.Ask != "" || (len(comment.Mentions) > 0 && notify.MentionsWake()):
 		return caveat.Caveat{}
 	// AN ANSWER EXPECTS NO REPLY: it closes a question, and the asker is
 	// woken to act on it, which is what the person answering wants. Warning

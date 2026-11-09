@@ -855,7 +855,7 @@ func TestACommentCarriesTheTurnsKeyAndItsMentions(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Mentions: fakeMentions{"pm"},
 	})
-	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "@pm this needs a decision",
 	})
 	if got.Failed {
@@ -876,7 +876,7 @@ func TestACommentCarriesTheTurnsKeyAndItsMentions(t *testing.T) {
 	reg2 := workRegistry(t, builtin.WorkDeps{
 		Reader: again, Writer: again.as, Mentions: fakeMentions{"pm"},
 	})
-	if got := callWork(t, reg2, builtin.CommentOnWorkTool, map[string]any{
+	if got := callWork(t, reg2, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "@pm this needs a decision",
 	}); got.Failed {
 		t.Fatalf("the re-run comment failed: %s", got.Output)

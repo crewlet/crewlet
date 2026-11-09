@@ -32,7 +32,8 @@ import (
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
 //   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
-const RecordVersion = 2
+//   - 3: an agent's comment that says it asks ([Notify.Asks]).
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -59,6 +60,7 @@ const baseRecordVersion = 1
 // been released" does not exempt a new field from its row.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+	{Name: "Notify.Asks", Since: 3, Path: []string{"notify", "asks"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -322,6 +324,10 @@ type Notify struct {
 	// Mentions are the handles a body named, which are woken whether or
 	// not they watch.
 	Mentions []string `json:"mentions,omitempty"`
+
+	// Asks is an agent's statement that its comment asks the seats it
+	// reaches: without it, an agent's comment wakes no agent (ADR-0113).
+	Asks bool `json:"asks,omitempty"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`

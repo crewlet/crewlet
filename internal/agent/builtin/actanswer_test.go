@@ -46,7 +46,7 @@ var everyWriteCall = map[string]map[string]any{
 		"labels": []any{"ops"}, "labels_create_missing": true, "waiting_on": []any{"ENG-2"}},
 	worklet.UpdateWorkItemTool: {"item": "ENG-1", "status": "in_progress",
 		"waiting_on": map[string]any{"add": []any{"ENG-3"}}},
-	worklet.CommentOnWorkTool:      {"item": "ENG-1", "body": "on it"},
+	worklet.CommentOnWorkTool:      {"asks": false, "item": "ENG-1", "body": "on it"},
 	worklet.MergeWorkItemTool:      {"item": "ENG-2", "into": "ENG-1"},
 	worklet.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
 	worklet.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}, "fields": []any{}},
@@ -62,7 +62,7 @@ var everyWriteCall = map[string]map[string]any{
 		"status": "in_progress", "if_match": 7},
 	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
 	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
-	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
+	builtin.CommentOnPageTool: {"asks": false, "page": "p1", "body": "is this current?"},
 	// THE CHAT GESTURES, every one the dashboard makes — the read-state
 	// flush included, which appends nothing ([appendsNoRecord]).
 	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved", "asks": false},

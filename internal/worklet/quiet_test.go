@@ -1,6 +1,7 @@
 package worklet_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -156,6 +157,49 @@ func TestAPersonsOpenAskMakesACoAsker(t *testing.T) {
 		}
 		if !slices.Equal(got.Awaiting, want) {
 			t.Errorf("a reply by %s has %v awaiting, want %v", author, got.Awaiting, want)
+		}
+	}
+}
+
+// AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE, through the record it
+// writes (ADR-0113): the measured loop, an agent's "nothing for @qa", wakes no
+// agent, while the same words saying they ask, or a person's mention, wake qa.
+func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("release checklist")
+	for i, c := range []struct {
+		author string
+		kind   worklet.AuthorKind
+		asks   bool
+		woken  bool
+	}{
+		{"pm", worklet.AuthorAgent, false, false},
+		{"pm", worklet.AuthorAgent, true, true},
+		{"jane", worklet.AuthorHuman, false, true},
+	} {
+		comment := worklet.Comment{ID: fmt.Sprintf("c-%d", i), Task: created.ID, Author: c.author,
+			AuthorKind: c.kind, Body: "My approval still stands, nothing for @qa.",
+			Mentions: []string{"qa"}, CreatedAt: wednesday}
+		wake := worklet.Wake{Kind: worklet.ChangeComment, Before: created, After: created,
+			Comment: &comment, Mentions: comment.Mentions, Asks: c.asks}.Notify(nil)
+		if _, err := r.writer.As(c.author, c.kind, worklet.Provenance{}).UpdateTask(t.Context(),
+			"op-"+comment.ID, created.ID, "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &comment}, worklet.ChangeComment, wake); err != nil {
+			t.Fatalf("%s's comment: %v", c.author, err)
+		}
+		r.drain()
+		record, err := worklet.Decode(r.lastRecord(t))
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		woken := handles(worklet.Route(worklet.Candidates(record.Notify), everyone, c.author))
+		if got := slices.Contains(woken, "qa"); got != c.woken {
+			t.Errorf("a %s comment with asks=%v woke %v, want qa woken %v", c.kind, c.asks,
+				woken, c.woken)
+		}
+		if heard, told := worklet.CandidateFor(record.Notify, "qa"); !told || heard.Reason != worklet.ReasonMention {
+			t.Errorf("a %s comment with asks=%v did not tell qa of the mention", c.kind, c.asks)
 		}
 	}
 }

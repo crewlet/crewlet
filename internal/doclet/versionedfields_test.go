@@ -21,6 +21,7 @@ func TestAClosedPagesRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
 	closed := map[int][]string{
 		2: {"MutationRecord.ActorApps"},
+		3: {"Notify.Asks"},
 	}
 	got := map[int][]string{}
 	for _, field := range doclet.VersionedFields() {

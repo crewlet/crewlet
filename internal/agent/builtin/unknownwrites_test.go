@@ -172,7 +172,7 @@ var receipt = []string{`"version"`, `"comment_id"`, `"key"`, `"id"`, `"outcome"`
 func unknownOperatorCalls() map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.UpdateWorkItemTool: {"item": "ENG-1", "status": "done"},
-		builtin.CommentOnWorkTool:  {"item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
+		builtin.CommentOnWorkTool:  {"asks": false, "item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
 		worklet.MergeWorkItemTool:  {"item": "ENG-2", "into": "ENG-1"},
 		worklet.MoveWorkItemTool:   {"item": "ENG-1", "project": "OPS"},
 		worklet.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
