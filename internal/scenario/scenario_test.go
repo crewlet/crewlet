@@ -1,6 +1,7 @@
 package scenario_test
 
 import (
+	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +18,41 @@ var fixtureDirs = []struct {
 	vocab scenario.Vocabulary
 }{
 	{"timelines", scenario.TimelineVocabulary},
+	{"../advisor/testdata", scenario.DocumentVocabulary(companySchemaKeys())},
+}
+
+// companySchemaKeys is every property name the company document's schema
+// declares, the only keys a document fixture may hold besides the word list.
+func companySchemaKeys() []string {
+	raw, err := os.ReadFile("../../schema/company.schema.json")
+	if err != nil {
+		panic(err)
+	}
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		panic(err)
+	}
+	var keys []string
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			if props, ok := v["properties"].(map[string]any); ok {
+				for k := range props {
+					keys = append(keys, k)
+				}
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(doc)
+	return keys
 }
 
 // NO FIXTURE CARRIES A WORD FROM OUTSIDE ITS VOCABULARY, so a pattern measured

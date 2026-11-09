@@ -2081,10 +2081,12 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		ActorApps: w.recordedApps(notify),
 		// THE HISTORY ROW KEEPS THEM from this version on (ADR-0112).
 		ActorAppsKept: len(w.recordedApps(notify)) > 0,
-		OperatorID:    w.OperatorID,
-		TurnID:        w.TurnID,
-		Chain:         w.Chain,
-		Notify:        notify,
+		// THE NOTICE ROWS KEEP THE STATEMENT from this version on.
+		NoticeAsksKept: notify != nil && notify.Snapshot.CommentAsks != nil,
+		OperatorID:     w.OperatorID,
+		TurnID:         w.TurnID,
+		Chain:          w.Chain,
+		Notify:         notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {

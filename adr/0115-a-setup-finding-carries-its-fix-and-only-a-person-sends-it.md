@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestTheAdvisorImportsNoWritePath`, `internal/advisor.TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule`, `internal/advisor.TestEveryClassHasWordsAndAFix`, `internal/advisor.TestTheLiveShapeRaisesExactlyTheStaticClasses`, `internal/config.TestEveryAdvisoryClassIsValidAndRaisedSomewhere`
+- **Enforced-by:** `internal/advisor.TestTheAdvisorImportsNoWritePath`, `internal/advisor.TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule`, `internal/advisor.TestEveryClassHasWordsAndAFix`, `internal/advisor.TestTheLiveShapeRaisesExactlyTheStaticClasses`, `internal/config.TestEveryAdvisoryClassIsValidAndRaisedSomewhere`, `internal/advisor.TestNoDetectorCallsAModel`, `internal/advisor.TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend`, `internal/worklet.TestEveryEngineDetectorFiresOnItsOwnTimelineAlone`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -29,6 +29,23 @@ wrong, why it costs the company, where in the document it sits, and its fix.
 - **The answer is read off the redacted document**, so no change a fix carries
   can hold a value redaction hides.
 
+- **A finding read from what the company did is a fixed reading of records.**
+  Each evidence class reads a closed window (the 7 days before the request)
+  through a detector with its threshold beside it, and no detector calls a
+  model: a model choosing what is detected would let words in a comment steer
+  what the owner is told. A pattern the engine itself is reducing is the
+  engine's (`actor: engine`, `fix.kind: none`): listed apart, never the
+  owner's to-do. Evidence is typed numbers and at most five record ids.
+- **Evaluated on read.** Detectors run on each request rather than in a
+  background duty, so no finding is stored and none can go stale. What they
+  read is applied alike on every node: a fact a record gained for them (a
+  comment author's statement kept on its notice rows) is written only from
+  records at the version that carries it, so a node behind that version
+  retains the record rather than keeping a different row, and a row an older
+  build wrote reads as unknown, never as a fact. What must persist between reads (a finding standing
+  on consecutive days before it is shared, a notice for a persistent
+  `blocks` finding) keeps its own state where it is built.
+
 ## Why the obvious alternatives are wrong
 
 **Applying a fix the engine is sure of.** A grant, a model, a schedule or a
@@ -47,6 +64,6 @@ of it. The entity route's dry run is the same check the real write runs.
 
 ## What this does not decide
 
-Findings read from what a company has done (its turns, refusals and schedule
-runs), dismissing a finding, and where the dashboard shows the list: each
-lands with the pieces that build it.
+Findings that need the turn ledger (turns by what woke them, refusals and
+schedule runs), dismissing a finding, and where the dashboard shows the list:
+each lands with the pieces that build it.

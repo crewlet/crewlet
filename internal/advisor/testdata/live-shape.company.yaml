@@ -1,6 +1,3 @@
-# A company shaped like one that ran two weeks with these settings: six agent
-# seats and one person, every phase on one model, no agent holding the health
-# grant, and three schedules that poll every one or two hours.
 name: Example
 providers:
   llm:

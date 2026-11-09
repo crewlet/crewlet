@@ -55,6 +55,7 @@ type TrackerReader interface {
 	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
+	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
 	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 		worklet.ActivityAnswer, error)
 	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
@@ -755,6 +756,14 @@ var opThread = define("tracker.thread", opRead, trackerDomain, false,
 			return worklet.ResolvedThread{}, errNoHalf
 		}
 		return b.Tracker.Thread(ctx, a.Query, a.Fresh)
+	})
+
+var opWorkPatterns = define("tracker.work_patterns", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+		if b.Tracker == nil {
+			return worklet.WorkPatterns{}, errNoHalf
+		}
+		return b.Tracker.WorkPatterns(ctx, q)
 	})
 
 type activityArgs struct {
