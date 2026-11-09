@@ -39,11 +39,8 @@ var AdvisoryClasses = []AdvisoryClass{ClassHealthUnheld, ClassAuxiliaryModel, Cl
 func (c AdvisoryClass) Valid() bool { return slices.Contains(AdvisoryClasses, c) }
 
 // FrequentScheduleFires is how many fires in one day make a schedule advised
-// about: every two hours. Polling checks every one or two hours were the
-// schedules a live company found changed nothing on almost every fire; a
-// daily or weekday cadence, or a few fires a day, is a routine and is never
-// flagged. Counted per day rather than read off the shortest gap, because
-// the cost is turns, and two fires an hour apart once a day are two turns.
+// about (every two hours). Counted per day rather than off the shortest gap,
+// because the cost is turns: two fires an hour apart once a day are two.
 const FrequentScheduleFires = 12
 
 // referenceWeek is the week a schedule's cadence is read over: fixed, so
