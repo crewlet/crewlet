@@ -50,7 +50,12 @@ const SETUP_NOTICE = { class: SETUP_BLOCKER.class, subject: SETUP_BLOCKER.subjec
 
 /** An alarm's notice, as the engine sends one that has stood past its threshold. */
 function alarmNotice(kind: string, nodes = ["node-a"]): AdvisorNotice {
-  return { class: "alarm", subject: { kind: "alarm", name: kind }, since: "2026-01-01T10:00:00Z", nodes };
+  return {
+    class: "alarm",
+    subject: { kind: "alarm", name: kind },
+    since: "2026-01-01T10:00:00Z",
+    nodes,
+  };
 }
 
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
@@ -837,8 +842,12 @@ test("a finding that blocks the company is a condition a person decides", () => 
 // ONLY WHAT THE ENGINE NOTICED REACHES THE QUEUE: a blocking finding with no
 // notice is the advisor's to show, and a notice whose finding is gone draws nothing.
 test("a finding is a condition only through its notice", () => {
-  expect(attentionQueue(input({ findings: [SETUP_BLOCKER] })).filter((a) => a.subject === "setup")).toEqual([]);
-  expect(attentionQueue(input({ notices: [SETUP_NOTICE] })).filter((a) => a.subject === "setup")).toEqual([]);
+  expect(
+    attentionQueue(input({ findings: [SETUP_BLOCKER] })).filter((a) => a.subject === "setup"),
+  ).toEqual([]);
+  expect(
+    attentionQueue(input({ notices: [SETUP_NOTICE] })).filter((a) => a.subject === "setup"),
+  ).toEqual([]);
 });
 
 // AN ALARM THAT HAS STOOD REACHES THE ADMINISTRATORS: one row a kind, opening
@@ -846,7 +855,13 @@ test("a finding is a condition only through its notice", () => {
 // alarm is its server's row and is not drawn twice.
 test("an alarm that has stood is a condition a person decides", () => {
   const queue = attentionQueue(
-    input({ notices: [alarmNotice("backup_age", ["node-a", "node-b"]), alarmNotice("llm_sign_in_refused"), alarmNotice("mcp_server_failing")] }),
+    input({
+      notices: [
+        alarmNotice("backup_age", ["node-a", "node-b"]),
+        alarmNotice("llm_sign_in_refused"),
+        alarmNotice("mcp_server_failing"),
+      ],
+    }),
   );
   const backup = queue.find((a) => a.id === "alarm-backup_age");
   expect(backup?.title).toBe("Backup age has not cleared");
@@ -854,7 +869,10 @@ test("an alarm that has stood is a condition a person decides", () => {
   expect(backup?.query).toEqual({ at: "alarms" });
   expect(backup?.technical).toBe("Standing on node-a, node-b.");
   expect(backup?.at).toBe("2026-01-01T10:00:00Z");
-  expect(queue.find((a) => a.id === "alarm-llm_sign_in_refused")?.path).toEqual(["settings", "models"]);
+  expect(queue.find((a) => a.id === "alarm-llm_sign_in_refused")?.path).toEqual([
+    "settings",
+    "models",
+  ]);
   expect(queue.find((a) => a.id === "alarm-mcp_server_failing")).toBeUndefined();
   expect(conditionsToDecide(queue)).toContainEqual(backup);
 });

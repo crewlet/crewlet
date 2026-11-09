@@ -98,6 +98,18 @@ export function useAttention(): Attention[] {
         notices,
         findings,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms, notices, findings],
+    [
+      agents,
+      runs,
+      budget,
+      engine,
+      connected,
+      authRejected,
+      now,
+      nameOf,
+      mcpAlarms,
+      notices,
+      findings,
+    ],
   );
 }
