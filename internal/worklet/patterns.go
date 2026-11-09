@@ -38,13 +38,17 @@ type WorkPatterns struct {
 	Overtaken  []string `json:"overtaken"`
 }
 
-// NamedWithoutAsk is one seat an agent's comment named without asking it.
+// NamedWithoutAsk is one seat agents' comments named without a question.
 type NamedWithoutAsk struct {
 	Handle string `json:"handle"`
-	// Told counts the notices, Woken those that obliged an answer.
-	Told     int      `json:"told"`
-	Woken    int      `json:"woken"`
-	Comments []string `json:"comments"`
+	// Told counts the notices; Asked those whose author said the comment asks;
+	// Woken those that obliged an answer though the author did not say so.
+	Told  int `json:"told"`
+	Asked int `json:"asked"`
+	Woken int `json:"woken"`
+	// Comments and WokenComments are at most five of each, by id.
+	Comments      []string `json:"comments"`
+	WokenComments []string `json:"woken_comments"`
 }
 
 // WorkPatterns reads q's window of comments and answers.
@@ -69,8 +73,8 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 }
 
 // patternNamedStatement is every agent comment in the window, with each
-// mention notice an agent comment that asked nothing sent.
-const patternNamedStatement = `SELECT c.id, c.ask, n.recipient, n.addressed
+// mention notice it sent and its author's statement of whether it asks.
+const patternNamedStatement = `SELECT c.id, c.ask, n.recipient, n.addressed, n.asks
 FROM tracker_comments c
 LEFT JOIN tracker_notifications n ON n.record_id = c.record_id AND n.reason = 'mention'
 WHERE c.author_kind = 'agent' AND c.created_at >= ? AND c.created_at < ? AND c.removed = 0
@@ -86,8 +90,8 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 	for rows.Next() {
 		var id, ask string
 		var recipient sql.NullString
-		var addressed sql.NullBool
-		if err := rows.Scan(&id, &ask, &recipient, &addressed); err != nil {
+		var addressed, asks sql.NullBool
+		if err := rows.Scan(&id, &ask, &recipient, &addressed, &asks); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an agent comment: %w", err)
 		}
@@ -100,12 +104,19 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 		}
 		named := byHandle[recipient.String]
 		if named == nil {
-			named = &NamedWithoutAsk{Handle: recipient.String, Comments: []string{}}
+			named = &NamedWithoutAsk{Handle: recipient.String, Comments: []string{},
+				WokenComments: []string{}}
 			byHandle[recipient.String] = named
 		}
 		named.Told++
-		if addressed.Bool {
+		switch {
+		case asks.Valid && asks.Bool:
+			named.Asked++
+		case addressed.Bool:
 			named.Woken++
+			if len(named.WokenComments) < MaxPatternExamples {
+				named.WokenComments = append(named.WokenComments, id)
+			}
 		}
 		if len(named.Comments) < MaxPatternExamples {
 			named.Comments = append(named.Comments, id)
@@ -123,18 +134,20 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 }
 
 // patternAnswersStatement is every person's answer in the window to an agent's
-// question, with whether the item had finished first and whether the asker
-// had asked the same person again on it before the answer.
+// question, with whether the item had finished first and whether the asker had
+// asked the same person again on it, still open when this answer came.
 const patternAnswersStatement = `SELECT a.id,
 	t.finished_at IS NOT NULL AND t.finished_at <= r.created_at,
 	EXISTS (SELECT 1 FROM tracker_comments b
 		WHERE b.task_id = a.task_id AND b.author = a.author AND b.ask = a.ask
-		AND b.created_at > a.created_at AND b.created_at < r.created_at)
+		AND b.removed = 0 AND b.created_at > a.created_at AND b.created_at < r.created_at
+		AND NOT EXISTS (SELECT 1 FROM tracker_comments ba
+			WHERE ba.id = b.answered_by AND ba.created_at <= r.created_at))
 FROM tracker_comments r
 JOIN tracker_comments a ON a.id = r.answers
 JOIN tracker_tasks t ON t.id = a.task_id
-WHERE r.author_kind = 'human' AND r.created_at >= ? AND r.created_at < ? AND r.removed = 0
-	AND a.author_kind = 'agent' AND a.ask <> ''
+WHERE r.author_kind IN ('human', 'operator') AND r.created_at >= ? AND r.created_at < ?
+	AND r.removed = 0 AND a.author_kind = 'agent' AND a.ask <> ''
 ORDER BY r.created_at, r.id`
 
 func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkPatterns) error {

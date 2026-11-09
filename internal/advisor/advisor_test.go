@@ -22,6 +22,9 @@ func company(t *testing.T, doc string) *config.Company {
 	return c
 }
 
+// liveShape is a company shaped like one that ran two weeks: six agent seats and
+// one person, every phase on one model, no agent holding the health grant, and
+// three schedules that poll every one or two hours.
 func liveShape(t *testing.T) *config.Company {
 	t.Helper()
 	doc, err := os.ReadFile("testdata/live-shape.company.yaml")

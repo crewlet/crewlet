@@ -46,6 +46,9 @@ const (
 	// PatternHealthyCompany is the control: hand-offs, asks and answers that
 	// must keep waking the seats they concern whatever routing rule changes.
 	PatternHealthyCompany Pattern = "healthy_company"
+	// PatternAgentHandoffs is agents handing work to each other in comments
+	// that say they ask: every one wakes, and no detector may count it.
+	PatternAgentHandoffs Pattern = "agent_handoffs"
 	// PatternAgentMentionsWithoutAsk is agents naming each other in comments
 	// that ask nothing, each one waking the other.
 	PatternAgentMentionsWithoutAsk Pattern = "agent_mentions_without_ask"
@@ -58,7 +61,7 @@ const (
 )
 
 // Patterns is every [Pattern] a timeline may declare.
-var Patterns = []Pattern{PatternHealthyCompany, PatternAgentMentionsWithoutAsk,
+var Patterns = []Pattern{PatternHealthyCompany, PatternAgentHandoffs, PatternAgentMentionsWithoutAsk,
 	PatternPersonRequestsWithoutAsk, PatternAskOvertaken}
 
 // Valid reports whether p is a declared pattern.
@@ -120,6 +123,9 @@ type Step struct {
 
 	Mentions []string `json:"mentions,omitempty"`
 	Ask      string   `json:"ask,omitempty"`
+	// Asks is an agent author's statement that the comment asks the seats it
+	// names, as the comment tool requires one; absent is an older build's record.
+	Asks *bool `json:"asks,omitempty"`
 
 	// Answers is the index of the earlier comment step this comment answers.
 	Answers *int `json:"answers,omitempty"`
@@ -268,12 +274,13 @@ func (tl Timeline) checkStep(i int, st Step, filed map[string]bool) error {
 func checkVerbFields(tl Timeline, i int, st Step) error {
 	has := map[string]bool{
 		"say": st.Say != "", "mentions": len(st.Mentions) > 0, "ask": st.Ask != "",
+		"asks":    st.Asks != nil,
 		"answers": st.Answers != nil, "assignee": st.Assignee != "",
 		"status": st.Status != "", "watcher": st.Watcher != "",
 	}
 	allowed := map[Verb][]string{
 		VerbFile:    {"assignee"},
-		VerbComment: {"say", "mentions", "ask", "answers"},
+		VerbComment: {"say", "mentions", "ask", "asks", "answers"},
 		VerbAssign:  {"assignee"},
 		VerbStatus:  {"status"},
 		VerbWatch:   {"watcher"},
@@ -288,6 +295,9 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 	}
 	if required != "" && !has[required] {
 		return fmt.Errorf("a %s step needs %s", st.Verb, required)
+	}
+	if st.Asks != nil && tl.Kind(st.Actor) != SeatAgent {
+		return fmt.Errorf("only an agent states asks; %q is a person", st.Actor)
 	}
 	if st.Say != "" && !st.Say.Valid() {
 		return fmt.Errorf("say %q is not one of %s", st.Say, words.Or(PhraseClasses))

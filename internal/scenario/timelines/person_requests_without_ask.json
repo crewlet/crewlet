@@ -6,17 +6,11 @@
     {"handle": "backend", "kind": "agent"}
   ],
   "steps": [
-    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "backend",
-     "expect": {"woken": ["backend"]}},
-    {"at": 600, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["owner"],
-     "expect": {"woken": []}},
-    {"at": 3600, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"],
-     "expect": {"woken": []}},
-    {"at": 7200, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"],
-     "expect": {"woken": []}},
-    {"at": 10800, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["owner"],
-     "expect": {"woken": []}},
-    {"at": 14400, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"],
-     "expect": {"woken": []}}
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "backend", "expect": {"woken": ["backend"]}},
+    {"at": 600, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["owner"], "asks": false, "expect": {"woken": []}},
+    {"at": 3600, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"], "asks": false, "expect": {"woken": []}},
+    {"at": 7200, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"], "asks": false, "expect": {"woken": []}},
+    {"at": 10800, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["owner"], "asks": false, "expect": {"woken": []}},
+    {"at": 14400, "actor": "backend", "verb": "comment", "item": "W-1", "say": "status_note", "mentions": ["owner"], "asks": false, "expect": {"woken": []}}
   ]
 }

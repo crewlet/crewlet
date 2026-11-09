@@ -31,6 +31,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 	t.Parallel()
 	want := map[scenario.Pattern]advisor.Class{
 		scenario.PatternHealthyCompany:           "",
+		scenario.PatternAgentHandoffs:            "",
 		scenario.PatternAgentMentionsWithoutAsk:  advisor.ClassAgentMentionsWithoutAsk,
 		scenario.PatternPersonRequestsWithoutAsk: advisor.ClassPersonRequestsWithoutAsk,
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
@@ -60,7 +61,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 				t.Fatalf("WorkPatterns: %v", err)
 			}
 			var raised []advisor.Class
-			for _, f := range advisor.Detect(advisor.Evidence{Until: end, Work: work}, d.agent) {
+			for _, f := range advisor.Detect(advisor.Evidence{Until: end, Work: work}, d.kind) {
 				if !slices.Contains(raised, f.Class) {
 					raised = append(raised, f.Class)
 				}
@@ -87,6 +88,17 @@ func playTimeline(t *testing.T, tl scenario.Timeline) *timelineDriver {
 }
 
 func (d *timelineDriver) agent(handle string) bool { return d.tl.Kind(handle) == scenario.SeatAgent }
+
+// kind is what a handle names in the timeline, in the advisor's terms.
+func (d *timelineDriver) kind(handle string) advisor.SeatKind {
+	switch d.tl.Kind(handle) {
+	case scenario.SeatAgent:
+		return advisor.SeatAgent
+	case scenario.SeatPerson:
+		return advisor.SeatPerson
+	}
+	return advisor.SeatUnknown
+}
 
 // timelineDriver plays a timeline's steps as the tools do: the wake built from
 // the task before and after, the thread resolved by the reader.
@@ -185,8 +197,20 @@ func (d *timelineDriver) comment(i int, st scenario.Step, kind worklet.AuthorKin
 	d.comments[i] = c.ID
 	patch := worklet.TaskPatch{Comment: c,
 		Watch: &worklet.WatchIntent{Handle: st.Actor, Watch: true, Auto: true}}
-	return patch, worklet.Wake{Before: current, Comment: c, Mentions: c.Mentions,
+	wake := worklet.Wake{Before: current, Comment: c, Mentions: c.Mentions,
 		Thread: thread.ThreadParties, AnswersDecision: thread.AnswersDecision}
+	if st.Asks != nil {
+		// AS THE COMMENT TOOL STATES IT: an ask asks by itself, and only the
+		// agents it names are told apart from the people.
+		asks := *st.Asks || c.Ask != ""
+		wake.Asks = &asks
+		for _, m := range c.Mentions {
+			if d.agent(m) {
+				wake.MentionedAgents = append(wake.MentionedAgents, m)
+			}
+		}
+	}
+	return patch, wake
 }
 
 // woken is every agent seat the notices after the first before start a turn

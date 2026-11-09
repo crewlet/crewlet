@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -50,13 +51,23 @@ type Backup struct {
 	Logs     int
 }
 
-// detector raises one class's findings from the evidence; isAgent tells an
+// SeatKind is what a handle names in the company document.
+type SeatKind int
+
+// The kinds a handle can name: an agent seat, a person's seat, or no seat.
+const (
+	SeatUnknown SeatKind = iota
+	SeatAgent
+	SeatPerson
+)
+
+// detector raises one class's findings from the evidence; kind tells an
 // agent seat's handle from a person's. It reads records only and calls no model.
 type detector struct {
 	class Class
 	// work marks a detector that reads the tracker's [worklet.WorkPatterns].
 	work   bool
-	detect func(ev Evidence, isAgent func(string) bool) []Finding
+	detect func(ev Evidence, kind func(string) SeatKind) []Finding
 }
 
 // detectors is every evidence class's detector.
@@ -102,10 +113,10 @@ func WorkClasses() []Class {
 }
 
 // Detect is every evidence finding ev raises, the most costly first.
-func Detect(ev Evidence, isAgent func(handle string) bool) []Finding {
+func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 	out := []Finding{}
 	for _, d := range detectors {
-		out = append(out, d.detect(ev, isAgent)...)
+		out = append(out, d.detect(ev, kind)...)
 	}
 	sortFindings(out)
 	return out
@@ -114,11 +125,14 @@ func Detect(ev Evidence, isAgent func(handle string) bool) []Finding {
 // ReadWithEvidence is [Read] with the findings ev raises beside the document's.
 func ReadWithEvidence(c *config.Company, revision string, ev Evidence) Answer {
 	answer := Read(c, revision)
-	agents := map[string]string{}
-	for _, role := range agentSeats(c) {
-		agents[role.Seat().Handle()] = role.Name
+	kinds := map[string]SeatKind{}
+	for role := range c.EachRole() {
+		kinds[role.Seat().Handle()] = SeatAgent
+		if role.Kind == org.KindHuman {
+			kinds[role.Seat().Handle()] = SeatPerson
+		}
 	}
-	found := Detect(ev, func(h string) bool { _, ok := agents[h]; return ok })
+	found := Detect(ev, func(h string) SeatKind { return kinds[h] })
 	for i := range found {
 		if s := &found[i].Subject; s.Kind == SubjectSeat {
 			s.Name = seatName(c, s.Seat)
@@ -148,16 +162,16 @@ func engineFinding(class Class, subject Subject, title, why string, facts []Fact
 	}
 }
 
-func agentMentionsWithoutAsk(ev Evidence, isAgent func(string) bool) []Finding {
+func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
 	woken, seats := 0, 0
 	var records []string
 	for _, n := range ev.Work.Named {
-		if !isAgent(n.Handle) || n.Woken == 0 {
+		if kind(n.Handle) != SeatAgent || n.Woken == 0 {
 			continue
 		}
 		woken += n.Woken
 		seats++
-		records = appendExamples(records, n.Comments)
+		records = appendExamples(records, n.WokenComments)
 	}
 	if woken < minNamedWakes || woken*100 < namedWakesPer100*ev.Work.AgentComments {
 		return nil
@@ -171,10 +185,10 @@ func agentMentionsWithoutAsk(ev Evidence, isAgent func(string) bool) []Finding {
 			{Key: "agent_comments", Value: int64(ev.Work.AgentComments)}}, records)}
 }
 
-func personRequestsWithoutAsk(ev Evidence, isAgent func(string) bool) []Finding {
+func personRequestsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, n := range ev.Work.Named {
-		if isAgent(n.Handle) || n.Told < minNamedPerson {
+		if kind(n.Handle) != SeatPerson || n.Told < minNamedPerson {
 			continue
 		}
 		out = append(out, engineFinding(ClassPersonRequestsWithoutAsk,
@@ -187,7 +201,7 @@ func personRequestsWithoutAsk(ev Evidence, isAgent func(string) bool) []Finding 
 	return out
 }
 
-func askOvertaken(ev Evidence, _ func(string) bool) []Finding {
+func askOvertaken(ev Evidence, _ func(string) SeatKind) []Finding {
 	w := ev.Work
 	overtaken := w.Superseded + w.Moot
 	if overtaken < minOvertaken || overtaken*100 < overtakenPercent*w.Answers {
@@ -204,7 +218,7 @@ func askOvertaken(ev Evidence, _ func(string) bool) []Finding {
 
 // noVerifiedBackup reads the backup alarm, at the backup policy's own age: the
 // one threshold the trim, the alarm and this finding share.
-func noVerifiedBackup(ev Evidence, _ func(string) bool) []Finding {
+func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 	if !ev.Backup.Standing {
 		return nil
 	}

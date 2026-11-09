@@ -11,10 +11,20 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-func agentsOnly(handle string) bool { return handle != "owner" }
+// kindOf names owner a person, ghost no seat, and every other handle an agent.
+func kindOf(handle string) advisor.SeatKind {
+	switch handle {
+	case "owner":
+		return advisor.SeatPerson
+	case "ghost":
+		return advisor.SeatUnknown
+	}
+	return advisor.SeatAgent
+}
 
 func named(handle string, told, woken int) worklet.NamedWithoutAsk {
-	return worklet.NamedWithoutAsk{Handle: handle, Told: told, Woken: woken, Comments: []string{"c-1"}}
+	return worklet.NamedWithoutAsk{Handle: handle, Told: told, Woken: woken,
+		Comments: []string{"c-1"}, WokenComments: []string{"c-1"}}
 }
 
 // EACH DETECTOR FIRES AT ITS THRESHOLD AND IS SILENT ONE BELOW IT, so a
@@ -34,6 +44,10 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			Named: []worklet.NamedWithoutAsk{named("pm", 5, 5)}}, nil},
 		"5 references that woke nobody": {worklet.WorkPatterns{AgentComments: 5,
 			Named: []worklet.NamedWithoutAsk{named("pm", 5, 0)}}, nil},
+		"5 hand-offs that said they ask": {worklet.WorkPatterns{AgentComments: 5,
+			Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 5, Asked: 5}}}, nil},
+		"a removed seat named 5 times": {worklet.WorkPatterns{AgentComments: 5,
+			Named: []worklet.NamedWithoutAsk{named("ghost", 5, 5)}}, nil},
 		"a person named 5 times": {worklet.WorkPatterns{AgentComments: 5,
 			Named: []worklet.NamedWithoutAsk{named("owner", 5, 5)}},
 			[]advisor.Class{advisor.ClassPersonRequestsWithoutAsk}},
@@ -47,7 +61,7 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var got []advisor.Class
-			for _, f := range advisor.Detect(advisor.Evidence{Work: tc.work}, agentsOnly) {
+			for _, f := range advisor.Detect(advisor.Evidence{Work: tc.work}, kindOf) {
 				got = append(got, f.Class)
 			}
 			if !slices.Equal(got, tc.want) {
@@ -61,10 +75,10 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 // and only then; it is a step outside the document, with nothing to send.
 func TestTheBackupFindingBlocksWhileTheBackupAlarmStands(t *testing.T) {
 	t.Parallel()
-	if got := advisor.Detect(advisor.Evidence{}, agentsOnly); len(got) != 0 {
+	if got := advisor.Detect(advisor.Evidence{}, kindOf); len(got) != 0 {
 		t.Fatalf("no standing alarm raised %v", got)
 	}
-	got := advisor.Detect(advisor.Evidence{Backup: advisor.Backup{Standing: true, Logs: 12}}, agentsOnly)
+	got := advisor.Detect(advisor.Evidence{Backup: advisor.Backup{Standing: true, Logs: 12}}, kindOf)
 	if len(got) != 1 {
 		t.Fatalf("a standing backup alarm raised %d findings, want 1", len(got))
 	}
@@ -88,9 +102,9 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 		many[i] = "c-" + strconv.Itoa(i)
 	}
 	work := worklet.WorkPatterns{AgentComments: 9, Answers: 3, Moot: 3, Overtaken: many[:5],
-		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, Comments: many[:5]},
-			{Handle: "qa", Told: 4, Woken: 4, Comments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}}}
-	found := advisor.Detect(advisor.Evidence{Work: work}, agentsOnly)
+		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, WokenComments: many[:5]},
+			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}}}
+	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
 	if len(found) != len(advisor.WorkClasses()) {
 		t.Fatalf("raised %d findings, want one per class the work patterns raise", len(found))
 	}

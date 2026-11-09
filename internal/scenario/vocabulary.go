@@ -72,7 +72,7 @@ type Vocabulary func(path []string, value string, key bool) bool
 
 // timelineKeys is every object key a timeline file has.
 var timelineKeys = []string{"name", "pattern", "seats", "steps", "handle", "kind", "at",
-	"actor", "verb", "item", "say", "mentions", "ask", "answers", "assignee", "status",
+	"actor", "verb", "item", "say", "mentions", "ask", "asks", "answers", "assignee", "status",
 	"watcher", "expect", "woken"}
 
 // TimelineVocabulary admits a timeline's own words and nothing else. A name is
@@ -103,12 +103,17 @@ var (
 	placeholder = regexp.MustCompile(`^U0[A-Z0-9]+$`)
 )
 
-// DocumentVocabulary admits a company document fixture's own words: any key
-// (the schema's), and values from the closed list, the handles, a cron line or
-// a placeholder id.
-func DocumentVocabulary(_ []string, value string, key bool) bool {
-	return key || slices.Contains(documentWords, value) || slices.Contains(Handles, value) ||
-		cronLine.MatchString(value) || placeholder.MatchString(value)
+// DocumentVocabulary admits a company document fixture's own words: a key the
+// schema names (schemaKeys) or one from the closed list, and values from the
+// closed list, the handles, a cron line or a placeholder id.
+func DocumentVocabulary(schemaKeys []string) Vocabulary {
+	return func(_ []string, value string, key bool) bool {
+		if key {
+			return slices.Contains(schemaKeys, value) || slices.Contains(documentWords, value)
+		}
+		return slices.Contains(documentWords, value) || slices.Contains(Handles, value) ||
+			cronLine.MatchString(value) || placeholder.MatchString(value)
+	}
 }
 
 // CheckTree walks every .json, .yaml and .yml file under fsys and reports each
@@ -129,6 +134,9 @@ func CheckTree(fsys fs.FS, vocab Vocabulary) ([]Violation, error) {
 			err = json.Unmarshal(raw, &doc)
 		} else {
 			err = yaml.Unmarshal(raw, &doc)
+			if commented(raw) {
+				out = append(out, Violation{File: name, Path: "#", Value: "a YAML comment"})
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("scenario: decode %s: %w", name, err)
@@ -157,4 +165,21 @@ func walk(v any, at []string, visit func([]string, string, bool)) {
 	case string:
 		visit(at, v, false)
 	}
+}
+
+// commented reports a YAML document that carries a comment, which holds prose
+// no vocabulary can check; a fixture says what it is in its test instead.
+func commented(raw []byte) bool {
+	var node yaml.Node
+	if yaml.Unmarshal(raw, &node) != nil {
+		return false
+	}
+	var walk func(*yaml.Node) bool
+	walk = func(n *yaml.Node) bool {
+		if n.HeadComment != "" || n.LineComment != "" || n.FootComment != "" {
+			return true
+		}
+		return slices.ContainsFunc(n.Content, walk)
+	}
+	return walk(&node)
 }
