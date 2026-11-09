@@ -105,6 +105,19 @@ const calledAfterHeader = "## Calls made after the session above was saved" +
 	" call marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked" +
 	" `→ error` did not take effect."
 
+// calledSinceHeader introduces the calls a session CUT OFF had its run make
+// through the seat's tools after the newest point it is known to hold
+// ([AfterSave.Interrupted]), which is not where it ends: the session may show
+// some of them, so they are never said to be missing from it, and a call shown
+// in both places is said to be one call, so a model reading it twice does not
+// take it for a second one.
+const calledSinceHeader = "## Calls this run made that the session above may not show" +
+	"\nThe session above was cut off, so it may show some of these calls and not others: they are" +
+	" every call the run working in it made through your tools since the last point the engine" +
+	" knows it reached. A call shown both above and here is ONE call, made once, not two. They" +
+	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
+	" write among them again; one marked `→ error` did not take effect."
+
 // AfterSave is what a session's run did through the seat's tools after the
 // session was saved, as a run that continues the session is told it
 // ([CalledAfter]).
@@ -129,24 +142,36 @@ type AfterSave struct {
 	// Dropped's calls were, by tool, beside calls the session holds. Said
 	// only beside a Dropped it accounts for.
 	Tally string
+
+	// Interrupted says the session was cut off ([InterruptedSession]), so the
+	// point its calls are told from is the newest one its launch is known to
+	// hold, not where it ends (internal/sandbox's savepoint.go): some of the
+	// calls may be in it as well. They are told under [calledSinceHeader],
+	// never as calls it lacks, and the dropped ones counted since that point.
+	Interrupted bool
 }
 
 // CalledAfter is the section telling a run that continues a session what its
 // run did through the seat's tools after the session was saved: the calls the
 // record lists, then how many more it kept only in a tally and that tally, the
-// way every other reader of a long run's calls is told what was dropped. ""
+// way every other reader of a long run's calls is told what was dropped — of a
+// session cut off, as calls it may already show ([AfterSave.Interrupted]). ""
 // where the run did nothing after the save.
 func CalledAfter(after AfterSave) string {
 	calls := strings.TrimSpace(after.Calls)
 	if calls == "" && after.Dropped <= 0 {
 		return ""
 	}
-	parts := []string{calledAfterHeader}
+	header := calledAfterHeader
+	if after.Interrupted {
+		header = calledSinceHeader
+	}
+	parts := []string{header}
 	if calls != "" {
 		parts = append(parts, calls)
 	}
 	if after.Dropped > 0 {
-		parts = append(parts, droppedAfter(after.Dropped))
+		parts = append(parts, droppedAfter(after.Dropped, after.Interrupted))
 		if tally := strings.TrimSpace(after.Tally); tally != "" {
 			parts = append(parts, tally)
 		}
@@ -157,15 +182,20 @@ func CalledAfter(after AfterSave) string {
 // droppedAfter says that n of the calls a session's run made after it was
 // saved are counted only in its record's tally, which says what they were
 // beside calls the session holds, and what a call counted only there asks of
-// the run: it has no outcome to go by.
-func droppedAfter(n int) string {
+// the run: it has no outcome to go by. Of a session cut off (interrupted),
+// they are the calls since the point its section says, not since a save.
+func droppedAfter(n int, interrupted bool) string {
 	calls := "calls"
 	if n == 1 {
 		calls = "call"
 	}
-	return "(+" + strconv.Itoa(n) + " further " + calls + " this run made after the session above was saved," +
+	since, before := "after the session above was saved", "before the save"
+	if interrupted {
+		since, before = "since that point", "before that point"
+	}
+	return "(+" + strconv.Itoa(n) + " further " + calls + " this run made " + since + "," +
 		" which its record did not keep one by one: past two hundred calls a run's record keeps its first and" +
-		" last and only a tally of those between. The tally below counts calls made before the save as well." +
+		" last and only a tally of those between. The tally below counts calls made " + before + " as well." +
 		" A call counted only in the tally has no outcome here: check whether its tool already did what it" +
 		" was for before doing it again.)"
 }

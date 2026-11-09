@@ -77,9 +77,11 @@ import (
 // Its place — the launch's ordinal ([PendingRun.LaunchSeq]) and its own among
 // that launch's captures — is reserved on the row before a byte is spooled
 // ([PendingStore.StampCapture]), with its SAVE POINT — how many of its round's
-// calls the run's log had taken when it was read before the pack
-// ([SessionCapture.Through]; every call the log takes is numbered as it is
-// appended, [BridgeCall.Appended]) — and the note the job had read through: what
+// calls the run's log had taken when it was read once the job was over, for a
+// job whose harness ended its own run ([SessionCapture.Through]; every call the
+// log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
+// the take of a job still working or one cut off, the newest its launch is
+// known to hold (savepoint.go) — and the note the job had read through: what
 // a launch that continues the session would need to know of what came after
 // it. How it came out is stamped beside: LANDED, REFUSED with why (no box to
 // read it out of, a pack that failed, a session past its bounds, the seat's
@@ -521,39 +523,50 @@ type SessionCapture struct {
 
 	// Through is the session's SAVE POINT: how many calls the round's log had
 	// taken ([BridgeLog.Appends]) at the one read of it the capture was placed
-	// by, made before the archive was packed ([Coordinator.takeCapture]).
-	// Every call the log takes after that read is numbered past it
-	// ([BridgeCall.Appended]), and is one the session had not been answered
-	// when it was read: a launch that continues the session is told each, with
-	// its outcome — whatever its place in the order the calls were made, so a
-	// call in flight at the read is told however many places the log's bound
-	// dropped below it — and how many of them the bound dropped from the
-	// middle, exactly (internal/agent/runner's calledAfter). A call answered
-	// between the read and the pack is in the session and told all the same:
-	// told twice, never not at all.
+	// by. For a job whose harness ended its own run — over, its harness gone
+	// cleanly by itself, its script packing it — that read is the capture's
+	// own, made once the job was over, after its script packed the archive
+	// and before the take ([Coordinator.takeCapture], savepoint.go);
+	// every other capture — the take of a job still working, and one
+	// cut off ([SessionCapture.Interrupted]) — is placed by an EARLIER read,
+	// the save point of the newest capture its launch is known to hold, or
+	// zero (savepoint.go), since its harness may have made, and had answered,
+	// calls it never wrote. Every call the log takes after that read is
+	// numbered past it ([BridgeCall.Appended]), and is one the session may not
+	// have been answered: a launch that continues the session is told each,
+	// with its outcome — whatever its place in the order the calls were made,
+	// so a call in flight at the read is told however many places the log's
+	// bound dropped below it — and how many of them the bound dropped from the
+	// middle, exactly (internal/agent/runner's calledAfter). A call after an
+	// earlier read that the session holds all the same — written before its
+	// harness was cut off — is told too: told more than once, never not at
+	// all.
 	//
 	// A POINTER, because no call taken is a save point — 0, a session that
 	// holds none of the round's calls — and "not stated" is another fact. A
 	// stamp an older build wrote states none, and a kept capture that states
 	// none is not continued ([followedCapture]), as a session whose place
-	// cannot be stated is not kept. On a REFUSED stamp nil is "not known": the
-	// refusal came before the log was read, or the log could not be read
-	// ([Coordinator.refuseUnplaced]).
+	// cannot be stated is not kept. A stamp REFUSED before its place was
+	// reserved ([Coordinator.refuseUnplaced]), which no launch continues,
+	// states the count its own read saw, or nil, "not known": the refusal came
+	// before the log was read, the log could not be read, or the capture is
+	// one no read places, which reads no log.
 	Through *int `json:"bridge_through,omitempty"`
 
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
-	// READS IT, written for a fleet mid-upgrade and read by nothing of this
-	// build: the last bridged call ([BridgeCall.Seq]) the log held
-	// ([BridgeLog.LastSeq]), and the places at or below it the log held no
-	// call at ([openPlaces]) — a call the bridge numbers as it arrives is
-	// recorded only once its tool answers, so a place below the highest can
-	// be a call in flight. That build tells a continuation every call past
-	// BridgeSeq or at a place BridgeOpen names; but BridgeOpen keeps only the
-	// highest [maxOpenPlaces] of them, which a long round's dropped middle
-	// fills, so a call in flight below them reads to it as answered, which no
-	// count of places can mend and Through does. FROM THE SAME READ AS
-	// THROUGH, so the two state one save point. On a REFUSED stamp a BridgeSeq
-	// of zero is "not known", as a nil Through is.
+	// READS IT — copied off the capture whose save point Through takes, where
+	// the capture is placed by an earlier read — written for a fleet
+	// mid-upgrade and read by nothing of this build: the last bridged call
+	// ([BridgeCall.Seq]) the log held ([BridgeLog.LastSeq]), and the places at
+	// or below it the log held no call at ([openPlaces]) — a call the bridge
+	// numbers as it arrives is recorded only once its tool answers, so a place
+	// below the highest can be a call in flight. That build tells a
+	// continuation every call past BridgeSeq or at a place BridgeOpen names;
+	// but BridgeOpen keeps only the highest [maxOpenPlaces] of them, which a
+	// long round's dropped middle fills, so a call in flight below them reads
+	// to it as answered, which no count of places can mend and Through does.
+	// FROM THE SAME READ AS THROUGH, so the two state one save point. On a
+	// REFUSED stamp a BridgeSeq of zero is "not known", as a nil Through is.
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
 
@@ -1139,32 +1152,38 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if _, held := c.heldTaker(); !held {
 		return nil, c.refuseUnplaced(ctx, by, run, current, at, nil, takerUnheld)
 	}
-	// THE SESSION'S PLACE IN THE RUN'S LOG, read BEFORE THE TAKE: how many
-	// calls the log had taken is how far the session had been answered
-	// ([SessionCapture.Through]). A call is appended once its tool has
-	// answered it, so every call this read counts was answered before the
-	// pack that follows, and a call answered after it is numbered past it,
-	// and told — a call in flight now among them, whatever its place. Kept
-	// beside the row rather than on it ([BridgeLog]), so a log the store
-	// could not read REFUSES the capture: a session whose place cannot be
-	// stated is one a launch that continues it could not tell what came
-	// after, and is not kept. Read as the job stands to hold it
+	// THE SESSION'S PLACE IN THE RUN'S LOG, read BEFORE THE TAKE, and only
+	// where its harness ended its own run, the one capture a read places
+	// ([SessionCapture.Through]): every other capture is placed off the row
+	// below and reads no log, so a log the store cannot read refuses none of
+	// those (savepoint.go). Such a job is over, its archive packed by its
+	// script once its harness exited, so this read comes after that pack:
+	// every call it counts was made, answered and written before that harness
+	// ended its run, and a call the log takes after it is numbered past it,
+	// and told. Kept beside the row rather than on it ([BridgeLog]), so a log
+	// the store could not read REFUSES the capture: a session whose place
+	// cannot be stated is one a launch that continues it could not tell what
+	// came after, and is not kept. Read as the job stands to hold it
 	// ([PendingStore.TurnLog]), so a log a relaunch has not yet opened to the
 	// row's job places the session where that opening will number from,
 	// never at 0.
-	calls, err := c.pending.TurnLog(ctx, current)
-	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, nil,
-			fmt.Sprintf("the run's bridged log could not be read: %v", err))
+	var calls *BridgeLog
+	if !at.cutOff {
+		read, readErr := c.pending.TurnLog(ctx, current)
+		if readErr != nil {
+			return nil, c.refuseUnplaced(ctx, by, run, current, at, nil,
+				fmt.Sprintf("the run's bridged log could not be read: %v", readErr))
+		}
+		calls = &read
 	}
 	scrub, err := c.scrubValues(ctx, current, box)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, &calls, err.Error())
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, err.Error())
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes})
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, &calls, takeRefusal(ctx, err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, takeRefusal(ctx, err))
 	}
 	if taken.Body == nil {
 		return nil, nil
@@ -1179,7 +1198,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// lease again was lost.
 	hold, held := c.heldTaker()
 	if !held {
-		return nil, c.refuseUnplaced(ctx, by, run, current, at, &calls, takerUnheld)
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, takerUnheld)
 	}
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
@@ -1191,7 +1210,25 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	stamp.placeAt(calls)
+	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN —
+	// the job over, its harness gone cleanly by itself and its script packing
+	// it, nothing cut off — which wrote every call it made before it exited.
+	// EVERY OTHER CAPTURE IS PLACED AT THE NEWEST SAVE POINT ITS
+	// LAUNCH IS KNOWN TO HOLD ([SessionCapture.placeAtNewest]): a job still
+	// working, and one CUT OFF ([readCapture]) — its harness killed, crashed
+	// or told to stop, or gone with a loss whose read cannot say how. A harness
+	// may make a call, and have it answered, before it writes the call to its
+	// record — Claude Code 2.1.310 writes a message only once the whole of it
+	// has streamed (measured) — and one killed in that window never writes it;
+	// its end's SIGTERM was measured only with the call's message already
+	// written. So the calls the log had taken before the pack are no measure of
+	// what such an archive holds, and a continuation told only the calls after
+	// them was never told those (savepoint.go).
+	if calls != nil {
+		stamp.placeAt(*calls)
+	} else {
+		stamp.placeAtNewest(current)
+	}
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
 	// reservation answered after the take's deadline reserves a place for a
 	// take that can no longer spool, and leaves the outcome stamp none of the
@@ -1679,8 +1716,9 @@ func loginValuesOf(raw []byte) []string {
 // UNDER A CONTEXT OF ITS OWN, by by at the latest, asked again while the store
 // does not answer ([Coordinator.stampSettled]): the take's budget may be what
 // ended it, and the stamp is what says so. calls is the run's log where the
-// refusal had read it, and nil where it had not: its stamp then states no save
-// point, "not known" ([SessionCapture.Through]).
+// refusal had read it, and nil where it had not — the refusal came before the
+// read, or the capture is one no read places, which reads none: its stamp then
+// states no save point, "not known" ([SessionCapture.Through]).
 func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
 	at capturePoint, calls *BridgeLog, why string) *SessionKept {
 

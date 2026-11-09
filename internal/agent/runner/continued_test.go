@@ -151,16 +151,22 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 // A CARRIED-ON SESSION IS TOLD WHAT CAME AFTER IT WAS SAVED. A lost job's round
 // continues the job's kept session, saved before the job was cut off: so it is
 // told it was cut off, that its transcript may end mid-call, and every call the
-// run made through the seat's tools that the session had not been answered —
-// every call the round's log took after the read the session's save point is,
-// so after the point it ends and one still in flight when it was saved, which
-// the log took once its tool answered — with the call's outcome, never one the
-// session holds. A round lost a second time starts a session of its own,
-// rather than replay the state it was lost in toward the round's limit.
+// run made through the seat's tools that the session may not have been
+// answered — every call the round's log took after the read the session's save
+// point is, so after the point it ends and one still in flight when it was
+// saved, which the log took once its tool answered — with the call's outcome,
+// never one the log took before that read. A session cut off is saved at the
+// newest point its launch was known to hold, which may be short of where it
+// ends — the round's start, where its launch landed no capture of its own — so
+// those calls are told as ones it may already show, each shown both there and
+// in the session one call, and never as calls it lacks. A round lost a second
+// time starts a session of its own, rather than replay the state it was lost
+// in toward the round's limit.
 //
 // Mutation: list every call of the round, read the save point against the
 // order the calls were made in rather than the order the log took them (and
-// the call in flight goes untold), drop the interrupted note, or continue the
+// the call in flight goes untold), drop the interrupted note, tell a session
+// cut off its calls in the words of one saved where it ends, or continue the
 // session after a second loss, and a case goes red.
 func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	t.Parallel()
@@ -192,8 +198,8 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 		return relauncher.last(t)
 	}
 
-	// SAVED ONCE ITS FIRST CALL WAS ANSWERED: the two after it are not in
-	// the session.
+	// SAVED ONCE ITS FIRST CALL WAS ANSWERED: the two after it may not be in
+	// the session, and are told as calls it may already show.
 	basis := keptBasis
 	basis.Interrupted, basis.Through = true, 1
 	first := carriedOn(basis, bridged, 1)
@@ -202,13 +208,35 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	}
 	brief := first.Session.Brief
 	for _, want := range []string{"## Your previous segment was cut off", prompts.InterruptedSession,
-		"## Calls made after the session above was saved", "jira_create", "slack_history"} {
+		"## Calls this run made that the session above may not show", "jira_create", "slack_history"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the carried-on session is not told %q:\n%s", want, brief)
 		}
 	}
 	if strings.Contains(brief, "slack_post") {
 		t.Errorf("the carried-on session is handed a call it holds:\n%s", brief)
+	}
+
+	// PLACED AT THE ROUND'S START, as a capture cut off is where its launch
+	// has landed none: every call of the round is told, those the session
+	// holds among them, as calls it may already show and each one call —
+	// never as calls it lacks.
+	start := keptBasis
+	start.Interrupted, start.Through = true, 0
+	fromStart := carriedOn(start, bridged, 1)
+	if fromStart.Session == nil {
+		t.Fatal("a lost job's round placed at its start continues no kept session")
+	}
+	for _, want := range []string{"## Calls this run made that the session above may not show",
+		"ONE call, made once", "slack_post", "jira_create", "slack_history"} {
+		if !strings.Contains(fromStart.Session.Brief, want) {
+			t.Errorf("placed at the round's start, the carried-on session is not told %q:\n%s", want,
+				fromStart.Session.Brief)
+		}
+	}
+	if strings.Contains(fromStart.Session.Brief, "so they are not in it") {
+		t.Errorf("placed at the round's start, the carried-on session is told calls it may hold are not in "+
+			"it:\n%s", fromStart.Session.Brief)
 	}
 
 	// SAVED ONCE ITS SECOND CALL WAS ANSWERED, while its first — a slow one,

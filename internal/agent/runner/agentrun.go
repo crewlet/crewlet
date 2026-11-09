@@ -281,10 +281,12 @@ type SessionBasis struct {
 
 	// Through and NoteCursor are what the session accounts for, so the brief
 	// that continues it carries what came after: its save point — how many of
-	// the round's calls the run's log had taken when the capture read it
-	// (sandbox.SessionCapture.Through), every call the log took after it
-	// ([BridgedCall.Appended] past it) being one the session had not been
-	// answered — and the last note read. Zero holds none of the round's calls.
+	// the round's calls the run's log had taken at the read the capture was
+	// placed by, its own or, where its harness may not have written every call
+	// it made, an earlier capture's (sandbox.SessionCapture.Through), every
+	// call the log took after it ([BridgedCall.Appended] past it) being one the
+	// session may not have been answered — and the last note read. Zero holds
+	// none of the round's calls.
 	Through    int
 	NoteCursor int
 
