@@ -138,10 +138,11 @@ var alarmMeaning = map[Kind]string{
 		"could read in the hour it was handed back — a roll that outlasted the " +
 		"hour, a key no node holds, or a record no build translates — kept whole " +
 		"in `CREWLET_DLQ`. Each is a wake nobody has had. The first node whose feed " +
-		"starts able to read an entry derives its wake and drops it; one nothing " +
-		"replays expires after `stream.event_retention_hours`, and its wake with " +
-		"it. One alarm names every such log, leading with the one whose oldest " +
-		"entry expires soonest.",
+		"starts able to read an entry derives its wake and drops it; an operator " +
+		"can discard one whose wake they have decided to lose; one nothing replays " +
+		"or discards expires after `stream.event_retention_hours`, and its wake " +
+		"with it. One alarm names every such log, leading with the one whose " +
+		"oldest entry expires soonest.",
 	KindFeedStopped: "A change feed on this node has held no consumer for " +
 		"longer than the one-minute stall grace, so this node publishes no " +
 		"wake from it. It opens its group again on its own and is handed every " +

@@ -149,6 +149,7 @@ const (
 	StoreBytes                       = "crewlet.store.bytes"
 	StorePoolWait                    = "crewlet.store.pool.wait"
 	StoreWalBytes                    = "crewlet.store.wal.bytes"
+	TrackerFeedDeadLetterDiscarded   = "crewlet.tracker.feed.dead_letter_discarded"
 	TrackerFeedDeadLetterExpired     = "crewlet.tracker.feed.dead_letter_expired"
 	TrackerFeedDeadLettered          = "crewlet.tracker.feed.dead_lettered"
 	TrackerFeedDeferred              = "crewlet.tracker.feed.deferred"

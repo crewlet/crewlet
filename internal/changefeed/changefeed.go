@@ -95,8 +95,10 @@
 // acked, so it stops holding a slot of the consumer's pending set without
 // anybody's wake being lost. An entry is kept for the event stream's retention
 // and then expires; the first node whose feed starts able to read it replays
-// it ([Feed.replay]) through the same claim a delivery passes, and drops it.
-// ADR-0012's amendment records the decision.
+// it ([Feed.replay]) through the same claim a delivery passes, and drops it;
+// and an operator who has decided its wake can be lost discards it (the
+// engine's operator surface, `crewlet feeds discard`). ADR-0012's amendment
+// records the decision.
 package changefeed
 
 import (
@@ -971,7 +973,9 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 // failed. One this node still cannot read (any deferral, a record it cannot
 // translate, an entry a newer build wrote) is LEFT for a node that can. A
 // frame this fleet did not write is dropped, loudly, since no node will ever
-// act on it. Nothing else clears an entry but its retention.
+// act on it. Nothing else this package does clears an entry: an operator's
+// discard (internal/engine's FeedDeadLetters, through the same
+// [DeadLetters]) and the retention are the other two ways one goes.
 func (f *Feed) replay(ctx context.Context, src Source, records Records) bool {
 	if f.deadLetters == nil {
 		return true

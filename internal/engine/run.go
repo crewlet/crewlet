@@ -225,11 +225,13 @@ type Engine struct {
 	metrics *metrics.Recorder
 
 	// deadLetterLedger is the queue's dead-letter verbs as this node's wake
-	// feeds call them, accounting for every entry a replay drops so the
-	// alarm reading never counts it as a lost wake (feeddeadletters.go). ONE
-	// PER PROCESS, built in [New] over the node's queue and the fleet's
-	// claims, so every feed's replay and the reading share it. Nil on an
-	// engine literal a case builds without a queue.
+	// feeds and its operator surface call them, accounting for every entry
+	// a replay or a discard drops so the alarm reading never counts it as a
+	// wake the retention lost (feeddeadletters.go). ONE PER PROCESS, built
+	// in [New] over the node's queue and the fleet's claims, so every
+	// feed's replay, an operator's discard ([Engine.FeedDeadLetters]) and
+	// the reading share it. Nil on an engine literal a case builds without
+	// a queue.
 	deadLetterLedger *deadLetterLedger
 
 	// objectives is the node's service objective meter, which every

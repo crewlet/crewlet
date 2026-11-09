@@ -265,6 +265,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runGitlet(environ, rest, stdout, stderr)
 	case "fleet":
 		return runFleet(environ, rest, stdout, stderr)
+	case "feeds":
+		return runFeeds(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
@@ -322,6 +324,9 @@ Usage:
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
+  crewlet feeds <cmd>         The wake feeds' dead letters, records no node could
+                              read: dead-letters lists them, and discard gives
+                              one's wake up for good
   crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
@@ -2695,6 +2700,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// and the removal of one gone for good through a member's system
 		// account — which is reachable only from inside a member.
 		FleetBroker: e.FleetBroker(),
+		// THE WAKE FEEDS' DEAD LETTERS, listed and discarded through the
+		// engine's one ledger over its queue, so a discard takes the claim
+		// every node's expiry count reads: kept in the broker's dead-letter
+		// stream, which binds no socket on the default topology.
+		DeadLetters: feedDeadLetters(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -3814,6 +3824,17 @@ func (w engineConfigWriter) SetSeat(
 func nodeGate(e *engine.Engine) api.NodeGate {
 	if g := e.NodeGate(); g != nil {
 		return g
+	}
+	return nil
+}
+
+// feedDeadLetters is the wake feeds' dead letters as the engine lists and
+// discards them — through its one ledger over the node's queue — or an UNTYPED
+// nil where the engine keeps none, which [api.New] then refuses by name. A
+// typed nil would pass its check and panic on the first read.
+func feedDeadLetters(e *engine.Engine) api.FeedDeadLetters {
+	if d := e.FeedDeadLetters(); d != nil {
+		return d
 	}
 	return nil
 }
