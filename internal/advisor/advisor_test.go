@@ -3,6 +3,7 @@ package advisor_test
 import (
 	"encoding/json"
 	"go/build"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -87,6 +88,38 @@ func TestFindingsAreListedTheMostCostlyFirst(t *testing.T) {
 
 // apply sends a change the way the dashboard does, in memory: the entity as
 // the config surface reads it, Set's fields replaced, decoded back in place.
+// decoded is v as JSON decodes it, the shape the dashboard reads a change in.
+func decoded(t *testing.T, v map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// mergeInto merges from into into as the dashboard does: nested objects key
+// by key, anything else replaced.
+func mergeInto(into, from map[string]any) map[string]any {
+	out := maps.Clone(into)
+	if out == nil {
+		out = map[string]any{}
+	}
+	for k, v := range from {
+		had, hadObject := out[k].(map[string]any)
+		if next, isObject := v.(map[string]any); isObject && hadObject {
+			out[k] = mergeInto(had, next)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func apply(t *testing.T, c *config.Company, ch advisor.Change) {
 	t.Helper()
 	replace := func(entity any) {
@@ -98,15 +131,8 @@ func apply(t *testing.T, c *config.Company, ch advisor.Change) {
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			t.Fatal(err)
 		}
-		set, err := json.Marshal(ch.Set)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var values map[string]any
-		if err := json.Unmarshal(set, &values); err != nil {
-			t.Fatal(err)
-		}
-		for k, v := range values {
+		fields = mergeInto(fields, decoded(t, ch.Merge))
+		for k, v := range decoded(t, ch.Set) {
 			fields[k] = v
 		}
 		merged, err := json.Marshal(fields)

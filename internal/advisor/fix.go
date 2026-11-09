@@ -68,9 +68,12 @@ const (
 // tag that GET answered, first with `dry_run=true` for the preview and then
 // for real, with Summary as the revision's summary.
 type Change struct {
-	Entity  string         `json:"entity"`
-	ID      string         `json:"id"`
-	Set     map[string]any `json:"set"`
+	Entity string         `json:"entity"`
+	ID     string         `json:"id"`
+	Set    map[string]any `json:"set"`
+	// Merge is merged into the entity as read before Set, nested objects key
+	// by key, so a change to one nested field keeps every other as it is now.
+	Merge   map[string]any `json:"merge,omitempty"`
 	Summary string         `json:"summary"`
 }
 

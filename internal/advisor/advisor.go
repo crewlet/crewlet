@@ -19,6 +19,12 @@
 // package only gives it an owner's words and a fix. A warning with no
 // [config.AdvisoryClass] is still listed, in the words `crewlet validate`
 // prints, with the setting it is about.
+//
+// # An agent's access request is the same kind of fix
+//
+// An agent asks for more access by naming one key of the closed catalogue in
+// access.go, and the change is built here for that agent alone; a person
+// previews and sends it before the question is answered (ADR-0118).
 package advisor
 
 import (
