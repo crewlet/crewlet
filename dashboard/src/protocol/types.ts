@@ -3587,6 +3587,8 @@ export interface WorkItem {
   muted?: string[];
   tags?: string[];
   start_at?: string;
+  /** Why the item waits until `start_at`, in one line, as whoever set the wait said it. */
+  wait_reason?: string;
   due_at?: string;
   due_all_day?: boolean;
   estimate_minutes?: number;
@@ -5728,6 +5730,9 @@ export interface WorkAskView {
   comment: string;
   asked_of: string;
   open: boolean;
+  /** An open ask the facts settled: asked again since (`superseded`), or its
+   *  item finished (`moot`). It waits on nobody; an answer is still recorded. */
+  overtaken?: "superseded" | "moot";
   /** Who closed it and when: the answer's author, or with `resolved` whoever
    *  resolved it without an answer. Absent while open. */
   answered_by?: string;
