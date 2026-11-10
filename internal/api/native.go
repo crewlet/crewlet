@@ -367,6 +367,14 @@ func (l liveWork) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (wo
 	return r.WorkPatterns(ctx, q)
 }
 
+func (l liveWork) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.TurnsMoved(ctx, q)
+}
+
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 

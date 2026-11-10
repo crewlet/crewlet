@@ -107,6 +107,11 @@ func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (workle
 	return call(ctx, w.r, opWorkPatterns, nil, q)
 }
 
+// TurnsMoved answers which of a set of turns moved work on the tracker.
+func (w Work) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, w.r, opTurnsMoved, nil, q)
+}
+
 // Activity answers what happened to a task or a project.
 func (w Work) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 	worklet.ActivityAnswer, error) {
