@@ -38,11 +38,16 @@ func TestAnAskTheFactsOvertookNoLongerWaits(t *testing.T) {
 	r := newRoundTrip(t)
 	filedTask(t, r, "w")
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
+	// AGENTS ASK, as the product's asks are, and a person answers.
 	comment := func(id, author string, ask string, answers *string, minute int) {
 		t.Helper()
-		c := worklet.Comment{ID: id, Task: "w", Author: author, AuthorKind: worklet.AuthorHuman,
+		kind := worklet.AuthorAgent
+		if author == "ana" || author == "jane" {
+			kind = worklet.AuthorHuman
+		}
+		c := worklet.Comment{ID: id, Task: "w", Author: author, AuthorKind: kind,
 			Body: "which way?", Ask: ask, Answers: answers, CreatedAt: at.Add(time.Duration(minute) * time.Minute)}
-		if _, err := r.writer.As(author, worklet.AuthorHuman, worklet.Provenance{}).UpdateTask(t.Context(),
+		if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(t.Context(),
 			"op-"+id, "w", "ENG", worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment,
 			nil); err != nil {
 			t.Fatalf("comment %s: %v", id, err)
@@ -80,12 +85,19 @@ func TestAnAskTheFactsOvertookNoLongerWaits(t *testing.T) {
 	comment("c-3", "qa", "ana", nil, 3)
 	check("pm asked twice and qa once", map[string]string{"c-1": "superseded", "c-2": "", "c-3": ""}, 2)
 
+	// THE SAME PERSON ONLY: pm asking bo, and a person's own ask beside an
+	// agent's to somebody else, overtake nothing.
+	comment("c-5", "pm", "bo", nil, 5)
+	comment("c-6", "jane", "bo", nil, 6)
+	comment("c-7", "pm", "cy", nil, 7)
+	check("pm asked bo and cy, jane asked bo", map[string]string{"c-2": "", "c-5": "", "c-6": "", "c-7": ""}, 2)
+
 	answered := "c-1"
 	comment("c-4", "ana", "", &answered, 4)
 	check("ana answered the superseded ask", map[string]string{"c-1": "", "c-2": "", "c-3": ""}, 2)
 
 	move("op-done", worklet.StatusDone)
-	check("the item is done", map[string]string{"c-2": "moot", "c-3": "moot"}, 0)
+	check("the item is done", map[string]string{"c-2": "moot", "c-3": "moot", "c-6": "moot"}, 0)
 
 	move("op-reopen", worklet.StatusTodo)
 	check("the item is reopened", map[string]string{"c-2": "", "c-3": ""}, 2)
