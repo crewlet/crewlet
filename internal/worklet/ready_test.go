@@ -121,8 +121,8 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	submitted := newTask("review")
 	submitted.Assignee, submitted.Status = "ana", worklet.StatusInReview
 	submitted.StatusGroup = worklet.StatusInReview.Group()
-	if _, err := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}).CreateTask(t.Context(),
-		"op-review", submitted, nil); err != nil {
+	if _, err := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke()).
+		CreateTask(t.Context(), "op-review", submitted, nil); err != nil {
 		t.Fatalf("CreateTask review: %v", err)
 	}
 	r.drain()
@@ -305,7 +305,7 @@ func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
 	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
 	fileFor(t, r, "asked", "ana", worklet.StatusInReview, worklet.PriorityLow)
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke())
 	mine := newTask("mine")
 	mine.Assignee, mine.Status, mine.StatusGroup = "ana", worklet.StatusTodo, worklet.StatusTodo.Group()
 	if _, err := ana.CreateTask(t.Context(), "op-mine", mine, nil); err != nil {
