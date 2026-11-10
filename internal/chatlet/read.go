@@ -2187,7 +2187,7 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 			continue
 		}
 		out.views = append(out.views, MessageView{
-			Message: message, ChannelSeq: seq,
+			Message: message.forReaders(), ChannelSeq: seq,
 			Position: statelog.Position{
 				Stream: stream, Generation: uint32(generation),
 				Seq: uint64(position),

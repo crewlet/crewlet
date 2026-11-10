@@ -228,7 +228,9 @@ type Message struct {
 	// it yet: the applier writes a message's document once, at its post's
 	// position, so a field a later build began to fill would be missing from
 	// every post a node applied before that build and present on a node that
-	// applied the same post after it.
+	// applied the same post after it. NEVER HANDED TO A READER: every read
+	// and every write's answer takes the message without it
+	// ([Message.forReaders]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// CreatedAt is the BROKER's own instant. A message's displayed time
@@ -308,6 +310,17 @@ func workingForOf(record MutationRecord) *types.WorkingFor {
 		return nil
 	}
 	return record.WorkingFor.Clone()
+}
+
+// forReaders is m as a read or a write's answer hands it to whoever asked:
+// without whom an agent's post was written for ([Message.WorkingFor]), which
+// the document keeps for the engine's own reads alone. A room's reader needs
+// no requester's seat, nor a credential's login and apps, to read what was
+// said, so neither leaves the package on a message: the transcript, a thread,
+// the agents' read tools and the answer of a post, an edit or a removal.
+func (m Message) forReaders() Message {
+	m.WorkingFor = nil
+	return m
 }
 
 // widen adds the seats an EDIT newly reached to a post's reach, each once and

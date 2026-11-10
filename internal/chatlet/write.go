@@ -2138,7 +2138,7 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		return Written{}, err
 	}
 	return s.decided(ctx, OpPost, channelID, id, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }
@@ -2568,7 +2568,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 		return Written{}, err
 	}
 	return s.decided(ctx, OpEdit, channelID, messageID, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }
@@ -2660,7 +2660,7 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 		return Written{}, err
 	}
 	return s.decided(ctx, OpDelete, channelID, messageID, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }

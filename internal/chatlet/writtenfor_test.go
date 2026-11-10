@@ -1,6 +1,7 @@
 package chatlet_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AN AGENT'S MESSAGE THAT WAKES SOMEBODY CARRIES WHOM IT WAS WRITTEN FOR, AND
@@ -287,5 +289,43 @@ func TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody(t *testing.T)
 	if rec := r.lastRecord(); !reflect.DeepEqual(rec.WorkingFor, ada) || rec.V != 3 {
 		t.Errorf("pm's silent answer to eng's ask is recorded written for %+v at version %d, want ada at 3",
 			rec.WorkingFor, rec.V)
+	}
+}
+
+// WHOM A MESSAGE WAS WRITTEN FOR STAYS OFF ITS READS (ADR-0109): the document
+// keeps it for the engine's own reads, and a room's transcript hands the
+// message to its reader without it, as every read and every write's answer
+// does. A room's reader needs no requester's seat, nor a credential's login
+// and apps, to read what was said.
+//
+// Mutation: hand the transcript the document as it is stored, and the view
+// carries ada.
+func TestWhomAMessageWasWrittenForStaysOffItsReads(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	h := newReadHarness(t)
+	h.apply(readCreateRoom("room-1", "eng", chatlet.KindPublic, "ada", "dev"))
+	post := readPost("room-1", "msg-1", "dev", "for the record")
+	post.V, post.ActorKind, post.WorkingFor = chatlet.WorkingForVersion, chatlet.AuthorAgent, ada
+	at := h.apply(post)
+
+	got, err := h.reader().Messages(t.Context(), "ada", chatlet.TranscriptQuery{ChannelID: "room-1"},
+		statelog.FloorAt(statelog.ReadSession, at))
+	if err != nil {
+		t.Fatalf("read the room: %v", err)
+	}
+	views := said(got.Messages)
+	if len(views) != 1 || views[0].Message.ID != "msg-1" || views[0].Message.WorkingFor != nil {
+		t.Errorf("the room's transcript hands over %+v, want msg-1 with nobody it was written for", views)
+	}
+	var document []byte
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT document FROM chat_messages WHERE id = ?`,
+			"msg-1").Scan(&document)
+	}); err != nil {
+		t.Fatalf("read msg-1's document: %v", err)
+	}
+	if stored, err := chatlet.DecodeMessage(document); err != nil || !reflect.DeepEqual(stored.WorkingFor, ada) {
+		t.Errorf("msg-1's document keeps written for %+v (%v), want ada", stored.WorkingFor, err)
 	}
 }
