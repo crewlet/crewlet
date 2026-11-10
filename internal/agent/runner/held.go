@@ -58,7 +58,8 @@ type HeldCommit interface {
 	// Marked is how an earlier attempt at the same answer left the call, as
 	// the claim that carries the run on read its row, and false where no
 	// attempt had marked it ([sandbox.HeldCall.Calling]): Made says whether
-	// that attempt recorded what the call returned (Result).
+	// that attempt recorded what the call returned (Result), and Unread that
+	// it did where what it recorded cannot be opened here.
 	//
 	// THE CLAIM'S OWN READ, which needs no other: nothing clears a mark but
 	// the next job's opening, which ends the claim, so a call the claim read
@@ -69,7 +70,8 @@ type HeldCommit interface {
 	// Begin marks the call as being made. First is true where this mark is
 	// the first, and the caller makes the call; false where some earlier
 	// attempt at the same answer marked it, and Made says whether that
-	// attempt recorded what the call returned (Result).
+	// attempt recorded what the call returned (Result), and Unread that it did
+	// where what it recorded cannot be opened here.
 	Begin(ctx context.Context) (HeldPrior, error)
 	// Record records what the call returned — result, as the run that
 	// carries the work on is handed it — and the call itself as a call of the
@@ -98,13 +100,25 @@ type HeldPrior struct {
 	First  bool
 	Made   bool
 	Result sandbox.HeldResult
+
+	// Unread is a call made whose result its attempt recorded, where what
+	// the result says cannot be opened on the node carrying the run on — no
+	// key it was sealed under is there (internal/engine's heldCommit.prior):
+	// Made is set, and Result holds only whether the tool reported a failure,
+	// off the call's entry recorded with it (sandbox.HeldCall.Call), never
+	// its output.
+	Unread bool
 }
 
 // outcome is what became of a call some earlier attempt at the same answer
-// marked, as the run is told it: the result that attempt recorded, or, where
-// it recorded none, that the call may or may not have taken effect.
+// marked, as the run is told it: the result that attempt recorded — or, where
+// it cannot be read here, that the call was made and whether it failed — or,
+// where it recorded none, that the call may or may not have taken effect.
 func (p HeldPrior) outcome() heldOutcome {
-	if p.Made {
+	switch {
+	case p.Made && p.Unread:
+		return heldOutcome{kind: heldUnread, result: p.Result}
+	case p.Made:
 		return heldOutcome{kind: heldMade, result: p.Result}
 	}
 	return heldOutcome{kind: heldUnknown}
@@ -137,6 +151,9 @@ const (
 	heldDenied
 	heldNotMade
 	heldUnknown
+	// heldUnread is a call made and its result recorded, which the node
+	// carrying the run on cannot open ([HeldPrior.Unread]).
+	heldUnread
 )
 
 // makeHeld makes the held call the person allowed, through the seat's own
@@ -318,6 +335,17 @@ func (h *HeldCall) told(b provenance.Boundary) string {
 		return "The call was started, and the node making it stopped before its result was " +
 			"recorded, so it may or may not have taken effect. Check its effect before you call " +
 			"the tool again."
+	case heldUnread:
+		// MADE, AND SAID SO: never as a call whose result is unknown, which
+		// it is not — what it returned is on its record, and the round's log
+		// lists it made — and with whether it failed, which that record says.
+		if o.result.Failed {
+			return "The call was made, and the tool reported a failure. What it said is recorded, but " +
+				"cannot be read on the node carrying this run on."
+		}
+		return "The call was made, and the tool reported success, so it ALREADY RAN: do not call the " +
+			"tool again for this. What it returned is recorded, but cannot be read on the node carrying " +
+			"this run on."
 	}
 	return "The call was not made."
 }

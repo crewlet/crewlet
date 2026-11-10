@@ -66,6 +66,7 @@ func (r *Rotated) session() string                         { return r.SessionID 
 func (r *Rotated) boxKept() bool                           { return r.BoxKept }
 func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
 func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
+func (r *Rotated) tellsHeld() string                       { return "" }
 func (r *Rotated) keeps() bool                             { return true }
 func (r *Rotated) branch() string                          { return "" }
 func (r *Rotated) refusal() error                          { return nil }

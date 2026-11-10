@@ -490,3 +490,75 @@ func TestATempRootTooDeepForASocketIsRefusedNamingTMPDIR(t *testing.T) {
 		t.Errorf("a refused host left %d entries behind in the temp root", len(entries))
 	}
 }
+
+// waitingDispatcher holds a call to `slow` until its harness stops waiting for
+// it, and says of every call it answers whether its harness had by then.
+type waitingDispatcher struct {
+	entered chan struct{}
+	gone    chan bool
+}
+
+func (d *waitingDispatcher) Offered() []toolsession.Tool {
+	return []toolsession.Tool{tool("slow"), tool("quick")}
+}
+
+func (d *waitingDispatcher) Revision() uint64 { return 0 }
+
+func (d *waitingDispatcher) Call(call toolsession.Call) toolsession.Result {
+	if call.Name == "slow" {
+		close(d.entered)
+		<-call.Abandoned
+	}
+	select {
+	case <-call.Abandoned:
+		d.gone <- true
+	default:
+		d.gone <- false
+	}
+	return toolsession.Result{Output: call.Name + " done"}
+}
+
+// A CALL ITS HARNESS GAVE UP ON REACHES THE DISPATCHER AS ABANDONED. A harness
+// that stops waiting for a call can cancel its request — Claude Code does at
+// its tool timeout, and discards a late answer — while the call goes on under
+// its run's context, whose effect then happens with no reader for its answer.
+// So the dispatcher is handed whether the request was cancelled, and only
+// that: closed once the harness cancelled the call, and open as a call returns
+// to a harness still waiting for it.
+//
+// Mutation: hand the dispatcher no signal, or one that is never closed, and the
+// call the harness gave up on is read as one it was answered.
+func TestACallItsHarnessGaveUpOnReachesTheDispatcherAsAbandoned(t *testing.T) {
+	t.Parallel()
+	h := host(t)
+	d := &waitingDispatcher{entered: make(chan struct{}), gone: make(chan bool, 2)}
+	s, err := h.Open(t.Context(), "crewlet", "", d)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Retire()
+	cs := client(t, s)
+
+	if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "quick", Arguments: map[string]any{}}); err != nil {
+		t.Fatalf("CallTool(quick): %v", err)
+	}
+	if <-d.gone {
+		t.Error("a call answered to the harness waiting for it reached the dispatcher as abandoned")
+	}
+
+	// THE HARNESS GIVES UP ON THE CALL while it runs: it cancels its request.
+	ctx, giveUp := context.WithCancel(t.Context())
+	returned := make(chan error, 1)
+	go func() {
+		_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "slow", Arguments: map[string]any{}})
+		returned <- err
+	}()
+	<-d.entered
+	giveUp()
+	if !<-d.gone {
+		t.Error("a call its harness gave up on reached the dispatcher as one it still waited for")
+	}
+	if err := <-returned; err == nil {
+		t.Error("the harness was answered a call it had given up on")
+	}
+}
