@@ -276,31 +276,62 @@ func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 //
 // A member restarted onto a keyring sharing no key with its peers — a rotation
 // that dropped the old key before every node held the new one — presents a key
-// no peer holds: it is isolated, and each peer counts its dials as
-// `route/unknown`.
+// no peer holds: every route it dials is refused, and each peer counts every
+// one of them as `route/unknown`.
+//
+// DECIDED ON EVERY DIAL, NEVER ON A ROUTE LIST (#803). A member lists a route
+// it dialled before its peer has judged it: the peer sends its INFO when it
+// accepts the connection, before it reads the CONNECT it judges, and the
+// dialler registers the route on that INFO (nats-server v2.15.2, route.go's
+// createRoute and processRouteInfo). So the member names a peer for as long as
+// each refusal takes to arrive, and a peer names the member while the member
+// judges the peer's own dial. Nor does the route report say which end admitted
+// a route: an accepted route is marked solicited once its own end dials the
+// same peer (upgradeRouteToSolicited), and nats-server calls a route it dialled
+// authenticated only at the first PONG to its PING (addRoute). The refusal is
+// what decides it, since a refused connection is closed and never routes.
+//
+// So the case runs on forwarders it counts. The peers' own dials to the member
+// stop at their forwarders, so every route between them is one the member
+// dialled. Once each peer has refused it, the member's forwarders take no new
+// dial and the ones in flight end: a route a peer admitted is held open and
+// never would. Every one ends, so every one was refused, and each peer counted
+// one refusal for each dial that reached it.
 //
 // NOT PARALLEL, for TestAFleetStaysWholeThroughAKeyRotation's reason.
 //
-// Mutation: count nothing → the peers' counts never arrive, red.
+// Mutations: count nothing, or count an unknown key's route as invalid → no
+// route/unknown refusal arrives, red; admit an unknown key's route → none is
+// counted, red; admit a route whose refusal was counted → it is held open and
+// the member's forwarder never empties, red; hand the sink each refusal
+// twice, or only those the log limiter writes → refusals and dials differ,
+// red.
 func TestAMemberOnAnotherKeyringIsRefusedByKey(t *testing.T) {
-	c := StartCluster(t, 3, js.Config{})
+	c := StartPartitionableCluster(t, 3, js.Config{})
 	peers := []*refusalCount{countRefusalsOf(c.Servers[0]), countRefusalsOf(c.Servers[1])}
 	c.StopMember(2)
+	for i := range peers {
+		// THE PEERS' DIALS TO IT END AT THEIR FORWARDERS, and its own to
+		// them carry nothing from before it stopped: the routes it held
+		// end with it, and its forwarders open again counting from zero.
+		c.drain(t, i, 2)
+		c.drain(t, 2, i)
+		c.reopen(t, 2, i)
+	}
 	c.Configs[2].FleetAuth = fleetOf(t, "k9",
 		runtoken.KeyMaterial{ID: "k9", Material: "a keyring no peer holds"})
 	// THE SERVER ALONE: a client of it would wait for a quorum it cannot reach.
-	isolated := c.restartServer(t, 2)
+	c.restartServer(t, 2)
 	unknown := js.PeerRefusal{Listener: js.ListenerRoute, Presented: js.PresentedUnknown}
 	for i, count := range peers {
 		eventually(t, 30*time.Second, fmt.Sprintf("member %d to count the stranger's dials", i),
 			func() bool { return count.of(unknown) > 0 })
 	}
-	if routed := isolated.RoutePeers(); len(routed) != 0 {
-		t.Errorf("the member on another keyring routes to %v", routed)
-	}
-	for i := range 2 {
-		if slices.Contains(c.Servers[i].RoutePeers(), c.Configs[2].ServerName) {
-			t.Errorf("member %d routes to the member on another keyring", i)
+	for i, count := range peers {
+		dials := c.drain(t, 2, i)
+		if refused := count.of(unknown); refused != uint64(dials) {
+			t.Errorf("member %d counted %d %s/%s refusals for the %d routes the member on "+
+				"another keyring dialled to it", i, refused, unknown.Listener, unknown.Presented, dials)
 		}
 	}
 }
