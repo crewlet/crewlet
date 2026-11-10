@@ -667,9 +667,14 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	return nil
 }
 
-// held records an agent seat's held wake, once per change and seat: under the
-// id its wake would have had, so a redelivery collapses onto the same record. A
-// person, or a seat with no id, has no turn to hold and records nothing.
+// HeldID is the id a held wake is recorded under: name-based on the id its
+// wake would have had, the same on every node and redelivery, never that id.
+func HeldID(wake uuid.UUID) uuid.UUID { return uuid.NewSHA1(wake, []byte("held")) }
+
+// held records an agent seat's held wake, once per change and seat: under an id
+// derived from the one its wake would have had, so a redelivery collapses onto
+// it and a wake another build makes of the same change is never taken for it.
+// A person, or a seat with no id, has no turn to hold and records nothing.
 func (s *Service) held(ctx context.Context, ev *events.Event, r Routed, party Party) error {
 	if party.AgentID == uuid.Nil || party.Human {
 		return nil
@@ -678,7 +683,7 @@ func (s *Service) held(ctx context.Context, ev *events.Event, r Routed, party Pa
 		NotificationSource: r.Source, Origin: r.Origin},
 		events.TraceContext{TraceID: ev.TraceID, ParentSpanID: ev.SpanID})
 	if r.WakeID != uuid.Nil {
-		rec.ID = r.WakeID
+		rec.ID = HeldID(r.WakeID)
 		if !r.WakeAt.IsZero() {
 			rec.Timestamp = r.WakeAt.UTC()
 		}

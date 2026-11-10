@@ -415,8 +415,8 @@ wake_held                  # an agent seat a change told and did not wake (its
                            # another agent's words that ask nothing): the
                            # seat, and the origin it was told under, which
                            # the turn ledger counts as the wake's `held`
-                           # disposition. One per change and seat, under the
-                           # id its wake would have had
+                           # disposition. One per change and seat, under an
+                           # id derived from the one its wake would have had
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
