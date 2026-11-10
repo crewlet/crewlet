@@ -2,13 +2,17 @@ package jetstream
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
@@ -338,6 +342,49 @@ func apiRequests(t *testing.T, q *Queue, subject string) func() []string {
 // mailbox sweep, on the maintenance worker's lifetime — asks it once and fails
 // its tick when a member drops it. Each interception is of its own listing's
 // subject, so neither listing's re-ask is the other's.
+//
+// # Two of the cases in a bubble
+//
+// The first case's claim and the third's are about the clock — when a dropped
+// page is asked again, and what deadline each request carries — so both run
+// IN A SYNCTEST BUBBLE ([inBubble]), with the case as the metadata leader on
+// the client the listing is built over ([listerOn], through [jsapi.Meta]'s
+// seam), and each request read off the instant it was asked and the deadline
+// it carried ([armedWaits]), exactly:
+//
+//   - The first drops each page's first request, held until its context
+//     ends, and answers the next with the page. The names page is asked at
+//     none and two seconds and the consumers page at two and eight, every
+//     request carries the caller's deadline, and the listing ends at the
+//     answer.
+//   - The third answers the names page at once and the consumers page never.
+//     Each page is given exactly the client's default, the consumers page is
+//     asked once, and the listing ends on its deadline.
+//
+// Each used to read the machine's clock. The first held the whole listing to
+// a ten-second context against eight seconds of cadence, so a runner that
+// lost two and a half seconds between the pages failed it, and a re-ask a
+// second late passed it. The third timed the listing and held it between the
+// default and a read term past it, so a runner that lost a second and a half
+// between the pages failed it, and a page held half a second past the default
+// passed it. Neither could move into a bubble before the seam: the broker
+// answers the names page, its connection's reader hands each reply in from
+// outside the bubble, and the consumers page went out on that raw connection,
+// where no fake client saw it. The second case stays on the broker, which
+// drops a page where every reader's request goes, whatever the reader was
+// built with ([jsapitest]).
+//
+// Mutation: re-ask a page a second late, or give the consumers page the read
+// term alone, and a page is asked again at the wrong instant; abandon each
+// request at its term, or hold a caller's deadline to the client's default,
+// and a request carries the wrong deadline; give the consumers page half a
+// read term past the client's default, or every page the lookup ceiling, and
+// a deadline-less page is given more than the default; let a request outlive
+// its context, and the listing ends past the page's deadline; put the pages
+// on the client's connection whatever the client, and neither bubbled case
+// hears one; read a page nobody answered as anything but silence, and the
+// listing is not the broker unavailable; never ask a page again, and the
+// first two cases' listings fail.
 func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	// listing is a queue holding one subscription, and the stream it is on.
@@ -357,28 +404,75 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 
 	t.Run("a caller with a deadline past a consumers page and a re-ask", func(t *testing.T) {
 		t.Parallel()
-		ns, q, stream := listing(t)
-		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1, nats.Token(leaderReadsToken))
-		consumers := jsapitest.DropFirst(t, ns, jsapitest.ConsumerList(stream), 1, nats.Token(leaderReadsToken))
-
-		// A dropped names page costs a term and a re-ask; a dropped
-		// consumers page the four seconds the metadata leader waits for a
-		// consumer's own leaders besides.
-		timing := q.provisioning()
-		ctx, cancel := context.WithTimeout(t.Context(), 3*(timing.ReadTerm+timing.ReAsk)+4*time.Second)
-		defer cancel()
-		got, err := q.ListSubscriptions(ctx, "dropped.>")
-		if err != nil {
-			t.Fatalf("a listing whose pages the broker dropped once failed rather than "+
-				"asking again: %v", err)
-		}
-		if len(got) != 1 || got[0] != want {
-			t.Errorf("listed %v, want [%v]", got, want)
-		}
-		if n, m := names.Count(), consumers.Count(); n != 1 || m != 1 {
-			t.Errorf("the broker held %d stream-name and %d consumer pages, want the 1 "+
-				"of each it dropped", n, m)
-		}
+		_, q, stream := listing(t)
+		names, consumers := jsapitest.StreamNames(), jsapitest.ConsumerList(stream)
+		// A MEMBER THAT DROPS EACH PAGE'S FIRST REQUEST, held until its
+		// context ends, in front of a leader that answers the next with the
+		// page: the consumers page as the broker gave it.
+		pages := map[string][]byte{names: streamNamesPage(t, stream), consumers: consumersPage(t, q, stream)}
+		sent := map[string]*atomic.Int32{names: new(atomic.Int32), consumers: new(atomic.Int32)}
+		var asked armedWaits
+		lister := listerOn(q, func(ctx context.Context, subject string) (*nats.Msg, error) {
+			page, ok := pages[subject]
+			if !ok {
+				return nil, fmt.Errorf("the listing asked %s, which is none of its pages", subject)
+			}
+			if !asked.note(ctx, subject) {
+				return nil, fmt.Errorf("the page on %s was asked with no deadline", subject)
+			}
+			if sent[subject].Add(1) == 1 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return &nats.Msg{Subject: subject, Data: page}, nil
+		})
+		// A DEADLINE PAST BOTH RE-ASKS: a names page is asked again a read
+		// term and a re-ask after it was sent, and a consumers page the
+		// metadata leader's four-second wait later besides.
+		namesAgain := jsprovision.ReadTerm + jsprovision.ReAsk
+		consumersAgain := jsprovision.ReadTerm + 4*time.Second + jsprovision.ReAsk
+		budget := 3*(jsprovision.ReadTerm+jsprovision.ReAsk) + 4*time.Second
+		inBubble(t, func(t *testing.T) {
+			start := time.Now()
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
+			defer cancel()
+			got, err := lister.ListSubscriptions(ctx, "dropped.>")
+			ended := time.Now()
+			if err != nil {
+				t.Fatalf("a listing whose pages a member dropped once failed rather than "+
+					"asking again: %v", err)
+			}
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("listed %v, want [%v]", got, want)
+			}
+			// Each request as the case received it: its page, and the
+			// instant it was asked and the deadline it carried, from the
+			// call. Exported fields, so a failure prints the durations as
+			// durations.
+			type request struct {
+				Page         string
+				At, Deadline time.Duration
+			}
+			var requests []request
+			for _, w := range asked.all() {
+				requests = append(requests, request{w.what, w.at.Sub(start), w.deadline.Sub(start)})
+			}
+			wantRequests := []request{
+				{names, 0, budget},
+				{names, namesAgain, budget},
+				{consumers, namesAgain, budget},
+				{consumers, namesAgain + consumersAgain, budget},
+			}
+			if !slices.Equal(requests, wantRequests) {
+				t.Errorf("the listing asked %+v, want %+v: each page asked again once its "+
+					"term and a re-ask had passed, every request carrying the caller's "+
+					"deadline", requests, wantRequests)
+			}
+			if took := ended.Sub(start); took != namesAgain+consumersAgain {
+				t.Errorf("the listing ended %v in, want %v, when its consumers page was "+
+					"answered", took, namesAgain+consumersAgain)
+			}
+		})
 	})
 
 	t.Run("no deadline: a names page dropped is asked again", func(t *testing.T) {
@@ -400,25 +494,118 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 
 	t.Run("no deadline: a consumers page is asked once, inside the client's default", func(t *testing.T) {
 		t.Parallel()
-		ns, q, stream := listing(t)
-		consumers := jsapitest.Hold(t, ns, jsapitest.ConsumerList(stream), nats.Token(leaderReadsToken))
+		_, q, stream := listing(t)
+		names, consumers := jsapitest.StreamNames(), jsapitest.ConsumerList(stream)
+		namesPage := streamNamesPage(t, stream)
+		// THE CASE IS THE METADATA LEADER: the names page answered at once,
+		// naming the subscription's stream, and its consumers page never.
+		var asked armedWaits
+		lister := listerOn(q, func(ctx context.Context, subject string) (*nats.Msg, error) {
+			if !asked.note(ctx, subject) {
+				return nil, fmt.Errorf("the page on %s was asked with no deadline", subject)
+			}
+			switch subject {
+			case names:
+				return &nats.Msg{Subject: subject, Data: namesPage}, nil
+			case consumers:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("the listing asked %s, which is none of its pages", subject)
+		})
 		bound := q.js.Options().DefaultTimeout
-		start := time.Now()
-		got, err := q.ListSubscriptions(context.Background(), "dropped.>")
-		took := time.Since(start)
-		if !errors.Is(err, queue.ErrUnavailable) {
-			t.Fatalf("a deadline-less listing whose consumers page nobody answered = (%v, %v), "+
-				"want the broker unavailable", got, err)
-		}
-		if n := consumers.Count(); n != 1 {
-			t.Errorf("the consumers page was asked %d times inside the client's %v, want 1: "+
-				"its term is the metadata leader's four-second wait beside the read term, "+
-				"which is the whole of that default", n, bound)
-		}
-		if took < bound || took > bound+jsprovision.ReadTerm {
-			t.Errorf("the listing ended %v in, want the client's %v default", took, bound)
-		}
+		inBubble(t, func(t *testing.T) {
+			got, err := lister.ListSubscriptions(context.Background(), "dropped.>")
+			ended := time.Now()
+			if !errors.Is(err, queue.ErrUnavailable) {
+				t.Fatalf("a deadline-less listing whose consumers page nobody answered = (%v, %v), "+
+					"want the broker unavailable", got, err)
+			}
+			pages := asked.all()
+			if len(pages) != 2 || pages[0].what != names || pages[1].what != consumers {
+				t.Fatalf("the listing asked %v, want its names page and then its consumers page, "+
+					"once each inside the client's %v: a consumers page's term is the metadata "+
+					"leader's four-second wait beside the read term, which is the whole of that "+
+					"default", pages, bound)
+			}
+			for _, p := range pages {
+				if armed := p.deadline.Sub(p.at); armed != bound {
+					t.Errorf("%v: given %v, want the client's %v default", p, armed, bound)
+				}
+			}
+			if !ended.Equal(pages[1].deadline) {
+				t.Errorf("the listing ended %v after its consumers page was asked, want at that "+
+					"page's deadline, %v after", ended.Sub(pages[1].at), bound)
+			}
+		})
 	})
+}
+
+// answeringJS is a JetStream client that ANSWERS the requests a listing puts
+// on it itself ([jsapi.Meta]'s seam), with whatever answer returns, and has no
+// connection: a request put anywhere but on the client reaches nothing, and
+// fails. So a case can be the metadata leader inside a synctest bubble, where
+// no broker's reply can reach a request — the connection's reader would hand
+// it in from outside the bubble.
+//
+// EMBEDS THE INTERFACE, as this package's other fakes do: a listing asks only
+// Options and Conn of the client it is built over.
+type answeringJS struct {
+	jetstream.JetStream
+	opts   jetstream.JetStreamOptions
+	answer func(ctx context.Context, subject string) (*nats.Msg, error)
+}
+
+func (f *answeringJS) Options() jetstream.JetStreamOptions { return f.opts }
+
+// Conn is no connection.
+func (f *answeringJS) Conn() *nats.Conn { return nil }
+
+// RequestWithContext is a request put on the client, which answer answers.
+func (f *answeringJS) RequestWithContext(ctx context.Context, subject string, _ []byte) (*nats.Msg, error) {
+	return f.answer(ctx, subject)
+}
+
+// listerOn is a queue over q's own connection — up, so a page nobody answers
+// is the broker unavailable — whose listings put their pages on a client that
+// answer answers ([answeringJS]).
+func listerOn(q *Queue, answer func(ctx context.Context, subject string) (*nats.Msg, error)) *Queue {
+	return &Queue{log: q.log, nc: q.nc, js: &answeringJS{opts: q.js.Options(), answer: answer}}
+}
+
+// streamNamesPage is the metadata leader's answer to a stream names listing
+// that holds one stream, name.
+func streamNamesPage(t *testing.T, name string) []byte {
+	t.Helper()
+	page, err := json.Marshal(server.JSApiStreamNamesResponse{
+		ApiResponse: server.ApiResponse{Type: server.JSApiStreamNamesResponseType},
+		ApiPaged:    server.ApiPaged{Total: 1, Limit: 1024},
+		Streams:     []string{name},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+// consumersPage is the broker's own first page of stream's consumers, asked
+// on q's connection before a bubble, so that a case inside one answers with
+// what the metadata leader answered.
+func consumersPage(t *testing.T, q *Queue, stream string) []byte {
+	t.Helper()
+	req, err := json.Marshal(server.JSApiConsumersRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// LIVENESS: the case's own broker answers a page at once; this only ends
+	// a wait for one that never does.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	reply, err := q.nc.RequestWithContext(ctx, jsapitest.ConsumerList(stream), req)
+	if err != nil {
+		t.Fatalf("ask the broker for %s's consumers: %v", stream, err)
+	}
+	return reply.Data
 }
 
 // AN ACCOUNT LIMIT A MEMBER DROPS IS ASKED AGAIN.
