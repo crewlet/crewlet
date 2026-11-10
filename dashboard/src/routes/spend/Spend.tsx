@@ -54,6 +54,7 @@ import { ByModel } from "./ByModel.tsx";
 import { ByUnit } from "./ByUnit.tsx";
 import { ExpensiveTasksCard } from "./ExpensiveTasks.tsx";
 import { Hero } from "./Hero.tsx";
+import { NothingTurns } from "./NothingTurns.tsx";
 import { PhaseChart } from "./PhaseChart.tsx";
 import { Workers } from "./Workers.tsx";
 import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from "./model.ts";
@@ -212,6 +213,8 @@ export function Spend() {
               <Workers rollup={rollup} loading={tokens.loading} words={words} />
             </div>
           )}
+          {/* WHAT TURNS CHANGED NOTHING, by what woke them and who can act. */}
+          <NothingTurns params={params} words={words} />
         </div>
       )}
     </>

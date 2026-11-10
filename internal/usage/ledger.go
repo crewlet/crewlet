@@ -16,6 +16,10 @@ type TurnLedgerRow struct {
 	Turns, Input, Output, CacheRead, CacheWrite, AuxInput, AuxOutput int64
 }
 
+// Tokens is what the row's turns spent: input, output and the auxiliary calls'.
+// The cache columns are a breakdown of Input, never an addition to it.
+func (r TurnLedgerRow) Tokens() int64 { return r.Input + r.Output + r.AuxInput + r.AuxOutput }
+
 // turnLedgerSQL is [TurnLedger]'s statement: a day range of every node and every
 // seat, through the key's leading day (replicated 0155).
 const turnLedgerSQL = `

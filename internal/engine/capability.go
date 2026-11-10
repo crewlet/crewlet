@@ -69,6 +69,10 @@ type toldTurn struct {
 	// lines are the change lines the turn tells, for the activity event.
 	lines []string
 
+	// review is whether a told change owes the seat's open work a review
+	// (ADR-0111): a box change alone does not.
+	review bool
+
 	// memory is every change told in the memory window, this turn's
 	// included, which marks the notes written before it.
 	memory []prefetch.ToldChange
@@ -104,7 +108,7 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	}
 	out := decideTold(snap, recent, handle, turn, now, accessdomain.SnapshotMaxBytes)
 	out.memory = append(e.toldMemory(ctx, recent.Since), out.memory...)
-	if out.changes != "" {
+	if out.changes != "" && out.review {
 		// THE TURN THAT TELLS A CHANGE ASKS FOR THE REVIEW, whatever woke
 		// it (ADR-0111): its told record keeps every later turn from being
 		// told the change again, the review's included.
@@ -186,6 +190,7 @@ func decideTold(snap capability.Snapshot, recent accessdomain.Recent, handle, tu
 		record.RevisionFrom = base.RevisionTo
 	}
 	out.changes = capability.ChangesBlock(changes)
+	out.review = slices.ContainsFunc(changes, capability.Change.OwesReview)
 	out.pending = &record
 	for _, c := range changes {
 		out.lines = append(out.lines, c.Line)
@@ -266,6 +271,9 @@ func (e *Engine) capabilityInputOf(ctx context.Context, cfg *config.Company, o *
 		}
 	}
 	in.Tools = toolServersOf(cfg, o, handle)
+	if o != nil {
+		in.Boxes = e.seatBoxes(ctx, cfg, o, handle)
+	}
 	return in, nil
 }
 
