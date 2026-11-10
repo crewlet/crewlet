@@ -1107,3 +1107,23 @@ func TestARenameIsToTheTitleTheCheckReads(t *testing.T) {
 		t.Errorf("the title 1000000 renamed the page as %+v, want \"1000000\"", kb.renames)
 	}
 }
+
+// THE PAGE COMMENT TOOL SENDS A PERSON'S QUESTION TO A WORK ITEM: its words say
+// `asks` reaches the agents named and that a person is asked with the work item
+// tool, so an agent following them is never refused for asking a person here.
+func TestThePageCommentToolSendsAPersonsQuestionToAWorkItem(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	entry, ok := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}).Lookup(builtin.CommentOnPageTool)
+	if !ok {
+		t.Fatal("comment_on_page is not registered")
+	}
+	body := entry.Tool.Parameters()["properties"].(map[string]any)["body"].(map[string]any)["description"].(string)
+	for name, said := range map[string]string{"the tool": entry.Tool.Description(), "body": body} {
+		if !strings.Contains(said, builtin.CommentOnWorkTool) || strings.Contains(said, "anyone you @-mention") ||
+			strings.Contains(said, "colleague by handle") {
+			t.Errorf("%s says %q, want a person asked with %s and no invitation to ask anyone here",
+				name, said, builtin.CommentOnWorkTool)
+		}
+	}
+}
