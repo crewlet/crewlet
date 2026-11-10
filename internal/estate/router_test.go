@@ -145,6 +145,28 @@ type fakeNode struct {
 	// indexBuilding is a node whose index has not finished its first lap.
 	indexBuilding bool
 
+	// olderBuild, where it is set, rewrites every request this node is sent
+	// before it reads it: a key added to the arguments or the actor stands
+	// for one the asker's build declares and this node's does not — what a
+	// data node of an older build meets mid-upgrade (wirerule_test.go).
+	olderBuild func(request) request
+
+	// newerBuild, where it is set, rewrites every reply this node gives after
+	// its own build has made it: a key added to the result stands for one this
+	// node's build declares and the asker's does not — what a node of an older
+	// build meets mid-upgrade when a data node of a newer one answers it
+	// (unreadwalk_test.go). And strip is the strip of views it answers.
+	newerBuild func(reply) reply
+	strip      worklet.ViewListing
+
+	// undeclared, where it is set, is the paths of the members this node's
+	// build does not declare, as a refusal names them: a request carrying one
+	// is refused naming each it carries, as a data node of an older build
+	// refuses it, and any other is read as this build reads it — for a case
+	// about which requests a refusal moves, which the asker's own request
+	// must carry (wirerule_test.go).
+	undeclared []string
+
 	// gestures is every inbox gesture it was asked to make, and
 	// taskQueries every query a task read asked it (routedzero_test.go).
 	gestures    []inbox.Gesture[worklet.Reason]
@@ -246,6 +268,14 @@ func (f *fakeNode) Tasks(ctx context.Context, q worklet.Query, _ time.Time) (wor
 		}
 	}
 	return worklet.Answer{TotalHint: 7}, nil
+}
+
+// Views answers the strip of views this node holds, which a case sets.
+func (f *fakeNode) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	f.note("views")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.strip, nil
 }
 
 func (f *fakeNode) CreateTask(_ context.Context, opID string, task worklet.Task,
@@ -720,6 +750,7 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 			s.node.anyway++
 		}
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
+		older, undeclared, newer := s.node.olderBuild, s.node.undeclared, s.node.newerBuild
 		s.node.mu.Unlock()
 		if refusesLagging {
 			// A REFUSAL THE FLEET SIGNED, bound to the request it
@@ -743,8 +774,59 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 			s.node.note("silent")
 			return nil, errors.New("this node is gone")
 		}
-		return h(ctx, raw)
+		if held := heldOf(req, undeclared); len(held) > 0 {
+			// REFUSED AS A DATA NODE OF AN OLDER BUILD REFUSES IT
+			// ([server.refuseUnknown]): naming every member it carries that
+			// the build does not declare, and nothing of it run.
+			s.node.note("unread")
+			return fleetEnvelopes.sealReply(reply{Node: s.node.name, Request: req.ID,
+				Err: encodeError(&ErrUnknownKeys{Op: req.Op, Keys: held, Nodes: []string{s.node.name}})}), nil
+		}
+		if older != nil && req.ID != "" {
+			// SIGNED AGAIN, as the fleet signs: the node reads the request
+			// the newer asker's build would have sent it.
+			sealed, err := fleetEnvelopes.sealRequest(older(req))
+			if err != nil {
+				return nil, err
+			}
+			raw = sealed
+		}
+		answered, err := h(ctx, raw)
+		if newer == nil || err != nil || req.ID == "" {
+			return answered, err
+		}
+		// SIGNED AGAIN, as the fleet signs: the reply this node's build made,
+		// as a newer build would have made it.
+		rep, why, err := fleetEnvelopes.openReply(answered, req.ID)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("%s's own reply does not open: %w", s.node.name, err)
+		case why != "":
+			return nil, fmt.Errorf("%s's own reply is not believed: %s", s.node.name, why)
+		}
+		return fleetEnvelopes.sealReply(newer(rep)), nil
 	})
+}
+
+// heldOf is every one of paths the inputs of req carry, as a refusal names it.
+func heldOf(req request, paths []string) []string {
+	if len(paths) == 0 || req.ID == "" {
+		return nil
+	}
+	doc := map[string]any{}
+	if args, err := looseDoc(req.Args); err == nil {
+		doc["args"] = args
+	}
+	if actor, err := looseDoc(req.Actor); err == nil {
+		doc["actor"] = actor
+	}
+	var held []string
+	for _, path := range paths {
+		if carries(doc, path) {
+			held = append(held, path)
+		}
+	}
+	return held
 }
 
 type namedChart struct{ worklet.Units }
@@ -3179,7 +3261,7 @@ func TestAUsagePageFitsOneMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := encodeResult(page)
+	result, err := encodeResult(opUsagePageReads.spec, page)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3423,7 +3505,7 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 	// between them still the key's.
 	r.markSuspect(o[0])
 	r.markOutOfService(o[1], codeDomain)
-	if got, want := r.orderFor(opCodePropose.spec, repo, holders),
+	if got, want := r.orderFor(opCodePropose.spec, repo, holders, nil),
 		[]string{o[2], o[3], o[1], o[0]}; !slices.Equal(got, want) {
 		t.Fatalf("with %s silent and %s's code copy out of service, %s is asked of %v, want %v",
 			o[0], o[1], repo, got, want)
@@ -3574,20 +3656,20 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 		t.Fatalf("the node that ran nothing was proposed %d pushes, want only the first: "+
 			"the second asks it last", asked)
 	}
-	if got, want := r.orderFor(opCodePropose.spec, repo, holders),
+	if got, want := r.orderFor(opCodePropose.spec, repo, holders, nil),
 		[]string{o[1], o[2], o[0]}; !slices.Equal(got, want) {
 		t.Fatalf("a push to %s is asked of %v, want %v — %s last", repo, got, want, o[0])
 	}
 	// ONLY FOR THE OPERATION IT DECLINED: its copy of the code log is not
 	// out of service, so nothing moves it for a read.
-	if class := r.classes(opCodeRead.spec, false)(o[0]); class != 1 {
+	if class := r.classes(opCodeRead.spec, false, nil)(o[0]); class != 1 {
 		t.Fatalf("a read ranks %s in class %d, want 1 — declining a push says nothing "+
 			"about its reads", o[0], class)
 	}
 
 	// THE WINDOW LAPSES: the node is back at its place in the key's order.
 	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
-	if got := r.orderFor(opCodePropose.spec, repo, holders); !slices.Equal(got, o) {
+	if got := r.orderFor(opCodePropose.spec, repo, holders, nil); !slices.Equal(got, o) {
 		t.Fatalf("after the window a push to %s is asked of %v, want the key's order %v",
 			repo, got, o)
 	}
@@ -3602,12 +3684,12 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 		got.OpID != o[0] {
 		t.Fatalf("with only %s committing = (%+v, %v), want its answer", o[0], got, err)
 	}
-	if class := r.classes(opCodePropose.spec, true)(o[0]); class != 1 {
+	if class := r.classes(opCodePropose.spec, true, nil)(o[0]); class != 1 {
 		t.Fatalf("after %s committed a push it ranks in class %d for pushes, want 1 — "+
 			"the decline it answered before is over", o[0], class)
 	}
 	for _, refused := range o[1:] {
-		if class := r.classes(opCodePropose.spec, true)(refused); class != 2 {
+		if class := r.classes(opCodePropose.spec, true, nil)(refused); class != 2 {
 			t.Fatalf("%s, which ran nothing for the push, ranks in class %d, want 2",
 				refused, class)
 		}

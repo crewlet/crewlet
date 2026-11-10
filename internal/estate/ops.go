@@ -664,19 +664,40 @@ type viewsArgs struct {
 	Zone  string
 }
 
-var opViews = define("tracker.views", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a viewsArgs) (worklet.ViewListing, error) {
-		if b.Tracker == nil {
-			return worklet.ViewListing{}, errNoHalf
-		}
-		loc, err := zoneOf(a.Zone)
-		if err != nil {
-			return worklet.ViewListing{}, err
-		}
-		q := a.Query
-		q.Units, q.Zone = b.Units, loc
-		return b.Tracker.Views(ctx, q)
-	})
+// ONE CONTAINER'S STRIP OF VIEWS, as a screen shows it — the dashboard's tabs,
+// the API's listing: read leniently.
+var opViews = define("tracker.views", opRead, trackerDomain, false, views)
+
+// THE STRIP A VIEW IS SAVED AGAIN FROM, ANSWERED WHOLE ([op.answeredWhole]):
+// save_work_view replaces a view whole, by an id list_work_views lists, with
+// what its call sends — so a call that changes one thing of a view re-sends
+// the rest as the listing showed it (internal/agent/builtin), and a newer
+// build's field on a view this build would drop is refused here rather than
+// saved away on every node. Its own operation, so a screen that only shows the
+// strip is not refused one ([opArtifactVersionCarried] says why).
+//
+// NOT A SAVE THAT KEEPS WHAT IT DOES NOT NAME, which would need no read whole:
+// a field a save leaves at its zero crosses exactly as one an older build
+// never sent ([define]), so a decide merging with the stored view could not
+// tell a field cleared from one unknown, and no save could clear a field
+// without a clear of its own — the patch shape [worklet.Writer.WriteView]
+// declines for a query small enough to re-state whole.
+var opViewsCarried = define("tracker.views_carried", opRead, trackerDomain, false,
+	views).answeredWhole()
+
+// views is one container's strip of views, read from this node's copy.
+func views(ctx context.Context, b Backend, _ *Actor, a viewsArgs) (worklet.ViewListing, error) {
+	if b.Tracker == nil {
+		return worklet.ViewListing{}, errNoHalf
+	}
+	loc, err := zoneOf(a.Zone)
+	if err != nil {
+		return worklet.ViewListing{}, err
+	}
+	q := a.Query
+	q.Units, q.Zone = b.Units, loc
+	return b.Tracker.Views(ctx, q)
+}
 
 // zoneArg is a location as it crosses: its NAME, because a *time.Location is a
 // table of transitions a JSON encoder writes as nothing at all. Empty is a nil
@@ -713,6 +734,11 @@ type expandArgs struct {
 	Zone string
 }
 
+// A LIST'S PARAMETERS EXPANDED INTO THE QUERY ITS READ ASKS, ANSWERED WHOLE
+// ([op.answeredWhole]): every caller hands the answer to tracker.tasks as that
+// read's query — a seat's list_work_items, a screen's list of work items — so
+// a filter a newer data node parsed and this build would drop is refused rather
+// than asked without, which would answer more than the caller asked for.
 var opExpandedQuery = define("tracker.expanded_query", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a expandArgs) (worklet.Query, error) {
 		if b.Tracker == nil {
@@ -723,15 +749,28 @@ var opExpandedQuery = define("tracker.expanded_query", opRead, trackerDomain, fa
 			return worklet.Query{}, err
 		}
 		return b.Tracker.ExpandedQuery(ctx, a.Params, a.Viewer, a.Now, loc)
-	})
+	}).answeredWhole()
 
-var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
-		if b.Tracker == nil {
-			return worklet.CatalogueAnswer{}, errNoHalf
-		}
-		return b.Tracker.Catalogue(ctx, q)
-	})
+// THE WORKSPACE CATALOGUE, as a screen shows it: read leniently.
+var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false, catalogue)
+
+// THE CATALOGUE A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): the
+// catalogue's writes replace every type and every field, each declaration whole,
+// and write_work_catalogue's description tells a model to read the catalogue
+// with get_work_catalogue and send back what it gave (internal/agent/builtin) —
+// so a newer build's field on a type or a field this build would drop is
+// refused rather than written away. Its own operation, so a screen that only
+// shows the catalogue is not refused one ([opArtifactVersionCarried] says why).
+var opCatalogueCarried = define("tracker.catalogue_carried", opRead, trackerDomain, false,
+	catalogue).answeredWhole()
+
+// catalogue is the workspace catalogue, read from this node's copy.
+func catalogue(ctx context.Context, b Backend, _ *Actor, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	if b.Tracker == nil {
+		return worklet.CatalogueAnswer{}, errNoHalf
+	}
+	return b.Tracker.Catalogue(ctx, q)
+}
 
 type personArgs struct {
 	Query worklet.PersonQuery
@@ -822,14 +861,27 @@ var opProjects = define("tracker.projects", opRead, trackerDomain, false,
 		return b.Tracker.Projects(ctx, q)
 	})
 
-var opProject = define("tracker.project", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
-		if b.Tracker == nil {
-			return worklet.ProjectDetail{}, errNoHalf
-		}
-		q.Units = b.Units
-		return b.Tracker.Project(ctx, q)
-	})
+// ONE PROJECT, as a screen shows it: read leniently.
+var opProject = define("tracker.project", opRead, trackerDomain, false, project)
+
+// ONE PROJECT A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): a
+// project's field declarations are replaced whole by write_project, whose
+// description tells a model to read them with describe_project first and send
+// the whole set (internal/agent/builtin) — so a newer build's field on a
+// declaration this build would drop is refused rather than written away. Its own
+// operation, so a screen that only shows the project is not refused one
+// ([opArtifactVersionCarried] says why).
+var opProjectCarried = define("tracker.project_carried", opRead, trackerDomain, false,
+	project).answeredWhole()
+
+// project is one project, read from this node's copy.
+func project(ctx context.Context, b Backend, _ *Actor, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
+	if b.Tracker == nil {
+		return worklet.ProjectDetail{}, errNoHalf
+	}
+	q.Units = b.Units
+	return b.Tracker.Project(ctx, q)
+}
 
 type workSearchArgs struct {
 	Text  string
@@ -1339,7 +1391,10 @@ type viewPriorArgs struct {
 // freely — and floored like every tracker read, since the asker may have
 // written the view through another node a moment ago. The save that follows
 // it refuses a prior that has moved in its own snapshot, wherever it runs, so
-// a stale answer here is a refusal there rather than a wrong overwrite.
+// a stale answer here is a refusal there rather than a wrong overwrite. And
+// ANSWERED WHOLE ([op.answeredWhole]), because the save hands the answer back:
+// a field a newer build adds to the prior is what that build's save is
+// decided against, and dropped here it would reach the decide as its zero.
 var opViewPrior = define("tracker.view_prior", opRead, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a viewPriorArgs) (worklet.ViewPrior, error) {
 		w, err := writerFor(b, actor)
@@ -1347,7 +1402,7 @@ var opViewPrior = define("tracker.view_prior", opRead, trackerDomain, true,
 			return worklet.ViewPrior{}, err
 		}
 		return w.ViewPrior(ctx, a.ID)
-	})
+	}).answeredWhole()
 
 type writeViewArgs struct {
 	OpID  string

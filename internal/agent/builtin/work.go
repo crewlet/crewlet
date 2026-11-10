@@ -66,10 +66,19 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error)
 	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
 		fresh statelog.Freshness) (worklet.TaskDetail, error)
-	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
+	// CarriedViews is a container's strip as list_work_views hands it to a
+	// model, which save_work_view replaces a view of whole, by its id, with
+	// what the model re-sends of it: read whole or refused where this node's
+	// build would drop part of it (estate's tracker.views_carried), never
+	// shown short and saved back.
+	CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
-	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
+	// CarriedCatalogue is the catalogue as get_work_catalogue hands it to a
+	// model, which write_work_catalogue tells to send it back whole: read
+	// whole or refused where this node's build would drop part of it
+	// (estate's tracker.catalogue_carried), never shown short and written back.
+	CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
 	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)

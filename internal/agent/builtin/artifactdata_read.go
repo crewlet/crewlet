@@ -79,17 +79,24 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	doc := strings.TrimSpace(argString(args, "doc"))
 	t.d.touch(a.c, a.head.ID, presence.Viewing,
 		presence.Focus{Collection: collection, Doc: doc})
-	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
-	if err != nil {
-		return dataFailure(ctx, t.Name(), err), nil
-	}
 	if collection == "" {
 		if doc != "" {
 			return failed(t.Name() + ": a `doc` belongs to a `collection`; send both."), nil
 		}
+		// THE SCHEMA A MODEL SENDS BACK: set_artifact_schema replaces every
+		// collection and says to read them here first, so it is read whole
+		// or refused, never shown short and written back short.
+		schema, err := t.d.data.Store.CarriedSchema(ctx, a.head.ID)
+		if err != nil {
+			return dataFailure(ctx, t.Name(), err), nil
+		}
 		out := map[string]any{"artifact": a.head.ID.String(), "collections": schema,
 			"role": string(a.stamp)}
 		return jsonResult(out)
+	}
+	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
+	if err != nil {
+		return dataFailure(ctx, t.Name(), err), nil
 	}
 	if doc != "" {
 		got, err := t.d.data.Store.Doc(ctx, a.head.ID, a.reading(), collection, doc) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

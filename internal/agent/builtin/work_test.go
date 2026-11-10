@@ -243,7 +243,7 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want worklet.Detai
 	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
+func (f *fakeTracker) CarriedViews(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.viewQuery = q
 	return f.viewListing, nil
 }
@@ -273,7 +273,7 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	return worklet.ParseQuery(merged, now, loc)
 }
 
-func (f *fakeTracker) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+func (f *fakeTracker) CarriedCatalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return worklet.CatalogueAnswer{}, nil
 }
 
@@ -323,7 +323,7 @@ func (f *fakeTracker) Projects(_ context.Context, q worklet.ProjectQuery) (
 	return f.projects, f.readErr
 }
 
-func (f *fakeTracker) Project(_ context.Context, q worklet.ProjectDetailQuery) (
+func (f *fakeTracker) CarriedProject(_ context.Context, q worklet.ProjectDetailQuery) (
 	worklet.ProjectDetail, error) {
 
 	f.detailQuery = q
