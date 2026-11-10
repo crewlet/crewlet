@@ -19,7 +19,7 @@
  * AN ADDRESS OF AN APP THE DASHBOARD KNOWS, rebuilt on a host the company
  * configured, that resolved to no record still unfurls into its mark, name and
  * what the address names
- * (`gophrase/backend#14`), read from its PARSED host and path, never from
+ * (`acme/backend#14`), read from its PARSED host and path, never from
  * words a writer put beside it. Every other address is the address token
  * ([AddressLink]), by the rule a chat message's words are read with (`own`):
  * a writer chooses a message's links, so none opens as written.

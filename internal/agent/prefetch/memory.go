@@ -31,8 +31,8 @@ import (
 //
 // When the filter is unavailable or its answer is unparseable, the block is
 // empty. Falling back to "the most recent eight" would leak a memory ABOUT
-// ONE PERSON into a turn triggered by another — "Sam prefers short replies"
-// surfacing on a turn where Miles is asking — which is the failure the
+// ONE PERSON into a turn triggered by another ("Sam prefers short replies"
+// surfacing on a turn where Morgan is asking), which is the failure the
 // filter exists to prevent, reappearing on exactly the transient outages
 // nobody is watching for.
 
