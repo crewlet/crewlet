@@ -185,13 +185,12 @@ func AuxPurposes() []AuxPurpose {
 	return out
 }
 
-// Valid reports whether this build knows the purpose.
-// Learning reports a purpose that is a seat's learning: remembering a turn and
-// curating what it learned, which learning.max_share holds to its share.
 // HeldByShare reports a learning purpose the share may hold: every one but the
 // compaction the raw-episode cap asks for, which keeps the rows bounded.
 func (p AuxPurpose) HeldByShare() bool { return p.Learning() && p != AuxEpisodeCompaction }
 
+// Learning reports a purpose that is a seat's learning: remembering a turn and
+// curating what it learned, which learning.max_share holds to its share.
 func (p AuxPurpose) Learning() bool {
 	switch p {
 	case AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
@@ -201,6 +200,7 @@ func (p AuxPurpose) Learning() bool {
 	return false
 }
 
+// Valid reports whether this build knows the purpose.
 func (p AuxPurpose) Valid() bool {
 	if kind, ok := strings.CutPrefix(string(p), auxCondensePrefix); ok {
 		return slices.Contains(auxCondenseKinds, kind)

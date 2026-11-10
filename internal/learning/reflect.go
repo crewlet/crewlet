@@ -545,13 +545,13 @@ type Reflection struct {
 	Failed map[string]error
 }
 
-// Skip reasons. Exported because they are what an operator reads back out of
-// a log line or a test asserts on, and a caller comparing against its own
-// copy of the string is how the two drift.
 // ErrLearningShare is a learning call held because the seat's learning has
 // reached learning.max_share of its company day's spend; it resumes next day.
 var ErrLearningShare = errors.New("learning: the seat's learning is at its share of the day's spend")
 
+// Skip reasons. Exported because they are what an operator reads back out of
+// a log line or a test asserts on, and a caller comparing against its own
+// copy of the string is how the two drift.
 const (
 	// SkipLearningShare is a worker whose model call [ErrLearningShare] held.
 	SkipLearningShare = "learning_share"
