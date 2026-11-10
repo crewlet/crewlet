@@ -521,3 +521,75 @@ func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
 		})
 	}
 }
+
+// AN AGENT'S COMMENT THAT ASKS AND NAMES A PERSON PUTS THE QUESTION AS AN ASK
+// (ADR-0100): otherwise it reaches the person only as a mention, never among the
+// decisions waiting on them. Asking an agent, only mentioning a person, naming a
+// team, or a person's own comment are posted as before.
+//
+// Mutation: return nil from checkAsksOfNamed, and the agent's request that
+// names a person in words is posted.
+func TestAnAgentsRequestThatNamesAPersonIsAnAsk(t *testing.T) {
+	t.Parallel()
+	roster := func() []colleague.Seat {
+		return []colleague.Seat{
+			{Handle: "pm", Name: "Pat Manager", Kind: "agent"},
+			{Handle: "ana", Name: "Ana", Kind: "human"},
+		}
+	}
+	person := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "jane", Kind: worklet.AuthorHuman}, nil
+	}
+	comment := func(asks bool, ask string, decided map[string]any) map[string]any {
+		args := map[string]any{"item": "ENG-1", "body": "Can you merge it?", "asks": asks}
+		if ask != "" {
+			args["ask"] = ask
+		}
+		if decided != nil {
+			args["decision"] = decided
+		}
+		return args
+	}
+	for _, c := range []struct {
+		name     string
+		mentions fakeMentions
+		actor    func(context.Context, *turnctx.Turn) (builtin.Actor, error)
+		args     map[string]any
+		refused  bool
+	}{
+		{"an agent asks a named person in words", fakeMentions{"ana"}, nil, comment(true, "", nil), true},
+		{"an agent asks an agent and names a person", fakeMentions{"pm", "ana"}, nil, comment(true, "pm", nil), true},
+		{"an agent asks the named person with a decision", fakeMentions{"ana"}, nil, comment(true, "ana", decisionArg()), false},
+		{"an agent asks a named agent in words", fakeMentions{"pm"}, nil, comment(true, "", nil), false},
+		{"an agent only mentions a person", fakeMentions{"ana"}, nil, comment(false, "", nil), false},
+		{"an agent asks and names a team", fakeMentions{"eng"}, nil, comment(true, "", nil), false},
+		{"a person asks a named person in words", fakeMentions{"ana"}, person, comment(true, "", nil), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := tools.NewRegistry()
+			if _, err := builtin.Register(reg, gated(builtin.Deps{
+				Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, Seats: roster, Actor: c.actor,
+					Mentions: c.mentions},
+				Pages: builtin.PageDeps{Reader: newFakeKB()},
+			})); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			got := callWork(t, reg, builtin.CommentOnWorkTool, c.args)
+			switch {
+			case !c.refused && got.Failed:
+				t.Fatalf("the comment was refused: %s", got.Output)
+			case !c.refused && len(trk.patched) != 1:
+				t.Fatalf("the comment was not written once: %d writes", len(trk.patched))
+			case !c.refused:
+			case !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid:
+				t.Fatalf("the comment was not refused as invalid: %+v", got)
+			case !strings.Contains(got.Output, "set `ask` to their handle"):
+				t.Errorf("the refusal %q does not say how to ask", got.Output)
+			case len(trk.patched) != 0:
+				t.Errorf("a refused comment was written: %d writes", len(trk.patched))
+			}
+		})
+	}
+}

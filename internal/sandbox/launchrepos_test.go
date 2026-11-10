@@ -224,6 +224,14 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	execs := rig.provider.Box(res.SandboxID).Execs()
 	var ran []string
 	for _, e := range execs {
+		if e.Command == boxFactsScript {
+			// THE LAUNCH'S READ OF THE BOX, which needs no credential and is
+			// handed none.
+			if len(e.Env) != 0 {
+				t.Errorf("the box's read was handed an environment: %v", e.Env)
+			}
+			continue
+		}
 		ran = append(ran, firstLine(e.Command))
 		if got := e.Env["CREWLET_GIT_TOKEN"]; got != token {
 			t.Errorf("setup command %q ran with CREWLET_GIT_TOKEN=%q, want the job's %q", firstLine(e.Command),

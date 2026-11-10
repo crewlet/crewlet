@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -342,6 +343,23 @@ type Resume struct {
 	// and where it said nothing — which every rebuild of the run's skill guard
 	// from State takes for a session of its own ([Resume.parked]).
 	Continued bool
+
+	// HarnessEnd is how the harness of the job State parked ended, as the read
+	// that collected the job recorded it (sandbox.LaunchRecord's HarnessEnd):
+	// its own run — the job over, its harness gone cleanly by itself, its
+	// script packing it — whose copy of the session in its box has every call
+	// the job made, every note it read and every load; cut off — killed,
+	// crashed, told to stop, ended on an error, its job ended before its
+	// harness started; or nothing, a job an older build collected or a record
+	// the coordination store did not take. ANYTHING BUT AN OWN RUN
+	// ([sandbox.HarnessEnd.EndedOwnRun]) may lack calls its harness made and
+	// had answered without writing them, and is not known to hold the job's
+	// brief, so a relaunch carrying the round on in the job's box tells the
+	// session there that it was cut off — that it may have been, where
+	// nothing was recorded — every call of the round and every note the turn
+	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
+	// [Runner.sessionDecided]): the safe direction for a word that never came.
+	HarnessEnd sandbox.HarnessEnd
 
 	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent

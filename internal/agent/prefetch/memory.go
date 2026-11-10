@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Personal memory: what this seat has learned and kept.
@@ -123,21 +125,41 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 		}
 		return EmptyMemoryHint
 	}
-	candidates := f.memoryCandidates(ctx, r, vector)
+	candidates, held := f.memoryCandidates(ctx, r, vector), f.heldBack(ctx, r)
 	if len(candidates) == 0 {
-		// Nothing stored. The hint would be a lie: there is no filter to
+		// Nothing offered. The hint would be a lie: there is no filter to
 		// re-run and nothing for it to find.
-		return ""
+		return heldBackLine(held)
 	}
 	selected := f.filterMemories(ctx, r, candidates)
 	if len(selected) == 0 {
-		return EmptyMemoryHint
+		return joinLines(EmptyMemoryHint, heldBackLine(held))
 	}
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
 		bullets = append(bullets, renderMemory(r.Boundary, entry, r.Told))
 	}
-	return joinBullets(bullets)
+	return joinLines(joinBullets(bullets), heldBackLine(held))
+}
+
+// heldBackLine says how many notes a turn was not offered because an upgrade
+// or an access change may have made them false; "" for none.
+func heldBackLine(held int) string {
+	if held == 0 {
+		return ""
+	}
+	notes := "notes"
+	if held == 1 {
+		notes = "note"
+	}
+	return fmt.Sprintf("(%d %s about the platform or your access held back: written before the "+
+		"engine was upgraded or your access last changed. Where one is still true, keep it again "+
+		"with %s.)", held, notes, toolname.ReflectAndPersist)
+}
+
+// joinLines is the non-empty parts, one per line.
+func joinLines(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n")
 }
 
 // memoryCandidates gathers the pool the filter judges.
@@ -164,9 +186,11 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 	}
 
 	if v, ok := vector(); ok {
+		// HELD BACK IN THE READ: a note an upgrade or an access change may
+		// have made false is never offered, nor takes a current note's place.
 		hits, err := f.src.Diary.Recall(ctx, r.AgentID, learning.RecallQuery{
 			Handle: r.AgentID, Embedding: v.Values, Model: v.Model,
-			Limit: memoryVectorLimit,
+			Limit: memoryVectorLimit, Held: f.currency(r),
 		}, now)
 		if err != nil {
 			log.WarnContext(ctx, "memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
@@ -181,10 +205,25 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 	return out
 }
 
+// currency is what r's notes are held to.
+func (f *Fetcher) currency(r Request) learning.Currency {
+	return learning.Currency{Build: f.src.Build, AccessChangedAt: r.AccessChangedAt}
+}
+
+// heldBack marks the notes r holds back and counts them, 0 where the store
+// cannot say: the line it renders is the seat's only word of them.
+func (f *Fetcher) heldBack(ctx context.Context, r Request) int {
+	n, err := f.src.Diary.Hold(ctx, r.AgentID, f.currency(r), f.now())
+	if err != nil {
+		log.WarnContext(ctx, "memory_held_uncounted", "agent_id", r.AgentID, "error", err.Error())
+	}
+	return n
+}
+
 // recentMemories is the recency half of the pool: the seat's newest live
 // notes, a database read with no embedding and no model call.
 func (f *Fetcher) recentMemories(ctx context.Context, r Request) []learning.DiaryEntry {
-	recent, err := f.src.Diary.Recent(ctx, r.AgentID, f.now(), memoryRecencyLimit)
+	recent, err := f.src.Diary.RecentHeldTo(ctx, r.AgentID, f.currency(r), f.now(), memoryRecencyLimit)
 	if err != nil {
 		log.WarnContext(ctx, "memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
 	}

@@ -106,14 +106,16 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // paused, all of it on its own host. And the TAKE of the job's harness session
 // beside it ([SessionTakeBudget]), with the room the take leaves after it —
 // once for its own records, the stamp of what came of it and the digest it
-// leaves in the box, and once for the pause and the answer ([discardGrace]
-// each, [Coordinator.takeContext]) — because the read is where the session is
-// taken out of the box, on the host and before the box is paused: the host
-// reads only for its share of the budget ([BoxReadAnswerShare]), so all of it
-// is counted at that share, and a take at its bound fits a host's read whole
-// rather than being cut by the host's own deadline. Only the take: the upload
-// and the record are made after the host has answered, off the read
-// ([Coordinator.keepCapture]), so no asker waits on an upload.
+// leaves in the box, beside which a collection records how its job's harness
+// ended, with no time of its own ([Coordinator.markHarnessEnd]), and once for
+// the pause and the answer ([discardGrace] each, [Coordinator.takeContext]) —
+// because the read is where the session is taken out of the box, on the host
+// and before the box is paused: the host reads only for its share of the
+// budget ([BoxReadAnswerShare]), so all of it is counted at that share, and a
+// take at its bound fits a host's read whole rather than being cut by the
+// host's own deadline. Only the take: the upload and the record are made after
+// the host has answered, off the read ([Coordinator.keepCapture]), so no asker
+// waits on an upload.
 //
 // AND A READ THAT MAY END THE JOB HOLDS THE JOB'S END BEFORE ITS TAKE
 // ([JobEndBudget]): a stop's and a loss's end it first ([Coordinator.endJob]),

@@ -59,6 +59,7 @@ import (
 // [MCPRestarts] a person asked for, each server's latest test ([MCPChecks]),
 // each SSH server's latest Test connection ([SSHTests]),
 // each engine defect the company reported ([IssueReports]),
+// each operating insight it shares ([InsightRecords]),
 // each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
 // ([MCPSignIns]), the definition each MCP tool's level was decided on
 // ([MCPAccepted]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
@@ -1789,6 +1790,7 @@ type Fleet interface {
 	Counter
 	Claims
 	Ledger
+	SeenMarks
 	Budgets
 	Plane
 	Channels
@@ -1802,6 +1804,7 @@ type Fleet interface {
 	SeatAccess
 	AccessReviews
 	ConversationHolds
+	BoxReadings
 	Mailboxes
 	ObjectStores
 	TrashReaps
@@ -1813,6 +1816,7 @@ type Fleet interface {
 	MCPChecks
 	SSHTests
 	IssueReports
+	InsightRecords
 	MCPGrants
 	MCPSignIns
 	MCPAccepted

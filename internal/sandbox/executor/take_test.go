@@ -599,7 +599,7 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 	return "#!/bin/sh\n" +
 		"own=" + tool(packer) + " whole=" + at("whole") + "\n" +
 		`if [ "$1" != ` + shQuote(word) + ` ]; then exec "$own" "$@"; fi` + "\n" +
-		`if mkdir ` + at("claimed") + ` 2> /dev/null; then` + "\n" +
+		`if ` + claim(filepath.Join(flags, "claimed")) + `; then` + "\n" +
 		`  "$own" "$@"; st=$?` + "\n" +
 		`  : > ` + at("first-packed") + "\n" +
 		`  printf 'held\n' > ` + at("held") + "\n" +

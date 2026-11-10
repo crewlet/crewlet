@@ -43,6 +43,14 @@
 // (failurehold.go), and a conversation whose context does not fit is held
 // (conversationhold.go). ADR-0117 is the decision.
 //
+// And it is where a wake a completed turn already read past, asking the seat
+// nothing, is absorbed rather than run (seenthrough.go). ADR-0120 is the
+// decision.
+//
+// And it is where a pull request a task waits on settles it, from the GitHub
+// webhook or the poll of open ones, with no agent's turn (changesettle.go).
+// ADR-0121 is the decision.
+//
 // And it is where a remote MCP server's OAuth grant is kept and renewed: the
 // sign-in a person starts on one node and the vendor returns to another, the
 // refresh token sealed in the secret store's engine rows, each node's access

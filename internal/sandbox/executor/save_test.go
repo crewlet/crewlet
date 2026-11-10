@@ -799,8 +799,8 @@ func faultyFind(t *testing.T, pattern string) string {
 func faultyFindFirst(t *testing.T, home, pattern string) string {
 	t.Helper()
 	find := shQuote(hostTool(t, "find"))
-	failed := shQuote(filepath.Join(home, "find-failed-once"))
-	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") if mkdir " + failed + " 2> /dev/null; then " + find +
+	failed := filepath.Join(home, "find-failed-once")
+	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") if " + claim(failed) + "; then " + find +
 		` "$@"; exit 1; fi;; esac` + "\nexec " + find + ` "$@"` + "\n"
 }
 
@@ -1133,7 +1133,7 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	// clock's does not — and it says B has picked the task file, then holds
 	// until A's tar has had it rewritten; every other touch is this machine's.
 	writeBoxStandIn(t, b, p.BinDir()+"/touch", "#!/bin/sh\n"+
-		`case " $* " in *" -c "*) if mkdir `+at("b-claimed")+` 2> /dev/null; then printf 'picked\n' > `+
+		`case " $* " in *" -c "*) if `+claim(filepath.Join(flags, "b-claimed"))+`; then printf 'picked\n' > `+
 		at("picked")+`; read said < `+at("rewritten")+`; [ "$said" = rewritten ] || exit 3; `+touch+` "$@"; `+
 		`st=$?; : > `+at("b-set")+`; printf 'set\n' > `+at("set")+`; exit "$st"; fi;; esac`+"\n"+
 		"exec "+touch+` "$@"`+"\n")
@@ -1243,8 +1243,8 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	// writes, and it holds until the second pack's tar has packed and the
 	// harness has written again — failing where the word it is given is any
 	// other, so an interleaving that did not happen fails the case.
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+at("claimed")+
-		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; `+writes("first")+`; : > `+at("first-packed")+`; `+
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if `+claim(filepath.Join(flags, "claimed"))+
+		`; then "$tar" -czf "$@"; st=$?; `+writes("first")+`; : > `+at("first-packed")+`; `+
 		`read said < `+at("second")+`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
 		`"$tar" -czf "$@"; st=$?; `+writes("second")+`; : > `+at("second-packed")+`; printf 'packed\n' > `+
 		at("second")+`; exit "$st"`+"\n"))
@@ -1757,8 +1757,8 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	// tar waits on; a save that ends says so in its stead (wordInFifo).
 	heldFifo(t, flags, "second")
 	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+at("claimed")+
-		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; : > `+at("first-packed")+`; read said < `+at("second")+
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if `+claim(filepath.Join(flags, "claimed"))+
+		`; then "$tar" -czf "$@"; st=$?; : > `+at("first-packed")+`; read said < `+at("second")+
 		`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
 		`"$tar" -czf "$@"; st=$?; : > `+at("second-packed")+`; printf 'packed\n' > `+at("second")+
 		`; exit "$st"`+"\n"))

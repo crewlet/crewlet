@@ -186,10 +186,11 @@ var modelCalls = map[string]modelCall{
 	}},
 	// THE CONTINUATION OF A KEPT SESSION, composed by the runner and carried
 	// by the engine to the launch: the engine's own words and the seat's, the
-	// notes the session has not read as their senders' (each defused, as a
-	// note in any brief is), the calls made after the session was saved
-	// defused under the turn's token, and the engine's record of the session's
-	// box and branch defused. keptSession fences and defuses each part before
+	// notes the session has not read — of a session cut off, every note the
+	// turn has read, under the engine's header — as their senders' (each
+	// defused, as a note in any brief is), the calls made after the session
+	// was saved defused under the turn's token, and the engine's record of the
+	// session's box and branch defused. keptSession fences and defuses each part before
 	// the relaunch's last budget check; led only puts the lead in front of
 	// them once that check has passed, so it is led's request this holds.
 	"internal/agent/runner/continued.go:led": {tests: []string{

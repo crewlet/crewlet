@@ -35,6 +35,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
+
+	"github.com/crewlet/crewlet/internal/insights"
+	"github.com/crewlet/crewlet/internal/issuereport"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
@@ -54,6 +58,12 @@ type App struct {
 	// stopRooms unregisters the socket's rooms from the appliers they hear,
 	// before the service stops.
 	stopRooms []func()
+
+	// insights shares the company's operating insights under its consent
+	// (ADR-0119), nil where the fleet keeps no record of them; stopInsights
+	// ends its run.
+	insights     *insights.Sharer
+	stopInsights func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
 	// through. The App's to mount and never to start or stop.
@@ -946,10 +956,23 @@ func New(opts Options) (*App, error) {
 	sources.AlarmsEvaluated = opts.Runtime.AlarmsEvaluated
 	// And every seat's pause, which the advisor reads for a failure's.
 	sources.Pauses = opts.Runtime.SeatPauses()
+	// And what each agent may do, for the go-live check's review.
+	sources.AgentAccess = opts.Runtime.AgentAccess()
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()
 	sources.IssueReports = opts.Runtime.IssueReports()
+	// THE OPERATING INSIGHTS, over the fleet's record, sending only from a
+	// public build (ADR-0101's origin rule) to the relay's constant address.
+	if sources.Insights != nil {
+		origin := issuereport.OriginOf(version.String())
+		// A BUILD THAT SENDS NOTHING HAS NO SENDER AT ALL.
+		var send func(context.Context, []byte) (int, error)
+		if origin.InertReason() == "" {
+			send = insights.NewSender(issuereport.NewClient(), insights.RelayURL)
+		}
+		a.insights = sources.InsightSharer(origin, send)
+	}
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
@@ -1510,6 +1533,8 @@ func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc
 	// of an entry whose wake they have decided to lose. See
 	// feeddeadletters.go.
 	a.mountFeedDeadLetters(mount)
+	// An administrator's answer to a queued insight record. See insights.go.
+	a.mountInsights(mount)
 }
 
 // deploymentPolicy is the verb one deployment route is decided under: a read
@@ -1693,6 +1718,7 @@ func (a *App) Configured() bool {
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
 	a.listens.Join(ctx)
+	a.startInsights(ctx)
 }
 
 // Stop ends the tick, disconnects every client and leaves the fleet's
@@ -1700,6 +1726,9 @@ func (a *App) Start(ctx context.Context) {
 // still in flight — before the engine closes the queue they ride — for at most
 // [fleetTellBudget] and never past ctx, the caller's shutdown grace.
 func (a *App) Stop(ctx context.Context) {
+	if a.stopInsights != nil {
+		a.stopInsights()
+	}
 	for _, stop := range a.stopRooms {
 		stop()
 	}

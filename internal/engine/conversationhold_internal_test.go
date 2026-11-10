@@ -41,6 +41,14 @@ func message(conversation string, kind iam.ActorKind) *events.Event {
 	return ev
 }
 
+// killed is a run of ceo's on conversation whose harness the kernel killed for
+// memory, on a continued session or not.
+func killed(conversation string, continued bool) *events.Event {
+	return events.New(types.ExecutorCollected{Agent: ceoSeat.String(), ConversationKey: conversation,
+		HarnessSessionContinued: continued, Failed: true, ErrorKind: types.ExecutorErrorOutOfMemory,
+		MemoryKills: 1, MemoryBytes: 2 << 30}, events.TraceContext{})
+}
+
 func holdsOf(t *testing.T, f coord.ConversationHolds) []coord.ConversationHold {
 	t.Helper()
 	held, err := f.ConversationHolds(t.Context(), ceoSeat)
@@ -75,6 +83,67 @@ func TestTheSecondContextThatDoesNotFitHoldsTheConversation(t *testing.T) {
 	}
 }
 
+// A HARNESS THE KERNEL KILLED FOR MEMORY TWICE IN A ROW HOLDS ITS CONVERSATION,
+// on whatever session: the work does not fit its box, which a fresh session
+// does not change. Two different failures in a row are not twice, and the hold
+// is judged against the seat's sandbox, not its models.
+//
+// Mutation: hold on one kill, count a context failure and a kill as one kind,
+// or fingerprint the models for a kill, and this goes red.
+func TestTheSecondRunKilledForMemoryHoldsTheConversation(t *testing.T) {
+	t.Parallel()
+	e, _, fleet := pausingEngine(t)
+	ctx := t.Context()
+	for _, ev := range []*events.Event{
+		killed(longRoom, false), collected(longRoom, true, false), killed(longRoom, false),
+		collected(longRoom, false, false), killed(longRoom, true),
+	} {
+		e.noteConversationRun(ctx, "", ev)
+	}
+	if held := holdsOf(t, fleet); len(held) != 0 {
+		t.Fatalf("no run was killed for memory twice in a row, and %+v is held", held)
+	}
+	e.noteConversationRun(ctx, "", killed(longRoom, true))
+	waitFor(t, "the conversation to be held", func() bool { return len(holdsOf(t, fleet)) == 1 })
+	h := holdsOf(t, fleet)[0]
+	if h.Conversation != longRoom || h.Kind != string(failureOutOfMemory) || h.Basis == "" {
+		t.Errorf("the hold is %+v, want %s held for memory", h, longRoom)
+	}
+	// ON THE SANDBOX, where a company configures both it and models.
+	both := capabilityCompany(t)
+	memory, _ := failureBasis(both, "ceo", failureOutOfMemory)
+	sandbox, _ := failureBasis(both, "ceo", failureSandboxSettings)
+	models, _ := failureBasis(both, "ceo", failureContextExhausted)
+	if memory != sandbox || memory == models {
+		t.Errorf("a memory hold's basis is %q, want the sandbox's %q and not the models' %q", memory, sandbox, models)
+	}
+}
+
+// A HOLD FOR MEMORY IS LIFTED BY A CHANGED SANDBOX, and only a hold taken on a
+// sandbox the company no longer configures is.
+//
+// Mutation: judge a memory hold against the models, and this goes red.
+func TestAChangedSandboxLiftsAMemoryHold(t *testing.T) {
+	t.Parallel()
+	e, _, fleet := pausingEngine(t)
+	ctx := t.Context()
+	current, _ := failureBasis(e.Company(), "ceo", failureOutOfMemory)
+	for _, h := range []coord.ConversationHold{
+		{Seat: ceoSeat, Conversation: longRoom, Kind: string(failureOutOfMemory), Basis: "a box that is gone", At: time.Now()},
+		{Seat: ceoSeat, Conversation: "chat:room/2", Kind: string(failureOutOfMemory), Basis: current, At: time.Now()},
+	} {
+		if ok, err := fleet.CreateConversationHold(ctx, h); err != nil || !ok {
+			t.Fatalf("hold: %v (%v)", ok, err)
+		}
+	}
+	if e.conversationHeld(ctx, "ceo", longRoom, []*events.Event{message(longRoom, iam.ActorAgent)}) {
+		t.Error("a memory hold taken on another sandbox still holds the conversation")
+	}
+	if !e.conversationHeld(ctx, "ceo", "chat:room/2", []*events.Event{message("chat:room/2", iam.ActorAgent)}) {
+		t.Error("a memory hold on the seat's sandbox as it is was lifted")
+	}
+}
+
 // A HELD CONVERSATION STARTS NO TURN, AND THE SEAT'S OTHERS DO: its wakes are
 // settled unrun, and a person writing on it lifts the hold and runs.
 func TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt(t *testing.T) {
@@ -87,12 +156,18 @@ func TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt(t *testing.T) {
 		t.Fatalf("hold: %v (%v)", ok, err)
 	}
 	var turns atomic.Int32
+	var skipped []types.TurnTriggerSkipped
 	d := &Dispatcher{
 		Conditions: func(string) inbox.Conditions {
 			return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
 		},
 		Ledgered: inbox.Ledgered,
 		Held:     e.conversationHeld,
+		Observe: func(_ context.Context, ev *events.Event) {
+			if s, ok := events.DataAs[*types.TurnTriggerSkipped](ev); ok {
+				skipped = append(skipped, *s)
+			}
+		},
 		Turn: func(context.Context, Request) (turn.Result, error) {
 			turns.Add(1)
 			return turn.Result{}, nil
@@ -102,6 +177,10 @@ func TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt(t *testing.T) {
 	if got := dispatch(message(longRoom, iam.ActorAgent)); got.Outcome != queue.OutcomeAck || turns.Load() != 0 {
 		t.Fatalf("an agent's message on the held conversation answered %+v after %d turns, want settled unrun",
 			got, turns.Load())
+	}
+	// THE TURN LEDGER COUNTS IT AS HELD BY THE BREAKER, not as worked.
+	if len(skipped) != 1 || skipped[0].Disposition != types.DispositionBreakerHeld || skipped[0].Wake == "" {
+		t.Errorf("the held wake was recorded as %+v, want one skip counted breaker_held under its wake", skipped)
 	}
 	dispatch(message("chat:room/2", iam.ActorAgent))
 	if turns.Load() != 1 {

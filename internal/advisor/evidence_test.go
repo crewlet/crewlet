@@ -90,6 +90,12 @@ func started(seat, wake, outcome string, turns int64) usage.TurnLedgerRow {
 }
 
 // spent is a seat's started turns that spent tokens of their own and auxiliary.
+// absorbed is a seat's wakes a completed turn had already read past.
+func absorbed(seat string, wakes int64) usage.TurnLedgerRow {
+	return usage.TurnLedgerRow{AgentID: "id-" + seat, Handle: seat, Wake: "work_item:comment",
+		Disposition: "absorbed", Turns: wakes}
+}
+
 func spent(seat string, own, aux int64) usage.TurnLedgerRow {
 	r := started(seat, "chat:message", "moved", 1)
 	r.Input, r.AuxInput = own, aux
@@ -122,6 +128,11 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			[]advisor.Class{advisor.ClassAuxiliaryShare}},
 		"15% auxiliary of a million":      {[]usage.TurnLedgerRow{spent("sre", 850_000, 150_000)}, nil},
 		"half auxiliary, under a million": {[]usage.TurnLedgerRow{spent("sre", 499_999, 499_999)}, nil},
+		"10 of 50 wakes already read": {[]usage.TurnLedgerRow{started("qa", "chat:message", "moved", 40),
+			absorbed("qa", 10)}, []advisor.Class{advisor.ClassRedeliveredSeen}},
+		"10 of 51 wakes already read": {[]usage.TurnLedgerRow{started("qa", "chat:message", "moved", 41),
+			absorbed("qa", 10)}, nil},
+		"9 wakes already read, all of them": {[]usage.TurnLedgerRow{absorbed("qa", 9)}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -148,6 +159,7 @@ func TestAHealthyLedgerRaisesNothing(t *testing.T) {
 		started("app", pickup, "moved", 25), started("app", pickup, "words", 4),
 		started("app", pickup, "nothing", 1),
 		started("sre", "schedule:health-check", "nothing", 336), started("sre", "chat:message", "moved", 6),
+		absorbed("pm", 3),
 		spent("backend", 2_000_000, 200_000),
 	}
 	if got := advisor.Detect(advisor.Evidence{Ledger: healthy}, kindOf); len(got) != 0 {
@@ -208,10 +220,11 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}},
 		Notices:     []worklet.NoticeLoad{{Handle: "owner", Notices: 400}}}
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
-		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000)}
+		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000), absorbed("app", 10)}
 	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
-	// Every class but approval.rubber_stamp, the owner's, held on its own below.
-	if len(found) != len(advisor.WorkClasses())-1+len(advisor.LedgerClasses()) {
+	// Every class but the owner's two (approval.rubber_stamp and
+	// integration.inbound_silent), each held on its own.
+	if len(found) != len(advisor.WorkClasses())-2+len(advisor.LedgerClasses()) {
 		t.Fatalf("raised %d findings, want one per engine class the work patterns and the ledger raise", len(found))
 	}
 	// A COUNT NAMES NO RECORD: these classes read totals, not rows to open.
@@ -431,5 +444,78 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 	ev.PausesUnread = true
 	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
 		t.Errorf("an unread pause store raised %+v", found)
+	}
+}
+
+// A BOX THAT RAN OUT OF MEMORY TWICE IN A WEEK IS THE OWNER'S TO SIZE: one
+// finding per agent naming its ceiling, opening the sandbox settings; once is
+// a spike, and an unread source raises nothing.
+func TestARunStoppedForMemoryTwiceIsTheOwnersToSize(t *testing.T) {
+	t.Parallel()
+	ev := advisor.Evidence{MemoryKills: []advisor.MemoryKill{
+		{Seat: "app", MemoryBytes: 2 << 30}, {Seat: "app", MemoryBytes: 2 << 30}, {Seat: "ops"},
+	}}
+	found := advisor.Detect(ev, kindOf)
+	if len(found) != 1 {
+		t.Fatalf("raised %+v, want app's alone", found)
+	}
+	f := found[0]
+	if f.Class != advisor.ClassSandboxOutOfMemory || f.Actor != advisor.ActorOwner ||
+		f.Subject.Seat != "app" || f.Fix.Kind != advisor.FixOpenSetting ||
+		f.Fix.Setting != "providers.sandbox" || !strings.Contains(f.Title, "2 times") ||
+		!strings.Contains(f.Why, "at its 2 GB ceiling") {
+		t.Errorf("finding = %+v, want the owner's, about app's 2 GB box, opening the sandbox", f)
+	}
+	ev.RunsUnread = true
+	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
+		t.Errorf("an unread source raised %+v", found)
+	}
+}
+
+// ONLY THE POLL SETTLING SAYS THE WEBHOOK IS SILENT: a pull request the poll
+// settled after the webhook's newest is the owner's to look into, and a
+// delivery since clears it.
+func TestOnlyThePollSettlingSaysTheWebhookIsSilent(t *testing.T) {
+	t.Parallel()
+	at := func(h int) time.Time { return time.Date(2026, 3, 6, h, 0, 0, 0, time.UTC) }
+	settled := func(polled, polledAt, delivered, deliveredAt int) []worklet.ChangeSettles {
+		var out []worklet.ChangeSettles
+		if polled > 0 {
+			out = append(out, worklet.ChangeSettles{Source: worklet.SettledByPoll, Count: polled, Newest: at(polledAt)})
+		}
+		if delivered > 0 {
+			out = append(out, worklet.ChangeSettles{Source: worklet.SettledByWebhook, Count: delivered,
+				Newest: at(deliveredAt)})
+		}
+		return out
+	}
+	silent := func(s []worklet.ChangeSettles) []advisor.Finding {
+		var out []advisor.Finding
+		for _, f := range advisor.Detect(advisor.Evidence{Work: worklet.WorkPatterns{Settled: s}}, kindOf) {
+			if f.Class == advisor.ClassInboundSilent {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	found := silent(settled(2, 9, 1, 8))
+	if len(found) != 1 {
+		t.Fatalf("the poll settled after the webhook's newest and raised %d findings, want one", len(found))
+	}
+	f := found[0]
+	if f.Actor != advisor.ActorOwner || f.Severity != advisor.SeverityCosts ||
+		f.Subject.Kind != advisor.SubjectIntegration || f.Subject.Name != "GitHub" ||
+		f.Fix.Kind != advisor.FixExternalStep || f.Fix.Setting != "github" || len(f.Evidence) != 2 {
+		t.Errorf("the finding is %+v, want the owner's external step on GitHub with its two counts", f)
+	}
+	for name, s := range map[string][]worklet.ChangeSettles{
+		"a delivery since":               settled(2, 9, 1, 10),
+		"only deliveries":                settled(0, 0, 3, 9),
+		"nothing settled":                nil,
+		"a delivery at the same instant": settled(1, 9, 1, 9),
+	} {
+		if got := silent(s); len(got) != 0 {
+			t.Errorf("%s raised %+v", name, got)
+		}
 	}
 }

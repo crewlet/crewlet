@@ -153,6 +153,8 @@ learning:                               # optional — agent-learning subsystem
                                         #   cheap model (see concepts/llm-backends.md
                                         #   § Auxiliary work and latency)
   enabled: true                         # master switch (auto-disables without DB + embeddings)
+  max_share: 0.15                       # the most of an agent's day of spend its learning
+                                        #   may take (0 < x <= 1; 1 leaves it uncapped)
   episodic:
     retrieval_limit: 5                  # default hits query_episodes returns when the
                                         # model names no limit (1-20)

@@ -2244,6 +2244,27 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 	return marked, err
 }
 
+// MarkHarnessEnd records how a job's harness ended, as a read that collected
+// the job found it. See the contract on [PendingStore].
+func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error) {
+	if !end.Valid() {
+		return false, fmt.Errorf("sandbox: %q is no way a job's harness ends; it is one of %s",
+			end, words.Or(HarnessEnds))
+	}
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		next := run.Launch.HarnessEnd.after(end)
+		if run.LaunchID != launch || next == run.Launch.HarnessEnd {
+			return false
+		}
+		run.Launch.HarnessEnd = next
+		return true
+	})
+	return marked, err
+}
+
 // MarkResumeBegun records what a claim's resumed turn does with its job's
 // round. See the contract on [PendingStore].
 //

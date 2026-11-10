@@ -713,8 +713,10 @@ flowchart TD
   asked again last — behind the configuration is a node the control plane
   has confirmed `shed` or `stuck`, never one merely mid-rollout, whose chart,
   units and limits are the revision the fleet replaced; see
-  [Control Plane](control-plane.md#where-the-gate-sits)), or that is behind
-  the caller's floor. Being behind the configuration lasts — until the node's
+  [Control Plane](control-plane.md#where-the-gate-sits)), that is behind
+  the caller's floor, or whose build does not declare a key the request
+  holds, which it refuses unrun ([below](#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it)).
+  Being behind the configuration lasts — until the node's
   apply succeeds, or a person acts — so it answers `behind_config` and the
   asking node remembers that for thirty seconds: meanwhile it skips the node,
   asking it once, told to take the request, only when no other data node
@@ -863,6 +865,109 @@ assembled node by node into a shape where a whole job is done by nobody while no
 single node's config is wrong. The engine checks the assembled shape against
 live node presence and logs `fleet_role_unmanned` when a role has nobody doing
 it. See [the fleet guide](../guides/fleet.md#node-roles).
+
+### A build reads what it is asked whole, or runs none of it
+
+A rolling upgrade mixes builds, so the node that asks is not always running the
+build of the data node that answers. What an operation takes — its arguments,
+and the actor a write runs as — crosses under one rule, and both halves of it
+are the standard library's own (`encoding/json`'s `omitzero` on every field,
+and the rule its `DisallowUnknownFields` sets):
+
+- **A key goes on the wire only where it carries a value.** The asking node
+  leaves every field at its zero off the request, at every depth, so a field a
+  later build adds reaches a data node only in a request that sets it. A
+  request that does not is served by a data node of either build exactly as
+  before: a field's zero means what a build without the field does, which is
+  the rule every operation's arguments are declared under. A pointer at a value
+  its type calls zero — the zero instant, a log position that names nothing —
+  is such a field too, and crosses as no value at all, so no field's meaning
+  rests on one: a cleared date is a flag of its own (`clear_due`), a bound on a
+  query is a value whose zero means unset, and a value no write may hold, such
+  as a task due at the zero instant, is refused where the request is asked,
+  whichever node asks it.
+- **A key the serving build does not declare refuses the request.** A data
+  node reads a request's inputs refusing every member its build's types do not
+  declare, at every depth — a list's elements, a struct's promoted fields; a
+  map's keys and a raw JSON document are data, never declarations — before it
+  waits for a floor or runs anything, and answers that it ran nothing of it,
+  naming the operation, each key and itself. A write run without them would
+  land as something its writer never asked for: recorded by the older rule,
+  under the lowest version that reads what was left, on every node — the newer
+  ones too — with nothing said. A read carrying a newer argument is refused the
+  same way, never answered with the argument ignored.
+
+The asking node treats that answer as any answer from a node that ran
+nothing: it asks the next data node, since one of the asking node's build
+serves it, and does not ask the refusing node first next time. An operation
+whose node is chosen by a key — a push, by its repository's committer; a git
+read, by the repository's home — asks the refusing node last for thirty
+seconds for every request that carries what it refused, and for those alone:
+the node serves every other request as before. A repository's home that
+refused a git request hands the copy it would have filled to its runner-up,
+which fills it and answers. When no data node serves the request, the caller
+is told no data node served it and what would: a data node of the asking
+node's build, so finish the upgrade. A write a node may have run is still an
+unknown outcome, never a refusal — a refusal says nothing ran.
+
+- **The engine's record of how a turn ended stays owed.** It is asked again
+  under its one operation as while no data node answers, the run's record
+  keeps owing it, and the seat's mail waits on it as on any owed end, until a
+  data node of the writer's build records it. A session's capture stays
+  unresolved the same way.
+- **A tool, the API and the operator's surfaces answer
+  `fleet_builds_differ`**, a condition no wait clears until an administrator
+  finishes the upgrade: "This node and the company's other nodes run different
+  versions of Crewlet".
+- **The data node that refused logs `estate_request_refused`** at `WARN`, once
+  per request it refuses, as it logs a request under a key it does not hold or
+  one past its window — with `disposition=unknown_keys`, the operation, the
+  node that asked and the keys.
+
+A data node answering its own seats from its own copy reads nothing off the
+wire, so none of this applies there. The rest of a request — its floors, its
+deadline, what a node asked before already paid for — is the routers' own
+protocol, which every build reads as it always has: a later build adds there
+only what an earlier one may ignore.
+
+**And an answer a caller carries on is read whole.** A newer data node's answer
+can hold a key an older node's build does not declare. Most answers are only
+shown, and a reader that drops a field it cannot show loses nothing. Some are
+carried into another request, and those cross under the same rule — the data
+node leaves a field at its zero off them, and the asking node reads them whole
+or refuses them, `fleet_builds_differ` again:
+
+| What is carried | Into |
+|---|---|
+| An artifact version's files, which a publish keeps | the next version |
+| A saved view's prior, which a save hands back | the save, decided against it |
+| A container's views `list_work_views` hands a model | `save_work_view`, which replaces a view whole by an id it lists |
+| The catalogue `get_work_catalogue` hands a model | `write_work_catalogue`, which replaces the types and fields whole |
+| A project's field declarations `describe_project` hands a model | `write_project`'s `fields`, which replaces them whole |
+| A datastore's collections `read_artifact_data` hands a model | `set_artifact_schema`, which replaces them whole |
+| A list's parameters, expanded into a query | the read that lists the work items |
+| A page of a repository's snapshot | the next page, asked by its cursor, as a Gitlet node syncs |
+
+Where the same answer is also only shown — an artifact version a page serves or
+a tool shows, a container's views, the catalogue, a project or a datastore's
+collections on a screen — the carried read is a read of its own, and the shown
+one is read as before. Neither a write that replaces a whole list nor a view's
+save is decided against the version its caller read — a save's prior is the
+view's owner and container, not its fields — so a newer field another node
+sets after an older node has read the list or the view is still replaced away
+by that node's write, as one writer's change is by any other writer's
+([#893](https://github.com/crewlet/crewlet/issues/893)).
+
+**Upgrade the data nodes first.** A data node of the newer build reads every
+older node's request whole, so with the data nodes upgraded before the rest,
+no data node refuses a request. That order has a cost of its own: once a newer
+node writes a newer field, a node not yet upgraded is refused the answers in
+the table above that hold it, and answers `fleet_builds_differ` for the
+request it would have carried them into — and a Gitlet node of the older build
+cannot sync such a repository — until it is upgraded too. Upgraded the other way round, a seats-only node's
+request that sets a field its data nodes do not declare waits — refused, never
+run short — until one of them runs the newer build. See
+[Draining and rolling upgrades](../guides/fleet.md#draining-and-rolling-upgrades).
 
 ---
 

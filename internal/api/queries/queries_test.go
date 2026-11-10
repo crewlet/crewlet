@@ -265,7 +265,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
-		"token_series": "everybody", "seat_activity": "everybody",
+		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
 		"budgets": "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
@@ -284,8 +284,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor": "admin", "advisor_access": "admin",
-		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
+		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor": "admin", "advisor_access": "admin", "go_live_review": "admin",
+		"diagnostics_insights": "admin",
+		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
 		// Where a model's executors can run, the catalogue a model step

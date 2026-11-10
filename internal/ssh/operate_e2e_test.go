@@ -193,7 +193,7 @@ func TestAHeldOperateCallApprovedOnceRunsOnce(t *testing.T) {
 	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: o.AgentSeatByHandle("sre"), Org: o,
 		Lookups: turnctx.NewLookups()}
 	exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHOperateTool}).
-		WithHolder(builtin.NewCallHold(desk, seal)).ForTurn(turn)
+		WithHolder(builtin.NewCallHold(desk, seal, nil)).ForTurn(turn)
 	ctx := turnctx.WithJob(iam.WithPrincipal(t.Context(), turnctx.SeatPrincipal(o, turn.Seat)), "launch-1")
 	const marker = "/tmp/crewlet-e2e-ran"
 	args := map[string]any{"host": "api-1", "command": "echo ran >> " + marker, "reason": "prove the run"}

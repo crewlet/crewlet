@@ -77,6 +77,10 @@ const OrgScope = "org"
 // as its lease, its mailbox and its diary are.
 func AgentScope(agentID string) string { return "agent:" + agentID }
 
+// LearningScope is one seat's learning counter: the share of its spend that
+// went on learning, read beside [AgentScope] and judged by no ceiling.
+func LearningScope(agentID string) string { return "learning:" + agentID }
+
 // PersonScope is one person's counter key: their Dashboard Assistant spend,
 // judged by the company's `assistant.token_budget` (internal/engine).
 //

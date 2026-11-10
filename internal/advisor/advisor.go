@@ -163,14 +163,16 @@ type Answer struct {
 
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
 // work patterns, the turn ledger, the alarms (this node's evaluation or the
-// fleet's marks), the seats' pauses and the held conversations that could not
-// be read.
+// fleet's marks), the seats' pauses, the executor runs' records, the schedules'
+// fires and the held conversations that could not be read.
 const (
 	UnreadIntegrations = "integrations"
 	UnreadWork         = "work"
 	UnreadLedger       = "ledger"
 	UnreadAlarms       = "alarms"
 	UnreadPauses       = "pauses"
+	UnreadRuns         = "runs"
+	UnreadFires        = "fires"
 	UnreadHolds        = "holds"
 )
 

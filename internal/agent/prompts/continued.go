@@ -12,11 +12,15 @@ import (
 //
 // A relaunch of a turn continues the session its earlier launches worked in
 // (internal/sandbox, restore.go), so its brief is the session's NEXT MESSAGE,
-// not a whole brief: the session already holds the task as it read it, every
-// call it made and every note it read. What it is told is what it lacks —
-// what changed since its last message — and, where the box it runs in is not
-// the one it was last worked in, what that changes. The fresh brief a run that
-// starts a session of its own is handed is [BuildPhaseUserMessage]'s.
+// not a whole brief: the session holds the task as it read it, where it holds
+// the message that brief was in, and, where its harness ended its own run,
+// every call it made and every note it read. What it is told is what it lacks
+// — what changed since its last message, and of a session cut off, that it was
+// or may have been and what it may not show ([InterruptedSession],
+// [InterruptedCopy], [MayBeInterruptedCopy]), with the calls and the notes it
+// may lack ([CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
+// not the one it was last worked in, what that changes. The fresh brief a run
+// that starts a session of its own is handed is [BuildPhaseUserMessage]'s.
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
@@ -97,6 +101,33 @@ const InterruptedSession = "## The session above was cut off" +
 	" end in the middle of a call — a tool call with no result, which may or may not have run." +
 	" Check what such a call was meant to do before doing it again."
 
+// InterruptedCopy is [InterruptedSession] for the copy of a session its job's
+// own box holds, continued in place where the job's record says its harness
+// was cut off: no save took that copy, so it is told it was cut off in words
+// that say nothing of one — and that it may not show the last of what its run
+// did, which the calls told after it, every call of the round, are the seat's
+// share of. TOLD WHETHER OR NOT A CALL IS LISTED AFTER IT: the call a harness
+// was cut off in may be none the round's log holds — one of its own tools,
+// which never reach the seat's.
+const InterruptedCopy = "## The session above was cut off" +
+	"\nThe run that worked in it did not finish cleanly by itself: it was stopped, killed or ended on" +
+	" an error before it finished, so the session above may end in the middle of a call — a tool call" +
+	" with no result, which may or may not have run — and may not show the last of what it did." +
+	" Check what such a call was meant to do before doing it again."
+
+// MayBeInterruptedCopy is [InterruptedCopy] for a copy whose job's record says
+// nothing of how its harness ended, or says it in a word this build does not
+// know — a job a build before this one collected, a record the coordination
+// store did not take: the engine has no word that its run finished cleanly by
+// itself and none that it did not, so the copy is told only what is known, and
+// what it may then lack. Told where [InterruptedCopy] would be, whether or not
+// a call is listed after it.
+const MayBeInterruptedCopy = "## The session above may have been cut off" +
+	"\nThe engine has no record that the run that worked in it finished cleanly by itself, so the" +
+	" session above may end in the middle of a call — a tool call with no result, which may or may" +
+	" not have run — and may not show the last of what it did. Check what such a call was meant to" +
+	" do before doing it again."
+
 // calledAfterHeader introduces the calls a session's run made through the seat's
 // tools after the point the session was saved at.
 const calledAfterHeader = "## Calls made after the session above was saved" +
@@ -107,12 +138,16 @@ const calledAfterHeader = "## Calls made after the session above was saved" +
 
 // calledSinceHeader introduces the calls a session CUT OFF had its run make
 // through the seat's tools after the newest point it is known to hold
-// ([AfterSave.Interrupted]), which is not where it ends: the session may show
-// some of them, so they are never said to be missing from it, and a call shown
-// in both places is said to be one call, so a model reading it twice does not
-// take it for a second one.
+// ([AfterSave.Interrupted]) — a kept capture's save point, or, for the copy a
+// job's own box holds, the round's start — which is not where it ends: the
+// session may show some of them, so they are never said to be missing from it,
+// and a call shown in both places is said to be one call, so a model reading it
+// twice does not take it for a second one. It says nothing of why the session
+// may show only some of them, which the section before it says: that it was
+// cut off, or, of a copy whose job's record says nothing, that it may have been
+// ([MayBeInterruptedCopy]).
 const calledSinceHeader = "## Calls this run made that the session above may not show" +
-	"\nThe session above was cut off, so it may show some of these calls and not others: they are" +
+	"\nThe session above may show some of these calls and not others: they are" +
 	" every call the run working in it made through your tools since the last point the engine" +
 	" knows it reached. A call shown both above and here is ONE call, made once, not two. They" +
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
@@ -143,9 +178,12 @@ type AfterSave struct {
 	// only beside a Dropped it accounts for.
 	Tally string
 
-	// Interrupted says the session was cut off ([InterruptedSession]), so the
-	// point its calls are told from is the newest one its launch is known to
-	// hold, not where it ends (internal/sandbox's savepoint.go): some of the
+	// Interrupted says the session was, or may have been, cut off
+	// ([InterruptedSession], [InterruptedCopy], [MayBeInterruptedCopy]), so
+	// the point its calls are told from is the newest one its launch is known
+	// to hold, not where it ends (internal/sandbox's savepoint.go) — or, for
+	// the copy a job's own box holds where its harness may have been cut off,
+	// the round's start (internal/agent/runner's calledInPlace): some of the
 	// calls may be in it as well. They are told under [calledSinceHeader],
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
@@ -198,6 +236,41 @@ func droppedAfter(n int, interrupted bool) string {
 		" last and only a tally of those between. The tally below counts calls made " + before + " as well." +
 		" A call counted only in the tally has no outcome here: check whether its tool already did what it" +
 		" was for before doing it again.)"
+}
+
+// notesAgainHeader opens the notes a session that may have been cut off is told
+// again ([NotesReadAgain]).
+const notesAgainHeader = "## Notes this turn read that the session above may not show"
+
+// NotesReadAgain is the section that tells a session its run may have been cut
+// off in the notes the turn has read again, each already rendered as the model
+// reads a note ([SteerMessage]), "" for none: the session may not show them, and
+// may show some.
+//
+// SAID AS NOTES IT MAY ALREADY SHOW, ONE NOTE WHEREVER SHOWN, AND COUNTED. Each
+// note says it stands for the rest of the turn, so a model reading one both above
+// and here could do twice what it asks; and the notes the brief is the first to
+// read follow these in the same form, which the count tells apart.
+//
+// AND THE NOTES AFTER THEM AS ONES THE TURN HAD NOT READ, never as new to the
+// session. Which notes the turn has read is the run's record's word, and a
+// harness can be handed a note before the record says it was read: OpenCode's
+// delivery is recorded read only once its plugin confirms it, so a harness gone
+// before its confirmation landed leaves a session that may show a note the
+// brief takes as waiting.
+func NotesReadAgain(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	which := "the note below"
+	if len(notes) > 1 {
+		which = "the " + strconv.Itoa(len(notes)) + " notes below"
+	}
+	return notesAgainHeader + "\nThe session above may not show " + which + ": every note a person sent" +
+		" this turn that the turn has read so far, in the order it read them. A note shown both above and" +
+		" here is ONE note, sent once, not two: do what it asks once. A note after them is one the turn" +
+		" had not read before this message." +
+		"\n\n" + strings.Join(notes, "\n\n")
 }
 
 // BoxReplaced is what a run that continues its session in a box other than the

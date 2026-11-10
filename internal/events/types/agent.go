@@ -586,6 +586,10 @@ type TurnCompleted struct {
 	// `no_action`, `blocked`, or the engine-written `incomplete`. Empty on
 	// a turn that never reached an executor at all.
 	Outcome string `json:"outcome,omitempty"`
+	// Acted says a successful call of the turn could reach somebody outside
+	// the engine (a vendor's post included), which the tally's outcome, of
+	// the engine's own committed changes only, does not see.
+	Acted bool `json:"acted,omitempty"`
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
 	// constituent, possibly from several senders. Empty for internal triggers.

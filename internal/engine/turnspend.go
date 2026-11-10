@@ -176,17 +176,14 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	ended time.Time,
 ) segmentCharge {
 	item, _ := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
-	// THE JOB'S ENGINE SPEND: what its bridged calls and the condensation
-	// of its collection cost, which no segment was running to tally.
 	job := t.jobEngine
+	tokens := t.segmentTokens(spend)
 	own := withAux(withAux(worklet.TurnSpend{
-		Rounds: spend.Rounds,
-		Input: spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput +
-			job.WorkerInput,
-		Output: spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput +
-			job.WorkerOutput,
-		CacheRead:  spend.CacheRead + t.jobCacheRead,
-		CacheWrite: spend.CacheWrite + t.jobCacheWrite,
+		Rounds:     spend.Rounds,
+		Input:      tokens.Input,
+		Output:     tokens.Output,
+		CacheRead:  tokens.CacheRead,
+		CacheWrite: tokens.CacheWrite,
 		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Workers:    spend.Workers + job.Workers,
 		SentBack:   spend.SentBack,
@@ -244,6 +241,24 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		charge.record.FailedIn = spend.FailedIn
 	}
 	return charge
+}
+
+// segmentTokens is the segment's model tokens, the run it collected included:
+// that run's own usage and its engine spend (its bridged calls' workers and
+// auxiliary calls, which no segment was running to tally). The one sum the
+// turn's tally and its work item's charge both read.
+func (t turnTelemetry) segmentTokens(spend runner.Spend) types.TurnTokens {
+	job, aux := t.jobEngine, t.auxSpent.Total()
+	return types.TurnTokens{
+		Input: spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput +
+			job.WorkerInput,
+		Output: spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput +
+			job.WorkerOutput,
+		CacheRead:  spend.CacheRead + t.jobCacheRead,
+		CacheWrite: spend.CacheWrite + t.jobCacheWrite,
+		AuxInput:   aux.Input + job.Aux.Input,
+		AuxOutput:  aux.Output + job.Aux.Output,
+	}
 }
 
 // closingAfter is the telemetry of the segment that CLOSES a turn on the frame

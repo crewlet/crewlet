@@ -32,6 +32,7 @@ export function heldCallFrom(
     at: approval.at,
     item: approval.item ? { id: approval.item, key: approval.item } : null,
     args: approval.args,
+    acting: approval.acting,
     ...(tool ? { extra: <RiskChips tool={tool} /> } : {}),
     ...(approval.status === "answered"
       ? { answered: answeredWords(approval.answer, seatName(approval.answered_by)) }

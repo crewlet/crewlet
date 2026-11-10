@@ -686,6 +686,16 @@ type Result struct {
 	// ([SessionCapture.Interrupted]).
 	HarnessCutOff bool
 
+	// MemoryKills is how many processes the kernel killed for memory in the
+	// job's memory domain while its harness ran, and MemoryBytes the domain's
+	// ceiling, both 0 where it killed none or kept no count. OutOfMemory is a
+	// run whose harness was one of them: it ended at its box's memory
+	// ceiling (types.ExecutorErrorOutOfMemory). Read off the box, so a run
+	// that forges it costs only its own conversation, which a person releases.
+	MemoryKills int64
+	MemoryBytes int64
+	OutOfMemory bool
+
 	// JobEnd is how the job was ended on request, as its script recorded it
 	// ([JobEnder], internal/sandbox/executor's Paths.JobEnded): a harness told
 	// to stop, one killed past its grace, or a request that came before the
@@ -701,6 +711,15 @@ type Result struct {
 	// for the launch's own record; nil where nothing was taken. Set by the
 	// coordinator, never by a runner.
 	Kept *SessionKept
+
+	// HarnessEnd is how the job's harness ended, as the read that collected
+	// this result found it ([LaunchRecord.HarnessEnd]): recorded on the job's
+	// record by that read, on the node whose host the box is on, and carried
+	// back with the result for the claim it collects for, which was read
+	// before the record was written ([Coordinator.collectClaimed]). Set by the
+	// coordinator, never by a runner; empty from a host of an older build,
+	// which is never read as an own run.
+	HarnessEnd HarnessEnd
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero

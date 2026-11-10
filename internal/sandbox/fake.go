@@ -437,6 +437,9 @@ type FakeProvider struct {
 	// a control plane that is slow to answer, or does not, for one box
 	// while it answers for the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
+	// Made, when set, is handed every box Create makes, before Create
+	// answers: a case scripts a fresh box's commands there.
+	Made func(box *FakeSandbox)
 
 	// runs is the run each box was made for, as a local box records it
 	// ([HostBox]): kept for a box made for a turn in a cell on the engine's
@@ -465,6 +468,9 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	p.next++
 	box := NewFakeSandbox(fmt.Sprintf("box-%d", p.next))
 	p.boxes[box.id] = box
+	if p.Made != nil {
+		p.Made(box)
+	}
 	if spec.TurnID != "" && spec.Placement.OnEngineHost() {
 		if p.runs == nil {
 			p.runs = map[string]HostBox{}

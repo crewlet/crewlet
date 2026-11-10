@@ -148,6 +148,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalStoreFull:          {http.StatusInsufficientStorage, httpjson.CodeStoreFull},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
 	crewletmcp.RefusalInternalError:      {http.StatusInternalServerError, httpjson.CodeInternalError},
+	crewletmcp.RefusalVendorForbidden:    {http.StatusForbidden, httpjson.CodeVendorForbidden},
 }
 
 // Fail writes the answer to one call that was NOT made: cause is the failed

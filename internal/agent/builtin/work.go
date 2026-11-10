@@ -66,10 +66,19 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error)
 	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
 		fresh statelog.Freshness) (worklet.TaskDetail, error)
-	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
+	// CarriedViews is a container's strip as list_work_views hands it to a
+	// model, which save_work_view replaces a view of whole, by its id, with
+	// what the model re-sends of it: read whole or refused where this node's
+	// build would drop part of it (estate's tracker.views_carried), never
+	// shown short and saved back.
+	CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
-	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
+	// CarriedCatalogue is the catalogue as get_work_catalogue hands it to a
+	// model, which write_work_catalogue tells to send it back whole: read
+	// whole or refused where this node's build would drop part of it
+	// (estate's tracker.catalogue_carried), never shown short and written back.
+	CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
 	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
@@ -134,6 +143,11 @@ type WorkMover interface {
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
+
+	// ChangeRef is a pull request's tracker name, where raw is one under the
+	// company's GitHub owners, or why one on its host is refused; both empty,
+	// or nil, and raw names an item.
+	ChangeRef func(raw string) (ref, refused string)
 
 	// Authorize decides the checks a tool can only take AFTER a read.
 	//
@@ -1846,7 +1860,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// nothing was written.
 	var blockers []string
 	for _, ref := range argStrings(args, "waiting_on") {
-		id, refused := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		id, refused := t.deps.resolveBlocker(ctx, CreateWorkItemTool, "waiting_on", ref)
 		if refused != nil {
 			return *refused, nil
 		}
@@ -2602,7 +2616,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"to set — filing your own work into your own team is " +
 					"what `unit` on " + worklet.CreateWorkItemTool + " does.",
 			},
-			"waiting_on":   setArgSchema("The items this one is blocked BY. " + itemRefs),
+			"waiting_on": setArgSchema("The items this one is blocked BY. " + itemRefs +
+				" A pull request under the company's GitHub owners, by its URL, blocks it " +
+				"until it merges or closes, when you are told to update the item."),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
@@ -3195,6 +3211,9 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if refusal != "" {
 		return patch, kind, refusal
 	}
+	if refusal = readWait(args, now, loc, &plan, UpdateWorkItemTool); refusal != "" {
+		return patch, kind, refusal
+	}
 	// THE DATES AND THE SIZING ARE `fields`, which is what they are.
 	plan.applyToPatch(&patch)
 
@@ -3559,6 +3578,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refused, nil
 		}
 		ask = resolved
+	}
+	if refused := t.deps.checkAsksOfNamed(CommentOnWorkTool, actor, asks, ask, comment.Mentions); refused != nil {
+		return *refused, nil
 	}
 	query := worklet.ThreadQuery{
 		Task:    before.Task.ID,

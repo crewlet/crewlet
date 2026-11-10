@@ -222,6 +222,7 @@ test("a seat's learned skills say how many of its total are listed", async () =>
           version: 2,
           updated_at: "2026-09-20T10:00:00Z",
           uses: 4,
+          loads: 1,
         },
       ],
       skills_total: 40,
@@ -277,12 +278,14 @@ test("a seat's learned skills are ordered by the holder, in the order sort= name
   // AN EMPTY PAGE DRAWS NO HEAD, so the head's ask has its own case below.
 });
 
-test("a learned skill's Uses and Updated heads ask the holder for its order", async () => {
+test("a learned skill's Offered and Updated heads ask the holder for its order", async () => {
   location.hash = "#/doclet/skills?kind=learned&seat=swe";
   const { asked } = mount({
     agent_memory: {
       id: "swe",
-      skills: [{ id: "k-1", key: "k-1", title: "Reviewing", summary: "", uses: 2, version: 1 }],
+      skills: [
+        { id: "k-1", key: "k-1", title: "Reviewing", summary: "", uses: 2, loads: 1, version: 1 },
+      ],
       skills_total: 1,
       diary: [],
       diary_total: 0,
@@ -303,7 +306,7 @@ test("a learned skill's Uses and Updated heads ask the holder for its order", as
   await settle();
   expect(location.hash).toContain("sort=-updated");
   expect(memory()).toMatchObject({ skills_order: "updated" });
-  fireEvent.click(screen.getByRole("button", { name: /^Uses/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Offered/ }));
   await settle();
   expect(location.hash).not.toContain("sort=");
   expect(memory()).toMatchObject({ skills_order: "uses" });

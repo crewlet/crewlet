@@ -21,7 +21,7 @@ const (
 	ListWorkItemsTool  = "list_work_items"
 	GetWorkItemTool    = toolname.GetWorkItem
 	CreateWorkItemTool = toolname.CreateWorkItem
-	UpdateWorkItemTool = "update_work_item"
+	UpdateWorkItemTool = toolname.UpdateWorkItem
 	CommentOnWorkTool  = toolname.CommentOnWorkItem
 
 	// MergeWorkItemTool folds one item into another, and it is a SEAT's

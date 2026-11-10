@@ -1083,15 +1083,17 @@ func TestABriefFailureIsRiddenThrough(t *testing.T) {
 	t.Run("ridden through", func(t *testing.T) {
 		t.Parallel()
 		srv := s3fake.Start(t, "files")
-		b := openRetrying(t, srv, "", s3obj.Clock{})
-		s3obj.SetStall(b, bound)
+		// ON THE JUDGE'S OWN CLOCK, a backoff ceiling per retry: two failures span
+		// twenty seconds of it, inside the forty a span is always given, however
+		// long a loaded runner takes to send each attempt.
+		b, _ := openStepped(t, srv, nil)
 		for _, c := range []struct {
 			name string
 			data []byte
 		}{{"one-part", single}, {"in-parts", parts}} {
-			srv.FailFor(100*time.Millisecond, http.StatusInternalServerError, "InternalError")
+			srv.FailNext(2, http.StatusInternalServerError, "InternalError")
 			if _, err := put(t, b, c.name, c.data); err != nil {
-				t.Fatalf("a put of %d bytes against a bucket failing for 100ms = %v; want it stored",
+				t.Fatalf("a put of %d bytes against a bucket failing twice = %v; want it stored",
 					len(c.data), err)
 			}
 		}

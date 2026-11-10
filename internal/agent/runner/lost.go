@@ -118,8 +118,10 @@ func (l Lost) Continuation() string {
 type carried interface {
 	// session is the run's own harness session, which the relaunch continues
 	// where it runs in that run's box and takes up no kept capture of it;
-	// "" continues none there.
+	// "" continues none there. boxKept says that box is still there: where it
+	// is gone no launch continues in it, whatever session says.
 	session() string
+	boxKept() bool
 	// continuation is the prompt the continued session is given, and
 	// reseed what a fresh run carrying the round on is told beside its
 	// brief, each under the fence token of the turn that relaunches it.
@@ -137,6 +139,7 @@ type carried interface {
 }
 
 func (a *Asked) session() string                           { return a.SessionID }
+func (a *Asked) boxKept() bool                             { return a.BoxKept }
 func (a *Asked) continuation(b provenance.Boundary) string { return a.Continuation(b) }
 func (a *Asked) reseed(b provenance.Boundary) string       { return a.Reseed(b) }
 func (a *Asked) keeps() bool                               { return true }
@@ -160,6 +163,7 @@ func (a *Asked) what() string {
 // rather than replay that state toward the round's limit. What a fresh run is
 // told of it is the engine's own words, which no fence token touches.
 func (l *Lost) session() string                         { return "" }
+func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }

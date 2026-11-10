@@ -841,3 +841,87 @@ func TestTheWakingChatSurfaceReachesTheTurnContext(t *testing.T) {
 		}
 	}
 }
+
+// AN EXECUTOR TURN'S OUTCOME IS SETTLED WHEN ITS RUN IS COLLECTED: the run's
+// calls are made after the park recorded the turn's set, so what they
+// committed comes off the run's call log. A run whose calls committed nothing
+// settles nothing.
+//
+// Mutation: stop the resume reading the log's changes, and the first case
+// settles nothing.
+func TestAnExecutorTurnSettlesWhatItsRunCommitted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		log  sandbox.BridgeLog
+		want types.TurnOutcome
+	}{
+		{"its run filed a work item", sandbox.BridgeLog{
+			Calls: []sandbox.BridgeCall{{Name: "create_work_item", Seq: 1,
+				Committed: []string{string(types.CommittedItem)}}},
+		}, types.OutcomeMoved},
+		{"its calls were condensed out of the log", sandbox.BridgeLog{
+			Elided: 1, Committed: []string{string(types.CommittedComment)},
+		}, types.OutcomeWords},
+		{"its run only read", sandbox.BridgeLog{
+			Calls: []sandbox.BridgeCall{{Name: "lookup_colleague", Seq: 1}},
+		}, types.OutcomeNothing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, p := starting(t, refusingModels(t))
+			company := e.Company()
+			if err := e.resumeTurn(t.Context(), resumeInput{
+				Company: company,
+				Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+					TaskDescription: "fix the failing test", DelegationDepth: 3},
+				Bridged: tc.log,
+				State:   execstate.State{SoFar: &execstate.TurnSoFar{}},
+				Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+					Org: company.Org},
+				Answer:  "done",
+				Trigger: chatTrigger("D0ANA"),
+			}); err != nil {
+				t.Fatalf("resumeTurn: %v", err)
+			}
+			done := only[*types.TurnCompleted](t, p, "turn_completed")
+			if done.Turn == nil || done.Turn.Outcome != tc.want {
+				t.Errorf("tally %+v, want the outcome %q", done.Turn, tc.want)
+			}
+		})
+	}
+}
+
+// AN EXECUTOR TURN'S TALLY COUNTS ITS RUN'S TOKENS, which the run reports at
+// its collection and are most of what the turn spent: the tally and the work
+// item's charge read one sum.
+//
+// Mutation: measure the segment without the collected job, and this goes red.
+func TestAnExecutorTurnsTallyCountsItsRunsTokens(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	carried := execstate.TurnSoFar{Tokens: types.TurnTokens{Input: 1_000, Output: 100}}
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3},
+		State: execstate.State{SoFar: &carried},
+		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+			Org: company.Org},
+		Answer:      "done",
+		Trigger:     chatTrigger("D0ANA"),
+		InputTokens: 50_000, OutputTokens: 2_000, CacheRead: 40_000, CacheWrite: 5_000,
+	}); err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	done := only[*types.TurnCompleted](t, p, "turn_completed")
+	if done.Turn == nil {
+		t.Fatal("the resumed turn's end states no tally")
+	}
+	got := done.Turn.Tokens
+	if got.Input < 51_000 || got.Output < 2_100 || got.CacheRead < 40_000 || got.CacheWrite < 5_000 {
+		t.Errorf("tokens %+v, want at least the run's 50,000 in, 2,000 out, 40,000 and 5,000 "+
+			"cached, beside the 1,000 and 100 before the park", got)
+	}
+}

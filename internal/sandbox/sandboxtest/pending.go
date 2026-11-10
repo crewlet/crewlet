@@ -78,6 +78,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
 		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
+		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
+		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
@@ -436,6 +438,111 @@ func testAJobItsCapEndedIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.Pendi
 	}
 	if ok, err := s.MarkEndedAtDeadline(ctx, "t-none", "job-1"); err != nil || ok {
 		t.Errorf("the cap's end of a run with no record = %v, %v", ok, err)
+	}
+}
+
+// HOW A JOB'S HARNESS ENDED IS RECORDED FOR ITS OWN JOB, AND CUT OFF STANDS. The
+// read that collects a job records on the claimed row whether its harness ended
+// its own run, and a relaunch that carries the round on in the job's box reads
+// it there: a record naming a job the row has moved on from is nothing, as is
+// one for a run with no record; the same end again changes nothing; a cut-off
+// end is recorded over an own run, and an own run never over a cut-off end,
+// since a later read must never call whole a copy an earlier one found cut off;
+// an end this build does not know is refused; and the next launch's job starts
+// with nothing said, since how one job's harness ended is not the next's.
+//
+// Mutation: record an own run over a cut-off end, record it on another job's
+// row, or carry it across a relaunch, and a check goes red.
+func testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-ended"))
+	mustClaim(t, s, "t-ended")
+	mark := func(job string, end sandbox.HarnessEnd) bool {
+		t.Helper()
+		ok, err := s.MarkHarnessEnd(ctx, "t-ended", job, end)
+		if err != nil {
+			t.Fatalf("MarkHarnessEnd(%s, %q): %v", job, end, err)
+		}
+		return ok
+	}
+	recorded := func() sandbox.HarnessEnd {
+		t.Helper()
+		return mustGet(t, s, "t-ended").Launch.HarnessEnd
+	}
+	if mark("another-job", sandbox.HarnessEndOwnRun) || recorded() != "" {
+		t.Errorf("an end of a job the record does not hold was written: %q", recorded())
+	}
+	if !mark(launch, sandbox.HarnessEndOwnRun) || recorded() != sandbox.HarnessEndOwnRun {
+		t.Fatalf("the job's record says %q, want its harness's own run", recorded())
+	}
+	if mark(launch, sandbox.HarnessEndOwnRun) {
+		t.Error("the same end recorded again changed the record")
+	}
+	if !mark(launch, sandbox.HarnessEndCutOff) || recorded() != sandbox.HarnessEndCutOff {
+		t.Fatalf("the job's record says %q after a read found its harness cut off, want cut off", recorded())
+	}
+	if mark(launch, sandbox.HarnessEndOwnRun) || recorded() != sandbox.HarnessEndCutOff {
+		t.Errorf("an own run was recorded over a cut-off end: the record says %q", recorded())
+	}
+	if _, err := s.MarkHarnessEnd(ctx, "t-ended", launch, "saved"); err == nil {
+		t.Error("an end this build does not know was taken")
+	}
+	mustBeginLaunch(t, s, run("t-ended"))
+	if got := recorded(); got != "" {
+		t.Errorf("the next job's record says %q, want nothing said", got)
+	}
+	if ok, err := s.MarkHarnessEnd(ctx, "t-none", "job-1", sandbox.HarnessEndCutOff); err != nil || ok {
+		t.Errorf("an end of a run with no record = %v, %v", ok, err)
+	}
+}
+
+// HOW A JOB'S HARNESS ENDED RIDES EVERY WRITE OF THE JOB'S RECORD UNTIL THE NEXT
+// LAUNCH. A person's answer can come days after the collection that recorded
+// it, and the record is rewritten whole by every write in between — a status, a
+// lease, a bridged call, a claim and its release, a park — each of which must
+// write the end back as it read it, on the wire under its own key, so the
+// relaunch the answer drives reads what the collection found; only the next
+// launch, which replaces the job's record whole, says nothing again.
+//
+// Mutation: leave the field off the wire (`json:"-"`), or rebuild the job's
+// record in a write that is not a relaunch's, and a check goes red.
+func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-ended-writes"
+	launch := mustLaunched(t, s, run(turn))
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.HarnessEndCutOff); err != nil || !ok {
+		t.Fatalf("MarkHarnessEnd = %v, %v", ok, err)
+	}
+	check := func(step string) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.HarnessEnd; got != sandbox.HarnessEndCutOff {
+			t.Errorf("after %s the job's record says %q, want the cut-off end the collection recorded",
+				step, got)
+		}
+	}
+	check("the record")
+	if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write")
+	if _, err := s.ClaimOwnership(ctx, turn, "node-b", 2); err != nil {
+		t.Fatal(err)
+	}
+	check("a lease")
+	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("a bridged call")
+	claimed := mustClaim(t, s, turn)
+	check("the claim")
+	mustRelease(t, s, claimed)
+	check("its release")
+	park(t, s, turn)
+	check("a park")
+	mustBeginLaunch(t, s, run(turn))
+	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
+		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
 	}
 }
 

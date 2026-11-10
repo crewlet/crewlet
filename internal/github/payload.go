@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -120,16 +121,18 @@ type repository struct {
 
 // item is an issue or a pull request, which share a shape.
 type item struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	HTMLURL   string `json:"html_url"`
-	State     string `json:"state"`
-	Draft     bool   `json:"draft"`
-	Merged    bool   `json:"merged"`
-	User      user   `json:"user"`
-	Assignees []user `json:"assignees"`
-	Reviewers []user `json:"requested_reviewers"`
+	Number    int        `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	HTMLURL   string     `json:"html_url"`
+	State     string     `json:"state"`
+	Draft     bool       `json:"draft"`
+	Merged    bool       `json:"merged"`
+	MergedAt  *time.Time `json:"merged_at"`
+	ClosedAt  *time.Time `json:"closed_at"`
+	User      user       `json:"user"`
+	Assignees []user     `json:"assignees"`
+	Reviewers []user     `json:"requested_reviewers"`
 
 	// PullRequest is present, and non-nil, on an ISSUE that is really a
 	// pull request. Its contents are links this integration never
@@ -272,3 +275,21 @@ func logins(users []user) []string {
 
 // login is one user, lowercased, or empty.
 func login(u user) string { return strings.ToLower(strings.TrimSpace(u.Login)) }
+
+// SettledPull is a delivery's pull request that merged or closed: its page,
+// whether it merged, and when, as the host stamped it. False for every other
+// delivery, a reopen included.
+func SettledPull(w types.RawWebhook) (page string, merged bool, at time.Time, ok bool) {
+	h, err := decode(w)
+	if err != nil || h.Event != EventPullRequest || h.Action != "closed" || h.PullRequest.HTMLURL == "" {
+		return "", false, time.Time{}, false
+	}
+	stamp := h.PullRequest.ClosedAt
+	if h.PullRequest.Merged && h.PullRequest.MergedAt != nil {
+		stamp = h.PullRequest.MergedAt
+	}
+	if stamp == nil {
+		return "", false, time.Time{}, false
+	}
+	return h.PullRequest.HTMLURL, h.PullRequest.Merged, stamp.UTC(), true
+}

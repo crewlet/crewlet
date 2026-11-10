@@ -323,3 +323,77 @@ func TestTheAdvisorImportsNoWritePath(t *testing.T) {
 		}
 	}
 }
+
+// A SCHEDULE WHOSE FIRES RARELY MOVE WORK IS THE OWNER'S COST, with
+// schedule.frequent's fix; a frequent schedule says what its fires did and how
+// many turns it starts in a plan window, and one that is also unproductive is
+// said once, as the cost. An unread source adds nothing.
+func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
+	t.Parallel()
+	c := liveShape(t)
+	fires := func(name string, n, moved int) []advisor.ScheduleFire {
+		var out []advisor.ScheduleFire
+		for i := range n {
+			out = append(out, advisor.ScheduleFire{Seat: "sre", Name: name, Moved: i < moved})
+		}
+		return out
+	}
+	ev := advisor.Evidence{Fires: append(fires("health-check", 12, 1), fires("post-release", 8, 2)...)}
+	answer := advisor.ReadWithEvidence(advisor.Inputs{Company: c, Revision: "r1"}, ev)
+	of := func(class advisor.Class, schedule string) *advisor.Finding {
+		for i, f := range answer.Findings {
+			if f.Class == class && f.Subject.Seat == "sre" && f.Subject.Schedule == schedule {
+				return &answer.Findings[i]
+			}
+		}
+		return nil
+	}
+	cost := of(advisor.ClassScheduleUnproductive, "health-check")
+	if cost == nil || cost.Severity != advisor.SeverityCosts || cost.Actor != advisor.ActorOwner ||
+		cost.Title != "health-check ran 12 times and changed something once." ||
+		!strings.Contains(cost.Why, "11 of them moved no work") ||
+		!strings.Contains(cost.Why, "about 0.4 turns in every five-hour plan window") ||
+		cost.Fix.Kind != advisor.FixConfigChange || len(cost.Fix.Options) != 2 {
+		t.Errorf("the health check's cost = %+v, want the owner's, its fires said, with the frequent fix", cost)
+	}
+	if of(advisor.ClassScheduleFrequent, "health-check") != nil {
+		t.Error("an unproductive schedule was said twice, as frequent too")
+	}
+	if of(advisor.ClassScheduleUnproductive, "post-release") != nil {
+		t.Error("a schedule a quarter of whose fires moved work was called unproductive")
+	}
+	frequent := of(advisor.ClassScheduleFrequent, "post-release")
+	if frequent == nil || !strings.Contains(frequent.Why, "it fired 8 times and 2 of them (25%) moved any work") ||
+		!strings.Contains(frequent.Why, "turns in every five-hour plan window") {
+		t.Errorf("post-release's frequent note = %+v, want what its fires did and its turns per window", frequent)
+	}
+	// An agent that writes code, work or pages at a vendor does work the
+	// engine keeps no per-turn record of, so its schedules are not judged; one
+	// that only reads there is.
+	for access, judged := range map[config.GitHubAccess]bool{config.GitHubWrite: false, config.GitHubRead: true} {
+		vendor := liveShape(t)
+		for role := range vendor.EachRole() {
+			if role.Seat().Handle() == "sre" {
+				role.Integrations.GitHub = &config.RoleGitHub{Permissions: map[string]config.GitHubAccess{"contents": access}}
+			}
+		}
+		answer = advisor.ReadWithEvidence(advisor.Inputs{Company: vendor, Revision: "r1"}, ev)
+		if got := of(advisor.ClassScheduleUnproductive, "health-check") != nil; got != judged {
+			t.Errorf("with GitHub %s, the health check judged = %v, want %v", access, got, judged)
+		}
+		if f := of(advisor.ClassScheduleFrequent, "post-release"); f == nil ||
+			strings.Contains(f.Why, "In the last 7 days it fired") != judged {
+			t.Errorf("with GitHub %s, post-release's frequent note = %+v, want its fires said only if judged", access, f)
+		}
+	}
+	ev.FiresUnread = true
+	unread := advisor.ReadWithEvidence(advisor.Inputs{Company: c, Revision: "r1"}, ev)
+	for _, f := range unread.Findings {
+		if f.Class == advisor.ClassScheduleUnproductive || strings.Contains(f.Why, "In the last 7 days it fired") {
+			t.Errorf("an unread source raised %+v", f)
+		}
+	}
+	if !slices.Contains(unread.Unread, advisor.UnreadFires) {
+		t.Errorf("unread = %v, want the fires named", unread.Unread)
+	}
+}

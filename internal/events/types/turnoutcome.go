@@ -73,10 +73,15 @@ type WakeDisposition string
 const (
 	DispositionStarted WakeDisposition = "started"
 	DispositionHeld    WakeDisposition = "held"
+	// DispositionAbsorbed is a wake a completed turn already read past (ADR-0120).
+	DispositionAbsorbed WakeDisposition = "absorbed"
+	// DispositionBreakerHeld is a wake settled unrun because its conversation is held (ADR-0117).
+	DispositionBreakerHeld WakeDisposition = "breaker_held"
 )
 
 // WakeDispositions is the closed set.
-var WakeDispositions = []WakeDisposition{DispositionStarted, DispositionHeld}
+var WakeDispositions = []WakeDisposition{DispositionStarted, DispositionHeld,
+	DispositionAbsorbed, DispositionBreakerHeld}
 
 // Valid reports whether d is one of [WakeDispositions].
 func (d WakeDisposition) Valid() bool { return slices.Contains(WakeDispositions, d) }

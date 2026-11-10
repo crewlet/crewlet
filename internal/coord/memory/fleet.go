@@ -65,7 +65,11 @@ type Fleet struct {
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
-	mailboxes                map[uuid.UUID]coord.MailboxRecord
+	seen                     map[string]seenMark
+	seenRevision             uint64
+	// boxReadings is each seat's box readings, by seat and cell.
+	boxReadings map[boxReadingKey]coord.BoxReading
+	mailboxes   map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -121,6 +125,8 @@ type Fleet struct {
 	sshTests entryRecords[coord.SSHTest, coord.SSHTest]
 	// issueReports are the engine defects the company reported, by fingerprint.
 	issueReports entryRecords[coord.IssueReport, coord.IssueReport]
+	// insightRecords are the operating insights the company shares, by class and week.
+	insightRecords entryRecords[coord.InsightRecord, coord.InsightRecord]
 	// accepted are the definitions MCP tools' levels were decided on, by
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
@@ -188,6 +194,8 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		seen:              map[string]seenMark{},
+		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},
@@ -198,6 +206,7 @@ func NewFleet() *Fleet {
 		checks:            newCheckRecords(),
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
+		insightRecords:    newInsightRecords(),
 		grants:            newGrantRecords(),
 		mcpSignIns:        newMCPSignInRecords(),
 		accepted:          newAcceptedRecords(),

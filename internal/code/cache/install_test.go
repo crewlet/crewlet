@@ -1645,14 +1645,13 @@ func (f *failFrom) Hit(ctx context.Context, p codefault.Point, _ int64) error {
 	case off || hit < f.n:
 		return nil
 	case hit == f.n:
+		// ON THE SIGNAL ALONE: placing the packs before it is real work a loaded
+		// runner can take long over, and a true hang is the test binary's timeout.
 		close(f.reached)
 		select {
 		case <-f.before:
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-time.After(hangDetector):
-			return fmt.Errorf("the %d packs before the failing download were not placed in %v", f.n-1,
-				hangDetector)
 		}
 	}
 	return errFailedDownload

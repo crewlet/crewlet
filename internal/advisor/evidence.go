@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
@@ -27,11 +28,16 @@ const (
 	ClassNoopShare                Class = "wake.noop_share"
 	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
 	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
+	ClassRedeliveredSeen          Class = "wake.redelivered_seen"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
 	// recommendation on almost every decision it asked of them.
 	ClassApprovalRubberStamp Class = "approval.rubber_stamp"
+	// ClassInboundSilent is the owner's: the pull requests work waited on
+	// reached it only through the engine's poll, so GitHub's webhook is not
+	// reaching the company (ADR-0121).
+	ClassInboundSilent Class = "integration.inbound_silent"
 )
 
 // AreaWork holds the patterns in how the company's work moves, and
@@ -73,9 +79,13 @@ type Evidence struct {
 	Backup Backup
 	// Paused is every agent seat the engine paused for a failure (ADR-0117).
 	Paused []PausedSeat
-	// WorkUnread, LedgerUnread, AlarmsUnread and PausesUnread say the caller
-	// could not read that source, so its classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread bool
+	// MemoryKills is every run in the window the kernel stopped for memory.
+	MemoryKills []MemoryKill
+	// Fires is every schedule fire in the window whose turn could be read.
+	Fires []ScheduleFire
+	// WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread and RunsUnread say the
+	// caller could not read that source, so its classes raise nothing and the answer names it.
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
 }
 
 // source is the record a detector reads.
@@ -90,6 +100,10 @@ const (
 	sourceAlarms
 	// sourcePauses is the seats' pauses, [Evidence.Paused].
 	sourcePauses
+	// sourceRuns is the executor runs' records, [Evidence.MemoryKills].
+	sourceRuns
+	// sourceFires is the schedules' fires and what their turns wrote, [Evidence.Fires].
+	sourceFires
 )
 
 // unread reports whether ev could not read src.
@@ -103,6 +117,10 @@ func (ev Evidence) unread(src source) bool {
 		return ev.AlarmsUnread
 	case sourcePauses:
 		return ev.PausesUnread
+	case sourceRuns:
+		return ev.RunsUnread
+	case sourceFires:
+		return ev.FiresUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -141,8 +159,11 @@ var detectors = []detector{
 	{ClassNoopShare, sourceLedger, noopShare},
 	{ClassPickupStillWaiting, sourceLedger, pickupStillWaiting},
 	{ClassAuxiliaryShare, sourceLedger, auxiliaryShare},
+	{ClassRedeliveredSeen, sourceLedger, redeliveredSeen},
 	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
 	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
+	{ClassSandboxOutOfMemory, sourceRuns, sandboxOutOfMemory},
+	{ClassInboundSilent, sourceWork, inboundSilent},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -173,6 +194,10 @@ const (
 	// committing nothing.
 	minStartedTurns = 20
 	noopPercent     = 25
+	// minAbsorbed and absorbedPercent: 10 wakes a week, a fifth of all that
+	// woke the seat, for changes a turn of it had already read.
+	minAbsorbed     = 10
+	absorbedPercent = 20
 	// minPickups and stillWaitingPercent: 10 pickups a week, a fifth of them
 	// ending in words only, which says the work handed out could not move.
 	minPickups          = 10
@@ -183,13 +208,13 @@ const (
 	auxiliaryPercent = 15
 )
 
-// EvidenceClasses is every class a detector or a paused seat raises.
+// EvidenceClasses is every class a detector, a paused seat or a schedule's fires raise.
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return append(out, pausedClasses()...)
+	return append(append(out, pausedClasses()...), ClassScheduleUnproductive)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
@@ -241,7 +266,7 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			s.Name = seatName(c, s.Seat)
 		}
 	}
-	answer.Findings = append(answer.Findings, found...)
+	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)
@@ -254,6 +279,12 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.PausesUnread {
 		answer.Unread = append(answer.Unread, UnreadPauses)
+	}
+	if ev.RunsUnread {
+		answer.Unread = append(answer.Unread, UnreadRuns)
+	}
+	if ev.FiresUnread {
+		answer.Unread = append(answer.Unread, UnreadFires)
 	}
 	return answer
 }
@@ -286,6 +317,7 @@ var engineSentences = map[Class]string{
 	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
 	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
 	ClassAuxiliaryShare:           "Auxiliary calls run on the seat's auxiliary model, and a smaller one costs less.",
+	ClassRedeliveredSeen:          "A wake for a change a completed turn already read starts no turn.",
 }
 
 func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
@@ -462,14 +494,19 @@ type seatTurns struct {
 	turns, nothing        int64
 	tokens, auxiliary     int64
 	pickups, pickupsWords int64
+	// started is every started turn, schedules' included, and absorbed the
+	// wakes a completed turn had already read past (ADR-0120).
+	started, absorbed int64
 }
 
-// seatsOf folds the ledger's started turns by seat, in the ledger's order.
+// seatsOf folds the ledger's started turns and absorbed wakes by seat, in the
+// ledger's order.
 func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 	var out []*seatTurns
 	byID := map[string]*seatTurns{}
 	for _, r := range ledger {
-		if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		disposition := types.WakeDisposition(r.Disposition)
+		if disposition != types.DispositionStarted && disposition != types.DispositionAbsorbed {
 			continue
 		}
 		s, ok := byID[r.AgentID]
@@ -478,7 +515,12 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 			byID[r.AgentID] = s
 			out = append(out, s)
 		}
-		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
+		if disposition == types.DispositionAbsorbed {
+			s.absorbed += r.Turns
+			continue
+		}
+		s.started += r.Turns
+		s.tokens += r.Tokens()
 		s.auxiliary += r.AuxInput + r.AuxOutput
 		outcome := types.TurnOutcome(r.Outcome)
 		// A SCHEDULE'S TURNS ARE THE OWNER'S CHOICE, and a check that finds
@@ -541,6 +583,25 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
 }
 
+// redeliveredSeen is one finding per agent whose wakes often came for changes
+// a turn of it had already read: the engine absorbed them, and says how many.
+func redeliveredSeen(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, s := range seatsOf(ev.Ledger) {
+		woke := s.started + s.absorbed
+		if s.absorbed < minAbsorbed || s.absorbed*100 < absorbedPercent*woke {
+			continue
+		}
+		out = append(out, engineFinding(ClassRedeliveredSeen, Subject{Kind: SubjectSeat, Seat: s.handle},
+			"Wakes repeated changes an agent had already read.",
+			fmt.Sprintf("In the last 7 days, %d of the %d wakes for %s came for changes a turn "+
+				"of it had already read, so the engine absorbed them instead of starting turns.",
+				s.absorbed, woke, s.handle),
+			[]Fact{{Key: "woke", Value: woke}, {Key: "absorbed", Value: s.absorbed}}, nil))
+	}
+	return out
+}
+
 // auxiliaryShare is one finding per agent whose in-turn auxiliary calls took
 // a large share of its spend.
 func auxiliaryShare(ev Evidence, _ func(string) SeatKind) []Finding {
@@ -586,4 +647,36 @@ func appendExamples(records, more []string) []string {
 		records = append(records, r)
 	}
 	return records
+}
+
+// inboundSilent raises when the poll settled a change in the window and the
+// webhook settled none after it: deliveries have not resumed since.
+func inboundSilent(ev Evidence, _ func(string) SeatKind) []Finding {
+	var polled, delivered worklet.ChangeSettles
+	for _, s := range ev.Work.Settled {
+		switch s.Source {
+		case worklet.SettledByPoll:
+			polled = s
+		case worklet.SettledByWebhook:
+			delivered = s
+		}
+	}
+	if polled.Count == 0 || !polled.Newest.After(delivered.Newest) {
+		return nil
+	}
+	kind := integration.KindGitHub
+	name := surfaceName(kind)
+	return []Finding{{
+		Class: ClassInboundSilent, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
+		Area: AreaIntegrations, Subject: Subject{Kind: SubjectIntegration, Name: name},
+		Path:  "integrations." + string(kind),
+		Title: fmt.Sprintf("%d pull requests your work waited on reached it only through the engine's poll.", polled.Count),
+		Why: fmt.Sprintf("When %s's webhook delivers a merge or a close, the item waiting on it hears within a "+
+			"minute. In the last 7 days %d were learned by the poll instead, each at least ten minutes late, "+
+			"and no delivery has settled one since, so the webhook is not reaching this company.", name, polled.Count),
+		Evidence: []Fact{{Key: "polled", Value: int64(polled.Count)}, {Key: "delivered", Value: int64(delivered.Count)}},
+		Fix: Fix{Kind: FixExternalStep, Options: []Option{}, Setting: string(kind),
+			Sentence:  "Open " + name + "'s settings and check that its webhook reaches the engine.",
+			Unchanged: "The poll keeps settling what the webhook misses, ten minutes or more late."},
+	}}
 }

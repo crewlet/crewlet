@@ -530,6 +530,41 @@
 // chart are, and judged against the stored author and the room's unit in the
 // serving node's own snapshot.
 //
+// # A request is read whole, or runs nowhere
+//
+// A rolling upgrade mixes builds, so the node that asks is not always the
+// build of the data node that answers — and a data node that decoded a newer
+// build's request into its own types ran it without every key it did not
+// declare, recorded under the lowest version that reads what was left. So an
+// operation's INPUTS, its arguments and the actor it runs as, cross under one
+// rule (wirerule.go, ADR-0025's amendment), both halves the standard
+// library's own: the router leaves every field at its zero off the wire
+// ([encodeInput]) — so a field a later build adds is on a request only where
+// the request sets it, and a field's zero means what a build without it does
+// ([define] states the rule, and why a pointer at a value its type calls zero
+// is one such field) — and a serving node decodes them refusing every member
+// its build does not declare, at every depth ([decodeInput]), before it waits
+// for a floor or runs anything, answering [ErrUnknownKeys]. A read carrying a
+// newer argument is refused alike, never answered with the argument ignored.
+// The router reads that as a node that RAN NOTHING, whatever the class, and
+// asks the next ([Router.settle]): a keyed operation asks the refusing node
+// last for requests carrying what it refused, and for those alone
+// ([Router.markUnread]), and a repository's home that refused passes the copy
+// it would fill to its runner-up ([passesFill]). A walk nobody served ends in
+// the refusal over its [ErrUnserved], never over a write a node may have run
+// ([walk.unserved]). The answer of a read a caller carries into another
+// request ([op.answeredWhole]) crosses under the same rule the other way, on a
+// read of its own wherever the same answer is also only shown
+// ([opArtifactVersionCarried]). A value a caller hands back as it took it
+// stays outside the rule: a [code.CheckKey] a check runner reports under, a
+// [statelog.Position] a later read floors at, a credential's actor. A write's
+// answer, which carries a position, is never refused once the write has run,
+// and a member a later build adds to one of these changes what it names, which
+// no reading of an answer makes safe: such a member comes with its own plan
+// for a fleet of two builds. The rest of the envelope is the routers' own
+// protocol, read as it always was: a later build adds there only what an
+// earlier one may ignore.
+//
 // # Errors keep their identity
 //
 // A tool decides what to tell a model by asking errors.Is and errors.As — "no

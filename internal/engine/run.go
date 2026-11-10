@@ -134,6 +134,8 @@ type Engine struct {
 	// with it on every wiring and emptied when GitHub is retired. See
 	// githubpulls.go.
 	githubPulls githubPullReader
+	// changePoll is where the poll of open changes stopped (ADR-0121).
+	changePoll changePoll
 	// tokenWaits is what this node's polls have said of the running jobs
 	// whose seat's issued tokens could not be issued, so each wait is said
 	// once per job rather than on every pass. See issued.go.
@@ -2799,6 +2801,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
 	}
+	if d.SeenThrough == nil {
+		d.SeenThrough = ledgerstore.NewSeenThrough(backends.Fleet)
+	}
 	return d
 }
 
@@ -3845,7 +3850,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// once here and frozen on the turn like the endings below; its notes
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
-	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told.memory)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.

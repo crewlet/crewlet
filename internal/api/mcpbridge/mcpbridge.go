@@ -180,6 +180,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httprelay"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -358,6 +359,25 @@ type Surface interface {
 	DigestOf(name string, args map[string]any) string
 }
 
+// committing is a [Surface] whose calls commit to an agent's turn: the set
+// they commit their changes to, which each call's record carries
+// ([Call.Committed]). A seat's *tools.Surface is one; Ask Crewlet's is not.
+type committing interface {
+	Written() *turnctx.Written
+}
+
+// A seat's surface must stay one, or its runs' writes would settle nothing.
+var _ committing = (*tools.Surface)(nil)
+
+// writtenOf is the set s's calls commit to, nil (which records nothing) for a
+// surface that commits to no agent's turn.
+func writtenOf(s Surface) *turnctx.Written {
+	if c, ok := s.(committing); ok {
+		return c.Written()
+	}
+	return nil
+}
+
 // Caller is who a session's every call is decided as.
 type Caller interface {
 	// Acting is the context one bridged call runs under: the context's own
@@ -471,6 +491,10 @@ type Call struct {
 	// call of the run's record is one of them and a later segment's log must
 	// count them all the same.
 	Absorbed []toolloop.Called
+
+	// Committed is the kinds of change the call committed to the run's turn
+	// (turnctx.Written), which its collection settles the turn's outcome by.
+	Committed []types.CommittedChange
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -1728,6 +1752,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	digest := s.Surface.DigestOf(in.Name, args)
 	o.mu.Unlock()
 
+	written := writtenOf(s.Surface)
+	before := written.Changes()
 	started := time.Now()
 	res, broke, err := o.execute(admitted, in.Name, args)
 	took := time.Since(started)
@@ -1796,7 +1822,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
-		Digest: digest, Absorbed: res.Absorbed,
+		Digest: digest, Absorbed: res.Absorbed, Committed: written.Since(before),
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }

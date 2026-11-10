@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -131,5 +133,32 @@ func TestTheWeekIsReadInUTC(t *testing.T) {
 	late := time.Date(2030, 1, 6, 23, 30, 0, 0, time.FixedZone("west", -3*3600))
 	if got := WeekOf(late); got != "2030-W02" {
 		t.Errorf("a Sunday evening west of UTC is week %s, want 2030-W02 (Monday in UTC)", got)
+	}
+}
+
+// NO SETTING REACHES WHERE OR FROM WHAT A RECORD IS SENT: the consent holds only
+// its mode, its accepted schema and its always-sent classes, and the wiring reads
+// the binary's own origin and the constant relay address.
+func TestNoSettingReachesTheInsightsOrigin(t *testing.T) {
+	t.Parallel()
+	var fields []string
+	for f := range reflect.TypeFor[config.InsightsSharing]().Fields() {
+		fields = append(fields, f.Name)
+	}
+	if !slices.Equal(fields, []string{"Share", "Accepted", "Always"}) {
+		t.Errorf("config.InsightsSharing holds %v; an address or an override in the document would let "+
+			"whoever writes it send anywhere, or from a development build", fields)
+	}
+	wiring, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "api", "app.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"issuereport.OriginOf(version.String())", "insights.RelayURL"} {
+		if !strings.Contains(string(wiring), want) {
+			t.Errorf("the API's wiring does not read %s", want)
+		}
+	}
+	if strings.Contains(string(wiring), "issuereport.Origin{") {
+		t.Error("the API's wiring builds an origin by hand, which only a test may")
 	}
 }

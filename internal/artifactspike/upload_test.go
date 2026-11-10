@@ -64,6 +64,10 @@ func (createReads) Version(context.Context, artifacts.ID, int) (artifactsdomain.
 	return artifactsdomain.Version{}, errSpikeReads
 }
 
+func (createReads) CarriedVersion(context.Context, artifacts.ID, int) (artifactsdomain.Version, error) {
+	return artifactsdomain.Version{}, errSpikeReads
+}
+
 func (createReads) HeldObjects(context.Context, artifacts.ID, []objstore.Hash) (map[objstore.Hash]objstore.Object, error) {
 	return nil, errSpikeReads
 }

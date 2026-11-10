@@ -30,6 +30,11 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 			AgentHandle: "dev", NotificationSource: "work",
 			Origin: types.TriggerOrigin{Kind: types.OriginWorkItem, ID: "W-1", Reason: "mention"}})
 	}
+	skipped := func(id, trigger string, at time.Time, disposition types.WakeDisposition) store.EventRecord {
+		return usageRecord(t, id, "turn_trigger_skipped", at, "seat-1", types.TurnTriggerSkipped{Agent: "seat-1",
+			AgentHandle: "dev", TriggerID: trigger, TriggerType: "notification", Reason: "read past",
+			Disposition: disposition, Wake: "work_item:mention"})
+	}
 	for _, rec := range []store.EventRecord{
 		endedTurn(t, "e1", at(10), "seat-1", "t-1", words),
 		endedTurn(t, "e2", at(20), "seat-1", "t-2", words),
@@ -37,6 +42,13 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 		endedTurn(t, "e3", at(30), "seat-1", "t-3", moved),
 		endedTurn(t, "e4", at(40), "seat-1", "t-4", types.TurnTally{DurationMS: 500}),
 		held("h1", at(50)), held("h2", at(51)),
+		// SKIPS THE LEDGER COUNTS, each trigger once; a skip naming no
+		// disposition is not counted.
+		skipped("s1", "w-1", at(60), types.DispositionAbsorbed),
+		skipped("s1-again", "w-1", at(61), types.DispositionAbsorbed),
+		skipped("s2", "w-2", at(62), types.DispositionAbsorbed),
+		skipped("s3", "w-3", at(63), types.DispositionBreakerHeld),
+		skipped("s4", "w-4", at(64), ""),
 	} {
 		if err := log.Append(t.Context(), rec); err != nil {
 			t.Fatalf("append %s: %v", rec.ID, err)
@@ -50,6 +62,8 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 		t.Fatalf("derived %d seats, want seat-1 alone", len(day.Seats))
 	}
 	want := []store.UsageLedger{
+		{Wake: "work_item:mention", Disposition: "absorbed", Turns: 2},
+		{Wake: "work_item:mention", Disposition: "breaker_held", Turns: 1},
 		{Wake: "work_item:mention", Disposition: "held", Turns: 2},
 		{Wake: "work_item:mention", Disposition: "started", Outcome: "words", Turns: 2,
 			Tokens: types.TurnTokens{Input: 200, Output: 20, AuxInput: 10}},

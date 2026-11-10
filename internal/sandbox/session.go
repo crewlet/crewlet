@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -81,9 +80,10 @@ import (
 // job whose harness ended its own run ([SessionCapture.Through]; every call the
 // log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
 // the take of a job still working or one cut off, the newest its launch is
-// known to hold (savepoint.go) — and the note the job had read through: what
-// a launch that continues the session would need to know of what came after
-// it. How it came out is stamped beside: LANDED, REFUSED with why (no box to
+// known to hold (savepoint.go) — and the last note read the record says it
+// holds, none for a session cut off ([SessionCapture.NoteCursor]): what a
+// launch that continues the session would need to know of what came after it.
+// How it came out is stamped beside: LANDED, REFUSED with why (no box to
 // read it out of, a pack that failed, a session past its bounds, the seat's
 // budget, an upload the store had no room for, a record the log will never
 // take), or UNRESOLVED — uploaded, and whether its record landed unknown —
@@ -607,11 +607,12 @@ type SessionCapture struct {
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
 
-	// NoteCursor is the last note read ([RunSteer.Reads]) the session holds
-	// ([notesHeld]): every note read when the archive was packed, but for a
-	// session its harness was cut off in, none its job took at its last take
-	// of them, which may never have reached it. A launch that continues the
-	// session hands it every note read after.
+	// NoteCursor is the last note read ([RunSteer.Reads]) the run's record says
+	// the session holds ([notesHeld]): every note the record says was read when
+	// the archive was packed, where its harness ended its own run, and none
+	// where it was cut off. A launch that continues the session hands it every
+	// note read after — of a session cut off, every note the turn has read, as
+	// notes it may already show (internal/agent/runner's keptSession).
 	NoteCursor int `json:"note_cursor,omitempty"`
 
 	// Interrupted says the session's harness was CUT OFF rather than exiting
@@ -1160,32 +1161,29 @@ func openPlaces(calls BridgeLog, last int) []int {
 	return open
 }
 
-// notesHeld is the last note read ([RunSteer.Reads]) a session packed from
-// run's job — launch — holds ([SessionCapture.NoteCursor]): every one read,
-// where its harness exited cleanly; and where it was cut off, every one read
-// before the job's LAST TAKE of its notes, whose notes may never have reached
-// it. A take is recorded read in the write that answers the harness's ask,
-// before the answer is handed back (internal/engine's note hooks), so a
-// harness cut off between the two never had them; a take before the last was
-// answered, since the harness went on to ask again. The notes the job's brief
-// read are the brief's, which the session holds from its first message.
-func notesHeld(run PendingRun, launch string, cutOff bool) int {
-	held := run.Steer.Reads
-	if !cutOff {
-		return held
+// notesHeld is the last note read ([RunSteer.Reads]) run's record says a
+// session packed from its job holds ([SessionCapture.NoteCursor]): every one
+// the record says was read, where its harness ended its own run; and NONE where
+// it was cut off.
+//
+// NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
+// the write that answers the harness's ask, before the answer is handed back
+// (internal/engine's note hooks), so a harness cut off between the two never
+// had its last take's notes; but neither is such a session known to hold its
+// job's brief, the message that told the notes the session it continued
+// lacked, an earlier job's among them: no probe has measured whether Claude
+// Code 2.1.310 writes the message a continued session is handed before it
+// answers a call, and no record says which notes that brief told. A cursor
+// stopped before the job's last take said the session held the notes that
+// brief told, which may never have reached it. A launch that continues a
+// session cut off tells it every note the turn has read, as notes it may
+// already show, whatever its cursor (internal/agent/runner's keptSession); an
+// older build, which tells it every note past its cursor, tells it every one.
+func notesHeld(run PendingRun, cutOff bool) int {
+	if cutOff {
+		return 0
 	}
-	last := 0
-	for _, note := range run.Steer.Notes {
-		read := note.Read
-		if read != nil && read.Launch == launch && read.Boundary != string(types.SteerBoundaryBrief) &&
-			read.Order > last {
-			last = read.Order
-		}
-	}
-	if last > 0 {
-		held = min(held, last-1)
-	}
-	return held
+	return run.Steer.Reads
 }
 
 // spooledCapture is a capture taken out of its box and spooled, sealed, on this
@@ -1373,7 +1371,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: place, Launch: run.LaunchID,
 		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
-		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC(),
+		NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC(),
 		Taker: hold.holder, TakerEpoch: hold.epoch,
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
@@ -1725,15 +1723,26 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 // by is zero where the read has no deadline.
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)
-	var by time.Time
-	if d, ok := ctx.Deadline(); ok {
-		by = d.Add(-discardGrace)
+	by := recordsBy(ctx)
+	if !by.IsZero() {
 		if last := by.Add(-discardGrace); last.Before(deadline) {
 			deadline = last
 		}
 	}
 	take, cancel := context.WithDeadline(ctx, deadline)
 	return take, cancel, by
+}
+
+// recordsBy is the instant by which a read's records made after its take must
+// be made — the take's own ([Coordinator.takeContext]) and how its job's
+// harness ended ([Coordinator.markHarnessEnd]) — so its pause and its answer
+// keep their room ([discardGrace]); zero where the read has no deadline.
+func recordsBy(ctx context.Context) time.Time {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}
+	}
+	return d.Add(-discardGrace)
 }
 
 // stampContext is the context the one record a take makes only once is made
@@ -2176,7 +2185,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
-		Interrupted: at.cutOff, NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
+		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
 		stamp.placeAt(*calls)
 	}

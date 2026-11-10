@@ -3,6 +3,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -16,10 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -42,15 +45,22 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	fleet, fleetKnown := s.fleetAlarms(ctx)
 	held, heldKnown := s.heldConversations(ctx)
-	noticed := func(a advisor.Answer) advisorAnswer {
-		return noticedWith(a, fleet, fleetKnown, held, heldKnown, now)
+	answer, err := s.advisorRead(ctx, now)
+	if err != nil {
+		return nil, err
 	}
+	return noticedWith(answer, fleet, fleetKnown, held, heldKnown, now), nil
+}
+
+// advisorRead is the advisor's findings at now, typed: what `advisor` answers
+// beside its notices, and what the insights sharer reads.
+func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer, error) {
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}), nil
+		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
 	}
 	if err != nil {
-		return nil, revisionRefusal("advisor", err)
+		return advisor.Answer{}, revisionRefusal("advisor", err)
 	}
 	in := advisor.Inputs{Company: company.Redact(), Revision: revision}
 	// THE INTEGRATIONS' LAST RECONCILE, from the read the integrations answer
@@ -60,7 +70,7 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now))), nil
+	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), nil
 }
 
 // noticedWith is the answer with the notices its findings, the fleet's alarms
@@ -123,7 +133,69 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_seat_pauses_unreadable", "error", err.Error())
 		ev.PausesUnread = true
 	}
+	if ev.MemoryKills, err = s.memoryKills(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_runs_unreadable", "error", err.Error())
+		ev.RunsUnread = true
+	}
+	if ev.Fires, err = s.scheduleFires(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_schedule_fires_unreadable", "error", err.Error())
+		ev.FiresUnread = true
+	}
 	return ev
+}
+
+// failedRunsPage is how many failed runs one read of the week takes, and
+// maxFailedRunPages how many reads it takes before it names the source read
+// in part: a week holding more failed runs than that is not read as whole.
+const (
+	failedRunsPage    = 200
+	maxFailedRunPages = 10
+)
+
+// memoryKills is every executor run in the window before now the kernel stopped
+// for memory, by its agent's handle, read a page at a time back to the window's
+// start. A fleet that did not answer whole, or a week past the bound, is unread.
+func (s Sources) memoryKills(ctx context.Context, now time.Time) ([]advisor.MemoryKill, error) {
+	if s.Events == nil {
+		return nil, errors.New("queries: this node reads no event log")
+	}
+	failed := true
+	q := store.ListQuery{
+		Type: types.ExecutorCollected{}.EventType(), Failed: &failed,
+		Since: now.Add(-advisor.Window), Until: now, Limit: failedRunsPage, At: now,
+	}
+	var rows []store.EventRecord
+	for page := 0; ; page++ {
+		if page == maxFailedRunPages {
+			return nil, fmt.Errorf("queries: the week holds more than %d failed runs",
+				failedRunsPage*maxFailedRunPages)
+		}
+		listing, coverage, err := s.Events.List(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("queries: list the week's failed runs: %w", err)
+		}
+		if !coverage.Complete {
+			return nil, errors.New("queries: not every node answered for its runs")
+		}
+		rows = append(rows, listing.Rows...)
+		if !listing.More || len(listing.Rows) == 0 {
+			break
+		}
+		oldest := listing.Rows[len(listing.Rows)-1]
+		q.Before = &store.Cursor{Time: oldest.Time, ID: oldest.ID}
+	}
+	chart := s.chartHandles()
+	var out []advisor.MemoryKill
+	for _, rec := range rows {
+		var run types.ExecutorCollected
+		seat, charted := chart[rec.AgentID]
+		if !charted || json.Unmarshal(rec.Payload, &run) != nil ||
+			run.ErrorKind != types.ExecutorErrorOutOfMemory {
+			continue
+		}
+		out = append(out, advisor.MemoryKill{Seat: seat.handle, MemoryBytes: run.MemoryBytes})
+	}
+	return out, nil
 }
 
 // SeatPauseLister is the read of every seat's pause ([coord.SeatPauses]').
@@ -159,7 +231,8 @@ func (s Sources) pausedSeats(ctx context.Context, company *config.Company) ([]ad
 }
 
 // fleetAlarms is every live node's alarm marks as its last heartbeat carried
-// them, from the node whose table has run; false where the fleet cannot be read.
+// them, from the nodes whose table has run; false where the fleet cannot be
+// read, or a live node has not evaluated yet and may hold one unsaid.
 func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
 	if s.Coord == nil {
 		return nil, false
@@ -170,14 +243,18 @@ func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
 		return nil, false
 	}
 	var out []notice.NodeAlarms
+	complete := true
 	for _, lease := range leases {
 		status, ok := coord.StatusFromMeta(lease.Meta)
+		// A NODE SAYING NOTHING YET (no status, or none evaluated) may hold an
+		// alarm unsaid, as a node just started does.
 		if !ok || !status.AlarmsEvaluated {
+			complete = false
 			continue
 		}
 		out = append(out, notice.NodeAlarms{Node: nameIn(coord.ClassNode, lease.Resource), Marks: status.Alarms})
 	}
-	return out, true
+	return out, complete
 }
 
 // backupEvidence is whether the latest evaluation holds the backup alarm, and

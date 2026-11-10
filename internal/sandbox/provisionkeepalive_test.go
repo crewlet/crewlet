@@ -96,7 +96,14 @@ func (p *timedBoxes) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 	fake := box.(*FakeSandbox)
 	p.timer(fake.ID(), spec.TimeoutSec)
-	fake.ExecFunc = func(context.Context, string, ExecOptions) (ExecResult, error) { return p.exec(fake) }
+	fake.ExecFunc = func(_ context.Context, cmd string, _ ExecOptions) (ExecResult, error) {
+		if cmd == boxFactsScript {
+			// THE LAUNCH'S READ OF THE BOX, after its provisioning and held to
+			// seconds by its own bound: not one of the steps this case times.
+			return ExecResult{}, nil
+		}
+		return p.exec(fake)
+	}
 	return box, nil
 }
 

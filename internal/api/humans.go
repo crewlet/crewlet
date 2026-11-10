@@ -581,7 +581,8 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	writer, writable := engine.OperatorWorkWriter(e)
 	if readable {
 		work = builtin.WorkDeps{
-			Reader: reader,
+			Reader:    reader,
+			ChangeRef: e.ChangeRef,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
 			// from the request's context rather than from the call: a
 			// tracker whose author field is chosen by the writer is not
@@ -744,6 +745,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		kb = builtin.PageDeps{
 			Reader: pageReader, Writer: pageWriter,
 			Mentions: engine.LiveMentions(e),
+			// THE ROSTER a seat's page tools read, so the page tools decide
+			// on one roster wherever they are built.
+			Seats: engine.LiveSeatCorpus(e),
 			// A PERSON'S PAGE THAT NAMES NO CONTAINER lands in their own
 			// team's space, on the rule a seat's own writes follow
 			// ([engine.LiveSeatSpace]), keyed on the actor's handle as

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,17 +27,17 @@ import (
 // and it looked healthy: it queried, found nothing, and rendered nothing —
 // which is indistinguishable from a company that is simply young.
 
-// wakeWithMessage publishes a substantive trigger from an identifiable
-// person, which is what the profiler needs and the recon gate does not skip.
+// wakeWithMessage publishes a substantive trigger from the founder's chat
+// account, which is what the profiler needs and the recon gate does not skip.
 func wakeWithMessage(t *testing.T, n *node, handle string) {
 	t.Helper()
 	body := "can you send the weekly numbers, plainly, no preamble"
 	ev := events.New(types.ExternalNotification{
-		NotificationSource: "mattermost", SourceEventType: "posted",
-		Sender: "sam", Subject: "weekly numbers",
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: "Jane Doe", Subject: "weekly numbers",
 		Body: body, SalientBody: &body,
 		Metadata: map[string]string{
-			notify.ActorField:       "u-sam",
+			notify.ActorField:       "U0FOUNDER",
 			notify.ChannelKindField: string(types.ChannelDM),
 		},
 	}, events.TraceContext{})
@@ -79,10 +80,16 @@ func awaitRows(t *testing.T, what string, found func() (int, error)) {
 // either way.
 func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 	t.Parallel()
-	n := start(t)
+	// THE SHARE UNCAPPED: a scripted turn spends so little that learning's
+	// share of it would hold the third worker, and the share has its own case.
+	n := startWith(t, func(doc string) string {
+		return strings.Replace(doc, "roles:\n", "learning:\n  max_share: 1\nroles:\n", 1)
+	})
 	waitForSeat(t, n, "ceo")
-	// A turn that calls nothing has engaged with nothing, and every
-	// learning worker correctly skips it — see scriptedModel.engages.
+	// THE FOUNDER, EMPLOYED, asks: a turn woken by a sender the company does
+	// not know may write nothing (the requester ceiling), and a turn that
+	// only reads has engaged with nothing: see scriptedModel.engages.
+	employFounder(t, n)
 	n.model.engageOnExecute()
 
 	// SUBSCRIBED BEFORE THE WAKE, or the event the first claim reads could
@@ -135,12 +142,22 @@ func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 		if tc.TurnID == "" {
 			t.Error("no turn id, so nothing the workers write can be deduped")
 		}
+		// THE ENGAGEMENT GATE'S INPUT: the work item the executor filed is a
+		// call that reached outside the engine.
+		if !tc.Acted {
+			t.Errorf("the turn filed a work item and did not act (tally %+v)", tc.Turn)
+		}
+		// AND ITS OUTCOME IS SETTLED BY ITS RUN'S WRITES, which land after the
+		// turn parked on the launch.
+		if tc.Turn == nil || tc.Turn.Outcome != types.OutcomeMoved {
+			t.Errorf("the executor filed a work item and the tally is %+v, want moved", tc.Turn)
+		}
 		// FATAL, because the two claims after it read the first entry: an
 		// error here went on to index an empty list and panicked the case.
 		if len(tc.Interactions) == 0 {
 			t.Fatal("no interactions, so no counterparty can ever be profiled")
 		}
-		if tc.Interactions[0].Sender.ExternalID != "u-sam" {
+		if tc.Interactions[0].Sender.ExternalID != "U0FOUNDER" {
 			t.Errorf("sender = %+v, want the resolved actor",
 				tc.Interactions[0].Sender)
 		}
@@ -195,7 +212,7 @@ func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 	t.Run("ACompletedTurnLeavesACounterpartyProfileBehind", func(t *testing.T) {
 		counterparties := learning.NewCounterparties(n.engine.Backends().Store)
 		subject := learning.Subject{
-			ExternalID: "u-sam", Platform: "mattermost", Name: "sam",
+			Handle: "founder", ExternalID: "U0FOUNDER", Platform: "slack", Name: "Founder",
 		}
 		awaitRows(t, "the sender's profile", func() (int, error) {
 			_, found, err := counterparties.Get(context.Background(), "ceo", subject)

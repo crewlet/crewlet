@@ -113,6 +113,10 @@ type TurnRef struct {
 	// trigger to resolve it from — see [PendingRun.WorkItem].
 	WorkItem *types.WorkItem
 
+	// Answered are the answers whose deliveries woke the turn, for the row
+	// ([PendingRun.Answered]).
+	Answered []string
+
 	// Requester is the seat whose wake started the turn, by its handle,
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
@@ -149,6 +153,10 @@ type TurnRef struct {
 // the task as a message the model reads as part of the request.
 type LaunchRequest struct {
 	Turn TurnRef
+
+	// ReadBox asks a fresh box to be read once after its setup ([ReadBoxFacts]):
+	// set where no reading is kept for the box as it is made now.
+	ReadBox bool
 
 	// System is the run's own standing instructions: the seat's executor
 	// prompt. It is FRAMED as the brief is: what the box provides, and how
@@ -469,6 +477,10 @@ type LaunchResult struct {
 	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
 	Reused bool
 
+	// Read is what the fresh box was found to have ([ReadBoxFacts]), nil for a
+	// reused box or a read that did not answer.
+	Read *BoxFacts
+
 	// Continues is the harness session the launch asked its run to continue,
 	// "" where it started one of its own; Brief is which of the three briefs
 	// it handed the run (restore.go). Whether the run did continue it is its
@@ -574,7 +586,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
-		WorkItem: req.Turn.WorkItem,
+		WorkItem: req.Turn.WorkItem, Answered: slices.Clone(req.Turn.Answered),
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester, WorkingFor: req.Turn.WorkingFor,
@@ -720,6 +732,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
+	}
+	var read *BoxFacts
+	if !reused && req.ReadBox {
+		read = readFresh(ctx, box)
 	}
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
 	// here, which is the moment its host may reclaim it: told now rather
@@ -889,7 +905,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
-		Harness: req.Spec.Harness, Reused: reused,
+		Harness: req.Spec.Harness, Reused: reused, Read: read,
 		Continues: continued.session, Brief: continued.kind,
 	}, nil
 }

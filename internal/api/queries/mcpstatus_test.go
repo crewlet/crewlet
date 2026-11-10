@@ -524,6 +524,13 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	body := asMap(t, raw)
 	holdShape(t, "McpServersStatusAnswer", []map[string]any{body}, false)
 	holdShape(t, "McpApproval", rowsOf(t, body["approvals"]), false)
+	var acting []map[string]any
+	for _, row := range rowsOf(t, body["approvals"]) {
+		if a, ok := row["acting"].(map[string]any); ok {
+			acting = append(acting, a)
+		}
+	}
+	holdShape(t, "McpApprovalActing", acting, false)
 	holdShape(t, "McpStatusNode", rowsOf(t, body["nodes"]), false)
 	servers := rowsOf(t, body["servers"])
 	holdShape(t, "McpServerStatus", servers, false)

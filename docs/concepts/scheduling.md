@@ -672,9 +672,13 @@ the last word anybody said about that item.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under
-the item's own conversation so the turn continues the item's session. Its brief names the four honest answers: start or continue
-the work, record the blocker, hand the item back, or say on the item why it
-should wait. A company on a vendor tracker, or with no model, gets no pickups.
+the item's own conversation so the turn continues the item's session. Its brief names the honest answers, each a change to the
+item: start or continue the work, ask whoever must answer first, record the
+item that blocks it (`waiting_on`), set it aside until a date with why
+(`wait_until` and `wait_reason`), or hand it back. A wait said only in a
+comment is not offered: it changes nothing, so nothing hands the item back
+when it ends. An item set aside until a date is handed once when the date
+comes. A company on a vendor tracker, or with no model, gets no pickups.
 
 `crewlet.work.pickups{outcome}` counts what each pickup decided for an idle
 seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,

@@ -43,6 +43,7 @@ type CodeServer interface {
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error)
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 }
@@ -381,7 +382,11 @@ var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
 	})
 
 // opCodeRepoState is one page of a repository's snapshot — its packs and refs,
-// whole or since a position: a Gitlet node's cache sync.
+// whole or since a position: a Gitlet node's cache sync. ANSWERED WHOLE
+// ([op.answeredWhole]), because a page's cursor (code.RepoSnapshot.Next) is the
+// next page's request: a member a newer data node put in it and this build
+// would drop is a snapshot paged on by a cursor that no longer says where it
+// stands, so it is refused rather than paged on.
 var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.StateQuery) (code.RepoSnapshot, error) {
 		if b.Code == nil {
@@ -389,7 +394,7 @@ var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 		}
 		snap, err := b.Code.Snapshot(ctx, q)
 		return snap, ranNothing(err)
-	})
+	}).answeredWhole()
 
 // opCodePushOutcome is what became of one push: the receiver's wait on a push
 // whose record resolved pending or unknown.
@@ -456,6 +461,17 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
 	}).judgesGrant(func(q code.ReadQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+
+// opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
+// a review: the advisor's read, which names no asker.
+var opCodeTurnsMoved = define("code.turns_moved", opRead, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q code.TurnsMovedQuery) (map[string]bool, error) {
+		if b.Code == nil {
+			return nil, errNoHalf
+		}
+		moved, err := b.Code.TurnsMovedCode(ctx, q)
+		return moved, ranNothing(err)
+	})
 
 // opCodeResolveRef is one ref of one repository, asked of any data node whose
 // code copy serves, at the level the query names — the read a seat's tool

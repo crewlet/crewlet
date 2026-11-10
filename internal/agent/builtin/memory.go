@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The memory tools: what an agent can do with what it has already learned.
@@ -50,7 +51,7 @@ type (
 	SkillStore interface {
 		Get(ctx context.Context, handle, name string) (learning.Skill, bool, error)
 		List(ctx context.Context, handle string, opts learning.ListOptions) ([]learning.Skill, error)
-		MarkUsed(ctx context.Context, skillID string, at time.Time) learning.Use
+		MarkLoaded(ctx context.Context, skillID string, at time.Time) learning.Use
 	}
 
 	// EpisodeStore is the per-turn memory half.
@@ -160,7 +161,7 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// telemetry is what answers "do agents actually load the skills the
 	// synthesizer drafts", and a write that failed must not cost the agent
 	// the skill it asked for.
-	t.skills.MarkUsed(ctx, sk.ID, time.Now().UTC())
+	t.skills.MarkLoaded(ctx, sk.ID, time.Now().UTC())
 	// ONE EVENT PER LOAD, which is the measurement skill induction has to
 	// pass to be worth its cost: without it, "are the skills the
 	// synthesizer drafts ever loaded again" is answerable only by diffing
@@ -634,6 +635,15 @@ func (t *reflectAndPersist) Parameters() map[string]any {
 				"description": "`long` for something durable, `short` for " +
 					"something that expires. Defaults to long.",
 			},
+			"about": map[string]any{
+				"type": "string",
+				"enum": aboutValues(),
+				"description": "What the fact is about: `company` (how the company works), " +
+					"`preference` (how a person likes to work), `capability` (what you can " +
+					"reach or run) or `platform` (how the engine itself works). Defaults to " +
+					"company. A capability or platform fact is held back after your access " +
+					"changes or the engine is upgraded, until you keep it again.",
+			},
 		},
 		"required": []any{"content"},
 	}
@@ -668,8 +678,16 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if kind != learning.DiaryShort {
 		kind = learning.DiaryLong
 	}
+	about := learning.About(strings.TrimSpace(argString(args, "about")))
+	if about == "" {
+		about = learning.AboutCompany
+	}
+	if !about.Valid() {
+		return failed(fmt.Sprintf("%s takes `about` as one of %s, not %q.",
+			ReflectAndPersistTool, words.Or(learning.Abouts), about)), nil
+	}
 	entry := learning.DiaryEntry{
-		ID: uuid.NewString(), AgentID: agentID, Kind: kind, Content: content,
+		ID: uuid.NewString(), AgentID: agentID, Kind: kind, Content: content, About: about,
 		// Attributed to the tool, not to the reflection worker: an
 		// operator reading the diary has to be able to tell what the
 		// agent chose to keep from what a worker decided for it.
@@ -680,6 +698,15 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return nodeFailure(ctx, ReflectAndPersistTool, err, "Could not keep that note", ""), nil
 	}
 	return tools.Result{Output: "Kept. You will see it in later turns."}, nil
+}
+
+// aboutValues is every class a note may be about, as the tool's enum.
+func aboutValues() []any {
+	out := make([]any, 0, len(learning.Abouts))
+	for _, a := range learning.Abouts {
+		out = append(out, string(a))
+	}
+	return out
 }
 
 // --- mark_onboarded ------------------------------------------------------- //

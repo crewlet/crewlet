@@ -62,9 +62,15 @@ func (w Work) File(ctx context.Context, project, path string,
 	return call(ctx, w.r, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
 }
 
-// Views answers the saved views.
+// Views answers one container's strip of views, to show.
 func (w Work) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
+}
+
+// CarriedViews answers one container's strip of views as a caller saves a view
+// of it again from, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
+	return call(ctx, w.r, opViewsCarried, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
@@ -74,9 +80,15 @@ func (w Work) ExpandedQuery(ctx context.Context, params map[string]any,
 		expandArgs{Params: params, Viewer: viewer, Now: now, Zone: zoneArg(loc)})
 }
 
-// Catalogue answers the workspace catalogue.
+// Catalogue answers the workspace catalogue, to show.
 func (w Work) Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return call(ctx, w.r, opCatalogue, nil, q)
+}
+
+// CarriedCatalogue answers the workspace catalogue a caller sends back whole,
+// read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return call(ctx, w.r, opCatalogueCarried, nil, q)
 }
 
 // Person answers one person's own record.
@@ -93,6 +105,11 @@ func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
 // WorkPatterns answers what the company's comments and answers did in a window.
 func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return call(ctx, w.r, opWorkPatterns, nil, q)
+}
+
+// TurnsMoved answers which of a set of turns moved work on the tracker.
+func (w Work) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, w.r, opTurnsMoved, nil, q)
 }
 
 // Activity answers what happened to a task or a project.
@@ -119,9 +136,15 @@ func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.Pro
 	return call(ctx, w.r, opProjects, nil, q)
 }
 
-// Project describes one project.
+// Project describes one project, to show.
 func (w Work) Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
 	return call(ctx, w.r, opProject, nil, q)
+}
+
+// CarriedProject describes one project whose declarations a caller sends back
+// whole, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
+	return call(ctx, w.r, opProjectCarried, nil, q)
 }
 
 // Search is the tracker's ranked search, answered by a data node's index. A
@@ -485,6 +508,11 @@ func (p Pages) Containers(ctx context.Context, fresh statelog.Freshness) (
 // knowledge base.
 func (p Pages) Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error) {
 	return call(ctx, p.r, opPageActivity, nil, q)
+}
+
+// TurnsMovedPages answers which of a set of turns moved work on the pages.
+func (p Pages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, p.r, opPageTurnsMoved, nil, q)
 }
 
 // LinkedFrom answers which pages and tasks link to a page, by its id — from a
@@ -1358,6 +1386,12 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 // compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
+}
+
+// TurnsMovedCode answers which of a set of turns pushed, opened a change or
+// gave a review.
+func (c CodeSeam) TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, c.r, opCodeTurnsMoved, nil, q)
 }
 
 // Lifecycle asks a data node to decide one lifecycle request — a tool's
