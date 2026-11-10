@@ -130,7 +130,7 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 		{in.Values, &out.Values}, {in.Add, &out.Add}, {in.Remove, &out.Remove},
 	} {
 		for _, ref := range group.from {
-			id, refusal := d.resolveRef(ctx, tool, "`"+field+"`", ref)
+			id, refusal := d.resolveBlocker(ctx, tool, field, ref)
 			if refusal != nil {
 				return setArg{}, refusal
 			}
@@ -527,4 +527,18 @@ func fieldMap(raw any) (map[string]json.RawMessage, string) {
 		out[key] = encoded
 	}
 	return out, ""
+}
+
+// resolveBlocker is resolveRef, and for `waiting_on` also a pull request on
+// the company's GitHub by its URL, kept under its tracker name.
+func (d WorkDeps) resolveBlocker(ctx context.Context, tool, field, ref string) (string, *tools.Result) {
+	if field == "waiting_on" && d.ChangeRef != nil {
+		switch change, refused := d.ChangeRef(ref); {
+		case refused != "":
+			return "", refusalOf(failed(tool + ": `waiting_on` names " + refused + " Nothing was written."))
+		case change != "":
+			return change, nil
+		}
+	}
+	return d.resolveRef(ctx, tool, "`"+field+"`", ref)
 }

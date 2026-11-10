@@ -1927,6 +1927,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		FleetSeat: e.FleetSeat,
+		ChangeRef: e.ChangeRef,
 		Seats:     e.seatCorpus,
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply

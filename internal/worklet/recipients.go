@@ -373,6 +373,9 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 	switch n.Kind {
 	case ChangeCreated, ChangeAssignee:
 		return true
+	// A CHANGE THE TASK WAITS ON SETTLED: whoever holds it is to update it.
+	case ChangeLinkSettled:
+		return true
 	case ChangeStatus:
 		return finishedEdge
 	case ChangeComment:
@@ -483,7 +486,7 @@ func (k ChangeKind) TaskCommit() bool {
 		ChangeRouted, ChangeMoved, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
-		ChangeRestored, ChangePurged:
+		ChangeRestored, ChangePurged, ChangeLinkSettled:
 		return true
 	}
 	return false

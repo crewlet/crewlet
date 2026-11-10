@@ -222,8 +222,9 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
 		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000), absorbed("app", 10)}
 	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
-	// Every class but approval.rubber_stamp, the owner's, held on its own below.
-	if len(found) != len(advisor.WorkClasses())-1+len(advisor.LedgerClasses()) {
+	// Every class but the owner's two (approval.rubber_stamp and
+	// integration.inbound_silent), each held on its own.
+	if len(found) != len(advisor.WorkClasses())-2+len(advisor.LedgerClasses()) {
 		t.Fatalf("raised %d findings, want one per engine class the work patterns and the ledger raise", len(found))
 	}
 	// A COUNT NAMES NO RECORD: these classes read totals, not rows to open.
@@ -443,5 +444,53 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 	ev.PausesUnread = true
 	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
 		t.Errorf("an unread pause store raised %+v", found)
+	}
+}
+
+// ONLY THE POLL SETTLING SAYS THE WEBHOOK IS SILENT: a pull request the poll
+// settled after the webhook's newest is the owner's to look into, and a
+// delivery since clears it.
+func TestOnlyThePollSettlingSaysTheWebhookIsSilent(t *testing.T) {
+	t.Parallel()
+	at := func(h int) time.Time { return time.Date(2026, 3, 6, h, 0, 0, 0, time.UTC) }
+	settled := func(polled, polledAt, delivered, deliveredAt int) []worklet.ChangeSettles {
+		var out []worklet.ChangeSettles
+		if polled > 0 {
+			out = append(out, worklet.ChangeSettles{Source: worklet.SettledByPoll, Count: polled, Newest: at(polledAt)})
+		}
+		if delivered > 0 {
+			out = append(out, worklet.ChangeSettles{Source: worklet.SettledByWebhook, Count: delivered,
+				Newest: at(deliveredAt)})
+		}
+		return out
+	}
+	silent := func(s []worklet.ChangeSettles) []advisor.Finding {
+		var out []advisor.Finding
+		for _, f := range advisor.Detect(advisor.Evidence{Work: worklet.WorkPatterns{Settled: s}}, kindOf) {
+			if f.Class == advisor.ClassInboundSilent {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	found := silent(settled(2, 9, 1, 8))
+	if len(found) != 1 {
+		t.Fatalf("the poll settled after the webhook's newest and raised %d findings, want one", len(found))
+	}
+	f := found[0]
+	if f.Actor != advisor.ActorOwner || f.Severity != advisor.SeverityCosts ||
+		f.Subject.Kind != advisor.SubjectIntegration || f.Subject.Name != "GitHub" ||
+		f.Fix.Kind != advisor.FixExternalStep || f.Fix.Setting != "github" || len(f.Evidence) != 2 {
+		t.Errorf("the finding is %+v, want the owner's external step on GitHub with its two counts", f)
+	}
+	for name, s := range map[string][]worklet.ChangeSettles{
+		"a delivery since":               settled(2, 9, 1, 10),
+		"only deliveries":                settled(0, 0, 3, 9),
+		"nothing settled":                nil,
+		"a delivery at the same instant": settled(1, 9, 1, 9),
+	} {
+		if got := silent(s); len(got) != 0 {
+			t.Errorf("%s raised %+v", name, got)
+		}
 	}
 }

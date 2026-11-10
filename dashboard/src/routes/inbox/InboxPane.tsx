@@ -55,6 +55,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { describeLink } from "~/lib/inlineTokens.ts";
+import { askStateWords } from "~/lib/askState.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
@@ -1595,9 +1596,7 @@ function NoticePane({
         ))}
       {ask && (
         <Text as="p" variant="caption">
-          {ask.open
-            ? "The question it is about is still open."
-            : `The question it is about was ${ask.resolved ? "resolved" : "answered"}${ask.answered_at ? ` at ${moment(ask.answered_at, now)}` : ""}.`}
+          {askStateWords(ask, (at) => moment(at, now))}
         </Text>
       )}
       <NoticeActions

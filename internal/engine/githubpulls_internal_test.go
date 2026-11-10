@@ -24,14 +24,14 @@ func TestAPullPreviewIsReadThroughTheWiringInForce(t *testing.T) {
 	if _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
 		t.Fatalf("an unwired reader answered %v, want no GitHub", err)
 	}
-	g.wire(&github.SeatLookup{})
+	g.wire(&github.SeatLookup{}, nil)
 	if _, err := g.read(t.Context(), ref); !errors.Is(err, github.ErrNoSeatCanRead) {
 		t.Fatalf("a wiring with no agent's app answered %v, want no seat can read", err)
 	}
 	if hit, ok := g.entries[ref]; !ok || !errors.Is(hit.err, github.ErrNoSeatCanRead) {
 		t.Errorf("the read was not kept for reuse: %+v", g.entries)
 	}
-	g.wire(nil)
+	g.wire(nil, nil)
 	if _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
 		t.Errorf("a retired wiring answered %v, want no GitHub", err)
 	}

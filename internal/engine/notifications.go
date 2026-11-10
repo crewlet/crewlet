@@ -722,6 +722,8 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		// admits everything, which is the single-node case and the case
 		// before a control plane exists.
 		Admits: e.admits,
+		// AND A LINKED CHANGE'S SETTLE, which no wake carries (ADR-0121).
+		Observe: e.observeInbound,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: notifications: %w", err)
