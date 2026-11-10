@@ -2194,8 +2194,12 @@ const (
 	// draft held to what the engine takes (draft.set's arguments declared only
 	// while one schema holds them, and sizes counted as the engine encodes
 	// them) took it to 5716.3 KiB (5,853,532 bytes, +538 over the tree it was
-	// built on, all script): 5717 KiB.
-	treeBudget = 5<<20 + 597<<10
+	// built on, all script): 5717 KiB. Ask Crewlet reading and proposing to
+	// the agents' access draft (an integration's Agents tab and an agent's
+	// Access tab, one draft over its tabs) and draft.set written in its fields'
+	// order took it to 5725.3 KiB (5,862,652 bytes, +9,120, all script):
+	// 5726 KiB.
+	treeBudget = 5<<20 + 606<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

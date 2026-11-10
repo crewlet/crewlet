@@ -1,9 +1,10 @@
 /**
  * The Agents tab's readings, apart from anything drawn: what a seat's row
  * says (its status word, what it holds at the vendor, its tool, its last
- * sync), which actions it can take now, and whether a draft differs from what
- * is saved. Whether a save raises a seat to administration access (D10) is
- * the engine's to say, on the plan (`step_up`).
+ * sync), which actions it can take now, whether a draft differs from what is
+ * saved, and how each control changes the draft. Whether a save raises a seat
+ * to administration access (D10) is the engine's to say, on the plan
+ * (`step_up`).
  *
  * Pure functions of the engine's answer, so each reading is held by a unit
  * test rather than by a screen.
@@ -16,6 +17,7 @@ import type {
   AccessLaneKey,
   AccessObserved,
   AccessOptions,
+  AccessSeat,
   AccessSeatLane,
   AccessStep,
   GitHubAccess,
@@ -23,6 +25,7 @@ import type {
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
 import { integrationDocHref } from "../docs.ts";
+import type { AccessDraft } from "./api.ts";
 import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -271,6 +274,82 @@ export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boo
   );
 }
 
+/** What a seat asks for on a lane as the draft stands: its drafted state, else what is saved. */
+export function wantOf(draft: AccessDraft, seat: AccessSeat, lane: AccessLaneKey): AccessDesired {
+  return draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
+}
+
+/**
+ * THE TAB'S ONE UPDATE PATH: the draft with one seat's lane changed as a
+ * control changes it, `next` over what the seat asks for now, and the lane
+ * dropped once it asks for what is saved, so the draft holds only what
+ * differs. Each control comes through one of the four below, and so does a
+ * change Ask Crewlet proposes (`assistantDraft.ts`): a proposal is the draft
+ * the control would have made.
+ */
+export function drafted(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  next: Partial<AccessDesired>,
+): AccessDraft {
+  const merged = { ...wantOf(draft, seat, lane.key), ...next };
+  const lanes = { ...(draft[seat.handle] ?? {}) };
+  if (sameDesired(lane, merged, seat.lanes[lane.key]!.desired)) delete lanes[lane.key];
+  else lanes[lane.key] = merged;
+  const out = { ...draft, [seat.handle]: lanes };
+  if (Object.keys(lanes).length === 0) delete out[seat.handle];
+  return out;
+}
+
+/** The switch: off, or on with the only scope there is where an empty one reaches nothing. */
+export function withEnabled(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  on: boolean,
+): AccessDraft {
+  const only = on ? onlyScope(lane, wantOf(draft, seat, lane.key)) : undefined;
+  return drafted(draft, seat, lane, only ? { enabled: true, scope: only } : { enabled: on });
+}
+
+/**
+ * The level picker: one level, or a lane of sets' chosen ones joined
+ * ([joinLevels]). Product access only takes no scope, so choosing it clears one.
+ */
+export function withLevel(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  level: string,
+): AccessDraft {
+  return drafted(draft, seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
+}
+
+/** The permissions dialog: one GitHub permission at one access, No access dropping it. */
+export function withPermission(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  key: string,
+  access: "none" | GitHubAccess,
+): AccessDraft {
+  const permissions = { ...(wantOf(draft, seat, lane.key).permissions ?? {}) };
+  if (access === "none") delete permissions[key];
+  else permissions[key] = access;
+  return drafted(draft, seat, lane, { permissions });
+}
+
+/** The scope dialog: the entries ticked, and those typed where the lane takes them. */
+export function withScope(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  scope: string[],
+): AccessDraft {
+  return drafted(draft, seat, lane, { scope });
+}
+
 /** What a draft changes on one lane, in a word or two, and the tone its tag takes. */
 export interface ChangeSummary {
   label: string;
@@ -323,6 +402,11 @@ export function levelName(lane: Lane, id: string | undefined): string {
     return [...known.map((l) => l.name), ...unknown].join(", ");
   }
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
+}
+
+/** A level as its picker's menu names it: one the company defined marked as its own. */
+export function menuName(level: Lane["levels"][number]): string {
+  return level.custom ? `${level.name} (custom)` : level.name;
 }
 
 /** The empty level, where the vendor offers one: the product with no role (Jira, Confluence). */
