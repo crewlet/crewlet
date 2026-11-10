@@ -124,9 +124,9 @@ func rawLog(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
 // a marker naming its size and digest in its place — while the repository,
 // the branch and the file's path stay whole beside it; the call states the
 // size of what it was sent with, keeps its identity, and adds no more to the
-// log than its share — the log's own union of what its calls committed, which
-// the commit's kind joins, being the log's field, held by the room above its
-// calls' share ([sandbox.BridgeLog.Committed]).
+// log than its share — the log's union of what its calls committed, which the
+// commit's kind joins, being one of the log's own fields, which the log holds
+// outside its calls' share ([sandbox.BridgeLog.Committed]).
 //
 // Mutation: record the call as the bridge handed it, and the log grows by six
 // megabytes of escapes; drop the identity, and a resumed run cannot count the
@@ -144,9 +144,9 @@ func testABridgedCallCarryingAMegabyteIsKeptWithinItsShare(t *testing.T, s sandb
 			Digest: digestOf(1), Seq: 1, Committed: []string{string(types.CommittedCode)}}}); err != nil || !recorded {
 		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
 	}
-	// THE CALL'S OWN BYTES: what the log grew by, less what the log's own
-	// union of the kinds its calls committed grew by with this call's first
-	// kind — a field of the log, which the room above its calls' share holds
+	// THE CALL'S OWN BYTES: what the log grew by, less what the log's union
+	// of the kinds its calls committed grew by with this call's first kind:
+	// one of the log's own fields, outside its calls' share
 	// ([sandbox.BridgeLog.Committed]), never the call's.
 	after := rawLog(t, runs, r.TurnID)
 	if grew := len(after) - len(before) - unionGrowth(t, before, after); grew > sandbox.MaxBridgeCallBytes {

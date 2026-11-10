@@ -69,10 +69,13 @@ import (
 // ([MaxAbsorbedIdentityBytes]). 199 × 16,384 + 73,728 + 2 × 65,536 + 300 for
 // the keys, the commas and the count is 3,465,516, inside the share. The rest
 // of the log is the turn's earlier rounds' tool names ([MaxPriorCalls]) and the
-// log's own identifiers — its job, its round, the answer it was cut for — which
-// weigh tens of KiB: the room left above them is a later build's, for keys it
-// adds to the log or to an identity ([BridgeLog.Extra], [ElidedCall.Extra]); a
-// key added to a call comes out of the call's own share.
+// log's own fields — its identifiers (its job, its round, the answer it was cut
+// for), every kind of change its round's calls committed, each once
+// ([BridgeLog.Committed]), and how many of the calls it dropped no save point
+// holds ([BridgeLog.LateElided]) — which weigh tens of KiB together at their
+// worst (TestTheWholeLogFitsItsBudget): the room left above them is a later
+// build's, for keys it adds to the log or to an identity ([BridgeLog.Extra],
+// [ElidedCall.Extra]); a key added to a call comes out of the call's own share.
 //
 // THE PARKED STATE is held by the park, which is the one writer of it: past
 // [ExecuteStateBytes] the closed rounds' payloads are condensed, and a state
@@ -132,8 +135,10 @@ const (
 
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
-	// value — the turn's earlier rounds' tool names, the log's identifiers
-	// and the room for a later build's keys — is what [RowBytes] leaves.
+	// value — the turn's earlier rounds' tool names, the log's own fields (its
+	// identifiers, the kinds of change its calls committed and its count of
+	// the dropped calls no save point holds) and the room for a later build's
+	// keys — is what [RowBytes] leaves.
 	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share of the row: the
