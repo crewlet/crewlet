@@ -749,9 +749,9 @@ base hold (above) is this log's only hold.
 then the rows that named it still do — the base the turn continued, or an
 earlier capture of the turn's own — so a relaunch of the turn it ran out in,
 which starts a session of its own, is told it may read it. An end that retires
-it (the amendment above) takes it from every ended row that names it, a held
-base included, and a read of such a row then says so; the seat's later turns
-are told how that turn ended.
+it (the amendment on a session that ran out of context) takes it from every
+ended row that names it, a held base included, and a read of such a row then
+says so; the seat's later turns are told how that turn ended.
 
 ## Amendment: a capture names its taker's lease, and one whose taker's lease lapsed is settled from the log
 
@@ -1468,8 +1468,9 @@ it answers a call (it was measured answering a fresh session's first two calls
 before that session's transcript file existed, but a fresh session cut off then
 leaves its box nothing to continue, and the relaunch starts a session of its
 own), and a job that ended before its harness started leaves the session it was
-handed, which never read it. That is the under-tell the amendment above fixed
-for a kept capture, on the path it did not touch.
+handed, which never read it. That is the under-tell the amendment on a capture
+whose harness did not end its own run fixed for a kept capture, on the path it
+did not touch.
 
 **How the job's harness ended is recorded on the job's own record.** The read
 that collects a job writes `harness_end` on its `LaunchRecord` — `own_run`, or
