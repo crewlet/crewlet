@@ -105,6 +105,10 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	if seat == nil {
 		return prefetch.Blocks{}
 	}
+	if told == nil {
+		// A turn told nothing of its access holds nothing back for it.
+		told = &toldTurn{}
+	}
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
