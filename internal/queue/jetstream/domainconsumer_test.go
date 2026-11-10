@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -90,7 +93,11 @@ func TestAConsumerResumesFromTheCheckpoint(t *testing.T) {
 // checkpoint. Rebuilding it would be harmless and is still wrong — it is a
 // replicated delete and create on every boot of every node, for nothing — and
 // it is the direction a judgement that rebuilt whenever in doubt would go.
-// The consumer's creation instant is what says it was not rebuilt.
+// The consumer's own delivery count is what says it was not rebuilt, since
+// every delivery moves it: the consumer the last run made has made its four
+// and the next record's, and one the reopen rebuilt at the checkpoint only
+// the next record's. Its creation instant said so only when the broker's
+// clock had ticked between the two creates.
 //
 // The last run's acknowledgements are awaited at the BROKER before the
 // reopen, because that is the staging this case claims: see
@@ -107,20 +114,24 @@ func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 		t.Fatalf("the first run received %d of 4 records", len(got))
 	}
 	awaitAcknowledged(t, first, 4)
-	before := createdAt(t, first)
 
 	again, err := q.DomainConsumer(t.Context(), "CREWLET_KEEP_LOG", "node-a", 4)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if after := createdAt(t, again); !after.Equal(before) {
-		t.Fatalf("a consumer that had delivered and acknowledged exactly through "+
-			"the checkpoint was rebuilt (created %s, now %s) — a replicated "+
-			"delete and create on every ordinary restart", before, after)
-	}
 	appendN(t, log, "crewlet.keep.log.task.a", 1)
 	if got := fetchAll(t, again, 1); len(got) != 1 || got[0].Seq != 5 {
 		t.Fatalf("the kept consumer delivered %v, want the next record, 5", seqsOf(got))
+	}
+	info, err := consumerInfo(t, again)
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.Delivered.Consumer != 5 {
+		t.Fatalf("the consumer's delivery count is %d after the last run's four and the "+
+			"next record, want 5: a consumer that had delivered and acknowledged exactly "+
+			"through the checkpoint was rebuilt — a replicated delete and create on every "+
+			"ordinary restart", info.Delivered.Consumer)
 	}
 }
 
@@ -139,18 +150,25 @@ func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 // that sits unhydrated for thirty seconds on every such restart.
 //
 // Both are asserted from a checkpoint of nothing (the rows are gone) and from
-// one partway (an older copy), and both are read off the broker rather than
-// the clock: the consumer the reopen leaves is one the reopen CREATED, and the
-// replay is that consumer's own first delivery of each record — never the
-// earlier one handing a record over again once its ack window ran out, which
-// a consumer kept ahead of the rows does for the delivered ones and never for
-// the acknowledged. The replay used to be held to a third of the window by
-// the test's clock, which a runner that lost ten seconds in the reopen failed.
+// one partway (an older copy), and both are read off what the broker records
+// rather than off a clock: the consumer the reopen leaves is one the reopen
+// CREATED, and the replay is that consumer's own first delivery of each
+// record — never the earlier one handing a record over again once its ack
+// window ran out, which a consumer kept ahead of the rows does for the
+// delivered ones and never for the acknowledged. The consumer's own delivery
+// count says both at once, since every delivery moves it, a redelivery
+// included: a consumer the reopen created has made exactly the deliveries of
+// the replay, and one it kept had made five before the reopen and counts on
+// from there. The replay used to be held to a third of the window by the
+// test's clock, which a runner that lost ten seconds in the reopen failed; and
+// the rebuild was read off the consumer's creation instant, the broker's clock
+// at each create, which two creates inside one tick of it stamp alike.
 //
 // Mutation: keep a consumer that has delivered or acknowledged past the rows,
 // and what the node is missing is not handed over; keep the delivered one
 // under an ack window of a second, and it hands them over again a second late
-// — which the clock passed, as a replay well inside a third of the window.
+// — which the clock passed, as a replay well inside a third of the window,
+// and which the delivery count does not: ten deliveries for a replay of five.
 func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -205,7 +223,6 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 
 			// THE ROWS WENT BACKWARDS: this run's checkpoint is below
 			// what the consumer delivered.
-			before := createdAt(t, first)
 			again, err := q.DomainConsumer(t.Context(), stream, "node-a", tc.after)
 			if err != nil {
 				t.Fatalf("reopen at %d: %v", tc.after, err)
@@ -222,21 +239,19 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 			// REBUILT, AND REPLAYED BY WHAT WAS REBUILT: a consumer the
 			// reopen made, whose own deliveries are exactly the records
 			// the node is missing, each once. Its delivery count holds
-			// every delivery, a redelivery included.
+			// every delivery, a redelivery included, so it is what tells a
+			// rebuilt consumer from a kept one: the kept one had already
+			// made five, and counts on from there.
 			info, err := consumerInfo(t, again)
 			if err != nil {
 				t.Fatalf("info: %v", err)
 			}
-			if info.Created.Equal(before) {
-				t.Fatalf("a consumer that had delivered through 5 was kept for a node "+
-					"whose rows are at %d (created %s, as before the reopen)",
-					tc.after, info.Created)
-			}
 			if info.Delivered.Consumer != uint64(want) {
 				t.Fatalf("the replay of %d record(s) took %d deliveries of the consumer "+
-					"the reopen left — a record handed over again once the %s ack "+
-					"window ran out, rather than by a rebuild",
-					want, info.Delivered.Consumer, domainConsumerAckWait)
+					"the reopen left — a consumer that had delivered through 5 kept for "+
+					"a node whose rows are at %d, a record handed over again once the "+
+					"%s ack window ran out, rather than by a rebuild",
+					want, info.Delivered.Consumer, tc.after, domainConsumerAckWait)
 			}
 		})
 	}
@@ -336,6 +351,16 @@ func TestAConsumerBehindTheRowsIsMovedUpToThem(t *testing.T) {
 // position, and is the more common of the two: the trim purges under the
 // consumers of nodes that are running. Neither agrees with the checkpoint in
 // raw numbers; both are kept only through the broker's skip.
+//
+// # What says it was kept
+//
+// The broker's own record that it created none: it announces every consumer
+// it creates ([consumerCreates]), and the reopen is watched for the one
+// announcement a rebuild makes. The delivery count cannot say it here, since
+// the consumer had made no delivery before the reopen, so a rebuilt one
+// counts what a kept one does; and the consumer's creation instant, the
+// broker's clock at each create, said it only when that clock had ticked
+// between the two.
 func TestAConsumerPlacedAtTheFirstSurvivorIsKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -385,18 +410,18 @@ func TestAConsumerPlacedAtTheFirstSurvivorIsKept(t *testing.T) {
 					"nothing", info.Delivered.Stream, info.AckFloor.Stream,
 					info.NumAckPending)
 			}
-			before := info.Created
 
 			// ITS NEXT BOOT, still below the floor.
+			creates := consumerCreates(t, q, stream)
 			again, err := q.DomainConsumer(t.Context(), stream, "node-a", 2)
 			if err != nil {
 				t.Fatalf("reopen: %v", err)
 			}
-			if after := createdAt(t, again); !after.Equal(before) {
-				t.Fatalf("a consumer the broker placed at the stream's first "+
-					"survivor was rebuilt (created %s, now %s) — into the place it "+
-					"already was, and again on every boot below the floor",
-					before, after)
+			if n := creates(again.name); n != 0 {
+				t.Fatalf("the broker announced %d create(s) of the consumer on the reopen, "+
+					"want none: a consumer the broker placed at the stream's first survivor "+
+					"was rebuilt — into the place it already was, and again on every boot "+
+					"below the floor", n)
 			}
 			if got := fetchAll(t, again, 2); len(got) != 2 || got[0].Seq != 5 {
 				t.Fatalf("the kept consumer delivered %v, want 5 and 6", seqsOf(got))
@@ -606,15 +631,53 @@ func appendN(t *testing.T, log *DomainLog, subject string, n int) {
 	}
 }
 
-// createdAt is when the broker made the consumer this handle reads, which is
-// what tells a kept consumer from a rebuilt one.
-func createdAt(t *testing.T, c *DomainConsumer) time.Time {
+// consumerCreates watches the broker announce the consumers it creates on
+// stream, from now: a case calls it before the step that may rebuild one, and
+// the function it returns after that step, for the number of times the
+// consumer named name was created in between. A create is the broker's own
+// RECORD of a rebuild, so it tells a kept consumer from a rebuilt one with no
+// clock, where the consumer's creation instant is the broker's clock at each
+// create, which two creates inside one tick of it stamp alike.
+//
+// THE COUNT IS DECIDED, NOT WAITED FOR. The broker announces a consumer only
+// to a subject somebody listens on, so the subscription is flushed to it
+// before the step. It sends every announcement of one stream's consumers
+// through that stream's one outbound queue, in the order they were created,
+// so the count ends at a fence: a consumer of the case's own, created after
+// the step, whose announcement is the last one read. The bound on that read
+// is liveness, ending only a broker that never announces the fence.
+func consumerCreates(t *testing.T, q *Queue, stream string) func(name string) int {
 	t.Helper()
-	info, err := consumerInfo(t, c)
+	prefix := server.JSAdvisoryConsumerCreatedPre + "." + stream + "."
+	sub, err := q.nc.SubscribeSync(prefix + "*")
 	if err != nil {
-		t.Fatalf("consumer info: %v", err)
+		t.Fatalf("subscribe to %s's consumer creates: %v", stream, err)
 	}
-	return info.Created
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	if err := q.nc.Flush(); err != nil {
+		t.Fatalf("flush the subscription to %s's consumer creates: %v", stream, err)
+	}
+	return func(name string) int {
+		t.Helper()
+		fence := "fence-" + name
+		if _, err := q.js.CreateConsumer(t.Context(), stream, jetstream.ConsumerConfig{Durable: fence}); err != nil {
+			t.Fatalf("create the fence consumer on %s: %v", stream, err)
+		}
+		t.Cleanup(func() { _ = q.js.DeleteConsumer(context.WithoutCancel(t.Context()), stream, fence) })
+		creates := 0
+		for {
+			msg, err := sub.NextMsg(10 * time.Second)
+			if err != nil {
+				t.Fatalf("the broker never announced the fence consumer it created on %s: %v", stream, err)
+			}
+			switch strings.TrimPrefix(msg.Subject, prefix) {
+			case fence:
+				return creates
+			case name:
+				creates++
+			}
+		}
+	}
 }
 
 func seqOf(msgs []statelog.Message) uint64 {

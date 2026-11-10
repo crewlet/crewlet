@@ -2,6 +2,7 @@ package worklet
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -439,7 +440,14 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// THE ORDER IS COMPILED AFTER THE RESOLUTION TOO, because a
 		// `sort=f.<slug>` term is a JOIN onto the field's own values and
 		// the field is only known once the catalogue has been read.
-		terms := sortTerms(q, fields)
+		//
+		// AND WHAT A DERIVED ORDER IS BUILT FROM, once for the page, its
+		// cursor and its neighbours ([resolveOrder]).
+		basis, err := resolveOrder(ctx, tx, q)
+		if err != nil {
+			return err
+		}
+		terms := sortTerms(q, fields, basis)
 		// AND THE PAGE BOUNDARY IS THE ROW READ'S ALONE — see
 		// [pageClause]. The hint and the totals are about the whole
 		// matched set, and neither carries a sort join.
@@ -449,7 +457,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		listed := listOrdered(q)
 		var resume []keyset.Arm
 		if !listed {
-			resume, err = pageClause(q, fields)
+			resume, err = pageClause(q, fields, basis)
 			if err != nil {
 				return err
 			}
@@ -1341,11 +1349,11 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 // `sort=f.<slug>` cursor compares `fs0.num`, and the hint and the totals carry
 // no join at all — so a cursor in the shared predicate made page two of every
 // custom-field-sorted query a hard error.
-func pageClause(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) {
+func pageClause(q Query, fields map[string]resolvedField, basis orderBasis) ([]keyset.Arm, error) {
 	if q.Cursor == "" {
 		return nil, nil
 	}
-	return cursorArms(q, fields)
+	return cursorArms(q, fields, basis)
 }
 
 // handleClause builds a handle filter, with `none` as a real value.
@@ -1681,7 +1689,7 @@ var sortColumns = map[string]sortColumn{
 // column (the board's, the recent listing's, the workspace's, spend's,
 // estimate's, points' and the trash's) and still serves the range with no
 // sort step.
-func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
+func sortTerms(q Query, fields map[string]resolvedField, basis orderBasis) []sortTerm {
 	trash := q.Removed != nil && *q.Removed
 	var terms []sortTerm
 	for i, sort := range q.Sort {
@@ -1710,6 +1718,10 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 					alias + ".seq = 0",
 				JoinArgs: []any{field.ID},
 			})
+			continue
+		}
+		if derived, ok := derivedOrders[sort.Key]; ok {
+			terms = append(terms, derived(basis, sort.Descending)...)
 			continue
 		}
 		column, known := sortColumns[sort.Key]
@@ -1825,11 +1837,37 @@ func renderOrder(terms []sortTerm) string {
 type page struct {
 	Keys []any `json:"k"`
 
-	// Order is the compiled order this cursor was minted under. Compiled
-	// rather than the caller's `sort=` spelling, because the default order
-	// depends on the scope and two queries that named no sort at all can
-	// still be sorted differently.
+	// Order is the compiled order this cursor was minted under, as
+	// [cursorOrder] digests it. Compiled rather than the caller's `sort=`
+	// spelling, because the default order depends on the scope and two
+	// queries that named no sort at all can still be sorted differently.
 	Order string `json:"o,omitempty"`
+}
+
+// cursorOrder is what a cursor carries of its order: a digest of the order as
+// compiled, which names it as exactly as the text does.
+//
+// A DIGEST RATHER THAN THE TEXT, because an order over the chart is a CASE
+// naming every seat ([assigneeOrder]), and a cursor carrying it would be
+// kilobytes in every URL and every model's context that pages a listing.
+func cursorOrder(terms []sortTerm) string {
+	sum := sha256.Sum256([]byte(renderOrder(terms)))
+	return base64.RawURLEncoding.EncodeToString(sum[:16])
+}
+
+// sortSpelling is an order as a caller wrote it, for a refusal to name.
+func sortSpelling(sorts []Sort) string {
+	if len(sorts) == 0 {
+		return "the default order"
+	}
+	out := make([]string, len(sorts))
+	for i, s := range sorts {
+		out[i] = s.Key
+		if s.Descending {
+			out[i] = "-" + s.Key
+		}
+	}
+	return "sort=" + strings.Join(out, ",")
 }
 
 // cursorArms turns an opaque page cursor back into the arms the rows after it
@@ -1860,7 +1898,7 @@ type page struct {
 // end of a listing cost the square of its length. The arithmetic, its NULL
 // rule and why neither a range nor a union of the arms will do are
 // [keyset]'s; [readPage] reads the arms in turn until the page is full.
-func cursorArms(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) {
+func cursorArms(q Query, fields map[string]resolvedField, basis orderBasis) ([]keyset.Arm, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: the cursor is not one this surface "+
@@ -1871,8 +1909,7 @@ func cursorArms(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) 
 		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
 			"after")
 	}
-	terms := sortTerms(q, fields)
-	order := renderOrder(terms)
+	terms := sortTerms(q, fields, basis)
 	if len(resume.Keys) == 0 || resume.Keys[len(resume.Keys)-1] == nil {
 		// THE LAST KEY IS THE ROW'S ID, which is never NULL: a cursor
 		// without one names no row, and resumed it would be read as the
@@ -1880,17 +1917,18 @@ func cursorArms(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) 
 		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
 			"after")
 	}
-	if len(resume.Keys) != len(terms) || resume.Order != order {
+	if len(resume.Keys) != len(terms) || resume.Order != cursorOrder(terms) {
 		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
 		// this one: resuming a rank-ordered page inside an
 		// update-ordered query is a page boundary computed against a
 		// column the query does not sort by, which drops rows without
 		// saying so. The ORDER is what decides that, not the key count —
 		// see [page].
-		return nil, fmt.Errorf("worklet: this cursor was minted for the "+
-			"order %q and this query sorts by %q — a cursor belongs to the "+
-			"order that minted it, and re-sorting starts a new page",
-			resume.Order, order)
+		return nil, fmt.Errorf("worklet: this cursor was minted for another "+
+			"order than this query's (%s): a cursor belongs to the order that "+
+			"minted it, and re-sorting, or an edit to the type catalogue or the "+
+			"seats' names an order is built from, starts a new page",
+			sortSpelling(q.Sort))
 	}
 	return keyset.After(keysetTerms(terms), resume.Keys), nil
 }
@@ -2031,7 +2069,7 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	if len(out) > limit {
 		out = out[:limit]
 		// THE ORDER TRAVELS WITH THE KEYS — see [page].
-		cursor = mintCursor(pageKeys[limit-1], renderOrder(terms))
+		cursor = mintCursor(pageKeys[limit-1], cursorOrder(terms))
 	}
 	// AND THE OVERDUE FLAG IS DERIVED ONCE, here, so every renderer agrees
 	// — against the QUERY's own day boundary rather than against this

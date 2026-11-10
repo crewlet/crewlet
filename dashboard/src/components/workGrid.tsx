@@ -115,18 +115,20 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     cell: (row) =>
       row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
   };
+  // TWO MARKS UNDER WORDS: a glyph head left the type and the seat looking like
+  // decoration rather than columns, and a sortable head needs a word to press.
   const type: Column = {
     key: "type",
-    header: "",
-    label: "Type",
-    icon: true,
+    header: "Type",
+    shrink: true,
+    align: "center",
     cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
   };
   const assignee: Column = {
     key: "assignee",
-    header: "",
-    label: "Assignee",
-    icon: true,
+    header: "Assignee",
+    shrink: true,
+    align: "center",
     cell:
       cells.assignee ??
       ((row) => (
