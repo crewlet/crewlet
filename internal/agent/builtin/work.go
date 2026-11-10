@@ -135,9 +135,10 @@ type WorkMover interface {
 type WorkDeps struct {
 	Reader WorkReader
 
-	// ChangeRef is a pull request's tracker name, where raw is one on the
-	// company's GitHub; nil, or false, and `waiting_on` names items alone.
-	ChangeRef func(raw string) (string, bool)
+	// ChangeRef is a pull request's tracker name, where raw is one under the
+	// company's GitHub owners, or why one on its host is refused; both empty,
+	// or nil, and raw names an item.
+	ChangeRef func(raw string) (ref, refused string)
 
 	// Authorize decides the checks a tool can only take AFTER a read.
 	//
@@ -2607,8 +2608,8 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"what `unit` on " + worklet.CreateWorkItemTool + " does.",
 			},
 			"waiting_on": setArgSchema("The items this one is blocked BY. " + itemRefs +
-				" A pull request on the company's GitHub, by its URL, blocks it until it " +
-				"merges or closes, when you are told to update the item."),
+				" A pull request under the company's GitHub owners, by its URL, blocks it " +
+				"until it merges or closes, when you are told to update the item."),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),

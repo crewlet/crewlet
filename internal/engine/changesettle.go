@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -58,8 +59,11 @@ func (e *Engine) observeInbound(ctx context.Context, source string, w types.RawW
 	if !ok {
 		return
 	}
-	ref, ok := e.ChangeRef(page)
-	if !ok {
+	ref, refused := e.ChangeRef(page)
+	if ref == "" {
+		if refused != "" {
+			log.DebugContext(ctx, "change_settle_not_the_companys", "change", page)
+		}
 		return
 	}
 	state := worklet.ChangeClosed
@@ -87,62 +91,69 @@ const (
 	changePollGrace = 10 * time.Minute
 )
 
-// changePoll is where the last pass stopped, so the next resumes after it.
+// changePoll is where the last pass stopped, so the next resumes after it,
+// and the changes the host would not let it read, each asked again later.
 type changePoll struct {
-	mu    sync.Mutex
-	after string
+	mu         sync.Mutex
+	after      string
+	unreadable map[string]unreadableChange
+	// batch overrides changePollBatch, for a test.
+	batch int
 }
+
+// unreadableChange is when a change the host refused is next asked about, and
+// how long the wait before that was.
+type unreadableChange struct {
+	until time.Time
+	wait  time.Duration
+}
+
+// The back-off of a change the host refused to show: an hour, doubling to a day.
+const (
+	unreadableFirst = time.Hour
+	unreadableMost  = 24 * time.Hour
+)
 
 // openChangesPending is the poll's gate: a GitHub wiring, and a change some
 // task still waits on.
 func (e *Engine) openChangesPending(ctx context.Context) (bool, error) {
 	n := e.native.Load()
-	if n == nil || n.trackerReader == nil || e.githubPulls.current() == nil {
+	if lookup, _ := e.githubPulls.current(); n == nil || n.trackerReader == nil || lookup == nil {
 		return false, nil
 	}
 	open, err := n.trackerReader.OpenChanges(ctx, "", 1, statelog.ReadStale)
 	return len(open) > 0, err
 }
 
-// pollChanges asks the host about up to changePollBatch open changes, after
-// the last pass's, through the agents' apps' cached tokens, and settles each
-// that merged or closed more than changePollGrace ago.
+// pollChanges asks the host about up to changePollBatch open changes under
+// the company's owners, after the last pass's, through the agents' apps'
+// cached tokens, and settles each that merged or closed more than
+// changePollGrace ago. A rate limit ends the pass where it stood.
 func (e *Engine) pollChanges(ctx context.Context, now, _ time.Time) (int64, error) {
-	n, lookup := e.native.Load(), e.githubPulls.current()
-	if n == nil || n.trackerReader == nil || lookup == nil {
+	n := e.native.Load()
+	if lookup, _ := e.githubPulls.current(); n == nil || n.trackerReader == nil || lookup == nil {
 		return 0, nil
 	}
 	e.changePoll.mu.Lock()
-	after := e.changePoll.after
+	after, batch := e.changePoll.after, cmp.Or(e.changePoll.batch, changePollBatch)
 	e.changePoll.mu.Unlock()
-	refs, err := n.trackerReader.OpenChanges(ctx, after, changePollBatch, statelog.ReadStale)
+	refs, err := n.trackerReader.OpenChanges(ctx, after, batch, statelog.ReadStale)
 	if err != nil {
 		return 0, err
 	}
 	next := ""
-	if len(refs) == changePollBatch {
+	if len(refs) == batch {
 		next = refs[len(refs)-1]
 	}
-	var settled int64
+	reached, settled := after, int64(0)
 	for _, ref := range refs {
-		pull, _, ok := github.ChangeRef(lookup.Opts.WebBase, ref)
-		if !ok {
-			continue
-		}
-		pr, err := e.githubPulls.read(ctx, pull)
-		var refused *github.APIError
-		switch {
-		case errors.As(err, &refused) && refused.RateLimited:
-			// THE HOST ASKED FOR A WAIT: the rest wait for the next pass.
-			next = ""
-		case err != nil:
-			log.DebugContext(ctx, "change_poll_unread", "change", ref, "error", err)
-			continue
-		}
-		if err != nil {
+		s, done, limited := e.pollChange(ctx, ref, now)
+		if limited {
+			// THE HOST ASKED FOR A WAIT: the next pass starts at this change.
+			next = reached
 			break
 		}
-		s, done := settledState(pr)
+		reached = ref
 		if !done || now.Sub(s.At) < changePollGrace {
 			continue
 		}
@@ -156,6 +167,52 @@ func (e *Engine) pollChanges(ctx context.Context, now, _ time.Time) (int64, erro
 	e.changePoll.after = next
 	e.changePoll.mu.Unlock()
 	return settled, nil
+}
+
+// pollChange reads one open change: its settle where it has settled, and
+// whether the host asked for a wait. A change outside the company's owners is
+// never read, and one the host refused waits out its back-off, said once.
+func (e *Engine) pollChange(ctx context.Context, ref string, now time.Time) (worklet.ChangeSettlement, bool, bool) {
+	lookup, _ := e.githubPulls.current()
+	pull, _, ok := github.ChangeRef(lookup.Opts.WebBase, ref)
+	if !ok || !e.ownedChange(ref) {
+		return worklet.ChangeSettlement{}, false, false
+	}
+	e.changePoll.mu.Lock()
+	held, waiting := e.changePoll.unreadable[ref]
+	e.changePoll.mu.Unlock()
+	if waiting && now.Before(held.until) {
+		return worklet.ChangeSettlement{}, false, false
+	}
+	pr, err := e.githubPulls.read(ctx, pull)
+	var refused *github.APIError
+	switch {
+	case errors.As(err, &refused) && refused.RateLimited:
+		return worklet.ChangeSettlement{}, false, true
+	case err != nil:
+		wait := unreadableFirst
+		if waiting {
+			wait = min(2*held.wait, unreadableMost)
+		} else {
+			log.WarnContext(ctx, "change_poll_unreadable", "change", ref, "error", err,
+				"detail", "the tasks waiting on it stay blocked until the agents' apps can read it "+
+					"or a person removes the wait; it is asked again after a growing wait")
+		}
+		e.changePoll.mu.Lock()
+		if e.changePoll.unreadable == nil {
+			e.changePoll.unreadable = map[string]unreadableChange{}
+		}
+		e.changePoll.unreadable[ref] = unreadableChange{until: now.Add(wait), wait: wait}
+		e.changePoll.mu.Unlock()
+		return worklet.ChangeSettlement{}, false, false
+	}
+	if waiting {
+		e.changePoll.mu.Lock()
+		delete(e.changePoll.unreadable, ref)
+		e.changePoll.mu.Unlock()
+	}
+	s, done := settledState(pr)
+	return s, done, false
 }
 
 // settledState is a pull request's settle as the poll read it, and whether it

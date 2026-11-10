@@ -1884,7 +1884,10 @@ and those it stamped permanently one-sided (`final`);
 and is retried on the next pass.
 
 **A task can wait on a pull request** on the company's GitHub: give its URL in
-`waiting_on` (any tab of its page reads as the page itself). The task reads
+`waiting_on` (any tab of its page reads as the page itself). It must be under
+an owner the company's GitHub configuration names, its organization or the
+owner of a repository a seat works in; one under any other owner is refused
+naming them. The task reads
 blocked until the pull request merges or closes, and that is recorded on the
 task by the engine, with no agent's turn: a `change_settled` record that keeps
 the pull request among the task's `changes` (its state, when, and whether the
@@ -1893,6 +1896,11 @@ to update it, addressed. The task's status is never moved. The engine learns it
 from GitHub's webhook as it arrives, or else from a fleet poll that asks GitHub
 about at most fifty open pull requests every 15 minutes, through the agents'
 apps' cached tokens, once the pull request settled more than ten minutes ago.
+A rate limit ends a pass where it stood, and the next resumes there. A pull
+request GitHub will not show the apps (deleted, moved, or out of their reach)
+is logged once as `change_poll_unreadable` and asked again after a wait that
+grows from an hour to a day; its tasks stay blocked until a person removes the
+wait.
 Each settle is written once however many deliveries and polls saw it. A wait on
 a pull request has no mirror, is never one-sided, and a pull request cannot be
 made to wait on a task. When the poll keeps settling what no delivery did, the

@@ -533,7 +533,10 @@ func fieldMap(raw any) (map[string]json.RawMessage, string) {
 // the company's GitHub by its URL, kept under its tracker name.
 func (d WorkDeps) resolveBlocker(ctx context.Context, tool, field, ref string) (string, *tools.Result) {
 	if field == "waiting_on" && d.ChangeRef != nil {
-		if change, ok := d.ChangeRef(ref); ok {
+		switch change, refused := d.ChangeRef(ref); {
+		case refused != "":
+			return "", refusalOf(failed(tool + ": `waiting_on` names " + refused + " Nothing was written."))
+		case change != "":
 			return change, nil
 		}
 	}

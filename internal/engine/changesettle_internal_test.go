@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,8 @@ const settledPull = "https://github.com/acme/web/pull/12"
 func changeNode(t *testing.T) (*Engine, []string) {
 	t.Helper()
 	e, _ := aRunningNodeOf(t, nativeCleanupCompany)
-	e.githubPulls.wire(&github.SeatLookup{Opts: github.SeatAppOptions{WebBase: "https://github.com"}})
+	e.githubPulls.wire(&github.SeatLookup{Opts: github.SeatAppOptions{WebBase: "https://github.com"}},
+		[]string{"acme"})
 	writer := e.native.Load().writer
 	at := time.Now().UTC()
 	key := fmt.Sprintf("C%05d", seededProjects.Add(1))
@@ -140,5 +142,114 @@ func TestThePollSettlesWhatNoDeliveryDid(t *testing.T) {
 	}
 	if pending, err := e.openChangesPending(t.Context()); err != nil || pending {
 		t.Errorf("the poll's gate answered %v (%v) with nothing left open, want no pass", pending, err)
+	}
+}
+
+// waitAlsoOn makes task id of the node's project wait on ref too, written as
+// the engine (a wait no tool would accept included).
+func waitAlsoOn(t *testing.T, e *Engine, id, ref string) {
+	t.Helper()
+	project, _, _ := strings.Cut(id, "-")
+	if _, err := e.native.Load().writer.Depend(t.Context(), statelog.NewOpID(time.Now(), "depend"),
+		worklet.DependencyChange{Task: id, Project: project, WaitingOnAdd: []string{ref}}, nil); err != nil {
+		t.Fatalf("wait %s on %s: %v", id, ref, err)
+	}
+}
+
+// cachePulls stands each pull request's read in for the host's.
+func cachePulls(e *Engine, reads map[string]pullPreview) {
+	e.githubPulls.mu.Lock()
+	defer e.githubPulls.mu.Unlock()
+	e.githubPulls.entries = map[github.PullRef]pullPreview{}
+	for raw, read := range reads {
+		ref, _, _ := github.ChangeRef("https://github.com", raw)
+		read.at = time.Now()
+		e.githubPulls.entries[ref] = read
+	}
+}
+
+// A PULL REQUEST OUTSIDE THE COMPANY'S OWNERS IS REFUSED, NEVER READ AND NEVER
+// SETTLED: the company's credentials are for its own code.
+func TestAPullRequestOutsideTheCompanysOwnersIsNeitherAcceptedNorRead(t *testing.T) {
+	t.Parallel()
+	e, ids := changeNode(t)
+	const foreign = "https://github.com/other/lib/pull/3"
+	if ref, refused := e.ChangeRef("https://github.com/Acme/Web/pull/12/files"); ref != settledPull || refused != "" {
+		t.Errorf("the company's own pull request reads as (%q, %q), want %s", ref, refused, settledPull)
+	}
+	if ref, refused := e.ChangeRef(foreign); ref != "" || !strings.Contains(refused, "other") ||
+		!strings.Contains(refused, "acme") {
+		t.Errorf("another owner's pull request reads as (%q, %q), want it refused naming both owners", ref, refused)
+	}
+	waitAlsoOn(t, e, ids[0], foreign)
+	closed := time.Now().UTC().Add(-time.Hour)
+	cachePulls(e, map[string]pullPreview{foreign: {pr: github.PullRequest{State: "closed", ClosedAt: &closed}}})
+	if _, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	body, _ := json.Marshal(map[string]any{"action": "closed", "pull_request": map[string]any{
+		"html_url": foreign, "merged": false, "closed_at": closed}})
+	e.observeInbound(t.Context(), github.Backend, types.RawWebhook{BodyRaw: body,
+		Headers: map[string]string{"x-github-event": "pull_request"}})
+	got, err := e.native.Load().trackerReader.Task(t.Context(), ids[0], worklet.DetailWants{},
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, settled := got.Task.Changes[foreign]; settled {
+		t.Errorf("another owner's pull request was settled on %s: %+v", ids[0], got.Task.Changes)
+	}
+}
+
+// A RATE LIMIT ENDS A PASS WHERE IT STOOD: the next resumes at the change the
+// host refused, so changes past the first batch are still read.
+func TestARateLimitedPassResumesWhereItStopped(t *testing.T) {
+	t.Parallel()
+	e, ids := changeNode(t)
+	const thirteen, fourteen = "https://github.com/acme/web/pull/13", "https://github.com/acme/web/pull/14"
+	waitAlsoOn(t, e, ids[0], thirteen)
+	waitAlsoOn(t, e, ids[1], fourteen)
+	e.changePoll.batch = 2
+	closed := time.Now().UTC().Add(-time.Hour)
+	done := pullPreview{pr: github.PullRequest{State: "closed", ClosedAt: &closed}}
+	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "open"}},
+		thirteen: {err: &github.APIError{Status: 429, RateLimited: true}}, fourteen: done})
+	if _, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if e.changePoll.after != settledPull {
+		t.Fatalf("a pass the host stopped at %s resumes after %q, want after %s", thirteen,
+			e.changePoll.after, settledPull)
+	}
+	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "open"}},
+		thirteen: done, fourteen: done})
+	if n, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil || n != 2 {
+		t.Fatalf("the next pass settled %d (%v), want the two past the first batch", n, err)
+	}
+}
+
+// A PULL REQUEST THE HOST WILL NOT SHOW WAITS OUT A GROWING BACK-OFF, and is
+// read again once it is over.
+func TestAnUnreadablePullRequestBacksOff(t *testing.T) {
+	t.Parallel()
+	e, _ := changeNode(t)
+	closed := time.Now().UTC().Add(-time.Hour)
+	cachePulls(e, map[string]pullPreview{settledPull: {err: &github.APIError{Status: 404}}})
+	now := time.Now()
+	if _, err := e.pollChanges(t.Context(), now, time.Time{}); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if held := e.changePoll.unreadable[settledPull]; held.wait != unreadableFirst {
+		t.Fatalf("an unreadable pull request waits %v, want %v", held.wait, unreadableFirst)
+	}
+	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "closed", ClosedAt: &closed}}})
+	if n, _ := e.pollChanges(t.Context(), now.Add(30*time.Minute), time.Time{}); n != 0 {
+		t.Errorf("a pass inside the back-off settled %d, want it not read", n)
+	}
+	if n, _ := e.pollChanges(t.Context(), now.Add(2*time.Hour), time.Time{}); n != 2 {
+		t.Errorf("a pass after the back-off settled %d, want both waiting tasks", n)
+	}
+	if _, held := e.changePoll.unreadable[settledPull]; held {
+		t.Error("a pull request read again is still held as unreadable")
 	}
 }
