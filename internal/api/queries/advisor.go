@@ -140,31 +140,49 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 	return ev
 }
 
-// maxFailedRuns bounds the failed runs the advisor reads over its window, the
-// newest first: enough to see an agent's box run out of memory twice.
-const maxFailedRuns = 200
+// failedRunsPage is how many failed runs one read of the week takes, and
+// maxFailedRunPages how many reads it takes before it names the source read
+// in part: a week holding more failed runs than that is not read as whole.
+const (
+	failedRunsPage    = 200
+	maxFailedRunPages = 10
+)
 
 // memoryKills is every executor run in the window before now the kernel stopped
-// for memory, by its agent's handle. A fleet that did not answer whole is
-// unread, never no runs.
+// for memory, by its agent's handle, read a page at a time back to the window's
+// start. A fleet that did not answer whole, or a week past the bound, is unread.
 func (s Sources) memoryKills(ctx context.Context, now time.Time) ([]advisor.MemoryKill, error) {
 	if s.Events == nil {
 		return nil, errors.New("queries: this node reads no event log")
 	}
 	failed := true
-	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
+	q := store.ListQuery{
 		Type: types.ExecutorCollected{}.EventType(), Failed: &failed,
-		Since: now.Add(-advisor.Window), Until: now, Limit: maxFailedRuns, At: now,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("queries: list the week's failed runs: %w", err)
+		Since: now.Add(-advisor.Window), Until: now, Limit: failedRunsPage, At: now,
 	}
-	if !coverage.Complete {
-		return nil, errors.New("queries: not every node answered for its runs")
+	var rows []store.EventRecord
+	for page := 0; ; page++ {
+		if page == maxFailedRunPages {
+			return nil, fmt.Errorf("queries: the week holds more than %d failed runs",
+				failedRunsPage*maxFailedRunPages)
+		}
+		listing, coverage, err := s.Events.List(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("queries: list the week's failed runs: %w", err)
+		}
+		if !coverage.Complete {
+			return nil, errors.New("queries: not every node answered for its runs")
+		}
+		rows = append(rows, listing.Rows...)
+		if !listing.More || len(listing.Rows) == 0 {
+			break
+		}
+		oldest := listing.Rows[len(listing.Rows)-1]
+		q.Before = &store.Cursor{Time: oldest.Time, ID: oldest.ID}
 	}
 	chart := s.chartHandles()
 	var out []advisor.MemoryKill
-	for _, rec := range listing.Rows {
+	for _, rec := range rows {
 		var run types.ExecutorCollected
 		seat, charted := chart[rec.AgentID]
 		if !charted || json.Unmarshal(rec.Payload, &run) != nil ||
