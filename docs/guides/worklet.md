@@ -1939,6 +1939,15 @@ is waiting on, and `asked_by=` is whose question it is — one name, since the
 asks you put through your own assistant are written as your seat. Each row
 carries `answer_with`, the literal call that answers it, and `open`.
 
+An open question the facts overtook stops waiting. When its asker asks the
+same person again on the same item, the older question is `superseded`; when
+the item reaches a finished status, its open questions are `moot`, and
+reopening the item makes them wait again. An overtaken question leaves
+`asked_of_me`, the person's decisions, `has_open_asks`, `asked_of=` and
+`asked_by=`, and an answer without `answers` is inferred among the questions
+still waiting. Its card carries `overtaken` with the reason, and an answer that
+names it is still recorded. A question somebody answered is never overtaken.
+
 ### Asking for a decision
 
 A question that needs somebody to **choose** carries a **decision** on the ask:
