@@ -491,6 +491,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.StartAt != nil {
 		task.StartAt = clearableInstant(patch.StartAt)
 	}
+	if patch.WaitReason != nil {
+		task.WaitReason = *patch.WaitReason
+	}
 	if patch.DueAt != nil {
 		task.DueAt = clearableInstant(patch.DueAt)
 	}
@@ -535,6 +538,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	}
 	setSlice(&task.Collaborators, patch.Collaborators)
 	setSlice(&task.Watchers, patch.Watchers)
+	setSlice(&task.AskWatch, patch.AskWatch)
 	setSlice(&task.Muted, patch.Muted)
 	setSlice(&task.Tags, patch.Tags)
 	setSlice(&task.Relations, patch.Relations)

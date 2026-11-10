@@ -316,6 +316,10 @@ type TurnTriggerSkipped struct {
 	TriggerID   string `json:"trigger_id"`
 	TriggerType string `json:"trigger_type"`
 	Reason      string `json:"reason"`
+	// Disposition is what the turn ledger counts the wake as, under Wake, its
+	// key there; empty on a skip the ledger does not count.
+	Disposition WakeDisposition `json:"disposition,omitempty"`
+	Wake        string          `json:"wake,omitempty"`
 }
 
 // EventType is the "turn_trigger_skipped" wire type.

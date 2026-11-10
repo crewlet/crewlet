@@ -1166,6 +1166,14 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if asks != "" {
 				charged = settleAskWatch(current, charged, asks)
 			}
+			charged, err = endAskWatch(ctx, tx, id, current, charged, kind)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			charged, err = settleWaitReason(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			charged, err = w.settleRelations(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -1361,6 +1369,29 @@ func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment
 	return checkChoice(task, ask.id, ask.decision, comment.Choice)
 }
 
+// settleWaitReason holds a wait's reason to its start: a reason needs a start
+// set in the same patch, and a start set or cleared without one clears the
+// reason it had, which said why the item waited until the old instant.
+func settleWaitReason(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.WaitReason != nil && *patch.WaitReason != "" {
+		reason := *patch.WaitReason
+		switch {
+		case patch.StartAt == nil || patch.StartAt.IsZero():
+			return patch, invalid("a wait reason on task %s needs the start it waits until, "+
+				"set in the same change", current.ID)
+		case len(reason) > MaxWaitReason || strings.ContainsAny(reason, "\r\n"):
+			return patch, invalid("a wait reason on task %s is one line of at most %d bytes",
+				current.ID, MaxWaitReason)
+		}
+		return patch, nil
+	}
+	if patch.StartAt != nil && patch.WaitReason == nil && current.WaitReason != "" {
+		cleared := ""
+		patch.WaitReason = &cleared
+	}
+	return patch, nil
+}
+
 // settleAskWatch puts the person a new question asks on the task's watchers.
 //
 // AN ASK IS AN OBLIGATION, and the person holding one has to hear what happens
@@ -1382,8 +1413,74 @@ func settleAskWatch(current Task, patch TaskPatch, asked string) TaskPatch {
 	}
 	if next, ok := followAuto(watchers, muted, asked); ok {
 		patch.Watchers = &next
+		held := append(slices.Clone(askWatchOf(current, patch)), asked)
+		patch.AskWatch = &held
 	}
 	return patch
+}
+
+// askWatchOf is the task's ask-added watchers as the patch leaves them.
+func askWatchOf(current Task, patch TaskPatch) []string {
+	if patch.AskWatch != nil {
+		return *patch.AskWatch
+	}
+	return current.AskWatch
+}
+
+// openAskToStatement is whether a task still holds an open question to a
+// person other than one comment, named for the plan test.
+const openAskToStatement = `SELECT 1 FROM tracker_comments
+	WHERE task_id = ? AND ask = ? AND id <> ? AND resolved = 0 AND answered_by IS NULL AND removed = 0
+	  AND overtaken = ''
+	LIMIT 1`
+
+// endAskWatch ends the watch a question added once it has nothing left to
+// follow (ADR-0023): the person an answered or resolved question was put to,
+// when no other open question here is theirs, and everybody a question added
+// when the task finishes. A watch somebody chose is never ended.
+func endAskWatch(ctx context.Context, tx *sql.Tx, task string, current Task, patch TaskPatch,
+	kind ChangeKind) (TaskPatch, error) {
+
+	held := askWatchOf(current, patch)
+	if len(held) == 0 {
+		return patch, nil
+	}
+	var ends []string
+	switch {
+	case patch.Status != nil && patch.Status.Group().Finished():
+		ends = held
+	case patch.Comment != nil && (kind == ChangeCommentResolved || patch.Comment.Answers != nil):
+		closed := patch.Comment.ID
+		if kind != ChangeCommentResolved {
+			closed = *patch.Comment.Answers
+		}
+		ask, err := readAsk(ctx, tx, task, closed)
+		if err != nil {
+			return patch, err
+		}
+		if ask.asked == "" || !slices.Contains(held, ask.asked) {
+			return patch, nil
+		}
+		var open int
+		err = tx.QueryRowContext(ctx, openAskToStatement, task, ask.asked, closed).Scan(&open)
+		switch {
+		case err == nil:
+			return patch, nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return patch, fmt.Errorf("worklet: read whether %s still owes an answer on %s: %w",
+				ask.asked, task, err)
+		}
+		ends = []string{ask.asked}
+	default:
+		return patch, nil
+	}
+	watchers := current.Watchers
+	if patch.Watchers != nil {
+		watchers = *patch.Watchers
+	}
+	watchers, rest := without(watchers, ends), without(held, ends)
+	patch.Watchers, patch.AskWatch = &watchers, &rest
+	return patch, nil
 }
 
 // followAuto is a watcher set with somebody the write made a party to the
@@ -1457,6 +1554,11 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 	handle := patch.Watch.Handle
 	if handle == "" {
 		return patch, invalid("a watch gesture names no handle")
+	}
+	// A GESTURE IS A CHOICE, so a watch a question added stops being one.
+	if held := askWatchOf(current, patch); slices.Contains(held, handle) {
+		rest := without(held, []string{handle})
+		patch.AskWatch = &rest
 	}
 	watchers := without(current.Watchers, []string{handle})
 	muted := without(current.Muted, []string{handle})

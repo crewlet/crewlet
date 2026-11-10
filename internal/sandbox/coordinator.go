@@ -2618,10 +2618,18 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
 		rec.ErrorKind = types.ExecutorErrorLaunchFailed
-		if ranOutOfContext(run, result) {
+		switch {
+		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		case result.OutOfMemory && Placement(run.Placement).OwnsMemory():
+			// A direct box's kills are the engine host's domain's, recorded
+			// below and never the run's ending.
+			rec.ErrorKind = types.ExecutorErrorOutOfMemory
 		}
 	}
+	// THE KERNEL'S KILLS FOR MEMORY, on any ending, so a run that survived a
+	// killed command is evidence of its box's size too.
+	rec.MemoryKills, rec.MemoryBytes = result.MemoryKills, result.MemoryBytes
 	return rec
 }
 

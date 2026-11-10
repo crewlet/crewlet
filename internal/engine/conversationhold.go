@@ -14,11 +14,24 @@ import (
 )
 
 // A conversation whose context did not fit twice in a row, the second time on
-// a fresh session, is held: its seat starts no turn on it until a person writes
-// on it or the seat's models change, and its other conversations go on (ADR-0117).
+// a fresh session, or whose runs' harness the kernel killed for memory twice in
+// a row, is held: its seat starts no turn on it until a person writes on it or
+// the settings it failed on change, and its other conversations go on (ADR-0117).
 
-// failureContextExhausted is a conversation whose brief does not fit its models.
-const failureContextExhausted failureKind = "context_exhausted"
+// The failures that hold a conversation rather than its seat.
+const (
+	// failureContextExhausted is a conversation whose brief does not fit its models.
+	failureContextExhausted failureKind = "context_exhausted"
+	// failureOutOfMemory is a conversation whose work does not fit its box's memory.
+	failureOutOfMemory failureKind = "out_of_memory"
+)
+
+// conversationFailures are the collected endings that hold a conversation, by
+// the kind their record names.
+var conversationFailures = map[string]failureKind{
+	types.ExecutorErrorContextExhausted: failureContextExhausted,
+	types.ExecutorErrorOutOfMemory:      failureOutOfMemory,
+}
 
 // conversationRun is one seat's conversation.
 type conversationRun struct {
@@ -29,27 +42,27 @@ type conversationRun struct {
 // heldConversations is this node's view of the conversations it holds runs of.
 type heldConversations struct {
 	mu sync.Mutex
-	// exhausted marks a conversation whose last run ran out of context.
-	exhausted map[conversationRun]bool
+	// last is how a conversation's last run failed, for the kinds that hold one.
+	last map[conversationRun]failureKind
 	// held is each seat's holds as last read from the fleet, nil where unread.
 	held map[uuid.UUID]map[string]coord.ConversationHold
 }
 
-// ranOut records whether run's latest run ran out of context, and reports
-// whether the one before it did too.
-func (h *heldConversations) ranOut(run conversationRun, out bool) bool {
+// failedAgain records how run's latest run failed ("" for none that holds),
+// and reports whether the one before it failed the same way.
+func (h *heldConversations) failedAgain(run conversationRun, kind failureKind) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.exhausted == nil {
-		h.exhausted = map[conversationRun]bool{}
+	if h.last == nil {
+		h.last = map[conversationRun]failureKind{}
 	}
-	before := h.exhausted[run]
-	if out {
-		h.exhausted[run] = true
+	before := h.last[run]
+	if kind != "" {
+		h.last[run] = kind
 	} else {
-		delete(h.exhausted, run)
+		delete(h.last, run)
 	}
-	return before && out
+	return kind != "" && before == kind
 }
 
 // forget drops what this node read of seat's holds, so the next check reads
@@ -71,29 +84,37 @@ func (e *Engine) noteConversationRun(ctx context.Context, _ string, ev *events.E
 	if err != nil {
 		return
 	}
-	out := rec.Failed && rec.ErrorKind == types.ExecutorErrorContextExhausted
-	if !out && !rec.Failed && rec.Notes != "" {
-		return // stopped, lost or asking: it says nothing about the context
+	var kind failureKind
+	if rec.Failed {
+		kind = conversationFailures[rec.ErrorKind]
 	}
-	if !e.conversations.ranOut(conversationRun{seat, rec.ConversationKey}, out) || rec.HarnessSessionContinued {
+	if kind == "" && !rec.Failed && rec.Notes != "" {
+		return // stopped, lost or asking: it says nothing about the conversation
+	}
+	if !e.conversations.failedAgain(conversationRun{seat, rec.ConversationKey}, kind) {
 		return
+	}
+	if kind == failureContextExhausted && rec.HarnessSessionContinued {
+		return // a long session, not the brief: a fresh one may fit
 	}
 	handle, known := e.seatHandle(rec.Agent)
 	if !known {
 		return
 	}
-	go e.holdConversation(context.WithoutCancel(ctx), seat, handle, rec.ConversationKey)
+	go e.holdConversation(context.WithoutCancel(ctx), seat, handle, rec.ConversationKey, kind)
 }
 
 // holdConversation writes the hold the fleet reads; the seat's holder reads it
 // on its next delivery of the conversation.
-func (e *Engine) holdConversation(ctx context.Context, seat uuid.UUID, handle, conversation string) {
-	basis, known := failureBasis(e.Company(), handle, failureContextExhausted)
+func (e *Engine) holdConversation(ctx context.Context, seat uuid.UUID, handle, conversation string,
+	kind failureKind) {
+
+	basis, known := failureBasis(e.Company(), handle, kind)
 	if !known || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
 	created, err := e.backends.Fleet.CreateConversationHold(ctx, coord.ConversationHold{Seat: seat,
-		Conversation: conversation, Kind: string(failureContextExhausted), Basis: basis, At: time.Now().UTC()})
+		Conversation: conversation, Kind: string(kind), Basis: basis, At: time.Now().UTC()})
 	if err != nil {
 		log.WarnContext(ctx, "conversation_not_held", "seat", handle, "error", err.Error(),
 			"detail", "the conversation's next wake starts a turn as before")
@@ -102,7 +123,8 @@ func (e *Engine) holdConversation(ctx context.Context, seat uuid.UUID, handle, c
 	e.conversations.forget(seat)
 	if created {
 		log.InfoContext(ctx, "conversation_held", "seat", handle, "conversation", conversation,
-			"detail", "its context did not fit twice; a person's message on it or new models release it")
+			"kind", string(kind), "detail", "it failed the same way twice; a person's message on it, "+
+				"or a change of the settings it failed on, releases it")
 	}
 }
 
@@ -144,7 +166,7 @@ func (e *Engine) heldConversation(ctx context.Context, seat uuid.UUID, handle,
 		for _, h := range list {
 			basis, known := failureBasis(e.Company(), handle, failureKind(h.Kind))
 			if known && basis != h.Basis {
-				e.liftConversationHold(ctx, h, handle, "the seat's models changed")
+				e.liftConversationHold(ctx, h, handle, "the settings it failed on changed")
 				continue
 			}
 			holds[h.Conversation] = h

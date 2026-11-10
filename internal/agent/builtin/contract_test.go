@@ -85,6 +85,11 @@ func declaredTypes(schemas map[string]map[string]any) map[string]map[string]bool
 						out[key][s] = true
 					}
 				}
+			case []string:
+				// A nullable field's union, as an update's schedule declares it.
+				for _, s := range typ {
+					out[key][s] = true
+				}
 			case nil:
 				out[key]["any"] = true
 			}
@@ -334,6 +339,10 @@ func TestADeclaredNumberIsReadByItsTypesReader(t *testing.T) {
 			case []any:
 				for _, each := range typ {
 					s, _ := each.(string)
+					declared[key][s] = true
+				}
+			case []string:
+				for _, s := range typ {
 					declared[key][s] = true
 				}
 			}

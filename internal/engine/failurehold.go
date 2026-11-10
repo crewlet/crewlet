@@ -92,7 +92,8 @@ func modelsRefused(err error) bool {
 
 // boundToModels is whether kind's failure depends on the seat's models rather
 // than its sandbox; a context that does not fit, which holds only its
-// conversation and so is not in the table, always does.
+// conversation and so is not in the table, always does, and work that does not
+// fit its box's memory never does.
 func boundToModels(kind failureKind) bool {
 	return kind == failureContextExhausted || failureRules[kind].models
 }
