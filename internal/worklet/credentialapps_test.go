@@ -61,3 +61,56 @@ func TestACredentialsWriteCarriesTheAppsItUsedHere(t *testing.T) {
 		}
 	}
 }
+
+// A CREDENTIAL'S ASSIGNMENT CARRIES ITS APPS ONLY WHERE IT MOVES THE ASSIGNEE
+// (ADR-0109, ADR-0112): the work pickup reads the rows that moved an item's
+// assignee, so a token's move keeps the apps it wrote under, at the version
+// that marks them kept, while its reassertion to the seat that already holds
+// the item, which moves nothing and which no read asks, carries none and stays
+// at the base version every build reads. The reassertion is written with the
+// wake the tool builds for it, which names nobody to wake.
+//
+// Mutation: ask the apps of every record of kind assignee again
+// (Writer.recordedApps(carries || kind == ChangeAssignee)), and the reassertion
+// carries Worklet at the kept version.
+func TestACredentialsAssignmentCarriesItsAppsOnlyWhereItMovesTheAssignee(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	worklets := []iam.Grant{iam.GrantWorklet}
+	token := r.writer.As("token:ci", worklet.AuthorOperator,
+		worklet.Provenance{OperatorID: "token:ci", Apps: worklets})
+	task := newTask("t-handed")
+	task.Key, task.Reporter = "", "token:ci"
+	if _, err := token.CreateTask(t.Context(), "op-t-handed", task, nil); err != nil {
+		t.Fatalf("token:ci files t-handed: %v", err)
+	}
+	r.drain()
+	for _, c := range []struct {
+		name    string
+		want    []iam.Grant
+		version int
+	}{
+		{"a move of the assignee", worklets, worklet.AppsKeptVersion},
+		{"a reassertion to the holder", nil, 1},
+	} {
+		after := task
+		after.Assignee = "ana"
+		to := after.Assignee
+		wake := worklet.Wake{Kind: worklet.ChangeAssignee, Before: task, After: after}.Notify(nil)
+		if _, err := token.UpdateTask(t.Context(), "op-"+c.name, "t-handed", "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Assignee: &to}, worklet.ChangeAssignee, wake); err != nil {
+			t.Fatalf("token:ci writes %s: %v", c.name, err)
+		}
+		r.drain()
+		record, err := worklet.Decode(r.lastRecord(t))
+		if err != nil {
+			t.Fatalf("decode %s: %v", c.name, err)
+		}
+		if !slices.Equal(record.ActorApps, c.want) || record.V != c.version ||
+			record.ActorAppsKept != (c.want != nil) {
+			t.Errorf("%s is recorded carrying %v (kept %v) at version %d, want %v at %d",
+				c.name, record.ActorApps, record.ActorAppsKept, record.V, c.want, c.version)
+		}
+		task = after
+	}
+}

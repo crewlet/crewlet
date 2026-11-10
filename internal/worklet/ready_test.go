@@ -170,10 +170,14 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 
 // READY WORK SAYS WHOM EACH ITEM'S WORK IS FOR (ADR-0109): the writer of its
 // last assignment by somebody else, else the writer that filed it, a
-// credential with the apps it wrote under; nobody for the seat's own work.
+// credential with the apps it wrote under; nobody for the seat's own work. A
+// token's reassertion to the seat that already holds its item moves nothing,
+// so its row keeps no apps and the pickup reads the move before it, which did.
 //
 // Mutation: read the reporter column, and the item a token filed already
-// assigned is for a seat named `token:ci` that no directory holds.
+// assigned is for a seat named `token:ci` that no directory holds; read the
+// assignment by its kind, and the token's reassertion makes it a credential
+// holding no app.
 func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -207,6 +211,17 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	}
 	file(pm, "by-token", "")
 	assign(token, "by-token")
+	// THE REASSERTION, with the wake the tool builds for one: the item as it
+	// is held on both sides, which names nobody to wake.
+	held := newTask("by-token")
+	held.Assignee = "ana"
+	again := held.Assignee
+	if _, err := token.UpdateTask(t.Context(), "op-reassert-by-token", "by-token", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Assignee: &again}, worklet.ChangeAssignee,
+		worklet.Wake{Kind: worklet.ChangeAssignee, Before: held, After: held}.Notify(nil)); err != nil {
+		t.Fatalf("token:ci reasserts by-token: %v", err)
+	}
+	r.drain()
 	file(token, "filed-by-token", "ana")
 	file(pm, "filed-by-pm", "")
 	assign(ana, "filed-by-pm")
