@@ -1424,6 +1424,13 @@ run](code-sandbox.md#notes-to-a-running-run)):
   making the same calls would.
 - **The run's context, never the request's.** A box that disconnects mid-call
   abandons only the answer, never a tool half-way through a write.
+- **An answer started at once and kept going.** A progress notification on the
+  call's own token as its tool starts, and another every 20 seconds until it
+  returns: the bridge is reached over streamable HTTP, whose server writes
+  nothing on a call's response until its first event, and Claude Code gives up
+  a call whose response's first byte has not come within a minute where the
+  server's entry sets no timeout, cancelling nothing, while the call runs on
+  (measured on 2.1.310).
 - **A panic contained.** A tool that panics is answered as failed and logged
   with its stack, and the run's tools are closed to it.
 - **A run that is over refuses.** A call that reaches a session after its run
@@ -1507,11 +1514,13 @@ its round's log, marked late, where the next run carries the round on — a loss
 relaunch, a person's answer's, a replaced sign-in's — and dropped where the next
 run starts a new round ([A call that ends after its job's
 relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). One its
-harness cancelled — Claude Code cancels a call at its tool timeout, and its
-model reads the call as timed out — is listed as its run's own and marked as
-one nobody waited for, which every continuation of its round is told whatever
-its save point; one it stopped waiting for without cancelling, as Claude Code's
-own watchdogs on a call do, is listed as any call ([A call its harness gave up
+harness cancelled — Claude Code and OpenCode cancel a call at their tool
+timeout, and the model reads the call as timed out — or hung up on, which the next progress the bridge keeps
+its answer going with finds, is listed as its run's own and marked as one
+nobody waited for, which every continuation of its round is told whatever its
+save point; one it stopped waiting for while it still read the call's response,
+as Claude Code's own watchdogs on a call can, is listed as any call ([A call
+its harness gave up
 on](code-sandbox.md#a-relaunch-continues-the-turns-session)). A call that
 finishes after its run was collected but before any next run is recorded on its
 own run and is not paid: the resume paid what the run's record held when it was

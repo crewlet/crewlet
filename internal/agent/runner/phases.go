@@ -505,10 +505,11 @@ type BridgedCall struct {
 
 	// Abandoned is a call nobody waited for by the time it returned
 	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
-	// Code cancels a call at its tool timeout and discards a late answer — or
-	// its job's session on the bridge had ended. It ran and its effect
-	// happened, while the session of the job that made it shows it with no
-	// outcome or a failed one. HELD BY NO SAVE POINT, as a late call is
+	// Code and OpenCode cancel a call at its server's timeout and discard a
+	// late answer — or hung up on the response the bridge kept its answer
+	// going on, or its job's session on the bridge had ended. It ran and its
+	// effect happened, while the session of the job that made it shows it with
+	// no outcome or a failed one. HELD BY NO SAVE POINT, as a late call is
 	// ([heldAt]): every continuation of the round built after it landed is
 	// told it, under the late calls' words, and no rebuilt guard counts a load
 	// it made. Unlike a late call it may be the round's submission
