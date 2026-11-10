@@ -2,6 +2,7 @@ package learning_test
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -863,6 +864,67 @@ func TestUsingAStaleSkillRevivesItInTheSameWrite(t *testing.T) {
 	}
 	if got := mustSkill(t, s, gone.ID); got.State != learning.SkillArchived {
 		t.Errorf("archived skill came back as %q", got.State)
+	}
+}
+
+// A load and an offer are counted apart: the load rate on the memory screen
+// is loads over offers, so a load must never move the offer count.
+func TestALoadIsCountedApartFromTheOffers(t *testing.T) {
+	t.Parallel()
+	s, db := skillStore(t)
+	ctx := context.Background()
+
+	ageing := newSkill("alice", "loaded", base)
+	ageing.State = learning.SkillStale
+	ageing.StaleAt = base.Add(time.Hour)
+	mustInsert(t, s, ageing)
+
+	for i := range 10 {
+		s.MarkUsed(ctx, ageing.ID, base.Add(time.Duration(i+2)*time.Hour))
+	}
+	at := base.Add(48 * time.Hour)
+	for range 4 {
+		if use := s.MarkLoaded(ctx, ageing.ID, at); !use.Recorded {
+			t.Fatalf("load = %+v, want recorded", use)
+		}
+	}
+	got := mustSkill(t, s, ageing.ID)
+	if got.UseCount != 10 || got.LoadCount != 4 {
+		t.Errorf("offers = %d loads = %d, want 10 and 4", got.UseCount, got.LoadCount)
+	}
+	if !got.LastUsedAt.Equal(at) || got.State != learning.SkillActive {
+		t.Errorf("last used %v state %q, want %v and active", got.LastUsedAt, got.State, at)
+	}
+
+	// A load revives a stale skill as an offer does.
+	stale := newSkill("alice", "stale", base)
+	stale.State = learning.SkillStale
+	stale.StaleAt = base.Add(time.Hour)
+	mustInsert(t, s, stale)
+	if use := s.MarkLoaded(ctx, stale.ID, at); !use.Recorded || !use.Revived {
+		t.Errorf("stale skill: load = %+v, want recorded and revived", use)
+	}
+	if got := mustSkill(t, s, stale.ID); got.UseCount != 0 || got.LoadCount != 1 {
+		t.Errorf("stale skill: offers = %d loads = %d, want 0 and 1", got.UseCount, got.LoadCount)
+	}
+
+	// The health rollup: 5 loads over 10 offers, and no rate for a seat
+	// whose skills were never offered.
+	mustInsert(t, s, newSkill("bob", "unoffered", base))
+	health := func(handle string) (offers, loads int, rate sql.NullFloat64) {
+		t.Helper()
+		if err := db.SQL().QueryRowContext(ctx, `SELECT total_skill_uses, total_skill_loads,
+			skill_load_rate FROM learning_health WHERE agent_handle = ?`, handle,
+		).Scan(&offers, &loads, &rate); err != nil {
+			t.Fatalf("learning_health %s: %v", handle, err)
+		}
+		return offers, loads, rate
+	}
+	if offers, loads, rate := health("alice"); offers != 10 || loads != 5 || !rate.Valid || rate.Float64 != 0.5 {
+		t.Errorf("alice: offers = %d loads = %d rate = %+v, want 10, 5 and 0.5", offers, loads, rate)
+	}
+	if _, _, rate := health("bob"); rate.Valid {
+		t.Errorf("bob: rate = %v, want none for a skill never offered", rate.Float64)
 	}
 }
 

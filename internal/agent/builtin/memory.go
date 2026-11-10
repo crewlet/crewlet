@@ -51,7 +51,7 @@ type (
 	SkillStore interface {
 		Get(ctx context.Context, handle, name string) (learning.Skill, bool, error)
 		List(ctx context.Context, handle string, opts learning.ListOptions) ([]learning.Skill, error)
-		MarkUsed(ctx context.Context, skillID string, at time.Time) learning.Use
+		MarkLoaded(ctx context.Context, skillID string, at time.Time) learning.Use
 	}
 
 	// EpisodeStore is the per-turn memory half.
@@ -161,7 +161,7 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// telemetry is what answers "do agents actually load the skills the
 	// synthesizer drafts", and a write that failed must not cost the agent
 	// the skill it asked for.
-	t.skills.MarkUsed(ctx, sk.ID, time.Now().UTC())
+	t.skills.MarkLoaded(ctx, sk.ID, time.Now().UTC())
 	// ONE EVENT PER LOAD, which is the measurement skill induction has to
 	// pass to be worth its cost: without it, "are the skills the
 	// synthesizer drafts ever loaded again" is answerable only by diffing
