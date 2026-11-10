@@ -996,6 +996,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Company:      company,
 		Run:          req.Run,
 		Bridged:      req.Bridged,
+		BridgedRead:  req.BridgedRead,
 		State:        state,
 		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
 		Answer:       req.Answer,
@@ -1180,6 +1181,10 @@ type resumeInput struct {
 	// ([sandbox.ResumeRequest.Bridged]); empty on a close that judges no
 	// calls.
 	Bridged sandbox.BridgeLog
+	// BridgedRead is how many calls the log had taken at that read
+	// ([sandbox.ResumeRequest.BridgedRead]).
+	BridgedRead int
+
 	State   execstate.State
 	Turn    *turnctx.Turn
 	Answer  string
@@ -1777,10 +1782,18 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// dropped, and the calls the log absorbed from their own work.
 		Elided:   identitiesOf(in.Bridged.Unlisted()),
 		Absorbed: identitiesOf(in.Bridged.Absorbed()),
+		// AND HOW MANY OF THE DROPPED WERE LATE, which a continuation is
+		// told past whatever its save point: no save point holds a late
+		// call, and a dropped one keeps no mark.
+		LateElided: in.Bridged.LateElided,
 		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the log recorded it
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
 		Answered: in.Bridged.AnsweredThrough,
+		// AND HOW MANY CALLS THE READ SAW, which a relaunch that carries the
+		// round on hands its launch: the opening marks every call the log
+		// took after it late ([sandbox.Continuation.BriefRead]).
+		BridgedRead: in.BridgedRead,
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).
@@ -1883,11 +1896,17 @@ func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.Hel
 	result, err := h.seal.OpenResult(h.held.TurnID, call)
 	if err != nil {
 		// RECORDED, AND UNREADABLE HERE: the call was made, and what it
-		// returned cannot be handed over, which the run is told as a call
-		// whose result is unknown. Never made again.
+		// returned cannot be handed over. The run is told it was made, and
+		// whether the tool reported a failure — off the call's entry the
+		// result was recorded with, which is what the round's log lists of it
+		// — never as a call whose result is unknown, which it is not: a later
+		// attempt at the answer tells the call by this lead alone, the list of
+		// the round's calls leaving it out (runner.HeldPrior.Unread). Never
+		// made again.
 		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
 			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
-		return runner.HeldPrior{}
+		return runner.HeldPrior{Made: true, Unread: true,
+			Result: sandbox.HeldResult{Failed: call.Call != nil && call.Call.Failed}}
 	}
 	return runner.HeldPrior{Made: true, Result: result}
 }

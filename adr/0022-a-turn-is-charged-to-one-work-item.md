@@ -104,6 +104,19 @@ carries no conversation, where the decision above says the suspended
 conversation. And the round-cap judge a segment's tokens include is the
 onboarding pass's, the one pass a judge extends.
 
+## Amendment: a call that outlives its job is listed in its round, and paid by nobody
+
+A bridged call that finishes after the next launch is no longer unrecorded
+where that launch carried the call's round on — a loss's relaunch, a person's
+answer's, a replaced sign-in's: its round's log lists it, marked late, so a
+continuation of the round can be told it
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
+its amendment on a call the log took after its job's relaunch). What it cost
+is still on no job's record — the next job's resume would pay it as its own —
+so the item can fall short of the turn's cost and never exceed it, as above. A
+call that finishes after a launch that started a new round is not recorded at
+all, as before.
+
 ## What this does not decide
 
 It does not decide how a task's turns are listed or numbered on a screen, nor

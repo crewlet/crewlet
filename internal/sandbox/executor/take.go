@@ -360,7 +360,7 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 // ([Runner.ClearArtifacts]), which removes every pack's and every save's by
 // their patterns.
 func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, files ...string) {
-	ctx, cancel := releaseContext(ctx)
+	ctx, cancel := releaseContext(ctx, r.now())
 	defer cancel()
 	res, err := box.Exec(ctx, "rm -rf "+shellQuoteAll(files), sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
@@ -373,8 +373,9 @@ func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, files ...str
 	}
 }
 
-// releaseContext is the context a pack's release runs under ([Runner.dropPack]):
-// past ctx's cancellation, and never past ctx's own deadline — the take's,
+// releaseContext is the context a pack's release runs under ([Runner.dropPack]),
+// made at now, by the runner's clock ([Runner.now]): past ctx's cancellation,
+// and never past ctx's own deadline — the take's,
 // which leaves the outcome stamp and the box's pause their room after it
 // (internal/sandbox's takeContext) — unless that leaves less than
 // [packReleaseFloor], which it is given instead, nor past the pack's own bound
@@ -382,8 +383,7 @@ func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, files ...str
 // A fresh pack's bound on every release let a box that stopped answering once
 // its archive was read hold the read two minutes past the take's time, into
 // what it leaves the stamp and the pause.
-func releaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	now := time.Now()
+func releaseContext(ctx context.Context, now time.Time) (context.Context, context.CancelFunc) {
 	deadline := now.Add(sandbox.SessionPackWait)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d

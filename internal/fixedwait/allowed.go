@@ -1411,7 +1411,6 @@ var allowed = []Entry{
 	{File: "internal/sandbox/executor/opencode_steer_test.go", Func: "startProbe", ExemptWait: 1, Piece: 15},
 	{File: "internal/sandbox/executor/save_test.go", Func: "noneAhead", ElapsedBound: 2, Piece: 15},
 	{File: "internal/sandbox/executor/systemprompt_test.go", Func: "TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox", ExemptWait: 1, ExemptElapsed: 1, Piece: 15},
-	{File: "internal/sandbox/executor/take_test.go", Func: "TestAPacksReleaseIsHeldToItsTakesOwnDeadline", ElapsedBound: 1, Piece: 15},
 	{File: "internal/sandbox/executor/transcript_internal_test.go", Func: "withinFactor", ElapsedBound: 1, Piece: 15},
 	{File: "internal/sandbox/executor/transcript_test.go", Func: "awaited", ExemptWait: 1, Piece: 15},
 	{File: "internal/sandbox/executor/transcript_test.go", Func: "readPastTheSlots", ExemptWait: 1, Piece: 15},
