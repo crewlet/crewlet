@@ -126,8 +126,10 @@ var (
 // MarshalJSONTo writes the carrier, or null, through the caller's own encoder
 // and so under the caller's options ("Across the wire", on [WrittenFor]). An
 // actor's field is omitted where it carries nobody ([WrittenFor.IsZero],
-// `omitzero`), so an actor carrying nobody goes out byte for byte as a build
-// without the field sends it.
+// `omitzero`), so a page's or a chat actor carrying nobody goes out byte for
+// byte as a build without the field sends it. A tracker actor's provenance,
+// which holds the field, then crosses as `{}` where such a build sent no
+// member, which that build declares and reads as empty.
 func (f WrittenFor) MarshalJSONTo(enc *jsontext.Encoder) error {
 	return jsonv2.MarshalEncode(enc, f.carrier)
 }

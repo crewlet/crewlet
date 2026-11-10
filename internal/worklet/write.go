@@ -702,8 +702,8 @@ type Provenance struct {
 	//
 	// SENT ONLY WHERE SET: a provenance crosses to a data node inside the
 	// estate's signed envelope (internal/estate's Actor), and a write that
-	// carries no apps — every seat's and every person's — goes out byte for
-	// byte as a build without the field sends it.
+	// carries no apps — every seat's and every person's — sends no apps
+	// member, as a build without the field sends none.
 	Apps []iam.Grant `json:",omitempty"`
 
 	// WrittenFor is whom the writer's records are written for (ADR-0109):
