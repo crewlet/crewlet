@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
+- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallNamesTheDecisionItCarriesOut`, `internal/worklet.TestTheDecisionATurnActsOnIsItsNewestAnswered`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
 - **Cost-when-tried:** with only `allow` and `blocked`, an operator who wanted a person to look at each call to a destructive tool had one choice, blocking it, and the agent then could not do the work at all; and the executor's harness runs fully permissioned in its box, so its own permission prompts were never an option to fall back on.
 - **Tag-status:** unreleased
 
@@ -26,7 +26,12 @@ other tool at `approve`, one that declares nothing included (`mcp.RiskOf`,
    the call that ended the job, and the collection parks the run with its
    seat freed. Every other phase (the reviewer, delegated workers, the
    onboarding pass, the side passes) has no run to park and is refused the
-   call as `forbidden`, told that the seat's own run may ask.
+   call as `forbidden`, told that the seat's own run may ask. A held call
+   names the decision it carries out, where there is one: the newest
+   question its seat asked on the turn's work item that a person answered
+   (`HeldCall.Acting`, the question and the chosen option), said in the
+   question's context and on the approval's row (`acting`), so an approver
+   reads a step of an answer already given rather than a new question.
 2. **The arguments are sealed at rest**: encrypted under the fleet keyring
    (`CallSeal`), bound to the run, the job and the call, kept out of the
    question, the call log and the turn's ledger, and opened only for a person

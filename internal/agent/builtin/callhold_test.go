@@ -2,8 +2,10 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -49,7 +51,7 @@ func TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed(t *testing.T) {
 	t.Parallel()
 	desk := &askDesk{outcome: sandbox.AskRecorded}
 	seal := callSeal(t)
-	hold := builtin.NewCallHold(desk, seal)
+	hold := builtin.NewCallHold(desk, seal, nil)
 	turn := &turnctx.Turn{RunID: "run-1", WorkItem: &types.WorkItem{Backend: types.WorkWorklet,
 		ID: "id-9", Key: "ENG-9"}}
 	ctx := turnctx.WithJob(t.Context(), "launch-1")
@@ -100,18 +102,18 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 	t.Parallel()
 	call := tools.HeldCall{Name: "tr_close_issue", Entry: tools.Entry{Tool: trackerTool{}}}
 	desk := &askDesk{outcome: sandbox.AskRecorded}
-	hold := builtin.NewCallHold(desk, callSeal(t))
+	hold := builtin.NewCallHold(desk, callSeal(t), nil)
 	if got, held := hold.Hold(t.Context(), &turnctx.Turn{RunID: "run-1"}, call); held ||
 		!got.Failed || len(desk.recorded) != 0 {
 		t.Fatalf("a call with no job = %+v, %v, recorded %d", got, held, len(desk.recorded))
 	}
 	asked := &askDesk{outcome: sandbox.AskAlreadyAsked}
-	got, held := builtin.NewCallHold(asked, callSeal(t)).Hold(turnctx.WithJob(t.Context(), "launch-1"),
+	got, held := builtin.NewCallHold(asked, callSeal(t), nil).Hold(turnctx.WithJob(t.Context(), "launch-1"),
 		&turnctx.Turn{RunID: "run-1"}, call)
 	if held || tools.RefusalOf(got) != tools.RefusalNotRunning {
 		t.Fatalf("a call while the job waits = %+v, %v, want not running", got, held)
 	}
-	if builtin.NewCallHold(desk, nil) != nil || builtin.NewCallHold(nil, callSeal(t)) != nil {
+	if builtin.NewCallHold(desk, nil, nil) != nil || builtin.NewCallHold(nil, callSeal(t), nil) != nil {
 		t.Fatal("a holder was built without its desk or its seal")
 	}
 }
@@ -129,7 +131,7 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 func TestACallTooLargeToHoldIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	t.Parallel()
 	desk := &askDesk{outcome: sandbox.AskRecorded}
-	hold := builtin.NewCallHold(desk, callSeal(t))
+	hold := builtin.NewCallHold(desk, callSeal(t), nil)
 	turn := &turnctx.Turn{RunID: "run-1"}
 	ctx := turnctx.WithJob(t.Context(), "launch-1")
 	entry := tools.Entry{Tool: trackerTool{}, Origin: tools.Origin("tracker"), NeedsApproval: true}
@@ -145,5 +147,74 @@ func TestACallTooLargeToHoldIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	if _, held := hold.Hold(ctx, turn, tools.HeldCall{Name: "tr_close_issue", Entry: entry,
 		Args: map[string]any{"id": "7", "comment": "close it, it is a duplicate"}}); !held {
 		t.Fatal("a call within the share was not held")
+	}
+}
+
+// actedOn answers one decision, or fails.
+type actedOn struct {
+	act *sandbox.HeldAct
+	err error
+}
+
+func (a actedOn) DecisionActedOn(context.Context, string, string) (*sandbox.HeldAct, error) {
+	if a.act == nil {
+		return nil, a.err
+	}
+	copied := *a.act
+	return &copied, a.err
+}
+
+// A HELD CALL NAMES THE DECISION IT CARRIES OUT: the newest question its seat
+// asked on the turn's work item that a person answered rides the held call,
+// on that item, and its context says so, so an approver reads a step of an
+// answer already given rather than a new question. A read that fails, or a
+// turn on no tracker item, holds the call naming none.
+//
+// Mutation: drop the decision from the held call or its context, or refuse a
+// call whose decision could not be read, and this goes red.
+func TestAHeldCallNamesTheDecisionItCarriesOut(t *testing.T) {
+	t.Parallel()
+	act := &sandbox.HeldAct{Ask: "q-2", Question: "Ship the migration?", Choice: "Ship it",
+		AnsweredBy: "jane", AnsweredAt: time.Unix(1_700_000_000, 0).UTC()}
+	call := tools.HeldCall{Name: "tr_close_issue",
+		Entry: tools.Entry{Tool: trackerTool{}, Origin: tools.Origin("tracker"), NeedsApproval: true},
+		Args:  map[string]any{"id": "7"}}
+	hold := func(acting builtin.ActedDecisions, item *types.WorkItem) sandbox.Ask {
+		t.Helper()
+		desk := &askDesk{outcome: sandbox.AskRecorded}
+		turn := turnFor(t, "agent-ceo")
+		turn.WorkItem = item
+		if _, held := builtin.NewCallHold(desk, callSeal(t), acting).Hold(
+			turnctx.WithJob(t.Context(), "launch-1"), turn, call); !held || len(desk.recorded) != 1 {
+			t.Fatalf("the call was not held (%v, %d asks)", held, len(desk.recorded))
+		}
+		return desk.recorded[0]
+	}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "id-9", Key: "ENG-9"}
+
+	ask := hold(actedOn{act: act}, item)
+	got := ask.Held.Acting
+	if got == nil || got.Item != "id-9" || got.Key != "ENG-9" || got.Ask != "q-2" || got.Choice != "Ship it" {
+		t.Fatalf("the held call carries out %+v, want q-2 on ENG-9", got)
+	}
+	if want := `It carries out a decision on ENG-9: jane answered "Ship the migration?" with "Ship it".`; !strings.Contains(ask.Context, want) {
+		t.Errorf("the context says\n%s\nwant it to say\n%s", ask.Context, want)
+	}
+	if err := ask.Validate(); err != nil {
+		t.Errorf("an ask naming its decision does not validate: %v", err)
+	}
+	words := *act
+	words.Choice = ""
+	if ask := hold(actedOn{act: &words}, item); !strings.Contains(ask.Context, `answered "Ship the migration?" in words.`) {
+		t.Errorf("an answer in words reads\n%s", ask.Context)
+	}
+	for name, a := range map[string]sandbox.Ask{
+		"a read that failed": hold(actedOn{err: errors.New("the tracker did not answer")}, item),
+		"no tracker item":    hold(actedOn{act: act}, &types.WorkItem{Backend: "jira", ID: "J-1"}),
+		"no decision":        hold(actedOn{}, item),
+	} {
+		if a.Held.Acting != nil || strings.Contains(a.Context, "carries out a decision") {
+			t.Errorf("%s: the call names %+v", name, a.Held.Acting)
+		}
 	}
 }
