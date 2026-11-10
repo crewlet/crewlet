@@ -4,10 +4,8 @@ import (
 	"context"
 	"net/url"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
@@ -96,7 +94,7 @@ func (s Sources) linkHosts(_ context.Context, _ Params) (any, error) {
 		if p := in.GitLab.Provisioning; p != nil {
 			groups, projects = []string{p.Group}, p.Projects
 		}
-		add(LinkHostGitLab, expand(in.GitLab.URL), codeOwners(groups, projects, expand))
+		add(LinkHostGitLab, expand(in.GitLab.URL), config.CodeOwners(groups, projects, expand))
 	}
 	if in.Mattermost != nil {
 		add(LinkHostMattermost, expand(in.Mattermost.URL), nil)
@@ -150,16 +148,7 @@ func githubHost(company *config.Company, lookup func(string) (string, bool),
 		return "", nil, false
 	}
 	_, web := gh.Bases(lookup)
-	var orgs, repos []string
-	if p := gh.Provisioning; p != nil {
-		orgs, repos = []string{p.Org}, p.Repos
-	}
-	for role := range company.EachRole() {
-		if rg := role.Integrations.GitHub; rg != nil {
-			repos = append(repos, rg.Repos...)
-		}
-	}
-	return web, codeOwners(orgs, repos, expand), true
+	return web, company.GitHubOwners(expand), true
 }
 
 // browserBase is raw as the address a browser opens, or "" when it is not an
@@ -173,50 +162,3 @@ func browserBase(raw string) string {
 	clean := url.URL{Scheme: u.Scheme, Host: strings.ToLower(u.Host), Path: strings.TrimRight(u.Path, "/")}
 	return clean.String()
 }
-
-// codeOwners is the owners a code host's configuration names: each
-// organization or top-level group whole, and the first segment of each
-// repository or project PATH (`gophrase` of `gophrase/backend`), resolved,
-// folded to lower case, sorted and each once.
-//
-// ONLY A PATH NAMES AN OWNER: a project entry without a slash is a GitLab
-// project's numeric id or a bare name, which is no owner at all, and sent
-// whole it made `12345` or `backend` an owner every bare `12345/x` and
-// `backend/x` read as the company's.
-//
-// THE OWNER AND NEVER THE REPOSITORY, which is the integration's business.
-// The owner is what lets the dashboard read a bare `gophrase/backend` in prose
-// as a repository and `and/or` or `src/app` as words: a two-part path is a
-// repository only under an owner the company works in.
-//
-// A SEGMENT NO CODE HOST ALLOWS IS DROPPED rather than sent: an owner is
-// letters, digits, `.`, `_` and `-`, starting with a letter or a digit
-// ([ownerName]), so a reader is never handed a value no path could hold.
-func codeOwners(owners, paths []string, expand func(string) string) []string {
-	var out []string
-	keep := func(owner string) {
-		owner = strings.ToLower(owner)
-		if ownerName().MatchString(owner) && !slices.Contains(out, owner) {
-			out = append(out, owner)
-		}
-	}
-	for _, owner := range owners {
-		keep(expand(owner))
-	}
-	for _, path := range paths {
-		if owner, _, ok := strings.Cut(expand(path), "/"); ok {
-			keep(owner)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// ownerName is a GitHub organization's or a GitLab group's path: GitHub
-// allows letters, digits and hyphens, GitLab also `.` and `_`, and neither
-// starts with punctuation.
-// Compiled at first use, not at init: Gitlet's push hook is this
-// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
-var ownerName = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
-})

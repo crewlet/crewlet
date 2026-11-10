@@ -648,6 +648,8 @@ func taskReads() map[string]indexedRead {
 			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
 		"the advisor's idle reviews": seek("tracker_tasks_queue_idx", patternIdleReviewsStatement,
 			"qa", string(GroupActive), store.EncodeTime(planNow), store.EncodeTime(planNow)),
+		"the advisor's settled changes": seek("sqlite_autoindex_tracker_task_deps_1", changeSettlesStatement,
+			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
@@ -737,7 +739,7 @@ func taskReads() map[string]indexedRead {
 		"the one-sided repair's gate": walk("tracker_relations_repair_idx",
 			pendingOneSidedStatement),
 		"a task's edges written": seek(key, store.InsertStatement(depsInsertPrefix,
-			depsInsertRow, depsInsertConflict, 1), other, task, other, other),
+			depsInsertRow, depsInsertConflict, 1), other, task, other, 1, other, nil),
 		"a blocker's edges settled": seek(blockers, clearDependentsStatement, "done", 1, task),
 		"a key's holders flagged":   seek(keys, keyCollisionStatement, "ENG-1"),
 		"a key handed on":           seek(keys, handOnKeyStatement, "ENG-1"),
@@ -1149,6 +1151,10 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"what last woke a seat to its ready work": seek("tracker_notifications_woke_idx", arms(2, readyMovedArm),
 			task, "ana", "t-0008", "ana"),
 		"who asked for a seat's reviews": seek(subject, arms(2, readyReviewArm), task, "t-0008"),
+		"the tasks waiting on a change": seek("tracker_relations_other_idx", waitingOnChangeStatement,
+			"https://github.com/acme/web/pull/12"),
+		"the changes tasks still wait on": seek("sqlite_autoindex_tracker_task_deps_1", openChangesStatement,
+			"http", 50),
 		"when a seat's own ready work was filed": seek(subject, arms(2, readyFirstArm),
 			task, "t-0008"),
 		"a seat's progress on its started work": seek(subject, arms(2, readyProgressArm),

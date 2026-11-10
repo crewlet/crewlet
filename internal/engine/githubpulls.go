@@ -3,10 +3,13 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A pull request read for a chat link's preview.
@@ -57,6 +60,7 @@ type githubPullReader struct {
 
 	mu      sync.Mutex
 	lookup  *github.SeatLookup
+	owners  []string
 	entries map[github.PullRef]pullPreview
 	now     func() time.Time
 }
@@ -73,10 +77,10 @@ type pullPreview struct {
 // credential or a removed app must not go on answering. Which host a pull
 // request's address is read against is the preview's own check, against the
 // company document (`chat_unfurls`), before it asks.
-func (g *githubPullReader) wire(lookup *github.SeatLookup) {
+func (g *githubPullReader) wire(lookup *github.SeatLookup, owners []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.lookup, g.entries = lookup, nil
+	g.lookup, g.owners, g.entries = lookup, owners, nil
 }
 
 // clock is the reader's time, the wall clock unless a suite set one.
@@ -149,4 +153,41 @@ func (e *Engine) PullRequestPreview(ctx context.Context, ref github.PullRef) (
 	github.PullRequest, error) {
 
 	return e.githubPulls.read(ctx, ref)
+}
+
+// current is the lookup of the GitHub wiring now in force, nil without one,
+// and the owners the company's configuration names there.
+func (g *githubPullReader) current() (*github.SeatLookup, []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lookup, g.owners
+}
+
+// ChangeRef is raw's tracker name, where raw is a pull request under the
+// company's GitHub owners, or why one on its host is refused: the owners are
+// the code the company's credentials are for, as a chat link's preview holds.
+func (e *Engine) ChangeRef(raw string) (ref, refused string) {
+	lookup, owners := e.githubPulls.current()
+	if lookup == nil {
+		return "", ""
+	}
+	pull, ref, ok := github.ChangeRef(lookup.Opts.WebBase, raw)
+	switch {
+	case !ok:
+		return "", ""
+	case len(owners) == 0:
+		return "", fmt.Sprintf("a pull request under %s, and the company's GitHub names no "+
+			"organization or repository of its own.", pull.Owner)
+	case !slices.Contains(owners, pull.Owner):
+		return "", fmt.Sprintf("a pull request under %s, which the company's GitHub does not "+
+			"cover: a task waits only on one under %s.", pull.Owner, words.Or(owners))
+	}
+	return ref, ""
+}
+
+// ownedChange reports whether a stored change is a pull request under the
+// company's owners, the only ones the poll and the webhook settle.
+func (e *Engine) ownedChange(ref string) bool {
+	got, refused := e.ChangeRef(ref)
+	return got != "" && refused == ""
 }
