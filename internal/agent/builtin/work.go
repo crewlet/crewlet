@@ -261,6 +261,11 @@ type WorkDeps struct {
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
 
+	// FleetSeat is an agent seat as the fleet's active revision holds it,
+	// which an answer choosing a grant is checked against (ADR-0118). Nil
+	// refuses every grant choice: the grant cannot be confirmed.
+	FleetSeat func(ctx context.Context, handle string) (*org.Role, error)
+
 	// Holders says whose record somebody else's LOGIN names — the identity
 	// directory's half of [iam.OwnerOf], which every person verb resolves
 	// its name through before it decides or reads or writes anything.
@@ -3600,6 +3605,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"you. Name the question with `answers` (its comment id), or answer "+
 			"in `body` without a choice.", clip(comment.Choice),
 			before.Named())), caveat.NoQuestionForChoice()), nil
+	}
+	if refused := t.deps.grantChosen(ctx, comment.Choice, thread); refused != nil {
+		return *refused, nil
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a

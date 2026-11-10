@@ -682,6 +682,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// THE ROSTER, so an operator's assistant is refused a
 			// handle nobody has rather than silently filing work for
 			// one — the same check every seat's tools make.
+			// AND THE FLEET'S SEATS, which an answer choosing a grant is
+			// checked against (ADR-0118).
+			FleetSeat: e.FleetSeat,
 			Seats: func() []colleague.Seat {
 				c := e.Company()
 				if c == nil {

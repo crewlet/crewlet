@@ -319,6 +319,12 @@ type Sources struct {
 	// `decisions` notes on its questions. Nil notes nothing.
 	Access AccessReviews
 
+	// Holds is the fleet's held conversations (ADR-0117), which the advisor's
+	// notices name. Nil holds nothing.
+	Holds interface {
+		ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error)
+	}
+
 	// RunAnswers opens a run's recorded answer for who gave it, which only
 	// the answer's seal says ([sandbox.AnswerSeal]). Nil, or a seal that
 	// does not open here, leaves a row's `answered_by` empty.
@@ -1118,6 +1124,9 @@ func Register(r *Registry, s Sources) {
 		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
 		// document, so the administrator's as the document is.
 		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
+		// AND THE CHANGE AN AGENT'S ACCESS REQUEST WOULD MAKE, built from
+		// the same document for the person deciding it (ADR-0118).
+		r.Register("advisor_access", Requires(iam.GrantAdmin), s.advisorAccess)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one

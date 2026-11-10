@@ -368,6 +368,9 @@ type Engine struct {
 	// failures is each seat's latest failure a retry cannot cure, on this
 	// node: its second in a row pauses the seat (failurehold.go).
 	failures lastFailures
+	// conversations is each held seat's held conversations, as this node
+	// read them, and which conversations' last run ran out of context.
+	conversations heldConversations
 
 	// limitProbes is one probe per limited chain, which settles every seat
 	// parked on it. See providerpark.go.
@@ -2010,6 +2013,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE ISSUE REPORTER, off until a revision turns it on. Its listener goes
 	// on before anything publishes, as the custody listener below does.
 	e.startIssueReports(opts.Bootstrap, backends)
+	if backends != nil && backends.Queue != nil {
+		// EVERY RUN THIS NODE COLLECTS, for the conversations whose context
+		// does not fit (conversationhold.go).
+		backends.Queue.AddPublishListener(e.noteConversationRun)
+	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
 	// DID — before anything publishes, because the custody listener must
@@ -2737,6 +2745,12 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Failure == nil {
 		d.Failure = e.failureHold
+	}
+	if d.FailureCleared == nil {
+		d.FailureCleared = e.failureCleared
+	}
+	if d.Held == nil {
+		d.Held = e.conversationHeld
 	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been

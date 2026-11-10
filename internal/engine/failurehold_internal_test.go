@@ -126,7 +126,9 @@ func TestOnlyARunOfOneFailurePausesTheSeat(t *testing.T) {
 		if _, parked, err := e.failureHold(ctx, "ceo", imageRefused); parked || err != nil {
 			t.Fatalf("the first failure paused (%v, %v)", parked, err)
 		}
-		if _, parked, err := e.failureHold(ctx, "ceo", between); parked || err != nil {
+		if between == nil {
+			e.failureCleared("ceo")
+		} else if _, parked, err := e.failureHold(ctx, "ceo", between); parked || err != nil {
 			t.Fatalf("%v between paused (%v, %v)", between, parked, err)
 		}
 		if _, parked, err := e.failureHold(ctx, "ceo", imageRefused); parked || err != nil {

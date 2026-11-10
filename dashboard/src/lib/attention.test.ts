@@ -407,7 +407,11 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         mcpAlarms: [mcpAlarm("mcp_server_failing", "github")],
-        notices: [SETUP_NOTICE, alarmNotice("backup_age")],
+        notices: [
+          SETUP_NOTICE,
+          alarmNotice("backup_age"),
+          { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "task:t-1" } },
+        ],
         findings: [SETUP_BLOCKER],
         engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
@@ -889,4 +893,33 @@ test("an advisor that could not read everything says so, once", () => {
   expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
   expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
   expect(rows[0]?.path).toEqual(["settings", "advisor"]);
+});
+
+// A CONVERSATION THE ENGINE HOLDS REACHES THE ADMINISTRATORS: one row a hold,
+// saying there is nothing to decide and what releases it, opening its item.
+test("a held conversation is a row that opens its item", () => {
+  const queue = attentionQueue(
+    input({
+      notices: [
+        {
+          class: "conversation.held",
+          subject: { kind: "seat", seat: "dev", name: "task:t-1" },
+          since: "2026-01-01T10:00:00Z",
+        },
+        { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "chat:room/1" } },
+      ],
+    }),
+  );
+  const item = queue.find((a) => a.id === "held-dev-task:t-1");
+  expect(item?.title).toBe("Held by the engine: its context did not fit its models");
+  expect(item?.path).toEqual(["worklet", "t-1"]);
+  expect(item?.who).toBe("dev");
+  expect(item?.detail).toContain("There is nothing for you to decide.");
+  expect(queue.find((a) => a.id === "held-dev-chat:room/1")?.path).toEqual([
+    "company",
+    "org",
+    "seats",
+    "dev",
+  ]);
+  expect(conditionsToDecide(queue)).toContainEqual(item);
 });

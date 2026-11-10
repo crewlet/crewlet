@@ -138,6 +138,10 @@ const (
 // access review (internal/accessreview), below the builtins, names it.
 const WithdrawAsk = "withdraw_ask"
 
+// RequestAccess asks a person for one grant from a closed list (ADR-0118);
+// here because authz names it as the verb a seat holds.
+const RequestAccess = "request_access"
+
 // WriteProject is the tracker's one project write a seat holds. The tracker
 // owns it, and it is here because internal/caveat, which the tracker imports,
 // words what a task filed to triage tells the model when its project's

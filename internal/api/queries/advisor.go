@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,9 +41,13 @@ type advisorAnswer struct {
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	fleet, fleetKnown := s.fleetAlarms(ctx)
+	held, heldKnown := s.heldConversations(ctx)
+	noticed := func(a advisor.Answer) advisorAnswer {
+		return noticedWith(a, fleet, fleetKnown, held, heldKnown, now)
+	}
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, fleet, fleetKnown, now), nil
+		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}), nil
 	}
 	if err != nil {
 		return nil, revisionRefusal("advisor", err)
@@ -55,17 +60,41 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), fleet, fleetKnown, now), nil
+	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now))), nil
 }
 
-// noticed is the answer with the notices its findings and the fleet's alarms
-// raise. `alarms` is named unread once, whether this node's evaluation or the
-// fleet's marks could not be read.
-func noticed(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, now time.Time) advisorAnswer {
+// noticedWith is the answer with the notices its findings, the fleet's alarms
+// and the held conversations raise. `alarms` is named unread once, whether this
+// node's evaluation or the fleet's marks could not be read; `holds` where the
+// held conversations could not be.
+func noticedWith(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, held []notice.Notice,
+	heldKnown bool, now time.Time) advisorAnswer {
+
 	if !fleetKnown && !slices.Contains(a.Unread, advisor.UnreadAlarms) {
 		a.Unread = append(a.Unread, advisor.UnreadAlarms)
 	}
-	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, now)}
+	if !heldKnown {
+		a.Unread = append(a.Unread, advisor.UnreadHolds)
+	}
+	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, held, now)}
+}
+
+// heldConversations is a notice per conversation the engine holds, named by
+// its seat's handle; false where the holds cannot be read.
+func (s Sources) heldConversations(ctx context.Context) ([]notice.Notice, bool) {
+	if s.Holds == nil {
+		return nil, true
+	}
+	holds, err := s.Holds.ListConversationHolds(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_conversation_holds_unread", "error", err.Error())
+		return nil, false
+	}
+	handles := s.seatHandles()
+	return notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) {
+		handle, known := handles[seat]
+		return handle, known
+	}), true
 }
 
 // advisorEvidence is what the company did in the week before now. A SOURCE THAT
@@ -165,6 +194,48 @@ func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
 		return advisor.Backup{Standing: true, Logs: logs}
 	}
 	return advisor.Backup{}
+}
+
+// AccessFixAnswer is `advisor_access`: the change that grants an agent one
+// access it asked for, built from the fleet's company, never applied here.
+type AccessFixAnswer struct {
+	Seat     string            `json:"seat"`
+	Access   advisor.AccessKey `json:"access"`
+	Revision string            `json:"revision"`
+	Fix      advisor.Fix       `json:"fix"`
+}
+
+// advisorAccess answers `advisor_access`: the grant change for `seat` and
+// `access`, read off the redacted document. A key the catalogue does not
+// name, a seat that holds it or cannot take it, or no such agent is refused
+// in its own words.
+func (s Sources) advisorAccess(ctx context.Context, p Params) (any, error) {
+	seat, key := strings.TrimSpace(p.String("seat")), advisor.AccessKey(strings.TrimSpace(p.String("access")))
+	if !key.Valid() {
+		return nil, badParams("access", string(key), accessKeyNames())
+	}
+	company, revision, err := s.Config.FleetCompany(ctx)
+	if err != nil {
+		return nil, revisionRefusal("advisor_access", err)
+	}
+	fix, err := advisor.AccessFix(company.Redact(), seat, key)
+	switch {
+	case errors.Is(err, advisor.ErrAccessHeld):
+		return nil, fmt.Errorf("%w: %s can already %s", ErrBadParams, seat, key.Does())
+	case errors.Is(err, advisor.ErrAccessNotTakable):
+		return nil, fmt.Errorf("%w: %s has nothing this access could be added to", ErrBadParams, seat)
+	case err != nil:
+		return nil, fmt.Errorf("%w: %s is not an agent seat of this company", ErrBadParams, seat)
+	}
+	return AccessFixAnswer{Seat: seat, Access: key, Revision: revision, Fix: fix}, nil
+}
+
+func accessKeyNames() []string {
+	out := []string{}
+	for _, k := range advisor.AccessKeys() {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // advisorLedger is the turn ledger over [advisor.LedgerDays], each seat named
