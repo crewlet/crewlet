@@ -1410,9 +1410,9 @@ otherwise.
 **Held by no save point.** No brief of the round had told a late call when the
 log took it, and the session of the job that made it may not hold it. Yet a save
 point is a prefix of the log: a later capture of the job carrying the round on,
-placed by its own read, as the amendment before this one places a capture whose
-harness ended its own run, counts the late call among the calls its session
-holds, and every continuation after it would skip the call. So a marked call is
+placed by its own read, as the amendment on a capture whose harness did not end
+its own run places one whose harness did, counts the late call among the calls
+its session holds, and every continuation after it would skip the call. So a marked call is
 held at no save point (internal/agent/runner's `heldAt`, the one test of what a
 session holds): every continuation of the round built after it landed is told it
 whatever its point, and again by every later one, in a section of its own under
