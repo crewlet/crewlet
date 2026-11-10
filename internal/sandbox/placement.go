@@ -81,6 +81,11 @@ func (p Placement) Valid() bool {
 // what an operator has to think about before enabling it on a shared host.
 func (p Placement) OnEngineHost() bool { return p == Direct || p == Container }
 
+// OwnsMemory reports whether a box in this cell is held to a memory domain of
+// its own (a container's cgroup, a remote machine), so a kill the kernel counts
+// there for memory is the box's. A direct box shares the engine host's.
+func (p Placement) OwnsMemory() bool { return p == Container || p == E2B }
+
 // OwnsKernel reports whether a box in this cell runs on a kernel of its own —
 // a remote machine, made for the run — so the budgets a Linux kernel keeps
 // per user, inotify's watches and instances among them, are the box's alone.

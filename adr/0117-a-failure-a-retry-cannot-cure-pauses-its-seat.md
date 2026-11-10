@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`
+- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 
@@ -42,8 +42,22 @@ conversation lifts the hold and that delivery runs, and so does a change of
 the seat's models, which a hold is judged against the next time it is read. A
 seat the company removes takes its holds with it.
 
+**A conversation whose work does not fit its box's memory is held the same
+way.** A run whose harness the kernel killed for memory (`out_of_memory`: a kill
+counted in the job's memory domain between the job script's reads of it before
+and after the harness, the harness ended by SIGKILL, and the box held to a
+domain of its own, a container or a remote machine, never a direct box, which
+shares the engine host's) after the
+conversation's previous run's was, on whatever session, holds that
+conversation. A fresh session does not shrink the work, so nothing about the
+session is asked. The hold is judged against the seat's sandbox settings
+rather than its models, so a person writing on the conversation, or a change of
+the box (its size among them), lifts it. Every collected run says the kills its
+job saw and its domain's ceiling, a run that survived a killed command included.
+
 **A held conversation is told, and is never released by a timer.** Each hold is
-a platform notice of the engine's cause (ADR-0116, class `conversation.held`),
+a platform notice of the engine's cause (ADR-0116, class `conversation.held`,
+with its `cause`: `context_exhausted` or `out_of_memory`),
 which reaches every administrator while the hold stands and leaves with it, and
 the item a held conversation is about says "Held by the engine" on its page.
 There is nothing to decide: the notice says what releases it. A timed release

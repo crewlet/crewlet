@@ -34,9 +34,16 @@ import (
 // the alarm, named by its kind.
 const ClassAlarm = "alarm"
 
-// ClassConversationHeld is a conversation the engine holds because its context
-// did not fit (ADR-0117); its subject is the seat, and Name the conversation.
+// ClassConversationHeld is a conversation the engine holds because it failed the
+// same way twice (ADR-0117); its subject is the seat, Name the conversation,
+// and Cause how it failed: [CauseContextExhausted] or [CauseOutOfMemory].
 const ClassConversationHeld = "conversation.held"
+
+// The causes of a held conversation ([Notice.Cause]), as its hold names them.
+const (
+	CauseContextExhausted = "context_exhausted"
+	CauseOutOfMemory      = "out_of_memory"
+)
 
 // SubjectAlarm is what an alarm's notice is about: Name is the alarm's kind.
 const SubjectAlarm advisor.SubjectKind = "alarm"
@@ -55,6 +62,8 @@ type Notice struct {
 	Since time.Time `json:"since,omitzero"`
 	// Nodes are the nodes an alarm stands on, sorted; empty for a finding.
 	Nodes []string `json:"nodes,omitempty"`
+	// Cause is how a held conversation failed; empty for every other notice.
+	Cause string `json:"cause,omitempty"`
 	// Alarm is the alarm kind that raised a finding's notice, so a reader
 	// without the finding can still say what stands; empty otherwise.
 	Alarm string `json:"alarm,omitempty"`
@@ -131,7 +140,7 @@ func FromConversationHolds(holds []coord.ConversationHold, handleOf func(uuid.UU
 		if !known {
 			continue
 		}
-		out = append(out, Notice{Class: ClassConversationHeld, Since: h.At,
+		out = append(out, Notice{Class: ClassConversationHeld, Since: h.At, Cause: h.Kind,
 			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: handle, Name: h.Conversation}})
 	}
 	return Merge(out)
