@@ -426,7 +426,7 @@ describe("what an ask says", () => {
 
   test("a free-text ask written as one long paragraph is read whole under a plain heading", () => {
     const body =
-      "@miles Thanks for approving. PR #24 is still open at head `da7fe81`, clean and " +
+      "@morgan Thanks for approving. PR #24 is still open at head `da7fe81`, clean and " +
       "QA-approved. My GitHub app is refused on merge (403), so please merge it yourself.";
     const words = { ...ASK_ROW, decision: undefined, body } as unknown as WorkAskRow;
     expect(askHeadline(words)).toBe(ASK_HEADING);
