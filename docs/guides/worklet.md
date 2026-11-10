@@ -1156,6 +1156,16 @@ input to something the tracker already reports:
 | `estimate_minutes` | how long it is expected to take. |
 | `points` | how big it is on the team's own scale. |
 
+`update_work_item` also takes a **wait until a date**: `wait_until`, in the
+same spellings, sets the item's `start` with a required `wait_reason`, one line
+of at most 200 bytes saying what it waits for, which the item reads as
+`wait_reason`. The seat holding it is not handed it before the date and is
+handed it once when the date comes. A wait without a reason, a reason without
+a wait, a wait beside `start`, or a date that has passed is refused with
+nothing written, and `wait_until: null` ends the wait. A `start` moved without
+a reason takes the old reason off, since it said why the item waited until the
+old date.
+
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
 totals (`totals=points:sum`, `totals=estimate_min:sum`) and the workload

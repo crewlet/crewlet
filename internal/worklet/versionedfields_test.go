@@ -29,6 +29,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		6: {"MutationRecord.NoticeAsksKept"},
 		7: {"MutationRecord.NoticeWokeKept"},
 		8: {"TaskPatch.AskWatch"},
+		9: {"TaskPatch.WaitReason"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

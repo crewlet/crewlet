@@ -1170,6 +1170,10 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			charged, err = settleWaitReason(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			charged, err = w.settleRelations(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -1363,6 +1367,29 @@ func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment
 		return err
 	}
 	return checkChoice(task, ask.id, ask.decision, comment.Choice)
+}
+
+// settleWaitReason holds a wait's reason to its start: a reason needs a start
+// set in the same patch, and a start set or cleared without one clears the
+// reason it had, which said why the item waited until the old instant.
+func settleWaitReason(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.WaitReason != nil && *patch.WaitReason != "" {
+		reason := *patch.WaitReason
+		switch {
+		case patch.StartAt == nil || patch.StartAt.IsZero():
+			return patch, invalid("a wait reason on task %s needs the start it waits until, "+
+				"set in the same change", current.ID)
+		case len(reason) > MaxWaitReason || strings.ContainsAny(reason, "\r\n"):
+			return patch, invalid("a wait reason on task %s is one line of at most %d bytes",
+				current.ID, MaxWaitReason)
+		}
+		return patch, nil
+	}
+	if patch.StartAt != nil && patch.WaitReason == nil && current.WaitReason != "" {
+		cleared := ""
+		patch.WaitReason = &cleared
+	}
+	return patch, nil
 }
 
 // settleAskWatch puts the person a new question asks on the task's watchers.

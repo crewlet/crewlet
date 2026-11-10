@@ -71,6 +71,9 @@ const (
 	// skipped with a warning.
 	MaxWatchers = 64
 
+	// MaxWaitReason is a wait's reason: one line a card shows beside the date.
+	MaxWaitReason = 200
+
 	// MaxCollaborators is deliberately far smaller than the watcher cap:
 	// a collaborator is somebody doing the work, and a task with more than
 	// eight is a task nobody owns.
@@ -452,6 +455,9 @@ type Task struct {
 	StartAt   *time.Time `json:"start_at,omitempty"`
 	DueAt     *time.Time `json:"due_at,omitempty"`
 	DueAllDay bool       `json:"due_all_day,omitempty"`
+	// WaitReason is why the item waits until StartAt, said by whoever set the
+	// wait; a start set without one clears it.
+	WaitReason string `json:"wait_reason,omitempty" untrusted:"name"`
 
 	EstimateMinutes int     `json:"estimate_minutes,omitempty"`
 	Points          float64 `json:"points,omitempty"`
@@ -720,9 +726,10 @@ type TaskPatch struct {
 	// arbitration gave it.
 	Mint *KeyMint `json:"mint,omitempty"`
 
-	StartAt   *time.Time `json:"start_at,omitempty"`
-	DueAt     *time.Time `json:"due_at,omitempty"`
-	DueAllDay *bool      `json:"due_all_day,omitempty"`
+	StartAt    *time.Time `json:"start_at,omitempty"`
+	DueAt      *time.Time `json:"due_at,omitempty"`
+	DueAllDay  *bool      `json:"due_all_day,omitempty"`
+	WaitReason *string    `json:"wait_reason,omitempty"`
 
 	EstimateMinutes *int     `json:"estimate_minutes,omitempty"`
 	Points          *float64 `json:"points,omitempty"`
