@@ -414,7 +414,7 @@ export interface McpApproval {
 }
 
 /** The decision a held call carries out, as its approver reads it. */
-export interface McpApprovalActing {
+interface McpApprovalActing {
   /** The work item, by id and by key. */
   item: string;
   key?: string;
