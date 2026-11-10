@@ -2181,8 +2181,11 @@ const (
 	// out-of-memory reason, merged on top of it, took it to 5708.4 KiB
 	// (5,845,450 bytes, +9,309, all script): 5709 KiB. The go-live review of
 	// what each agent can do took it to 5711.6 KiB (5,848,639 bytes, +3,189,
-	// all script): 5712 KiB.
-	treeBudget = 5<<20 + 592<<10
+	// all script): 5712 KiB. A pull request settling the work that waits on it,
+	// and why an item waits (its Waits for line, an overtaken question in the
+	// Inbox), merged on top of it, took it to 5712.1 KiB (5,849,155 bytes, +516,
+	// all script): 5713 KiB.
+	treeBudget = 5<<20 + 593<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
