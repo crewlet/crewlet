@@ -28,25 +28,29 @@ const (
 )
 
 // YourAccess renders the "## Your access" section: one line per granted
-// integration and one naming those not granted, at most [MaxLines]. Empty for
-// a company that connects no integration. A function of the snapshot alone, so
+// integration, one per box the seat's runs use, and one naming the
+// integrations not granted, at most [MaxLines]. Empty for a company that
+// connects no integration and runs no box. A function of the snapshot alone, so
 // it is byte-stable while the digest is.
 func YourAccess(s Snapshot) string {
 	s = s.normal()
-	if len(s.Integrations) == 0 && len(s.NotGranted) == 0 {
+	if len(s.Integrations) == 0 && len(s.NotGranted) == 0 && len(s.Boxes) == 0 {
 		return ""
 	}
 	var lines []string
 	for _, in := range s.Integrations {
 		lines = append(lines, "- "+integrationLine(in))
 	}
-	room := MaxLines
+	room := MaxLines - len(s.Boxes)
 	if len(s.NotGranted) > 0 {
 		room--
 	}
 	if len(lines) > room {
 		rest := len(lines) - (room - 1)
 		lines = append(lines[:room-1], fmt.Sprintf("- (and %d more integrations)", rest))
+	}
+	for _, b := range s.Boxes {
+		lines = append(lines, "- "+boxLine(b, len(s.Boxes) > 1, voiceOf(ForSeat)))
 	}
 	if len(s.NotGranted) > 0 {
 		names := make([]string, 0, len(s.NotGranted))
