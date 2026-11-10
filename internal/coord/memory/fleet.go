@@ -121,6 +121,8 @@ type Fleet struct {
 	sshTests entryRecords[coord.SSHTest, coord.SSHTest]
 	// issueReports are the engine defects the company reported, by fingerprint.
 	issueReports entryRecords[coord.IssueReport, coord.IssueReport]
+	// insightRecords are the operating insights the company shares, by class and week.
+	insightRecords entryRecords[coord.InsightRecord, coord.InsightRecord]
 	// accepted are the definitions MCP tools' levels were decided on, by
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
@@ -198,6 +200,7 @@ func NewFleet() *Fleet {
 		checks:            newCheckRecords(),
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
+		insightRecords:    newInsightRecords(),
 		grants:            newGrantRecords(),
 		mcpSignIns:        newMCPSignInRecords(),
 		accepted:          newAcceptedRecords(),

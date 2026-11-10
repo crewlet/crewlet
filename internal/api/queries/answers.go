@@ -231,6 +231,10 @@ type Sources struct {
 	// nil on a build with no reporter, whose question is not registered.
 	IssueReports IssueReportReader
 
+	// Insights is the fleet's record of the operating insights the company
+	// shares (ADR-0119); nil leaves `diagnostics_insights` unregistered.
+	Insights coord.InsightRecords
+
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
 	MCPChecks MCPCheckReader
@@ -787,6 +791,10 @@ func Register(r *Registry, s Sources) {
 	if s.IssueReports != nil {
 		// THE COMPANY'S CHOICE, and an administrator's as the setting is.
 		r.Register("issue_reports", Requires(iam.GrantAdmin), s.issueReports)
+	}
+	if s.Insights != nil {
+		// THE COMPANY'S CONSENT and what it shares, an administrator's as the setting is.
+		r.Register("diagnostics_insights", Requires(iam.GrantAdmin), s.insightsReading)
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row

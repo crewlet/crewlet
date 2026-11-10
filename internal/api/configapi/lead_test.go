@@ -589,16 +589,28 @@ func TestALeadsSettingChangeIsRefusedNamingTheKey(t *testing.T) {
 // settings, and the first write lands.
 func TestOnlyAnAdministratorMayTurnIssueReportsOn(t *testing.T) {
 	t.Parallel()
+	onlyAnAdministratorMayTurnOn(t, `{"diagnostics": {"issue_reports": {"enabled": true}}}`)
+}
+
+// SHARING OPERATING INSIGHTS IS AN ADMINISTRATOR'S CONSENT TOO (ADR-0119), on
+// the same setting rule as the defect reports.
+func TestOnlyAnAdministratorMayTurnInsightsOn(t *testing.T) {
+	t.Parallel()
+	onlyAnAdministratorMayTurnOn(t, `{"diagnostics": {"insights": {"share": "review", "accepted": 1}}}`)
+}
+
+// onlyAnAdministratorMayTurnOn holds a diagnostics write, on, to an administrator.
+func onlyAnAdministratorMayTurnOn(t *testing.T, on string) {
+	t.Helper()
 	s := leadSurface(t)
 	before := activeRevision(t, s)
-	const on = `{"diagnostics": {"issue_reports": {"enabled": true}}}`
 	member := platformLead()
 	member.Seat = "staff-eng"
 	refused := map[string]iam.Principal{"a lead": platformLead(), "a person who leads nothing": member}
 	for who, principal := range refused {
 		res := doAs(t, s, principal, http.MethodPatch, "/config", on, map[string]string{"X-Summary": "report"})
 		if res.Code < 400 {
-			t.Errorf("%s turned issue reports on: %d %s", who, res.Code, res.Body.String())
+			t.Errorf("%s turned %s on: %d %s", who, on, res.Code, res.Body.String())
 		}
 	}
 	res := doAs(t, s, platformLead(), http.MethodPatch, "/config", on, map[string]string{"X-Summary": "report"})

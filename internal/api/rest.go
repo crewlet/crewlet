@@ -91,6 +91,9 @@ var namedRoutes = []struct {
 	// WHAT THE COMPANY REPORTED AND WHAT A REPORT WOULD SAY. The write is the
 	// setting's own, `diagnostics.issue_reports.enabled` under /config.
 	{method: "GET", pattern: "/diagnostics/issue-reports", what: "issue_reports"},
+	// THE OPERATING INSIGHTS: the consent, the catalogue and every record kept;
+	// the consent is the setting's own, `diagnostics.insights` under /config.
+	{method: "GET", pattern: "/diagnostics/insights", what: "diagnostics_insights"},
 	// WHAT THE COMPANY'S SETUP COSTS IT, each finding with its fix. The
 	// fixes are written through the /config entity routes, never here.
 	{method: "GET", pattern: "/advisor", what: "advisor"},
