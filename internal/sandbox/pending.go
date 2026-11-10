@@ -823,7 +823,8 @@ type BridgeCall struct {
 
 	// Committed is the kinds of change the call committed to its turn
 	// (types.CommittedChange), which the run's collection settles the
-	// turn's outcome by. Additive on the wire.
+	// turn's outcome by. At most every kind once, which the call's share of
+	// the log holds room for ([MaxBridgeCallBytes]). Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim

@@ -32,10 +32,11 @@ var worstAt = time.Date(2026, 11, 3, 23, 59, 59, 999_999_999, time.FixedZone("x"
 // past its bound; arguments holding a body of markup beside the identifiers
 // that say where it went, and forty notes of markup a few hundred bytes each,
 // so what is kept once the body is left out is as close to its share as
-// whole notes come; and an output of markup. NOT HELD AND NOT APPROVED: a call
-// whose arguments are withheld keeps none of them ([BridgeCall.Withheld]), so
-// the flags cost a call twenty-seven bytes and the arguments it then does not
-// keep eight thousand.
+// whole notes come; an output of markup; and every kind of change a call can
+// commit to its turn, each once ([everyKind]). NOT HELD AND NOT APPROVED: a
+// call whose arguments are withheld keeps none of them ([BridgeCall.Withheld]),
+// so the flags cost a call twenty-seven bytes and the arguments it then does
+// not keep eight thousand.
 func worstCall(t *testing.T, name string) BridgeCall {
 	t.Helper()
 	notes := map[string]any{}
@@ -55,24 +56,49 @@ func worstCall(t *testing.T, name string) BridgeCall {
 		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, Late: true, Abandoned: true,
 		StartedAt: worstAt, DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server,
 		Source: "mcp:" + server, Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
-		HeldID: uuid.NewString(),
+		HeldID: uuid.NewString(), Committed: everyKind(),
 	}
+}
+
+// everyKind is every kind of change a call can commit to its turn, each once,
+// as the log spells them ([BridgeCall.Committed]): the closed set
+// (types.CommittedChanges), read off it, so a kind added there is measured
+// here. The most one call carries, since the bridge reads a call's kinds off
+// its turn's set of changes, which holds each once (internal/agent/turnctx's
+// Written.Since), and the most the log's union of them holds
+// ([BridgeLog.Committed]).
+func everyKind() []string {
+	kinds := make([]string, 0, len(types.CommittedChanges))
+	for _, c := range types.CommittedChanges {
+		kinds = append(kinds, string(c))
+	}
+	return kinds
 }
 
 // A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. Every field of a
 // call kept by the log, each at the widest the log's encoder writes it — a name
-// past its bound in markup, arguments and an output of a megabyte of markup —
-// weighs no more than [MaxBridgeCallBytes] less the room left for what a later
-// build adds to a call; the newest successful submission no more than
-// [MaxSubmissionCallBytes] less the same. And the parts are each within the
-// figure rowbytes.go states for them, so the arithmetic there is this test's.
+// past its bound in markup, arguments and an output of a megabyte of markup,
+// both its marks and every kind of change it can commit — weighs no more than
+// [MaxBridgeCallBytes] less the room left for what a later build adds to a
+// call; the newest successful submission no more than [MaxSubmissionCallBytes]
+// less the same. And the parts are each within the figure rowbytes.go states
+// for them, and those figures with the room close at the share, so the
+// arithmetic there is this test's.
 //
 // Mutation: keep the arguments or the output whole, or measure a cut by the
 // payload's own length rather than escaped, and the call overruns its share;
-// leave the name uncut, and the name does.
+// leave the name uncut, and the name does; keep a call without the kinds it
+// committed, and the case is no longer at its worst.
 func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
-	const reserve = 1958 // what rowbytes.go leaves a later build in one call
+	const (
+		others  = 700  // what rowbytes.go counts for a call's every other field
+		reserve = 1858 // what rowbytes.go leaves a later build in one call
+	)
+	if MaxBridgeCallNameBytes*6+2+MaxBridgeArgsBytes+MaxBridgeOutputBytes+others+reserve != MaxBridgeCallBytes {
+		t.Errorf("a call's name, arguments, output and other fields, with the room left for a later build, "+
+			"do not close at its share %d", MaxBridgeCallBytes)
+	}
 	for name, tc := range map[string]struct {
 		budget, share, args int
 	}{
@@ -93,8 +119,8 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 			t.Errorf("%s: its arguments weigh %d, past their %d", name, argsBytes, tc.args)
 		case outputBytes > MaxBridgeOutputBytes:
 			t.Errorf("%s: its output weighs %d, past its %d", name, outputBytes, MaxBridgeOutputBytes)
-		case fixed > 600:
-			t.Errorf("%s: its other fields weigh %d, past the 600 the per-call bounds count", name, fixed)
+		case fixed > others:
+			t.Errorf("%s: its other fields weigh %d, past the %d the per-call bounds count", name, fixed, others)
 		case len(raw) > tc.share-reserve:
 			t.Errorf("%s: weighs %d, past its share %d less the %d left for a later build",
 				name, len(raw), tc.share, reserve)
@@ -110,6 +136,12 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 		if call.ArgsBytes == 0 || call.OutputBytes != 64<<10 {
 			t.Errorf("%s: states a whole of %d arguments and %d output, want both", name,
 				call.ArgsBytes, call.OutputBytes)
+		}
+		// AND EVERY KIND IT COMMITTED KEPT, or the other fields were measured
+		// short of them.
+		if !slices.Equal(call.Committed, everyKind()) {
+			t.Errorf("%s: is kept with %d of the %d kinds of change it committed: the case is not at its worst",
+				name, len(call.Committed), len(types.CommittedChanges))
 		}
 	}
 }
@@ -485,9 +517,11 @@ func worstRow(t *testing.T) PendingRun {
 // folds to its last step; each call's own work tallied the same way, so the
 // identities it made fold too; the most tool names the turn's earlier rounds
 // fold to ([MaxPriorCalls]); the log's identifiers — its job, its round, the
-// answer it was cut for — at their widest; and its count of the late calls it
+// answer it was cut for — at their widest; its count of the late calls it
 // dropped ([BridgeLog.LateElided]) at the most it can be, every call it drops a
-// late one, as every call but the newest submission is.
+// late one, as every call but the newest submission is; and every kind of
+// change a call can commit, on every call and so, through the append, in the
+// log's union of what its calls committed ([BridgeLog.Committed]).
 //
 // A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND, in the change that adds it:
 // one of the calls' comes out of [BridgeLogBytes], and any other out of the
@@ -591,11 +625,13 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 // than [BridgeLogBytes], and the whole log, with the most tool names the turn's
 // earlier rounds fold to and its identifiers at their widest, no more than
 // [RowBytes] — what is left above it being the room a later build adds keys to
-// the log in.
+// the log in. Its calls carry every kind of change a call can commit, and its
+// union of them holds every kind.
 //
 // Mutation: keep a call's output whole, or raise MaxBridgeCalls, and the calls
 // overrun their share; raise MaxPriorCalls far enough, and the log overruns
-// its value.
+// its value; stop the append folding a call's kinds into the log's union, and
+// the log is not measured at its worst.
 func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	bridged := worstLog(t)
@@ -627,6 +663,10 @@ func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	if bridged.LateElided != elidedWorst {
 		t.Errorf("the log counts %d of its %d dropped calls late, want every one: the count is measured at "+
 			"the most it can be", bridged.LateElided, elidedWorst)
+	}
+	if !slices.Equal(bridged.Committed, everyKind()) {
+		t.Errorf("the log's union of what its calls committed holds %d kinds, want every one of the %d: the "+
+			"union is measured at its most", len(bridged.Committed), len(types.CommittedChanges))
 	}
 	if n := elidedCount(bridged.Absorbed()); n != MaxBridgeCalls+elidedWorst {
 		t.Errorf("the calls' own work is counted %d times, want %d", n, MaxBridgeCalls+elidedWorst)

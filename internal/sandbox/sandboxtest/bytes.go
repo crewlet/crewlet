@@ -88,6 +88,26 @@ func raw(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
 	return record.Value
 }
 
+// unionGrowth is how many bytes the log's union of the kinds its calls
+// committed ([sandbox.BridgeLog.Committed]) grew by from the raw log before to
+// the raw log after, its key and the comma before it counted where before held
+// none.
+func unionGrowth(t *testing.T, before, after []byte) int {
+	t.Helper()
+	weigh := func(raw []byte) int {
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			t.Fatalf("the raw log is not one object: %v", err)
+		}
+		union, ok := keys["committed"]
+		if !ok {
+			return 0
+		}
+		return len(`,"committed":`) + len(union)
+	}
+	return weigh(after) - weigh(before)
+}
+
 // rawLog is the run's bridged call log as the coordination store holds it
 // beside the record.
 func rawLog(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
@@ -104,7 +124,9 @@ func rawLog(t *testing.T, runs coord.SandboxRuns, turnID string) []byte {
 // a marker naming its size and digest in its place — while the repository,
 // the branch and the file's path stay whole beside it; the call states the
 // size of what it was sent with, keeps its identity, and adds no more to the
-// log than its share.
+// log than its share — the log's own union of what its calls committed, which
+// the commit's kind joins, being the log's field, held by the room above its
+// calls' share ([sandbox.BridgeLog.Committed]).
 //
 // Mutation: record the call as the bridge handed it, and the log grows by six
 // megabytes of escapes; drop the identity, and a resumed run cannot count the
@@ -115,14 +137,19 @@ func testABridgedCallCarryingAMegabyteIsKeptWithinItsShare(t *testing.T, s sandb
 	ctx := t.Context()
 	r := run("t-bytes-commit")
 	launch := mustLaunched(t, s, r)
-	before := len(rawLog(t, runs, r.TurnID))
+	before := rawLog(t, runs, r.TurnID)
 	args := commitArgs(t, strings.Repeat("<", 1<<20))
 	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{Launch: launch,
 		Call: sandbox.BridgeCall{Name: "code_commit_files", Args: args, Output: "committed abc123",
-			Digest: digestOf(1), Seq: 1}}); err != nil || !recorded {
+			Digest: digestOf(1), Seq: 1, Committed: []string{string(types.CommittedCode)}}}); err != nil || !recorded {
 		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
 	}
-	if grew := len(rawLog(t, runs, r.TurnID)) - before; grew > sandbox.MaxBridgeCallBytes {
+	// THE CALL'S OWN BYTES: what the log grew by, less what the log's own
+	// union of the kinds its calls committed grew by with this call's first
+	// kind — a field of the log, which the room above its calls' share holds
+	// ([sandbox.BridgeLog.Committed]), never the call's.
+	after := rawLog(t, runs, r.TurnID)
+	if grew := len(after) - len(before) - unionGrowth(t, before, after); grew > sandbox.MaxBridgeCallBytes {
 		t.Errorf("one call grew the log by %d bytes, past its share %d", grew, sandbox.MaxBridgeCallBytes)
 	}
 	got := mustLogged(t, s, r.TurnID).Log.Calls

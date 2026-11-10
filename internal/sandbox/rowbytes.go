@@ -94,7 +94,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,700,801  (with 2,989,077 to spare)
+//	every other field, measured ..... 1,700,923  (with 2,988,955 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -269,16 +269,19 @@ const (
 	// MaxBridgeCallBytes bounds one call as the log holds it, every field at
 	// its bound: the name at its worst (256 bytes escaped six-fold, 1,538),
 	// the arguments (8,192) and the output (4,096), the digest and every
-	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare
+	// other field (at most 700, measured by TestABridgedCallIsHeldToItsShare
 	// with both its places at their widest — the place it was admitted at and
 	// the one its round's log took it at, [BridgeCall.Appended], whose 31
-	// bytes at their widest the 600 held room for — its late mark set,
-	// [BridgeCall.Late], whose 12 bytes it held room for too, and the mark
-	// that nobody waited for it, [BridgeCall.Abandoned], whose 17 it holds
-	// room for as well: 593 measured with every one of them, 576 before that
-	// last mark), and what is left — 1,958 bytes — the room for keys a LATER
-	// BUILD ADDS TO A CALL ([BridgeCall.Extra]), which this build carries
-	// unread.
+	// bytes at their widest the 600 this figure was held room for — its late
+	// mark set, [BridgeCall.Late], whose 12 bytes it held room for too, the
+	// mark that nobody waited for it, [BridgeCall.Abandoned], whose 17 it held
+	// room for as well, and every kind of change a call can commit to its
+	// turn, [BridgeCall.Committed], each once, whose 61 it held no room for:
+	// 654 measured with every one of them, 593 before those kinds; 700 is
+	// that worst rounded up to the next hundred, as 600 was for the marks
+	// since, which leaves the next small mark room), and what is left — 1,858
+	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
+	// ([BridgeCall.Extra]), which this build carries unread.
 	MaxBridgeCallBytes = 16 << 10
 
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
