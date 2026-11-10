@@ -1,7 +1,8 @@
 /**
- * A conversation the engine holds (ADR-0117): its context did not fit the
- * seat's models twice in a row, so the engine stopped starting turns on it.
- * The advisor's notices name each hold by its seat and its conversation.
+ * A conversation the engine holds (ADR-0117): it failed the same way twice in a
+ * row (its context did not fit the seat's models, or its work ran out of its
+ * sandbox's memory), so the engine stopped starting turns on it. The advisor's
+ * notices name each hold by its seat and its conversation, and say its cause.
  */
 
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
@@ -9,8 +10,20 @@ import type { AdvisorNotice } from "~/protocol/advisor.ts";
 /** The notice class of a held conversation. */
 export const HELD_CLASS = "conversation.held";
 
+/** The cause of a hold whose work ran out of its sandbox's memory. */
+export const HELD_OUT_OF_MEMORY = "out_of_memory";
+
 /** Why the engine holds a conversation, in the words the item and Inbox say. */
-export const HELD_REASON = "its context did not fit its models";
+export function heldReason(n: AdvisorNotice): string {
+  return n.cause === HELD_OUT_OF_MEMORY
+    ? "its work ran out of its sandbox's memory"
+    : "its context did not fit its models";
+}
+
+/** What a person changes to release a hold, beside writing on it. */
+export function heldSetting(n: AdvisorNotice): string {
+  return n.cause === HELD_OUT_OF_MEMORY ? "sandbox" : "models";
+}
 
 /** The conversation key the engine gives a work item's own thread. */
 export function itemConversation(id: string): string {

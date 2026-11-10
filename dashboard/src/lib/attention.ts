@@ -43,7 +43,7 @@ import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
 import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
-import { HELD_CLASS, HELD_REASON, heldItem } from "./heldConversation.ts";
+import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
 import { unreadSentences } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -527,13 +527,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         severity: "caution",
         subject: "holds",
         icon: "pause",
-        title: `Held by the engine: ${HELD_REASON}`,
+        title: `Held by the engine: ${heldReason(n)}`,
         detail:
           "The engine stopped retrying this after 2 identical failures and is holding the " +
           "conversation. There is nothing for you to decide.",
         path: item ? ["worklet", item] : ["company", "org", "seats", seat],
         action: item ? "Open the item" : "Open the seat",
-        clears: "Clears when somebody writes on the conversation or the seat's models change.",
+        clears: `Clears when somebody writes on the conversation or the seat's ${heldSetting(n)} change.`,
         ...(seat ? { who: seat } : {}),
         ...at,
       });
