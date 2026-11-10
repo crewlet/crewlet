@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,13 +151,18 @@ func TestACallTooLargeToHoldIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	}
 }
 
-// actedOn answers one decision, or fails.
+// actedOn answers one decision for the answers it is asked about, or fails,
+// and records what it was asked.
 type actedOn struct {
-	act *sandbox.HeldAct
-	err error
+	act   *sandbox.HeldAct
+	err   error
+	asked *[][]string
 }
 
-func (a actedOn) DecisionActedOn(context.Context, string, string) (*sandbox.HeldAct, error) {
+func (a actedOn) DecisionAnswered(_ context.Context, answers []string, _ string) (*sandbox.HeldAct, error) {
+	if a.asked != nil {
+		*a.asked = append(*a.asked, answers)
+	}
 	if a.act == nil {
 		return nil, a.err
 	}
@@ -164,38 +170,44 @@ func (a actedOn) DecisionActedOn(context.Context, string, string) (*sandbox.Held
 	return &copied, a.err
 }
 
-// A HELD CALL NAMES THE DECISION IT CARRIES OUT: the newest question its seat
-// asked on the turn's work item that a person answered rides the held call,
-// on that item, and its context says so, so an approver reads a step of an
-// answer already given rather than a new question. A read that fails, or a
-// turn on no tracker item, holds the call naming none.
+// A HELD CALL NAMES THE DECISION IT CARRIES OUT ONLY ON THE TURN THAT DECISION'S
+// ANSWER WOKE: a person's answer to the seat's question, delivered to the
+// turn, rides the held call and its context, so an approver reads a step of an
+// answer already given. A later turn on the item, woken by anything else,
+// names none and does not read for one; a read that fails holds the call
+// naming none.
 //
-// Mutation: drop the decision from the held call or its context, or refuse a
-// call whose decision could not be read, and this goes red.
-func TestAHeldCallNamesTheDecisionItCarriesOut(t *testing.T) {
+// Mutation: name a decision on a turn no answer woke, drop it from the held
+// call or its context, or refuse a call whose decision could not be read, and
+// this goes red.
+func TestAHeldCallNamesTheDecisionItsTurnWasWokenFor(t *testing.T) {
 	t.Parallel()
-	act := &sandbox.HeldAct{Ask: "q-2", Question: "Ship the migration?", Choice: "Ship it",
-		AnsweredBy: "jane", AnsweredAt: time.Unix(1_700_000_000, 0).UTC()}
+	act := &sandbox.HeldAct{Item: "id-9", Key: "ENG-9", Ask: "q-2", Question: "Ship the migration?",
+		Choice: "Ship it", AnsweredBy: "jane", AnsweredAt: time.Unix(1_700_000_000, 0).UTC()}
 	call := tools.HeldCall{Name: "tr_close_issue",
 		Entry: tools.Entry{Tool: trackerTool{}, Origin: tools.Origin("tracker"), NeedsApproval: true},
 		Args:  map[string]any{"id": "7"}}
-	hold := func(acting builtin.ActedDecisions, item *types.WorkItem) sandbox.Ask {
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "id-9", Key: "ENG-9"}
+	hold := func(acting builtin.ActedDecisions, answered ...string) sandbox.Ask {
 		t.Helper()
 		desk := &askDesk{outcome: sandbox.AskRecorded}
 		turn := turnFor(t, "agent-ceo")
-		turn.WorkItem = item
+		turn.WorkItem, turn.Answered = item, answered
 		if _, held := builtin.NewCallHold(desk, callSeal(t), acting).Hold(
 			turnctx.WithJob(t.Context(), "launch-1"), turn, call); !held || len(desk.recorded) != 1 {
 			t.Fatalf("the call was not held (%v, %d asks)", held, len(desk.recorded))
 		}
 		return desk.recorded[0]
 	}
-	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "id-9", Key: "ENG-9"}
 
-	ask := hold(actedOn{act: act}, item)
+	var asked [][]string
+	ask := hold(actedOn{act: act, asked: &asked}, "a-2")
 	got := ask.Held.Acting
 	if got == nil || got.Item != "id-9" || got.Key != "ENG-9" || got.Ask != "q-2" || got.Choice != "Ship it" {
 		t.Fatalf("the held call carries out %+v, want q-2 on ENG-9", got)
+	}
+	if len(asked) != 1 || !slices.Equal(asked[0], []string{"a-2"}) {
+		t.Errorf("the decision was read for %v, want the answer that woke the turn", asked)
 	}
 	if want := `It carries out a decision on ENG-9: jane answered "Ship the migration?" with "Ship it".`; !strings.Contains(ask.Context, want) {
 		t.Errorf("the context says\n%s\nwant it to say\n%s", ask.Context, want)
@@ -205,13 +217,18 @@ func TestAHeldCallNamesTheDecisionItCarriesOut(t *testing.T) {
 	}
 	words := *act
 	words.Choice = ""
-	if ask := hold(actedOn{act: &words}, item); !strings.Contains(ask.Context, `answered "Ship the migration?" in words.`) {
+	if ask := hold(actedOn{act: &words}, "a-2"); !strings.Contains(ask.Context, `answered "Ship the migration?" in words.`) {
 		t.Errorf("an answer in words reads\n%s", ask.Context)
 	}
+
+	asked = nil
+	later := hold(actedOn{act: act, asked: &asked})
+	if later.Held.Acting != nil || strings.Contains(later.Context, "carries out a decision") || len(asked) != 0 {
+		t.Errorf("a turn no answer woke names %+v (read for %v)", later.Held.Acting, asked)
+	}
 	for name, a := range map[string]sandbox.Ask{
-		"a read that failed": hold(actedOn{err: errors.New("the tracker did not answer")}, item),
-		"no tracker item":    hold(actedOn{act: act}, &types.WorkItem{Backend: "jira", ID: "J-1"}),
-		"no decision":        hold(actedOn{}, item),
+		"a read that failed": hold(actedOn{err: errors.New("the tracker did not answer")}, "a-2"),
+		"no decision given":  hold(actedOn{}, "a-2"),
 	} {
 		if a.Held.Acting != nil || strings.Contains(a.Context, "carries out a decision") {
 			t.Errorf("%s: the call names %+v", name, a.Held.Acting)

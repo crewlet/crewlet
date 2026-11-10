@@ -11,18 +11,18 @@ import (
 // tracker this node reads: [builtin.ActedDecisions].
 type heldActs struct{ engine *Engine }
 
-// DecisionActedOn is the newest question asker put on item that a person
-// answered, nil on a node with no tracker. A stale read: the call is held
-// either way, and what it names is for the approver to read.
-func (h heldActs) DecisionActedOn(ctx context.Context, item, asker string) (*sandbox.HeldAct, error) {
+// DecisionAnswered is the newest decision a person gave asker among answers,
+// nil on a node with no tracker. A stale read: the call is held either way,
+// and what it names is for the approver to read.
+func (h heldActs) DecisionAnswered(ctx context.Context, answers []string, asker string) (*sandbox.HeldAct, error) {
 	tracker := h.engine.Tracker()
 	if tracker == nil {
 		return nil, nil
 	}
-	acted, err := tracker.DecisionActedOn(ctx, item, asker, statelog.ReadStale)
+	acted, err := tracker.DecisionAnswered(ctx, answers, asker, statelog.ReadStale)
 	if err != nil || acted == nil {
 		return nil, err
 	}
-	return &sandbox.HeldAct{Ask: acted.Ask, Question: acted.Question, Choice: acted.Choice,
-		AnsweredBy: acted.AnsweredBy, AnsweredAt: acted.AnsweredAt}, nil
+	return &sandbox.HeldAct{Item: acted.Task, Key: acted.Key, Ask: acted.Ask, Question: acted.Question,
+		Choice: acted.Choice, AnsweredBy: acted.AnsweredBy, AnsweredAt: acted.AnsweredAt}, nil
 }

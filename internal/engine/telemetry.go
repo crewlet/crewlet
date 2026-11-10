@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The turn-level events, published around turn.Run.
@@ -163,7 +164,9 @@ type turnTelemetry struct {
 	// trigger's, the asker's or the parked row's — and workItemBasis the
 	// rule that named it; both empty for a turn nothing named an item for.
 	// See worksubject.go for the rules and their order.
-	workItem      *types.WorkItem
+	workItem *types.WorkItem
+	// answered are the answers whose deliveries woke the turn ([turnctx.Turn.Answered]).
+	answered      []string
 	workItemBasis types.WorkItemBasis
 
 	// written is the set of items this turn's writes commit to, shared with
@@ -374,6 +377,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// THE ITEM, from the same first event the trigger is described from,
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
+	t.answered = worklet.AnswersIn(req.Events)
 	t.written = &turnctx.Written{}
 	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
 	// held in this process's memory while the turn runs, which this node
@@ -492,6 +496,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// thing a turn points at, shared by every tool call.
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
+			Answered:      t.answered,
 			Written:       t.written,
 			// AND WHAT IT HOLDS FROM GITLET'S EXPIRY, which every
 			// tool call takes its hold in before its request.
@@ -1057,6 +1062,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// carried on the suspension, so a completion concluding a sole write
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
+	// AND THE ANSWERS THAT WOKE IT, off the row for the same reason.
+	t.answered = slices.Clone(in.Run.Answered)
 	committed := make([]types.CommittedChange, 0, len(in.State.Committed))
 	for _, c := range in.State.Committed {
 		committed = append(committed, types.CommittedChange(c))

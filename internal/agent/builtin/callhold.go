@@ -51,10 +51,10 @@ type CallHold struct {
 	now    func() time.Time
 }
 
-// ActedDecisions reads the decision a seat's turn on a work item acts on: the
-// newest question the seat asked there that a person answered, nil for none.
+// ActedDecisions reads the decision answers gave a seat: the newest question
+// the seat asked that a person answered among them, nil for none.
 type ActedDecisions interface {
-	DecisionActedOn(ctx context.Context, item, asker string) (*sandbox.HeldAct, error)
+	DecisionAnswered(ctx context.Context, answers []string, asker string) (*sandbox.HeldAct, error)
 }
 
 var _ tools.Holder = (*CallHold)(nil)
@@ -71,22 +71,18 @@ func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal, acting ActedDecisions)
 	return &CallHold{desk: desk, seal: seal, acting: acting, now: time.Now}
 }
 
-// actedOn is the decision turn's call carries out, nil where the turn is on no
-// tracker item, the seat asked nothing answered there, or the read failed: a
-// call is still held, naming no decision, rather than refused for its wording.
+// actedOn is the decision turn's call carries out: a person's answer to the
+// seat's question whose delivery woke the turn. Nil for a turn no such answer
+// woke, or a read that failed: the call is still held, naming no decision.
 func (h *CallHold) actedOn(ctx context.Context, turn *turnctx.Turn) *sandbox.HeldAct {
-	if h.acting == nil || turn == nil || turn.Handle() == "" || turn.WorkItem == nil ||
-		turn.WorkItem.Backend != types.WorkWorklet || turn.WorkItem.ID == "" {
+	if h.acting == nil || turn == nil || turn.Handle() == "" || len(turn.Answered) == 0 {
 		return nil
 	}
-	act, err := h.acting.DecisionActedOn(ctx, turn.WorkItem.ID, turn.Handle())
+	act, err := h.acting.DecisionAnswered(ctx, turn.Answered, turn.Handle())
 	if err != nil {
-		log.WarnContext(ctx, "held_call_decision_unread", "seat", turn.Handle(), "item", turn.WorkItem.ID,
-			"error", err.Error(), "detail", "the call is held naming no decision")
+		log.WarnContext(ctx, "held_call_decision_unread", "seat", turn.Handle(), "error", err.Error(),
+			"detail", "the call is held naming no decision")
 		return nil
-	}
-	if act != nil {
-		act.Item, act.Key = turn.WorkItem.ID, turn.WorkItem.Key
 	}
 	return act
 }
