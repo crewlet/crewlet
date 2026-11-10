@@ -1201,6 +1201,44 @@ var ChangeKinds = []ChangeKind{
 // Valid reports whether a change kind off the wire is one this build knows.
 func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 
+// MovedFields is the deltas a change of kind k records its move under
+// ([TaskDeltas]), for the kinds that name one field of a task or one family of
+// its sets, and nil for every other kind.
+//
+// A RECORD CARRIES ONE KIND, and a write that moves several of these fields at
+// once is filed under one of them: update_work_item's is the assignee's, then
+// the status's, and the tags', the watchers', the team's or a link's only
+// where nothing before them set it. So the change of one of these kinds is
+// found by its delta, whatever kind its record ended with, as the pickup finds
+// an assignment by its assignee delta (readyAssignedArm, #930). A kind that
+// names no single field, `fields` among them, is found by its kind alone, and
+// a checklist's move records no delta to find it by.
+func (k ChangeKind) MovedFields() []string {
+	switch k {
+	case ChangeStatus:
+		return []string{"status"}
+	case ChangeAssignee:
+		return []string{"assignee"}
+	case ChangeCollaborators:
+		return []string{"collaborators"}
+	case ChangeWatchers:
+		return []string{"watchers"}
+	case ChangeTags:
+		return []string{"tags"}
+	case ChangeRouted:
+		return []string{"routing_unit"}
+	case ChangeRelations:
+		// EVERY LINK SET, and the mirror a blocker carries of the items
+		// waiting on it ([TaskDeltas]).
+		fields := make([]string, 0, len(RelationKinds)+1)
+		for _, relation := range RelationKinds {
+			fields = append(fields, string(relation))
+		}
+		return append(fields, "blocking")
+	}
+	return nil
+}
+
 // MaxDeltas caps what a notification DISPLAYS, and governs nothing else.
 //
 // THIRTY-TWO IS A DISPLAY LIMIT. It must never govern the mutation: a write
