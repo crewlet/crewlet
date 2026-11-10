@@ -13,10 +13,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Profiler } from "react";
+import { Profiler, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
+import { PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
@@ -158,6 +160,18 @@ beforeEach(() => {
   calls.planRefusal = null;
 });
 afterEach(cleanup);
+
+/** The shapes a glyph draws, compared as drawn: the attributes are every glyph's alike. */
+const shapes = (glyph: ReactElement) => {
+  const drawn = document.createElement("div");
+  drawn.innerHTML = renderToStaticMarkup(glyph);
+  return drawn.firstElementChild!.innerHTML;
+};
+const PENCIL = shapes(<PencilGlyph />);
+const PLUS = shapes(<PlusGlyph />);
+const glyphIn = (el: Element) => el.querySelector("svg")?.innerHTML;
+/** The grid cell a text is drawn in. */
+const cellWith = (text: string) => screen.getByText(text).closest<HTMLElement>('[role="cell"]')!;
 
 function draw(
   data: AccessAnswer,
@@ -726,12 +740,56 @@ test("a reader who may not change access gets the reading and no control", () =>
 
 test("GitHub's permissions are edited in GitHub's own words, in a dialog", async () => {
   draw(githubAnswer());
-  fireEvent.click(screen.getByRole("button", { name: "6 permissions" }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub permissions" }));
   const dialog = await screen.findByRole("dialog", { name: "QA's GitHub permissions" });
   const contents = within(dialog).getByRole("radiogroup", { name: "QA's Contents permission" });
   fireEvent.click(within(contents).getByRole("radio", { name: "Read and write" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
   expect(screen.getByText("Not saved")).toBeTruthy();
+});
+
+// PERMISSIONS READ AS A VALUE WITH A PENCIL, the dashboard's mark for a value
+// that is changed in place, so a reader sees they can be edited; a read-only
+// tab draws the count alone. Mutation: drop the pencil, or draw it read-only.
+test("an agent's permissions are a count beside a pencil that edits them, and read-only draws neither", () => {
+  draw(githubAnswer());
+  expect(screen.getByText("6 permissions")).toBeTruthy();
+  const edit = screen.getByRole("button", { name: "Edit QA's GitHub permissions" });
+  expect(glyphIn(edit)).toBe(PENCIL);
+  expect(edit.getAttribute("title")).toContain("Issues: Read and write");
+  expect((edit as HTMLButtonElement).disabled).toBe(false);
+  cleanup();
+  draw(githubAnswer(), { readOnly: OPERATOR_MANAGED });
+  expect(screen.getByText("6 permissions")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /permissions$/ })).toBeNull();
+  const table = screen.getByRole("table", { name: "Agents on GitHub" });
+  expect([...table.querySelectorAll("svg")].map((g) => g.innerHTML)).not.toContain(PENCIL);
+});
+
+// THE PENCIL IS HELD WHERE THE COUNT'S BUTTON WAS: an agent that is off, one
+// that has left, and a tab nobody here may change.
+test("the permissions pencil is held for an agent that is off or gone, and on a held tab", () => {
+  const data = githubAnswer();
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  data.seats.push({
+    ...seat("ops", "Ops", {
+      github: onLane({
+        variable: "GITHUB_APP_KEY_OPS",
+        desired: { enabled: true, permissions: { contents: "read" } },
+      }),
+    }),
+    departed: true,
+  });
+  draw(data);
+  const held = (who: string) =>
+    (screen.getByRole("button", { name: `Edit ${who}'s GitHub permissions` }) as HTMLButtonElement)
+      .disabled;
+  expect(held("QA")).toBe(false);
+  expect(held("PM")).toBe(true);
+  expect(held("Ops")).toBe(true);
+  cleanup();
+  draw(githubAnswer(), { held: "Admins change an agent's access." });
+  expect(held("QA")).toBe(true);
 });
 
 test("on an agent's own page, the table is that agent's alone", () => {
@@ -908,10 +966,8 @@ test("Jira's product access with no project role is a choice of its own, with no
   expect(screen.getByRole("combobox", { name: "PM's Jira access" }).textContent).toContain(
     "Product access only",
   );
-  // THE SCOPE PICKER, whatever role its searchable trigger takes.
-  const picker = (name: string) => document.querySelector(`[aria-label="${name}"]`);
-  expect(picker("PM's Jira projects")).toBeNull();
-  expect(picker("QA's Jira projects")).not.toBeNull();
+  expect(screen.queryByRole("button", { name: /PM's Jira projects$/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "Edit QA's Jira projects" })).toBeTruthy();
 });
 
 test("an account turned off at the vendor by hand offers Turn back on and Keep off, with no plan", () => {
@@ -1304,6 +1360,155 @@ test("a lane that does not allow keeping the account offers no button to keep it
   expect(screen.queryByRole("button", { name: /^Keep the/ })).toBeNull();
 });
 
+// A SCOPE READS AS ITS CHOICE, NEVER A FIELD: a chip with no remove, or the
+// lane's words for none, beside a pencil where entries are chosen and a plus
+// where none is. Mutation: draw the inline picker again, or swap the glyphs.
+test("an agent's repositories read as chips beside a pencil, or the lane's words beside a plus", () => {
+  const data = githubAnswer();
+  data.seats.push(
+    seat("pm", "PM", {
+      github: onLane({
+        variable: "GITHUB_APP_KEY_PM",
+        desired: { enabled: true, permissions: { contents: "read" } },
+      }),
+    }),
+  );
+  draw(data);
+  const edit = screen.getByRole("button", { name: "Edit QA's GitHub repositories" });
+  expect(within(cellWith("gophrase/backend")).getAllByRole("button")).toEqual([edit]);
+  expect(glyphIn(edit)).toBe(PENCIL);
+  expect(screen.getByText("All installed repositories")).toBeTruthy();
+  expect(glyphIn(screen.getByRole("button", { name: "Choose PM's GitHub repositories" }))).toBe(
+    PLUS,
+  );
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+});
+
+// THE DIALOG TICKS FROM WHAT THE INSTALLATION REACHES, and what it changes
+// waits in the unsaved bar for the review like any other change.
+test("the repositories dialog lists what the installation reaches, and a choice waits for review", async () => {
+  draw(githubAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub repositories" }));
+  const dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
+  expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
+  const box = (name: string) => within(dialog).getByRole("checkbox", { name }) as HTMLInputElement;
+  expect(box("gophrase/backend").checked).toBe(true);
+  expect(box("gophrase/frontend").checked).toBe(false);
+  // WHAT IS TICKED IS COUNTED on the choice, and focus starts on it.
+  const chosen = within(dialog).getByRole("radio", { name: /^Chosen repositories,\s*1 chosen$/ });
+  expect((chosen as HTMLInputElement).checked).toBe(true);
+  await waitFor(() => expect(document.activeElement).toBe(chosen));
+  // A SHORT LIST IS READ WHOLE, with nothing to search.
+  expect(within(dialog).queryByRole("searchbox")).toBeNull();
+  fireEvent.click(box("gophrase/frontend"));
+  expect(within(dialog).getByRole("radio", { name: /^Chosen repositories,\s*2 chosen$/ })).toBe(
+    chosen,
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByText("Not saved")).toBeTruthy();
+  // ONE CHIP AND A COUNT, which names the rest.
+  const more = within(cellWith("gophrase/backend")).getByText("1 more repository");
+  expect(more.closest("[title]")?.getAttribute("title")).toBe("gophrase/frontend");
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({
+    seats: { qa: { github: { scope: ["gophrase/backend", "gophrase/frontend"] } } },
+  });
+});
+
+// ALL INSTALLED REPOSITORIES IS A CHOICE OF ITS OWN, and choosing it clears
+// the picks: the row then reads it beside a plus, and the review sends none.
+test("choosing all installed repositories clears the picks", async () => {
+  draw(githubAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub repositories" }));
+  const dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
+  fireEvent.click(within(dialog).getByRole("radio", { name: "All installed repositories" }));
+  expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByText("All installed repositories")).toBeTruthy();
+  const choose = screen.getByRole("button", { name: "Choose QA's GitHub repositories" });
+  expect(glyphIn(choose)).toBe(PLUS);
+  // OPENED AGAIN, focus starts on the choice that holds, not the one under it.
+  fireEvent.click(choose);
+  const again = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
+  const all = within(again).getByRole("radio", { name: "All installed repositories" });
+  expect((all as HTMLInputElement).checked).toBe(true);
+  await waitFor(() => expect(document.activeElement).toBe(all));
+  fireEvent.click(within(again).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({ seats: { qa: { github: { scope: [] } } } });
+});
+
+// A LONG LIST IS SEARCHED, and a connection that lists its reach offers
+// nothing outside it: a name it does not list matches nothing and cannot be
+// added. Mutation: offer the add on a closed lane and this goes red.
+test("a long repository list is searched, and offers only what the installation reaches", async () => {
+  const data = githubAnswer();
+  const many = Array.from({ length: 12 }, (_, i) => `example/service-${i + 1}`);
+  data.options[0] = { ...data.options[0]!, scope: ["gophrase/backend", ...many] };
+  draw(data);
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub repositories" }));
+  const dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
+  expect(within(dialog).getAllByRole("checkbox")).toHaveLength(13);
+  const find = within(dialog).getByRole("searchbox", { name: "Find a repository" });
+  await waitFor(() => expect(document.activeElement).toBe(find));
+  fireEvent.change(find, { target: { value: "service-1" } });
+  expect(within(dialog).getAllByRole("checkbox")).toHaveLength(4);
+  fireEvent.change(find, { target: { value: "example/tools" } });
+  expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  expect(within(dialog).getByText("No repository matches “example/tools”.")).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: /^Add/ })).toBeNull();
+});
+
+// THE CONTROL IS HELD WHERE THE INLINE FIELD WAS: an agent that is off or
+// gone, and a held tab; a read-only tab draws the choice alone.
+test("the repositories control is held for an agent that is off or gone, on a held tab, and absent read-only", () => {
+  const data = githubAnswer();
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  data.seats.push({
+    ...seat("ops", "Ops", {
+      github: onLane({
+        variable: "GITHUB_APP_KEY_OPS",
+        desired: {
+          enabled: true,
+          permissions: { contents: "read" },
+          scope: ["gophrase/mobile-app"],
+        },
+      }),
+    }),
+    departed: true,
+  });
+  draw(data);
+  const held = (name: string) =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+  expect(held("Edit QA's GitHub repositories")).toBe(false);
+  expect(held("Choose PM's GitHub repositories")).toBe(true);
+  expect(held("Edit Ops's GitHub repositories")).toBe(true);
+  cleanup();
+  draw(githubAnswer(), { held: "Admins change an agent's access." });
+  expect(held("Edit QA's GitHub repositories")).toBe(true);
+  cleanup();
+  draw(githubAnswer(), { readOnly: OPERATOR_MANAGED });
+  expect(within(cellWith("gophrase/backend")).queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("button", { name: /GitHub repositories$/ })).toBeNull();
+});
+
+// WHERE NO ENTRY REACHES NOTHING the empty list is no choice to offer, so the
+// dialog is the list alone, named by the lane's word, and says what is needed.
+test("a Scaleway agent's projects are the list alone, with no empty choice", async () => {
+  draw(scalewayAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Edit SRE's Scaleway projects" }));
+  const dialog = await screen.findByRole("dialog", { name: "SRE's Scaleway projects" });
+  expect(within(dialog).queryByRole("radio")).toBeNull();
+  const list = within(dialog).getByRole("group", { name: "Projects" });
+  expect(within(list).getAllByRole("checkbox").length).toBeGreaterThan(0);
+});
+
 // A SCOPE ENTRY IS READ BY ITS NAME: where the vendor names an entry apart from
 // the identifier stored (a project's ID), the picker labels it by name with the
 // identifier beneath, and the review names it too.
@@ -1311,12 +1516,15 @@ test("a scope entry is picked by its name, with its identifier beneath, and the 
   const data = jiraAnswer();
   data.options[0]!.scope_names = { ENG: "Engineering", OPS: "Operations" };
   draw(data);
-  const picker = document.querySelector<HTMLElement>(`[aria-label="QA's Jira projects"]`)!;
-  expect(picker.textContent).toContain("Engineering");
-  pick(picker, /Operations/);
-  expect(screen.getByRole("option", { name: /Operations/ }).textContent).toContain("OPS");
-  fireEvent.keyDown(picker, { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("option")).toBeNull());
+  expect(cellWith("Engineering")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's Jira projects" }));
+  const dialog = await screen.findByRole("dialog", { name: "QA's Jira projects" });
+  // THE LANE'S OWN WORDS for an empty list and a chosen one.
+  expect(within(dialog).getByRole("radio", { name: "No project" })).toBeTruthy();
+  expect(within(dialog).getByRole("radio", { name: /^Chosen projects,\s*1 chosen$/ })).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "Operations", description: "OPS" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const review = await screen.findByRole("dialog");
   expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
@@ -1335,22 +1543,28 @@ test.each([
       data.options[0] = { ...data.options[0]!, scope: undefined, scope_open: true };
       return data;
     },
-    field: "QA's GitHub repositories",
+    who: "QA's GitHub repositories",
     typed: "gophrase/web",
     sent: { qa: { github: { scope: ["gophrase/backend", "gophrase/web"] } } },
   },
   {
     vendor: "GitLab",
     answer: gitlabAnswer,
-    field: "Dev's GitLab projects",
+    who: "Dev's GitLab projects",
     typed: "gophrase/infra",
     sent: { dev: { gitlab: { scope: ["gophrase/backend", "gophrase/infra"] } } },
   },
-])("an open $vendor connection takes a typed entry", async ({ answer, field, typed, sent }) => {
+])("an open $vendor connection takes a typed entry", async ({ answer, who, typed, sent }) => {
   draw(answer());
-  const input = screen.getByRole("combobox", { name: field });
-  fireEvent.change(input, { target: { value: typed } });
-  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: `Edit ${who}` }));
+  const dialog = await screen.findByRole("dialog", { name: who });
+  const find = within(dialog).getByRole("searchbox", { name: /^Find or add a / });
+  fireEvent.change(find, { target: { value: typed } });
+  fireEvent.click(within(dialog).getByRole("button", { name: `Add “${typed}”` }));
+  expect((within(dialog).getByRole("checkbox", { name: typed }) as HTMLInputElement).checked).toBe(
+    true,
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
   expect(screen.getByText("Not saved")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(calls.plan).toHaveLength(1));
@@ -1365,7 +1579,7 @@ test("a scope list that could not be read, or holds nothing, says so in place of
   data.options[0] = { ...data.options[0]!, scope: undefined, scope_live: false };
   const { redraw } = draw(data);
   expect(screen.getByText("Crewlet could not read your repositories")).toBeTruthy();
-  expect(document.querySelector(`[aria-label="QA's GitHub repositories"]`)).toBeNull();
+  expect(screen.queryByRole("button", { name: /QA's GitHub repositories$/ })).toBeNull();
   redraw({ ...data, options: [{ ...data.options[0]!, scope_live: true }] });
   expect(screen.getByText("No repositories to choose from")).toBeTruthy();
 });
@@ -1431,9 +1645,18 @@ test("a refusal about one seat's projects closes the review and is said beside t
   );
   expect(said.getAttribute("role")).toBe("alert");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  const marked = document.querySelector<HTMLElement>(`[aria-describedby="${said.id}"]`)!;
-  expect(marked.getAttribute("aria-invalid")).toBe("true");
-  expect(marked.closest(`[aria-label="QA's Jira projects"]`) ?? marked).toBeTruthy();
+  const edit = screen.getByRole("button", { name: "Edit QA's Jira projects" });
+  expect(edit.getAttribute("aria-describedby")).toBe(said.id);
+  // THE DIALOG SAYS IT TOO, over the list it is about.
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "QA's Jira projects" });
+  expect(
+    within(dialog).getByText(
+      "Choose at least one project for qa: an agent in no project can reach nothing.",
+    ),
+  ).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Jira" }));
   expect(screen.queryByText(/Choose at least one project for qa/)).toBeNull();
 });
@@ -1520,9 +1743,8 @@ test("a Scaleway seat's details name its application, its permission sets, its k
 // project's name, never its UUID.
 test("a Scaleway seat's projects read by name", () => {
   draw(scalewayAnswer());
-  const picker = document.querySelector<HTMLElement>(`[aria-label="SRE's Scaleway projects"]`)!;
-  expect(picker.textContent).toContain("gophrase-prod");
-  expect(picker.textContent).not.toContain("11111111");
+  const chips = cellWith("gophrase-prod");
+  expect(chips.textContent).not.toContain("11111111");
 });
 
 // NO PROJECT REACHES NOTHING: turning a Scaleway agent on with none holds the
