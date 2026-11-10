@@ -578,6 +578,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		}
 		return failed, err
 	}
+	if result.Read != nil {
+		e.keepBoxReading(ctx, company, handle, cell, *result.Read)
+	}
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }
 

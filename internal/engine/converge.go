@@ -162,6 +162,7 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		e.clearRemovedSeatPauses(ctx, c)
 		e.liftChangedFailurePauses(ctx, c)
 		e.clearRemovedConversationHolds(ctx, c)
+		e.clearRemovedBoxReadings(ctx, c)
 		e.rereadConversationHolds()
 		// AND ITS PENDING ACCESS REVIEW, so a handle used again starts with
 		// none. See accessreview.go.

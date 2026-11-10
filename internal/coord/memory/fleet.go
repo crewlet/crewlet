@@ -65,7 +65,9 @@ type Fleet struct {
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
-	mailboxes                map[uuid.UUID]coord.MailboxRecord
+	// boxReadings is each seat's box readings, by seat and cell.
+	boxReadings map[boxReadingKey]coord.BoxReading
+	mailboxes   map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -188,6 +190,7 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},

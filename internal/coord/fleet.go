@@ -1802,6 +1802,7 @@ type Fleet interface {
 	SeatAccess
 	AccessReviews
 	ConversationHolds
+	BoxReadings
 	Mailboxes
 	ObjectStores
 	TrashReaps

@@ -76,10 +76,13 @@ func continuing(asked *AskedRun) LaunchRequest {
 //
 // Mutation: start the continued job on the round's brief with no session, park
 // the run on the session its collection read off the box, or empty the bridged
-// log on the relaunch's reset, and this goes red.
+// log on the relaunch's reset, or read the reused box again, and this goes red.
 func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
+	// Every box answers its read, so only the launch's own choice keeps a
+	// reused box from being read again.
+	rig.provider.Made = func(box *FakeSandbox) { answersFacts(box, "total_kb=1048576\n") }
 	var relaunched LaunchResult
 	run := askAndAnswer(t, rig, false, func(ctx context.Context, r PendingRun, asked *AskedRun) {
 		if asked == nil || asked.SessionID != "sess-t1" || !asked.BoxKept {
@@ -99,6 +102,9 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	})
 	if !relaunched.Reused || relaunched.SandboxID != run.SandboxID {
 		t.Fatalf("relaunch = %+v, want it in the asking run's box %q", relaunched, run.SandboxID)
+	}
+	if relaunched.Read != nil {
+		t.Fatalf("the reused box was read again: %+v", relaunched.Read)
 	}
 	started := rig.runner.Started()
 	last := started[len(started)-1]

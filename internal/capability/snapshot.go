@@ -19,8 +19,12 @@ import (
 )
 
 // Version is the snapshot shape this build writes. A snapshot evolves by
-// addition only, so an older one decodes into this shape.
-const Version = 1
+// addition only, so an older one decodes into this shape. Version 2 added the
+// seat's boxes, so a baseline below it never told them ([Snapshot.Boxes]).
+const Version = 2
+
+// boxesFrom is the first version whose snapshots hold the seat's boxes.
+const boxesFrom = 2
 
 // Setup step origins ([SetupStep.From]).
 const (
@@ -85,6 +89,36 @@ type Input struct {
 
 	// Tools is the seat's MCP servers and their tools' levels.
 	Tools []ToolServer
+
+	// Boxes is every box the seat's executor can run in, as the document
+	// places it and its image was last observed.
+	Boxes []Box
+}
+
+// Box cells ([Box.Cell]), as config.Placement names them.
+const (
+	CellDirect    = "direct"
+	CellContainer = "container"
+	CellE2B       = "e2b"
+)
+
+// Cells is every cell a box runs in, which bounds a snapshot's boxes.
+var Cells = []string{CellDirect, CellContainer, CellE2B}
+
+// Box is one box the seat's executor runs in: where it runs, the memory it is
+// held to, and what its image holds where a run has read it.
+type Box struct {
+	Cell string `json:"cell"`
+
+	// MemoryBytes is the memory the box is held to, 0 where neither the
+	// document nor a run has said.
+	MemoryBytes int64 `json:"memory_bytes,omitempty"`
+
+	// Observed is whether a run read the box as it is configured now;
+	// Browser and ContainerRuntime say what it found, empty for none.
+	Observed         bool   `json:"observed,omitempty"`
+	Browser          string `json:"browser,omitempty"`
+	ContainerRuntime string `json:"container_runtime,omitempty"`
 }
 
 // Integration is one lane the seat is granted.
@@ -156,6 +190,7 @@ type Snapshot struct {
 	MCP          []ToolServer  `json:"mcp"`
 	Policies     []Policy      `json:"policies"`
 	Setup        []SetupStep   `json:"setup"`
+	Boxes        []Box         `json:"boxes"`
 
 	// MCPMore, PoliciesMore and SetupMore are how many entries past the
 	// shown ones each list holds, and the digests are of each whole list,
@@ -174,7 +209,7 @@ type Snapshot struct {
 // snapshot, byte for byte.
 func Take(in Input) Snapshot {
 	s := Snapshot{V: Version, Integrations: []Integration{}, NotGranted: []string{},
-		MCP: []ToolServer{}, Policies: []Policy{}, Setup: []SetupStep{}}
+		MCP: []ToolServer{}, Policies: []Policy{}, Setup: []SetupStep{}, Boxes: []Box{}}
 	c := in.Company
 	if c == nil {
 		return s
@@ -200,6 +235,7 @@ func Take(in Input) Snapshot {
 	s.MCP = in.Tools
 	s.Policies = policiesOf(c.Policies)
 	s.Setup = setupOf(c, role)
+	s.Boxes = in.Boxes
 	return bound(s.normal())
 }
 
@@ -399,7 +435,33 @@ func (s Snapshot) normal() Snapshot {
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
+	s.Boxes = boxesOf(s.Boxes)
 	return s
+}
+
+// boxesOf is boxes one per cell, by cell, each fact kept only where it was
+// read: a box no run observed holds no image facts.
+func boxesOf(boxes []Box) []Box {
+	byCell := map[string]Box{}
+	for _, b := range boxes {
+		if b.Cell = strings.TrimSpace(b.Cell); !slices.Contains(Cells, b.Cell) {
+			continue
+		}
+		if _, seen := byCell[b.Cell]; seen {
+			continue
+		}
+		b.MemoryBytes = max(b.MemoryBytes, 0)
+		if !b.Observed {
+			b.Browser, b.ContainerRuntime = "", ""
+		}
+		b.Browser, b.ContainerRuntime = shortened(b.Browser), shortened(b.ContainerRuntime)
+		byCell[b.Cell] = b
+	}
+	out := make([]Box, 0, len(byCell))
+	for _, cell := range slices.Sorted(maps.Keys(byCell)) {
+		out = append(out, byCell[cell])
+	}
+	return out
 }
 
 // nonNil is in, or an empty list for nil, so an absent list and an empty one

@@ -469,6 +469,10 @@ type LaunchResult struct {
 	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
 	Reused bool
 
+	// Read is what the fresh box was found to have ([ReadBoxFacts]), nil for a
+	// reused box or a read that did not answer.
+	Read *BoxFacts
+
 	// Continues is the harness session the launch asked its run to continue,
 	// "" where it started one of its own; Brief is which of the three briefs
 	// it handed the run (restore.go). Whether the run did continue it is its
@@ -721,6 +725,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
+	var read *BoxFacts
+	if !reused {
+		read = readFresh(ctx, box)
+	}
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
 	// here, which is the moment its host may reclaim it: told now rather
 	// than found at its next pass ([Coordinator.acquire]).
@@ -889,7 +897,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
-		Harness: req.Spec.Harness, Reused: reused,
+		Harness: req.Spec.Harness, Reused: reused, Read: read,
 		Continues: continued.session, Brief: continued.kind,
 	}, nil
 }
