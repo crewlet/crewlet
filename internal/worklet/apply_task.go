@@ -31,6 +31,20 @@ import (
 
 // applyTask writes one task record and everything derived from it.
 func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+	n, err := a.applyTaskRecord(ctx, tx, c)
+	if err != nil {
+		return 0, err
+	}
+	// AND ITS ASKS, which any change to the task may have overtaken or freed.
+	overtaken, err := stampOvertaken(ctx, tx, c.subject().ID)
+	if err != nil {
+		return 0, err
+	}
+	return n + overtaken, nil
+}
+
+// applyTaskRecord applies one task record: its object row, history and comments.
+func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	id := c.subject().ID
 	if c.record.Op == OpPurge {
 		return a.purgeTask(ctx, tx, c)

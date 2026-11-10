@@ -1142,6 +1142,10 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
+		"which of a task's asks the facts overtook": func() indexedRead {
+			query, args := overtakenStatement(task)
+			return seek("tracker_comments_thread_idx", query, args...)
+		}(),
 		"what last woke a seat to its ready work": seek("tracker_notifications_woke_idx", arms(2, readyMovedArm),
 			task, "ana", "t-0008", "ana"),
 		"who asked for a seat's reviews": seek(subject, arms(2, readyReviewArm), task, "t-0008"),

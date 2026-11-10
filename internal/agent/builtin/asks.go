@@ -22,7 +22,8 @@ var (
 	// workAsks is a work item comment's: an answer wakes its asker, and a
 	// stake in the thread hears every reply.
 	workAsks = asksSurface{
-		asked: "The colleagues you @-mention are woken and must answer.",
+		asked: "The colleagues you @-mention are woken and must answer; a person " +
+			"you ask is asked with `ask` and a `decision`, never in words alone.",
 		quiet: "whoever's question it answers (`answers`) and anyone with an open " +
 			"question in the thread are woken.",
 	}
