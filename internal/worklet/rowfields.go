@@ -16,7 +16,7 @@ import (
 // so a card cannot say "1 open question" on a task the filter beside it says
 // has none — the two were about to be written twice, one per reader.
 const openAskSQL = "m.ask <> '' AND m.resolved = 0 AND m.answered_by IS NULL " +
-	"AND m.removed = 0"
+	"AND m.removed = 0 AND m.overtaken = ''"
 
 // rowFieldBatch bounds how many ids one row-fact statement binds. A grouped
 // answer carries up to [MaxGroupsWithSubgroups] × [MaxSubgroups] ×

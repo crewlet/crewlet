@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/decision.TestADecisionIsValidatedField`, `internal/worklet.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
+- **Enforced-by:** `internal/worklet.TestAnAskTheFactsOvertookNoLongerWaits`, `internal/worklet.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/decision.TestADecisionIsValidatedField`, `internal/worklet.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
 - **Cost-when-tried:** "no decision engine" was read as "no decision structure". A question that needed somebody to choose travelled as prose on an `ask` comment — the options somewhere in the body, the recommendation a sentence among others, the evidence links a reader went looking for — and the answer was prose the asker then had to map back onto the options it had in mind. The dashboard design dropped its "Also posts to Slack" line because nothing could keep it; when the line came back as `inform`, the tracker accepted it from an operator, for a surface the company did not run and for a channel nothing declared, and a second answer to one ask landed beside the first, claiming to close a question the first had already closed.
 - **Tag-status:** unreleased
 
@@ -46,6 +46,16 @@ The engine enforces **exactly three things**, and forbids itself a fourth:
    not name. The DACI roles stay behavioural guidance; `role` is a label that
    tells the person whether their answer *is* the decision or an input to one,
    and gates nothing.
+
+**An ask the facts overtook stops waiting.** An open ask its asker puts to the
+same person again, later, on the same item is `superseded`; an open ask on an
+item in a finished status is `moot`, and reopening the item frees it. The
+applier keeps this on the ask (`overtaken`, a derived column re-derived with
+the others), so the waiting reads (a person's decisions and `asked_of_me`, the
+board's `has_open_asks`, `asked_of=` and `asked_by=`, and answer inference)
+leave it out, and the cards say why. Nothing a person answered changes: an
+answered, resolved or removed ask is never overtaken, and an answer to an
+overtaken ask is still recorded when somebody names it.
 
 ## Why the obvious alternatives are wrong
 
