@@ -3334,6 +3334,22 @@ type PendingStore interface {
 	// takers racing for it, nor delivered without a record that says so.
 	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
 
+	// SettleTake settles a take whose TakeNotes answered an error, by the
+	// identity its read named ([NoteRead.Take]): the call's write may have
+	// landed with its answer lost, or may land yet. It answers every note
+	// whose read that take recorded — each marked unanswered first where the
+	// settle says its reader never had them ([NoteSettle.Unanswered]) — and
+	// leaves the take nothing more to record: where the record holds no read
+	// of it, the record is written all the same, so a write of the take's
+	// still in flight, conditioned on a version before this one, never lands
+	// after it. A record that is gone — before the settle, or under it, an
+	// attempt that decided losing its race to the record's removal — answers
+	// nothing, never an error; a settle that names no take is an error.
+	//
+	// NO PIN AND NO FENCE: what a take recorded is a fact about the take,
+	// true whoever holds the record and whatever its status or its ending.
+	SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error)
+
 	// MarkPulled records that the job named has asked for its notes at least
 	// once ([RunSteer.Pulled]), reporting whether this call recorded it.
 	// FALSE IS NOT AN ERROR: the record holds another job, already says so,

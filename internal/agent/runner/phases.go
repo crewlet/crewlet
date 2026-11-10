@@ -295,11 +295,12 @@ type SteerSource interface {
 	// answers what it took — what a run of the engine's loop opens with.
 	Take(ctx context.Context, at steer.Reading) []steer.Note
 
-	// Brief is the notes a launch's brief takes, oldest first. They are
-	// the launch's from here: recorded read by the write that opens the
-	// run's job, or handed back with [SteerSource.Return] where the launch
-	// fails before that write.
-	Brief(ctx context.Context) []steer.Note
+	// Brief is the notes a launch's brief takes, oldest first, and every note
+	// the turn has read whose read its record marks unanswered as the brief
+	// read it ([steer.Briefing]). The notes are the launch's from here:
+	// recorded read by the write that opens the run's job, or handed back with
+	// [SteerSource.Return] where the launch fails before that write.
+	Brief(ctx context.Context) steer.Briefing
 
 	// Return hands back notes [SteerSource.Brief] gave a launch that failed
 	// BEFORE IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they
@@ -2187,12 +2188,35 @@ func (r *Runner) carriedSteers() []string {
 }
 
 // steerBrief is the notes a launch's brief takes — none on a turn nobody
-// can steer.
+// can steer — once the reads the turn carries are marked unanswered as the
+// record marks them now ([Runner.markUnanswered]), which every brief the
+// launch builds after it counts.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {
 		return nil
 	}
-	return r.cfg.Steer.Brief(ctx)
+	briefing := r.cfg.Steer.Brief(ctx)
+	r.markUnanswered(briefing.Unanswered)
+	return briefing.Notes
+}
+
+// markUnanswered marks unanswered every read the turn carries of a note ids
+// names: one the run's record marks unanswered (steer.Briefing.Unanswered),
+// its take's settle having landed after the record this segment resumed from
+// was read ([Resume.Steered]). A capture stamped before that settle counted the
+// note held, so the briefs a relaunch builds stop its cursor before it as the
+// record does ([Runner.notesHeldBy]).
+func (r *Runner) markUnanswered(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, read := range r.steered {
+		if slices.Contains(ids, read.ID) {
+			r.steered[i].Unanswered = true
+		}
+	}
 }
 
 // steerReturn hands back the notes a launch that failed took for its brief —

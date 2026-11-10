@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +49,7 @@ var noteCases = []struct {
 		testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox},
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
+	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -59,6 +61,7 @@ var noteRawCases = []struct {
 	{"AKeyALaterBuildAddsInsideASectionSurvivesEveryWrite",
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
+	{"ASettleOfATakeThatRecordedNothingFencesItsWrite", testASettleOfATakeThatRecordedNothingFencesItsWrite},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -99,6 +102,14 @@ func bridgeTake(launch string, ids ...string) sandbox.NoteTake {
 		Read: sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1,
 			Boundary: "tool_batch", Launch: launch},
 	}
+}
+
+// namedTake is [bridgeTake] under the identity take, which a settle finds its
+// reads by.
+func namedTake(launch, take string, ids ...string) sandbox.NoteTake {
+	t := bridgeTake(launch, ids...)
+	t.Read.Take = take
+	return t
 }
 
 // waitingIDs is the ids of the notes on turnID's record nothing has read.
@@ -1187,5 +1198,246 @@ func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.Pending
 		case len(view.Steer.Notes) == 2:
 			return
 		}
+	}
+}
+
+// A TAKE WHOSE ANSWER WAS LOST IS SETTLED BY ITS IDENTITY. A take's write can
+// land and its answer not reach the harness that asked — a hook given five
+// seconds, a store that answered after them — and the record then says the note
+// was read by a job whose harness never had it. The settle answers exactly the
+// notes that take's write recorded, found by the identity its read named, and
+// where its reader never had them marks each unanswered, keeping where it was
+// read: never another take's read, never a note still waiting. Asked again, it
+// answers the same notes and marks nothing twice. A take that recorded nothing
+// is answered nothing, a run with no record is answered nothing, a settle that
+// names no take is refused, and a run whose ending is decided is settled all the
+// same: what a take recorded is a fact about the take.
+//
+// Mutation: mark every read of the take's job rather than the take's own, mark
+// the reads of a settle that does not ask it, clear the read rather than mark
+// it, refuse a run whose ending is decided, or answer a settle naming no take,
+// and a check goes red.
+func testATakeWhoseAnswerWasLostIsSettledByItsIdentity(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-settle"))
+	for _, id := range []string{"n-1", "n-2", "n-3", "n-4"} {
+		mustFile(t, s, "t-settle", id)
+	}
+	if _, err := s.TakeNotes(ctx, "t-settle", namedTake(launch, "answered", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	// THE TAKE WHOSE ANSWER WAS LOST, its write landed: two notes.
+	lost, takeErr := s.TakeNotes(ctx, "t-settle", namedTake(launch, "lost", "n-2", "n-3"))
+	if takeErr != nil || len(lost) != 2 {
+		t.Fatalf("the lost take took %d (%v), want two", len(lost), takeErr)
+	}
+	// AS THEY STAND, for a reader that hands them over itself: nothing marked.
+	stand, standErr := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "lost"})
+	if standErr != nil || len(stand) != 2 || stand[0].Read.Unanswered || stand[1].Read.Unanswered {
+		t.Fatalf("a settle answering the take's reads as they stand = %+v, %v, want both, unmarked", stand,
+			standErr)
+	}
+	for range 2 {
+		settled, settleErr := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+		if settleErr != nil || len(settled) != 2 {
+			t.Fatalf("the settle answered %d (%v), want the two notes the take recorded", len(settled), settleErr)
+		}
+		for _, n := range settled {
+			if n.Read == nil || !n.Read.Unanswered || n.Read.Take != "lost" {
+				t.Errorf("the settle answered %s read %+v, want it marked unanswered", n.ID, n.Read)
+			}
+		}
+	}
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range mustGet(t, s, "t-settle").Steer.Notes {
+		byID[n.ID] = n
+	}
+	for _, id := range []string{"n-2", "n-3"} {
+		read := byID[id].Read
+		if read == nil || !read.Unanswered || read.Order != lost[0].Read.Order || read.Launch != launch ||
+			read.Boundary != "tool_batch" {
+			t.Errorf("note %s is read %+v on the record, want the lost take's read, kept and marked unanswered",
+				id, read)
+		}
+	}
+	if read := byID["n-1"].Read; read == nil || read.Unanswered {
+		t.Errorf("the answered take's read is %+v, want it read and unmarked", read)
+	}
+	if !byID["n-4"].Waiting() {
+		t.Errorf("a note no take recorded is read %+v, want it waiting", byID["n-4"].Read)
+	}
+	if none, err := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "never-landed",
+		Unanswered: true}); err != nil || len(none) != 0 {
+		t.Errorf("a settle of a take that recorded nothing = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.SettleTake(ctx, "t-settle-gone", sandbox.NoteSettle{Take: "lost",
+		Unanswered: true}); err != nil || len(none) != 0 {
+		t.Errorf("a settle of a run with no record = %+v, %v, want nothing", none, err)
+	}
+	if _, err := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Unanswered: true}); err == nil {
+		t.Error("a settle that names no take was answered")
+	}
+
+	// A RUN WHOSE ENDING IS DECIDED is settled all the same.
+	ending := mustLaunched(t, s, run("t-settle-ending"))
+	mustFile(t, s, "t-settle-ending", "n-1")
+	if _, err := s.TakeNotes(ctx, "t-settle-ending", namedTake(ending, "lost", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	decide(t, s, "t-settle-ending", everyJob(sandbox.Fence{}, sandbox.Active))
+	settled, endingErr := s.SettleTake(ctx, "t-settle-ending", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+	if endingErr != nil || len(settled) != 1 || !settled[0].Read.Unanswered {
+		t.Errorf("a settle of a run whose ending is decided = %+v, %v, want its note marked", settled, endingErr)
+	}
+}
+
+// A SETTLE OF A TAKE THAT RECORDED NOTHING FENCES ITS WRITE, IN EITHER MODE. A
+// take whose caller gave up on its answer can still have its write in flight —
+// sent, and taken by the store only after the settle read the record — and that
+// write records the note read by a take nobody answered. So a settle that finds
+// no read of the take writes the record all the same, whether it marks what it
+// finds or answers it as it stands, and the take's write, conditioned on the
+// version it read, cannot land after it: decided again on the record the settle
+// wrote, the take is a lost race, and the note still waits. A settle that finds
+// the take's reads — marked already, where it marks — writes nothing, nothing
+// of the take being left in flight.
+//
+// Mutation: write nothing where the take recorded nothing, in either mode, and
+// the take's write lands after the settle with its note read; or write where
+// the reads are there and need nothing, and the record moves for nothing.
+func testASettleOfATakeThatRecordedNothingFencesItsWrite(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	for name, unanswered := range map[string]bool{"marking": true, "answering": false} {
+		turnID := "t-fence-" + name
+		launch := mustLaunched(t, s, run(turnID))
+		mustFile(t, s, turnID, "n-1")
+		// THE TAKE'S WRITE, as the store makes it: its decision on the record
+		// it read, conditioned on that version — and between its read and its
+		// write, THE SETTLE, made by a caller that gave up on the take's
+		// answer.
+		attempts := 0
+		_, wrote, raceErr := runs.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
+			attempts++
+			if attempts > 1 {
+				// DECIDED AGAIN on the record the settle wrote: the take's
+				// caller is gone, and its write is no more.
+				return coord.SandboxRunChange{}, nil
+			}
+			settled, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "in-flight",
+				Unanswered: unanswered})
+			if settleErr != nil || len(settled) != 0 {
+				return coord.SandboxRunChange{}, fmt.Errorf("the settle beside the take's write = %+v, %v, "+
+					"want nothing recorded", settled, settleErr)
+			}
+			var row sandbox.PendingRun
+			if decodeErr := json.Unmarshal(read.Value, &row); decodeErr != nil {
+				return coord.SandboxRunChange{}, decodeErr
+			}
+			row.Steer.Reads++
+			row.Steer.Notes[0].Read = &sandbox.NoteRead{At: base, Order: row.Steer.Reads, Phase: "execute",
+				Boundary: "tool_batch", Launch: launch, Take: "in-flight"}
+			raw, encodeErr := json.Marshal(row)
+			return coord.SandboxRunChange{Put: raw}, encodeErr
+		})
+		if raceErr != nil {
+			t.Fatal(raceErr)
+		}
+		if wrote || attempts != 2 {
+			t.Errorf("%s, the take's write landed (%v) in %d attempt(s), want it lost to the settle's write",
+				name, wrote, attempts)
+		}
+		if got := waitingIDs(t, s, turnID); !slices.Equal(got, []string{"n-1"}) {
+			t.Errorf("%s, the notes waiting after the settle are %v, want n-1: the take's write landed", name, got)
+		}
+
+		// THE TAKE'S READS THERE, marked already where the settle marks:
+		// nothing is left in flight, and nothing is written.
+		if _, err := s.TakeNotes(ctx, turnID, namedTake(launch, "lost", "n-1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "lost",
+			Unanswered: unanswered}); settleErr != nil {
+			t.Fatal(settleErr)
+		}
+		before, _, beforeErr := runs.SandboxRun(ctx, turnID)
+		if beforeErr != nil {
+			t.Fatal(beforeErr)
+		}
+		if _, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "lost",
+			Unanswered: unanswered}); settleErr != nil {
+			t.Fatal(settleErr)
+		}
+		after, _, afterErr := runs.SandboxRun(ctx, turnID)
+		if afterErr != nil {
+			t.Fatal(afterErr)
+		}
+		if after.Version != before.Version {
+			t.Errorf("%s, a settle of reads that need nothing wrote the record (version %d to %d)", name,
+				before.Version, after.Version)
+		}
+	}
+}
+
+// noteStagedCases are the note cases whose subject is a write another party
+// lands under one of the store's own decisions, which only the records it is
+// built on can stage ([vanishingRuns]).
+var noteStagedCases = []struct {
+	name string
+	fn   func(*testing.T, *vanishingRuns, sandbox.PendingStore)
+}{
+	{"ASettleOfARecordRemovedUnderItAnswersNothing", testASettleOfARecordRemovedUnderItAnswersNothing},
+}
+
+// vanishingRuns is a coordination store's run records that, once armed, remove
+// a run's record between one decision of the store's and its write — the
+// run's ending deleting it under a write it lost to.
+type vanishingRuns struct {
+	records
+	armed atomic.Bool
+}
+
+// MutateSandboxRun makes the read-decide-write as the records would, the
+// record removed under the first decision once armed.
+func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
+	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
+
+	return r.records.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
+		change, err := decide(read)
+		if r.armed.CompareAndSwap(true, false) {
+			if _, _, removeErr := r.records.MutateSandboxRun(ctx, turnID,
+				func(coord.Record) (coord.SandboxRunChange, error) {
+					return coord.SandboxRunChange{Delete: true}, nil
+				}); removeErr != nil {
+				return coord.SandboxRunChange{}, removeErr
+			}
+		}
+		return change, err
+	})
+}
+
+// A SETTLE OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A settle that marks
+// decides to write: its attempt finds the take's reads, and can then lose its
+// race to the record's removal — the run's ending deleting it — and the store
+// asks again and finds no record. That attempt's decision recorded nothing, so
+// it is no answer, as a record gone before the settle is none. (A settle that
+// answers as the reads stand writes nothing where it finds them, so it races
+// nobody: what it read is its answer.)
+//
+// Mutation: answer what an earlier attempt decided where the last found no
+// record, and the settle answers notes marked by a write that never landed.
+func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanishingRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-vanish"))
+	mustFile(t, s, "t-vanish", "n-1")
+	if _, err := s.TakeNotes(ctx, "t-vanish", namedTake(launch, "lost", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	runs.armed.Store(true)
+	settled, err := s.SettleTake(ctx, "t-vanish", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+	if err != nil || len(settled) != 0 {
+		t.Errorf("a settle of a record removed under it = %+v, %v, want nothing", settled, err)
+	}
+	if _, found, getErr := s.Get(ctx, "t-vanish"); getErr != nil || found {
+		t.Errorf("the record is found (%v, %v) after its removal", found, getErr)
 	}
 }

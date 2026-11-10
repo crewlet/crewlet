@@ -63,7 +63,10 @@ import (
 //     has read, as notes it may already show ([prompts.NotesReadAgain]): its
 //     job's last take of them was recorded read before its harness had them,
 //     and it is not known to hold its job's brief, which told the notes the
-//     session it continued lacked; and then the ones this brief is the first to
+//     session it continued lacked; or, of one whose notes stop before a read
+//     the record marks unanswered — a take whose answer never reached its
+//     harness — every note past that, as notes it may already show
+//     ([Runner.notesHeldBy]); and then the ones this brief is the first to
 //     read.
 //
 // AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
@@ -89,7 +92,8 @@ import (
 // and is not known to hold a late one, nor the outcome of one its harness gave
 // up on ([heldAt]), which it shows with no outcome or a failed one: it is told
 // those, as every continuation of the round built after they landed is told
-// them.
+// them — and every note from the first read the record marks unanswered on, as
+// notes it may already show, since it lacks that one.
 //
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
@@ -187,11 +191,18 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// take of them was recorded read before its harness had them, and it is not
 	// known to hold its job's brief, which told the notes the session it
 	// continued lacked, and no record says which those were (internal/sandbox's
-	// notesHeld states none it holds).
-	if basis.Interrupted {
+	// notesHeld states none it holds). AND OF ONE WHOSE NOTES STOP BEFORE A READ
+	// MARKED UNANSWERED, every note past that, as notes it may already show
+	// ([Runner.notesHeldBy]): the session lacks that note, and holds the
+	// answered ones after it.
+	held, unsure := r.notesHeldBy(basis.NoteCursor)
+	switch {
+	case basis.Interrupted:
 		after = append(after, prompts.NotesReadAgain(r.carriedSteers()))
-	} else {
-		after = append(after, r.unreadSince(basis.NoteCursor)...)
+	case unsure:
+		after = append(after, prompts.NotesReadAgain(r.unreadSince(held)))
+	default:
+		after = append(after, r.unreadSince(held)...)
 	}
 	after = append(after, renderedNotes(fresh)...)
 	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
@@ -215,10 +226,13 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // whose outcomes that copy is not known to hold ([heldAt] at a nil save point),
 // while it holds every other call its job made and every call its job's brief
 // told: every other call of the round, where that brief told the round's calls
-// (a fresh run's brief tells none). A call nobody waited for is one the job
-// made whose harness gave up on it — a harness ends its own run once every
-// call it made is answered or given up on — or whose session ended under it:
-// the copy shows it with no outcome or a failed one, its harness having been
+// (a fresh run's brief tells none). AND THE NOTES FROM THE FIRST READ THE RECORD
+// MARKS UNANSWERED ON, as notes it may already show ([Runner.notesHeldBy]): that
+// take's answer never reached the harness, so the copy lacks its notes, while it
+// holds the answered ones after it and every one before. A call nobody waited
+// for is one the job made whose harness gave up on it — a harness ends its own
+// run once every call it made is answered or given up on — or whose session
+// ended under it: the copy shows it with no outcome or a failed one, its harness having been
 // told it timed out, though it ran on and its effect happened, and it is told
 // under the late calls' words, which hold of it. A late call is one the log took after
 // the job that made it was replaced — after this job's opening, or after the
@@ -271,10 +285,18 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	b := r.cfg.Turn.Context.FenceBoundary()
 	end, leadHeld := r.cfg.Resume.HarnessEnd, carry.tellsHeld()
 	if end.EndedOwnRun() {
+		var after []string
 		if late := prompts.CalledAfter(r.calledAfter(ctx, round, nil, leadHeld, surface, b)); late != "" {
-			return []string{late}
+			after = append(after, late)
 		}
-		return nil
+		// AND EVERY NOTE FROM THE FIRST READ MARKED UNANSWERED ON, as notes it
+		// may already show: the copy lacks that note, its take's answer never
+		// having reached the harness, and holds the answered ones after it
+		// ([Runner.notesHeldBy]); it holds every read before.
+		if first := r.firstUnanswered(); first > 0 {
+			after = append(after, prompts.NotesReadAgain(r.unreadSince(first-1)))
+		}
+		return after
 	}
 	after := []string{prompts.MayBeInterruptedCopy}
 	if end == sandbox.HarnessEndCutOff {
@@ -610,6 +632,43 @@ func (r *Runner) unreadSince(cursor int) []string {
 		}
 	}
 	return out
+}
+
+// notesHeldBy is the last read a session saved holding the notes read through
+// cursor (sandbox.SessionCapture.NoteCursor) holds as far as the turn's carried
+// reads say, and whether it may hold a read after that one too.
+//
+// STOPPED BEFORE THE FIRST READ MARKED UNANSWERED (steer.Reading.Unanswered)
+// that the cursor reaches: its take's answer never reached the harness, so the
+// session lacks that note, while it holds the answered reads after it — so
+// every note past the stop is told, as notes it may already show. The capture's
+// own cursor already stops there wherever the mark landed before the capture
+// was stamped (internal/sandbox's notesHeld); read again here, because a mark is
+// made off the take's frame and can land after the stamp, and the carried reads
+// are the record as this segment found it. A read marked unanswered that the
+// cursor neither counts nor stopped right before was made after the session was
+// saved, and is told as every read after it is.
+func (r *Runner) notesHeldBy(cursor int) (held int, unsure bool) {
+	first := r.firstUnanswered()
+	if first == 0 || first > cursor+1 {
+		return cursor, false
+	}
+	return first - 1, true
+}
+
+// firstUnanswered is the place among the record's reads of the earliest read
+// the turn carries that the record marks unanswered (steer.Reading.Unanswered),
+// zero for none.
+func (r *Runner) firstUnanswered() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	first := 0
+	for _, read := range r.steered {
+		if read.Unanswered && read.Order > 0 && (first == 0 || read.Order < first) {
+			first = read.Order
+		}
+	}
+	return first
 }
 
 // sendBackLead is what carries a send-back's session on: the review's notes and

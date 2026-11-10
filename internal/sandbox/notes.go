@@ -31,7 +31,10 @@ import (
 // The record's shape, and the conditions every change to it is taken on: a
 // note filed while the run's ending is undecided, taken only by the job the
 // taker names and only while the run is in a status the taker names, every read
-// recorded by the write that hands the note over. What a note SAYS it never
+// recorded by the write that hands the note over — and a take whose answer was
+// lost settled by its identity, its reads answered to a reader that can still
+// hand them over or marked unanswered where its reader never had them
+// ([PendingStore.SettleTake]). What a note SAYS it never
 // reads: a note is sealed by the engine under the fleet keyring before it is
 // filed ([RunNote.Sealed]), and opened by the engine before anything of it
 // reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
@@ -181,6 +184,23 @@ type NoteRead struct {
 	Boundary  string    `json:"boundary"`
 	Launch    string    `json:"launch,omitempty"`
 
+	// Take is the identity of the take whose write recorded the read, as its
+	// taker named it ([NoteTake]'s Read): what [PendingStore.SettleTake] finds
+	// the take's reads by once its answer was lost. Empty for a read no take
+	// recorded — a launch's brief — and for one a take that named none recorded,
+	// an older build's among them.
+	Take string `json:"take,omitempty"`
+
+	// Unanswered says the take that recorded the read never answered its
+	// reader: its write landed, and its answer did not reach the harness that
+	// asked ([PendingStore.SettleTake]). The note is still read by the record's
+	// word — no later take hands it over again, and every reader that carries
+	// the turn's read notes carries it, the review that judges the work among
+	// them — but the session of the job named does not hold it from this read,
+	// so no capture of that session counts it held (notesHeld), and a launch
+	// that continues one tells it again.
+	Unanswered bool `json:"unanswered,omitempty"`
+
 	// Extra is every key of the read this build does not know — see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -235,8 +255,24 @@ type NoteTake struct {
 	Statuses []string
 	Fence    Fence
 
-	// Read is where the notes are read; the store stamps its At.
+	// Read is where the notes are read; the store stamps its At and Order.
+	// Its Take names this take, fresh for every call, so a taker whose call
+	// answered an error can find what the call recorded
+	// ([PendingStore.SettleTake]).
 	Read NoteRead
+}
+
+// NoteSettle is a take settled once its answer was lost
+// ([PendingStore.SettleTake]).
+type NoteSettle struct {
+	// Take is the take's identity, as its read named it ([NoteRead.Take]).
+	Take string
+
+	// Unanswered says the take's reader never had its notes — a harness's
+	// hook answered nothing — so every read it recorded is marked so
+	// ([NoteRead.Unanswered]). Unset, they are answered as they stand, to a
+	// reader that hands them over itself.
+	Unanswered bool
 }
 
 // NotesView is what a reader following a run's notes needs of its record, and
@@ -400,6 +436,59 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		return nil, err
 	}
 	return taken, nil
+}
+
+// errSettleUnnamed is a settle that names no take.
+var errSettleUnnamed = errors.New("sandbox: a take of a run's notes is settled by its identity, and none was given")
+
+// SettleTake settles a take whose [CoordStore.TakeNotes] answered an error. See
+// the contract on [PendingStore].
+//
+// THROUGH THE WRITE EVERY RUN TAKES, its ending decided or not: what the take
+// recorded is a fact about the take, true whoever holds the record, and the
+// take's own write is in flight whatever the run's state. And ANSWERING NOTHING
+// WHERE THE LAST ATTEMPT FOUND NO RECORD, as a filing does
+// ([CoordStore.FileNote]): an attempt that decided and then lost its race to
+// the record's removal recorded nothing, and what it decided is no answer.
+func (s *CoordStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
+	if settle.Take == "" {
+		return nil, errSettleUnnamed
+	}
+	var recorded []RunNote
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		recorded = nil
+		notes := slices.Clone(run.Steer.Notes)
+		marked := false
+		for i, held := range notes {
+			if held.Read == nil || held.Read.Take != settle.Take {
+				continue
+			}
+			if settle.Unanswered && !held.Read.Unanswered {
+				read := *held.Read
+				read.Unanswered = true
+				held.Read = &read
+				notes[i] = held
+				marked = true
+			}
+			recorded = append(recorded, held)
+		}
+		run.Steer.Notes = notes
+		// WRITTEN WHERE THE TAKE RECORDED NOTHING, its record unchanged but
+		// for the write itself: the take's own write may still be in flight —
+		// sent before its caller gave up on the answer, and taken by the store
+		// after this read — and it was conditioned on a version this write
+		// moves past, so once this lands it never can. Where the take's reads
+		// are on the record, its write landed and nothing of it is left in
+		// flight: only a mark asked for and not yet made is written.
+		return marked || len(recorded) == 0
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case !found:
+		return nil, nil
+	}
+	return recorded, nil
 }
 
 // MarkPulled records that a job's harness has asked for notes. See the

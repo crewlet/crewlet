@@ -256,11 +256,17 @@ func TestAnApprovedCallCarriedOnInItsBoxIsToldFirstThenWhatItsCopyMayLack(t *tes
 // says a note shown both above and there is one note — a second copy of one,
 // unheaded, would read as a note of its own; the notes waiting follow, once. A
 // copy whose harness ended its own run holds them all, and is told only the
-// notes waiting.
+// notes waiting — but for a read the record marks unanswered, a take whose
+// answer never reached its harness: the copy lacks that note and holds the
+// answered ones after it, so it is told every note from that read on, under the
+// same header, and none before.
 //
 // Mutation: tell the notes from the job's first read, tell none, tell them where
-// the harness ended its own run, tell them without their header, after the
-// waiting notes, or a second time with no header, and a case goes red.
+// the harness ended its own run with every take answered, leave a read marked
+// unanswered untold where it did, tell them from the last read marked rather
+// than the first, tell the notes before it, tell them without their header,
+// after the waiting notes, or a second time with no header, and a case goes
+// red.
 func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	t.Parallel()
 	read := func(id, text string, order int, boundary types.SteerBoundary, launch string) steer.Read {
@@ -276,6 +282,15 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	msg := func(r steer.Read) string { return prompts.SteerMessage(r.By, r.Text) }
 	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
 	call := numbered("jira_create", map[string]any{"summary": "an earlier job's issue"}, 1, 1)
+	// A TAKE OF THE JOB'S WHOSE ANSWER WAS LOST, and an answered one after it.
+	lost := read("lost", "the note whose take's answer was lost", 3, types.SteerBoundaryToolBatch, "job-1")
+	lost.Unanswered = true
+	unanswered := []steer.Read{steered[0], steered[1], lost,
+		read("after", "the note an answered take read after it", 4, types.SteerBoundaryToolBatch, "job-1")}
+	// AND A LATER TAKE OF IT LOST TOO, the answered one between them.
+	lostAgain := read("lost-again", "the note a later take lost", 5, types.SteerBoundaryToolBatch, "job-1")
+	lostAgain.Unanswered = true
+	twice := append(append([]steer.Read{}, unanswered...), lostAgain)
 	for name, tc := range map[string]struct {
 		job       string
 		steered   []steer.Read
@@ -291,6 +306,13 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 			told: []string{msg(steered[0])}, count: "the note below"},
 		"a job whose harness ended its own run": {job: "job-1", steered: steered, end: sandbox.HarnessEndOwnRun,
 			not: []string{msg(steered[0]), msg(steered[1]), msg(steered[2]), notesAgainHeader}},
+		"a job whose harness ended its own run, a take of it unanswered": {job: "job-1", steered: unanswered,
+			end: sandbox.HarnessEndOwnRun, told: []string{msg(unanswered[2]), msg(unanswered[3])},
+			not: []string{msg(unanswered[0]), msg(unanswered[1])}, count: "the 2 notes below"},
+		"a job whose harness ended its own run, two takes of it unanswered around an answered one": {
+			job: "job-1", steered: twice, end: sandbox.HarnessEndOwnRun,
+			told: []string{msg(twice[2]), msg(twice[3]), msg(twice[4])},
+			not:  []string{msg(twice[0]), msg(twice[1])}, count: "the 3 notes below"},
 	} {
 		for _, carry := range inBoxCarries {
 			t.Run(carry.name+", "+name, func(t *testing.T) {

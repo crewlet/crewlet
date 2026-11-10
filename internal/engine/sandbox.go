@@ -1377,7 +1377,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// it follows the record by must not outlive the attempt. See runsteer.go.
 	source := e.runSteers.source(ctx, in.Run,
 		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
-	defer source.Close()
+	defer source.Close(ctx)
 	if source != nil {
 		input.Steer = source
 	}

@@ -1160,6 +1160,13 @@ func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteT
 	return s.inner.TakeNotes(ctx, turnID, take)
 }
 
+func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
+	if s.called("SettleTake") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleTake(ctx, turnID, settle)
+}
+
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkPulled") {
 		return false, errRefusedCall

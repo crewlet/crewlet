@@ -685,7 +685,7 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 	box.Offer(steer.Note{ID: "taken", Text: "x"})
 	// The brief takes the note, the launch fails before its write, and the
 	// runner gives it back ([runner.SteerSource.Return]).
-	brief := box.Brief(t.Context())
+	brief := box.Brief(t.Context()).Notes
 	box.Return(t.Context(), brief)
 
 	if notes := d.close("run-1"); len(notes) != 1 || notes[0].ID != "taken" {
@@ -716,7 +716,7 @@ func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testin
 	box := steer.New()
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
 	box.Offer(steer.Note{ID: "briefed", Text: "use staging", By: "founder"})
-	brief := box.Brief(t.Context())
+	brief := box.Brief(t.Context()).Notes
 	box.Offer(steer.Note{ID: "held", Text: "and tag it", By: "founder"})
 	opened := handToRecord(t, d, store, "run-1", brief, nil)
 	// THE LAUNCH FAILS: the runner hands nothing back, since the launch named

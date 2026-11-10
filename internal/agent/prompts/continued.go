@@ -349,14 +349,19 @@ func droppedLate(n int) string {
 		" check whether its tool already did what it was for before doing it again.)"
 }
 
-// notesAgainHeader opens the notes a session that may have been cut off is told
-// again ([NotesReadAgain]).
+// notesAgainHeader opens the notes a session is told again that it may not show
+// ([NotesReadAgain]).
 const notesAgainHeader = "## Notes this turn read that the session above may not show"
 
-// NotesReadAgain is the section that tells a session its run may have been cut
-// off in the notes the turn has read again, each already rendered as the model
-// reads a note ([SteerMessage]), "" for none: the session may not show them, and
-// may show some.
+// NotesReadAgain is the section that tells a session again notes the turn has
+// read that it may not show, each already rendered as the model reads a note
+// ([SteerMessage]), "" for none: every note the turn has read, to a session its
+// run may have been cut off in; every note from a read whose take's answer
+// never reached its harness on, to one whose harness ended its own run. The
+// session may not show them, and may show some.
+//
+// NEVER "EVERY NOTE" IN ITS WORDS: the notes before such a read are the
+// session's, and are not told again.
 //
 // SAID AS NOTES IT MAY ALREADY SHOW, ONE NOTE WHEREVER SHOWN, AND COUNTED. Each
 // note says it stands for the rest of the turn, so a model reading one both above
@@ -377,8 +382,8 @@ func NotesReadAgain(notes []string) string {
 	if len(notes) > 1 {
 		which = "the " + strconv.Itoa(len(notes)) + " notes below"
 	}
-	return notesAgainHeader + "\nThe session above may not show " + which + ": every note a person sent" +
-		" this turn that the turn has read so far, in the order it read them. A note shown both above and" +
+	return notesAgainHeader + "\nThe session above may not show " + which + ": notes a person sent" +
+		" this turn, in the order the turn read them. A note shown both above and" +
 		" here is ONE note, sent once, not two: do what it asks once. A note after them is one the turn" +
 		" had not read before this message." +
 		"\n\n" + strings.Join(notes, "\n\n")

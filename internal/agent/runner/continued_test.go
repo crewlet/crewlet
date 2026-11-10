@@ -48,6 +48,20 @@ func (l *probingLauncher) asked() int {
 	return l.probes
 }
 
+// markingBox is a box whose briefs say the run's record marks unanswered the
+// reads it names: a take's settle that landed after the segment resumed from
+// the record ([steer.Briefing.Unanswered]).
+type markingBox struct {
+	*steer.Box
+	unanswered []string
+}
+
+func (m markingBox) Brief(ctx context.Context) steer.Briefing {
+	b := m.Box.Brief(ctx)
+	b.Unanswered = m.unanswered
+	return b
+}
+
 // keptBasis is a turn's kept session as a launcher answers it: captured once
 // round 1's run had made its one call and read its first note.
 var keptBasis = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1",
@@ -378,6 +392,153 @@ func TestAKeptSessionCutOffIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 				if i < 0 || i < at || i > last || strings.Count(brief, want) != 1 {
 					t.Errorf("the session is not told %q once, in the order read and before the note waiting:\n%s",
 						want, brief)
+				}
+				at = i
+			}
+		})
+	}
+}
+
+// A KEPT SESSION IS TOLD AGAIN EVERY NOTE FROM A READ ITS HARNESS NEVER HAD. A
+// take whose write landed after its answer was lost is marked unanswered on the
+// record: the session lacks that note though its harness ended its own run, and
+// holds the answered reads after it. So a relaunch that continues it — a
+// person's answer or a send-back alike — tells it every note from that read on,
+// once each, in the order read, under the header of notes it may already show,
+// and none before, which the session holds; the note waiting follows, once. As
+// much where the capture's cursor already stops before the read
+// (internal/sandbox's notesHeld) as where its mark landed after the capture was
+// stamped and the cursor counts it — the mark carried from the record the
+// segment resumed from, or landed after that and read by the relaunch's own
+// brief. With two reads marked around an answered one, the first stops it. A
+// take marked unanswered after the session was saved is told as every read
+// after the save is, unheaded. The fresh brief beside it tells every note, as it
+// always does.
+//
+// Mutation: tell only the notes past the capture's cursor where it counts the
+// read, stop at the last read marked rather than the first, ignore a mark the
+// relaunch's brief read, tell them without their header, tell the notes before
+// the read too, or leave the read itself out, and a case goes red.
+func TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	read := func(id, text string, order int, boundary types.SteerBoundary, unanswered bool) steer.Read {
+		return steer.Read{Note: steer.Note{ID: id, Text: text, By: "founder"},
+			Reading: steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1, Boundary: boundary,
+				Launch: "job-1", Order: order, Unanswered: unanswered}}
+	}
+	steered := []steer.Read{
+		read("brief", "the note the job's brief carried", 1, types.SteerBoundaryBrief, false),
+		read("lost", "the note whose take's answer was lost", 2, types.SteerBoundaryToolBatch, true),
+		read("after", "the note an answered take read after it", 3, types.SteerBoundaryToolBatch, false),
+	}
+	msg := func(r steer.Read) string { return prompts.SteerMessage(r.By, r.Text) }
+	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
+	answer := func(r *runner.Resume) {
+		r.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+			SessionID: "s-1", BoxKept: true}
+	}
+	unmarked := slices.Clone(steered)
+	unmarked[1].Unanswered = false
+	twice := append(slices.Clone(steered),
+		read("lost-again", "the note a later take lost", 4, types.SteerBoundaryToolBatch, true))
+	for name, tc := range map[string]struct {
+		cursor    int
+		steered   []steer.Read
+		told, not []string
+		count     string
+		// marks is what the relaunch's brief reads the record to mark
+		// unanswered now, nil for the reads as they were carried.
+		marks []string
+	}{
+		"two reads marked around an answered one": {cursor: 4, steered: twice,
+			told: []string{msg(twice[1]), msg(twice[2]), msg(twice[3])}, not: []string{msg(twice[0])},
+			count: "the 3 notes below"},
+		"marked after the segment resumed, its brief reading the mark": {cursor: 3, steered: unmarked,
+			marks: []string{"lost"}, told: []string{msg(unmarked[1]), msg(unmarked[2])},
+			not: []string{msg(unmarked[0])}, count: "the 2 notes below"},
+		"its cursor stopped before the read": {cursor: 1, steered: steered,
+			told: []string{msg(steered[1]), msg(steered[2])}, not: []string{msg(steered[0])},
+			count: "the 2 notes below"},
+		"its cursor counting the read, marked after the stamp": {cursor: 3, steered: steered,
+			told: []string{msg(steered[1]), msg(steered[2])}, not: []string{msg(steered[0])},
+			count: "the 2 notes below"},
+		// MARKED AFTER THE SAVE, the session saved holding the brief's note
+		// alone: past where the cursor reaches, as every read after the save.
+		"a read marked after the session was saved": {cursor: 1, steered: []steer.Read{
+			read("before", "the note read before the save", 1, types.SteerBoundaryBrief, false),
+			read("after-save", "the note read after the save", 2, types.SteerBoundaryToolBatch, false),
+			read("lost-later", "the note a later take lost", 3, types.SteerBoundaryToolBatch, true)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box := steer.New()
+			box.Offer(waiting)
+			var source runner.SteerSource = box
+			if tc.marks != nil {
+				source = markingBox{Box: box, unanswered: tc.marks}
+			}
+			basis := keptBasis
+			basis.NoteCursor = tc.cursor
+			relauncher := &probingLauncher{basis: basis}
+			resume := &runner.Resume{State: parked.State, Steered: tc.steered, Bridged: []runner.BridgedCall{
+				numbered("jira_create", map[string]any{"summary": "the job's issue"}, 1, 1)}}
+			answer(resume)
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				steer: source, resume: resume})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.SessionID != "s-1" {
+				t.Fatalf("the relaunch continues %+v, want the turn's kept session", again.Session)
+			}
+			brief := again.Session.Brief
+			waitingMsg := prompts.SteerMessage(waiting.By, waiting.Text)
+			last := strings.Index(brief, waitingMsg)
+			if last < 0 || strings.Count(brief, waitingMsg) != 1 {
+				t.Fatalf("the session is not told the note waiting for it once:\n%s", brief)
+			}
+			for _, r := range tc.steered {
+				if !strings.Contains(again.Brief, msg(r)) {
+					t.Errorf("the fresh brief does not carry note %q", r.ID)
+				}
+			}
+			header := strings.Index(brief, notesAgainHeader)
+			if tc.count == "" {
+				if header >= 0 {
+					t.Errorf("a session saved before the read marked unanswered is told its notes as ones it "+
+						"may already show:\n%s", brief)
+				}
+				for _, r := range tc.steered[1:] {
+					if strings.Count(brief, msg(r)) != 1 {
+						t.Errorf("the session is not told %q, read after it was saved, once:\n%s", r.ID, brief)
+					}
+				}
+				if strings.Contains(brief, msg(tc.steered[0])) {
+					t.Errorf("the session is told %q again, which it holds:\n%s", tc.steered[0].ID, brief)
+				}
+				return
+			}
+			if header < 0 || !strings.Contains(brief[header:], tc.count) {
+				t.Fatalf("the notes from the read its harness never had are not headed as %s the session may "+
+					"not show:\n%s", tc.count, brief)
+			}
+			for _, not := range tc.not {
+				if strings.Contains(brief, not) {
+					t.Errorf("the session is told %q again, which it holds:\n%s", not, brief)
+				}
+			}
+			at := header
+			for _, want := range tc.told {
+				i := strings.Index(brief, want)
+				if i < 0 || i < at || i > last || strings.Count(brief, want) != 1 {
+					t.Errorf("the session is not told %q once, under the header, in the order read and before "+
+						"the note waiting:\n%s", want, brief)
 				}
 				at = i
 			}

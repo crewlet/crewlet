@@ -1907,6 +1907,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// write its launch makes to create the run's record — before any box or
 	// harness exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
+	// AND THE SETTLES THOSE RECORDS TAKE OFF THE PATH THAT TOOK END WITH THE
+	// NODE: each asks its store until it answers, and no longer than this
+	// node's teardown, which is when its store goes (runsteer.go).
+	e.runSteers.stopped = e.teardownSignal().Done()
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
