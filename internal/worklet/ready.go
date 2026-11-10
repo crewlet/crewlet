@@ -76,8 +76,9 @@ type ReadyItem struct {
 	Progressed uint64 `json:"progressed,omitempty"`
 
 	// For is whom the item's work is for: the writer of its last
-	// assignment by somebody else, else its reporter; nil for the seat's
-	// own work.
+	// assignment by somebody else, a change that moved its assignee
+	// whatever kind its record ended with ([readyAssignedArm]), else the
+	// writer that filed it; nil for the seat's own work.
 	For *types.WorkingFor `json:"for,omitempty"`
 }
 
@@ -328,10 +329,27 @@ const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker
 
 // readyAssignedArm is one item's last assignment by a person, a colleague or
 // a credential other than the seat: anybody but the engine's own duties.
+//
+// AN ASSIGNMENT IS A ROW THAT MOVED THE ASSIGNEE, read off its assignee delta
+// whatever kind its record ended with, as readyReviewArm reads a review
+// request off the status delta. A record carries one kind, and a write that
+// moves the assignee and another field in one call, the usual hand-off
+// "assign it to you and set it to todo", is filed under the other change's
+// kind ([ChangeKind.MovedFields]). Read by its kind, that hand-off was
+// invisible, and the pickup worked for the assigner before it (#930). An
+// assignment to the seat that already holds the item moves nothing, records no
+// delta, and is no assignment here: another colleague's reassertion changes
+// nothing about whom the work is for.
+//
+// THE CREATION OUTRANKS NOTHING. An item filed already assigned records the
+// assignee's delta on its creation row, its oldest, so any later assignment by
+// somebody else wins; where the creation is the only one, the arm reads the
+// writer that filed it, whom readyCreatedArm names anyway. The seat's own rows
+// stay out, a take included: whom the seat works for is never itself.
 const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
 	FROM tracker_history h
-	WHERE h.subject_id = ? AND h.kind = 'assignee' AND h.actor <> ?
-	  AND h.actor_kind <> 'system'
+	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
+	  AND h.actor <> ? AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // readyCreatedArm is one item's creation by a person, a colleague or a
