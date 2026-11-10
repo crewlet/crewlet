@@ -60,6 +60,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// anywhere called it — expired short-term memories stayed rows
 		// every recall scanned, forever.
 		"agent_diary",
+		// AND THE NOTES AN UPGRADE OR AN ACCESS CHANGE HELD BACK, retired a
+		// held note's life after they were first held (learning.HeldNoteLife).
+		"agent_diary_held",
 		"agent_diary_long",
 		// THE DATASTORE LOG'S operation ledger, the per-node table every
 		// strict state log keeps, swept for the pages log's reason below.
