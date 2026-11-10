@@ -39,12 +39,17 @@ func TestAPickupIsKeyedOnTheItemsVersionBySomebodyElse(t *testing.T) {
 	started := item("a", worklet.StatusInProgress, 40)
 	progressed := started
 	progressed.Progressed = 52
+	// THE SEAT'S OWN WAIT moves no other part: its date coming is the change.
+	waited := item("a", worklet.StatusTodo, 40)
+	until := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	waited.Start = &until
 	for name, other := range map[string]pickup.Key{
-		"somebody else changed it":     pickup.KeyOf(seat, item("a", worklet.StatusTodo, 41)),
-		"its status moved":             pickup.KeyOf(seat, started),
-		"the seat made progress on it": pickup.KeyOf(seat, progressed),
-		"another item":                 pickup.KeyOf(seat, item("b", worklet.StatusTodo, 40)),
-		"another seat":                 pickup.KeyOf(uuid.New(), item("a", worklet.StatusTodo, 40)),
+		"the date it waited until came": pickup.KeyOf(seat, waited),
+		"somebody else changed it":      pickup.KeyOf(seat, item("a", worklet.StatusTodo, 41)),
+		"its status moved":              pickup.KeyOf(seat, started),
+		"the seat made progress on it":  pickup.KeyOf(seat, progressed),
+		"another item":                  pickup.KeyOf(seat, item("b", worklet.StatusTodo, 40)),
+		"another seat":                  pickup.KeyOf(uuid.New(), item("a", worklet.StatusTodo, 40)),
 	} {
 		if other.WakeID() == base.WakeID() || other.WorkKey() == base.WorkKey() {
 			t.Errorf("%s kept the pickup's identity, so the seat is never "+
@@ -53,6 +58,13 @@ func TestAPickupIsKeyedOnTheItemsVersionBySomebodyElse(t *testing.T) {
 	}
 	if pickup.KeyOf(seat, progressed) == pickup.KeyOf(seat, started) {
 		t.Error("the seat's progress on started work left its key where it was")
+	}
+	// AN ITEM WITH NO START keeps the identity older builds derive, so a
+	// rolling upgrade hands no such item again.
+	older := uuid.NewSHA1(uuid.MustParse("7d0c6f2e-4b1a-5e39-8c27-91f3a6b2d4e8"),
+		[]byte(seat.String()+"\x00a\x0040\x00todo\x000"))
+	if base.WakeID() != older {
+		t.Errorf("an item with no start is keyed %s, want %s as older builds key it", base.WakeID(), older)
 	}
 }
 
@@ -89,10 +101,15 @@ func TestAPickupEventNamesItsItem(t *testing.T) {
 	}
 	brief := assigned.Brief()
 	for _, want := range []string{"WRK-a", "in progress and nothing is working on it",
-		"3 ready items", "get_work_item", "not be handed this item again"} {
+		"3 ready items", "get_work_item", "not be handed this item again",
+		"`ask`", "`waiting_on`", "`wait_until` and `wait_reason`", "hand it back"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief lacks %q:\n%s", want, brief)
 		}
+	}
+	// EVERY ANSWER IS A CHANGE TO THE ITEM: a wait said in a comment is none.
+	if strings.Contains(brief, "say why") {
+		t.Errorf("the brief still offers a comment as a wait:\n%s", brief)
 	}
 }
 

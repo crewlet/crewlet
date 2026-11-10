@@ -1184,6 +1184,14 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		errors.Is(err, code.ErrBadCursor), errors.Is(err, code.ErrBadLevel):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused what it was asked: %s. "+
 			"Change the arguments — the same ones are refused again.", tool, domainWords(err)))
+	case errors.As(err, new(*estate.ErrUnknownKeys)):
+		// THE FLEET RUNS TWO BUILDS, which no retry clears: in the
+		// condition's own words, AHEAD of the walk nobody served that it
+		// wraps — read there, the model was told a passing outage and
+		// retried a refusal for the rest of its turn.
+		why, _ := Condition(err)
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
+			"(%s). This is NOT an answer about the repository. %s", tool, repo, why, stuckRead))
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
 			"right now (no node holding it could answer in time). This is NOT an answer about the "+
@@ -1196,9 +1204,12 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 			"copy). This is NOT an answer about the repository: try again shortly.", tool, repo))
 	}
 	if why, ok := Condition(err); ok {
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
-			"right now (%s). This is NOT an answer about the repository: try again shortly.", tool,
-			repo, why))
+		// THE CONDITION'S OWN ADVICE: a wait clears most, and a model told
+		// to try again shortly about one no wait clears retries it for as
+		// long as its turn lasts ([conditionNext]).
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q%s "+
+			"(%s). This is NOT an answer about the repository%s", tool, repo, rightNow(err), why,
+			conditionNext(err, ": try again shortly.", ". "+stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read repository %q: %s. This is NOT an "+
 		"answer about the repository: say you could not read it.", tool, repo, faultSaid))

@@ -1263,3 +1263,100 @@ func TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo(t *testing.T) {
 		}
 	}
 }
+
+// A NOTICE ROW KEEPS ITS AUTHOR'S STATEMENT ONLY FROM THE VERSION THAT SAYS SO:
+// a record an older build wrote, or replayed from before the rule, leaves it
+// NULL on every node, so no two nodes keep different rows for one record.
+func TestANoticeKeepsItsAuthorsStatementOnlyFromTheVersionThatSaysSo(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, c := range []struct {
+		name   string
+		v      int
+		kept   bool
+		stated *bool
+		want   sql.NullInt64
+	}{
+		{"a version-5 record, before the rule", 5, false, &yes, sql.NullInt64{}},
+		{"a version-6 record that asks", worklet.NoticeAsksVersion, true, &yes, sql.NullInt64{Int64: 1, Valid: true}},
+		{"a version-6 record that asks nothing", worklet.NoticeAsksVersion, true, &no, sql.NullInt64{Valid: true}},
+		{"a person's comment, which states nothing", worklet.NoticeAsksVersion, false, nil, sql.NullInt64{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newApplyHarness(t)
+			at := time.Unix(1_700_000_100, 0).UTC()
+			if _, err := h.apply(taskRecord("t-1", worklet.OpCreate, newTask("t-1"), nil), at); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			comment := worklet.Comment{ID: "c-1", Task: "t-1", Author: "pm", AuthorKind: worklet.AuthorAgent,
+				Body: "Noted.", Mentions: []string{"qa"}, CreatedAt: at}
+			rec := taskRecord("t-1", worklet.OpPatch, worklet.TaskPatch{Comment: &comment},
+				&worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"qa"}, CommentID: "c-1",
+					Snapshot: worklet.Snapshot{Key: "ENG-1", CommentAuthorKind: worklet.AuthorAgent,
+						CommentAsks: c.stated, MentionedAgents: []string{"qa"}}})
+			rec.V, rec.Actor, rec.ActorKind, rec.NoticeAsksKept = c.v, "pm", worklet.AuthorAgent, c.kept
+			if _, err := h.apply(rec, at.Add(time.Second)); err != nil {
+				t.Fatalf("apply the comment: %v", err)
+			}
+			var got sql.NullInt64
+			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+				return tx.QueryRowContext(t.Context(), `SELECT asks FROM tracker_notifications
+					WHERE recipient = 'qa' AND kind = 'comment'`).Scan(&got)
+			}); err != nil {
+				t.Fatalf("read the notice row: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("the notice row keeps asks %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// A NOTICE KEEPS WHETHER IT WOKE ITS RECIPIENT ONLY FROM THE VERSION THAT SAYS
+// SO: an agent's comment that asks nothing tells the agent it names without
+// waking it, and only a marked record at that version writes so; an older or
+// unmarked one reads as waking, as every build before the rule wrote it.
+func TestANoticeKeepsWhetherItWokeOnlyFromTheVersionThatSaysSo(t *testing.T) {
+	t.Parallel()
+	no := false
+	for _, c := range []struct {
+		name string
+		v    int
+		kept bool
+		want int
+	}{
+		{"a version-6 record, before the rule", 6, false, 1},
+		{"a version-7 record that is not marked", worklet.NoticeWokeVersion, false, 1},
+		{"a marked version-7 record", worklet.NoticeWokeVersion, true, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newApplyHarness(t)
+			at := time.Unix(1_700_000_100, 0).UTC()
+			if _, err := h.apply(taskRecord("t-1", worklet.OpCreate, newTask("t-1"), nil), at); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			comment := worklet.Comment{ID: "c-1", Task: "t-1", Author: "pm", AuthorKind: worklet.AuthorAgent,
+				Body: "Noted.", Mentions: []string{"qa"}, CreatedAt: at}
+			rec := taskRecord("t-1", worklet.OpPatch, worklet.TaskPatch{Comment: &comment},
+				&worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"qa"}, CommentID: "c-1",
+					Snapshot: worklet.Snapshot{Key: "ENG-1", CommentAuthorKind: worklet.AuthorAgent,
+						CommentAsks: &no, MentionedAgents: []string{"qa"}}})
+			rec.V, rec.Actor, rec.ActorKind, rec.NoticeWokeKept = c.v, "pm", worklet.AuthorAgent, c.kept
+			if _, err := h.apply(rec, at.Add(time.Second)); err != nil {
+				t.Fatalf("apply the comment: %v", err)
+			}
+			var got int
+			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+				return tx.QueryRowContext(t.Context(), `SELECT starts_turn FROM tracker_notifications
+					WHERE recipient = 'qa' AND kind = 'comment'`).Scan(&got)
+			}); err != nil {
+				t.Fatalf("read the notice row: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("the notice row keeps starts_turn %d, want %d", got, c.want)
+			}
+		})
+	}
+}

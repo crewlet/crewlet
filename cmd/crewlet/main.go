@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/insights"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -98,13 +99,28 @@ func main() {
 		// errSilent has already said everything it has to say, on stdout,
 		// in the shape its caller asked for. Printing a second copy on
 		// stderr is what makes a machine consumer's log unreadable.
+		code := 1
+		var exit *exitError
+		if errors.As(err, &exit) {
+			code = exit.code
+		}
 		if errors.Is(err, errSilent) {
-			os.Exit(1)
+			os.Exit(code)
 		}
 		fmt.Fprintln(os.Stderr, "crewlet:", err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
+
+// exitError ends a command with a status of its own, for a script to tell a
+// result the command reports from a failure to ask.
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string { return e.err.Error() }
+func (e *exitError) Unwrap() error { return e.err }
 
 // run is main's testable body: it takes its arguments and streams rather
 // than reaching for globals, so the CLI surface can be exercised in tests —
@@ -267,6 +283,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runFleet(environ, rest, stdout, stderr)
 	case "feeds":
 		return runFeeds(environ, rest, stdout, stderr)
+	case "doctor":
+		return runDoctor(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
@@ -327,6 +345,9 @@ Usage:
   crewlet feeds <cmd>         The wake feeds' dead letters, records no node could
                               read: dead-letters lists them, and discard gives
                               one's wake up for good
+  crewlet doctor              The setup advisor's findings from a running node:
+                              classes, subjects by ordinal and counts (-words
+                              adds names and reasons); exits 2 when one blocks
   crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
@@ -2393,45 +2414,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	backups, err := backup.New(backup.Options{
-		Store: e.Backends().Store,
-		// WHAT THIS NODE HOLDS, from the rule the engine opens it by —
-		// never whether the replicated estate happens to be open, which it
-		// is not while an adoption replaces it.
-		Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
-		// Nil on a node that dialled an external NATS cluster, whose
-		// streams are backed up at the cluster. See internal/backup.
-		Conn: e.Backends().Conn(),
-		API:  e.Backends().API(),
-		// The trim-hold register. A backup is not a counted node, so
-		// without this the fleet's own trim can delete exactly the records
-		// the artefact's store-to-stream gap needs to be replayable, and
-		// the backup would report success.
-		Holds: e.Backends().Fleet,
-		// And where a finished copy is announced. Without it the trim's
-		// backup term has no input at all and refuses for ever, so a
-		// fleet with a working nightly backup would still never trim its
-		// log.
-		Backups: e.Backends().Fleet,
-		// The engine's own name for this node, never boot.Node.ID: the
-		// raw field is empty on a node named through CREWLET_NODE_ID, and
-		// this id keys the node's trim hold and its announced backup point.
-		NodeID: nodeID,
-		// Every object a required table of the store copy names,
-		// streamed from the one store the fleet shares and checked
-		// against the row naming it — or, where they ride the broker's
-		// own bucket, asked after once its stream is snapshotted.
-		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
-			Stream: e.ObjectsStream()},
-		// The keyring the appliers open every record with: the records a
-		// restore replays past the copy are signed frames, read for the
-		// files they name only once verified, exactly as they are applied.
-		Keyring: e.RecordKeyring(),
-		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
-		// duration is a catalogued instrument, and two recorders in one
-		// process would be two sets of series for one fleet.
-		Metrics: e.Recorder(),
-	})
+	// THE ENGINE'S OWN WIRING, every registered log included, so a backup
+	// names each one and the trim and the backup alarm can count it.
+	backups, err := backup.New(e.BackupOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -2563,6 +2548,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// node owns the requester's seat, so a per-node read would
 			// draw a different set depending on which node answered.
 			Channels: e.Backends().Fleet,
+			// The fleet's record of the operating insights it shares (ADR-0119).
+			Insights: e.Backends().Fleet,
 			// The company's ONE knowledge backend, behind the same seam a
 			// seat's own turn searches through. Nil when none is
 			// configured, which leaves the question unregistered rather
@@ -2576,6 +2563,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			Holds:     e.Backends().Fleet,
 			// WHERE A THIRD-PARTY APP REACHES THIS DEPLOYMENT — the
 			// public listener's `api.public.external_url` where one is
 			// configured, `api.external_url` otherwise — which is what a
@@ -3246,6 +3234,15 @@ const apiIdleTimeout = 60 * time.Second
 // schema`, and is the name of its checked-in file.
 const issueReportCatalogue = "issue-report-catalogue"
 
+// insightsCatalogue names the operating insights catalogue the same way.
+const insightsCatalogue = "insights-catalogue"
+
+// catalogues are the exports `crewlet schema` emits beside the two tiers.
+var catalogues = map[string]func() ([]byte, error){
+	issueReportCatalogue: issuereport.CatalogueJSON,
+	insightsCatalogue:    insights.CatalogueJSON,
+}
+
 // emitSchema writes a tier's JSON Schema.
 //
 // # Why the CLI carries this at all
@@ -3280,8 +3277,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// rather than a silently ignored argument.
 	name, given := onePositional(fs, name)
 	if given > 1 {
-		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s|%s] [-o path]\n",
-			config.TierCompany, config.TierBootstrap, issueReportCatalogue)
+		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s|%s|%s] [-o path]\n",
+			config.TierCompany, config.TierBootstrap, issueReportCatalogue, insightsCatalogue)
 		return errors.New("name at most one tier")
 	}
 	if name == "" {
@@ -3293,11 +3290,11 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var body []byte
-	if name == issueReportCatalogue {
-		// NOT A TIER: the catalogue a relay vendors, emitted and gated beside
+	if export, ok := catalogues[name]; ok {
+		// NOT A TIER: a catalogue a relay vendors, emitted and gated beside
 		// the two schemas for the same reason they are checked in. It ends in
 		// its own newline.
-		catalogue, err := issuereport.CatalogueJSON()
+		catalogue, err := export()
 		if err != nil {
 			return err
 		}

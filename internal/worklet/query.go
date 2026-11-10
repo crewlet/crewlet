@@ -190,18 +190,22 @@ type ShowClosed struct {
 	// Since is the same bound as an INSTANT, resolved from a date token on
 	// the company's clock by [ParseQuery] — `closed_since=sow` is the first
 	// instant of this ISO week in the company's zone, never the reader's.
-	// NIL IS UNSET, and it is a pointer because the zero instant is a
-	// value a caller can write — `closed_since=0001-01-01T00:00:00Z` is
-	// every finished task — and must not read as "no bound", which
-	// excludes them all.
-	Since *time.Time
+	// THE ZERO INSTANT IS UNSET, and no bound a query names: the parse
+	// refuses a `closed_since` that resolves to it, since a bound in January
+	// of year one is every finished task, which `show_closed=true` already
+	// says. It was a pointer whose zero instant meant exactly that, and a
+	// pointer at a value its type calls zero does not cross the estate's
+	// wire as itself — encoding/json's omitzero asks time.Time's IsZero
+	// through the pointer — so a query read through a node without data
+	// arrived as no bound at all and left out every finished task.
+	Since time.Time
 }
 
 // Finished reports whether any finished work is in the answer — the one
 // question [compilePredicate] and [admittedStatuses] both ask of this, stated
 // once so a fourth way to ask cannot reach one of them and not the other.
 func (s ShowClosed) Finished() bool {
-	return s.All || s.Recent > 0 || s.Since != nil
+	return s.All || s.Recent > 0 || !s.Since.IsZero()
 }
 
 // ArchivedMode is how archived work is included.
@@ -1057,7 +1061,13 @@ func (q *Query) parseShowClosed(p Params, now time.Time, loc *time.Location) err
 		if err != nil {
 			return fmt.Errorf("closed_since: %w", err)
 		}
-		q.ShowClosed.Since = &at.At
+		if at.At.IsZero() {
+			// THE ZERO INSTANT IS NO BOUND ([ShowClosed.Since]): every
+			// finished task has its own spelling.
+			return fmt.Errorf("worklet: closed_since=%s is the zero instant, January of year one, "+
+				"which bounds nothing — every finished task is show_closed=true", since)
+		}
+		q.ShowClosed.Since = at.At
 		return nil
 	}
 	switch value {

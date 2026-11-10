@@ -10,6 +10,7 @@
 
 import { useMemo } from "react";
 import type { McpAlarm } from "~/contract/mcp.ts";
+import type { AdvisorFinding, AdvisorNotice } from "~/protocol/advisor.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
@@ -21,6 +22,16 @@ import { useViewer } from "./viewer.ts";
 
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
+
+/** No notice or finding: a reader the advisor does not answer, or an answer not in yet. */
+const NO_NOTICES: readonly AdvisorNotice[] = [];
+const NO_FINDINGS: readonly AdvisorFinding[] = [];
+
+/** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
+const NO_SETUP_UNREAD: readonly string[] = [];
+
+/** How often the queue asks the advisor again: a setup changes by revisions. */
+export const ADVISOR_POLL_MS = 60_000;
 
 /**
  * Whether this reader is asked the MCP alarms: an administrator, the reader
@@ -40,7 +51,7 @@ function useReadsMcpAlarms(): boolean {
  * reader who is not asked their alarms.
  */
 export function useUnwatched(): readonly Subject[] {
-  return useReadsMcpAlarms() ? [] : ["tools"];
+  return useReadsMcpAlarms() ? [] : ["tools", "setup", "alarms", "holds"];
 }
 
 export function useAttention(): Attention[] {
@@ -65,6 +76,17 @@ export function useAttention(): Attention[] {
     enabled: readsMcp,
   });
   const mcpAlarms = readsMcp && mcp?.reading === "admin" ? mcp.alarms : NO_MCP_ALARMS;
+  // THE PLATFORM NOTICES, asked of the same administrator on the advisor's own
+  // poll: what blocks the setup and the alarms that have stood, nothing else.
+  const { data: advisor } = useQuery("advisor", undefined, {
+    pollMs: ADVISOR_POLL_MS,
+    enabled: readsMcp,
+  });
+  // READ, NEVER TRUSTED AS TYPED: an engine that answers no advisor, or one
+  // older than the notices, raises nothing here.
+  const notices = readsMcp && Array.isArray(advisor?.notices) ? advisor.notices : NO_NOTICES;
+  const findings = readsMcp && Array.isArray(advisor?.findings) ? advisor.findings : NO_FINDINGS;
+  const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
   return useMemo(
     () =>
       attentionQueue({
@@ -77,7 +99,23 @@ export function useAttention(): Attention[] {
         now,
         nameOf,
         mcpAlarms,
+        notices,
+        findings,
+        setupUnread,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms],
+    [
+      agents,
+      runs,
+      budget,
+      engine,
+      connected,
+      authRejected,
+      now,
+      nameOf,
+      mcpAlarms,
+      notices,
+      findings,
+      setupUnread,
+    ],
   );
 }

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import type { IssueReportInert, IssueReportsAnswer } from "~/protocol/issueReports.ts";
+import type { InsightsAnswer } from "~/protocol/insights.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -61,13 +62,26 @@ function reading(over: Partial<IssueReportsAnswer> = {}): IssueReportsAnswer {
   };
 }
 
+/** Usage insights, off and empty: this file is about bug reports. */
+const NO_INSIGHTS: InsightsAnswer = {
+  share: "off",
+  accepted: 0,
+  schema: 1,
+  always: [],
+  relay: "https://reports.crewlet.ai/v1/insights",
+  catalogue: { schema: 1, classes: [] },
+  records: [],
+};
+
 /** The screen, over a socket answering `answer`. */
 async function mount(answer: IssueReportsAnswer) {
   location.hash = "#/settings/diagnostics";
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : answer);
+    Promise.resolve(
+      what === "viewer" ? ADMIN_VIEWER : what === "diagnostics_insights" ? NO_INSIGHTS : answer,
+    );
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>

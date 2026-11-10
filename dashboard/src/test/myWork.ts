@@ -16,6 +16,7 @@ export function emptyDay(handle: string, over: Partial<WorkMyWork> = {}): WorkMy
     collaborating: [],
     watching_recent: [],
     unblocked_recent: [],
+    holding_up: [],
     totals: {
       priorities: { total: 0 },
       assigned: { total: 0 },
@@ -24,6 +25,7 @@ export function emptyDay(handle: string, over: Partial<WorkMyWork> = {}): WorkMy
       collaborating: { total: 0 },
       watching_recent: { total: 0 },
       unblocked_recent: { total: 0 },
+      holding_up: { total: 0 },
     },
     complete: true,
     ...over,

@@ -169,7 +169,7 @@ The engine's own domains — [Worklet](../guides/worklet.md#what-wakes-a-seat), 
 
 ### Alarm wakes
 
-A node's [alarms](../reference/alarms.md) wake the seats that may read the deployment's health. Every time an alarm changes on a node — it fires, it clears, or the node's first evaluation since it started finds it up (`firing_at_boot`) — the node hands the transition to an outbox, which publishes it on `crewlet.notifications.inbound` as a delivery of source `alarms`, retried until the broker takes it. The notification service routes it by the same rule as every first-party source (`internal/routing`) to every agent seat whose role carries [`health_tools`](../guides/fleet.md#the-health-tools): one reason, no actor, and a seat the company no longer employs dropped. Each wake's id is derived from the transition and the seat, so a delivery published twice wakes each seat once.
+A node's [alarms](../reference/alarms.md) wake the seats that may read the deployment's health. Every time an alarm changes on a node, it fires or it clears, the node hands the transition to an outbox, which publishes it on `crewlet.notifications.inbound` as a delivery of source `alarms`, retried until the broker takes it. A restart is not a change: the node keeps the alarms whose raise the broker took in its own file, so its first evaluation after a restart says only what changed while it was down, and a raise the broker never took is raised again. The notification service routes it by the same rule as every first-party source (`internal/routing`) to every agent seat whose role carries [`health_tools`](../guides/fleet.md#the-health-tools): one reason, no actor, and a seat the company no longer employs dropped. Each wake's id is derived from the transition and the seat, so a delivery published twice wakes each seat once.
 
 - **The delivery is the record.** Nothing commits beside it: the published delivery is the durable record the wakes derive from ([ADR-0095](../../adr/0095-a-nodes-alarm-transition-is-the-record-its-wake-derives-from.md)), so no write is left for a publish to trail. A transition the node did not live to publish is not recovered, since the outbox is the node's memory: what is firing now is every node's own heartbeat's to say, which `fleet_health` reads and every alarm wake sends its seat to first, and a restarted node's first evaluation says again what is still firing.
 - **One alarm is one conversation, and every transition is a wake.** A per-log alarm is a transition per log and a per-entry alarm a transition per model entry or MCP server, as their log lines are, each wake naming the log or entry it is about, and every data node evaluates its own table, so one fleet-wide condition, such as a stale backup, fires on each data node within one alarm interval (ten seconds; the nodes' evaluations are not synchronised). Every copy is keyed by the alarm alone (`alarm:<kind>`), so the [coalescer](#inbox-batching--coalescing) merges whichever of them are pending together when a seat's turn starts, as it merges any conversation's burst, and one look at `fleet_health` with `firing: true` answers them all. That is ALL that merges them. With `notification_coalesce_window_seconds` at its default `0`, the first copy starts a turn at once and the copies that arrive during it run together as one more, so one fleet-wide condition costs each granted seat two turns however many data nodes raise it; a window of at least the alarm interval gathers them into one, at that much more latency on every wake the seat gets. Nothing holds a transition back: the alarm table has no hysteresis and the outbox publishes every transition it is handed, so an alarm that fires and clears more slowly than a turn runs costs every granted seat one turn per fire and one per clear, for as long as it flaps. Nobody is waiting on an answer, so a woken seat may look and end its turn having done nothing.
@@ -226,6 +226,8 @@ flowchart TD
 **A failed turn does not hold its conversation back.** A failing partition's redelivery waits out a backoff — one second, doubling to thirty — and nothing waits with it: a newer event on the same conversation that arrives meanwhile is drained without it and runs first, in a turn of its own, and the failed event follows in a later turn. Event timestamps order the events *within* one partition, whatever order the broker returned them in; they cannot reorder two turns. Holding the newer events back instead would stall the conversation for the whole backoff and hand a poison event's failure to the healthy ones held behind it, since a partition succeeds or fails as a unit.
 
 **And the failed one is not answered twice.** In a chat thread the newer message's turn reads the thread at its start and sees the failed message there, still waiting — and answers the thread as it stands, that message included. So the turn reports the waiting messages its thread block showed it (its own writer's, after the seat's own last reply, before the message that woke it; never one a bound dropped, and never another writer's, which is owed a turn of its own, below), and when it completes they are written to the [completion ledger](seat-ownership.md#the-completion-ledger) beside its own triggers, keyed on each message's identity on its chat backend. When the failed message comes round it is dropped as worked — `TurnTriggerSkipped` says a later turn answered it in its thread — instead of producing a duplicate, out-of-order reply. The ledger is the fleet's, so the drop holds on whichever node the redelivery reaches. A message no later turn was shown — a top-level message has no thread block — is still owed its turn, and gets it.
+
+**And a wake a completed turn already read past starts no turn** ([ADR-0120](../../adr/0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md)). A first-party wake carries the log position of the record it was derived from (`trigger_position`). When a turn completes, the newest such position among its triggers becomes its seat's seen-through mark for the conversation on that log, keyed on the thread's stamped partition key (never split by writer) and the log, in the completion ledger's bucket and aged with it, and moved forward only, by compare-and-set. A wake that later arrives in that conversation at or below the mark, and that asks the seat for nothing (not addressed to it, owing no chat surface, no question put to the room), is dropped before coalescing with a `TurnTriggerSkipped` whose disposition is `absorbed`. An obligation is never absorbed, and a vendor's wake, which carries no position, never is. Reads made during a turn do not move the mark: it is what the turn was woken for.
 
 **The ack budget.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn, so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. That clock is real: `DefaultAckWait` is 30 minutes, and collection plus one handler run must fit inside it, which is why the linger is capped at 60 s. The number lives once, as `queue.MaxLingerSeconds`: the contract clamps to it on every read so programmatic construction cannot bypass it, and config validation refuses an out-of-range value at load from that same constant, so an operator is told rather than silently cut. A drain whose partitions together outlast the window is not lost, it is **redelivered**: the tail comes back, each redelivery spends one unit of the 25-delivery budget, and the [completion ledger](seat-ownership.md#the-completion-ledger) plus the same-id dedupe are what make that a redelivery rather than a second turn (`TurnTriggerSkipped` is emitted precisely so it is not invisible). What is never substituted is a republish: it would be a *new* message at the stream's tail, and both the ledger's idempotency and the batch layer's aging key on the identity a NAK preserves. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp), after any partition holding a priority wake (below): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
 
@@ -330,7 +332,8 @@ assistant_turn_completed   # one segment of a person's Ask Crewlet
                            # every step's tool, route pattern, outcome,
                            # status and bytes; never an argument, an answer
                            # or the question
-seat_paused                # a person paused a seat (paused_by,
+seat_paused                # a person, or the engine for a failure a
+                           # retry cannot cure, paused a seat (paused_by,
                            # paused_by_kind and operator_id from
                            # iam.ActorFor, reason, stop_running, paused_at).
                            # Published once per CHANGE by the caller whose
@@ -407,17 +410,40 @@ contribution_requested, contribution_received
 # notification: what arrived from outside, and what the engine decided
 external_notification      # inbound from a third-party app webhook or chat socket
 notification_skipped       # dropped notification with reason (traceability)
+wake_held                  # an agent seat a change told and did not wake (its
+                           # notice row is written and no turn starts, as for
+                           # another agent's words that ask nothing): the
+                           # seat, and the origin it was told under, which
+                           # the turn ledger counts as the wake's `held`
+                           # disposition. One per change and seat, under an
+                           # id derived from the one its wake would have had
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
                            # worked, emitted precisely so it is not invisible —
                            # or a trigger whose turn was ABANDONED rather than
                            # redelivered (it panicked, or wrote outside the
-                           # engine before breaking), with the reason
+                           # engine before breaking), with the reason. A wake
+                           # a completed turn already read past carries the
+                           # disposition `absorbed`, and one a held
+                           # conversation settled unrun `breaker_held`, each
+                           # with its wake, which the turn ledger counts
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
-turn_completed, episode_written, persist_decider_completed
+turn_completed             # the record that ends a turn; its `turn` tally
+                           # states the whole turn however it was spread over
+                           # nodes and parks: duration, reviews, tool calls,
+                           # `wake` (what woke its first segment: the object's
+                           # kind and reason, `schedule:<name>`, or the
+                           # waking event's type), `outcome` (`moved`, `words`
+                           # or `nothing`, read from the kinds of change its
+                           # committed writes recorded: an item moved, a page
+                           # saved, or code pushed, merged or reviewed is
+                           # moved; comments, answers to asks and chat posts
+                           # are words) and `tokens` (its model spend, and its
+                           # in-turn auxiliary calls apart)
+episode_written, persist_decider_completed
 counterparty_profile_updated, reflection_completed
 skill_synthesized, skill_refined, skill_promoted
 skill_used                 # a seat loaded a skill; a company-published tool
@@ -527,7 +553,9 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # (`response`), delivered refs, activity
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
-                           # error_kind launch_failed or context_exhausted).
+                           # error_kind launch_failed, context_exhausted or
+                           # out_of_memory), and the kills the kernel made
+                           # for memory in its job's domain.
                            # NO PHASE: the
                            # work of the `execute` round that launched it
                            # (`iteration`, `launch_id`), which every spend
@@ -868,10 +896,10 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
-**Stored, not fed.** Three types are rows like every other and are kept out of
+**Stored, not fed.** Some types are rows like every other and are kept out of
 the activity feed: `auxiliary_spend`, which is accounting rather than activity,
-`code_fetched`, which is an audit, and `code_check_finished`, which is
-counted rather than watched. The feed is a ring of the whole
+`code_fetched`, which is an audit, and `code_check_finished` and `wake_held`,
+which are counted rather than watched. The feed is a ring of the whole
 company's last few hundred events — every node's is fed by a fleet-wide
 broadcast — and a turn writes several auxiliary records beside its own phases,
 a compaction a burst, while a busy company's readers of its unit repositories —

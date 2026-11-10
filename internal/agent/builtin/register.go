@@ -261,6 +261,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// AND WITHDRAWING ONE'S OWN QUESTION, on a work item or one the
 		// seat's executor waits on. See withdrawask.go.
 		{&withdrawAsk{deps: withdraw, requesters: deps.Requesters}, withdraw.serves()},
+		// AND ASKING FOR ACCESS, a decision the comment tool posts whose grant
+		// option the engine builds. See requestaccess.go.
+		{&requestAccess{comment: &commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader}},
+			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can

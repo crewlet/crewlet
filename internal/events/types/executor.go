@@ -269,11 +269,17 @@ type ExecutorCollected struct {
 	Notes string `json:"notes"`
 	// Failed, Error and ErrorKind are a launch that did not succeed, with its
 	// reason, redacted; the kind is [ExecutorErrorContextExhausted] where the
-	// harness said its conversation no longer fits the model's context, and
-	// [ExecutorErrorLaunchFailed] for every other cause.
+	// harness said its conversation no longer fits the model's context,
+	// [ExecutorErrorOutOfMemory] where the kernel killed its harness for
+	// memory, and [ExecutorErrorLaunchFailed] for every other cause.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
+	// MemoryKills is how many processes the kernel killed for memory in the
+	// job's memory domain while it ran, and MemoryBytes that domain's
+	// ceiling; both absent where it killed none.
+	MemoryKills int64 `json:"memory_kills,omitempty"`
+	MemoryBytes int64 `json:"memory_bytes,omitempty"`
 	// HarnessSession is the harness's own session the launch RAN, as the
 	// run's script recorded it — which, for a launch asked to continue a
 	// session its box could not, is the new one it started instead — and
@@ -332,6 +338,10 @@ const (
 	// meets again, which is why it is told from the rest and why no later
 	// launch continues that session (internal/sandbox's ranOutOfContext).
 	ExecutorErrorContextExhausted = "context_exhausted"
+	// ExecutorErrorOutOfMemory is a run whose harness the kernel killed for
+	// memory: its box's ceiling, which the same work meets again until the
+	// box is larger or a person changes the work.
+	ExecutorErrorOutOfMemory = "out_of_memory"
 )
 
 // EventType is the "executor_collected" wire type.
@@ -558,6 +568,16 @@ const (
 	// models unreachable, a defect it keeps meeting), never the box, which
 	// answered.
 	ExecutorFailureResumeFailing = "resume_failing"
+
+	// ExecutorFailureStateRetired is a run whose parked turn was saved in a format
+	// no live node reads any more: an upgrade retired it, so it is ended, never
+	// retried, and a person's reply on it goes back to the seat.
+	ExecutorFailureStateRetired = "state_retired"
+
+	// ExecutorFailureItemFinished is a run parked on a question about a work item
+	// that was finished or removed since: the question is moot, so the run is
+	// ended and a person's reply on it goes back to the seat.
+	ExecutorFailureItemFinished = "item_finished"
 )
 
 // EventType is the "executor_failed" wire type.

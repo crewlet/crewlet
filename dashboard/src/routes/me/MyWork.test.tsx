@@ -181,6 +181,7 @@ const emptyDay = {
   collaborating: [],
   watching_recent: [],
   unblocked_recent: [],
+  holding_up: [],
   totals: {
     priorities: { total: 0 },
     assigned: { total: 0 },
@@ -189,6 +190,7 @@ const emptyDay = {
     collaborating: { total: 0 },
     watching_recent: { total: 0 },
     unblocked_recent: { total: 0 },
+    holding_up: { total: 0 },
   },
   complete: true,
 };
@@ -442,6 +444,7 @@ test("every claim is a section, and its count is published unopened", async () =
     "asked-of-me": "1",
     "asked-by-me": "3",
     unblocked: "0",
+    "holding-up": "0",
     collaborating: "0",
     watching: "2",
     checklist: "0",
@@ -763,6 +766,53 @@ test("an empty claim says what would be in it", async () => {
   mount("unblocked");
   await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
   expect(screen.getByText("Nothing newly unblocked.")).toBeTruthy();
+});
+
+// WHAT THE READER IS HOLDING UP, in the engine's order: how much waits on each
+// item and on whom, and how long it has been held. Nothing here is re-sorted
+// or re-counted; the row is the engine's walk.
+test("held work that others wait on says how much waits and on whom", async () => {
+  location.hash = "#/me/holding-up";
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: {
+      ...emptyDay,
+      holding_up: [
+        {
+          ...task({ key: "ENG-7", title: "Approve the release" }),
+          blocks: 18,
+          holders: ["rui"],
+          held_since: "2031-04-06T09:00:00Z",
+        },
+        {
+          ...task({ key: "ENG-8", title: "Check the copy" }),
+          blocks: 1,
+          blocks_capped: false,
+          holders: [],
+          held_since: "2031-04-16T08:00:00Z",
+        },
+      ],
+      totals: { ...emptyDay.totals, holding_up: { total: 2 } },
+    },
+  });
+  mount("holding-up");
+  await waitFor(() => expect(screen.getByText("Approve the release")).toBeTruthy());
+  const rows = screen.getAllByRole("row").map((r) => r.textContent ?? "");
+  const first = rows.findIndex((r) => r.includes("Approve the release"));
+  const second = rows.findIndex((r) => r.includes("Check the copy"));
+  expect(first).toBeGreaterThan(-1);
+  expect(second).toBeGreaterThan(first);
+  expect(rows[first]).toMatch(/18 items, held by /);
+  expect(rows[second]).toMatch(/1 item(?!s)/);
+  expect((await counts())["holding-up"]).toBe("2");
+});
+
+test("nothing held up says what would be there", async () => {
+  location.hash = "#/me/holding-up";
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount("holding-up");
+  await waitFor(() => expect(screen.getByText("Nothing is waiting")).toBeTruthy());
 });
 
 // THE QUESTIONS PUT TO SOMEBODY ELSE ARE NOT WRITTEN AS THE READER'S. This is

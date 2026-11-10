@@ -181,7 +181,12 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // ([coord.ErrUnavailable]); the estate's router finding no data node to run
 // the call on ([estate.ErrUnserved]) — every node holding the company's
 // records answered that its copy is out of service or behind, or, for a read,
-// did not answer at all; an estate held closed while a peer's snapshot is adopted
+// did not answer at all; the fleet's nodes running two builds mid-upgrade
+// ([estate.ErrUnknownKeys]), which a wait clears only once an operator
+// finishes the upgrade — no data node's build reads the call whole, which
+// wraps the estate nobody served, or this node's build cannot read whole the
+// answer a data node gave, which wraps nothing, since that node ran the call;
+// an estate held closed while a peer's snapshot is adopted
 // ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
@@ -400,6 +405,7 @@ func RetryAfter(err error, otherwise time.Duration) time.Duration {
 // condition is the one classification [Condition] and [ConditionSentence]
 // read: the condition err is, or false for a fault.
 func condition(err error) (conditionSaid, bool) {
+	var unknownKeys *estate.ErrUnknownKeys
 	switch {
 	case err == nil:
 		return conditionSaid{}, false
@@ -423,6 +429,25 @@ func condition(err error) (conditionSaid, bool) {
 		return conditionSaid{clause: "the coordination store did not answer",
 			person: "This node couldn't reach the rest of the fleet. " +
 				statelog.TryAgainSoon, kind: KindCoordinationUnavailable}, true
+	case errors.As(err, &unknownKeys):
+		// THE FLEET RUNS TWO BUILDS: the data nodes that would serve this
+		// cannot read the request whole, so none of it ran rather than run
+		// without what they could not read — or this node cannot read whole
+		// the answer one of them gave, so it was not acted on. Each clause
+		// says its own direction: the answer RAN where it was given. Read
+		// BEFORE an estate nobody served, which the first wraps: waiting
+		// clears either only once the upgrade reaches the nodes still on the
+		// older build, which is an operator's to finish.
+		clause := "the fleet's nodes run two different builds, and the data nodes that would serve " +
+			"this can't read all of it, so none of it ran"
+		if unknownKeys.Answer {
+			clause = "this node runs an older build than the data node that answered, and can't read " +
+				"all of its answer, so it was not acted on"
+		}
+		return conditionSaid{clause: clause,
+			person: "This node and the company's other nodes run different versions of Crewlet, so " +
+				"this couldn't be done. An administrator needs to finish upgrading them.",
+			stuck: true, kind: KindFleetBuildsDiffer}, true
 	case errors.As(err, new(*estate.ErrUnserved)):
 		return conditionSaid{clause: "no data node could serve it right now — " +
 			"every node holding the company's records answered that its copy is " +

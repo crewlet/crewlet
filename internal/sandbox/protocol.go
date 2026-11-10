@@ -686,6 +686,16 @@ type Result struct {
 	// ([SessionCapture.Interrupted]).
 	HarnessCutOff bool
 
+	// MemoryKills is how many processes the kernel killed for memory in the
+	// job's memory domain while its harness ran, and MemoryBytes the domain's
+	// ceiling, both 0 where it killed none or kept no count. OutOfMemory is a
+	// run whose harness was one of them: it ended at its box's memory
+	// ceiling (types.ExecutorErrorOutOfMemory). Read off the box, so a run
+	// that forges it costs only its own conversation, which a person releases.
+	MemoryKills int64
+	MemoryBytes int64
+	OutOfMemory bool
+
 	// JobEnd is how the job was ended on request, as its script recorded it
 	// ([JobEnder], internal/sandbox/executor's Paths.JobEnded): a harness told
 	// to stop, one killed past its grace, or a request that came before the

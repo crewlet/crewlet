@@ -288,7 +288,7 @@ describe("the navigation grammar", () => {
     const groups: Record<string, string[]> = {};
     for (const s of workspaceRow("settings")!.sections) (groups[s.group ?? ""] ??= []).push(s.key);
     expect(groups).toEqual({
-      Runtime: ["models", "mcp-tools", "secrets", "limits"],
+      Runtime: ["models", "mcp-tools", "secrets", "limits", "advisor"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
       Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],

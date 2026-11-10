@@ -125,11 +125,36 @@ func (d diary) Recall(_ context.Context, _ string, q learning.RecallQuery, _ tim
 	if len(q.Embedding) == 0 || q.Model == "" {
 		return nil, learning.ErrNoEmbedding
 	}
-	return d.hits, d.err
+	var hits []learning.DiaryHit
+	for _, h := range d.hits {
+		if !h.Entry.HeldBack(q.Held) {
+			hits = append(hits, h)
+		}
+	}
+	return hits, d.err
 }
 
-func (d diary) Recent(context.Context, string, time.Time, int) ([]learning.DiaryEntry, error) {
-	return d.recent, d.err
+// RecentHeldTo leaves out what c holds back, as the real one's query does.
+func (d diary) RecentHeldTo(_ context.Context, _ string, c learning.Currency, _ time.Time,
+	_ int) ([]learning.DiaryEntry, error) {
+	var out []learning.DiaryEntry
+	for _, e := range d.recent {
+		if !e.HeldBack(c) {
+			out = append(out, e)
+		}
+	}
+	return out, d.err
+}
+
+// Hold counts what c holds back among the recent notes.
+func (d diary) Hold(_ context.Context, _ string, c learning.Currency, _ time.Time) (int, error) {
+	n := 0
+	for _, e := range d.recent {
+		if e.HeldBack(c) {
+			n++
+		}
+	}
+	return n, d.err
 }
 
 // MarkRetrieved honours ctx, like the real one: store.ExecContext refuses a
@@ -489,7 +514,12 @@ func (p panickingDiary) Recall(context.Context, string, learning.RecallQuery, ti
 	panic(p.mark("a malformed diary row"))
 }
 
-func (p panickingDiary) Recent(context.Context, string, time.Time, int) ([]learning.DiaryEntry, error) {
+func (p panickingDiary) RecentHeldTo(context.Context, string, learning.Currency, time.Time,
+	int) ([]learning.DiaryEntry, error) {
+	panic(p.mark("a malformed diary row"))
+}
+
+func (p panickingDiary) Hold(context.Context, string, learning.Currency, time.Time) (int, error) {
 	panic(p.mark("a malformed diary row"))
 }
 

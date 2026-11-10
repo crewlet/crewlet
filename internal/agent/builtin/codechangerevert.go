@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -102,6 +103,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
 	}
+	commit(turn, res.Outcome, types.CommittedCode)
 	branch := strings.TrimPrefix(w.Ref, branchRoot)
 	out := codeRevertAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Reverts: cv.g.ref(), Branch: branch, OpID: cv.g.c.actor.Operation}
@@ -209,6 +211,9 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 		return
 	}
 	got, err := t.deps.Writer.GitWrite(ctx, w)
+	if err == nil {
+		commit(turn, got.Outcome, types.CommittedCode)
+	}
 	m := got.Merge
 	switch {
 	case err != nil:

@@ -32,7 +32,13 @@ import {
   type RowChrome,
 } from "~/components/work.tsx";
 import { checklistTask, itemAddress, readsBlocked } from "~/lib/work.ts";
-import type { WorkChecklistRow, WorkClaimTotal, WorkSummary } from "~/protocol/index.ts";
+import { plural } from "~/lib/format.ts";
+import type {
+  WorkChecklistRow,
+  WorkClaimTotal,
+  WorkHoldingRow,
+  WorkSummary,
+} from "~/protocol/index.ts";
 
 type Column = DataGridColumn<WorkSummary>;
 
@@ -201,6 +207,73 @@ export function workRowColumns(ctx: WorkColumnContext, cells?: WorkColumnCells):
 export function keysOf(rows: readonly WorkSummary[]) {
   const keys = new Map(rows.map((row) => [row.id, row.key]));
   return (id: string) => keys.get(id);
+}
+
+/**
+ * A person's held work that other work waits on, the most waited on first: the
+ * list's own opening columns, then how much waits and on whom, then how long
+ * it has been held. The order is the engine's, never re-sorted here.
+ */
+export function HoldingList({
+  rows,
+  chrome,
+  hrefOf,
+  now,
+  label,
+}: {
+  rows: WorkHoldingRow[];
+  chrome: RowChrome;
+  hrefOf: (row: WorkSummary) => string;
+  now: number;
+  label: string;
+}) {
+  const columns = useMemo(() => {
+    const c = workListColumns({ chrome, keyOf: keysOf(rows) });
+    const waiting: DataGridColumn<WorkHoldingRow> = {
+      key: "waiting",
+      header: "Waiting on it",
+      cell: (row) => {
+        const count = `${plural(row.blocks, "item")}${row.blocks_capped ? " or more" : ""}`;
+        const who = row.holders.map((h) => chrome.seatName?.(h) ?? h).join(", ");
+        return <span className="truncate">{who ? `${count}, held by ${who}` : count}</span>;
+      },
+    };
+    const held: DataGridColumn<WorkHoldingRow> = {
+      key: "held",
+      header: "Held for",
+      shrink: true,
+      align: "right",
+      cell: (row) => <span className="t-caption">{heldFor(row.held_since, now)}</span>,
+    };
+    return [
+      c.priority,
+      c.key,
+      c.title,
+      waiting,
+      held,
+      c.status,
+    ] as DataGridColumn<WorkHoldingRow>[];
+  }, [chrome, rows, now]);
+  return (
+    <DataGrid
+      aria-label={label}
+      rows={rows}
+      columns={columns}
+      rowKey={(row) => row.id}
+      rowHref={hrefOf}
+      phoneRows="compact"
+    />
+  );
+}
+
+/** How long a row has been held, as a span a person reads: "3 days". */
+export function heldFor(since: string, now: number): string {
+  const at = Date.parse(since);
+  if (Number.isNaN(at)) return "";
+  const hours = Math.max(0, Math.floor((now - at) / 3_600_000));
+  if (hours < 1) return "under an hour";
+  if (hours < 48) return plural(hours, "hour");
+  return plural(Math.floor(hours / 24), "day");
 }
 
 /** A page of tasks. Draws nothing of its own when it holds none: see its callers. */

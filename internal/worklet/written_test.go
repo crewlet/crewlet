@@ -13,8 +13,21 @@ import (
 // so a case can see exactly what reached the turn — the dedupe is the turn's
 // set's job, and a log that did it here would hide a writer reporting twice.
 type writeLog struct {
-	mu    sync.Mutex
-	items []types.WorkItem
+	mu      sync.Mutex
+	items   []types.WorkItem
+	changes []types.CommittedChange
+}
+
+func (l *writeLog) Commit(c types.CommittedChange) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.changes = append(l.changes, c)
+}
+
+func (l *writeLog) committed() []types.CommittedChange {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]types.CommittedChange(nil), l.changes...)
 }
 
 func (l *writeLog) Add(item types.WorkItem) {
@@ -102,5 +115,52 @@ func TestAWriterWithNoLogStillWrites(t *testing.T) {
 	w := r.writer.As("ops", worklet.AuthorOperator, worklet.Provenance{})
 	if _, err := w.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {
 		t.Fatalf("create with no log: %v", err)
+	}
+}
+
+// A TURN'S WRITER REPORTS WHAT KIND OF CHANGE EACH COMMITTED RECORD WAS, read
+// off the record: a create moves the item, a comment is words, a comment
+// answering an ask is an answer (words too), and who watches it moves nothing.
+func TestTheWriterRecordsTheKindOfChangeEachRecordCommitted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	log := &writeLog{}
+	w := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{TurnID: "run-1", Written: log})
+	step := func(name string, err error) []types.CommittedChange {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		r.drain()
+		return log.committed()
+	}
+	comment := func(id, body, ask string, answers *string) worklet.TaskPatch {
+		return worklet.TaskPatch{Comment: &worklet.Comment{ID: id, Task: "t-1", Author: "dev",
+			AuthorKind: worklet.AuthorAgent, Body: body, Ask: ask, Answers: answers, CreatedAt: wednesday}}
+	}
+	_, err := w.CreateTask(t.Context(), "op-create", newTask("t-1"), nil)
+	if got := step("create", err); !slices.Equal(got, []types.CommittedChange{types.CommittedItem}) {
+		t.Fatalf("a create committed %v, want an item move", got)
+	}
+	_, err = w.UpdateTask(t.Context(), "op-say", "t-1", "ENG", worklet.NoIfMatch,
+		comment("cm-1", "who owns the rollback?", "qa", nil), worklet.ChangeComment, nil)
+	if got := step("comment", err); got[len(got)-1] != types.CommittedComment {
+		t.Fatalf("a comment committed %v, want words last", got)
+	}
+	asked := "cm-1"
+	_, err = w.UpdateTask(t.Context(), "op-answer", "t-1", "ENG", worklet.NoIfMatch,
+		comment("cm-2", "platform owns it", "", &asked), worklet.ChangeComment, nil)
+	if got := step("answer", err); got[len(got)-1] != types.CommittedAnswer {
+		t.Fatalf("an answer committed %v, want an answer last", got)
+	}
+	before := len(log.committed())
+	watchers := []string{"dev", "qa"}
+	_, err = w.UpdateTask(t.Context(), "op-watch", "t-1", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Watchers: &watchers}, worklet.ChangeWatchers, nil)
+	if got := step("watch", err); len(got) != before {
+		t.Fatalf("a change of who watches committed %v, want nothing of the work", got[before:])
+	}
+	if got := types.OutcomeOf(log.committed()); got != types.OutcomeMoved {
+		t.Fatalf("the turn's outcome is %q, want moved", got)
 	}
 }

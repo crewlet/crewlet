@@ -381,7 +381,11 @@ var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
 	})
 
 // opCodeRepoState is one page of a repository's snapshot — its packs and refs,
-// whole or since a position: a Gitlet node's cache sync.
+// whole or since a position: a Gitlet node's cache sync. ANSWERED WHOLE
+// ([op.answeredWhole]), because a page's cursor (code.RepoSnapshot.Next) is the
+// next page's request: a member a newer data node put in it and this build
+// would drop is a snapshot paged on by a cursor that no longer says where it
+// stands, so it is refused rather than paged on.
 var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.StateQuery) (code.RepoSnapshot, error) {
 		if b.Code == nil {
@@ -389,7 +393,7 @@ var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 		}
 		snap, err := b.Code.Snapshot(ctx, q)
 		return snap, ranNothing(err)
-	})
+	}).answeredWhole()
 
 // opCodePushOutcome is what became of one push: the receiver's wait on a push
 // whose record resolved pending or unknown.

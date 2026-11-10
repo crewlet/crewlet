@@ -179,8 +179,10 @@ func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
 		woken   bool
 		version int
 	}{
-		{"pm", worklet.AuthorAgent, ptr(false), []string{"qa"}, false, 5},
-		{"pm", worklet.AuthorAgent, ptr(true), []string{"qa"}, true, 5},
+		// STATED, so its notice rows keep the statement: the version that says so,
+		// and one that tells qa without waking it keeps that too.
+		{"pm", worklet.AuthorAgent, ptr(false), []string{"qa"}, false, worklet.NoticeWokeVersion},
+		{"pm", worklet.AuthorAgent, ptr(true), []string{"qa"}, true, worklet.NoticeAsksVersion},
 		// AN OLDER BUILD'S, with no statement, and one naming its agents
 		// without a statement: the statement alone makes a reference.
 		{"pm", worklet.AuthorAgent, nil, nil, true, 1},

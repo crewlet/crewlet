@@ -166,12 +166,39 @@ func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: 
 // ([engine.Engine.LatestAlarms]).
 func (r engineRuntime) LatestAlarms() []statelog.Alarm { return r.engine.LatestAlarms() }
 
+// AlarmsEvaluated is [engine.Engine.AlarmsEvaluated].
+func (r engineRuntime) AlarmsEvaluated() bool { return r.engine.AlarmsEvaluated() }
+
 // MCPChecker is the engine's test of an MCP server and check of an address,
 // its refusals mapped onto the routes' ([mcpChecker]).
 func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engine} }
 
 // MCPChecks is the engine's read of each MCP server's latest test.
 func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
+
+// SeatPauses is the fleet store's pauses, nil without one: a nil store in the
+// interface would read as a node that can list them.
+func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
+	if b := r.engine.Backends(); b != nil && b.Fleet != nil {
+		return b.Fleet
+	}
+	return nil
+}
+
+// AgentAccess is the engine's read of each agent's access ([engine.Engine.AgentCapabilities]).
+func (r engineRuntime) AgentAccess() queries.AgentAccess {
+	return func(ctx context.Context) ([]queries.AgentAccessRow, error) {
+		agents, err := r.engine.AgentCapabilities(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]queries.AgentAccessRow, len(agents))
+		for i, a := range agents {
+			out[i] = queries.AgentAccessRow{Seat: a.Handle, Name: a.Name, Access: a.Access}
+		}
+		return out, nil
+	}
+}
 
 // IssueReports is the engine's reporter, nil where it has none: a nil pointer
 // in the interface would register a question that panics.

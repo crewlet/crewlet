@@ -595,8 +595,14 @@ func TestAHorizonThatAnswersZeroSkipsItsJob(t *testing.T) {
 
 // stubDiary remembers the clock it was swept on.
 type stubDiary struct {
-	nows []time.Time
-	caps []int
+	nows    []time.Time
+	caps    []int
+	retired []time.Time
+}
+
+func (d *stubDiary) RetireHeld(_ context.Context, now time.Time) (int64, error) {
+	d.retired = append(d.retired, now)
+	return 1, nil
 }
 
 func (d *stubDiary) Expire(_ context.Context, now time.Time) (int64, error) {
@@ -616,8 +622,15 @@ func (d *stubDiary) TrimLong(_ context.Context, cap int) (int64, error) {
 func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 	d := &stubDiary{}
 	jobs := maintenance.LearningJobs(d)
-	if len(jobs) != 2 || jobs[0].Name != "agent_diary" || jobs[1].Name != "agent_diary_long" {
-		t.Fatalf("jobs = %+v, want the diary's expiry and its durable trim", jobs)
+	if len(jobs) != 3 || jobs[0].Name != "agent_diary" || jobs[1].Name != "agent_diary_long" ||
+		jobs[2].Name != "agent_diary_held" {
+		t.Fatalf("jobs = %+v, want the diary's expiry, its durable trim and its held retirement", jobs)
+	}
+	// THE HELD HALF retires on the tick's now, as the expiry does: each
+	// note carries the instant it was first held.
+	if n, err := jobs[2].Run(context.Background(), base, base.Add(-time.Hour)); err != nil || n != 1 ||
+		len(d.retired) != 1 || !d.retired[0].Equal(base) {
+		t.Fatalf("retire Run = (%d, %v) at %v, want (1, nil) at the tick's now %v", n, err, d.retired, base)
 	}
 	// The durable half is bounded by a COUNT, so it has no horizon and
 	// ignores both clocks: a fact the agent marked durable has no deadline

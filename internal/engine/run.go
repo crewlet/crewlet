@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -133,6 +134,8 @@ type Engine struct {
 	// with it on every wiring and emptied when GitHub is retired. See
 	// githubpulls.go.
 	githubPulls githubPullReader
+	// changePoll is where the poll of open changes stopped (ADR-0121).
+	changePoll changePoll
 	// tokenWaits is what this node's polls have said of the running jobs
 	// whose seat's issued tokens could not be issued, so each wait is said
 	// once per job rather than on every pass. See issued.go.
@@ -364,6 +367,12 @@ type Engine struct {
 	// of the seat's chain is limited, each with the alarm that lifts it for
 	// a probe when the first is tried again. See providerpark.go.
 	providerParks providerParks
+	// failures is each seat's latest failure a retry cannot cure, on this
+	// node: its second in a row pauses the seat (failurehold.go).
+	failures lastFailures
+	// conversations is each held seat's held conversations, as this node
+	// read them, and which conversations' last run ran out of context.
+	conversations heldConversations
 
 	// limitProbes is one probe per limited chain, which settles every seat
 	// parked on it. See providerpark.go.
@@ -2006,6 +2015,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE ISSUE REPORTER, off until a revision turns it on. Its listener goes
 	// on before anything publishes, as the custody listener below does.
 	e.startIssueReports(opts.Bootstrap, backends)
+	if backends != nil && backends.Queue != nil {
+		// EVERY RUN THIS NODE COLLECTS, for the conversations whose context
+		// does not fit (conversationhold.go).
+		backends.Queue.AddPublishListener(e.noteConversationRun)
+	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
 	// DID — before anything publishes, because the custody listener must
@@ -2731,6 +2745,15 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Provider == nil {
 		d.Provider = e.providerPark
 	}
+	if d.Failure == nil {
+		d.Failure = e.failureHold
+	}
+	if d.FailureCleared == nil {
+		d.FailureCleared = e.failureCleared
+	}
+	if d.Held == nil {
+		d.Held = e.conversationHeld
+	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
@@ -2777,6 +2800,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	// always here by the time this runs.
 	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
+	}
+	if d.SeenThrough == nil {
+		d.SeenThrough = ledgerstore.NewSeenThrough(backends.Fleet)
 	}
 	return d
 }
@@ -3824,7 +3850,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// once here and frozen on the turn like the endings below; its notes
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
-	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told.memory)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -4087,7 +4113,7 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
-		Models: e.modelStatus(ctx),
+		Models: e.modelStatus(ctx), ParkedStateVersion: execstate.Version,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

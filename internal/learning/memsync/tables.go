@@ -112,6 +112,17 @@ type table struct {
 	fillsVector bool
 }
 
+// retiredTables are the memory tables this build no longer carries, which a
+// seat's changelog may still hold rows of: nothing republishes or replaces
+// them, so a hydration that meets one purges the seat's rows of it, once, for
+// every node ([Syncer.Hydrate]). A table a NEWER build carries is not here: its
+// rows are skipped, never purged, since that build still reads them.
+var retiredTables = []string{
+	// Moved to the executor log, where a conversation's sessions are kept
+	// beside the turns that ran them (ADR-0073).
+	"conversation_sessions",
+}
+
 // tables is every table a seat's memory lives in.
 //
 // Ordered so a hydrating node writes parents before children:
@@ -126,7 +137,7 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "embedding_model", "created_at",
+			"embedding", "embedding_model", "created_at", "provenance", "engine_build",
 		},
 		blobs:       []string{"embedding"},
 		watermark:   "change_seq",

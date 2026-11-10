@@ -231,6 +231,10 @@ type Sources struct {
 	// nil on a build with no reporter, whose question is not registered.
 	IssueReports IssueReportReader
 
+	// Insights is the fleet's record of the operating insights the company
+	// shares (ADR-0119); nil leaves `diagnostics_insights` unregistered.
+	Insights coord.InsightRecords
+
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
 	MCPChecks MCPCheckReader
@@ -318,6 +322,12 @@ type Sources struct {
 	// Access is each asking agent's pending access review (ADR-0111), which
 	// `decisions` notes on its questions. Nil notes nothing.
 	Access AccessReviews
+
+	// Holds is the fleet's held conversations (ADR-0117), which the advisor's
+	// notices name. Nil holds nothing.
+	Holds interface {
+		ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error)
+	}
 
 	// RunAnswers opens a run's recorded answer for who gave it, which only
 	// the answer's seal says ([sandbox.AnswerSeal]). Nil, or a seal that
@@ -588,6 +598,18 @@ type Sources struct {
 	// count, the gauge and the log lines were told. Nil answers no alarm.
 	Alarms func() []statelog.Alarm
 
+	// AlarmsEvaluated reports whether this node's alarm table has been
+	// evaluated: false mid-boot and on a node running no state log. Nil says false.
+	AlarmsEvaluated func() bool
+
+	// AgentAccess reads what each agent may do and where it runs, the
+	// engine's; nil on a node with no engine.
+	AgentAccess AgentAccess
+
+	// Pauses lists every seat's pause, which the advisor reads for the seats
+	// the engine paused on a failure (ADR-0117). Nil on a node with no pause store.
+	Pauses SeatPauseLister
+
 	// Secrets is the fleet's secret rows, metadata only, which a model's
 	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
 	Secrets SecretRows
@@ -738,6 +760,9 @@ func Register(r *Registry, s Sources) {
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
+		// AND WHAT THOSE TURNS DID, by what woke them: how many changed
+		// nothing and what they spent, from the turn ledger's same rows.
+		r.Register("turn_outcomes", Everybody(), s.turnOutcomes)
 		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
@@ -773,6 +798,10 @@ func Register(r *Registry, s Sources) {
 	if s.IssueReports != nil {
 		// THE COMPANY'S CHOICE, and an administrator's as the setting is.
 		r.Register("issue_reports", Requires(iam.GrantAdmin), s.issueReports)
+	}
+	if s.Insights != nil {
+		// THE COMPANY'S CONSENT and what it shares, an administrator's as the setting is.
+		r.Register("diagnostics_insights", Requires(iam.GrantAdmin), s.insightsReading)
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row
@@ -1107,6 +1136,17 @@ func Register(r *Registry, s Sources) {
 		r.Register("config_audit", Requires(iam.GrantAdmin), s.configAudit)
 		r.Register("config_diff", Requires(iam.GrantAdmin), s.configDiff)
 		r.Register("config_entities", Requires(iam.GrantAdmin), s.configEntities)
+		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
+		// document, so the administrator's as the document is.
+		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
+		// WHAT EACH AGENT MAY DO AND WHERE IT RUNS, as its next turn is told:
+		// the go-live check's review. Admin's, as the advisor is.
+		if s.AgentAccess != nil {
+			r.Register("go_live_review", Requires(iam.GrantAdmin), s.goLiveReview)
+		}
+		// AND THE CHANGE AN AGENT'S ACCESS REQUEST WOULD MAKE, built from
+		// the same document for the person deciding it (ADR-0118).
+		r.Register("advisor_access", Requires(iam.GrantAdmin), s.advisorAccess)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one

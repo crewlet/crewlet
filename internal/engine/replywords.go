@@ -22,7 +22,27 @@ func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 
 	return sandbox.Reply{Conv: conv, Text: replyWords(evs),
 		Label: replyLabel(prompts, parties, self, evs), Events: evs,
-		Writer: replyWriter(parties, evs)}
+		Writer: replyWriter(parties, evs), Says: replySays(prompts, parties, self, evs)}
+}
+
+// replySays is whether a delivery carries words its writer addressed to the
+// conversation ([sandbox.Reply.Says]): one of its notifications read from a
+// surface a writer speaks on, or one no prompt classifies; never a field change,
+// an alarm or a pickup.
+func replySays(prompts notify.Prompts, parties notify.Parties, self string, evs []*events.Event) bool {
+	for _, ev := range evs {
+		n, ok := events.DataAs[*types.ExternalNotification](ev)
+		if !ok || n == nil {
+			continue
+		}
+		labels := notify.SalientLabels(prompts, *n, parties, self)
+		if len(labels) > 0 && !slices.ContainsFunc(labels, func(l provenance.Label) bool {
+			return !l.Source.Said() && l.Source != provenance.SourceNotification
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // replyWriter is the seat the writer of a delivery offered to a parked run

@@ -434,6 +434,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 	// key opens the task the wake meant — which it does not, once another
 	// task claimed it first. See [InboxNotice.Task].
 	task := notify.Snapshot.TaskID(c.subject())
+	woken := noticesWoke(c.record)
 	written := 0
 	for _, candidate := range candidates {
 		// THE CHANGE'S OWN AUTHOR GETS NO NOTICE OF IT, unless the reason
@@ -449,8 +450,8 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			INSERT INTO tracker_notifications
 				(record_id, recipient, subject_id, subject_key, task_id, kind,
 				 reason, addressed, fallback_only, fallback_rank, excerpt,
-				 created_at, log_seq, log_stream, log_generation)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 created_at, log_seq, log_stream, log_generation, asks, starts_turn)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
 			historyID(c), candidate.Handle, c.subject().ID,
 			inboxSubjectKey(subjectKey, notify), task,
@@ -458,7 +459,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
 			store.EncodeTime(c.authored()), c.packed, c.position.Stream,
-			c.position.Generation)
+			c.position.Generation, statedAsks(c.record), boolInt(woken == nil || woken[candidate.Handle]))
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the inbox row for %s at %s: %w",
 				candidate.Handle, c.position, err)
@@ -521,4 +522,36 @@ func appsColumn(record MutationRecord) string {
 		return ""
 	}
 	return jsonOf(record.ActorApps)
+}
+
+// noticesWoke is who a record's change woke, for its notice rows to keep: nil,
+// every recipient woken, for a record below [NoticeWokeVersion] or one that
+// tells nobody it does not wake, so every node writes the same row.
+func noticesWoke(record MutationRecord) map[string]bool {
+	if record.V < NoticeWokeVersion || !record.NoticeWokeKept || record.Notify == nil {
+		return nil
+	}
+	woken, _ := noticeWakes(record.Notify, record.Actor)
+	return woken
+}
+
+// tellsWithoutWaking is whether a change tells somebody it does not wake, which
+// is when its record marks that its notice rows keep the decision.
+func tellsWithoutWaking(n *Notify, actor string) bool {
+	if n == nil {
+		return false
+	}
+	_, tells := noticeWakes(n, actor)
+	return tells
+}
+
+// statedAsks is a comment author's statement as the notice row keeps it: 1 or
+// 0 from a record at [NoticeAsksVersion] or above that kept it, and NULL for
+// every other, so every node writes the same row.
+func statedAsks(record MutationRecord) any {
+	if record.V < NoticeAsksVersion || !record.NoticeAsksKept || record.Notify == nil ||
+		record.Notify.Snapshot.CommentAsks == nil {
+		return nil
+	}
+	return boolInt(*record.Notify.Snapshot.CommentAsks)
 }

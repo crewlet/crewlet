@@ -83,7 +83,7 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Reader == nil {
 		return unconfigured(worklet.GetWorkCatalogueTool), nil
 	}
-	answer, err := t.deps.Reader.Catalogue(ctx, worklet.CatalogueQuery{
+	answer, err := t.deps.Reader.CarriedCatalogue(ctx, worklet.CatalogueQuery{
 		Archived: argBool(args, "archived"),
 		Level:    seatReadLevel,
 	})

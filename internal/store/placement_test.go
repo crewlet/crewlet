@@ -219,6 +219,12 @@ var nodeEstatePlacements = []placement{
 			"rows, and it goes where they go.",
 	},
 	{
+		Table: "alarm_standing",
+		Why: "The alarm instances this node's tracker has up, kept so its first " +
+			"evaluation after a restart diffs against them rather than raising " +
+			"every standing alarm again. Each node evaluates its own alarms.",
+	},
+	{
 		Table: "scheduled_runs",
 		Why: "This node's audit row for the fires it ran. The half the FLEET " +
 			"has to agree on — 'may I start this fire' — is in coordination, " +

@@ -426,7 +426,7 @@ func panicSignal(p *panics.Panic) Signal {
 func (r *Reporter) onExecutorFailed(ctx context.Context, rec types.ExecutorFailed) {
 	shadowed := false
 	switch rec.Reason {
-	case types.ExecutorFailureNoExecuteState:
+	case types.ExecutorFailureNoExecuteState, types.ExecutorFailureStateRetired:
 	case types.ExecutorFailureSuspensionUnrecorded:
 		// A coordination store that cannot record a suspension says as much with
 		// an alarm, and then the store is what failed.

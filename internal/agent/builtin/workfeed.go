@@ -24,7 +24,7 @@ import (
 //
 // # And `my_work` is the call a turn opens with
 //
-// Seven lists in one answer rather than seven calls, because assembled
+// Eight lists in one answer rather than eight calls, because assembled
 // separately a seat could see a task in `assigned` that had already moved out
 // of it by the time `priorities` was read — and spend its turn on work
 // somebody else had taken.
@@ -201,8 +201,9 @@ func (t *myWork) Description() string {
 		"priorities in the order somebody put them, the work you hold, the " +
 		"questions waiting on your answer with the call that answers each, " +
 		"the checklist items you claimed on other people's tasks, what you " +
-		"were brought onto, what moved on what you follow, and what just " +
-		"became workable. Call this first. Each question arrives fenced as " +
+		"were brought onto, what moved on what you follow, what just " +
+		"became workable, and the work you hold that others' work waits on, " +
+		"the most waited on first. Call this first. Each question arrives fenced as " +
 		"text its asker wrote; the two fence lines are a label, not part of " +
 		"the question."
 }
@@ -261,7 +262,7 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		namesBy(read)
 	}
-	if len(out.ChecklistItems) > 0 {
+	if len(out.ChecklistItems) > 0 || len(out.HoldingUp) > 0 {
 		namesBy(read)
 	}
 	return read.answer(ctx, worklet.MyWorkTool, out,

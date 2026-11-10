@@ -347,12 +347,18 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	// a tracker on the wall clock aged an alarm the evaluations beside it
 	// had raised on another.
 	r.alarms = statelog.NewTracker(e.metrics, r.clock)
+	// KEPT IN THE NODE'S OWN FILE, so a restart says only what changed.
+	if e.backends.Store != nil {
+		r.alarms.Remember(e.backends.Store)
+	}
 	// THE ALARMS' WAKES, told of every transition before the first
 	// evaluation, so what that evaluation finds firing is handed on too
-	// (as firing_at_boot) rather than said by the log alone — on the tracker
-	// just made, since a transition is told by the tracker it happens on.
+	// rather than said by the log alone — on the tracker just made, since a
+	// transition is told by the tracker it happens on. A raise the broker
+	// took is told back, which is what keeps it across a restart.
 	if e.backends.Queue != nil {
 		r.wakes = newAlarmOutbox(e.backends.Queue, e.metrics)
+		r.wakes.taken = r.alarms.Told
 		r.alarms.OnTransition(s.nodeID, r.wakes.Add)
 	}
 	// DETACHED from the caller's context, for the reason every other

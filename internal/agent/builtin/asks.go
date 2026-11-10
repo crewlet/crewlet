@@ -22,14 +22,15 @@ var (
 	// workAsks is a work item comment's: an answer wakes its asker, and a
 	// stake in the thread hears every reply.
 	workAsks = asksSurface{
-		asked: "The colleagues you @-mention are woken and must answer.",
+		asked: "The colleagues you @-mention are woken and must answer; a person " +
+			"you ask is asked with `ask` and a `decision`, never in words alone.",
 		quiet: "whoever's question it answers (`answers`) and anyone with an open " +
 			"question in the thread are woken.",
 	}
 	// pageAsks is a page comment's: an ask stays open, and every reply in
 	// its thread wakes its author, until somebody else answers it.
 	pageAsks = asksSurface{
-		asked: "The colleagues you @-mention are woken, and every later reply in " +
+		asked: "The agents you @-mention are woken, and every later reply in " +
 			"this comment's thread wakes you until one of them answers it with a " +
 			"comment that asks nothing (anybody, if you named nobody).",
 		quiet: "the agents with an open ask in this comment's thread (or, at the " +

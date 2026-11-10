@@ -428,6 +428,12 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			case id == "":
 				return parties{}, invalid("the dependency change "+
 					"on task %s names an empty counterparty", change.Task)
+			case IsChangeRef(id) && slices.Contains(change.BlockingAdd, id):
+				return parties{}, invalid("task %s cannot block %s: a change "+
+					"waits on no task", change.Task, id)
+			case IsChangeRef(id):
+				// A CHANGE IS NO TASK: nothing to read, and no mirror.
+				continue
 			case id == change.Task:
 				return parties{}, invalid("task %s cannot depend "+
 					"on itself — a task that blocks itself is one no close "+

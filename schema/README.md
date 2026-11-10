@@ -15,12 +15,19 @@ make schema   # both tiers, from the repository root
 go run ./cmd/crewlet schema company   -o schema/company.schema.json
 go run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 go run ./cmd/crewlet schema issue-report-catalogue -o schema/issue-report-catalogue.json
+go run ./cmd/crewlet schema insights-catalogue -o schema/insights-catalogue.json
 ```
 
 `issue-report-catalogue.json` is not a config schema. It is the catalogue of
 [engine issue reports](../docs/guides/engine-issue-reports.md), generated from
 the table in `internal/issuereport`, and the relay that files them vendors it.
 Its path is stable for that reason, and the same test keeps it current.
+
+`insights-catalogue.json` is the same kind of file for operating insights: the
+closed classes, facts and buckets an opted-in engine may share
+([ADR-0119](../adr/0119-operating-insights-are-typed-weekly-records-under-a-consent-of-their-own.md)),
+generated from the table in `internal/insights`, which the relay's insights
+route vendors.
 
 The schema is a **subset** of the validator and must stay one. It can
 express structure — key spaces, types, closed sets, ranges, patterns, and

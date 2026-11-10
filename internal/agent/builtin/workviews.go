@@ -41,11 +41,6 @@ type ViewWriter interface {
 		prior worklet.ViewPrior) (worklet.WriteResult, error)
 }
 
-// ViewReader is the read side.
-type ViewReader interface {
-	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
-}
-
 type listWorkViews struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*listWorkViews)(nil)
@@ -98,7 +93,12 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	listing, err := t.deps.Reader.Views(ctx, worklet.ViewQuery{
+	// READ WHOLE OR NOT AT ALL ([WorkReader.CarriedViews]): an id this lists
+	// is what save_work_view replaces a view whole by, with what the model
+	// re-sends of what this showed of it — so a view holding a field a newer
+	// build added, which this node's build would drop, is refused here rather
+	// than shown short and saved back without the field.
+	listing, err := t.deps.Reader.CarriedViews(ctx, worklet.ViewQuery{
 		Container: container,
 		Viewer:    actor.Handle,
 		// THE CHART, so `unit:engineering` and `unit:eng` are one

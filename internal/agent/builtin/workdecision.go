@@ -9,10 +9,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -231,6 +233,41 @@ func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decid
 		"you would ask in words still has answers you expect: offer them, and the "+
 		"person can always answer in their own words instead. Nothing was posted.",
 		tool, clip(asked), decision.MinOptions, decision.MaxOptions)))
+}
+
+// checkAsksOfNamed refuses an agent seat's comment that asks (`asks`) and names a
+// person it does not put the question to as an ask (ADR-0100): what an agent asks
+// a person reaches their decisions only as an ask carrying a decision.
+func (d WorkDeps) checkAsksOfNamed(tool string, actor Actor, asks bool, ask string, named []string) *tools.Result {
+	persons := askedInWords(actor.Kind == worklet.AuthorAgent, asks, ask, named, d.Seats)
+	if len(persons) == 0 {
+		return nil
+	}
+	return refusalOf(failed(fmt.Sprintf("%s: `asks` is true and this names a person (%s) "+
+		"outside `ask`. An agent's question to a person reaches their decisions only as an "+
+		"ask: set `ask` to their handle and give it a `decision` with %d to %d `options` they "+
+		"answer with one press, the one you `recommended`, your `rationale` and the `role` "+
+		"they answer in. If you only mention them, set `asks` to false. Nothing was posted.",
+		tool, words.And(persons), decision.MinOptions, decision.MaxOptions)))
+}
+
+// askedInWords is the persons' seats an agent's words that ask (`asks`) name
+// other than ask, the one they put the question to (ADR-0100).
+func askedInWords(agent, asks bool, ask string, named []string, roster func() []colleague.Seat) []string {
+	if !asks || !agent || roster == nil {
+		return nil
+	}
+	humans := map[string]bool{}
+	for _, seat := range roster() {
+		humans[seat.Handle] = seat.Kind == string(org.KindHuman)
+	}
+	var persons []string
+	for _, handle := range named {
+		if handle != ask && humans[handle] && !slices.Contains(persons, handle) {
+			persons = append(persons, handle)
+		}
+	}
+	return persons
 }
 
 // statedAsks is an agent's statement of whether its comment asks, which every

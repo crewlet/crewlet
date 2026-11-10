@@ -111,6 +111,34 @@ func TestClosedSinceIncludesOpenAndRecentlyFinished(t *testing.T) {
 	}
 }
 
+// A BOUND AT THE ZERO INSTANT IS NO BOUND, AND IS REFUSED NAMING THE ONE THAT
+// SAYS IT. `closed_since` at January of year one is every finished task, which
+// `show_closed=true` already asks — and a query holding the zero instant as its
+// bound could not cross the estate's wire as itself, since the wire leaves a
+// value its type calls zero off: read through a node without data, it arrived
+// as no bound at all and left every finished task out. So the parse refuses it,
+// and a bound it takes is never the zero instant.
+//
+// Mutation: drop the parse's refusal of the zero instant and the query parses,
+// holding no bound.
+func TestAClosedSinceAtTheZeroInstantIsRefused(t *testing.T) {
+	t.Parallel()
+	_, err := worklet.ParseQuery(worklet.MapParams{
+		"container": "project:ENG", "closed_since": "0001-01-01T00:00:00Z",
+	}, wednesday, berlin)
+	if err == nil || !strings.Contains(err.Error(), "show_closed=true") {
+		t.Errorf("closed_since at the zero instant parsed (err %v), want a refusal naming "+
+			"show_closed=true", err)
+	}
+	q, err := worklet.ParseQuery(worklet.MapParams{
+		"container": "project:ENG", "closed_since": "2031-04-10",
+	}, wednesday, berlin)
+	if err != nil || q.ShowClosed.Since.IsZero() || !q.ShowClosed.Finished() {
+		t.Errorf("closed_since=2031-04-10 parsed as (%+v, %v), want a bound that admits finished work",
+			q.ShowClosed, err)
+	}
+}
+
 // THE WEEK BEGINS AT THE COMPANY'S MIDNIGHT, NOT UTC'S.
 //
 // A task finished at 23:30 UTC on Sunday the 13th finished at 01:30 on MONDAY

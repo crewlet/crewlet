@@ -324,7 +324,7 @@ func TestMyWorkTotalsExceedThePageCap(t *testing.T) {
 	const asks = worklet.MyWorkRows + 2
 	for i := range asks {
 		askOn(t, r, fmt.Sprintf("op-ask-%02d", i), ids[3], worklet.Comment{
-			ID: fmt.Sprintf("c-%02d", i), Task: ids[3], Author: "bob",
+			ID: fmt.Sprintf("c-%02d", i), Task: ids[3], Author: fmt.Sprintf("bob-%02d", i),
 			AuthorKind: worklet.AuthorHuman, Body: "which region?", Ask: "ana",
 			CreatedAt: wednesday,
 		})
@@ -392,8 +392,8 @@ func TestEveryMyWorkBlockHasATotal(t *testing.T) {
 	for name := range totals {
 		t.Errorf("MyWorkTotals carries %q, which is no block of MyWork", name)
 	}
-	if blocks != 7 {
-		t.Errorf("MyWork has %d blocks; the package doc names seven", blocks)
+	if blocks != 8 {
+		t.Errorf("MyWork has %d blocks; the package doc names eight", blocks)
 	}
 }
 

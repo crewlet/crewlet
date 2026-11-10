@@ -376,7 +376,8 @@ type accessMeasure struct {
 }
 
 // measureAccess measures seat handle; false where it owes no review: told as it
-// stands, with no baseline, or a difference the closed list does not count.
+// stands, with no baseline, a difference the closed list does not count, or a
+// change of its boxes alone.
 func (e *Engine) measureAccess(ctx context.Context, company *Company, handle string) (
 	accessMeasure, bool, error) {
 
@@ -411,9 +412,11 @@ func measured(snap capability.Snapshot, recent accessdomain.Recent) (accessMeasu
 	if err != nil {
 		return m, false
 	}
-	if m.seatLines = linesOf(capability.DiffFor(old, snap, capability.ForSeat)); len(m.seatLines) == 0 {
+	changes := capability.DiffFor(old, snap, capability.ForSeat)
+	if !slices.ContainsFunc(changes, capability.Change.OwesReview) {
 		return m, false
 	}
+	m.seatLines = linesOf(changes)
 	m.personLines = linesOf(capability.DiffFor(old, snap, capability.ForPerson))
 	return m, true
 }

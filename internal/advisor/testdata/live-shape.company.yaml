@@ -1,0 +1,56 @@
+name: Example
+providers:
+  llm:
+    default:
+      harness: claude-code
+      model: opus
+    small:
+      harness: claude-code
+      model: haiku
+roles:
+  - name: Owner
+    kind: human
+    contact:
+      slack_user_id: U0OWNER
+units:
+  - name: Team
+    id: team
+    roles:
+      - name: PM
+        handle: pm
+        llm: default
+        llm_auxiliary: default
+        schedules:
+          - name: standup
+            cron: "30 9 * * 1-5"
+            task: Write the stand-up note.
+      - name: Designer
+        handle: designer
+        llm: default
+        llm_auxiliary: default
+      - name: App
+        handle: app
+        llm: default
+        llm_auxiliary: default
+      - name: Backend
+        handle: backend
+        llm: default
+        llm_auxiliary: default
+      - name: QA
+        handle: qa
+        llm: default
+        llm_auxiliary: default
+      - name: SRE
+        handle: sre
+        llm: default
+        llm_auxiliary: default
+        schedules:
+          - name: health-check
+            cron: "0 */2 * * *"
+            task: Check the service.
+          - name: release-window
+            cron: "15 */2 * * *"
+            task: Look for a release to ship.
+          - name: post-release
+            cron: "0 * * * *"
+            task: Check the last release.

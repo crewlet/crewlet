@@ -940,14 +940,35 @@ func panickedEnding(panicked *turn.PanicError) executorkeep.Ending {
 func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	state, ok, err := execstate.Decode(req.Run.ExecuteState)
 	if err != nil {
-		// A state this build cannot read is a ROUTING failure, not a run
-		// failure: a peer on the version that wrote it can resume this, so
-		// the completion must go back rather than be settled here.
+		// A RETIRED STATE NO LIVE NODE READS IS SETTLED: no build ever will.
+		unresumable, judgeErr := r.engine.retiredState(ctx, err)
+		if judgeErr != nil {
+			log.WarnContext(ctx, "sandbox_parked_run_unjudged", "turn_id", req.Run.TurnID,
+				"error", judgeErr.Error(), "detail", "whether any build can resume this run "+
+					"could not be read, so the resume goes back to be tried again")
+		}
+		if unresumable != nil {
+			return unresumable
+		}
+		// Any other state this build cannot read is a ROUTING failure, not a
+		// run failure: a peer on the version that wrote it can resume this,
+		// so the completion must go back rather than be settled here.
 		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
 		return fmt.Errorf("%w: run %s has no parked turn state",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
+	}
+	if req.Asked != nil {
+		// AN ANSWER TO A QUESTION ABOUT A FINISHED ITEM IS MOOT: the run is
+		// settled and the reply goes back to the seat as the message it is.
+		finished, err := r.engine.itemFinished(ctx, req.Run)
+		if err != nil {
+			return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
+		}
+		if finished != nil {
+			return finished
+		}
 	}
 	// ONE EPOCH for the whole resume: the seat checked here, the organization
 	// it belongs to, and the company the resumed turn then runs in (see
@@ -2097,6 +2118,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = tel.written.Items()
+	for _, c := range tel.written.Changes() {
+		suspension.State.Committed = append(suspension.State.Committed, string(c))
+	}
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = tel.ask
@@ -2841,7 +2865,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
-		Recovered: e.reopenAgentRun,
+		Recovered:   e.reopenAgentRun,
+		Unresumable: e.parkedRunUnresumable,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT IS STILL WAITING ON
 		// THE RUN'S RECORD is recorded expired by the ending, before the
 		// record goes — see runsteer.go.
@@ -3935,6 +3960,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// ([seatParks.forget]).
 	e.forgetBudgetPark(ctx, seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
+	// AND WHAT IT READ OF THE SEAT'S HELD CONVERSATIONS: the next holder reads its own.
+	e.conversations.forget(seat.ID)
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
 	// holder serves from now on: left open here they would pin the seat's
 	// surface in a process that no longer speaks for it, and every box

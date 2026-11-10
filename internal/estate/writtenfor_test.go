@@ -39,10 +39,10 @@ func TestATrackerActorThatCannotWriteIsNeverSent(t *testing.T) {
 		if _, err := json.Marshal(c.actor); !errors.Is(err, c.cause) {
 			t.Errorf("%s is encoded (%v), want it refused for %v", name, err, c.cause)
 		}
-		// AND AS A REQUEST CARRIES IT, behind a pointer.
-		if _, err := json.Marshal(request{ID: "r-1", Op: opCreateTask.spec.name, Actor: &c.actor,
-			Deadline: envelopeInstant}); !errors.Is(err, c.cause) {
-			t.Errorf("a request carrying %s is encoded (%v), want it refused for %v", name, err, c.cause)
+		// AND AS THE ROUTER ENCODES A REQUEST'S ACTOR, through the wire's
+		// own input encoder.
+		if _, err := encodeInput(c.actor); !errors.Is(err, c.cause) {
+			t.Errorf("the router encodes %s (%v), want it refused for %v", name, err, c.cause)
 		}
 	}
 

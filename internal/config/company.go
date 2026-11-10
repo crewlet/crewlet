@@ -542,6 +542,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.add(field("timezone"), ErrUnknownValue, "%v", err)
 	}
 	p.wrap(c.Artifacts.validate(field("artifacts")))
+	p.wrap(c.Diagnostics.Insights.validate(field("diagnostics.insights")))
 
 	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
 	//
@@ -934,6 +935,60 @@ type Diagnostics struct {
 	// IssueReports is whether the engine reports its own defects to the
 	// project. See [IssueReports].
 	IssueReports IssueReports `yaml:"issue_reports,omitempty" json:"issue_reports,omitzero" desc:"Anonymous reports of the engine's own defects, off until an administrator turns them on."`
+	// Insights is whether the engine shares typed weekly records of how the
+	// company's agents work (ADR-0119), under a consent of its own.
+	Insights InsightsSharing `yaml:"insights,omitempty" json:"insights,omitzero" desc:"Anonymous weekly records of how the company's agents work, off until an administrator turns them on."`
+}
+
+// InsightsShare is how the engine shares its operating insights.
+type InsightsShare string
+
+// The ways to share: never, each record after an administrator sends it, or
+// every eligible record on its own.
+const (
+	InsightsOff    InsightsShare = "off"
+	InsightsReview InsightsShare = "review"
+	InsightsAuto   InsightsShare = "auto"
+)
+
+// InsightsSharing is the company's consent to share operating insights. A
+// SETTING, so only an administrator changes it, and off is off: nothing is
+// kept, queued or sent, and a revision that turns it off cancels what waits.
+type InsightsSharing struct {
+	Share InsightsShare `yaml:"share,omitempty" json:"share,omitempty" js:"enum=off|review|auto" desc:"off (the default), review (each record waits for an administrator to send it) or auto (every eligible record is sent)."`
+	// Accepted is the catalogue schema an administrator accepted: a build
+	// whose catalogue is newer shares nothing until it is accepted again.
+	Accepted int `yaml:"accepted,omitempty" json:"accepted,omitempty" desc:"The insights catalogue schema an administrator accepted. A newer catalogue shares nothing until it is accepted again."`
+	// Always is the classes sent without review in review mode.
+	Always []string `yaml:"always,omitempty" json:"always,omitempty" desc:"Catalogue classes sent without waiting for review, in review mode."`
+}
+
+// insightClassShape is a catalogue class id, `wake.noop_share`.
+var insightClassShape = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
+// validate holds the consent to its closed values. Whether a class is in this
+// build's catalogue is the sharer's, which reads no class it does not name.
+func (s InsightsSharing) validate(path Path) error {
+	var p problems
+	switch s.Share {
+	case "", InsightsOff, InsightsReview, InsightsAuto:
+	default:
+		p.add(at(path, "share"), ErrUnknownValue, "%q is not off, review or auto", s.Share)
+	}
+	if s.Accepted < 0 {
+		p.add(at(path, "accepted"), ErrOutOfRange, "a schema is never negative")
+	}
+	seen := map[string]bool{}
+	for i, class := range s.Always {
+		switch {
+		case !insightClassShape.MatchString(class):
+			p.add(extend(at(path, "always"), i), ErrUnknownValue, "%q is not a catalogue class", class)
+		case seen[class]:
+			p.add(extend(at(path, "always"), i), ErrConflict, "%q is listed twice", class)
+		}
+		seen[class] = true
+	}
+	return p.err()
 }
 
 // IssueReports is the company's choice to report engine defects to the project

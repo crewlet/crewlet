@@ -189,6 +189,7 @@ test("an answer in words sends on Enter, and its hint says the keys", async () =
       item="NIM-7"
       comment="c-1"
       asker="Ada Okonkwo"
+      askedBy="ada"
       options={[]}
       open
       onOpenChange={() => {}}

@@ -248,11 +248,12 @@ type carrier interface {
 	Continues(box, writer string) (bool, string)
 
 	// Pack is the script that packs session NOW, as the run's script packs
-	// it once its harness exits — the same pack, into
-	// [Paths.SessionPackStaging], its digest kept the same way — for a job
-	// that never got to ([Runner.PackCapture]). Run in a login shell with
-	// the box's bin directory first on its PATH, as the run's wrapper runs.
-	Pack(paths Paths, session string) string
+	// it once its harness exits — the same pack, staged in staged, this
+	// pack's own directory ([Paths.SessionPackStaging]), and moved over
+	// [Paths.SessionCapture], its digest kept the same way — for a job that
+	// never got to ([Runner.PackCapture]). Run in a login shell with the
+	// box's bin directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session, staged string) string
 
 	// layout is how the harness's archive is laid out, which is what the
 	// scrub a capture streams it through has to read and write it as
@@ -511,7 +512,7 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(), p.OpenCodeConfig(),
 		p.BaseResult(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh(),
@@ -523,12 +524,19 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		files = append(files, out.Stdout)
 	}
 	// The directories alone are removed recursively; every other target is a
-	// file, removed as it always was. Two statements rather than one joined
-	// by `&&`, so a file that will not go never keeps a directory.
+	// file, removed as it always was. Separate statements rather than one
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	//
+	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack
+	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
+	// removes what matches instead, the glob outside the quotes: one a pack
+	// cut short left, its node stopped as it packed, would otherwise stay in
+	// the box for its life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
-			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
-			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -863,8 +871,13 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if hooks != "" {
 		b.WriteString(attributionExports(hooks))
 	}
-	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
-		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()))
+	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
+	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
+	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
+		sandbox.ShellQuote(paths.MemoryBefore()))
+	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; crewlet_memory > %s 2>/dev/null; ",
+		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()),
+		sandbox.ShellQuote(paths.MemoryAfter()))
 	if out.Result != "" && out.Result != out.Stdout {
 		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
 	}
@@ -1138,6 +1151,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
+
+	// A KILL FOR MEMORY DURING THE JOB, as the kernel counted it in the job's
+	// memory domain; the run ended at its ceiling where its harness was the
+	// process killed (SIGKILL, status 137).
+	result, refused, err = memoryKills(ctx, box, paths, result, refused, code)
+	if err != nil {
+		return sandbox.Result{}, err
+	}
 
 	// WHETHER THE JOB WAS ENDED ON REQUEST, as its script recorded the moment
 	// its harness was over ([Paths.JobEnded]): a run ended so did not finish,
@@ -1509,3 +1530,29 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, l
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
 		"so it was not read", what, path, size, humanSize(int64(limit)))
 }
+
+// memoryKills is result with the kills the kernel made for memory in the job's
+// domain while its harness ran, read off the script's two records of it.
+func memoryKills(ctx context.Context, box sandbox.Sandbox, paths Paths, result sandbox.Result,
+	refused []string, code string) (sandbox.Result, []string, error) {
+
+	var read [2]sandbox.MemoryDomain
+	for i, path := range []string{paths.MemoryBefore(), paths.MemoryAfter()} {
+		text, refusal, err := readWhole(ctx, box, path, "the record of its memory")
+		if err != nil {
+			return sandbox.Result{}, nil, err
+		}
+		if refusal != "" {
+			refused = append(refused, refusal)
+		}
+		read[i] = sandbox.ParseMemoryDomain(text)
+	}
+	if killed, ok := sandbox.KilledBetween(read[0], read[1]); ok && killed > 0 {
+		result.MemoryKills, result.MemoryBytes = killed, read[1].Ceiling()
+		result.OutOfMemory = code == harnessKilled
+	}
+	return result, refused, nil
+}
+
+// harnessKilled is the status a shell gives a child SIGKILL ended: 128 + 9.
+const harnessKilled = "137"

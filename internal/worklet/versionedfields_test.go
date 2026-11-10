@@ -22,11 +22,17 @@ import (
 func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
 	closed := map[int][]string{
-		2: {"MutationRecord.ActorApps"},
-		3: {"Snapshot.ThreadAwaiting", "Snapshot.ThreadOwing"},
-		4: {"MutationRecord.ActorAppsKept"},
-		5: {"Snapshot.CommentAsks", "Snapshot.MentionedAgents"},
-		6: {"MutationRecord.WorkingFor"},
+		2:  {"MutationRecord.ActorApps"},
+		3:  {"Snapshot.ThreadAwaiting", "Snapshot.ThreadOwing"},
+		4:  {"MutationRecord.ActorAppsKept"},
+		5:  {"Snapshot.CommentAsks", "Snapshot.MentionedAgents"},
+		6:  {"MutationRecord.NoticeAsksKept"},
+		7:  {"MutationRecord.NoticeWokeKept"},
+		8:  {"TaskPatch.AskWatch"},
+		9:  {"TaskPatch.WaitReason"},
+		10: {"TaskPatch.ClearDue", "TaskPatch.ClearStart"},
+		11: {"TaskPatch.ChangeSettled"},
+		12: {"MutationRecord.WorkingFor"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

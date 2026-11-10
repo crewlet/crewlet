@@ -1519,6 +1519,10 @@
     "Diagnostics": {
       "additionalProperties": false,
       "properties": {
+        "insights": {
+          "$ref": "#/$defs/InsightsSharing",
+          "description": "Anonymous weekly records of how the company's agents work, off until an administrator turns them on."
+        },
         "issue_reports": {
           "$ref": "#/$defs/IssueReports",
           "description": "Anonymous reports of the engine's own defects, off until an administrator turns them on."
@@ -2230,6 +2234,47 @@
           "type": [
             "integer",
             "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "InsightsSharing": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "description": "The insights catalogue schema an administrator accepted. A newer catalogue shares nothing until it is accepted again.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "always": {
+          "description": "Catalogue classes sent without waiting for review, in review mode.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "share": {
+          "description": "off (the default), review (each record waits for an administrator to send it) or auto (every eligible record is sent).",
+          "enum": [
+            "off",
+            "review",
+            "auto",
+            "",
+            null
           ]
         }
       },

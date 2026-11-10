@@ -323,9 +323,18 @@ type request struct {
 	// ([signedask.Guard]) and its reply names it ([reply.Request]).
 	ID string `json:"id"`
 
-	Op    string          `json:"op"`
+	Op string `json:"op"`
+
+	// Args and Actor are the operation's INPUTS — its arguments, and the
+	// actor it runs as — each encoded by the asking router under the wire's
+	// rule for them ([encodeInput]) and decoded by the serving node under
+	// the same rule ([decodeInput]): a key goes on the wire only where it
+	// carries a value, and a key the serving build does not declare refuses
+	// the request rather than vanish from it. The rest of the envelope is
+	// the router's own protocol, which a build reads as encoding/json always
+	// has.
 	Args  json.RawMessage `json:"args,omitempty"`
-	Actor *Actor          `json:"actor,omitempty"`
+	Actor json.RawMessage `json:"actor,omitempty"`
 
 	// Floors are the positions the serving node must have applied before it
 	// runs the operation — the asking node's session, on the log of the
@@ -505,6 +514,10 @@ type reply struct {
 	// included, since a walking gesture's earlier steps committed whether
 	// or not a later one failed.
 	Written []types.WorkItem `json:"written,omitempty"`
+
+	// Committed is the kinds of change those writes were, for the asking
+	// turn's outcome ([worklet.WriteLog.Commit]).
+	Committed []types.CommittedChange `json:"committed,omitempty"`
 }
 
 // Answers is the id of the request this reply answers ([signedask.Reply]).
@@ -572,9 +585,21 @@ type opSpec struct {
 	// ([op.answeredOn]) — and the one subject the router asks it on.
 	lane lane
 
-	// serve is the server half: the request's arguments, decoded, run on
-	// this node's backend.
-	serve func(ctx context.Context, b Backend, actor *Actor, raw json.RawMessage) (any, error)
+	// whole is an operation whose ANSWER a caller carries into another request
+	// ([op.answeredWhole]): the serving node encodes it under the wire's
+	// rule for an operation's inputs, and the asking router decodes it
+	// refusing a key this build does not declare ([ErrUnknownKeys]).
+	whole bool
+
+	// decode is the server half's first step: the request's arguments,
+	// decoded under the wire's rule ([decodeInput]) into the operation's own
+	// type — boxed — or every member they hold that the type does not
+	// declare, by its path, and nothing run.
+	decode func(raw json.RawMessage) (args any, unknown []string, err error)
+
+	// run is the server half's second: the decoded arguments run on this
+	// node's backend, as the actor the request names.
+	run func(ctx context.Context, b Backend, actor *Actor, args any) (any, error)
 }
 
 // op is a typed handle on one registered operation: its declaration, and its
@@ -606,6 +631,34 @@ type op[A, R any] struct {
 	// (Timing.GitWriteAttemptFor) — and nil for every operation whose
 	// attempt is its class's alone ([Router.wholeAttempt]).
 	attempt func(A, Timing) time.Duration
+
+	// asked is the check the ASKING node makes of the arguments before the
+	// request runs anywhere ([op.refusedBeforeAsking]), nil for every
+	// operation that declares none.
+	asked func(A) error
+}
+
+// refusedBeforeAsking declares a check the ASKING node makes of an operation's
+// arguments before the request runs anywhere — this node's own copy in process,
+// or a data node it routes to — refusing with check's error whatever check
+// refuses, so nothing is asked.
+//
+// FOR A VALUE THE WIRE DOES NOT CARRY AS ITSELF. A field at its zero is left
+// off the wire ([encodeInput]), and a pointer whose type's own IsZero calls
+// what it points at zero is such a field: it crosses as no value at all, and
+// the serving node decodes nil. A writer that refuses such a value where it
+// runs refused it on a data node's own seats and was handed nil from every
+// other node — one request, two answers, by which node asked. Checked where
+// the request is asked, it is refused alike from every node; the writer keeps
+// its own check for whatever reaches it another way. The wire gate holds every
+// such field to a reason ([zeroThroughPointer], wirerule_test.go), and a field
+// refused here names its check there.
+//
+// A property of the asking side, like [op.keyedBy]: the server runs the
+// operation as it always did.
+func (o op[A, R]) refusedBeforeAsking(check func(A) error) op[A, R] {
+	o.asked = check
+	return o
 }
 
 // attemptBy declares a git write whose attempt on one Gitlet node follows its
@@ -676,6 +729,33 @@ func (s *opSpec) surfaceWrite() bool {
 // a build that cannot serve, so it panics rather than silently shadowing, and
 // so does a domain this package knows no log for, whose copy no verdict
 // judges and whose floor no log holds.
+//
+// # A FIELD'S ZERO MEANS WHAT AN OLDER BUILD DOES
+//
+// A is the operation's arguments as the wire carries them, and every field of
+// it, at every depth, crosses only where it holds a value: the router leaves a
+// field at its zero off the wire ([encodeInput]), and the serving node decodes
+// its absence as Go's zero. So a field a later build adds to A — or to any type
+// A holds — must mean, at its zero, exactly what a build without the field
+// does: a request that does not use it is then served by a data node of either
+// build, and only one that sets it is refused by a data node that does not
+// declare it ([decodeInput], [ErrUnknownKeys]) rather than run without it. A
+// field whose zero would mean something else would change what every older
+// build's request means, so spell it so that its zero does not: a flag `Keep`
+// whose zero keeps nothing is spelled `Drop`, whose zero drops nothing.
+//
+// A TYPE'S OWN IsZero DECIDES THAT ZERO where it has one, as encoding/json/v2's
+// OmitZeroStructFields asks it — and it asks it THROUGH a pointer, so a pointer
+// at a value such a type calls zero crosses as nil, exactly as a nil pointer
+// does: a pointer at a type with its own IsZero crosses only where it points at
+// what that type calls non-zero. The wire gate holds every such type to a
+// reason its absence drops nothing a reader misses (wirerule_test.go's
+// zeroByMethod), and every pointer at one to a reason no reader tells nil from
+// a pointer at that zero (zeroThroughPointer). Where one would, the field is
+// reshaped until none does: a clear said by a flag of its own
+// (worklet.TaskPatch.ClearDue), a bound held as a value whose zero means unset
+// (worklet.ShowClosed.Since), or a value no request may carry refused before it
+// is asked ([op.refusedBeforeAsking]).
 func define[A, R any](name string, class opClass, domain string, actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
@@ -694,14 +774,19 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		}
 		spec.floorStream = stream
 	}
-	decode := func(raw json.RawMessage) (A, error) {
+	spec.decode = func(raw json.RawMessage) (any, []string, error) {
 		var args A
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &args); err != nil {
-				return args, fmt.Errorf("estate: %s: decode the arguments: %w", name, err)
-			}
+		if len(raw) == 0 {
+			return args, nil, nil
 		}
-		return args, nil
+		unknown, err := decodeInput(raw, &args)
+		switch {
+		case err != nil:
+			return nil, nil, fmt.Errorf("estate: %s: decode the arguments: %w", name, err)
+		case len(unknown) > 0:
+			return nil, unknown, nil
+		}
+		return args, nil, nil
 	}
 	checked := func(ctx context.Context, b Backend, who *Actor, args A) (R, error) {
 		var zero R
@@ -719,12 +804,8 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		}
 		return serve(ctx, b, who, args)
 	}
-	spec.serve = func(ctx context.Context, b Backend, who *Actor, raw json.RawMessage) (any, error) {
-		args, err := decode(raw)
-		if err != nil {
-			return nil, err
-		}
-		return checked(ctx, b, who, args)
+	spec.run = func(ctx context.Context, b Backend, who *Actor, args any) (any, error) {
+		return checked(ctx, b, who, args.(A))
 	}
 	registry[name] = spec
 	return op[A, R]{spec: spec, serve: checked}
@@ -801,6 +882,37 @@ func (o op[A, R]) answeredOn(l lane) op[A, R] {
 // see [opSpec.ungated].
 func (o op[A, R]) ungated() op[A, R] {
 	o.spec.ungated = true
+	return o
+}
+
+// answeredWhole declares a READ whose answer a caller carries into another
+// request through this router — a version's files a publish carries on, a
+// view's prior a save hands back, a catalogue a model is told to send back
+// whole, a list's expanded query its read asks, a page's cursor the next page
+// asks by — so the answer crosses under the rule an operation's inputs do: the
+// serving node leaves a field at its zero off it, and the asking router reads
+// it whole or refuses it ([ErrUnknownKeys], its Answer set) rather than drop
+// what a newer data node said and send the rest on.
+//
+// THE OTHER DIRECTION OF THE SAME LOSS. A data node of an older build running
+// a newer writer's request would run it short, and so would a node of an older
+// build that read a newer data node's answer, kept what it declares of it and
+// sent that on: a write records the newer field gone, and a read is answered
+// as though it had never been asked — and nothing says so either way. A read
+// nobody carries is not declared: a field a reader drops from what it shows
+// loses nothing, and refusing it would only blind an older node to data it can
+// show most of. So where one read is both shown and carried, the carried read
+// is an operation of its own, answering what the shown one answers
+// ([opArtifactVersionCarried] beside [opArtifactVersion]), and only the caller
+// that carries it asks it. TWO-SIDED in the wire gate (answeredWholeBy): every
+// read declared names the request its answer is carried into, and a read
+// declared and no longer carried fails it.
+func (o op[A, R]) answeredWhole() op[A, R] {
+	if o.spec.class != opRead {
+		panic(fmt.Sprintf("estate: %s is a write, and a write's answer is never refused: by the time it "+
+			"arrives the write has run", o.spec.name))
+	}
+	o.spec.whole = true
 	return o
 }
 

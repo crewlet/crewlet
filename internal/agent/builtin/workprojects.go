@@ -37,7 +37,12 @@ import (
 type ProjectReader interface {
 	Projects(ctx context.Context, q worklet.ProjectQuery) (
 		worklet.ProjectListing, error)
-	Project(ctx context.Context, q worklet.ProjectDetailQuery) (
+	// CarriedProject is one project as describe_project hands it to a model,
+	// whose field declarations write_project tells it to send back as the
+	// whole set: read whole or refused where this node's build would drop
+	// part of it (estate's tracker.project_carried), never shown short and
+	// written back.
+	CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) (
 		worklet.ProjectDetail, error)
 }
 
@@ -221,7 +226,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("Name a project — this seat's unit owns none, so there " +
 			"is no default to fall back on. " + worklet.ListProjectsTool + " reports the keys."), nil
 	}
-	detail, err := reader.Project(ctx, worklet.ProjectDetailQuery{
+	detail, err := reader.CarriedProject(ctx, worklet.ProjectDetailQuery{
 		Project: project,
 		ForType: strings.TrimSpace(argString(args, "for_type")),
 		Units:   t.deps.Units,

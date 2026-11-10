@@ -2497,8 +2497,8 @@ func Catalogue() []Instrument {
 			Attributes: []string{"change"},
 			Shows: "Alarm transitions this node published for the seats whose " +
 				"role carries `health_tools` to be woken by, once the broker " +
-				"took each — `fired`, `cleared` or `firing_at_boot`, the last " +
-				"what a node's first evaluation found up. A gauge flipping " +
+				"took each, `fired` or `cleared`; a restart says only what " +
+				"changed while the node was down. A gauge flipping " +
 				"while this stands still is a node whose wakes are not getting " +
 				"out: its `alarm_transition_unpublished` line names the error.",
 		},

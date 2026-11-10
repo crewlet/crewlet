@@ -2612,7 +2612,7 @@ day is 9.9 MB of records and 2.2 MB of read barriers:
 |---|---|---|
 | 274 tasks filed, at a 2 KiB description | 5 266 bytes, in two records | 1.44 MB |
 | 822 comments, at 1 KiB | 3 037 bytes | 2.50 MB |
-| 1 000 edits, each a status change | 1 157 bytes | 1.16 MB |
+| 1 000 edits, each a status change | 1 181 bytes | 1.18 MB |
 | 3 000 turns charged to a task, a summary at its 600-byte cap | 1 608 bytes | 4.82 MB |
 | 12 525 read barriers: the seats' 12 500 and the object collector's 25 | 176 bytes | 2.20 MB |
 
@@ -2632,7 +2632,7 @@ wherever a key is written — three times in a filed task, once in a comment or
 an edit — about 8 kB of the day, under a tenth of one percent. A record
 carries a description or a comment whole and its notification's excerpt of it
 again, so the text a company writes is part of the figure: with half of it — a
-1 KiB description, a 512-byte comment — the records come to 9.1 MB.
+1 KiB description, a 512-byte comment — the records come to 9.2 MB.
 The chat log holds about 230 MB at the census (a week at its 32 MB a day).
 `blocked_by` is the field that says whether this fleet is one that trims; if
 it is set on a log, that log is growing without bound and the forecast above

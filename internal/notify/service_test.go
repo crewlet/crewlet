@@ -189,6 +189,8 @@ func (h *harness) skips(t *testing.T) []types.NotificationSkipped {
 
 var skipTopic = topics.Event(types.NotificationSkipped{}.EventType())
 
+var heldTopic = topics.Event(types.WakeHeld{}.EventType())
+
 // seats every test's collectors cover: the fixture company's three, plus the
 // one a swap adds and the skip stream.
 var collected = []string{"engineering-lead", "backend-engineer", "dana-founder", "new-seat"}
@@ -211,6 +213,7 @@ func newService(t *testing.T, mutate func(*notify.Options, *harness)) *harness {
 		h.collect(t, inbox(handle))
 	}
 	h.collect(t, skipTopic)
+	h.collect(t, heldTopic)
 
 	opts := notify.Options{
 		Queue:     h.q,
@@ -781,6 +784,35 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 	if skips := h.skips(t); len(skips) != 1 ||
 		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
+	}
+}
+
+// A HELD RECIPIENT IS RECORDED, NEVER WOKEN: an agent seat the change told and
+// did not wake leaves one held-wake record under an id derived from its wake's
+// (never that id, which another build may wake under), and a person told and
+// not woken leaves none.
+func TestAHeldRecipientIsRecordedAndNotWoken(t *testing.T) {
+	h := newService(t, nil)
+	id := uuid.New()
+	origin := types.TriggerOrigin{Kind: types.OriginWorkItem, ID: "ENG-1", Reason: "mention"}
+	agent := to(notify.Recipient{Handle: "engineering-lead"}, "for you")
+	agent.Held, agent.WakeID, agent.Origin = true, id, origin
+	person := to(notify.Recipient{Handle: "dana-founder"}, "for you")
+	person.Held = true
+	h.parser.out = []notify.Routed{agent, person}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	h.quiet(t, inbox("engineering-lead"))
+	held := h.settled(t, heldTopic)
+	if len(held) != 1 || held[0].ID != notify.HeldID(id) || held[0].ID == id {
+		t.Fatalf("recorded %d held wakes, want one under the id derived from the wake's", len(held))
+	}
+	rec, ok := events.DataAs[*types.WakeHeld](held[0])
+	if !ok || rec.AgentHandle != "engineering-lead" || rec.Origin != origin ||
+		rec.Wake() != "work_item:mention" {
+		t.Fatalf("the held wake is %+v, want the seat and the origin it was told under", rec)
 	}
 }
 

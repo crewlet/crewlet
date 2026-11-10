@@ -532,6 +532,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "sign-in":
     case "storage":
     case "diagnostics":
+    case "advisor":
       return sectionPage(where.screen);
     case "code-settings":
       return sectionPage("gitlet");

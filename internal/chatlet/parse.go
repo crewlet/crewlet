@@ -217,7 +217,8 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			"author_kind", string(n.AuthorKind), "asks", n.Asks,
 			"held", len(n.Held), "woken", len(routed))
 	}
-	if len(routed) == 0 {
+	held := heldSeats(n, rosterOf(reg))
+	if len(routed) == 0 && len(held) == 0 {
 		return nil, nil
 	}
 
@@ -230,7 +231,16 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// and rebuilding it per copy would allocate the vocabulary's two
 	// derived sets on the hottest path this domain has.
 	rule := AddressRule()
-	out := make([]notify.Routed, 0, len(routed))
+	out := make([]notify.Routed, 0, len(routed)+len(held))
+	for _, c := range held {
+		// TOLD AND NOT WOKEN: the held wake's record, under the reason the
+		// quiet rule held the seat at, never a delivery.
+		out = append(out, notify.Routed{Inbound: notify.Inbound{Source: base.Source,
+			Origin: types.TriggerOrigin{Kind: types.OriginChatMessage, ID: n.MessageID,
+				Reason: string(c.Reason)}},
+			To: notify.Recipient{Handle: c.Handle}, Held: true,
+			WakeID: changefeed.WakeID(record.OpID, c.Handle), WakeAt: record.CreatedAt})
+	}
 	for _, c := range routed {
 		out = append(out, notify.Routed{
 			Inbound: withReason(base, rule, c.Reason, n.ThreadRoot),
@@ -298,6 +308,24 @@ func rosterOf(reg *notify.Registry) func(string) (bool, bool) {
 		party, ok := reg.ByHandle(handle)
 		return ok, party.Human
 	}
+}
+
+// heldSeats is the agent seats the quiet rule held a message from waking that
+// the company still employs, never its author.
+func heldSeats(n *Notify, known func(string) (exists, human bool)) []Recipient {
+	if known == nil {
+		return nil
+	}
+	var out []Recipient
+	for _, c := range n.Held {
+		if c.Handle == "" || c.Handle == n.Author {
+			continue
+		}
+		if exists, human := known(c.Handle); exists && !human {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // inbound is the delivery every recipient of this record shares, before the

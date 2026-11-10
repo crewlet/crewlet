@@ -299,7 +299,7 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 		return artifactsdomain.Published{}, Report{}, r.fail(ctx, &artifactsdomain.VersionMoved{Head: head, Live: live})
 	}
 	r.headContract, r.headCaps = head.Contract, head.Capabilities
-	if r.base, err = s.reads.Version(ctx, req.Artifact, base); err != nil {
+	if r.base, err = s.reads.CarriedVersion(ctx, req.Artifact, base); err != nil {
 		return artifactsdomain.Published{}, Report{}, r.fail(ctx, err)
 	}
 	r.hasBase = true

@@ -46,7 +46,8 @@ import (
 // different edits, and a tool that could only express the first would make a
 // date impossible to take back off.
 
-// scheduleSchema is the five parameters, declared once for both tools.
+// scheduleSchema is the five parameters, declared once for both tools, and an
+// update's wait.
 //
 // ONE DECLARATION because a create that accepts a due date and an update that
 // does not is the same bug one step later — which is the shape the two tools
@@ -67,7 +68,7 @@ func scheduleSchema(update bool) map[string]any {
 		clears = " null clears it."
 		nullable = func(t string) any { return []string{t, "null"} }
 	}
-	return map[string]any{
+	out := map[string]any{
 		"due": map[string]any{
 			"type": nullable("string"),
 			"description": "When this is due: a date (2031-04-16), an instant, " +
@@ -92,6 +93,20 @@ func scheduleSchema(update bool) map[string]any {
 				"other half of the size above." + clears,
 		},
 	}
+	if update {
+		out["wait_until"] = map[string]any{
+			"type": nullable("string"),
+			"description": "Set the item aside until a date, in the spellings of `due`: " +
+				"you are not handed it before then, and are handed it once when it comes. " +
+				"It is the item's `start`, with `wait_reason` beside it. null ends the wait.",
+		}
+		out["wait_reason"] = map[string]any{
+			"type": "string",
+			"description": "Required with `wait_until`: one line saying what the item " +
+				"waits for, shown beside the date.",
+		}
+	}
+	return out
 }
 
 // schedule is the four values, resolved, with absent and cleared told apart.
@@ -101,6 +116,9 @@ type schedule struct {
 	DueAllDay *bool
 	Estimate  *int
 	Points    *float64
+
+	// WaitReason is a wait's reason, read with `wait_until` into Start.
+	WaitReason *string
 
 	// Cleared names the keys that were explicitly set to null, which a
 	// create ignores — a new task has nothing to clear — and an update
@@ -140,6 +158,13 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		if err != nil {
 			return out, fmt.Sprintf("%s could not read `%s`: %s", tool, key,
 				worklet.Sentence(err))
+		}
+		if anchor.At.IsZero() {
+			// THE ZERO INSTANT IS NO DATE, and the tracker refuses one
+			// ([worklet.TaskPatch.CheckDates]) in words about the
+			// patch's own fields: said here, it is said in this tool's.
+			return out, fmt.Sprintf("%s was given `%s` %q, which is the zero instant "+
+				"(January of year one) and no date: name a real one.", tool, key, clip(token))
 		}
 		at := anchor.At
 		*target = &at
@@ -191,6 +216,51 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 	return out, ""
 }
 
+// readWait reads an update's `wait_until` into the plan's start, with the
+// `wait_reason` it requires; null or empty ends the wait.
+func readWait(args map[string]any, now time.Time, loc *time.Location, plan *schedule,
+	tool string) string {
+
+	raw, held := args["wait_until"]
+	_, start := args["start"]
+	reason := strings.TrimSpace(argString(args, "wait_reason"))
+	switch {
+	case !held && reason != "":
+		return tool + " was given `wait_reason` without `wait_until`: a reason says " +
+			"why the item waits until a date. Nothing was written."
+	case !held:
+		return ""
+	case start:
+		return tool + " was given both `wait_until` and `start`, which set the same " +
+			"date: give one. Nothing was written."
+	}
+	token := ""
+	if raw != nil {
+		token = strings.TrimSpace(argString(args, "wait_until"))
+	}
+	if token == "" {
+		plan.Start, plan.Cleared["start"] = nil, true
+		return ""
+	}
+	anchor, err := period.Resolve(token, now, loc)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s could not read `wait_until`: %s", tool, worklet.Sentence(err))
+	case !anchor.At.After(now):
+		return fmt.Sprintf("%s was given a `wait_until` that has passed (%s): a wait "+
+			"is until a later date. Nothing was written.", tool, anchor.At.Format(time.RFC3339))
+	case reason == "":
+		return tool + " was given `wait_until` without `wait_reason`: say in one line " +
+			"what the item waits for, which it shows beside the date. Nothing was written."
+	case len(reason) > worklet.MaxWaitReason || strings.ContainsAny(reason, "\r\n"):
+		return fmt.Sprintf("%s was given a `wait_reason` that is not one line of at most %d "+
+			"bytes. Nothing was written.", tool, worklet.MaxWaitReason)
+	}
+	at := anchor.At
+	plan.Start, plan.WaitReason = &at, &reason
+	return ""
+}
+
 // applyToTask writes what a CREATE was given. A create clears nothing: there
 // is no previous value for a null to take back.
 func (s schedule) applyToTask(task *worklet.Task) {
@@ -209,21 +279,24 @@ func (s schedule) applyToTask(task *worklet.Task) {
 
 // applyToPatch writes what an UPDATE was given, cleared keys included.
 //
-// A CLEARED DATE IS THE ZERO INSTANT rather than a nil pointer, because nil on
-// a patch means "not named" — the whole point of the pointer — so clearing has
-// to be a value the applier can recognise as empty.
+// A CLEARED DATE IS ITS FLAG ([worklet.TaskPatch.ClearStart],
+// [worklet.TaskPatch.ClearDue]), never a value: nil on a patch means "not
+// named" — the whole point of the pointer — and a date has no empty value to
+// point at, since the zero instant is a date in year one (the patch type's doc
+// says why it is no longer that).
 func (s schedule) applyToPatch(patch *worklet.TaskPatch) bool {
 	touched := false
 	if s.Start != nil {
 		patch.StartAt, touched = s.Start, true
+		patch.WaitReason = s.WaitReason
 	} else if s.Cleared["start"] {
-		patch.StartAt, touched = &time.Time{}, true
+		patch.ClearStart, touched = true, true
 	}
 	if s.Due != nil {
 		patch.DueAt, touched = s.Due, true
 		patch.DueAllDay = s.DueAllDay
 	} else if s.Cleared["due"] {
-		patch.DueAt, touched = &time.Time{}, true
+		patch.ClearDue, touched = true, true
 		allDay := false
 		patch.DueAllDay = &allDay
 	}

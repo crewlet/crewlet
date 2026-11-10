@@ -139,6 +139,9 @@ const (
 	// PickupInProgress is an item the seat already started, which comes
 	// before any it has not.
 	PickupInProgress PickupWhy = "in_progress"
+	// PickupReview is an item in review that somebody else moved there and
+	// the seat holds: its review, which comes before work it has not started.
+	PickupReview PickupWhy = "review"
 	// PickupPriorityList is the first item of the seat's priority list,
 	// the order somebody arranged for it.
 	PickupPriorityList PickupWhy = "priority_list"
@@ -149,7 +152,7 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupPriorityList, PickupQueue:
+	case PickupInProgress, PickupReview, PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -160,6 +163,8 @@ func (w PickupWhy) sentence() string {
 	switch w {
 	case PickupInProgress:
 		return "It is in progress and nothing is working on it now, so it comes before work you have not started."
+	case PickupReview:
+		return "It is in review and yours to review: somebody else asked for it, so it comes before work you have not started."
 	case PickupPriorityList:
 		return "It is the first ready item on your priority list, the order your lead set for you."
 	case PickupQueue:
@@ -293,8 +298,8 @@ func (p WorkPickup) SummaryFor(actor string) string {
 	return lead(actor, "was handed its next ready work item "+p.Key)
 }
 
-// Brief is the pickup's ask: which item, why, and the four honest answers,
-// named because a promise that changes nothing is never reminded.
+// Brief is the pickup's ask: which item, why, and the honest answers, each a
+// change to the item, because a promise in words changes nothing.
 func (p WorkPickup) Brief() string {
 	var b strings.Builder
 	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
@@ -310,10 +315,13 @@ func (p WorkPickup) Brief() string {
 	}
 	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then do one of these in this turn:\n" +
 		"- start or continue the work now;\n" +
-		"- if something outside your control blocks it, record the blocker on the item " +
-		"(waiting_on) or ask the person who can unblock it;\n" +
-		"- if it is not yours to do, hand it back or reassign it;\n" +
-		"- if it should wait, say why with " + toolname.CommentOnWorkItem + ".\n" +
-		"You will not be handed this item again until it changes.")
+		"- if somebody must answer or decide first, ask them with " +
+		toolname.CommentOnWorkItem + " (`ask`);\n" +
+		"- if another item blocks it, record that item with " + toolname.UpdateWorkItem +
+		" (`waiting_on`);\n" +
+		"- if it should wait until a date, set `wait_until` and `wait_reason` with " +
+		toolname.UpdateWorkItem + ";\n" +
+		"- if it is not yours to do, hand it back or reassign it.\n" +
+		"You will not be handed this item again until it changes or the date it waits until comes.")
 	return b.String()
 }

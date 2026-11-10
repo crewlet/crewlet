@@ -58,6 +58,29 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // proved nothing has lost nothing by trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
+// Unresumable is a run no build will ever resume, as the engine judges it. It
+// matches [ErrResumeAbandoned], so a resume that returns it ends the run before
+// its turn begins, announced under Reason, with a person's reply handed back.
+type Unresumable struct{ Reason, Detail string }
+
+func (u *Unresumable) Error() string {
+	return fmt.Sprintf("sandbox: no build will resume this run (%s): %s", u.Reason, u.Detail)
+}
+
+// Is matches [ErrResumeAbandoned]: no build will resume the run, so it ends.
+func (u *Unresumable) Is(target error) bool { return target == ErrResumeAbandoned }
+
+// note is what the run's ending announces.
+func (u *Unresumable) note() *failureNote { return &failureNote{reason: u.Reason, detail: u.Detail} }
+
+// abandonedNote is what a resume abandoned before its turn began announces.
+func abandonedNote(err error) *failureNote {
+	if u, ok := errors.AsType[*Unresumable](err); ok {
+		return u.note()
+	}
+	return &failureNote{reason: types.ExecutorFailureResumeBroken, detail: resumeBrokenDetail}
+}
+
 // ErrResumeHeld reports a resumed turn its seat's conditions refused — the
 // token budget its review or its relaunch was refused under, today — returned
 // wrapped in a [HeldError] that says what the refusal waits for.
@@ -467,6 +490,11 @@ type CoordinatorOptions struct {
 	//
 	// Nil serves nothing again.
 	Recovered func(ctx context.Context, run PendingRun)
+
+	// Unresumable judges each run parked on a question as its seat is recovered:
+	// non-nil is a run no build will ever resume, ended there rather than left
+	// holding its seat for an answer it cannot take. Nil judges none.
+	Unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 
 	// Stopped is called once for every way a run's engine-side life ENDS,
 	// and for the one way it stops without ending — a park. It is the ONE
@@ -933,6 +961,8 @@ type Coordinator struct {
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
+	// unresumable is [CoordinatorOptions.Unresumable].
+	unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
@@ -1149,6 +1179,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		ended:         opts.Ended,
 		settle:        opts.Settle,
 		recovered:     opts.Recovered,
+		unresumable:   opts.Unresumable,
 		stopped:       opts.Stopped,
 		closeStopped:  opts.CloseStopped,
 		turnLost:      opts.TurnLost,
@@ -2587,10 +2618,18 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
 		rec.ErrorKind = types.ExecutorErrorLaunchFailed
-		if ranOutOfContext(run, result) {
+		switch {
+		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		case result.OutOfMemory && Placement(run.Placement).OwnsMemory():
+			// A direct box's kills are the engine host's domain's, recorded
+			// below and never the run's ending.
+			rec.ErrorKind = types.ExecutorErrorOutOfMemory
 		}
 	}
+	// THE KERNEL'S KILLS FOR MEMORY, on any ending, so a run that survived a
+	// killed command is evidence of its box's size too.
+	rec.MemoryKills, rec.MemoryBytes = result.MemoryKills, result.MemoryBytes
 	return rec
 }
 
@@ -3689,14 +3728,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// run's ending is the only account of what became of it. It
 			// used to leave a guard breach and nothing else, so the turn
 			// parked on this run read as parked for good.
+			note := abandonedNote(err)
 			log.ErrorContext(ctx, "sandbox_resume_abandoned_before_turn",
-				"turn_id", run.TurnID, "error", err.Error(),
-				"detail", "the resume broke before the turn it would continue began; the run "+
+				"turn_id", run.TurnID, "reason", note.reason, "error", err.Error(),
+				"detail", "the resume could not begin the turn it would continue; the run "+
 					"is ended and announced rather than retried, and a person's reply that "+
 					"drove the resume goes back to the seat rather than being spent")
-			if !c.settleAbandoned(ctx, run, &failureNote{
-				reason: types.ExecutorFailureResumeBroken, detail: resumeBrokenDetail,
-			}) {
+			if !c.settleAbandoned(ctx, run, note) {
 				// NOT THIS NODE'S TO END after all: the run moved on —
 				// the seat's next holder fenced the claim and revived it,
 				// say — and what becomes of it, and of a reply on it, is
@@ -5513,6 +5551,10 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		c.queueOwed(ctx, run)
 		tally.parked++
 	case StatusAwaiting, StatusReseed:
+		if c.settledUnresumable(ctx, run, Fence{Owner: owner, Epoch: epoch}) {
+			tally.abandoned++
+			return
+		}
 		// NOTHING IS DONE TO THE RUN — its answer is what moves it —
 		// but the new owner has to know the question is open, or the
 		// answer arrives at a seat this node believes has nothing
@@ -5549,6 +5591,73 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {
 		c.queueOwed(ctx, run)
 	}
+}
+
+// SettleParked ends the seat's parked runs no build will resume
+// ([CoordinatorOptions.Unresumable]) and reports whether one still holds its box
+// paused for its answer: the one parked state that keeps the seat from other work.
+func (c *Coordinator) SettleParked(ctx context.Context, handle string) (pausing bool, err error) {
+	fence, held := c.leaseOf(handle)
+	if !held {
+		return false, notHeld(ctx, handle, "", "settling its parked runs")
+	}
+	runs, err := c.pending.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: listing seat %s's parked runs: %w", handle, err)
+	}
+	settled := false
+	for _, run := range runs {
+		if !run.WaitsOn(run.LaunchID) {
+			continue
+		}
+		if c.settledUnresumable(ctx, run, fence) {
+			settled = true
+			continue
+		}
+		pausing = pausing || run.Status == StatusAwaiting
+	}
+	if settled {
+		c.syncSeat(ctx, handle)
+	}
+	return pausing, nil
+}
+
+// settledUnresumable ends a parked run no build will resume
+// ([CoordinatorOptions.Unresumable]) while it is still parked, and reports
+// whether it is over: ended here, kept for this node's retry, or ended by another.
+func (c *Coordinator) settledUnresumable(ctx context.Context, run PendingRun, fence Fence) bool {
+	if c.unresumable == nil {
+		return false
+	}
+	u, err := c.unresumable(ctx, run)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_parked_run_unjudged", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "error", err.Error(),
+			"detail", "whether any build can resume this parked run could not be read, so it "+
+				"waits for its answer as before and is judged again at its next resume")
+		return false
+	}
+	if u == nil {
+		return false
+	}
+	decided, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Awaiting, launch: run.LaunchID, reclaim: true, note: u.note(),
+	})
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_unresumable_run_kept", "turn_id", run.TurnID,
+			"reason", u.Reason, "error", err.Error(),
+			"detail", "the parked run no build can resume is not ended yet; this node "+
+				"finishes the ending, and the seat's mail waits behind it")
+		return true
+	}
+	if decided != nil {
+		log.InfoContext(ctx, "sandbox_unresumable_run_ended", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "reason", u.Reason, "status", run.Status)
+		return true
+	}
+	// NOT ENDED UNDER THIS LICENSE: the run moved on since the listing, an
+	// answer recorded, say, whose resume judges it again.
+	return false
 }
 
 // fenceRun moves a run this recovery takes over — running, or parked on a

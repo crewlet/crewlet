@@ -41,14 +41,16 @@ import (
 // ([Record.Superseded]) is version 3; a unit repository's readers
 // ([KindRepoRead]) are version 4; a seat's day that carries its changes and
 // reviews ([Record.Code]) is version 5; and one that counts its failed checks
-// or its ejections ([CodeDay.ChecksFailed], [CodeDay.Ejections]) is version 6.
+// or its ejections ([CodeDay.ChecksFailed], [CodeDay.Ejections]) is version 6;
+// and one that carries its turn ledger or its refused calls ([Record.Ledger],
+// [Record.Refusals]) is version 7.
 //
 // IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
-// highest version: 6, a seat's failed checks and ejections.
-const RecordVersion = 6
+// highest version: 7, a seat's turn ledger.
+const RecordVersion = 7
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -106,6 +108,11 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Record.Code", Since: 5, Path: []string{"code"}},
 	{Name: "Record.Code.ChecksFailed", Since: 6, Path: []string{"code", "checks_failed"}},
 	{Name: "Record.Code.Ejections", Since: 6, Path: []string{"code", "ejections"}},
+	{Name: "Record.Ledger", Since: 7, Path: []string{"ledger"}},
+	{Name: "Record.LedgerElided", Since: 7, Path: []string{"ledger_elided"}},
+	{Name: "Record.LedgerUntallied", Since: 7, Path: []string{"ledger_untallied"}},
+	{Name: "Record.Refusals", Since: 7, Path: []string{"refusals"}},
+	{Name: "Record.RefusalsElided", Since: 7, Path: []string{"refusals_elided"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -432,6 +439,20 @@ type Record struct {
 	Tools       []ToolCalls `json:"tools,omitempty"`
 	ToolsElided int         `json:"tools_elided,omitempty"`
 
+	// Ledger is a seat's ended turns by what woke them and what they did
+	// ([LedgerRow]), capped at [LedgerPerSeatDay]; LedgerElided counts the rest.
+	Ledger       []LedgerRow `json:"ledger,omitempty"`
+	LedgerElided int         `json:"ledger_elided,omitempty"`
+
+	// LedgerUntallied is the seat's ended turns whose end stated no ledger
+	// figures (ended by a build before the ledger), in no ledger row.
+	LedgerUntallied int64 `json:"ledger_untallied,omitempty"`
+
+	// Refusals are the seat's refused calls per (server, tool, class), capped
+	// at [RefusalsPerSeatDay]; RefusalsElided counts the rest.
+	Refusals       []RefusalRow `json:"refusals,omitempty"`
+	RefusalsElided int          `json:"refusals_elided,omitempty"`
+
 	// Fires are a schedule's dispatches, as this node's scheduler recorded
 	// them.
 	Fires []Fire `json:"fires,omitempty"`
@@ -585,6 +606,35 @@ type Read struct {
 	LastTurnID  string    `json:"last_turn_id,omitempty"`
 	LastWorkKey string    `json:"last_work_key,omitempty"`
 	LastQuery   string    `json:"last_query,omitempty"`
+}
+
+// LedgerRow is a seat's wakes on its node's day under one wake and one
+// disposition: for `started`, the turns that ended under one outcome
+// ([types.TurnTally]) and what they spent, their in-turn auxiliary calls apart;
+// for `held`, how many notices told the seat and woke it not, with no outcome
+// and no spend. Each figure a lower bound on its own, as ToolCalls' are.
+type LedgerRow struct {
+	Wake        string `json:"wake"`
+	Disposition string `json:"disposition"`
+	Outcome     string `json:"outcome,omitempty"`
+
+	Turns      int64 `json:"turns"`
+	Input      int64 `json:"input,omitempty"`
+	Output     int64 `json:"output,omitempty"`
+	CacheRead  int64 `json:"cache_read,omitempty"`
+	CacheWrite int64 `json:"cache_write,omitempty"`
+	AuxInput   int64 `json:"aux_input,omitempty"`
+	AuxOutput  int64 `json:"aux_output,omitempty"`
+}
+
+// RefusalRow is a seat's calls to one tool the engine refused under one class
+// in the turns that ended on its node's day; Server is empty for the engine's
+// own tools.
+type RefusalRow struct {
+	Server string `json:"server,omitempty"`
+	Tool   string `json:"tool"`
+	Class  string `json:"class"`
+	Calls  int64  `json:"calls"`
 }
 
 // ToolCalls is one MCP tool's calls by a seat on its node's day, in the turns
@@ -888,7 +938,97 @@ func (r Record) validateTools() error {
 		}
 		seen[k] = true
 	}
+	return r.validateLedger()
+}
+
+// validateLedger holds a seat-day's ledger to its cap and its rows to a wake,
+// a known outcome, one row per pair and no negative figure.
+func (r Record) validateLedger() error {
+	if len(r.Ledger) > LedgerPerSeatDay {
+		return fmt.Errorf("usage: the seat record on %s carries %d ledger rows, past the "+
+			"%d a record holds; the rest are counted, not carried", r.Subject, len(r.Ledger), LedgerPerSeatDay)
+	}
+	if r.LedgerElided < 0 {
+		return fmt.Errorf("usage: the seat record on %s elides %d ledger rows", r.Subject, r.LedgerElided)
+	}
+	if r.LedgerUntallied < 0 {
+		return fmt.Errorf("usage: the seat record on %s counts %d untallied turns", r.Subject, r.LedgerUntallied)
+	}
+	seen := make(map[ledgerKey]bool, len(r.Ledger))
+	for _, l := range r.Ledger {
+		k := keyOfLedger(l)
+		started := types.WakeDisposition(l.Disposition) == types.DispositionStarted
+		spent := l.Input != 0 || l.Output != 0 || l.CacheRead != 0 || l.CacheWrite != 0 ||
+			l.AuxInput != 0 || l.AuxOutput != 0
+		switch {
+		case strings.TrimSpace(l.Wake) == "" || !types.WakeDisposition(l.Disposition).Valid():
+			return fmt.Errorf("usage: the seat record on %s carries a ledger row with no wake "+
+				"or an unknown disposition (%q, %q)", r.Subject, l.Wake, l.Disposition)
+		case started && !types.TurnOutcome(l.Outcome).Valid():
+			return fmt.Errorf("usage: the seat record on %s carries started turns of %s with an "+
+				"unknown outcome %q", r.Subject, l.Wake, l.Outcome)
+		case !started && (l.Outcome != "" || spent):
+			return fmt.Errorf("usage: the seat record on %s carries %s wakes of %s with an outcome "+
+				"or a spend, which only a started turn has", r.Subject, l.Disposition, l.Wake)
+		case seen[k]:
+			return fmt.Errorf("usage: the seat record on %s carries the ledger row %s/%s/%s twice",
+				r.Subject, l.Wake, l.Disposition, l.Outcome)
+		case l.Turns < 0 || l.Input < 0 || l.Output < 0 || l.CacheRead < 0 || l.CacheWrite < 0 ||
+			l.AuxInput < 0 || l.AuxOutput < 0:
+			return fmt.Errorf("usage: the seat record on %s counts a negative figure for %s/%s/%s",
+				r.Subject, l.Wake, l.Disposition, l.Outcome)
+		}
+		seen[k] = true
+	}
+	return r.validateRefusals()
+}
+
+// validateRefusals holds a seat-day's refused calls to their cap, to a tool and
+// a class, one row per (server, tool, class) and no negative count.
+func (r Record) validateRefusals() error {
+	if len(r.Refusals) > RefusalsPerSeatDay {
+		return fmt.Errorf("usage: the seat record on %s carries %d refusal rows, past the %d a "+
+			"record holds", r.Subject, len(r.Refusals), RefusalsPerSeatDay)
+	}
+	if r.RefusalsElided < 0 {
+		return fmt.Errorf("usage: the seat record on %s elides %d refusal rows", r.Subject, r.RefusalsElided)
+	}
+	seen := make(map[refusalKey]bool, len(r.Refusals))
+	for _, f := range r.Refusals {
+		k := keyOfRefusal(f)
+		switch {
+		case strings.TrimSpace(f.Tool) == "" || strings.TrimSpace(f.Class) == "":
+			return fmt.Errorf("usage: the seat record on %s carries a refusal with no tool or no "+
+				"class (%q, %q)", r.Subject, f.Tool, f.Class)
+		case seen[k]:
+			return fmt.Errorf("usage: the seat record on %s carries the refusals of %s/%s under %s twice",
+				r.Subject, f.Server, f.Tool, f.Class)
+		case f.Calls < 0:
+			return fmt.Errorf("usage: the seat record on %s counts a negative refusal for %s/%s",
+				r.Subject, f.Server, f.Tool)
+		}
+		seen[k] = true
+	}
 	return nil
+}
+
+// ledgerKey is a ledger row's identity within its record.
+type ledgerKey struct{ wake, disposition, outcome string }
+
+func keyOfLedger(l LedgerRow) ledgerKey { return ledgerKey{l.Wake, l.Disposition, l.Outcome} }
+
+func compareLedgerKey(a, b LedgerRow) int {
+	return cmp.Or(cmp.Compare(a.Wake, b.Wake), cmp.Compare(a.Disposition, b.Disposition),
+		cmp.Compare(a.Outcome, b.Outcome))
+}
+
+// refusalKey is a refusal row's identity within its record.
+type refusalKey struct{ server, tool, class string }
+
+func keyOfRefusal(f RefusalRow) refusalKey { return refusalKey{f.Server, f.Tool, f.Class} }
+
+func compareRefusalKey(a, b RefusalRow) int {
+	return cmp.Or(cmp.Compare(a.Server, b.Server), cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.Class, b.Class))
 }
 
 // Encode writes a record, stamping it with the lowest version that reads it.

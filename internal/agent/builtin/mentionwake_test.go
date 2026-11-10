@@ -28,9 +28,17 @@ func TestAnAgentsCommentMentionWakesOnlyWhenItAsks(t *testing.T) {
 		t.Fatalf("an agent's comment without asks answered %q and wrote %d, want it refused",
 			got.Output, len(trk.notified))
 	}
-	for _, asks := range []bool{false, true} {
+	// An agent asking a person in words is refused (ADR-0100), so the comment
+	// that asks names the agent alone.
+	for _, c := range []struct {
+		asks  bool
+		body  string
+		named fakeMentions
+	}{{false, body, fakeMentions{"eng", "jane"}}, {true, "Over to @eng for the merge.", fakeMentions{"eng"}}} {
+		asks := c.asks
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Mentions: c.named, Seats: roster})
 		got := callWork(t, reg, builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": body, "asks": asks})
+			map[string]any{"item": "ENG-1", "body": c.body, "asks": asks})
 		if got.Failed {
 			t.Fatalf("a comment with asks=%v failed: %s", asks, got.Output)
 		}
@@ -43,7 +51,7 @@ func TestAnAgentsCommentMentionWakesOnlyWhenItAsks(t *testing.T) {
 			t.Errorf("asks=%v: eng woken %v, asked %v; want both %v", asks, heard.Wakes,
 				heard.Addressed, asks)
 		}
-		if person, _ := worklet.CandidateFor(notify, "jane"); !person.Addressed {
+		if person, _ := worklet.CandidateFor(notify, "jane"); !asks && !person.Addressed {
 			t.Errorf("asks=%v: the person named is not addressed", asks)
 		}
 	}

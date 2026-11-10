@@ -600,6 +600,9 @@ type Written struct {
 	refs  map[string]struct{}
 	items []types.WorkItem
 	many  bool
+
+	// changes are the kinds of change the writes committed ([Written.Commit]).
+	changes []types.CommittedChange
 }
 
 // WrittenFrom rebuilds a set a suspended turn carried across its park: the
@@ -607,10 +610,13 @@ type Written struct {
 //
 // A RESUMED TURN IS THE SAME TURN, so its set continues rather than starting
 // empty — see execstate.State.Written for what an empty start cost.
-func WrittenFrom(items []types.WorkItem, many bool) *Written {
+func WrittenFrom(items []types.WorkItem, many bool, changes ...types.CommittedChange) *Written {
 	w := &Written{}
 	for _, item := range items {
 		w.Add(item)
+	}
+	for _, c := range changes {
+		w.Commit(c)
 	}
 	if many {
 		w.mu.Lock()

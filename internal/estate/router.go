@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -384,6 +385,12 @@ type Router struct {
 	// declined is when each node that ran nothing for a KEYED operation —
 	// answered `no_backend` — may be asked ahead of the rest for it again.
 	declined map[nodeOp]time.Time
+	// unread is, for each node that refused a request of a KEYED operation
+	// for keys its build does not declare ([ErrUnknownKeys]), those keys
+	// and when it may be asked ahead of the rest again for a request
+	// carrying one of them ([Router.markUnread]) — by what it refused, and
+	// never for the whole operation.
+	unread map[nodeOp]unreadKeys
 	// behindConfig is when each node that answered `behind_config` may be
 	// asked an operation the preference holds back ahead of the last resort
 	// again ([Router.markBehindConfig]). Per NODE, because the answer is:
@@ -405,6 +412,14 @@ type nodeCopy struct{ node, copies string }
 
 // nodeOp is one node's serving of one operation, by its name.
 type nodeOp struct{ node, op string }
+
+// unreadKeys is what one node refused requests of one operation for — the keys
+// its build does not declare, each by the path its refusal named
+// ([ErrUnknownKeys.Keys]) — and until when it is remembered.
+type unreadKeys struct {
+	until time.Time
+	keys  []string
+}
 
 // admission is one cached answer to [Router.Serves].
 type admission struct {
@@ -446,7 +461,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		gitPlacement: opts.Git, localGit: opts.LocalGit, timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
-		behindConfig: map[string]time.Time{},
+		unread: map[nodeOp]unreadKeys{}, behindConfig: map[string]time.Time{},
 	}, nil
 }
 
@@ -599,6 +614,39 @@ type exchange struct {
 	here bool
 }
 
+// carrying is the matcher of a refusal's keys against this request — its
+// arguments as the wire carries them, and the actor it runs as — that a keyed
+// order asks of every node remembered refusing requests of the operation for
+// keys its build does not declare ([Router.markUnread]): true where the
+// request carries a member at one of the keys' paths ([carries]). The request
+// is decoded once, the first time a key is asked about, and never where no
+// node is remembered.
+func (x exchange) carrying(actor *Actor) func(keys []string) bool {
+	var (
+		read bool
+		doc  map[string]any
+	)
+	return func(keys []string) bool {
+		if !read {
+			read, doc = true, map[string]any{}
+			// WHAT DOES NOT DECODE CARRIES NOTHING: no request this
+			// router encoded fails to, and a match that missed only asks a
+			// node first that refuses again ([carries]).
+			if args, err := looseDoc(x.encoded); err == nil {
+				doc["args"] = args
+			}
+			if actor != nil {
+				if encoded, err := encodeInput(actor); err == nil {
+					if a, err := looseDoc(encoded); err == nil {
+						doc["actor"] = a
+					}
+				}
+			}
+		}
+		return slices.ContainsFunc(keys, func(key string) bool { return carries(doc, key) })
+	}
+}
+
 // call runs one operation on a data node whose copy serves.
 func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
 	return callAs(ctx, r, o, actor, args, false)
@@ -625,6 +673,13 @@ func callAs[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, 
 	here bool) (R, error) {
 	var zero R
 	spec := o.spec
+	if o.asked != nil {
+		// REFUSED BEFORE IT IS ASKED ANYWHERE ([op.refusedBeforeAsking]),
+		// in process as routed, so the answer is the same from every node.
+		if err := o.asked(args); err != nil {
+			return zero, err
+		}
+	}
 	var written worklet.WriteLog
 	if actor != nil && actor.Provenance.Written != nil {
 		// THE TURN'S SET OF ITEMS IT WROTE is in this process, so a node
@@ -703,7 +758,10 @@ func exchangesOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writt
 func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, written worklet.WriteLog,
 	key string) (exchange, error) {
 
-	encoded, err := json.Marshal(args)
+	// UNDER THE WIRE'S RULE FOR AN OPERATION'S INPUTS ([encodeInput]): a
+	// field at its zero stays off, so a data node of a build that does not
+	// declare it serves a write that does not use it.
+	encoded, err := encodeInput(args)
 	if err != nil {
 		return exchange{}, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
 	}
@@ -718,7 +776,19 @@ func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writte
 			if len(raw) == 0 {
 				return out, nil
 			}
-			if decodeErr := json.Unmarshal(raw, &out); decodeErr != nil {
+			if spec.whole {
+				// AN ANSWER A CALLER CARRIES INTO A WRITE is read whole
+				// or not at all ([op.answeredWhole]).
+				unknown, decodeErr := decodeInput(raw, &out)
+				switch {
+				case decodeErr != nil:
+					return out, decodeErr
+				case len(unknown) > 0:
+					var zero R
+					return zero, &ErrUnknownKeys{Op: spec.name, Keys: prefixed("result", unknown),
+						Answer: true}
+				}
+			} else if decodeErr := json.Unmarshal(raw, &out); decodeErr != nil {
 				return out, decodeErr
 			}
 			// A PEER'S CAVEATS, rebuilt at this one boundary: no caveat
@@ -876,6 +946,50 @@ type walk struct {
 	// of N nodes appends at most one barrier and waits at most one bound
 	// for a position rather than N of each.
 	spent statelog.Spent
+
+	// unknown is what every node whose build could not read the request
+	// whole refused ([ErrUnknownKeys]) — the keys, and the nodes — or nil
+	// where none did. Each ran nothing, so the walk moved on from it; where
+	// no node serves the request, this is the answer ([walk.unserved]).
+	unknown *ErrUnknownKeys
+}
+
+// unreadBy is node refusing the request for keys its build does not declare —
+// or, where it answered for a walk of its own, for keys the data nodes it asked
+// do not ([ErrUnknownKeys.Nodes]): it ran nothing, so the walk keeps what it
+// refused and asks the next node.
+func (w *walk) unreadBy(node string, refused *ErrUnknownKeys) {
+	if w.unknown == nil {
+		w.unknown = &ErrUnknownKeys{Op: refused.Op}
+	}
+	nodes := refused.Nodes
+	if len(nodes) == 0 {
+		nodes = []string{node}
+	}
+	for _, n := range nodes {
+		if !slices.Contains(w.unknown.Nodes, n) {
+			w.unknown.Nodes = append(w.unknown.Nodes, n)
+		}
+	}
+	for _, key := range refused.Keys {
+		if !slices.Contains(w.unknown.Keys, key) {
+			w.unknown.Keys = append(w.unknown.Keys, key)
+		}
+	}
+	w.note("%s: its build does not declare %s, so it ran nothing", node, words.And(asSaid(refused.Keys)))
+}
+
+// refusedOr is unserved, the account of a walk no node served — or, where a
+// node refused the request for keys its build does not declare, that refusal
+// with the account beside it ([ErrUnknownKeys.Unserved]), so the caller is told
+// what would serve it: a data node of the writer's build.
+func (w *walk) refusedOr(unserved *ErrUnserved) error {
+	if w.unknown == nil {
+		return unserved
+	}
+	refused := *w.unknown
+	refused.Unserved = unserved
+	return &refused
 }
 
 // paid adds what one node's refusal of a read had paid for to what the walk
@@ -918,7 +1032,7 @@ func (w *walk) unserved(spec *opSpec) error {
 		return fmt.Errorf("%w (%s, asked of %s: %s)", ErrOutcomeUnknown, spec.name,
 			strings.Join(w.unanswered, ", "), detail)
 	}
-	return &ErrUnserved{Detail: detail, NodeSilent: w.silent}
+	return w.refusedOr(&ErrUnserved{Detail: detail, NodeSilent: w.silent})
 }
 
 // askFailed is the answer to a walk whose next request could not be made at
@@ -1021,7 +1135,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		}
 		return nil, fmt.Errorf("estate: %s: read who holds the estate: %w", spec.name, err)
 	}
-	for _, node := range r.orderFor(spec, x.key, nodes) {
+	for _, node := range r.orderFor(spec, x.key, nodes, x.carrying(actor)) {
 		if node == r.self {
 			// THIS NODE'S TURN IN A KEYED ORDER: in-process, held to the
 			// same floors and the same verdict a remote node is.
@@ -1198,8 +1312,18 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 
 	floors := r.floorsFor(spec)
 	req := request{
-		Op: spec.name, Args: x.encoded, Actor: actor,
+		Op: spec.name, Args: x.encoded,
 		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
+	}
+	if actor != nil {
+		// AN INPUT OF THE OPERATION, as its arguments are: it crosses under
+		// the same rule, and the serving node reads it whole or refuses the
+		// request ([inputs]).
+		encoded, err := encodeInput(actor)
+		if err != nil {
+			return reply{}, heard{}, fmt.Errorf("estate: %s: encode the actor: %w", spec.name, err)
+		}
+		req.Actor = encoded
 	}
 	if !spent.IsZero() {
 		req.Spent = &spent
@@ -1330,6 +1454,24 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 			w.note("%s: %v", node, failure)
 			return nil, false, nil
 		}
+		var refused *ErrUnknownKeys
+		if errors.As(failure, &refused) {
+			// A BUILD THAT COULD NOT READ THE REQUEST WHOLE RAN NOTHING,
+			// whatever the class: refused before its backend was called
+			// ([inputs]), it is a node that did not run the operation, so
+			// the next one is asked — a data node of the asking node's build
+			// serves it — and it is not the node asked first next time. A
+			// KEYED operation remembers WHAT IT REFUSED ([Router.markUnread]):
+			// its order has no sticky node to move the next such request off
+			// it, and its build outlasts one request — but the node serves
+			// every request that does not carry those keys, so only one that
+			// does is moved.
+			w.unreadBy(node, refused)
+			if x.key != "" {
+				r.markUnread(node, spec.name, refused.Keys)
+			}
+			return nil, false, nil
+		}
 	}
 	op := ""
 	if x.key != "" {
@@ -1346,6 +1488,15 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 		return nil, true, failure
 	}
 	value, err = x.decode(rep.Result)
+	var unread *ErrUnknownKeys
+	if errors.As(err, &unread) {
+		// AN ANSWER THIS BUILD CANNOT READ WHOLE, for an operation whose
+		// answer a caller carries on ([op.answeredWhole]): final, since it
+		// is what the copies hold, and another node's answer would not change
+		// what this build declares of it.
+		unread.Nodes = []string{node}
+		return nil, true, unread
+	}
 	if err != nil {
 		return nil, true, fmt.Errorf("estate: %s: %s answered with a result this build "+
 			"cannot decode: %w", spec.name, node, err)
@@ -1366,6 +1517,9 @@ func (x exchange) record(rep reply) {
 	}
 	for _, item := range rep.Written {
 		x.written.Add(item)
+	}
+	for _, c := range rep.Committed {
+		x.written.Commit(c)
 	}
 }
 
@@ -1540,7 +1694,7 @@ func (r *Router) order(spec *opSpec, nodes []string) []string {
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
-	class := r.classes(spec, false)
+	class := r.classes(spec, false, nil)
 	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
 	return nodes
 }
@@ -1548,12 +1702,13 @@ func (r *Router) order(spec *opSpec, nodes []string) []string {
 // orderFor is the order the data nodes are asked in for one request:
 // [Router.order] for an operation any copy answers equally — this node
 // excluded, since it was asked first — and [Router.keyedOrder] for a keyed
-// one, this node at its place where it holds the estate.
-func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
+// one, this node at its place where it holds the estate. carrying says which
+// of a refusal's keys the request carries ([exchange.carrying]), nil for none.
+func (r *Router) orderFor(spec *opSpec, key string, nodes []string, carrying func([]string) bool) []string {
 	if key == "" {
 		return r.order(spec, nodes)
 	}
-	return r.keyedOrder(spec, key, nodes, r.local != nil)
+	return r.keyedOrder(spec, key, nodes, r.local != nil, carrying)
 }
 
 // keyedOrder is the order a KEYED operation, spec, asks nodes in:
@@ -1561,12 +1716,14 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // it answers the operation (it holds the estate, or for a git operation its
 // git half is built), since the node the key prefers may be this one, and an
 // empty id never — with every node that answered `out_of_service` for the
-// operation's copies or ran nothing for it inside [suspectFor] after the rest
-// and every node that went silent inside it last, the key's order kept within
-// each by a STABLE sort. A node the router remembers behind the company's
-// configuration keeps its place in the key's order, from which the walk hands
-// it to the last resort unasked, so every asker's last resort meets the nodes
-// behind the configuration in the key's order ([Router.classes]). ONE order
+// operation's copies or ran nothing for it inside [suspectFor], or refused a
+// request of it for a key this request carries (carrying, [Router.markUnread]),
+// after the rest and every node that went silent inside it last, the key's
+// order kept within each by a STABLE sort. A node the router remembers behind
+// the company's configuration keeps its place in the key's order, from which
+// the walk hands it to the last resort unasked, so every asker's last resort
+// meets the nodes behind the configuration in the key's order
+// ([Router.classes]). ONE order
 // for a push's data nodes and a repository's Gitlet nodes, so the compactor's
 // home and the reads' first node can never be computed two ways.
 //
@@ -1576,9 +1733,10 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // whole burst commits it in a few records, where two committers each holding
 // part of it contend on its one subject and each round one loses costs it a
 // re-decide and a re-append of its whole batch.
-func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool) []string {
+func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool,
+	carrying func([]string) bool) []string {
 	ordered := r.keyed(key, nodes, self)
-	class := r.classes(spec, true)
+	class := r.classes(spec, true, carrying)
 	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
 	return ordered
 }
@@ -1606,10 +1764,11 @@ func (r *Router) keyed(key string, nodes []string, self bool) []string {
 // classes is how the router's memory ranks each node for spec, lowest asked
 // first: the STICKY node for its copies (never for a keyed order), then every
 // other node, then every node that answered `out_of_service` for its copies —
-// or, for a keyed operation, ran nothing for it — inside [suspectFor], then
-// every SUSPECT node. It sweeps out every window that has lapsed. ONE reading
-// of the memory for both orders, so a node demoted for the unkeyed walk is
-// demoted alike for the keyed one.
+// or, for a keyed operation, ran nothing for it, or refused a request of it
+// for a key this one carries (carrying, which may be nil: none) — inside
+// [suspectFor], then every SUSPECT node. It sweeps out every window that has
+// lapsed. ONE reading of the memory for both orders, so a node demoted for the
+// unkeyed walk is demoted alike for the keyed one.
 //
 // A node remembered behind the company's configuration HAS NO CLASS of its
 // own: the walk never asks it from its place — it hands it straight to the
@@ -1620,7 +1779,17 @@ func (r *Router) keyed(key string, nodes []string, self bool) []string {
 // the unheard one first; a router that had heard neither asked them in the
 // key's order, and the two sent one repository's pushes to two committers.
 // The memory is swept here with the rest.
-func (r *Router) classes(spec *opSpec, keyed bool) func(node string) int {
+func (r *Router) classes(spec *opSpec, keyed bool, carrying func([]string) bool) func(node string) int {
+	// MATCHED BEFORE THE LOCK, since matching decodes the request: a node
+	// that refused a key this request carries is passed over for it.
+	unread := map[string]bool{}
+	if carrying != nil {
+		for node, keys := range r.unreadFor(spec, keyed) {
+			if carrying(keys) {
+				unread[node] = true
+			}
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sticky := ""
@@ -1652,6 +1821,9 @@ func (r *Router) classes(spec *opSpec, keyed bool) func(node string) int {
 		case keyed && d.op == spec.name:
 			passedOver[d.node] = true
 		}
+	}
+	for node := range unread {
+		passedOver[node] = true
 	}
 	for n, until := range r.behindConfig {
 		if !now.Before(until) {
@@ -1732,6 +1904,50 @@ func (r *Router) markDeclined(node, op string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.declined[nodeOp{node: node, op: op}] = r.now().Add(suspectFor)
+}
+
+// markUnread asks node last for [suspectFor] for every request of op, a KEYED
+// operation, that carries one of keys — what it refused a request of op for,
+// its build not declaring them ([ErrUnknownKeys]) — and for no other request:
+// a node of an older build serves every request that does not use what its
+// build lacks. Declined for the whole operation, one newer read of one
+// repository moved every repository the node is home to off it, and a
+// runner-up holding no copy filled one for each — a fill costing far more than
+// the refused round trip it saved — and one newer push sent every repository's
+// pushes it commits to a second committer, to contend with the first. The keys
+// are kept beside those it refused before, inside the one window.
+func (r *Router) markUnread(node, op string, keys []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := nodeOp{node: node, op: op}
+	held := r.unread[d]
+	for _, key := range keys {
+		if !slices.Contains(held.keys, key) {
+			held.keys = append(held.keys, key)
+		}
+	}
+	held.until = r.now().Add(suspectFor)
+	r.unread[d] = held
+}
+
+// unreadFor is, for a keyed operation spec, every node remembered refusing a
+// request of it for keys its build does not declare, and those keys — read
+// under the lock and matched outside it ([Router.classes]), since matching
+// decodes the request. It sweeps out every window that has lapsed.
+func (r *Router) unreadFor(spec *opSpec, keyed bool) map[string][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	out := map[string][]string{}
+	for d, held := range r.unread {
+		switch {
+		case !now.Before(held.until):
+			delete(r.unread, d)
+		case keyed && d.op == spec.name:
+			out[d.node] = slices.Clone(held.keys)
+		}
+	}
+	return out
 }
 
 // markBehindConfig remembers for [suspectFor] that node answered

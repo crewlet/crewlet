@@ -246,7 +246,7 @@ func findAwaiting(ctx context.Context, s sandbox.PendingStore, handle string,
 		return sandbox.PendingRun{}, false, err
 	}
 	reply := events.New(types.ExternalNotification{Body: "use main"}, events.TraceContext{})
-	got, ok := sandbox.Reply{Conv: conv, Events: []*events.Event{reply}, Writer: requester}.Best(runs)
+	got, ok := sandbox.Reply{Conv: conv, Events: []*events.Event{reply}, Writer: requester, Says: true}.Best(runs)
 	return got, ok, nil
 }
 

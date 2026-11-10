@@ -66,6 +66,10 @@ const (
 		DELETE FROM usage_reads WHERE day = ? AND node = ? AND agent_id = ?`
 	applyClearSeatToolsSQL = `
 		DELETE FROM usage_tool_calls WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatLedgerSQL = `
+		DELETE FROM usage_turn_ledger WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatRefusalsSQL = `
+		DELETE FROM usage_tool_refusals WHERE day = ? AND node = ? AND agent_id = ?`
 	// A SCHEDULE-DAY'S ROWS ARE IN TWO TABLES, and its guard is the newest
 	// version among both: a node can hold a schedule's superseded fires on a
 	// day its scheduler sent none, and a guard read off the fires alone
@@ -146,7 +150,7 @@ func (a Applier) expire(ctx context.Context, tx *sql.Tx, day string) (int, error
 	}
 	cutoff := w.Shift(-HorizonDays).Label
 	var n int
-	for _, table := range []string{"usage_tokens", "usage_reads", "usage_tool_calls",
+	for _, table := range []string{"usage_tokens", "usage_reads", "usage_tool_calls", "usage_turn_ledger", "usage_tool_refusals",
 		"usage_turns", "usage_schedule_runs", "usage_schedule_superseded",
 		"usage_person_tokens", "usage_repo_reads", "usage_repo_read_days"} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE day < ?`, cutoff)
@@ -179,7 +183,8 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 
 	for _, clear := range []struct{ table, query string }{
 		{"usage_tokens", applyClearSeatTokensSQL}, {"usage_reads", applyClearSeatReadsSQL},
-		{"usage_tool_calls", applyClearSeatToolsSQL},
+		{"usage_tool_calls", applyClearSeatToolsSQL}, {"usage_turn_ledger", applyClearSeatLedgerSQL},
+		{"usage_tool_refusals", applyClearSeatRefusalsSQL},
 	} {
 		if _, err := tx.ExecContext(ctx, clear.query, s.Day, s.Node, s.Seat); err != nil {
 			return 0, fmt.Errorf("usage: clear %s for %s: %w", clear.table, s, err)
@@ -206,8 +211,8 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
 			 tools_elided, changes_opened, reviews_given, findings_received, checks_failed,
-			 ejections, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ejections, ledger_elided, refusals_elided, ledger_untallied, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
 			handle            = excluded.handle,
 			role              = excluded.role,
@@ -225,11 +230,15 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			findings_received = excluded.findings_received,
 			checks_failed     = excluded.checks_failed,
 			ejections         = excluded.ejections,
+			ledger_elided     = excluded.ledger_elided,
+			refusals_elided   = excluded.refusals_elided,
+			ledger_untallied  = excluded.ledger_untallied,
 			version           = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
 		lastEnded, r.ReadsElided, r.ToolsElided, code.ChangesOpened, code.ReviewsGiven,
-		code.FindingsReceived, code.ChecksFailed, code.Ejections, version); err != nil {
+		code.FindingsReceived, code.ChecksFailed, code.Ejections, r.LedgerElided, r.RefusalsElided,
+		r.LedgerUntallied, version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1
@@ -285,6 +294,34 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 		})
 	if err != nil {
 		return 0, fmt.Errorf("usage: write the tool calls of %s: %w", s, err)
+	}
+	rows += n
+
+	n, err = store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_turn_ledger
+			(day, node, agent_id, wake, disposition, outcome, turns, input, output,
+			 cache_read, cache_write, aux_input, aux_output) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Ledger),
+		func(i int) []any {
+			l := r.Ledger[i]
+			return []any{s.Day, s.Node, s.Seat, l.Wake, l.Disposition, l.Outcome, l.Turns, l.Input,
+				l.Output, l.CacheRead, l.CacheWrite, l.AuxInput, l.AuxOutput}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the turn ledger of %s: %w", s, err)
+	}
+	rows += n
+
+	n, err = store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_tool_refusals
+			(day, node, agent_id, server, tool, class, calls) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Refusals),
+		func(i int) []any {
+			f := r.Refusals[i]
+			return []any{s.Day, s.Node, s.Seat, f.Server, f.Tool, f.Class, f.Calls}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the refused calls of %s: %w", s, err)
 	}
 	return rows + n, nil
 }
