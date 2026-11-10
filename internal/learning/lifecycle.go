@@ -148,6 +148,11 @@ type Options struct {
 	// MinAge keeps recent rows raw and out of the compactor.
 	MinAge time.Duration
 
+	// CapAge is how old a raw row must be to fold once the seat holds
+	// Threshold of them: the cap binds whatever MinAge says, sparing only
+	// the synthesizer's own window, whose turns it still drafts from.
+	CapAge time.Duration
+
 	// MinClusterSize is the smallest cluster worth summarising.
 	MinClusterSize int
 
@@ -255,6 +260,10 @@ const (
 	// arguments and a skill cannot be written from it.
 	defaultMinAge = 30 * day
 
+	// defaultCapAge is the synthesizer's clustering window, the youngest a
+	// row folds at once the seat is over its raw cap.
+	defaultCapAge = 7 * day
+
 	// defaultMinClusterSize leaves singletons and pairs alone. Three
 	// occurrences is where "it happened" becomes "it recurs"; below that
 	// the per-turn detail is worth more than an aggregate over it.
@@ -301,6 +310,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.MinAge <= 0 {
 		o.MinAge = defaultMinAge
+	}
+	if o.CapAge <= 0 || o.CapAge > o.MinAge {
+		o.CapAge = min(defaultCapAge, o.MinAge)
 	}
 	if o.MinClusterSize <= 0 {
 		o.MinClusterSize = defaultMinClusterSize
@@ -688,7 +700,15 @@ func doomedSummaries(ctx context.Context, tx *sql.Tx, handle string, cutoff time
 
 // compact is the LLM-driven step: fetch, recover, cluster, fold.
 func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, res *PassResult) error {
-	candidates, err := l.candidates(ctx, handle, now.Add(-l.opts.MinAge))
+	// OVER THE CAP, THE CAP BINDS: rows younger than MinAge fold too, down
+	// to the synthesizer's window, so a busy seat's raw rows stop growing.
+	cutoff := now.Add(-l.opts.MinAge)
+	if _, over, err := l.RawCount(ctx, handle); err != nil {
+		return err
+	} else if over {
+		cutoff = now.Add(-l.opts.CapAge)
+	}
+	candidates, err := l.candidates(ctx, handle, cutoff)
 	if err != nil {
 		return err
 	}

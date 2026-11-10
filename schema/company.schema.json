@@ -2645,6 +2645,15 @@
         "episodic": {
           "$ref": "#/$defs/Episodic"
         },
+        "max_share": {
+          "description": "The most of an agent's day of spend its learning may take, as a fraction (default 0.15; 1 leaves it uncapped). Past it, learning waits for the next company day.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "personal_memory": {
           "$ref": "#/$defs/PersonalMemory"
         },

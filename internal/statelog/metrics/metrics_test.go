@@ -418,3 +418,17 @@ func TestAnUnsetGaugeIsAbsentFromBothReaders(t *testing.T) {
 		}
 	}
 }
+
+// A node run without metrics holds a nil Recorder, and every write to it is a
+// no-op: an unguarded write site (a pickup pass) once panicked the node.
+func TestANilRecorderRecordsNothing(t *testing.T) {
+	t.Parallel()
+	var r *Recorder
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	r.Add(WorkPickups, 1, Attrs{"outcome": "woken"})
+	r.AddAt(WorkPickups, 1, at, Attrs{"outcome": "woken"})
+	r.Observe(WorkPickups, time.Second, nil)
+	r.ObserveValue(WorkPickups, 1, nil)
+	r.Set(WorkPickups, 1, nil)
+	r.Unset(WorkPickups, nil)
+}
