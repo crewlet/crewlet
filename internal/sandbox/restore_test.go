@@ -872,40 +872,120 @@ func TestACaptureStillNamesTheOpenPlacesAnOlderPeerReads(t *testing.T) {
 	}
 }
 
-// A CUT-OFF SESSION IS HANDED AGAIN THE NOTES ITS JOB TOOK LAST. A take of a
-// run's notes is recorded read before its answer reaches the harness, so a
-// harness cut off between the two never had the notes of its last take; a take
-// before the last was answered, since the harness went on to ask again, and
-// the notes its brief read are in its first message. So a cut-off capture's
-// cursor stops before the job's last take, and a whole one's holds every note
-// read.
+// A CAPTURE STATES THE NOTES IT HOLDS ONLY WHERE ITS HARNESS ENDED ITS OWN RUN.
+// A session its harness ended its own run in holds every note read when it was
+// packed. One cut off may lack its job's last take of them — a take is
+// recorded read before its answer reaches the harness — and is not known to
+// hold its job's brief, which told the notes the session it continued lacked,
+// an earlier job's among them: so it is known to hold none, whatever its job
+// read, and a launch that continues it tells it every note the turn has read.
+// A cursor stopped before the job's last take said it held what its brief
+// told, which may never have reached it.
 //
-// Mutation: hold every note read whatever the harness's exit, count the
-// brief's reads as a take, or stop before the job's first take, and a case
-// goes red.
-func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
+// Mutation: hold every note read whatever the harness's exit, or hold none
+// whatever it was, and a case goes red.
+func TestACaptureStatesTheNotesItHoldsOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
 	read := func(id string, order int, boundary, launch string) RunNote {
 		return RunNote{ID: id, Read: &NoteRead{Order: order, Boundary: boundary, Launch: launch}}
 	}
 	run := PendingRun{Steer: RunSteer{Reads: 5, Notes: []RunNote{
-		read("brief", 1, string(types.SteerBoundaryBrief), "job-2"),
-		read("earlier-job", 2, string(types.SteerBoundaryToolBatch), "job-1"),
+		read("earlier-job", 1, string(types.SteerBoundaryToolBatch), "job-1"),
+		read("brief", 2, string(types.SteerBoundaryBrief), "job-2"),
 		read("first-take", 3, string(types.SteerBoundaryToolBatch), "job-2"),
 		read("last-take", 4, string(types.SteerBoundaryToolBatch), "job-2"),
-		read("last-take-too", 4, string(types.SteerBoundaryToolBatch), "job-2"),
 		read("review", 5, string(types.SteerBoundaryRound), ""),
 	}}}
-	if got := notesHeld(run, "job-2", false); got != 5 {
-		t.Errorf("a whole session holds notes through %d, want every one read, 5", got)
+	if got := notesHeld(run, false); got != 5 {
+		t.Errorf("a session its harness ended its own run in holds notes through %d, want every one read, 5", got)
 	}
-	if got := notesHeld(run, "job-2", true); got != 3 {
-		t.Errorf("a cut-off session holds notes through %d, want 3, before its job's last take", got)
+	if got := notesHeld(run, true); got != 0 {
+		t.Errorf("a cut-off session states it holds notes through %d, want none: not its job's last take, "+
+			"nor what its brief told", got)
 	}
 	briefOnly := PendingRun{Steer: RunSteer{Reads: 1, Notes: []RunNote{
 		read("brief", 1, string(types.SteerBoundaryBrief), "job-2")}}}
-	if got := notesHeld(briefOnly, "job-2", true); got != 1 {
-		t.Errorf("a cut-off session whose job took no notes holds through %d, want its brief's, 1", got)
+	if got := notesHeld(briefOnly, true); got != 0 {
+		t.Errorf("a cut-off session whose job read only its brief's note states it holds notes through %d, "+
+			"want none", got)
+	}
+}
+
+// EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED.
+// The note cursor on a capture's stamp is what a launch that continues it tells
+// it the notes past, on this build where its harness ended its own run and on
+// an older build whatever it ended: so the stamp of a session its harness ended
+// its own run in states every note the record says was read, and the stamp of
+// one cut off states none — the stamp of a capture taken, and that of one
+// refused before its place was reserved, alike. An older build tells a
+// continuation of a capture cut off every note the turn has read only because
+// its stamp states none.
+//
+// Mutation: stamp a capture cut off with every note read, where it is taken or
+// where it is refused before its place, and that case goes red.
+func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// cutOff is a job whose harness was killed, its script packing after
+		// it; else one whose harness ended its own run.
+		cutOff bool
+		// untaken fails the take, so the capture is refused before its place
+		// was reserved.
+		untaken bool
+	}{
+		{name: "a job whose harness ended its own run, its capture taken"},
+		{name: "a job whose harness was killed, its capture taken", cutOff: true},
+		{name: "a job whose harness ended its own run, its take refused", untaken: true},
+		{name: "a job whose harness was killed, its take refused", cutOff: true, untaken: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, _ := keepingRig(t)
+			launched := rig.launchKept(t, "t1")
+			// TWO TAKES OF THE JOB'S NOTES, so the record says two were read.
+			for _, id := range []string{"first", "second"} {
+				fileNote(t, rig.pending, "t1", id)
+				taken, err := rig.pending.TakeNotes(t.Context(), "t1", NoteTake{IDs: []string{id},
+					Launch: launched.LaunchID, Statuses: []string{StatusRunning},
+					Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch)}})
+				if err != nil || len(taken) != 1 {
+					t.Fatalf("taking note %s took %d (%v), want it", id, len(taken), err)
+				}
+			}
+			if reads := rig.get("t1").Steer.Reads; reads != 2 {
+				t.Fatalf("the record says %d notes were read, want 2", reads)
+			}
+			if tc.untaken {
+				rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
+			}
+			archive := rig.runner.Session.Archive
+			rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+				Captured: &archive, HarnessCutOff: tc.cutOff})
+			// COLLECTED, the resume after it refused, so the row stays for the
+			// case.
+			rig.resumer.failWith(errors.New("held for the case to read the row"))
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Logf("OnCompleted: %v", err)
+			}
+			rig.awaitKeeps()
+			state, want := CaptureLanded, 2
+			if tc.untaken {
+				state = CaptureRefused
+			}
+			if tc.cutOff {
+				want = 0
+			}
+			capture := rig.get("t1").Capture
+			if capture == nil || capture.State != state || capture.Interrupted != tc.cutOff {
+				t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, state, tc.cutOff)
+			}
+			if capture.NoteCursor != want {
+				t.Errorf("the capture is stamped holding the notes read through %d, want %d", capture.NoteCursor,
+					want)
+			}
+		})
 	}
 }
 

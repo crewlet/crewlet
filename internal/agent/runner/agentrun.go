@@ -288,13 +288,17 @@ type SessionBasis struct {
 	// placed by, its own or, where its harness may not have written every call
 	// it made, an earlier capture's (sandbox.SessionCapture.Through), every
 	// call the log took after it ([BridgedCall.Appended] past it) being one the
-	// session may not have been answered — and the last note read. Zero holds
-	// none of the round's calls.
+	// session may not have been answered — and the last note read the run's
+	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
+	// its harness ended its own run: a session cut off is told every note the
+	// turn has read ([Runner.keptSession]). Zero holds none of the round's
+	// calls.
 	Through    int
 	NoteCursor int
 
 	// Interrupted says the session was captured from a harness that was cut
-	// off, so its transcript may end mid-call.
+	// off, so its transcript may end mid-call, and may lack the brief its job
+	// was handed and the notes its job read.
 	Interrupted bool
 
 	// Home is where the session was last worked: absolute paths in its

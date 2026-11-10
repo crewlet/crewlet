@@ -258,6 +258,133 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	}
 }
 
+// A KEPT SESSION CUT OFF IS TOLD AGAIN EVERY NOTE THE TURN HAS READ. A capture
+// whose harness was cut off may lack its job's last take of the notes, recorded
+// read before its answer reached the harness, and is not known to hold its
+// job's brief, which told the notes the session it continued lacked — an
+// earlier job's among them. No record says which those were, so a relaunch
+// that continues it — a person's answer or a loss alike — tells it, after the
+// calls it may not show and before the note waiting for it, every note the turn
+// has read, once each, in the order read, under a header that counts them and
+// says a note shown both above and there is one note — a second copy of one,
+// unheaded, would read as a note of its own; the note waiting follows, once.
+// Whatever cursor its capture states: none, as this build stamps a capture cut
+// off, or the notes before its job's last take, as an older build stamped one.
+// A capture whose harness ended its own run holds every note read up to its
+// cursor, and is told those read after it, and only those, as before.
+//
+// Mutation: tell a session cut off only the notes past its cursor, head them
+// only where its capture states a cursor, tell them without their header, after
+// the note waiting or a second time with no header, or tell a whole session its
+// notes as ones it may already show or none of those read after its cursor, and
+// a case goes red.
+func TestAKeptSessionCutOffIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	read := func(id, text string, order int, ph types.Phase, boundary types.SteerBoundary, job string) steer.Read {
+		return steer.Read{Note: steer.Note{ID: id, Text: text, By: "founder"},
+			Reading: steer.Reading{Phase: ph, Iteration: 1, Round: 1, Boundary: boundary, Launch: job, Order: order}}
+	}
+	steered := []steer.Read{
+		read("earlier", "an earlier job's note", 1, types.PhaseExecute, types.SteerBoundaryToolBatch, "job-0"),
+		read("brief", "the note the job's brief carried", 2, types.PhaseExecute, types.SteerBoundaryBrief, "job-1"),
+		read("take", "the note the job's last take read", 3, types.PhaseExecute, types.SteerBoundaryToolBatch,
+			"job-1"),
+		read("review", "the note a review read after the save", 4, types.PhaseReview, types.SteerBoundaryRound, ""),
+	}
+	told := make([]string, 0, len(steered))
+	for _, r := range steered {
+		told = append(told, prompts.SteerMessage(r.By, r.Text))
+	}
+	answer := func(r *runner.Resume) {
+		r.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+			SessionID: "s-1", BoxKept: true}
+	}
+	loss := func(r *runner.Resume) {
+		r.Lost = &runner.Lost{Why: "the engine it ran under restarted, which killed it", BoxKept: true,
+			Losses: 1, Limit: 2}
+	}
+	type notesCase struct {
+		basis     runner.SessionBasis
+		carry     func(*runner.Resume)
+		told, not []string
+		// again says the notes are told as ones the session may already show.
+		again bool
+	}
+	// WHOLE, holding every note read when it was packed.
+	whole := keptBasis
+	whole.NoteCursor = 3
+	cases := map[string]notesCase{
+		"a person's answer, its kept session whole": {basis: whole, carry: answer, told: told[3:], not: told[:3]},
+	}
+	// CUT OFF, every call of the round after its save point, whatever cursor it
+	// states: none, as this build stamps a capture cut off (internal/sandbox's
+	// notesHeld), and the notes before its job's last take, as an older build
+	// stamped one.
+	for stamped, cursor := range map[string]int{"as this build stamps it": 0, "as an older build stamped it": 2} {
+		cutOff := keptBasis
+		cutOff.Interrupted, cutOff.Through, cutOff.NoteCursor = true, 0, cursor
+		cases["a person's answer, its kept session cut off "+stamped] = notesCase{basis: cutOff, carry: answer,
+			told: told, again: true}
+		cases["a loss, its kept session cut off "+stamped] = notesCase{basis: cutOff, carry: loss, told: told,
+			again: true}
+	}
+	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box := steer.New()
+			box.Offer(waiting)
+			relauncher := &probingLauncher{basis: tc.basis}
+			resume := &runner.Resume{State: parked.State, Steered: steered, Bridged: []runner.BridgedCall{
+				numbered("jira_create", map[string]any{"summary": "the job's issue"}, 1, 1)}}
+			tc.carry(resume)
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				steer: box, resume: resume})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.SessionID != "s-1" {
+				t.Fatalf("the relaunch continues %+v, want the turn's kept session", again.Session)
+			}
+			brief := again.Session.Brief
+			waitingMsg := prompts.SteerMessage(waiting.By, waiting.Text)
+			last := strings.Index(brief, waitingMsg)
+			if last < 0 || strings.Count(brief, waitingMsg) != 1 {
+				t.Fatalf("the session is not told the note waiting for it once:\n%s", brief)
+			}
+			for _, not := range tc.not {
+				if strings.Contains(brief, not) {
+					t.Errorf("a session whose harness ended its own run is told %q again:\n%s", not, brief)
+				}
+			}
+			header := strings.Index(brief, notesAgainHeader)
+			switch {
+			case !tc.again && header >= 0:
+				t.Errorf("a session whose harness ended its own run is told its notes as ones it may "+
+					"already show:\n%s", brief)
+			case tc.again && (header < strings.Index(brief, cutOffHeader) ||
+				!strings.Contains(brief[max(header, 0):], "the 4 notes below")):
+				t.Errorf("the notes told again are not headed, after the calls it may not show, as the 4 "+
+					"notes below the session may not show:\n%s", brief)
+			}
+			at := header
+			for _, want := range tc.told {
+				i := strings.Index(brief, want)
+				if i < 0 || i < at || i > last || strings.Count(brief, want) != 1 {
+					t.Errorf("the session is not told %q once, in the order read and before the note waiting:\n%s",
+						want, brief)
+				}
+				at = i
+			}
+		})
+	}
+}
+
 // AN ANSWERED OR A REFUSED RUN'S SESSION IS CONTINUED, TOLD WHAT CARRIES IT ON.
 // A person's answer carries the asking run on in the session that asked, and a
 // replaced sign-in the refused run's: the job each follows left its session

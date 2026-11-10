@@ -46,8 +46,11 @@ import (
 //     shown both there and in the session one call;
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
-//     is never the session's, or taken at the last moment before a harness that
-//     was cut off could have it — and then the ones this brief is the first to
+//     is never the session's — or, of a session cut off, every note the turn
+//     has read, as notes it may already show ([prompts.NotesReadAgain]): its
+//     job's last take of them was recorded read before its harness had them,
+//     and it is not known to hold its job's brief, which told the notes the
+//     session it continued lacked; and then the ones this brief is the first to
 //     read.
 //
 // AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
@@ -65,8 +68,8 @@ import (
 // its own run ([Resume.HarnessEnd]), that copy may lack calls the harness made
 // and had answered without writing them, and is not known to hold the job's
 // brief: so between the two it is told that it was cut off, or may have been,
-// every call of the round as a session cut off is told its calls, and every
-// note the turn has read ([Runner.inPlaceAfter]).
+// every call of the round, as a session cut off is told its calls, and every
+// note the turn has read, as it is told its notes ([Runner.inPlaceAfter]).
 //
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
@@ -113,11 +116,19 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // session — all of it but what carries the session on, which the caller leads
 // it with ([keptBrief.led]): what came after the session was saved of round,
 // the calls of the round its job worked in, as surface reads them
-// ([Runner.calledAfter]), then every note it has not read and the ones fresh
-// holds, in the box it was last worked in, and in another with what that
-// changes. The engine's own words and the seat's, every foreign word in them
-// fenced or defused under the relaunching segment's token; branch and the
+// ([Runner.calledAfter]), then every note it has not read — of a session cut
+// off, every note the turn has read, as notes it may already show — and the
+// ones fresh holds, in the box it was last worked in, and in another with what
+// that changes. The engine's own words and the seat's, every foreign word in
+// them fenced or defused under the relaunching segment's token; branch and the
 // basis's home are the engine's record of the session, defused too.
+//
+// NOT WHAT CARRIED ITS JOB ON: a session cut off is no more known to hold its
+// job's brief than the copy a job's own box holds ([Runner.inPlaceAfter]), and
+// one that lacks it lacks the lead it opened with too — the turn's task where
+// the job continued the session its conversation's last turn left, a review
+// that sent the round back, an earlier answer — which the engine keeps no copy
+// of to tell again.
 //
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
 // last time: telling the calls after the save rewrites a payload past its
@@ -144,7 +155,18 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	called := r.calledAfter(ctx, round, basis.Through, surface, b)
 	called.Interrupted = basis.Interrupted
 	after = append(after, prompts.CalledAfter(called))
-	after = append(after, r.unreadSince(basis.NoteCursor)...)
+	// THEN THE NOTES IT HAS NOT READ, past its cursor; of a session cut off,
+	// EVERY NOTE THE TURN HAS READ, as notes it may already show, as the copy a
+	// job's own box holds is told them ([Runner.inPlaceAfter]): its job's last
+	// take of them was recorded read before its harness had them, and it is not
+	// known to hold its job's brief, which told the notes the session it
+	// continued lacked, and no record says which those were (internal/sandbox's
+	// notesHeld states none it holds).
+	if basis.Interrupted {
+		after = append(after, prompts.NotesReadAgain(r.carriedSteers()))
+	} else {
+		after = append(after, r.unreadSince(basis.NoteCursor)...)
+	}
 	after = append(after, renderedNotes(fresh)...)
 	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
 		provenance.Neutralise(b, basis.Home), r.checkoutName())}
@@ -168,12 +190,14 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // EVERY NOTE THE TURN HAS READ, never only the job's: a copy that lacks the
 // job's brief lacks the notes that brief told — an earlier job's, which a
 // continuation re-tells where its session may not hold them — as much as the
-// ones the job read, and no record says from where that brief told them, so
-// it is told every one a fresh brief would be, as notes it may already show.
+// ones the job read, and no record says which those were, so it is told every
+// one a fresh brief would be, as notes it may already show, as a kept session
+// cut off is ([Runner.keptSession]).
 // NOT WHAT CARRIED THE JOB ON: a copy that lacks the job's brief lacks the
 // lead it opened with too — the turn's task where the job continued the
 // session its conversation's last turn left, a review that sent the round
-// back, an earlier answer — which the engine keeps no copy of to tell again.
+// back, an earlier answer — which the engine keeps no copy of to tell again,
+// as a kept session cut off may lack it ([Runner.keptSession]).
 //
 // BUILT BEFORE ITS LEAD, as the kept session's brief is ([Runner.keptSession]):
 // telling the calls rewrites a payload past its budget with the seat's

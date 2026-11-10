@@ -844,14 +844,19 @@ sequenceDiagram
   carries every note the turn has read; one that [continues the turn's
   session](code-sandbox.md#a-relaunch-continues-the-turns-session) carries the
   notes the session has not read — every note read after the session was saved,
-  by the run that went on in it or by a review, which is never the session's,
-  and those its job took at its last take where its harness was cut off, which
-  may never have reached it — and then the new ones.
+  by the run that went on in it or by a review, which is never the session's —
+  and then the new ones. A session whose harness was cut off, or is not known
+  to have ended its own run, is told every note the turn has read before the
+  new ones, as notes it may already show: its job's last take was recorded read
+  before its harness had it, and the session is not known to hold its job's
+  brief, which told the notes the session it continued lacked.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
   that takes them there reads a note after its current step; the take is
-  recorded on the record by the write that hands it over, so a note is never
-  handed to a model twice. **Claude Code** takes them through hooks the run is
+  recorded on the record by the write that hands it over, so no two takes hand
+  a model the same note (a session that may not show the notes it read is
+  told them again when it is continued, as notes it may already show: a
+  launch's brief, above). **Claude Code** takes them through hooks the run is
   started with: once every tool call of a batch the main agent made has its
   result (`tool_batch`) — the model reads the note after those results, as
   context the harness adds of its own: a system message after them, or on some
