@@ -20,15 +20,25 @@ func approvedFor(tool, heldID string, seq, appended int) runner.BridgedCall {
 		Approved: true, HeldID: heldID}
 }
 
+// heldFor is the call the run held for a person's approval, as the round's log
+// keeps it: named its tool, its arguments withheld, recorded failed though
+// nothing failed — it is the run's question — the seq'th the bridge admitted
+// and the appended'th the log took.
+func heldFor(tool string, seq, appended int) runner.BridgedCall {
+	return runner.BridgedCall{Call: ledger.Call{Name: tool, Withheld: true, Failed: true,
+		Result: "held for a person's approval"}, Seq: seq, Appended: appended, Held: true}
+}
+
 // laterAttemptBrief is the brief a later attempt at an answer carries the round
 // on with: the answer allowed a call to `tr_close_issue` once, an earlier
 // attempt marked and made it, recording what it returned ("closed #7"), and its
 // relaunch was refused after; this attempt reads the round's log as bridged. The
 // relaunch continues the kept session basis names, and the brief is that
 // continuation's; where basis names none, it continues the copy in the asking
-// job's own box, whose harness ended as end says.
+// job's own box, whose harness ended as end says. refused, where set, is the
+// question's outcome a reply too large to take, beside the held call.
 func laterAttemptBrief(t *testing.T, basis runner.SessionBasis, end sandbox.HarnessEnd,
-	bridged []runner.BridgedCall) string {
+	bridged []runner.BridgedCall, refused *runner.RefusedReply) string {
 
 	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -40,7 +50,7 @@ func laterAttemptBrief(t *testing.T, basis runner.SessionBasis, end sandbox.Harn
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 		resume: &runner.Resume{State: parked.State, Bridged: bridged, HarnessEnd: end,
 			Asked: &runner.Asked{Question: "close #7?", Answer: "yes", By: "founder",
-				SessionID: "sess-ask", BoxKept: true,
+				SessionID: "sess-ask", BoxKept: true, Refused: refused,
 				Held: &runner.HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:close",
 					Choice: sandbox.HeldOnce, HeldID: "held-1", Commit: made}}}})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
@@ -64,17 +74,21 @@ func laterAttemptBrief(t *testing.T, basis runner.SessionBasis, end sandbox.Harn
 // first attempt made the call a person allowed and recorded what it returned,
 // and its relaunch was refused after, so the answer is attempted again. This
 // attempt reads the call in the round's log, placed after every call the log
-// took, so past any save point, and answers it from its mark: its lead says what
-// the call returned. So neither a kept session's continuation, whatever its
-// save point, nor the copy in the asking job's own box, which may have been cut
-// off and is told every call of the round, lists that call again; while a call
-// an earlier answer of the round approved, which no lead of this relaunch
-// tells, is listed as any call is, once.
+// took, so past the save point of every capture taken before it was made, and
+// answers it from its mark: its lead says what the call returned. So neither a
+// kept session's continuation, whatever its save point, nor the copy in the
+// asking job's own box, which may have been cut off and is told every call of
+// the round, lists that call again — while the call the run held for the
+// person's approval, its question, is listed as any call of the round is, and so
+// is a call an earlier answer of the round approved, which no lead of this
+// relaunch tells, once each. A reply refused as too large tells no held call,
+// whatever the question was: its lead tells the refusal alone, and the approved
+// call is listed as any call is.
 //
 // Mutation: list the lead's approved call among the round's calls of a kept
 // session's continuation, or of the copy in its box, or of both; leave out every
-// call a person approved; or read no held call off the answer, and a case goes
-// red.
+// call a person approved, or the held one; read no held call off the answer; or
+// name the held call for a refused reply's lead, and a case goes red.
 func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnce(t *testing.T) {
 	t.Parallel()
 	// THE ROUND'S LOG AS THE LATER ATTEMPT READS IT: the asking job's posts
@@ -85,8 +99,13 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnce(t *testing.T) {
 		numbered("slack_post", map[string]any{"text": "posted before the save"}, 1, 1),
 		approvedFor("jira_transition", "held-earlier", 2, 2),
 		numbered("slack_post", map[string]any{"text": "posted after the save"}, 3, 3),
-		approvedFor("tr_close_issue", "held-1", 4, 4),
+		heldFor("tr_close_issue", 4, 4),
+		approvedFor("tr_close_issue", "held-1", 5, 5),
 	}
+	const (
+		heldLine     = "- tr_close_issue(arguments sealed for a person's approval, kept on no record) → error:"
+		approvedLine = "- tr_close_issue(arguments sealed for a person's approval, kept on no record) → success"
+	)
 	saved := keptBasis
 	saved.Through = 1
 	cutOff := keptBasis
@@ -108,13 +127,14 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnce(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			brief := laterAttemptBrief(t, tc.basis, tc.end, bridged)
+			brief := laterAttemptBrief(t, tc.basis, tc.end, bridged, nil)
 			if strings.Count(brief, "The call was made, and returned:") != 1 ||
 				!strings.Contains(brief, "closed #7") {
 				t.Errorf("the lead does not tell once what the approved call returned:\n%s", brief)
 			}
-			if strings.Contains(brief, "- tr_close_issue(") {
-				t.Errorf("the call the lead tells is listed among the round's calls as well:\n%s", brief)
+			if strings.Contains(brief, approvedLine) || strings.Count(brief, heldLine) != 1 {
+				t.Errorf("the call the lead tells is listed among the round's calls as well, or the held "+
+					"call is not listed once:\n%s", brief)
 			}
 			at := strings.Index(brief, tc.listed)
 			if at < 0 || strings.Count(brief, "- jira_transition(") != 1 ||
@@ -125,4 +145,14 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnce(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a reply refused as too large, beside the held call", func(t *testing.T) {
+		t.Parallel()
+		brief := laterAttemptBrief(t, cutOff, sandbox.HarnessEndCutOff, bridged,
+			&runner.RefusedReply{Messages: 1, Bytes: 70 << 10, MaxBytes: 64 << 10})
+		if strings.Contains(brief, "The call was made, and returned:") ||
+			strings.Count(brief, approvedLine) != 1 || strings.Count(brief, heldLine) != 1 {
+			t.Errorf("a refused reply's relaunch does not list the approved call and the held one once each, "+
+				"with no lead telling the approved one:\n%s", brief)
+		}
+	})
 }

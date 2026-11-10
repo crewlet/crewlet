@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -16,10 +17,12 @@ import (
 // call once; the first attempt at the answer marks the call, makes it and
 // records what it returned, and its relaunch is refused, so its claim is given
 // back and the answer attempted again. The round's log then holds the call
-// under the held call's id, after every call it took. The later attempt
-// answers the call from its mark, and its lead says what the call returned; the
-// copy in the asking job's box, its harness cut off, is told every other call
-// of the round, and that one nowhere else.
+// under the held call's id, after every call it took, the held call the job
+// parked on — its question, which the bridge logs as it holds it — among them.
+// The later attempt answers the call from its mark, and its lead says what the
+// call returned; the copy in the asking job's box, its harness cut off, is told
+// every other call of the round, the held one included, and that one nowhere
+// else.
 //
 // Mutation: drop the held call's id from the calls a resume hands the runner,
 // or from the held call it is handed, or list the lead's approved call among
@@ -33,6 +36,15 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	asking := launchBridged(t, turnID, read)
 	asking.call(t, "read_page")
 	launch := asking.row(t, turnID).LaunchID
+	// THE HELD CALL ITSELF, in the round's log as the bridge records a call the
+	// seat's surface held for a person's approval: its arguments withheld.
+	held := sandbox.BridgeCall{Name: "vendor_post", Seq: 2, StartedAt: time.Now().UTC(), Failed: true,
+		Held: true, Output: "held for a person's approval"}
+	recorded, err := asking.pending.AppendBridgeCall(ctx, turnID, sandbox.BridgeAppend{Launch: launch,
+		Round: asking.row(t, turnID).Round, Call: held})
+	if err != nil || !recorded {
+		t.Fatalf("the held call's append = %v, %v", recorded, err)
+	}
 	parkedOnAHeldCall(t, asking.pending, turnID, launch)
 	seal := sandbox.NewCallSeal(valueRing(t, "k1"))
 
@@ -92,7 +104,9 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 		!strings.Contains(brief, "posted to the vendor") {
 		t.Errorf("the lead does not tell once what the approved call returned:\n%s", brief)
 	}
-	if strings.Contains(brief, "- vendor_post(") || strings.Count(brief, "- read_page(") != 1 {
+	const sealed = "- vendor_post(arguments sealed for a person's approval, kept on no record) → "
+	if strings.Contains(brief, sealed+"success") || strings.Count(brief, sealed+"error:") != 1 ||
+		strings.Count(brief, "- read_page(") != 1 {
 		t.Errorf("the copy is not told every call of the round but the one its lead tells, once each:\n%s",
 			brief)
 	}
