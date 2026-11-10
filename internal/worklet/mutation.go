@@ -52,7 +52,8 @@ import (
 // ([MutationRecord.NoticeAsksKept]).
 // Version 7 is a notice row that keeps whether the change woke its recipient
 // ([MutationRecord.NoticeWokeKept]).
-const RecordVersion = 7
+// Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
+const RecordVersion = 8
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -116,6 +117,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
 	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
 	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
+	{Name: "TaskPatch.AskWatch", Since: 8, Path: []string{"mutation", "ask_watch"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

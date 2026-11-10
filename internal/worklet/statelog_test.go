@@ -204,6 +204,15 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks,
 				MentionedAgents: []string{"ada"}}}
 		record.NoticeWokeKept = true
+	case "TaskPatch.AskWatch":
+		// A PATCH THAT CARRIES THE WATCHERS A QUESTION ADDED.
+		askWatch := []string{"ada"}
+		patch, err := json.Marshal(worklet.TaskPatch{AskWatch: &askWatch})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
 	case "Snapshot.CommentAsks":
 		// AN AGENT'S COMMENT STATING IT ASKS NOTHING, which every build must
 		// carry: the statement is what makes its mentions references.
