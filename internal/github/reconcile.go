@@ -729,8 +729,12 @@ type ingress struct {
 // says so elsewhere, through the roster's own "no app of its own" finding.
 // With a hook working, the organization is covered and there is nothing
 // narrower to report.
+//
+// AND ONLY AT AN ADDRESS GITHUB DELIVERS TO. With none, no app's events arrive
+// either, which [noIngressReason] or [undeliverable] already says: a second
+// coverage finding saying some do would contradict it.
 func coverageFor(opts Options, hooks []HookState) integration.Finding {
-	if opts.SeatApps == 0 {
+	if opts.SeatApps == 0 || noIngressReason(opts) != "" || undeliverable(opts).Kind != "" {
 		return integration.Finding{}
 	}
 	for _, h := range hooks {

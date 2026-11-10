@@ -2,6 +2,7 @@ package advisor_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/advisor"
@@ -83,5 +84,23 @@ func TestABlockingIntegrationLeadsTheAnswer(t *testing.T) {
 			integration.Finding{Kind: integration.FindingCredentialMissing})}})
 	if a.Findings[0].Class != "integration.credential_missing" {
 		t.Errorf("first finding = %s, want the blocking integration ahead of every cost", a.Findings[0].Class)
+	}
+}
+
+// TWO FINDINGS OF ONE KIND ON ONE SURFACE SAY WHICH. A reconcile finding with
+// no title of its own is titled with its subject, so two agents' refusals at
+// one vendor are two findings a person can tell apart.
+func TestTwoFindingsOfOneKindOnASurfaceSayWhich(t *testing.T) {
+	t.Parallel()
+	got := advisor.FromIntegrations([]integration.State{reconciled(integration.KindDatadog,
+		integration.Finding{Kind: integration.FindingIdentityFailed, Subject: "pm", Detail: "Refused."},
+		integration.Finding{Kind: integration.FindingIdentityFailed, Subject: "sre", Detail: "Refused."})})
+	if len(got) != 2 || got[0].Title == got[1].Title {
+		t.Fatalf("findings = %+v, want two with titles that differ", got)
+	}
+	for i, who := range []string{"pm", "sre"} {
+		if !strings.Contains(got[i].Title, "("+who+")") {
+			t.Errorf("title %q does not name %s", got[i].Title, who)
+		}
 	}
 }
