@@ -47,6 +47,11 @@ type ActionArgs struct {
 	MaxLength *int `json:"maxLength,omitempty"`
 	MinItems  *int `json:"minItems,omitempty"`
 	MaxItems  *int `json:"maxItems,omitempty"`
+	// Pattern holds a string to an RE2 expression it matches as written, so
+	// one that anchors itself (`^...$`) holds the whole value, as JSON
+	// Schema reads it: a seat's handle where the seats are past what an
+	// enum lists. Bounded and compiled as a member pattern is.
+	Pattern string `json:"pattern,omitempty"`
 	// Items is every member of an array.
 	Items *ActionArgs `json:"items,omitempty"`
 	// Properties are an object's named members, Required the ones it must
@@ -246,6 +251,15 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 			return fmt.Errorf("%w: %s states a negative bound", ErrInvalid, path)
 		}
 	}
+	if s.Pattern != "" {
+		if len(s.Pattern) > actionArgsMaxPattern {
+			return fmt.Errorf("%w: %s states a pattern over %d bytes", ErrInvalid, path,
+				actionArgsMaxPattern)
+		}
+		if _, err := regexp.Compile(s.Pattern); err != nil {
+			return fmt.Errorf("%w: %s pattern %q does not compile", ErrInvalid, path, s.Pattern)
+		}
+	}
 	for _, name := range s.Required {
 		if _, ok := s.Properties[name]; !ok {
 			return fmt.Errorf("%w: %s requires %q, which it does not declare", ErrInvalid, path,
@@ -329,6 +343,11 @@ func (s *ActionArgs) problems(path string, v any) []error {
 		}
 		if s.MaxLength != nil && n > *s.MaxLength {
 			add("%s is at most %d characters", path, *s.MaxLength)
+		}
+		if s.Pattern != "" {
+			if re, err := regexp.Compile(s.Pattern); err == nil && !re.MatchString(value) {
+				add("%s is text matching %s, not %q", path, s.Pattern, value)
+			}
 		}
 	case []any:
 		if s.MinItems != nil && len(value) < *s.MinItems {

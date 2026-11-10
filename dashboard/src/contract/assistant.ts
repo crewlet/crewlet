@@ -654,6 +654,8 @@ export interface AssistantActionArgs {
   const?: string;
   minLength?: number;
   maxLength?: number;
+  /** An RE2 expression a string matches as written, anchored where it says `^...$`. */
+  pattern?: string;
   minItems?: number;
   maxItems?: number;
   items?: AssistantActionArgs;

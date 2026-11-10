@@ -9267,12 +9267,13 @@ context fenced as somebody else's words: it is a hint and never an authority.
 Beside `accepts`, the page context carries `action_args`: what each accepted
 page action takes on that screen now, by action id, as a closed subset of JSON
 Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
-`minItems`, `maxItems`, `items`, `properties`, `required`,
+`pattern`, `minItems`, `maxItems`, `items`, `properties`, `required`,
 `patternProperties`, `additionalProperties`, `oneOf`, and top-level
-`examples`). The screen builds it from the same declaration its parser reads
-(the address keys a view change writes, the seats and windows a screen draws,
-the org builder's operations), so the model is told the members to send rather
-than guessing them. Every accepted action declares it (`draft.set` may go
+`examples`). A `pattern` is RE2 matched as written, so one that anchors
+itself with `^` and `$` holds the whole value. The screen builds it from the
+same declaration its parser reads (the address keys a view change writes, the
+seats and windows a screen draws, the org builder's operations), so the model
+is told the members to send rather than guessing them. Every accepted action declares it (`draft.set` may go
 without, since the draft's editable fields declare what it takes: the dashboard
 sends it without on a draft whose editable fields are more than one schema
 holds, and drops it first from a page context over its 16 KiB). The engine
