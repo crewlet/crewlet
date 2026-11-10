@@ -134,6 +134,8 @@ type Engine struct {
 	// with it on every wiring and emptied when GitHub is retired. See
 	// githubpulls.go.
 	githubPulls githubPullReader
+	// changePoll is where the poll of open changes stopped (ADR-0121).
+	changePoll changePoll
 	// tokenWaits is what this node's polls have said of the running jobs
 	// whose seat's issued tokens could not be issued, so each wait is said
 	// once per job rather than on every pass. See issued.go.

@@ -45,7 +45,9 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 	guarded := []advisor.Class{advisor.ClassAgentMentionsWithoutAsk}
 	// A LOAD IS HUNDREDS OF NOTICES, which no timeline spells out step by step;
 	// its read is held by TestAPersonsNoticeLoadIsEveryNoticeSentThemInTheWindow.
-	counted := []advisor.Class{advisor.ClassNoticeLoad}
+	// WHERE A SETTLE CAME FROM is the poll's or the webhook's, which no timeline
+	// spells; held by TestOnlyThePollSettlingSaysTheWebhookIsSilent.
+	counted := []advisor.Class{advisor.ClassNoticeLoad, advisor.ClassInboundSilent}
 	for _, class := range advisor.WorkClasses() {
 		if !slices.Contains(slices.Collect(maps.Values(want)), class) && !slices.Contains(guarded, class) &&
 			!slices.Contains(counted, class) {

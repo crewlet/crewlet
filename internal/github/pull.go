@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // A pull request read for its preview: what a link to one in chat is drawn
@@ -23,6 +24,9 @@ type PullRequest struct {
 	Draft     bool   `json:"draft"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	// MergedAt and ClosedAt are when it settled, for the tracker's record.
+	MergedAt *time.Time `json:"merged_at"`
+	ClosedAt *time.Time `json:"closed_at"`
 }
 
 // PullRequest reads one pull request.
@@ -71,6 +75,18 @@ func ParsePullURL(web, raw string) (PullRef, bool) {
 		return PullRef{}, false
 	}
 	return PullRef{Owner: parts[0], Repo: parts[1], Number: number}, true
+}
+
+// ChangeRef is the one name the tracker keeps a pull request under: its own
+// page on the host at web, with the owner and repository lower-cased, since
+// GitHub reads them in any case and a webhook spells them its own way.
+func ChangeRef(web, raw string) (PullRef, string, bool) {
+	ref, ok := ParsePullURL(web, raw)
+	if !ok {
+		return PullRef{}, "", false
+	}
+	ref.Owner, ref.Repo = strings.ToLower(ref.Owner), strings.ToLower(ref.Repo)
+	return ref, ref.Canonical(strings.ToLower(strings.TrimRight(strings.TrimSpace(web), "/"))), true
 }
 
 // Canonical is the pull request's own page on the host at web.

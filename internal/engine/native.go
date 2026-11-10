@@ -1927,6 +1927,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		FleetSeat: e.FleetSeat,
+		ChangeRef: e.ChangeRef,
 		Seats: func() []colleague.Seat {
 			// AND WHAT THE PARTY REGISTRY WITHHOLDS NOW: a person the
 			// directory has suspended is left out of the roster exactly as

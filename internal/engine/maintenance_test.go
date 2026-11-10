@@ -214,6 +214,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_abandoned_merges",
 		"tracker_abandoned_moves",
 		"tracker_duplicate_ranks",
+		// AND THE POLL OF THE PULL REQUESTS TASKS WAIT ON, for what no
+		// webhook delivered (ADR-0121).
+		"tracker_linked_changes",
 		// AND A TASK FILED BEHIND A MOVE THAT HAS FINISHED: a create a
 		// lagging node decided before it heard of the move, accepted after
 		// the walk's last append, lands in the old project under a root in
