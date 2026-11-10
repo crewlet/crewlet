@@ -916,6 +916,15 @@ func requireSays(t *testing.T, page string, wants ...string) {
 // holdFirst is a stand-in git whose first upload-pack once hold exists
 // (armHold) writes started and waits, before it runs, until hold is removed;
 // every other upload-pack runs at once. rearm makes the next one held again.
+//
+// THE FIRST IS THE ONE THAT CLAIMS: it creates claimed, a file, under the
+// shell's own noclobber (`set -C`), which a POSIX shell opens O_CREAT|O_EXCL,
+// so of two upload-packs that start at once the kernel lets one alone create
+// it. Never `mkdir claimed`, whose exclusivity is its tool's: uutils
+// coreutils' mkdir, /usr/bin/mkdir on Ubuntu 26.04 and so on CI's runners,
+// answers success to both of two made at once through 0.10.0 (fixed upstream
+// in 0.11.0; measured on ubuntu:26.04, both succeeded in 2178 rounds of
+// 3000), and both upload-packs would hold.
 func holdFirst(t *testing.T) (fake, hold, started string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -923,7 +932,7 @@ func holdFirst(t *testing.T) (fake, hold, started string) {
 	claimed := filepath.Join(dir, "claimed")
 	fake = gittest.Wrap(t, `case " $* " in
 *" --advertise-refs "*) ;;
-" upload-pack "*) if [ -e `+shellWord(hold)+` ] && mkdir `+shellWord(claimed)+` 2>/dev/null; then
+" upload-pack "*) if [ -e `+shellWord(hold)+` ] && ( set -C; : > `+shellWord(claimed)+` ) 2>/dev/null; then
   : > `+shellWord(started)+`
   while [ -e `+shellWord(hold)+` ]; do sleep 0.02; done
 fi ;;
