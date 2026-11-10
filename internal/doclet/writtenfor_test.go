@@ -12,11 +12,12 @@ import (
 
 // AN AGENT'S WRITE THAT WAKES SOMEBODY CARRIES WHOM IT WAS WRITTEN FOR, AND
 // NOTHING ELSE DOES (ADR-0109), on the knowledge base's store as on the
-// tracker's. An agent's comment mentioning bob, made in a turn ada woke,
-// records that the turn worked for ada, at the version that carries it, which
-// an older build retains rather than waking bob for the agent. A quiet rename
-// by the same agent carries nobody, and so does a comment a turn nobody woke
-// makes: both stay at the base version.
+// tracker's. An agent's comment asking bob, made in a turn ada woke, records
+// that the turn worked for ada, at the version that carries it, which an older
+// build retains rather than waking bob for the agent. A quiet rename by the
+// same agent carries nobody and stays at the base version. A comment a turn
+// nobody woke makes carries nobody too, so it stays below the carrier's
+// version, at the one every agent comment's statement of whether it asks needs.
 //
 // AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent that states nobody it
 // writes for writes nothing, and a person handed a carrier writes nothing
@@ -33,7 +34,7 @@ func TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing
 	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
 	forAda := agent("dev")
 	forAda.WrittenFor = types.ForTurn(ada)
-	mention := doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}
+	mention := doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}, Asks: ptr(true)}
 
 	if _, _, err := r.store.Comment(t.Context(), forAda, page.Page.ID, mention); err != nil {
 		t.Fatalf("dev comments for ada: %v", err)
@@ -59,7 +60,7 @@ func TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing
 	if _, _, err := r.store.Comment(t.Context(), agent("dev"), page.Page.ID, mention); err != nil {
 		t.Fatalf("dev comments in a turn nobody woke: %v", err)
 	}
-	expect("the comment of a turn nobody woke", nil, 1)
+	expect("the comment of a turn nobody woke", nil, 3)
 
 	unstated := agent("dev")
 	unstated.WrittenFor = types.WrittenFor{}

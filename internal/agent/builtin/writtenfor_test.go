@@ -44,7 +44,8 @@ func writeFamilies() []writeFamily {
 					return out
 				}
 			}},
-		{tool: builtin.CommentOnPageTool, args: map[string]any{"page": "p1", "body": "@agent-ceo is this current?"},
+		{tool: builtin.CommentOnPageTool, args: map[string]any{"page": "p1", "asks": true,
+			"body": "@agent-ceo is this current?"},
 			wire: func(t *testing.T, who builtin.Requesters) (*tools.Registry, func() []types.WrittenFor) {
 				kb := newFakeKB()
 				reg := tools.NewRegistry()

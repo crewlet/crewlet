@@ -178,7 +178,7 @@ func commentOnPage(t *testing.T, o *org.Organization, people personSeats, turn *
 	pages := &runbookPages{}
 	got := called(t, seatTool(t, o, people, builtin.Deps{Pages: builtin.PageDeps{Reader: pages, Writer: pages,
 		Mentions: seatMentions{org: o}}}, builtin.CommentOnPageTool), turn, map[string]any{
-		"page": "p-1", "body": "@" + woken + " is this current?"})
+		"page": "p-1", "asks": true, "body": "@" + woken + " is this current?"})
 	if got.Failed || len(pages.actors) != 1 {
 		t.Fatalf("comment_on_page answered %q, writing %d times", got.Output, len(pages.actors))
 	}
@@ -273,10 +273,12 @@ func assignedWake(t *testing.T, author, woken string, carrier *types.WorkingFor)
 	return inboundDelivery(t, worklet.Source, payload)
 }
 
-// namedOnPageWake is author's comment on a page naming woken, written for
-// carrier.
+// namedOnPageWake is author's comment on a page naming woken and asking it,
+// written for carrier: the record the store makes of [commentOnPage]'s call,
+// whose agent author states that it asks.
 func namedOnPageWake(t *testing.T, author, woken string, carrier *types.WorkingFor) *events.Event {
 	t.Helper()
+	asks := true
 	record := doclet.MutationRecord{
 		RecordEnvelope: doclet.RecordEnvelope{
 			OpID: "op-comment-" + woken, Subject: doclet.PageSubject("p-1"), Op: doclet.OpPatch,
@@ -285,7 +287,7 @@ func namedOnPageWake(t *testing.T, author, woken string, carrier *types.WorkingF
 		Actor: author, ActorKind: doclet.AuthorAgent, WorkingFor: carrier,
 		Notify: &doclet.Notify{
 			Kind: doclet.ChangeComment, PageID: "p-1", Version: 1,
-			Mentions: []string{woken}, Excerpt: "@" + woken + " is this current?",
+			Mentions: []string{woken}, Asks: &asks, Excerpt: "@" + woken + " is this current?",
 			Container: "ENG", Title: "Runbook",
 		},
 	}
