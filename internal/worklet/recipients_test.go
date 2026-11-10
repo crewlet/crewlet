@@ -405,3 +405,19 @@ func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 			"a thread you are in asks something and is not what an inbox opens with")
 	}
 }
+
+// AN ASSIGNMENT TO THE HOLDER CONCERNS NOBODY: no change was made, so neither
+// the holder nor the reporter is told one, while a real reassignment still is.
+func TestAnAssignmentToTheHolderConcernsNobody(t *testing.T) {
+	t.Parallel()
+	same := &worklet.Notify{Kind: worklet.ChangeAssignee,
+		Snapshot: worklet.Snapshot{Assignee: "ana", PrevAssignee: "ana", Reporter: "pm"}}
+	if got := worklet.Candidates(same); got != nil {
+		t.Errorf("an assignment to the holder concerns %+v, want nobody", got)
+	}
+	moved := &worklet.Notify{Kind: worklet.ChangeAssignee,
+		Snapshot: worklet.Snapshot{Assignee: "bo", PrevAssignee: "ana", Reporter: "pm"}}
+	if heard, ok := worklet.CandidateFor(moved, "bo"); !ok || !heard.Wakes || !heard.Addressed {
+		t.Errorf("the new holder of a real reassignment hears %+v, want woken and asked", heard)
+	}
+}

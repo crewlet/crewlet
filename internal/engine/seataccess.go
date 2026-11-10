@@ -510,3 +510,23 @@ func accessSetting(d seataccess.Desired) types.AccessSetting {
 	}
 	return out
 }
+
+// grantHeld reads whether the engine's grant to the seat on lane is in place,
+// as the seat access ledger last observed it at the vendor; known is false
+// where the ledger cannot be read.
+func (e *Engine) grantHeld(ctx context.Context, handle, lane string) (held, known bool) {
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		return false, false
+	}
+	l := seataccess.Lane(lane)
+	rec, found, err := ledger.SeatRecord(ctx, l.Kind(), handle)
+	if err != nil {
+		return false, false
+	}
+	if !found {
+		return false, true
+	}
+	observed := rec.Lanes[l].Observed
+	return observed.Exists && observed.Enabled, true
+}

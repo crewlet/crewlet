@@ -41,7 +41,7 @@
 
 import { firstLine } from "~/lib/format.ts";
 import { useMemo, useState, type ReactNode } from "react";
-import { CodeBlock, Disclosure } from "@crewlethq/ui";
+import { CodeBlock, Disclosure, Text } from "@crewlethq/ui";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -608,6 +608,25 @@ export interface HeldCall {
   fixed?: boolean;
   /** Who answers it where not the seat's lead. */
   approvers?: string;
+  /** The decision the call carries out, where a person's answer woke its turn. */
+  acting?: HeldCallActing | null;
+}
+
+/** The decision a held call carries out: the question asked, and the answer given. */
+export interface HeldCallActing {
+  /** The work item's key, where the decision is on one. */
+  key?: string;
+  question: string;
+  /** The chosen option's label; absent for an answer in words. */
+  choice?: string;
+  answered_by: string;
+}
+
+/** What a held call carries out, in one sentence: who answered what, and how. */
+export function actingWords(acting: HeldCallActing, name: (handle: string) => string): string {
+  const on = acting.key ? ` on ${acting.key}` : "";
+  const how = acting.choice ? ` with \u201c${acting.choice}\u201d` : "";
+  return `It carries out a decision${on}: ${name(acting.answered_by)} answered \u201c${acting.question}\u201d${how}.`;
 }
 
 /** The call a parked run holds for approval, or null for a run parked on a question. */
@@ -684,8 +703,13 @@ export function HeldCallRow({
       ])}
       meta={joined([relTime(call.at, now)])}
       line={
-        said || call.extra || args ? (
+        said || call.extra || args || call.acting ? (
           <>
+            {call.acting ? (
+              <Text as="p" variant="caption">
+                {actingWords(call.acting, (h) => seatOf(index, h).name)}
+              </Text>
+            ) : null}
             {call.extra}
             {args}
             {said ? (

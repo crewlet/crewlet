@@ -177,14 +177,30 @@ type artifactVersionArgs struct {
 	Number int
 }
 
-var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a artifactVersionArgs) (artifactsdomain.Version, error) {
-		r, err := b.artifactsReader()
-		if err != nil {
-			return artifactsdomain.Version{}, err
-		}
-		return r.Version(ctx, a.ID, a.Number)
-	})
+// ONE VERSION, as a tool, a screen and the artifact origin show it: read
+// leniently, so a newer build's field on an entry is a field this build does
+// not show, never a version it cannot.
+var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, false, artifactVersion)
+
+// ONE VERSION A PUBLISH CARRIES ON, ANSWERED WHOLE ([op.answeredWhole]): a
+// publish that keeps a file of an earlier version — a patch's base, a file
+// carried from a version it names — writes back the entry it read
+// (internal/artifactupload), so a newer build's field on an entry this build
+// would drop is refused rather than published away. ITS OWN OPERATION, beside
+// the one that shows a version, because declared on that one it blinded every
+// reader that only shows a version — a seat's get_artifact, a screen, the
+// artifact origin deciding what it serves — to one a newer node published.
+var opArtifactVersionCarried = define("artifacts.version_carried", opRead, artifactsDomain, false,
+	artifactVersion).answeredWhole()
+
+// artifactVersion is one retained version, read from this node's copy.
+func artifactVersion(ctx context.Context, b Backend, _ *Actor, a artifactVersionArgs) (artifactsdomain.Version, error) {
+	r, err := b.artifactsReader()
+	if err != nil {
+		return artifactsdomain.Version{}, err
+	}
+	return r.Version(ctx, a.ID, a.Number)
+}
 
 // artifactPageArgs is one page of an artifact's versions or history.
 type artifactPageArgs struct {
@@ -707,9 +723,16 @@ func (a Artifacts) List(ctx context.Context, v artifactsdomain.Viewer, q artifac
 	return call(ctx, a.r, opArtifactList, nil, artifactListArgs{Viewer: v, Query: q})
 }
 
-// Version answers one retained version.
+// Version answers one retained version, to show.
 func (a Artifacts) Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error) {
 	return call(ctx, a.r, opArtifactVersion, nil, artifactVersionArgs{ID: id, Number: number})
+}
+
+// CarriedVersion answers one retained version whose entries the caller carries
+// into a publish, read whole or refused ([ErrUnknownKeys]).
+func (a Artifacts) CarriedVersion(ctx context.Context, id artifacts.ID, number int) (
+	artifactsdomain.Version, error) {
+	return call(ctx, a.r, opArtifactVersionCarried, nil, artifactVersionArgs{ID: id, Number: number})
 }
 
 // Versions answers a page of an artifact's versions.

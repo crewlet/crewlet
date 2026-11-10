@@ -256,7 +256,12 @@ func (n NewTold) validate() error {
 		return invalid("a told record that is not a baseline carries its changes as JSON")
 	case len(n.Changes) > ChangesMaxBytes:
 		return invalid("the changes are %d bytes and the maximum is %d", len(n.Changes), ChangesMaxBytes)
-	case n.ReadThrough.Stream != "" && n.ReadThrough.Stream != Domain{}.Stream().Name:
+	case n.ReadThrough.On(Domain{}.Stream().Name) != nil:
+		// [statelog.Position.On], the one rule a named position is held
+		// to: a position that names nothing is judged on no stream, so a
+		// told record reads the same here wherever it was asked from — the
+		// estate router's wire leaves a position its type calls zero off,
+		// and the data node it reaches meets no stream at all.
 		return invalid("the baseline was read at a position on %s, not on the access log", n.ReadThrough.Stream)
 	case len(n.Authors) > MaxAuthors:
 		return invalid("a told record names %d authors and the maximum is %d", len(n.Authors), MaxAuthors)

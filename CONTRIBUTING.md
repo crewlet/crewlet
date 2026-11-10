@@ -1644,10 +1644,17 @@ an older build:
   apply it wrong — which is why every data node names the version it reads
   on its position heartbeat, a writer of a gate above the base version waits
   on that census before publishing one, and an envelope never refuses what a
-  newer build may add to it; and a bump of the seat-host lease protocol makes
-  the newer node refuse to claim beside a live lower lease. That contract
-  runs FORWARD, to the builds after this one, and never obliges this tree to
-  read what an earlier unreleased build wrote.
+  newer build may add to it; a parked run's unknown keys ride
+  `PendingRun.Extra`; a data node refuses an estate request whose arguments
+  or actor hold a key its build does not declare rather than run it without
+  the key, and the router leaves every input field at its zero off the wire,
+  so only a request that sets a newer field is refused — a read carrying a
+  newer argument is refused the same way, never answered with the argument
+  ignored, and an answer a caller carries into another request is read whole
+  or refused; an apply refuses only a revision that cannot run; and a bump of
+  the seat-host lease protocol makes the newer node refuse to claim beside a
+  live lower lease. That contract runs FORWARD, to the builds after this one,
+  and never obliges this tree to read what an earlier unreleased build wrote.
 
 A free break is still a complete one: the rename lands everywhere in the same
 change — `docs/`, `examples/`, the dashboard, the tests — and `schema/` is

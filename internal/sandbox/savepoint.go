@@ -55,6 +55,13 @@ import "slices"
 // brief, and the floor its launch is held to (internal/engine's
 // continuedFloor), grow with them.
 //
+// A SAVE IS PLACED THE SAME WAY ([SessionTake.Save]; this version stamps
+// none), packed as it is while its job still works — and by one more capture
+// its launch is known to hold, where the save is handed it, which no row
+// records ([savePlaces]): the capture whose archive the launch's session
+// started from, where the launch carried its round on. Every call that archive
+// held, the session holds.
+//
 // A continuation from such a capture is told every call after that point, a
 // subagent's included, and the ones its harness had already recorded are told
 // again, as a continuation already accepts ([SessionCapture.Through]): told
@@ -62,19 +69,39 @@ import "slices"
 // point by come from the same capture as the point ([SessionCapture.BridgeSeq],
 // [SessionCapture.BridgeOpen]), so a peer reading them is never told less.
 
-// placeAtNewest places c, a capture of the session run's launch worked in
+// savePlaces is what a capture whose harness may not have written every call it
+// made — a save, the take of a job still working, a capture of a job cut off —
+// is placed by ([SessionCapture.placeAtNewest]).
+type savePlaces struct {
+	// run is the run's row as the capture read it, its launch the one whose
+	// session is taken: its kept capture ([PendingRun.Kept]) is that launch's
+	// newest landed capture where it is one of that launch's ([launchKept]).
+	run PendingRun
+
+	// continued is the capture of the job before, whose archive the launch's
+	// box took up and continued as the launch was asked to
+	// ([LaunchRequest.Session]); nil where it continued none — a session of
+	// its own, the one its conversation's last turn left, or the copy its job
+	// before left in the box, continued in place, which no capture places —
+	// and nil where the reader cannot say which it continued: a launch records
+	// none on its row, so the take of a job still working, and of one cut off,
+	// hands none, and is placed at its launch's own newest landed capture or
+	// at zero, which tells more, never less.
+	continued *SessionCapture
+}
+
+// placeAtNewest places c, a capture of the session from.run's launch worked in
 // that its harness may not have written whole, at the NEWEST save point that
 // launch is known to hold (see the file comment): its save point
 // ([SessionCapture.Through]) and, off the same capture, the places an older
-// build reads it by — or the round's start, zero, where no landed capture of
-// that launch states one. run is the run's row as the capture read it, its
-// launch the one whose session is taken.
-func (c *SessionCapture) placeAtNewest(run PendingRun) {
+// build reads it by — or the round's start, zero, where no capture that launch
+// is known to hold states one.
+func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	var newest *SessionCapture
 	point := 0
-	if kept := launchKept(run); kept != nil {
-		if at, stated := kept.SavePoint(); stated {
-			newest, point = kept, at
+	for _, held := range from.held() {
+		if at, stated := held.SavePoint(); stated && (newest == nil || at > point) {
+			newest, point = held, at
 		}
 	}
 	c.Through = new(point)
@@ -82,6 +109,27 @@ func (c *SessionCapture) placeAtNewest(run PendingRun) {
 	if newest != nil {
 		c.BridgeSeq, c.BridgeOpen = newest.BridgeSeq, slices.Clone(newest.BridgeOpen)
 	}
+}
+
+// held is every capture p's launch's session is known to hold, each of a save
+// point counted in its own round's log: its newest landed capture
+// ([launchKept]), and the capture it continued.
+//
+// THE CONTINUED ONE ONLY WHERE THE LAUNCH CARRIED ITS ROUND ON
+// ([PendingRun.Round], which names the job that opened the round): a launch
+// that opened a round began a log that numbers its calls from its start, and
+// a capture of the round before counts another log's. A row that names no
+// round says neither, and is read as the safe one, a new round's.
+func (p savePlaces) held() []*SessionCapture {
+	var held []*SessionCapture
+	run := p.run
+	if kept := launchKept(run); kept != nil {
+		held = append(held, kept)
+	}
+	if continued := p.continued; continued != nil && run.Round != "" && run.Round != run.LaunchID {
+		held = append(held, continued)
+	}
+	return held
 }
 
 // launchKept is the newest landed capture run's launch's session is known to

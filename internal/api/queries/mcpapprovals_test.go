@@ -23,7 +23,9 @@ func heldRuns(t *testing.T) (fixedRuns, *sandbox.CallSeal) {
 	seal := sandbox.NewCallSeal(cipher)
 	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-000000000001", LaunchID: "launch-1",
 		Server: "github", Tool: "gh_merge_pull_request", Raw: "merge_pull_request", Digest: "sha256:d1",
-		HeldAt: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)}
+		HeldAt: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC),
+		Acting: &sandbox.HeldAct{Item: "id-4", Key: "ENG-4", Ask: "q-2", Question: "Merge the release?",
+			Choice: "Merge it", AnsweredBy: "cto", AnsweredAt: time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)}}
 	if held.Arguments, err = seal.SealArguments("t-held", held, map[string]any{"pull": float64(7)}); err != nil {
 		t.Fatal(err)
 	}

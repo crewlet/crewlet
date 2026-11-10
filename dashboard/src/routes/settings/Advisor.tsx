@@ -26,6 +26,7 @@ import {
   type StepListStep,
 } from "@crewlethq/ui";
 import { FixDialog } from "~/components/advisorFix.tsx";
+import { GoLiveReview } from "./GoLiveReview.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useAssistantControl, type AssistantControl } from "~/app/assistant/control.ts";
 import { href } from "~/app/router.tsx";
@@ -72,6 +73,7 @@ export function Advisor() {
           </Callout>
         )}
         {data && <GoLiveCheck owner={owner} unread={data.unread} />}
+        {data && <GoLiveReview />}
         {/* NOTHING TO CHANGE ONLY WHEN EVERY SOURCE WAS READ: an unread one may hold the blocker. */}
         {data &&
           (owner.length === 0 ? (

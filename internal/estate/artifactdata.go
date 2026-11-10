@@ -149,14 +149,28 @@ type dataStoreArgs struct {
 	ID artifacts.ID
 }
 
-var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a dataStoreArgs) ([]artifacts.Collection, error) {
-		r, err := b.artifactDataReader()
-		if err != nil {
-			return nil, err
-		}
-		return r.Schema(ctx, a.ID)
-	})
+// A STORE'S COLLECTIONS, as a tool filters rows by them and a screen shows
+// them: read leniently.
+var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, false, dataSchema)
+
+// A STORE'S COLLECTIONS A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]):
+// set_artifact_schema replaces every collection, and its description tells a
+// model to read them with read_artifact_data and send them back with its
+// change (internal/agent/builtin) — so a newer build's field on a collection or
+// a column this build would drop is refused rather than written away. Its own
+// operation, so the reads that only filter rows by a schema are not refused
+// one ([opArtifactVersionCarried] says why).
+var opDataSchemaCarried = define("artifactdata.schema_carried", opRead, artifactDataDomain, false,
+	dataSchema).answeredWhole()
+
+// dataSchema is a store's collections, read from this node's copy.
+func dataSchema(ctx context.Context, b Backend, _ *Actor, a dataStoreArgs) ([]artifacts.Collection, error) {
+	r, err := b.artifactDataReader()
+	if err != nil {
+		return nil, err
+	}
+	return r.Schema(ctx, a.ID)
+}
 
 var opDataStore = define("artifactdata.store", opRead, artifactDataDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a dataStoreArgs) (artifactdata.StoreInfo, error) {
@@ -295,9 +309,20 @@ func (a ArtifactData) History(ctx context.Context, id artifacts.ID, rd artifactd
 		Cursor: cursor, Limit: limit})
 }
 
-// Schema answers a store's collections.
+// Schema answers a store's collections, to filter rows by or to show.
 func (a ArtifactData) Schema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error) {
-	out, err := call(ctx, a.r, opDataSchema, nil, dataStoreArgs{ID: id})
+	return collectionsOf(call(ctx, a.r, opDataSchema, nil, dataStoreArgs{ID: id}))
+}
+
+// CarriedSchema answers a store's collections the caller sends back whole, read
+// whole or refused ([ErrUnknownKeys]).
+func (a ArtifactData) CarriedSchema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error) {
+	return collectionsOf(call(ctx, a.r, opDataSchemaCarried, nil, dataStoreArgs{ID: id}))
+}
+
+// collectionsOf is a schema read's answer, a store holding none answered as an
+// empty list rather than nil.
+func collectionsOf(out []artifacts.Collection, err error) ([]artifacts.Collection, error) {
 	if out == nil && err == nil {
 		out = []artifacts.Collection{}
 	}

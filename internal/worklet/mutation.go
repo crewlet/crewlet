@@ -54,7 +54,12 @@ import (
 // ([MutationRecord.NoticeWokeKept]).
 // Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
 // Version 9 is why a task waits until its start ([TaskPatch.WaitReason]).
-const RecordVersion = 9
+// Version 10 is a task patch taking a date off by its flag
+// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 9 decodes
+// neither, and would apply the patch as one that names no date — keeping a
+// date every newer node cleared.
+// Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
+const RecordVersion = 11
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -120,6 +125,9 @@ var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
 	{Name: "TaskPatch.AskWatch", Since: 8, Path: []string{"mutation", "ask_watch"}},
 	{Name: "TaskPatch.WaitReason", Since: 9, Path: []string{"mutation", "wait_reason"}},
+	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
+	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
+	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1166,6 +1174,10 @@ const (
 	// account of itself.
 	ChangeFileWritten ChangeKind = "file_written"
 	ChangeFileRemoved ChangeKind = "file_removed"
+
+	// ChangeLinkSettled is a change (a pull request) the task waits on
+	// merged or closed, written by the engine, never by an agent's turn.
+	ChangeLinkSettled ChangeKind = "change_settled"
 )
 
 // ChangeKinds are every change kind this build writes.
@@ -1183,6 +1195,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
+	ChangeLinkSettled,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.

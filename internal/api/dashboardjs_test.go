@@ -2179,8 +2179,17 @@ const (
 	// took it to 5699.4 KiB (5,836,141 bytes, +2,713, all script): 5700 KiB.
 	// Usage insights in Settings › Diagnostics and the held conversation's
 	// out-of-memory reason, merged on top of it, took it to 5708.4 KiB
-	// (5,845,450 bytes, +9,309, all script): 5709 KiB.
-	treeBudget = 5<<20 + 589<<10
+	// (5,845,450 bytes, +9,309, all script): 5709 KiB. The go-live review of
+	// what each agent can do took it to 5711.6 KiB (5,848,639 bytes, +3,189,
+	// all script): 5712 KiB. A pull request settling the work that waits on it,
+	// and why an item waits (its Waits for line, an overtaken question in the
+	// Inbox), merged on top of it, took it to 5712.1 KiB (5,849,155 bytes, +516,
+	// all script): 5713 KiB. A held call naming the decision it carries out, the
+	// vendor permission a built-in needs, the insights and runs fixes, an item's
+	// wait reason once its date has come and a skill's loads beside its offers,
+	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
+	// script): still 5713 KiB.
+	treeBudget = 5<<20 + 593<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

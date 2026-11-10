@@ -405,7 +405,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 					return fmt.Errorf("%w: %q carries from version %d of an artifact that has none",
 						ErrInvalid, p, spec.From)
 				}
-				if v, err = r.s.reads.Version(ctx, r.id, spec.From); err != nil {
+				if v, err = r.s.reads.CarriedVersion(ctx, r.id, spec.From); err != nil {
 					return err
 				}
 				versions[spec.From] = v

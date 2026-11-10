@@ -310,3 +310,52 @@ func TestAToldRecordWhoseChangesDoNotDecodeIsSaidOnce(t *testing.T) {
 		t.Errorf("the unreadable record is held %d times, want once", said)
 	}
 }
+
+// A SEAT'S ACCESS INSTANT DOES NOT AGE OUT. A capability note is held against
+// when the seat was last told its access, its newest told record however old,
+// so a note written before a change told long past the told memory window is
+// held still; a turn that tells a change holds against now, and a seat never
+// told holds nothing back for it.
+//
+// Mutation: read the instant off the window's records, or ignore the turn's
+// own change, and a row goes red.
+func TestASeatsAccessInstantDoesNotAgeOut(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	old := now.Add(-3 * toldMemoryWindow)
+	quiet := accessdomain.Recent{Complete: true, Baseline: &accessdomain.ToldRow{Handle: "ceo", At: old}}
+	if got := toldAt(quiet, now, false); !got.Equal(old) {
+		t.Errorf("after quiet months the seat's access instant is %v, want its told record's %v", got, old)
+	}
+	if got := toldAt(quiet, now, true); !got.Equal(now) {
+		t.Errorf("a turn telling a change holds against %v, want now", got)
+	}
+	if got := toldAt(accessdomain.Recent{Complete: true}, now, false); !got.IsZero() {
+		t.Errorf("a seat never told holds against %v, want nothing", got)
+	}
+}
+
+// A TURN HOLDS ITS NOTES AGAINST WHAT THE SEAT WAS LAST TOLD: once the seat has
+// a told record, every later turn's dispatch carries that record's instant to
+// the memory prefetch, and the turn that tells a change carries its own.
+//
+// Mutation: hand the prefetch no access instant, and this goes red.
+func TestATurnHoldsItsNotesAgainstWhatTheSeatWasLastTold(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	first, turn := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes."))
+	launchTurn(t, e, first, turn)
+	rows := toldRows(t, e)
+	if len(rows) != 1 {
+		t.Fatalf("the told records are %+v, want the baseline", rows)
+	}
+	next, _ := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes."))
+	if !next.accessAt.Equal(rows[0].At) {
+		t.Errorf("the next turn holds against %v, want the baseline's %v", next.accessAt, rows[0].At)
+	}
+	before := time.Now().UTC()
+	changed, _ := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes.", "Only the SRE deploys."))
+	if changed.changes == "" || changed.accessAt.Before(before) {
+		t.Errorf("a turn telling a change holds against %v, want its own instant", changed.accessAt)
+	}
+}

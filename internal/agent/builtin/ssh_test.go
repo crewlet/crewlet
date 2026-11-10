@@ -258,7 +258,7 @@ func TestAnOperateCallIsHeldInEveryCase(t *testing.T) {
 		turn := sshTurn(o, "sre", requester, nil)
 		turn.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "id-9", Key: "ENG-9"}
 		exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHOperateTool}).
-			WithHolder(builtin.NewCallHold(desk, seal)).ForTurn(turn)
+			WithHolder(builtin.NewCallHold(desk, seal, nil)).ForTurn(turn)
 		res, err := exec.Execute(turnctx.WithJob(asSeat("sre"), "launch-1"),
 			llm.ToolCall{Name: builtin.SSHOperateTool, Arguments: args})
 		if err != nil {

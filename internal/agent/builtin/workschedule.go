@@ -159,6 +159,13 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 			return out, fmt.Sprintf("%s could not read `%s`: %s", tool, key,
 				worklet.Sentence(err))
 		}
+		if anchor.At.IsZero() {
+			// THE ZERO INSTANT IS NO DATE, and the tracker refuses one
+			// ([worklet.TaskPatch.CheckDates]) in words about the
+			// patch's own fields: said here, it is said in this tool's.
+			return out, fmt.Sprintf("%s was given `%s` %q, which is the zero instant "+
+				"(January of year one) and no date: name a real one.", tool, key, clip(token))
+		}
 		at := anchor.At
 		*target = &at
 		// A TOKEN THAT NAMED A DAY SETS THE ALL-DAY FLAG, so a renderer
@@ -272,22 +279,24 @@ func (s schedule) applyToTask(task *worklet.Task) {
 
 // applyToPatch writes what an UPDATE was given, cleared keys included.
 //
-// A CLEARED DATE IS THE ZERO INSTANT rather than a nil pointer, because nil on
-// a patch means "not named" — the whole point of the pointer — so clearing has
-// to be a value the applier can recognise as empty.
+// A CLEARED DATE IS ITS FLAG ([worklet.TaskPatch.ClearStart],
+// [worklet.TaskPatch.ClearDue]), never a value: nil on a patch means "not
+// named" — the whole point of the pointer — and a date has no empty value to
+// point at, since the zero instant is a date in year one (the patch type's doc
+// says why it is no longer that).
 func (s schedule) applyToPatch(patch *worklet.TaskPatch) bool {
 	touched := false
 	if s.Start != nil {
 		patch.StartAt, touched = s.Start, true
 		patch.WaitReason = s.WaitReason
 	} else if s.Cleared["start"] {
-		patch.StartAt, touched = &time.Time{}, true
+		patch.ClearStart, touched = true, true
 	}
 	if s.Due != nil {
 		patch.DueAt, touched = s.Due, true
 		patch.DueAllDay = s.DueAllDay
 	} else if s.Cleared["due"] {
-		patch.DueAt, touched = &time.Time{}, true
+		patch.ClearDue, touched = true, true
 		allDay := false
 		patch.DueAllDay = &allDay
 	}

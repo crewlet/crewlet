@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -271,11 +272,28 @@ func (t Turn) SelfPersisted() bool {
 // FAILED turn that called nothing failed at something, and that is worth
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
+//
+// WHAT THE TURN DID decides where its tally states it: a turn that moved work,
+// said words, or reached somebody outside the engine (a reply on a vendor's
+// chat) engaged, and one that only read did not, however many tools it read
+// with. An unstated outcome (a parked segment) falls back.
 func (t Turn) Engaged() bool {
 	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
 	}
+	if outcome := t.CommittedOutcome(); outcome != "" {
+		return outcome != types.OutcomeNothing || t.Event.Acted
+	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
+}
+
+// CommittedOutcome is the outcome the turn's tally states, "" where it states
+// none (a parked segment), which is what [Turn.Engaged] decides by.
+func (t Turn) CommittedOutcome() types.TurnOutcome {
+	if t.Event.Turn == nil {
+		return ""
+	}
+	return t.Event.Turn.Outcome
 }
 
 // Worker is one post-turn learning pass.
@@ -537,10 +555,17 @@ type Reflection struct {
 	Failed map[string]error
 }
 
+// ErrLearningShare is a learning call held because the seat's learning has
+// reached learning.max_share of its company day's spend; it resumes next day.
+var ErrLearningShare = errors.New("learning: the seat's learning is at its share of the day's spend")
+
 // Skip reasons. Exported because they are what an operator reads back out of
 // a log line or a test asserts on, and a caller comparing against its own
 // copy of the string is how the two drift.
 const (
+	// SkipLearningShare is a worker whose model call [ErrLearningShare] held.
+	SkipLearningShare = "learning_share"
+
 	SkipNoWorkers    = "no_workers"
 	SkipNoRole       = "no_role"
 	SkipRoleDisabled = "role_disabled"
@@ -673,7 +698,8 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
 			"agent_handle", tc.AgentHandle,
-			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
+			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome,
+			"turn_outcome", turn.CommittedOutcome(), "acted", tc.Acted)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
 		// learn from and a turn reflection never reached look identical
 		// on every surface otherwise, and the second is a bug while the
@@ -698,6 +724,15 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 			continue
 		}
 		payloads, err := r.dispatch(ctx, w, turn)
+		if errors.Is(err, ErrLearningShare) {
+			if out.Skipped == nil {
+				out.Skipped = map[string]string{}
+			}
+			out.Skipped[w.Name()] = SkipLearningShare
+			log.InfoContext(ctx, "reflection_worker_held_by_share", "turn_id", tc.TurnID,
+				"agent_handle", tc.AgentHandle, "worker", w.Name())
+			continue
+		}
 		if err != nil {
 			if out.Failed == nil {
 				out.Failed = map[string]error{}

@@ -540,11 +540,10 @@ type scriptedModel struct {
 	// ([modelRequest.Channel]).
 	channels []string
 
-	// engages makes the executor call a tool before answering, which is
-	// what the reflect dispatcher's engagement gate reads. A company with
-	// a chat integration always does — its executor calls the delivery
-	// tool — but this document configures none, so the default turn ends
-	// having called nothing and every learning worker correctly skips it.
+	// engages makes the executor file a work item before answering: a call
+	// that reaches outside the engine, which the reflect dispatcher's
+	// engagement gate reads. A read alone is not engagement, and this
+	// document configures no chat integration to reply on.
 	// Opt-in rather than default because the phase-count assertions
 	// elsewhere are written against a one-request Execute.
 	engages bool
@@ -598,7 +597,7 @@ func (m *scriptedModel) nextCall() (scriptedCall, bool) {
 	return call, true
 }
 
-// engageOnExecute makes the next turn's executor call a tool.
+// engageOnExecute makes the next turn's executor file a work item.
 func (m *scriptedModel) engageOnExecute() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -763,15 +762,13 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if m.shouldEngage() {
-			// The request that CALLS something. Recorded as execute like
-			// the submitting one, because it is the same phase — what
-			// differs is that this turn leaves an observable trace, which
-			// is the condition every learning worker is gated on. A tool
-			// every seat holds: an executor holds every tool its seat does
-			// and no discovery pair, so a call to one would be refused as
-			// a tool the run was never offered.
+			// The request that REACHES OUTSIDE the engine. Recorded as execute
+			// like the submitting one, since it is the same phase. A read
+			// alone is not engagement.
 			saw("execute")
-			reply = toolUse("lookup_colleague", map[string]any{"query": "ceo"})
+			reply = toolUse("create_work_item", map[string]any{
+				"title": "Send the numbers", "project": "ENG",
+			})
 			break
 		}
 		saw("execute")

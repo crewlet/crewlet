@@ -48,9 +48,9 @@ func TestAWaitUntilADateSaysWhy(t *testing.T) {
 			}
 			patch := trk.patched[0]
 			if c.args["wait_until"] == nil {
-				if patch.StartAt == nil || !patch.StartAt.IsZero() || patch.WaitReason != nil {
-					t.Errorf("an ended wait wrote start %v and reason %v, want the start cleared", patch.StartAt,
-						patch.WaitReason)
+				if !patch.ClearStart || patch.StartAt != nil || patch.WaitReason != nil {
+					t.Errorf("an ended wait wrote clear_start %v, start %v and reason %v, want the start "+
+						"cleared by its flag", patch.ClearStart, patch.StartAt, patch.WaitReason)
 				}
 				return
 			}

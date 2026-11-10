@@ -602,6 +602,10 @@ type Sources struct {
 	// evaluated: false mid-boot and on a node running no state log. Nil says false.
 	AlarmsEvaluated func() bool
 
+	// AgentAccess reads what each agent may do and where it runs, the
+	// engine's; nil on a node with no engine.
+	AgentAccess AgentAccess
+
 	// Pauses lists every seat's pause, which the advisor reads for the seats
 	// the engine paused on a failure (ADR-0117). Nil on a node with no pause store.
 	Pauses SeatPauseLister
@@ -1135,6 +1139,11 @@ func Register(r *Registry, s Sources) {
 		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
 		// document, so the administrator's as the document is.
 		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
+		// WHAT EACH AGENT MAY DO AND WHERE IT RUNS, as its next turn is told:
+		// the go-live check's review. Admin's, as the advisor is.
+		if s.AgentAccess != nil {
+			r.Register("go_live_review", Requires(iam.GrantAdmin), s.goLiveReview)
+		}
 		// AND THE CHANGE AN AGENT'S ACCESS REQUEST WOULD MAKE, built from
 		// the same document for the person deciding it (ADR-0118).
 		r.Register("advisor_access", Requires(iam.GrantAdmin), s.advisorAccess)

@@ -66,6 +66,11 @@ var carriedByServer = map[string]string{
 
 	"doclet.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
 		"an answer carries its result as SavedBy and SavedAt",
+
+	"knowledge.Result.VendorStatus": "set only by the Confluence searcher, which runs on the " +
+		"asking node; knowledge.search answers from Doclet's index, which refuses no credential",
+	"knowledge.Result.VendorSelf": "set only by the Confluence searcher, which runs on the " +
+		"asking node; knowledge.search answers from Doclet's index, which refuses no credential",
 }
 
 // extraField is the one field name every record type keeps a newer build's
@@ -130,7 +135,10 @@ func uncarried(t *testing.T) map[string]string {
 	// AND THE ENVELOPE EVERY ONE OF THEM TRAVELS IN, since a field of the
 	// request or the reply that does not cross loses every operation's
 	// answer at once.
-	for _, envelope := range []reflect.Type{reflect.TypeFor[request](), reflect.TypeFor[reply]()} {
+	// And the actor a write runs as, which the request carries encoded as
+	// its arguments are.
+	for _, envelope := range []reflect.Type{reflect.TypeFor[request](), reflect.TypeFor[reply](),
+		reflect.TypeFor[Actor]()} {
 		walk(envelope)
 	}
 	return found
@@ -139,6 +147,9 @@ func uncarried(t *testing.T) map[string]string {
 // NOTHING AN OPERATION CARRIES IS SILENTLY LEFT BEHIND. A field that does not
 // arrive answers as its zero value on the far side, which is a filter that
 // matches everything or a flag that was never set — and neither says so.
+//
+// Mutation: drop the actor from the walk's roots, and carriedByServer's
+// worklet.Provenance.Written is named as carried by nothing.
 func TestEveryFieldAnOperationCarriesArrives(t *testing.T) {
 	t.Parallel()
 	found := uncarried(t)
@@ -370,6 +381,9 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 // a router that silently reads a field its peer stopped sending. What is pinned
 // is the BODY a signature covers ([Envelopes]); the frame around it is the
 // state log's own, pinned there.
+//
+// Mutation: drop OmitZeroStructFields from inputEncoding and both writes'
+// actors are sent with every field at its zero.
 func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -398,24 +412,26 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
 				`"unconfirmed":["CREWLET_PAGES_LOG"]}}`,
 		},
+		// THE ACTOR IS AN INPUT OF THE OPERATION, under the wire's rule for
+		// one ([encodeInput]): a field at its zero is not on it at all, so a
+		// data node of a build without a field a newer one added to the
+		// actor serves every write that does not set it.
 		"a write's last resort": {
-			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: &swe,
+			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 				Deadline: envelopeInstant, AcceptLagging: true},
-			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent",` +
-				`"provenance":{"OperatorID":"","TurnID":"","Chain":null,"Origin":null}},` +
+			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent"},` +
 				`"deadline":"2026-10-04T12:00:00Z","accept_lagging":true}`,
 		},
 		// A CREDENTIAL'S WRITE CARRIES THE APPS IT USES, which hold the turn
 		// the write wakes (ADR-0109); a write that carries none, as the
 		// seat's above, sends no key for them at all.
 		"a credential's write": {
-			value: request{ID: "r-6", Op: opCreateTask.spec.name, Actor: &Actor{
+			value: request{ID: "r-6", Op: opCreateTask.spec.name, Actor: mustInput(t, Actor{
 				Handle: "token:ci", Kind: worklet.AuthorOperator,
 				Provenance: worklet.Provenance{OperatorID: "token:ci", Apps: []iam.Grant{iam.GrantWorklet}},
-			}, Deadline: envelopeInstant},
+			}), Deadline: envelopeInstant},
 			want: `{"id":"r-6","op":"tracker.create_task","actor":{"handle":"token:ci","kind":"operator",` +
-				`"provenance":{"OperatorID":"token:ci","TurnID":"","Chain":null,"Origin":null,` +
-				`"Apps":["worklet"]}},"deadline":"2026-10-04T12:00:00Z"}`,
+				`"provenance":{"OperatorID":"token:ci","Apps":["worklet"]}},"deadline":"2026-10-04T12:00:00Z"}`,
 		},
 		"admission's ping": {
 			value: pingEnvelope,
@@ -459,6 +475,17 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// mustInput is v as a router encodes an operation's input — its arguments, or
+// the actor it runs as ([encodeInput]).
+func mustInput(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := encodeInput(v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,11 +606,11 @@ func (s selfEncoded) AppendJSON(dst []byte) ([]byte, error) {
 // ordinary encoding of everything else.
 func TestAnAnswerThatHoldsItsOwnEncodingIsSentAsItIs(t *testing.T) {
 	t.Parallel()
-	got, err := encodeResult(selfEncoded{held: "rows"})
+	got, err := encodeResult(opUsageSeatDays.spec, selfEncoded{held: "rows"})
 	if err != nil || string(got) != `{"held":"rows"}` {
 		t.Fatalf("an answer holding its encoding was sent as (%s, %v), want its own bytes", got, err)
 	}
-	got, err = encodeResult(scheduleRunsPage{More: true})
+	got, err = encodeResult(opUsageScheduleRuns.spec, scheduleRunsPage{More: true})
 	if err != nil || string(got) != `{"Runs":null,"More":true}` {
 		t.Fatalf("an ordinary answer was sent as (%s, %v), want its json encoding", got, err)
 	}

@@ -807,6 +807,24 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
+- **Mid-rollout, a request that uses a newer field waits for a newer data
+  node.** A data node runs none of a request carrying a field its build does
+  not declare — a write, or a read asking by a newer argument — and refuses it
+  rather than run it without the field; the asking node tries the next data
+  node. Where none is on the newer build yet, a seat's tool or a person's
+  request answers `fleet_builds_differ`, the engine's record of how a turn
+  ended stays owed (the seat's mail waits on it) until one is, and the refusing
+  data node logs `estate_request_refused` at `WARN` with
+  `disposition=unknown_keys`, naming the keys, once per request it refuses. A
+  request that does not use the field is served as before. **Upgrade the data
+  nodes first**: then no data node refuses a request. That order costs
+  something too: once a newer node writes a newer field, a node not yet
+  upgraded is refused the answers it would carry into another request — a
+  publish keeping a version's files, a view save and the views listed to make
+  one, the catalogue, a project's fields or a datastore's schema sent back
+  whole, a list's query, a Gitlet node's sync of a repository — and answers
+  `fleet_builds_differ` for those until it is upgraded too. See
+  [A build reads what it is asked whole](../concepts/scaling.md#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it).
 - **A roll finishes within the hour, or its wakes are dead-lettered.**
   Every node pulls each domain's wake feed from one durable consumer, so a
   node on the older build that meets a record the newer build wrote — or a

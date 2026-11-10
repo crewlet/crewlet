@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -107,7 +108,12 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // ([claudeCarryFloor]); every resumed run has its transcript and every
 // subagent's thread cut back to its last whole line ([claudeSessionGate]), and
 // renders its system prompt afresh ([claudeSnapshotFloor]), so a later
-// launch's standing instructions are the ones it reads.
+// launch's standing instructions are the ones it reads. The engine packs the
+// session beside a harness that may still be working by the same pack, held to
+// a stricter rule ([claudeHeldTar]) that first sets every file of the session
+// stamped in the box's future to the box's present: a job its box would not
+// end ([ClaudeCode.Pack]), for the read that packs it alone, and a save, to its
+// taker's own path ([ClaudeCode.PackSave]).
 //
 // # Its end, on request
 //
@@ -120,7 +126,10 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // trap: it goes with its harness, as it always did.
 type ClaudeCode struct{}
 
-var _ Harness = ClaudeCode{}
+var (
+	_ Harness = ClaudeCode{}
+	_ saver   = ClaudeCode{}
+)
 
 // NewClaudeCode returns the runner.
 func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
@@ -370,12 +379,17 @@ const claudeSnapshotFloor = "2.1.267"
 // CLAUDE_CODE_TRANSCRIPT_LOCAL_GC on: 2.1.304, the release that fixed it
 // "dropping messages from the saved transcript when the disk filled up while
 // the file was being trimmed" (and 2.1.296 one "when its text held a Unicode
-// line or paragraph separator"). On, a `-p` transcript past 5 MB loses the
-// history before its last compaction — which a resume restores whether or not
-// the file was trimmed — so a session carried between boxes stays near that
-// size rather than growing with every compaction it outlives. On an older
-// release it is UNSET, whatever set it: a trim that loses messages loses them
-// from the session a later run continues.
+// line or paragraph separator"). On, a `-p` run trims its transcript once it
+// is 5 MiB or more and holds a compaction, after each compaction and once 20
+// MiB has been appended since the last trim (a backstop that doubles, up to
+// 160 MiB, after a trim that freed little): it keeps the history from the last
+// compaction on — which is all a resume restores, trimmed or not — writes it
+// to a new file and RENAMES that over the transcript (read in 2.1.310's
+// shipped code), so a session carried between boxes stays near that size
+// rather than growing with every compaction it outlives, and a pack whose tar
+// a trim overlaps sees the transcript's inode change ([claudeHeldTar]). On an
+// older release it is UNSET, whatever set it: a trim that loses messages loses
+// them from the session a later run continues.
 const claudeLocalGCFloor = "2.1.304"
 
 // claudeCarryFloor is the oldest Claude Code release a box continues a session
@@ -596,8 +610,8 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 //
 // NEVER ANYTHING ELSE: not the login (`.credentials.json`) or the harness's own
 // state (`.claude.json`), which the pinned configuration directory holds beside
-// them, and not `file-history/`, a checkpoint of the files the run edited,
-// which carries the checkout rather than the conversation and is off.
+// them, and not `file-history/`, the file-edit snapshots of the files the run
+// edited, which carry the checkout rather than the conversation and are off.
 //
 // NOTHING TO PACK IS SAID NOWHERE: a harness that wrote no transcript — one that
 // failed as it started, a release that files it elsewhere — has no session to
@@ -605,14 +619,43 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 // its start with the engine's words rather than the harness's. A box without tar
 // and gzip, or a pack that failed, is said on the error stream, and the run's
 // own status is never the pack's.
-func claudeCapture(paths Paths) string { return claudePack(paths, paths.SessionStaging()) }
+func claudeCapture(paths Paths) string {
+	return claudePack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+}
 
-// claudePack is [claudeCapture] packing in the staging directory staged: the
-// run's script's own, or the one a pack made on demand works in, that pack's
-// own ([Paths.SessionPackStaging]). ONE PACK for both, so a session packed by
-// the run's script and one packed while the run could not are the same archive
-// of the same files, and each keeps its digest.
-func claudePack(paths Paths, staged string) string {
+// packAt is where one of [claudePack]'s packs is made and kept, and which rule
+// it reads its files by.
+type packAt struct {
+	// staged is the directory the archive is made in, and dest the path it is
+	// moved over whole once it is made: the run's script's own pair
+	// ([Paths.SessionStaging], [Paths.SessionCapture]); a pack on demand's,
+	// its own [Paths.SessionPackStaging] and the same capture for a job that
+	// is over, its own [Paths.SessionPackHeld] for one still working; or a
+	// save's, its own [Paths.SessionSaveStaging] and its taker's
+	// [Paths.SessionSave].
+	staged, dest string
+
+	// working says the pack is made beside a harness that may still be
+	// working, which may rewrite a file as tar reads it: the pack is held to
+	// [claudeHeldTar]'s rule. False is a pack made once the harness is gone:
+	// the run's own end, and one made on demand of a job that is over.
+	working bool
+}
+
+// claudePack is [claudeCapture]'s pack, made in at.staged and moved over
+// at.dest. ONE PACK for every one of them — the run's script's at its end, one
+// made on demand of a job that never packed or that its box would not end, and
+// a save — so each is the same archive of the same files, and each keeps its
+// digest.
+//
+// A PACK MADE ONCE ITS HARNESS IS GONE — the run's own end, and one on demand
+// of a job that is over — takes GNU tar's exit 1 with "file changed as we
+// read it" as a whole archive of what it read: the only writer left is one
+// the harness started that outlived it. A pack of a job that may still be
+// working — one its box would not end, and a save — is made where the harness
+// may still be writing, and is held to [claudeHeldTar]'s rule instead, which
+// reads none of tar's words.
+func claudePack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
@@ -620,26 +663,365 @@ func claudePack(paths Paths, staged string) string {
 	project := "projects/" + claudeProjectDir
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
+	// THE TRANSCRIPT FIRST: [claudeHeldTar] reads back its first operand, the
+	// session's own transcript, on every pack it makes.
 	line(`    set -- %s/"$s".jsonl`, q(project))
 	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" %s/"$s"; fi`,
 		q(cfg+"/"+project), q(cfg+"/"+project), q(project))
 	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" tasks/"$s"; fi`,
 		q(cfg+"/tasks"), q(cfg+"/tasks"))
-	// A FILE THE HARNESS APPENDED TO WHILE TAR READ IT — a pack made on demand
-	// of a job still working — is GNU tar's exit 1 and a complete archive of
-	// what it read, which is the session as it stood; any other failure is
-	// none.
-	line(`    rm -rf %s; if mkdir -p %s && { tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; } && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"), q(staged+"/error"),
-		q(staged+"/capture"), q(paths.SessionCapture()), q(paths.SessionCapture()),
-		q(paths.SessionDigests()), q(staged+"/error"))
-	line(`    rm -rf %s`, q(staged))
+	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
+		q(at.staged+"/capture"), q(cfg), q(at.staged+"/error"), q(at.staged+"/error"))
+	if at.working {
+		tar = claudeHeldTar(cfg, at.staged)
+	}
+	line(`    rm -rf %s; if mkdir -p %s && %s && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, q(at.staged+"/capture"), q(at.dest), q(at.dest),
+		q(paths.SessionDigests()), q(at.staged+"/error"))
+	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
 	line(`  fi`)
 	line(`fi`)
 	return b.String()
 }
+
+// claudeHeldTar is [claudePack]'s tar for a pack made beside a harness that may
+// still be working — a job its box would not end, packed on demand, and a save
+// — packing the operands the pack set ("$@", relative to cfg, the session's
+// own transcript first) into staged/capture, or failing with the one check that
+// refused it, said on one line in staged/error.
+//
+// A SESSION ITS HARNESS IS STILL WRITING IS NOT APPEND-ONLY, and tar's own
+// word cannot be taken for what it read. Claude Code rewrites a task file as
+// its task tool changes it, a subagent's metadata as the subagent ends, and
+// its own transcript too: a trim renames a new file over it
+// ([claudeLocalGCFloor]), and withdrawing a message already written — an
+// abandoned attempt, a refusal, a malformed tool call retried — rewrites it
+// IN PLACE, in the same inode, and can grow it back past its old size
+// (2.1.310's removeTranscriptMessage, read in its shipped code). And tar says
+// little of it: measured on GNU tar 1.35 and BusyBox 1.37.0, a file that grows
+// as it is read is GNU's exit 1 ("file changed as we read it") and busybox's
+// exit 0 with no word, each archive holding the file as tar first saw it; one
+// that SHRINKS is exit 1 from both — GNU padding the member it read with NULs
+// to the size it first saw, busybox cutting the archive inside it and losing
+// every member after — and one shrunk and grown back within the read passed
+// every check of size. So the run's own end's rule — GNU's exit 1 taken
+// wherever "changed as we read it" stands anywhere in its error file — would
+// keep beside a working harness a task file read torn, or padded with NULs,
+// whenever another file's growth said those words, and a file busybox read
+// torn as it was rewritten in place whenever tar said nothing (its cut
+// archive, exit 1 with "short read", that rule refuses); and the scrub keeps
+// a `.json` that is not one value as the text it is.
+//
+// SO THE PACK LISTS WHAT IT READS, BEFORE THE TAR, AND HOLDS IT TO THAT AFTER:
+//
+//   - THE TOOLS it reads the session with beside tar and gzip ([heldTools]),
+//     each named where the box lacks it: without find, say, the wait below
+//     would read the box's clock as never moving, and refuse on that word.
+//   - NO FILE FROM THE BOX'S FUTURE, before the marker: a reference written
+//     in the pack's own staging directory, and every file and directory of
+//     the session that the box's find reads as newer than it — never a link,
+//     which touch would follow out of the session — set to the box's present
+//     (`touch -c`). A box cannot hold a file from its own future, and every
+//     check below would read one as written since the marker until the box's
+//     clock passed it — a task file failing every pack for that long, a
+//     thread read back on each — whatever stamped it: a box whose clock ran
+//     ahead, the session carried here with the times tar restores, or this
+//     box before its clock stepped back. So the pack sets it, the one step
+//     that reads a session file's time, rather than the resume, after which a
+//     clock that steps back would leave every file stamped before the step
+//     ahead of the clock. Once set, such a file is read as every other is: as
+//     written where the harness writes it after the marker, and whole where
+//     its last write came before the marker, tar reading it after. THE
+//     PRESENT, NEVER AN EARLIER TIME: a file the walk sets reads as no older
+//     than any write made before the walk set it, so the walk hides no write
+//     from a marker — not from this pack's, written after the walk, nor from
+//     that of another pack of the session running beside this one, as two
+//     takers' saves, a save and the take of a job still working, or two takes
+//     of one job at once may, each in a staging directory of its own. Set to
+//     the reference's time instead, a walk that ran late, its find held up on
+//     a busy box, would set a file the harness rewrote under the other pack's
+//     tar back behind that pack's marker, and that pack would keep the file
+//     torn. What another pack's walk sets after this pack's marker reads as
+//     written here, which costs this pack, never a torn file. Every earlier
+//     time is left as it is, which costs the session nothing, the harness's
+//     own retention sweep being held off ([claudeRetentionDays]). A find that
+//     compares whole seconds, as busybox's does, leaves a file stamped later
+//     than the reference within the reference's own second, which it never
+//     reads as newer than the marker either, the marker being written in that
+//     second or after it. A file the walk could not set is left in the
+//     future, where the checks below read it as written.
+//   - A MARKER, and then a wait until this box's own find reads a file written
+//     now as newer than it — busybox's find compares whole seconds (measured
+//     on 1.37.0: a file written 200 ms after the marker, in the same second,
+//     is not newer to it), so up to a second there, and a moment on GNU's,
+//     which compares the clock's own grain; past [heldClockWaits] sleeps of a
+//     tenth of a second the box's clock is taken not to move, and the pack
+//     fails. A file written after that wait is newer than the marker to the
+//     very find every check below asks, so no write while tar reads is missed;
+//     one written during the wait may be named too, which costs one pack,
+//     never a torn file.
+//   - A MANIFEST of every file of the session: its inode and its size, from
+//     `ls -i` and `wc -c` — and the sum of the sizes, which past what a kept
+//     session's scrub reads ([heldPlainMax]) fails the pack before the tar,
+//     since the take would refuse that session once packed.
+//   - THE TAR, whose exit 0 or 1 alike is held to every check below, whatever
+//     its error file says; any other exit is the pack's failure, with tar's
+//     first line. Its archive is then listed, through gunzip as every reader
+//     of it will — which refuses busybox's archive cut inside a member it read
+//     shrinking, as busybox's own listing does ("short read") and GNU's
+//     ("Unexpected EOF"); a listing of no file at all, tar's exit 1 over files
+//     it could not read, is refused too.
+//   - THE CHECKS, in this order, the first that fails naming its check and its
+//     file: a file the manifest listed is GONE (the harness's own sweep, or a
+//     trim, can unlink one); a file's inode changed (REPLACED: a trim's
+//     rename, any file moved over another); a file SHRANK; a file the manifest
+//     listed is not in the archive (MISSING: a file tar could not read, which
+//     busybox's tar leaves out with exit 1); a member that is not a `.jsonl`
+//     transcript was WRITTEN since the marker (find's -newer, held to files —
+//     a directory gaining a thread or a spilled result is newer too, and read
+//     so every pack during one would fail wherever a box's tar lists a
+//     directory as find names it: GNU's and busybox's end one in a slash
+//     (measured), which the filter by members alone keeps out, and -type f
+//     keeps out any tar's — and to the archive's members, since a file made
+//     after tar read its directory is not in it); the session's own
+//     transcript, or another `.jsonl` member written since the marker, is not
+//     A BYTE PREFIX of the live file — the member's cksum, read back out of
+//     the archive, against the live file's first as many bytes — which
+//     catches the in-place rewrite grown back, and the shrink grown back that
+//     GNU pads with NULs; and, LAST, a member of the archive is GONE — so a
+//     file removed while the checks ran is refused too: one made after the
+//     manifest, archived and removed, which no check of the manifest reads,
+//     and one written as tar read it and removed before WRITTEN or the
+//     prefix's check looked, neither of which reads a file that is gone.
+//   - EVERY CHECK FAILS CLOSED, and none rests on a tool's word that what it
+//     wrote landed. A tool need not check a write it makes, and one that does
+//     not exits 0 having written nothing, or half, to a full disk — the disk
+//     a harness still writing can fill under the pack. So every list and
+//     every answer a check reads is held in the shell first, read from its
+//     tool through a pipe, which no full disk cuts, and each find's own exit
+//     is held, never that of a pipeline's last command (a find that could
+//     not walk the whole session, an `-exec` that failed among them, leaves a
+//     file out of every check made of its list); then the shell writes it to
+//     the staging directory and reads it back (keep), refusing the pack where
+//     the file's cksum is not that of what was written. A list that cannot
+//     be made or kept, and a comparison grep cannot make — its exit 2, or an
+//     exit 0 whose answer names no line — refuse the pack as a difference
+//     would, never read as nothing having changed: a check resting on a
+//     list's holding a line, or on grep's exit alone, would hold a pack whose
+//     checks compared nothing. And the lists are this pack's alone, in a
+//     staging directory named for it — a pack on demand's
+//     ([Paths.SessionPackStaging]), a save's ([Paths.SessionSaveStaging]) —
+//     so no other pack of the box, another save of its taker's among them,
+//     clears them under it.
+//
+// A `.jsonl` that only grew is the one change taken: a transcript or a
+// subagent's thread appended to while tar read it is archived as tar first
+// saw it, a whole prefix of what the harness wrote, at most its last line torn,
+// which the restore cuts back ([claudeSessionGate]). A pack that fails leaves
+// nothing of its own: its staging directory goes with it, and the archive
+// already at its destination — the last save its taker made — is never moved
+// over; a pack on demand of a job still working moves nothing over the job's
+// capture at all ([Paths.SessionPackHeld]).
+//
+// THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, whatever any list
+// says of it — its proof rests on no list — and of the other `.jsonl` members
+// only one written since the marker. The transcript is the one `.jsonl` of
+// the session Claude Code rewrites in place: withdrawing a message
+// rewrites the session's own file and never a subagent's thread, which it only
+// appends to (2.1.310's removeTranscriptMessage, read in its shipped code). So
+// its proof cannot rest on the box's clock: a clock that steps back while a
+// pack runs can stamp that rewrite before the marker, and a proof made only of
+// what find reads as written would keep the transcript torn mid-file. A thread
+// find reads as older than the marker is the file tar read, unwritten since —
+// a rename over one, a removal and a shrink are refused above on no clock —
+// and a long session holds a hundred subagents' threads, each read back by a
+// decompression of the whole archive: every one would run the pack far past
+// its bound ([sandbox.SessionPackWait]), whose spare minute covers some ten.
+// Like WRITTEN, that narrowing rests on the box's clock: it does not step back
+// while a pack runs, and it stamps the marker, in the work directory, and the
+// session's files, in the configuration directory, at one grain — both
+// directories the engine keeps under the box's home. A CLOCK THAT DOES STEP
+// BACK while a pack runs costs at most a subagent's thread appended to as it
+// was packed and missed by the check, kept with a partial last line — as a
+// thread that only grew always is — which the resume's cut of a torn `.jsonl`
+// removes ([claudeSessionGate]); and, since WRITTEN rests on the same clock, a
+// file that is no transcript written as it was packed — rewritten in place (a
+// task file, a subagent's `.meta.json`) or still being written (a spilled tool
+// result) — kept torn or cut short. Neither WRITTEN nor the narrowing reads as
+// written a file stamped in the box's future before the pack began, which the
+// pack sets to the box's present before its marker (above) — unless the clock
+// steps back after the pack set it and before the marker: then both read it as
+// written, and that one pack refuses it where it is no transcript and reads it
+// back where it is a thread; the next pack sets it to its own present.
+//
+// THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
+// BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
+// sleep is required to take a tenth of a second — every wait the engine's own
+// scripts make sleeps a fraction of a second at a time (end.go's grace, the
+// kill of a job's group, OpenCode's waits for its server) — and a box whose
+// sleep refuses one fails the pack, saying so, rather than run its wait out at
+// once. No awk, and no stat, whose options differ between GNU and BSD. A
+// transcript member is read back out of the archive as a stream, never onto
+// the box's disk: a pack beside a harness that is still writing must not fill
+// the disk under it, and the archive already holds the session once.
+func claudeHeldTar(cfg, staged string) string {
+	q := sandbox.ShellQuote
+	plain := strconv.FormatInt(heldPlainMax, 10)
+	return strings.Join([]string{
+		`( st=` + q(staged),
+		`why() { printf '%s\n' "$*" > "$st/error"; exit 1; }`,
+		// A LIST OR AN ANSWER IS KEPT BY THE SHELL AND READ BACK. lines is its
+		// text as a file holds it, every line ended and nothing for none; keep
+		// writes it to the file $1 and refuses the pack, saying $3, where the
+		// file's cksum is not that of what was written: a write a full disk
+		// lost, or cut short, though the writer was told it landed.
+		`lines() { [ -z "$1" ] || printf '%s\n' "$1"; }`,
+		`keep() { lines "$2" > "$1" && [ "$(cksum < "$1")" = "$(lines "$2" | cksum)" ] || why "$3"; }`,
+		// A COMPARISON THAT CANNOT BE MADE REFUSES: grep's exit 1 is no
+		// difference, and its 0 a difference whose answer names the lines that
+		// differ; its 2 — a list it could not read — and a 0 that names no
+		// line are neither, and a check that took them for "none" would hold a
+		// pack it never compared. The answer, read through a pipe, is kept for
+		// the check that reads it.
+		`differs() { w=$1 o=$2; shift 2; a=$(grep "$@"); r=$?; case $r in ` +
+			`0) [ -n "$a" ] || why "the pack could not compare $w: grep found a difference and named none"; ` +
+			`keep "$o" "$a" "the pack could not compare $w: its answer could not be kept";; ` +
+			`1) ;; *) why "the pack could not compare $w: grep exited $r";; esac; return "$r"; }`,
+		// THE TOOLS.
+		`for c in ` + heldTools + `; do command -v "$c" > /dev/null 2>&1 || why "this box has no $c, which a ` +
+			`pack beside a working harness checks what it packed with"; done`,
+		`cd ` + q(cfg) + ` || why 'the directory the session is filed under could not be entered'`,
+		// NO FILE FROM THE BOX'S FUTURE, set to the box's present before the
+		// marker — never to an earlier time, which could put a write behind
+		// another pack's marker; what the walk could not set stays ahead, and
+		// the checks read it as written.
+		`: > "$st/now" || why "the pack could not write the reference it tells the box's future by"`,
+		`find "$@" ! -type l -newer "$st/now" -exec touch -c {} + 2> /dev/null`,
+		// THE MARKER, and the wait for the box's own find.
+		`: > "$st/marker" && touch "$st/clock" || why 'the pack could not write its marker'`,
+		`i=0; until [ -n "$(find "$st/clock" -newer "$st/marker" 2> /dev/null)" ]; do ` +
+			`[ "$i" -lt ` + strconv.Itoa(heldClockWaits) + ` ] || why "the box's clock did not move: its find ` +
+			`never read a file written now as newer than one written before it, so a file written as the ` +
+			`session was packed could not be told from one written before"; sleep 0.1 || why "this box's ` +
+			`sleep takes no tenth of a second, which the pack's wait for the box's clock counts in"; ` +
+			`i=$((i + 1)); touch "$st/clock"; done`,
+		// THE MANIFEST, and the plaintext it adds up to. The files as find
+		// names them, as tar names its members; their inodes and sizes as ls
+		// and wc print them, compared only with what the same command prints
+		// after the tar. Each list is read through a pipe, refused where its
+		// find exited otherwise than 0 — a find that could not walk the whole
+		// session, or whose `-exec` failed, leaves a file out of every check
+		// made of the list — or where it holds no line, and kept; as every
+		// list below is.
+		`v=$(find "$@" -type f 2> /dev/null) && [ -n "$v" ] || why 'the files of the session could not be listed'`,
+		`keep "$st/files" "$v" 'the files of the session could not be listed'`,
+		`v=$(find "$@" -type f -exec ls -i {} + 2> /dev/null) && v=$(lines "$v" | sed 's/^ *//') && ` +
+			`[ -n "$v" ] || why 'the files of the session could not be listed'`,
+		`keep "$st/inodes" "$v" 'the files of the session could not be listed'`,
+		`v=$(find "$@" -type f -exec wc -c {} + 2> /dev/null) && v=$(lines "$v" | sed -e 's/^ *//' ` +
+			`-e '/^[0-9]* total$/d') && [ -n "$v" ] || why 'the files of the session could not be listed'`,
+		`keep "$st/sizes" "$v" 'the files of the session could not be listed'`,
+		`p=0; while read -r n f; do case $n in ''|*[!0-9]*) why "a file's size could not be read: $f";; esac; ` +
+			`p=$((p + n)); done < "$st/sizes"`,
+		`[ "$p" -le ` + plain + ` ] || why "the files of the session are $p bytes, past the ` + plain +
+			` a kept session's scrub reads, so it would be refused once packed"`,
+		// THE TAR, its words read by nothing but the failure it reports, and
+		// its archive listed. Every grep below reads a file of patterns that
+		// is never empty: busybox's grep reads an empty one as matching every
+		// line, GNU's as matching none, and a check that turned on which grep
+		// a box has would pass on one of them.
+		`tar -czf "$st/capture" "$@" < /dev/null > /dev/null 2> "$st/tar"; t=$?`,
+		`[ "$t" = 0 ] || [ "$t" = 1 ] || why "tar exited $t: $(head -n 1 "$st/tar")"`,
+		`v=$(tar -tzf "$st/capture" < /dev/null 2> /dev/null) || why 'the archive the pack made could not be read back'`,
+		`[ -n "$v" ] || why 'the archive the pack made holds no file'`,
+		`keep "$st/members" "$v" 'the archive the pack made could not be read back'`,
+		// GONE: a file the manifest listed, before REPLACED reads its absence
+		// as another file's inode.
+		`while IFS= read -r f; do [ -e "$f" ] || [ -L "$f" ] || why "a file was removed while the session ` +
+			`was packed: $f"; done < "$st/files" || why "the pack could not read back its list of the session's files"`,
+		// REPLACED.
+		`v=$(find "$@" -type f -exec ls -i {} + 2> /dev/null) && v=$(lines "$v" | sed 's/^ *//') && ` +
+			`[ -n "$v" ] || why 'the files of the session could not be listed again'`,
+		`keep "$st/inodes.after" "$v" 'the files of the session could not be listed again'`,
+		`if differs "the files' inodes before and after tar" "$st/moved" -vxF -f "$st/inodes.after" "$st/inodes"; ` +
+			`then read -r n f < "$st/moved"; why "a file was replaced by another while the session was packed: $f"; fi`,
+		// SHRANK.
+		`v=$(find "$@" -type f -exec wc -c {} + 2> /dev/null) && v=$(lines "$v" | sed -e 's/^ *//' ` +
+			`-e '/^[0-9]* total$/d') && [ -n "$v" ] || why 'the files of the session could not be listed again'`,
+		`keep "$st/sizes.after" "$v" 'the files of the session could not be listed again'`,
+		`if differs "the files' sizes before and after tar" "$st/resized" -vxF -f "$st/sizes.after" "$st/sizes"; ` +
+			`then while read -r n f; do c=$(wc -c < "$f") && [ "$((c))" -ge "$n" ] || why "a file shrank while ` +
+			`the session was packed: $f"; done < "$st/resized" || why 'the pack could not read back the sizes it ` +
+			`compared'; fi`,
+		// MISSING.
+		`if differs "the files it listed with what its archive holds" "$st/missing" -vxF -f "$st/members" ` +
+			`"$st/files"; then read -r f < "$st/missing"; why "a file is not in the archive the pack made: $f"; fi`,
+		// WRITTEN: a member that is not a transcript.
+		`v=$(find "$@" -type f ! -name '*.jsonl' -newer "$st/marker" 2> /dev/null) || ` +
+			`why 'the pack could not list the files written since its marker'`,
+		`keep "$st/written" "$v" 'the pack could not list the files written since its marker'`,
+		`if differs "the files written since its marker with what its archive holds" "$st/rewritten" ` +
+			`-xF -f "$st/members" "$st/written"; then read -r f < "$st/rewritten"; why "a file was written ` +
+			`while the session was packed: $f"; fi`,
+		// NOT A PREFIX: the session's own transcript, the first operand, on
+		// every pack whatever find or any list says of it, and then every
+		// other transcript member written since the marker — their list
+		// compared with the archive only where it names one, so that no grep
+		// reads an empty file of patterns — each read back out of the archive
+		// as a stream. cksum prints the bytes it read beside its sum, so the
+		// member's length is its own word, and an extraction that failed is
+		// told apart from an empty member by a mark its failure empties,
+		// which a pipeline's status cannot say: written before the
+		// extraction, and emptied rather than written by its failure, which
+		// a full disk can never keep from happening.
+		`prefix() { printf x > "$st/read" || why 'the pack could not mark a transcript it reads back'; ` +
+			`a=$( { tar -xzOf "$st/capture" "$1" < /dev/null 2> /dev/null || : > "$st/read"; } | cksum ) && ` +
+			`[ -s "$st/read" ] || why "a transcript could not be read back out of the archive the pack made: $1"; ` +
+			`b=$(head -c "${a#* }" "$1" | cksum) && [ "$a" = "$b" ] || why "a transcript was rewritten in place ` +
+			`while the session was packed, so what the archive holds of it is not the start of the file: $1"; }`,
+		`prefix "$1"`,
+		`v=$(find "$@" -type f -name '*.jsonl' -newer "$st/marker" 2> /dev/null) || ` +
+			`why 'the pack could not list the transcripts it reads back'`,
+		`keep "$st/transcripts" "$v" 'the pack could not list the transcripts it reads back'`,
+		`if [ -n "$v" ] && differs "the transcripts it reads back with what its archive holds" "$st/prefixes" ` +
+			`-xF -f "$st/transcripts" "$st/members"; then while IFS= read -r f; do [ "$f" = "$1" ] || prefix "$f"; ` +
+			`done < "$st/prefixes" || why 'the pack could not read back the transcripts it listed'; fi`,
+		// GONE, LAST: every member of the archive, once every check that
+		// reads a live file has read it.
+		`while IFS= read -r f; do case $f in */) ;; *) [ -e "$f" ] || [ -L "$f" ] || why "a file was ` +
+			`removed while the session was packed: $f";; esac; done < "$st/members" || why 'the pack could not ` +
+			`read back the list of what its archive holds'`,
+		`) 2> /dev/null`,
+	}, "\n")
+}
+
+// heldTools are the tools [claudeHeldTar] reads a session with beside tar and
+// gzip, which [claudePack] asks the box for itself.
+const heldTools = "find ls wc sed grep head cksum touch sleep"
+
+// heldClockWaits is how many sleeps of a tenth of a second [claudeHeldTar]
+// makes, at most, waiting for its box's find to read a file written after its
+// marker as newer than it.
+//
+// FIFTY, five seconds: busybox's find compares whole seconds, so the wait is a
+// second at most on a box whose clock moves, and five is room for a contended
+// box's sleeps to run long; a box whose clock has not moved past that is one
+// whose writes the pack could not order, so it fails rather than packs blind.
+const heldClockWaits = 50
+
+// heldPlainMax is the most plaintext a pack beside a working harness packs
+// ([claudeHeldTar]): the most one reading of an archive yields to a kept
+// session's scrub, [scrubExpansion] times the bound a kept session's archive is
+// held to (executorkeep.SessionMaxBytes), a quarter of a gibibyte. A session
+// whose files add up past it is refused by the take once packed, so it is not
+// packed at all: its tar beside a working harness would cost that harness's box
+// some seconds of a core — a pack runs at about 43 MiB/s on one, measured — and
+// a moment of as much disk, for an archive nothing would keep. A file's size
+// is its plaintext and not quite the tar's, which adds a header to each, so
+// the bound refuses what the scrub would and never more.
+const heldPlainMax = scrubExpansion * executorkeep.SessionMaxBytes
 
 // floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
 func floorParts(version string) (major, minor, patch string) {
@@ -984,15 +1366,42 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into staged, this pack's own staging directory, and over the job's capture,
-// its digest kept — ending [packNothing] where the harness wrote no transcript,
-// and [packFailed] where it did and no archive was made, its error stream
-// saying why ([Runner.PackCapture]).
-func (ClaudeCode) Pack(paths Paths, session, staged string) string {
+// into staged, this pack's own staging directory, and over dest — the job's
+// capture for a job that is over, the pack's own for one still working
+// ([Paths.SessionPackHeld]) — its digest kept, ending [packNothing] where the
+// harness wrote no transcript, and [packFailed] where it did and no archive was
+// made, its error stream saying why ([Runner.PackCapture]).
+//
+// HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
+// working says the job may still be working — one its box would not end, its
+// harness perhaps writing as tar reads — and to the run's own end's where the
+// job is over: killed before its script could pack, lost with its engine, its
+// own pack failed. The take knows which ([sandbox.SessionTake.Pack]); a job
+// that is over has no harness left to write under a pack, and the working
+// rule would cost it the wait for the box's clock, and refuse a file that a
+// process its harness started, outliving it, writes as it packs.
+func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) string {
+	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: working})
+}
+
+// PackSave packs a save of session now, beside a harness that may still be
+// working, for taker ([saver]): the same members as every pack, held to the
+// rule of a pack beside a working harness ([claudeHeldTar]), into staged, this
+// save's own staging directory, and over taker's own path — never the job's
+// capture, which every read of a job that is over takes as its final archive —
+// its digest kept, ending as [ClaudeCode.Pack] does ([Runner.PackSave]).
+func (ClaudeCode) PackSave(paths Paths, session, staged, taker string) string {
+	return claudeOnDemand(paths, session, packAt{staged: staged, dest: paths.SessionSave(taker), working: true})
+}
+
+// claudeOnDemand is a pack the engine makes of session, outside the run's own
+// script, at at: [packNothing] where the box holds no transcript of it,
+// [packFailed] where no archive was made.
+func claudeOnDemand(paths Paths, session string, at packAt) string {
 	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
 	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
 		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(transcript), packNothing) +
-		claudePack(paths, staged) +
+		claudePack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 

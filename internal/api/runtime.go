@@ -275,6 +275,10 @@ type NodeRuntime interface {
 	// a node with no fleet store.
 	SeatPauses() queries.SeatPauseLister
 
+	// AgentAccess reads what each agent may do and where it runs, as its next
+	// turn is told; nil on a node that runs no engine.
+	AgentAccess() queries.AgentAccess
+
 	// IssueReports reads the company's issue reports and what one would say,
 	// nil on a node with no reporter.
 	IssueReports() queries.IssueReportReader

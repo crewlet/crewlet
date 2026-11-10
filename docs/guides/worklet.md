@@ -728,7 +728,8 @@ question it asks:
   **Recent** scope. It is the third way to say which finished work is in an
   answer, beside `show_closed=true` and `show_closed=recent:<duration>`, so
   naming it beside `show_closed` is refused, and an `any=` branch may not
-  carry it.
+  carry it. A date that resolves to the zero instant (`0001-01-01T00:00:00Z`)
+  bounds nothing and is refused: every finished task is `show_closed=true`.
 - **`around=<task>`** asks where one task — its key, a former key or its id —
   sits in this answer, and the answer carries `around: {position, prev, next,
   total_hint}`: its 1-based place, the keys of the tasks drawn before and after
@@ -1162,9 +1163,10 @@ of at most 200 bytes saying what it waits for, which the item reads as
 `wait_reason`. The seat holding it is not handed it before the date and is
 handed it once when the date comes. A wait without a reason, a reason without
 a wait, a wait beside `start`, or a date that has passed is refused with
-nothing written, and `wait_until: null` ends the wait. A `start` moved without
-a reason takes the old reason off, since it said why the item waited until the
-old date.
+nothing written, and `wait_until: null` ends the wait. A `start` moved or
+cleared without a reason takes the old reason off, since it said why the item
+waited until the old date. The item's page shows the reason under its start
+date, as **Waits for** until the date comes and **Waited for** after.
 
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
@@ -1179,7 +1181,12 @@ a **create** there is nothing to clear, so `null` is ignored.
 A value this grammar cannot read is **refused naming the argument**, never
 dropped. Silently ignoring a due date is the worst of the three outcomes: the
 write succeeds, the answer says `applied`, and the task simply has no due date
-— which a model reads as having set one.
+— which a model reads as having set one. So is the zero instant
+(`0001-01-01T00:00:00Z`), which is no date: stored, it would be the most
+overdue task the company ever had. The tracker refuses it too, on a create, on
+an update and on a comment's resolved time, whichever node the write is asked
+from, and a cleared date is said by its own flag (`clear_start`, `clear_due`),
+never by a date.
 
 `my_work` is the call a turn opens with, and it answers **eight lists** rather
 than one: the seat's priorities in the order somebody put them, the work it
@@ -1883,6 +1890,30 @@ and those it stamped permanently one-sided (`final`);
 `tracker_one_sided_repair_failed` (a warning) for an edge whose repair failed
 and is retried on the next pass.
 
+**A task can wait on a pull request** on the company's GitHub: give its URL in
+`waiting_on` (any tab of its page reads as the page itself). It must be under
+an owner the company's GitHub configuration names, its organization or the
+owner of a repository a seat works in; one under any other owner is refused
+naming them. The task reads
+blocked until the pull request merges or closes, and that is recorded on the
+task by the engine, with no agent's turn: a `change_settled` record that keeps
+the pull request among the task's `changes` (its state, when, and whether the
+webhook or the poll learned it), unblocks the task, and tells whoever holds it
+to update it, addressed. The task's status is never moved. The engine learns it
+from GitHub's webhook as it arrives, or else from a fleet poll that asks GitHub
+about at most fifty open pull requests every 15 minutes, through the agents'
+apps' cached tokens, once the pull request settled more than ten minutes ago.
+A rate limit ends a pass where it stood, and the next resumes there. A pull
+request GitHub will not show the apps (deleted, moved, or out of their reach)
+is logged once as `change_poll_unreadable` and asked again after a wait that
+grows from an hour to a day; its tasks stay blocked until a person removes the
+wait.
+Each settle is written once however many deliveries and polls saw it. A wait on
+a pull request has no mirror, is never one-sided, and a pull request cannot be
+made to wait on a task. When the poll keeps settling what no delivery did, the
+advisor says so to the owner as `integration.inbound_silent`
+([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)).
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is
@@ -1961,6 +1992,8 @@ reopening the item makes them wait again. An overtaken question leaves
 `asked_by=`, and an answer without `answers` is inferred among the questions
 still waiting. Its card carries `overtaken` with the reason, and an answer that
 names it is still recorded. A question somebody answered is never overtaken.
+The Inbox says so on a notice about it: the question no longer needs an answer,
+because it was asked again since or its item is finished.
 
 ### Asking for a decision
 
@@ -1976,7 +2009,9 @@ agent) is refused without a `decision`, on both asking tools, and nothing is
 posted. So is an agent's comment that asks (`asks` true) and names a person's
 seat in its words without making them its `ask`: the question would reach them
 as a mention, never among the decisions waiting on them. Naming a team, or a
-person in a comment that asks nothing, is a reference and is posted. A request an agent would make in words ("the merge is yours", "please
+person in a comment that asks nothing, is a reference and is posted. A page
+comment that asks a person it names is refused the same way, pointing at the
+work item the question concerns, since a page comment carries no decision. A request an agent would make in words ("the merge is yours", "please
 run the script") is a choice between the answers it expects, with the one it
 recommends: the person answers with one press, and can still answer in their
 own words through **Something else**. A question between two agent seats may
@@ -2132,6 +2167,11 @@ it.
 **One wake per person per change**, whatever number of reasons name them: the
 first reason in the precedence order wins and the rest are dropped. Somebody
 mentioned on a task they are watching hears that they were mentioned.
+
+**An assignment to whoever already holds the task wakes nobody** when nothing
+else changed with it: there is no change to tell, and a wake would oblige its
+holder to answer a notice that the assignee changed when it did not. A real
+reassignment wakes the new holder once.
 
 **And nothing wakes you for your own write.** The person who made a change is
 dropped from its own wake: being told what you just did is a turn spent on

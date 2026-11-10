@@ -131,7 +131,7 @@ func TestARequestTheFleetDidNotSignRunsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	node := f.nodes["data-a"]
-	write := request{ID: "r-forged", Op: opCreateTask.spec.name, Actor: &swe,
+	write := request{ID: "r-forged", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 		Args:     json.RawMessage(`{"OpID":"op-forged","Task":{"Project":"ENG"}}`),
 		Deadline: time.Now().Add(time.Minute)}
 
@@ -336,7 +336,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 func TestARequestNobodyIsWaitingForRunsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	write := request{Op: opCreateTask.spec.name, Actor: &swe,
+	write := request{Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 		Args: json.RawMessage(`{"OpID":"op-late","Task":{"Project":"ENG"}}`)}
 	for name, req := range map[string]request{
 		"past its deadline": {ID: "r-late", Op: write.Op, Actor: write.Actor, Args: write.Args,

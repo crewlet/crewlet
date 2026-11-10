@@ -611,6 +611,9 @@ func changeLead(meta map[string]string, actor string) string {
 		return "The task was removed" + by + "."
 	case ChangeRestored:
 		return "The task was restored" + by + "."
+	case ChangeLinkSettled:
+		return "A pull request this task waits on was merged or closed. Update the task: " +
+			"its status, what is left, or what follows."
 	case ChangePurged:
 		// THE ONE WITH NO INVERSE, and the line says so: every other kind
 		// here describes something a reader could undo or answer.

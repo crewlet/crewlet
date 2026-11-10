@@ -1927,14 +1927,8 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		FleetSeat: e.FleetSeat,
-		Seats: func() []colleague.Seat {
-			// AND WHAT THE PARTY REGISTRY WITHHOLDS NOW: a person the
-			// directory has suspended is left out of the roster exactly as
-			// an inbound message from them is left unattributed. Their
-			// contact ids resolve through this node's chain, the one
-			// ${VAR} lookup a chart still needs.
-			return builtin.Corpus(e.Company().Org, e.LookupSecret, e.WithheldContacts())
-		},
+		ChangeRef: e.ChangeRef,
+		Seats:     e.seatCorpus,
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
 		// does not rebuild the clone, and a captured chart would render
@@ -2345,6 +2339,13 @@ func leadOfUnit(o *org.Organization, unit *org.Unit) string {
 	return ""
 }
 
+// seatCorpus is the roster a seat's tools read per call, AND WHAT THE PARTY
+// REGISTRY WITHHOLDS NOW: a person the directory has suspended is left out
+// exactly as an inbound message from them is left unattributed.
+func (e *Engine) seatCorpus() []colleague.Seat {
+	return builtin.Corpus(e.Company().Org, e.LookupSecret, e.WithheldContacts())
+}
+
 // pageDeps is the knowledge half, on the same terms.
 func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 	reader, writer, await, ok := e.pageHalves()
@@ -2355,6 +2356,7 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		Reader:           reader,
 		Writer:           writer,
 		Mentions:         seatMentions{org: c.Org},
+		Seats:            e.seatCorpus,
 		DefaultContainer: LiveSeatSpace(e),
 		// THE TOOL-SKILLS CONTAINER, read off the CURRENT epoch for the
 		// reason the defaults are: a write into it is asked for the admin
@@ -2371,6 +2373,10 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 // admin a tool skill takes wherever it arrives from. See
 // [builtin.PageDeps.SkillPage].
 func LiveSkillsContainer(e *Engine) func() string { return e.skillsContainer }
+
+// LiveSeatCorpus is the roster a seat's tools read per call, for the page
+// tools a surface outside this package builds ([builtin.PageDeps.Seats]).
+func LiveSeatCorpus(e *Engine) func() []colleague.Seat { return e.seatCorpus }
 
 // pageHalves is this node's knowledge-base seams, on the terms
 // [Engine.trackerHalves] gives: the router's on every node.

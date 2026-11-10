@@ -767,7 +767,7 @@ func TestAnEmptyBriefIsRefusedWithTheReason(t *testing.T) {
 
 type skillStore struct {
 	skills []learning.Skill
-	used   []string
+	loaded []string
 }
 
 func (s *skillStore) Get(_ context.Context, handle, name string) (learning.Skill, bool, error) {
@@ -789,8 +789,8 @@ func (s *skillStore) List(_ context.Context, handle string, _ learning.ListOptio
 	return out, nil
 }
 
-func (s *skillStore) MarkUsed(_ context.Context, id string, _ time.Time) learning.Use {
-	s.used = append(s.used, id)
+func (s *skillStore) MarkLoaded(_ context.Context, id string, _ time.Time) learning.Use {
+	s.loaded = append(s.loaded, id)
 	return learning.Use{}
 }
 
@@ -825,7 +825,7 @@ func TestASkillLoadsOnlyForItsOwnSeat(t *testing.T) {
 	}
 }
 
-func TestLoadingASkillRecordsThatItWasUsed(t *testing.T) {
+func TestLoadingASkillCountsALoad(t *testing.T) {
 	t.Parallel()
 	// The telemetry is what answers "do agents actually load the skills the
 	// synthesizer drafts, or is the apparent benefit just extra sampling?"
@@ -834,8 +834,8 @@ func TestLoadingASkillRecordsThatItWasUsed(t *testing.T) {
 	}}
 	tool := registered(t, builtin.Deps{Skills: store}, builtin.UseSkillTool)
 	callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"skill_name": "post"})
-	if len(store.used) != 1 || store.used[0] != "s1" {
-		t.Errorf("used = %v", store.used)
+	if len(store.loaded) != 1 || store.loaded[0] != "s1" {
+		t.Errorf("loaded = %v", store.loaded)
 	}
 }
 
@@ -927,6 +927,34 @@ func TestANoteIsKeptAgainstTheDerivedAgentID(t *testing.T) {
 	// what the agent CHOSE to keep from what a worker decided for it.
 	if !strings.Contains(d.wrote[0].Source, builtin.ReflectAndPersistTool) {
 		t.Errorf("source = %q", d.wrote[0].Source)
+	}
+}
+
+// A NOTE SAYS WHAT IT IS ABOUT, AS THE SEAT NAMES IT. The class is stored with
+// the note, company where the seat names none, and one outside the closed set
+// is refused naming the set, never kept as something else.
+//
+// Mutation: drop the class, default it to anything but company, or keep an
+// unknown one, and this goes red.
+func TestANoteSaysWhatItIsAboutAsTheSeatNamesIt(t *testing.T) {
+	t.Parallel()
+	d := &diaryStore{}
+	tool := registered(t, builtin.Deps{Diary: d}, builtin.ReflectAndPersistTool)
+	turn := turnFor(t, "agent-ceo")
+	for _, args := range []map[string]any{
+		{"content": "My box has no browser.", "about": "capability"},
+		{"content": "Deploys go out on Thursdays."},
+	} {
+		if res := callFor(t, tool, turn, args); res.Failed {
+			t.Fatalf("%v failed: %s", args, res.Output)
+		}
+	}
+	if len(d.wrote) != 2 || d.wrote[0].About != learning.AboutCapability || d.wrote[1].About != learning.AboutCompany {
+		t.Fatalf("kept %+v, want a capability note and a company note", d.wrote)
+	}
+	res := callFor(t, tool, turn, map[string]any{"content": "A guess.", "about": "rumour"})
+	if !res.Failed || len(d.wrote) != 2 || !strings.Contains(res.Output, "platform") {
+		t.Errorf("an unknown class answered %+v and kept %d notes, want a refusal naming the set", res, len(d.wrote))
 	}
 }
 

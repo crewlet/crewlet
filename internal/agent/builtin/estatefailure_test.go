@@ -77,6 +77,66 @@ func TestAnEstateNobodyServedIsACondition(t *testing.T) {
 	}
 }
 
+// A REQUEST NO DATA NODE'S BUILD READS WHOLE IS A CONDITION AN ADMINISTRATOR
+// CLEARS. Mid-upgrade, a data node of an older build refuses a request carrying
+// a key it does not declare rather than run it short, and where none of a newer
+// build is up the router answers [estate.ErrUnknownKeys] over the walk's
+// [estate.ErrUnserved]. Read as the estate nobody served it wraps, it was told
+// as a wait — "try again shortly" — which nothing but finishing the upgrade
+// clears: so it is a condition of its own, recorded as one, carrying no
+// Retry-After, and told to a person as the administrator's to act on, in words
+// that carry none of the router's.
+//
+// Mutation: read an estate nobody served before this refusal in the
+// classification and every assertion here goes red.
+func TestARequestNoDataNodesBuildReadsWholeIsAConditionAnAdministratorClears(t *testing.T) {
+	t.Parallel()
+	refused := fmt.Errorf("estate: tracker.create_task: %w", &estate.ErrUnknownKeys{
+		Op: "tracker.create_task", Keys: []string{"args.Task.went_on"}, Nodes: []string{"data-b"},
+		Unserved: &estate.ErrUnserved{Detail: unservedDetail}})
+	if kind, ok := builtin.ConditionKind(refused); !ok || kind != builtin.KindFleetBuildsDiffer {
+		t.Errorf("the refusal is recorded under %q (%v), want %q", kind, ok, builtin.KindFleetBuildsDiffer)
+	}
+	if hint := builtin.RetryAfter(refused, time.Second); hint != 0 {
+		t.Errorf("the refusal is answered with a Retry-After of %s, which no wait honours", hint)
+	}
+	person, ok := builtin.ConditionSentence(refused)
+	if !ok || !strings.Contains(person, "different versions of Crewlet") ||
+		!strings.Contains(person, "administrator") || strings.Contains(person, "went_on") {
+		t.Errorf("a person is told %q (%v), want the fleet's versions and who finishes the upgrade", person, ok)
+	}
+}
+
+// THE FLEET'S TWO BUILDS ARE TOLD IN THE DIRECTION THEY WERE MET. A request no
+// data node's build reads whole ran nowhere; an answer this node's build cannot
+// read whole was given by a data node that ran the request, and it is this node
+// that is behind. One clause for both told a model that nothing ran where the
+// read had run — so each says its own, and the answer's wraps no walk nobody
+// served, since one node served it.
+//
+// Mutation: tell the request's clause for both directions and the answer is
+// said to have run nowhere.
+func TestTheFleetsTwoBuildsAreToldInTheDirectionTheyWereMet(t *testing.T) {
+	t.Parallel()
+	request := fmt.Errorf("estate: tracker.create_task: %w", &estate.ErrUnknownKeys{
+		Op: "tracker.create_task", Keys: []string{"args.Task.went_on"}, Nodes: []string{"data-b"},
+		Unserved: &estate.ErrUnserved{Detail: unservedDetail}})
+	answer := fmt.Errorf("estate: tracker.view_prior: %w", &estate.ErrUnknownKeys{
+		Op: "tracker.view_prior", Keys: []string{"result.went_on"}, Nodes: []string{"data-b"}, Answer: true})
+	if words, ok := builtin.Condition(request); !ok || !strings.Contains(words, "none of it ran") {
+		t.Errorf("a request no data node reads whole is told %q (%v), want that none of it ran", words, ok)
+	}
+	words, ok := builtin.Condition(answer)
+	if !ok || strings.Contains(words, "none of it ran") || !strings.Contains(words, "older build than the data node "+
+		"that answered") {
+		t.Errorf("an answer this node cannot read whole is told %q (%v), want this node's build named as the "+
+			"older one, and nothing said about the request not running", words, ok)
+	}
+	if errors.As(answer, new(*estate.ErrUnserved)) {
+		t.Error("an answer this node cannot read whole reads as an estate nobody served, which a node served")
+	}
+}
+
 // assertUnserved holds one tool's answer to an estate nobody served to what a
 // condition answers.
 func assertUnserved(t *testing.T, what string, got tools.Result) {

@@ -139,14 +139,23 @@ test("a sample record is the exact shape a class would send", async () => {
   });
 });
 
-test("a newer catalogue than the one accepted shares nothing until it is accepted", async () => {
+test("a catalogue other than the one accepted shares nothing until it is accepted", async () => {
   await mount(reading({ share: "auto", accepted: 1, schema: 2 }));
-  expect(screen.getByText("Nothing is shared until you accept the new list")).toBeTruthy();
+  expect(screen.getByText("Nothing is shared until you accept this list")).toBeTruthy();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Accept the new list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Accept this list" }));
   });
   await settled();
   expect(save.mock.calls[0]?.[0]).toEqual({ diagnostics: { insights: { accepted: 2 } } });
+});
+
+// A LIST ACCEPTED ON A NEWER BUILD, after a rollback, shares nothing either.
+test("a catalogue accepted on a newer build is said to share nothing", async () => {
+  await mount(reading({ share: "review", accepted: 3, schema: 2 }));
+  expect(screen.getByText("Nothing is shared until you accept this list")).toBeTruthy();
+  cleanup();
+  await mount(reading({ share: "review", accepted: 2, schema: 2 }));
+  expect(screen.queryByText("Nothing is shared until you accept this list")).toBeNull();
 });
 
 test("a record waiting for review is sent or declined by its class and week", async () => {

@@ -62,9 +62,15 @@ func (w Work) File(ctx context.Context, project, path string,
 	return call(ctx, w.r, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
 }
 
-// Views answers the saved views.
+// Views answers one container's strip of views, to show.
 func (w Work) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
+}
+
+// CarriedViews answers one container's strip of views as a caller saves a view
+// of it again from, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
+	return call(ctx, w.r, opViewsCarried, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
@@ -74,9 +80,15 @@ func (w Work) ExpandedQuery(ctx context.Context, params map[string]any,
 		expandArgs{Params: params, Viewer: viewer, Now: now, Zone: zoneArg(loc)})
 }
 
-// Catalogue answers the workspace catalogue.
+// Catalogue answers the workspace catalogue, to show.
 func (w Work) Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return call(ctx, w.r, opCatalogue, nil, q)
+}
+
+// CarriedCatalogue answers the workspace catalogue a caller sends back whole,
+// read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return call(ctx, w.r, opCatalogueCarried, nil, q)
 }
 
 // Person answers one person's own record.
@@ -119,9 +131,15 @@ func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.Pro
 	return call(ctx, w.r, opProjects, nil, q)
 }
 
-// Project describes one project.
+// Project describes one project, to show.
 func (w Work) Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
 	return call(ctx, w.r, opProject, nil, q)
+}
+
+// CarriedProject describes one project whose declarations a caller sends back
+// whole, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
+	return call(ctx, w.r, opProjectCarried, nil, q)
 }
 
 // Search is the tracker's ranked search, answered by a data node's index. A

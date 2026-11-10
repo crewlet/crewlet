@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // What a turn is given before it starts.
@@ -85,6 +86,9 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedText
+	// WHAT A SEAT'S NOTES ARE HELD TO: this build, and when the seat was last
+	// told its access, read for a memory refresh as a turn's start reads it.
+	src.Build, src.AccessTold = version.String(), e.accessToldAt
 	return src
 }
 
@@ -95,11 +99,15 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
-	told []prefetch.ToldChange,
+	told *toldTurn,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
 		return prefetch.Blocks{}
+	}
+	if told == nil {
+		// A turn told nothing of its access holds nothing back for it.
+		told = &toldTurn{}
 	}
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
@@ -119,8 +127,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// asked carry one answer about who wrote it.
 		Ask: ask,
 		// THE ACCESS CHANGES THE SEAT WAS TOLD, which mark its notes written
-		// before them (capability.go).
-		Told: told,
+		// before them, and when it was last told its access, which holds a
+		// capability note written before it back (capability.go).
+		Told: told.memory, AccessChangedAt: told.accessAt,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
