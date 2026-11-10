@@ -150,6 +150,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
+  "routes/settings/integrations/access/Dialogs.tsx":
+    "modal: an agent's permissions or scope, in their dialogs; the page holds the change",
   "routes/settings/integrations/access/HandoffSheet.tsx":
     "modal: an agent's robot token pasted in its sheet, a credential and never a draft",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",
