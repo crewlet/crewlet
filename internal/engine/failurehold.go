@@ -51,8 +51,6 @@ var failureRules = map[failureKind]failureRule{
 	failureSandboxBilling:  {says: "the sandbox provider refused for billing, twice in a row"},
 	failureModelsRefused: {says: "every model it can use refused its credential, twice in a row; " +
 		"resume it once the credential is fixed", models: true},
-	failureContextExhausted: {says: "its context did not fit its models twice in a row, " +
-		"the second time on a fresh session", models: true},
 }
 
 // whyFailures classifies every [sandbox.Why]: an empty kind is a failure that
@@ -92,6 +90,13 @@ func modelsRefused(err error) bool {
 	return true
 }
 
+// boundToModels is whether kind's failure depends on the seat's models rather
+// than its sandbox; a context that does not fit, which holds only its
+// conversation and so is not in the table, always does.
+func boundToModels(kind failureKind) bool {
+	return kind == failureContextExhausted || failureRules[kind].models
+}
+
 // failureBasis fingerprints the settings kind's failure depends on for handle
 // in c: the seat's models and the company's, or its sandbox and the company's.
 func failureBasis(c *Company, handle string, kind failureKind) (string, bool) {
@@ -103,7 +108,7 @@ func failureBasis(c *Company, handle string, kind failureKind) (string, bool) {
 			continue
 		}
 		settings := []any{role.Sandbox, c.Config.Providers.Sandbox}
-		if failureRules[kind].models {
+		if boundToModels(kind) {
 			settings = []any{role.LLM, c.Config.Providers.LLM}
 		}
 		raw, err := json.Marshal(settings)
