@@ -18,7 +18,7 @@ require (
 	github.com/nats-io/nats.go v1.55.0
 	github.com/nats-io/nkeys v0.4.16
 	github.com/nats-io/nuid v1.0.1
-	github.com/openai/openai-go/v3 v3.95.0
+	github.com/openai/openai-go/v3 v3.96.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/turso-go-platform-libs v0.8.3
 	github.com/yuin/goldmark v1.8.7
