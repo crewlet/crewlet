@@ -257,6 +257,15 @@ func (f *fakeNode) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error
 		Seq: f.codeSeq + 1_000}}, nil
 }
 
+// TurnsMovedCode answers that no turn moved code, or refuses with codeErr.
+func (f *fakeNode) TurnsMovedCode(context.Context, code.TurnsMovedQuery) (map[string]bool, error) {
+	f.note("code.turns_moved")
+	if err := f.codeRefusal(); err != nil {
+		return nil, err
+	}
+	return map[string]bool{}, nil
+}
+
 // ResolveRef answers the ref named for the query at the next position past
 // every one this node committed at — or refuses with codeErr.
 func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
@@ -316,6 +325,10 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 		}},
 		{opCodeRead.spec.name, func() error {
 			_, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos})
+			return err
+		}},
+		{opCodeTurnsMoved.spec.name, func() error {
+			_, err := seam.TurnsMovedCode(ctx, code.TurnsMovedQuery{Turns: []string{"t-1"}, Level: statelog.ReadStale})
 			return err
 		}},
 		{opCodeResolveRef.spec.name, func() error {
@@ -592,6 +605,7 @@ type codeAnswers struct {
 	checked   code.ChecksResult
 	wrote     code.EngineWriteResult
 	previewed code.MergePreviewAnswer
+	moved     map[string]bool
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -692,6 +706,11 @@ func (d *codeDesk) PushOutcome(_ context.Context, q code.OutcomeQuery) (code.Pus
 func (d *codeDesk) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	held, err := d.took(q)
 	return held.read, err
+}
+
+func (d *codeDesk) TurnsMovedCode(_ context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+	held, err := d.took(q)
+	return held.moved, err
 }
 
 func (d *codeDesk) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {

@@ -367,6 +367,25 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 		!strings.Contains(frequent.Why, "turns in every five-hour plan window") {
 		t.Errorf("post-release's frequent note = %+v, want what its fires did and its turns per window", frequent)
 	}
+	// An agent that writes code, work or pages at a vendor does work the
+	// engine keeps no per-turn record of, so its schedules are not judged; one
+	// that only reads there is.
+	for access, judged := range map[config.GitHubAccess]bool{config.GitHubWrite: false, config.GitHubRead: true} {
+		vendor := liveShape(t)
+		for role := range vendor.EachRole() {
+			if role.Seat().Handle() == "sre" {
+				role.Integrations.GitHub = &config.RoleGitHub{Permissions: map[string]config.GitHubAccess{"contents": access}}
+			}
+		}
+		answer = advisor.ReadWithEvidence(advisor.Inputs{Company: vendor, Revision: "r1"}, ev)
+		if got := of(advisor.ClassScheduleUnproductive, "health-check") != nil; got != judged {
+			t.Errorf("with GitHub %s, the health check judged = %v, want %v", access, got, judged)
+		}
+		if f := of(advisor.ClassScheduleFrequent, "post-release"); f == nil ||
+			strings.Contains(f.Why, "In the last 7 days it fired") != judged {
+			t.Errorf("with GitHub %s, post-release's frequent note = %+v, want its fires said only if judged", access, f)
+		}
+	}
 	ev.FiresUnread = true
 	unread := advisor.ReadWithEvidence(advisor.Inputs{Company: c, Revision: "r1"}, ev)
 	for _, f := range unread.Findings {

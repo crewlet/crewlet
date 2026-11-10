@@ -2,6 +2,8 @@ package advisor
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -82,6 +84,50 @@ func placeOfSchedule(c *config.Company, k scheduleKey) (place, bool) {
 	return place{}, false
 }
 
+// writesUnseen reports a seat granted a vendor home for work, where the engine
+// keeps no record of what each turn wrote: GitHub with a write permission,
+// GitLab, Jira or Confluence.
+func writesUnseen(in config.RoleIntegrations) bool {
+	on := func(enabled *bool) bool { return enabled == nil || *enabled }
+	if g := in.GitHub; g != nil && on(g.Enabled) && slices.Contains(slices.Collect(maps.Values(g.Permissions)), config.GitHubWrite) {
+		return true
+	}
+	return in.GitLab != nil && on(in.GitLab.Enabled) || in.Jira != nil && on(in.Jira.Enabled) ||
+		in.Confluence != nil && on(in.Confluence.Enabled)
+}
+
+// unseenWriters is the handle of every seat of c that [writesUnseen].
+func unseenWriters(c *config.Company) map[string]bool {
+	out := map[string]bool{}
+	for role := range c.EachRole() {
+		if writesUnseen(role.Integrations) {
+			out[role.Seat().Handle()] = true
+		}
+	}
+	return out
+}
+
+// seen reports whether every agent p's schedule runs on is outside unseen, so
+// its fires can be judged.
+func (p place) seen(unseen map[string]bool) bool {
+	if p.role != nil {
+		return !unseen[p.role.Seat().Handle()]
+	}
+	for _, r := range p.unit.Unit().Roles {
+		if unseen[r.Handle()] {
+			return false
+		}
+	}
+	return true
+}
+
+// seenSchedule reports whether the schedule k names is in c and its fires can
+// be judged.
+func seenSchedule(c *config.Company, k scheduleKey, unseen map[string]bool) bool {
+	p, ok := placeOfSchedule(c, k)
+	return ok && p.seen(unseen)
+}
+
 // keyOf is the schedule a finding's subject names.
 func keyOf(s Subject) scheduleKey {
 	return scheduleKey{seat: s.Seat, unit: s.Unit, name: s.Schedule}
@@ -94,14 +140,14 @@ func scheduleEvidence(c *config.Company, ev Evidence, found []Finding) []Finding
 	if ev.unread(sourceFires) {
 		return found
 	}
-	tallies := talliesOf(ev.Fires)
+	tallies, unseen := talliesOf(ev.Fires), unseenWriters(c)
 	unproductive := map[scheduleKey]bool{}
 	for k, t := range tallies {
 		if t.fires < minUnproductiveFires || t.moved*100 > movedPercent*t.fires {
 			continue
 		}
 		p, ok := placeOfSchedule(c, k)
-		if !ok {
+		if !ok || !p.seen(unseen) {
 			continue
 		}
 		unproductive[k] = true
@@ -113,7 +159,7 @@ func scheduleEvidence(c *config.Company, ev Evidence, found []Finding) []Finding
 			if unproductive[keyOf(f.Subject)] {
 				continue
 			}
-			if t, ok := tallies[keyOf(f.Subject)]; ok {
+			if t, ok := tallies[keyOf(f.Subject)]; ok && seenSchedule(c, keyOf(f.Subject), unseen) {
 				f.Why += " " + firesSaid(t)
 				f.Evidence = append(f.Evidence, Fact{Key: "fires", Value: int64(t.fires)},
 					Fact{Key: "moved", Value: int64(t.moved)})
@@ -133,7 +179,8 @@ func unproductiveFinding(c *config.Company, p place, t fireTally) Finding {
 		Source: SourceEvidence, Area: AreaSchedules, Subject: p.subject(),
 		Title: fmt.Sprintf("%s ran %d times and changed something %s.", s.Name, t.fires, times(t.moved)),
 		Why: fmt.Sprintf("In the last 7 days each of its %d fires started a turn on the agent's "+
-			"models, and %d of them moved no work: no item changed, only comments or nothing. "+
+			"models, and %d of them moved no work: no work item, page or code changed, only "+
+			"comments or nothing. "+
 			"That is about %s turns in every five-hour plan window. A check that waits for "+
 			"something to happen is better as a work item dated for when to look.",
 			t.fires, t.fires-t.moved, oneDecimal(t.perWindow(Window))),

@@ -163,6 +163,9 @@ type PageReader interface {
 	Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
 		fresh statelog.Freshness) (doclet.Revision, bool, error)
+
+	// TurnsMovedPages is which of a set of turns moved work on the pages.
+	TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error)
 }
 
 // PageWriter is the knowledge base's write side. The author is an argument
@@ -1672,6 +1675,14 @@ var opPageActivity = define("pages.activity", opRead, pagesDomain, false,
 			return doclet.PageActivity{}, errNoHalf
 		}
 		return b.Pages.Activity(ctx, q)
+	})
+
+var opPageTurnsMoved = define("pages.turns_moved", opRead, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+		if b.Pages == nil {
+			return nil, errNoHalf
+		}
+		return b.Pages.TurnsMovedPages(ctx, q)
 	})
 
 type revisionArgs struct {

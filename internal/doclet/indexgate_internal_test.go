@@ -257,6 +257,8 @@ func pageReads(t *testing.T) map[string]pageIndexed {
 	// through the index on exactly its population (replicated 0065), so its
 	// LIMIT stops it at a batch of stale pages rather than after a sort of
 	// every page in the company.
+	out["which of a schedule's turns moved a page"] = seek("pages_history_turn_idx",
+		turnsMovedStatement, `["t-1","t-2"]`, `["comment","watchers"]`)
 	statement, args := search.PageSelection("m", 8, 100)
 	out["the embedding duty's selection"] = pageIndexed{pagePlanned{statement, args},
 		"pages_heads_live_updated_idx", true}

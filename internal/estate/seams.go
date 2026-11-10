@@ -510,6 +510,11 @@ func (p Pages) Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet
 	return call(ctx, p.r, opPageActivity, nil, q)
 }
 
+// TurnsMovedPages answers which of a set of turns moved work on the pages.
+func (p Pages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, p.r, opPageTurnsMoved, nil, q)
+}
+
 // LinkedFrom answers which pages and tasks link to a page, by its id — from a
 // data node whose copies of both the knowledge base and the tracker serve —
 // or [search.ErrIndexBuilding] from one whose index has not finished its
@@ -1381,6 +1386,12 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 // compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
+}
+
+// TurnsMovedCode answers which of a set of turns pushed, opened a change or
+// gave a review.
+func (c CodeSeam) TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, c.r, opCodeTurnsMoved, nil, q)
 }
 
 // Lifecycle asks a data node to decide one lifecycle request — a tool's

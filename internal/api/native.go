@@ -445,6 +445,14 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 	return r.Revision(ctx, pageID, version, fresh)
 }
 
+func (l livePages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.TurnsMovedPages(ctx, q)
+}
+
 // liveBacklinks is which pages link to a page, resolved per question.
 //
 // ITS OWN SOURCE, and a native-half one: the links are an index the engine
