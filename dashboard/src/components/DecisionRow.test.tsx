@@ -17,7 +17,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
-import { DecisionRow, heldCallOf } from "./DecisionRow.tsx";
+import { DecisionRow, HeldCallRow, heldCallOf } from "./DecisionRow.tsx";
 import { AnswerRunButton } from "./writes.tsx";
 
 const answerHeldCall = vi.fn<(id: string, answer: string) => Promise<McpApprovalAnswer>>();
@@ -212,4 +212,56 @@ test("a parked run's answer button answers a held call through the approvals rou
   expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await waitFor(() => expect(answerHeldCall).toHaveBeenCalledWith(heldRun().held_call!.id, "deny"));
+});
+
+// A HELD CALL SAYS THE DECISION IT CARRIES OUT, so its approver reads the call
+// as part of a plan a person already chose rather than a new question; a call
+// no answer woke says nothing of the kind.
+test("a held call names the decision it carries out", async () => {
+  const call = {
+    id: "h-1",
+    seat: "swe",
+    server: "tracker",
+    tool: "tr_close_issue",
+    at: "2026-11-01T11:50:00Z",
+    item: null,
+    args: undefined,
+    acting: {
+      key: "ENG-9",
+      question: "Ship the migration?",
+      choice: "Ship it",
+      answered_by: "jane",
+    },
+  };
+  render(
+    <Answering>
+      <ToastProvider>
+        <LayerHost>
+          <ul className="decision-list">
+            <HeldCallRow call={call} now={NOW} />
+          </ul>
+        </LayerHost>
+      </ToastProvider>
+    </Answering>,
+  );
+  await afterMicrotasks();
+  expect(
+    screen.getByText(
+      "It carries out a decision on ENG-9: jane answered \u201cShip the migration?\u201d with \u201cShip it\u201d.",
+    ),
+  ).toBeTruthy();
+  cleanup();
+  render(
+    <Answering>
+      <ToastProvider>
+        <LayerHost>
+          <ul className="decision-list">
+            <HeldCallRow call={{ ...call, acting: null }} now={NOW} />
+          </ul>
+        </LayerHost>
+      </ToastProvider>
+    </Answering>,
+  );
+  await afterMicrotasks();
+  expect(screen.queryByText(/It carries out a decision/)).toBeNull();
 });

@@ -1494,6 +1494,8 @@ asked, the held call names that decision: the question and the option chosen
 ride the held call (`acting`) and its question's context ("It carries out a
 decision on ENG-9: jane answered ... with ..."), and the approvals list says
 it, so whoever approves the call reads a step of an answer already given. The
+approval card on the server's page in Settings › MCP & tools draws the same
+sentence above the call. The
 answers that woke the turn ride the run's row, so a later job of the same turn
 names them too. A turn woken by anything else, or by an agent's answer, names
 no decision.
