@@ -395,10 +395,11 @@ func (r *Runner) checkoutName() string {
 // ([BridgedCall.HeldID]) is in neither list. A later attempt at an answer, the
 // first's relaunch refused after it made the call, reads that call in the
 // round's log, placed after every call the log had taken (internal/sandbox's
-// withApproved), so past any save point: listed beside the lead that tells
-// what it returned, it was told twice, the second time as a call of its own. A
-// call an earlier answer of the round approved is told as any call is, since
-// no lead of this relaunch tells it.
+// withApproved), so past the save point of every capture taken before it was
+// made — one placed after it holds it, and lists it nowhere: listed beside the
+// lead that tells what it returned, it was told twice, the second time as a
+// call of its own. A call an earlier answer of the round approved is told as
+// any call is, since no lead of this relaunch tells it.
 //
 // THE LISTS AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS
 // ([ledger.Format]), fitted together: the meta-tools it skips left out, an

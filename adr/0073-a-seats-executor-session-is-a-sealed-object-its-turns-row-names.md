@@ -1695,12 +1695,13 @@ after it made the call, by the floor of the session it continues or by every
 member sitting out, the answer is attempted again, and the later attempt reads
 the call in the round's log: appended once its result was recorded, or, where
 that append never landed, added off the row (`sandbox.BridgeLog.withHeld`),
-either way numbered after every call the log had taken, so after any capture's
-save point. Its lead tells the call from its mark; and the calls after a kept
-session's save point, and every call of the round told to the copy in the
-asking job's own box that may have been cut off, listed it again. One call was
-told twice in one brief, the second time under the words of calls the session
-is not known to hold.
+either way numbered after every call the log had taken, so after the save point
+of every capture taken before the call was made (one placed after it counts it,
+and lists it nowhere). Its lead tells the call from its mark; and the calls
+after a kept session's save point, and every call of the round told to the copy
+in the asking job's own box that may have been cut off, listed it again. One
+call was told twice in one brief, the second time under the words of calls the
+session is not known to hold.
 
 **Told by the lead alone.** The runner's account of a call carries the held call
 an approved one was made for (`runner.BridgedCall.HeldID`, off
@@ -1722,9 +1723,12 @@ recorded with its result (`runner.HeldPrior.Unread`, from internal/engine's
 making the call stopped before its result was recorded, which was not so, and
 the line the list now leaves out was the only word that the call was made.
 
-**What it costs.** Nothing: the brief is shorter by the one line. A fresh run
-carrying a round on is told none of the round's calls, as before, so it never
-listed the call.
+**What it costs.** Nothing. The brief is shorter by the call's line, and by the
+whole section of calls after the save where that call was the only one listed —
+as it is where the later attempt continues the capture the asking job left when
+it parked, placed by its own read: that save point counts every call before
+the approved one, the held call among them. A fresh run carrying a round on is
+told none of the round's calls, as before, so it never listed the call.
 
 **Mid-upgrade.** Nothing on the wire changes: the log already names the held
 call an approved call was made for (`held_id`). A later attempt an older build
