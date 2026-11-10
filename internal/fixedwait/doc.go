@@ -278,7 +278,13 @@
 //     clock-step claim the gate does not count:
 //     `if b.Equal(a) { t.Fatal(...) }`, holding a second stamp off the
 //     first, passes only once the wall clock has moved between them, as a
-//     clock step's verdict does.
+//     clock step's verdict does. And so is an Equal used as a proxy for
+//     kept, unchanged or not re-stamped, read off the same entity's
+//     wall-clock stamp before and after:
+//     `if !after.Equal(before) { t.Fatal(...) }` passes a rebuild or a
+//     re-stamp that lands inside one tick of the clock that stamped both.
+//     Either is decided only by a stated instant, a clock the test
+//     controls, or the order or count the code records.
 //
 // A bound on measured elapsed time was another, until it reddened main
 // (#736): it is the fourth shape now, counted at time.Since, time.Until and a
