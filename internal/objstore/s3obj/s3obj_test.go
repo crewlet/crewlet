@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -373,13 +374,14 @@ func TestAWriteTheProviderHasNoRoomForIsRefusedAsFull(t *testing.T) {
 			srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
 		}, "XMinioStorageFull", ""},
 		{"the completion", large, func(srv *s3fake.Server) {
-			var landed sync.WaitGroup
-			landed.Add(3)
-			srv.PartHook = func(int32) { landed.Done() }
-			go func() {
-				landed.Wait()
-				srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
-			}()
+			// FILLED INSIDE THE THIRD PART'S HOOK, before that part is answered:
+			// every part passed the fill check, and no completion can come first.
+			var landed atomic.Int32
+			srv.PartHook = func(int32) {
+				if landed.Add(1) == 3 {
+					srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+				}
+			}
 		}, "XMinioStorageFull", "CompleteMultipartUpload"},
 		{"the upload's start", large, func(srv *s3fake.Server) {
 			srv.FailNext(1, http.StatusInsufficientStorage, "XMinioStorageFull")
