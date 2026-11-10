@@ -139,18 +139,25 @@ func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 // that sits unhydrated for thirty seconds on every such restart.
 //
 // Both are asserted from a checkpoint of nothing (the rows are gone) and from
-// one partway (an older copy), and both are read off the broker rather than
-// the clock: the consumer the reopen leaves is one the reopen CREATED, and the
-// replay is that consumer's own first delivery of each record — never the
-// earlier one handing a record over again once its ack window ran out, which
-// a consumer kept ahead of the rows does for the delivered ones and never for
-// the acknowledged. The replay used to be held to a third of the window by
-// the test's clock, which a runner that lost ten seconds in the reopen failed.
+// one partway (an older copy), and both are read off what the broker records
+// rather than off a clock: the consumer the reopen leaves is one the reopen
+// CREATED, and the replay is that consumer's own first delivery of each
+// record — never the earlier one handing a record over again once its ack
+// window ran out, which a consumer kept ahead of the rows does for the
+// delivered ones and never for the acknowledged. The consumer's own delivery
+// count says both at once, since every delivery moves it, a redelivery
+// included: a consumer the reopen created has made exactly the deliveries of
+// the replay, and one it kept had made five before the reopen and counts on
+// from there. The replay used to be held to a third of the window by the
+// test's clock, which a runner that lost ten seconds in the reopen failed; and
+// the rebuild was read off the consumer's creation instant, the broker's clock
+// at each create, which two creates inside one tick of it stamp alike.
 //
 // Mutation: keep a consumer that has delivered or acknowledged past the rows,
 // and what the node is missing is not handed over; keep the delivered one
 // under an ack window of a second, and it hands them over again a second late
-// — which the clock passed, as a replay well inside a third of the window.
+// — which the clock passed, as a replay well inside a third of the window,
+// and which the delivery count does not: ten deliveries for a replay of five.
 func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -205,7 +212,6 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 
 			// THE ROWS WENT BACKWARDS: this run's checkpoint is below
 			// what the consumer delivered.
-			before := createdAt(t, first)
 			again, err := q.DomainConsumer(t.Context(), stream, "node-a", tc.after)
 			if err != nil {
 				t.Fatalf("reopen at %d: %v", tc.after, err)
@@ -222,21 +228,19 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 			// REBUILT, AND REPLAYED BY WHAT WAS REBUILT: a consumer the
 			// reopen made, whose own deliveries are exactly the records
 			// the node is missing, each once. Its delivery count holds
-			// every delivery, a redelivery included.
+			// every delivery, a redelivery included, so it is what tells a
+			// rebuilt consumer from a kept one: the kept one had already
+			// made five, and counts on from there.
 			info, err := consumerInfo(t, again)
 			if err != nil {
 				t.Fatalf("info: %v", err)
 			}
-			if info.Created.Equal(before) {
-				t.Fatalf("a consumer that had delivered through 5 was kept for a node "+
-					"whose rows are at %d (created %s, as before the reopen)",
-					tc.after, info.Created)
-			}
 			if info.Delivered.Consumer != uint64(want) {
 				t.Fatalf("the replay of %d record(s) took %d deliveries of the consumer "+
-					"the reopen left — a record handed over again once the %s ack "+
-					"window ran out, rather than by a rebuild",
-					want, info.Delivered.Consumer, domainConsumerAckWait)
+					"the reopen left — a consumer that had delivered through 5 kept for "+
+					"a node whose rows are at %d, a record handed over again once the "+
+					"%s ack window ran out, rather than by a rebuild",
+					want, info.Delivered.Consumer, tc.after, domainConsumerAckWait)
 			}
 		})
 	}
