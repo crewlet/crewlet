@@ -2461,6 +2461,14 @@ person signed in as themselves always has a seat. See [Humans
 in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
 for the binding.
 
+**No notice names a credential.** A token or a service account bound to no seat
+files and watches items like anybody, and the item lists it as its reporter or
+a watcher, but no notice is written for it under any reason. It holds no turn,
+and its inbox is nobody's to read, so a notice to it would be read by nobody.
+The writer leaves every credential out of the recipients a change offers, and
+everybody else the change concerns hears as before. A token bound to a seat
+writes as that seat and hears as it.
+
 **Asked of me is answered where it stands.** Each question put to the person
 is drawn as the landing screen's "Needs your decision" draws it: grouped
 under who asked, with the role they are asked in and one line naming what the
