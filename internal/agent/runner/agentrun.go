@@ -217,8 +217,12 @@ type Continuation struct {
 	// what carries it on; where the job's harness is not known to have ended
 	// its own run, that the session was cut off or may have been, every call
 	// of the round and every note the turn has read, any of which such a copy
-	// may lack ([Runner.inPlaceAfter]); and the notes [AgentRunRequest.Notes]
-	// carries, which no copy has read.
+	// may lack, and where it did, the calls the round's log took late, which
+	// no copy is known to hold ([Runner.inPlaceAfter]); and the notes
+	// [AgentRunRequest.Notes] carries, which no copy has read. The floor of a
+	// launch that continues the copy counts all of it where a capture measured
+	// the copy's context, and is the static floor where none did
+	// (internal/engine's continuedFloor).
 	SessionID string
 	Brief     string
 
@@ -233,6 +237,15 @@ type Continuation struct {
 	// in its box, which its floor is made of. Zero where no capture measured
 	// it, which holds the launch to the static floor.
 	ContextTokens int64
+
+	// BriefRead is how many calls the round's log had taken at the read
+	// every brief of the launch was built from ([Resume.BridgedRead]): the
+	// launch's opening of the job's log marks every call of the round the log
+	// took after it late ([BridgedCall.Late]) — calls of the job before that
+	// landed while the relaunch was readied, which no brief told — but the
+	// call a person approved, which the lead tells. NIL marks none: a launch
+	// built from no such read.
+	BriefRead *int
 }
 
 // SessionDecision is how a launch decided its run takes up a session, told
@@ -447,8 +460,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
 		// middle among them: the session continued is that round's job's.
 		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
-			absorbed: r.cfg.Resume.Absorbed}
-		briefs.kept = r.keptSession(ctx, basis, collected, built, fresh, "").led(r.sendBackLead(notes))
+			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
+		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
+		// approved after the save is told among the rest.
+		briefs.kept = r.keptSession(ctx, basis, collected, "", built, fresh, "").led(r.sendBackLead(notes))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -574,6 +589,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	began := time.Now()
 	logged := bridgedLedger(bridgedCalls)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
+	read := r.cfg.Resume.BridgedRead
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
@@ -594,7 +610,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	round := roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed}
+	round := roundCalls{bridged: bridgedCalls, elided: elided, lateElided: r.cfg.Resume.LateElided,
+		absorbed: absorbed}
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -638,7 +655,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// BUILT HERE, all but its lead ([Runner.keptSession]): telling the session
 	// the calls after its save can call the seat's auxiliary model, which the
 	// budget asked below must count, and the lead says what the call a person
-	// approved returned, which is made only after that.
+	// approved returned, which is made only after that — so neither brief
+	// lists that call, which a later attempt at the answer finds in the
+	// round's log, beside the lead ([carried.tellsHeld]).
 	// THE PROBE IS ASKED OF EVERY RELAUNCH, a round lost a second time
 	// included: it continues nothing, but the session the probe read is the
 	// only record of what the round's jobs did in their boxes, and its run is
@@ -646,7 +665,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	basis := r.sessionBasis(ctx)
 	var kept *keptBrief
 	if carry.keeps() {
-		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
+		kept = r.keptSession(ctx, basis, round, carry.tellsHeld(), built, fresh, carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
 	// that carries the round on in the job's box rather than from its kept
@@ -754,6 +773,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// it whether the turn kept it or not: the floor of a launch
 			// that continues it in its box.
 			ContextTokens: basis.ContextTokens,
+			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
+			// opening marks late what the log took after it: the job before's
+			// calls that landed while this relaunch was readied, the call a
+			// person approved but excepted, which the lead tells.
+			BriefRead: &read,
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
@@ -1238,9 +1262,11 @@ func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 // under the call that spawned them.
 const runRound = 1
 
-// sinceAnswer is the calls of a round made after a person's answer last
-// carried it on: those placed after `answered` ([Resume.Answered]), or every
-// call where no answer has.
+// sinceAnswer is the calls of a round its submission may be read from — what
+// the collection replays ([replaySubmission]) and what says a lost job's round
+// was already submitted ([Resume.carriedRound]): those made after a person's
+// answer last carried it on, placed after `answered` ([Resume.Answered]), or
+// every call where no answer has — and none the log took late.
 //
 // ONLY WHAT THE RUN DID KNOWING THE ANSWER. A run carried on by a person's
 // answer keeps the calls it made before the question (ADR-0068), and a
@@ -1252,13 +1278,21 @@ const runRound = 1
 // may be gone from it, and the asking job may have called `submit_work` after
 // its question as well as before it. A call with no place (zero) is not after
 // any answer.
+//
+// AND NEVER A LATE CALL ([BridgedCall.Late]): the log took it after its job
+// was replaced, so after the cut was taken — its place, which its own job's
+// session gave it, can fall past the cut though it was made before the answer
+// — and after the brief of the job carrying the round on was built. That job
+// was never told it, and every later continuation of the round is told it as
+// no submission of the round ([prompts.AfterSave.LateSubmission]): the
+// round's submission is the one a run carrying the round on makes. Replayed, a
+// late submission would stand for the carried-on run's work, or stand over it
+// where its place sorts after; read as the round's, a lost round would be
+// collected on it rather than carried on.
 func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
-	if answered <= 0 {
-		return bridged
-	}
 	out := make([]BridgedCall, 0, len(bridged))
 	for _, call := range bridged {
-		if call.Seq > answered {
+		if !call.Late && (answered <= 0 || call.Seq > answered) {
 			out = append(out, call)
 		}
 	}

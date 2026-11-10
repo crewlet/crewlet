@@ -185,6 +185,19 @@ type ResumeRequest struct {
 	// off it.
 	Bridged BridgeLog
 
+	// BridgedRead is how many calls the round's log had taken at the read
+	// Bridged was made from ([BridgeLog.Appends]), before the call a person
+	// approved that it is still owed was added to it: every call of the round
+	// a brief built from Bridged can tell. A relaunch that carries the round
+	// on hands it to its launch ([Continuation.BriefRead]), whose opening
+	// marks every call of the round the log took after it late
+	// ([BridgeCall.Late]): one of the replaced job's, landing while the
+	// relaunch was readied, which none of its briefs told. Counted BEFORE the
+	// held call is added, which the log takes for good only at its own append
+	// or the opening, numbered after any call that landed in between — so a
+	// count that included it would leave the first of those unmarked.
+	BridgedRead int
+
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
 	// — it is published on the executor's phase record. Empty on a person's
@@ -3721,9 +3734,12 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	c.frameBegins(run.TurnID)
 	calls, err := c.pending.BridgeLog(ctx, run)
 	if err == nil {
+		// HOW MANY CALLS THE READ SAW, before the held call is added: what
+		// a relaunch built from it can tell ([ResumeRequest.BridgedRead]).
+		read := calls.Appends()
 		calls = calls.withHeld(run)
 		err = c.resume.Resume(ctx, ResumeRequest{
-			Run: run, Bridged: calls, Answer: answer, Success: success, Trigger: trigger,
+			Run: run, Bridged: calls, BridgedRead: read, Answer: answer, Success: success, Trigger: trigger,
 			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 			Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
 			InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,

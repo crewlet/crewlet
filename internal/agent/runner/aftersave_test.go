@@ -32,16 +32,24 @@ import (
 // lists bridged and counts elided without listing them.
 func afterSaveBrief(t *testing.T, through int, bridged []runner.BridgedCall, elided []ledger.Elided) string {
 	t.Helper()
+	basis := keptBasis
+	basis.Through = through
+	return lostRelaunch(t, basis, runner.Resume{Bridged: bridged, Elided: elided}).Session.Brief
+}
+
+// lostRelaunch is the request a lost job's round is carried on with, continuing
+// the kept session basis names, where the round's log is as round says of it —
+// its parked state and its loss the case's own.
+func lostRelaunch(t *testing.T, basis runner.SessionBasis, round runner.Resume) runner.AgentRunRequest {
+	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
-	basis := keptBasis
-	basis.Through = through
 	relauncher := &probingLauncher{basis: basis}
-	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
+	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		resume: &runner.Resume{State: parked.State, Bridged: bridged, Elided: elided, Lost: &lost}})
+		resume: &round})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -49,7 +57,7 @@ func afterSaveBrief(t *testing.T, through int, bridged []runner.BridgedCall, eli
 	if again.Session == nil {
 		t.Fatal("the lost job's round continues no kept session")
 	}
-	return again.Session.Brief
+	return again
 }
 
 // numbered is a call the run made, the seq'th the bridge admitted and the

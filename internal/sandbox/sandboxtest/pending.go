@@ -172,7 +172,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
 		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
 		{"ABridgedRunsSpendIsTheNewestTotal", testABridgedRunsSpendIsTheNewestTotal},
-		{"ABridgedCallOutlivingItsJobIsNotTheNextJobs", testABridgedCallOutlivingItsJobIsNotTheNextJobs},
+		{"ABridgedCallOutlivingItsRoundIsNotTheNextRounds", testABridgedCallOutlivingItsRoundIsNotTheNextRounds},
 		{"ABridgedCallNamingNoJobIsNotRecorded", testABridgedCallNamingNoJobIsNotRecorded},
 		{"ABridgedCallAfterItsJobsClaimStaysOnItsJob", testABridgedCallAfterItsJobsClaimStaysOnItsJob},
 		{"ARowALaterJobMovedOnReadsNoneOfItsCalls", testARowALaterJobMovedOnReadsNoneOfItsCalls},
@@ -188,6 +188,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, bytesCases...)
 	cases = append(cases, refusalCases...)
 	cases = append(cases, standbyCases...)
+	cases = append(cases, lateCases...)
+	cases = append(cases, briefReadCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -213,7 +215,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			tc.fn(t, store, runs)
 		})
 	}
-	for _, tc := range stagedLogCases {
+	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
@@ -3259,18 +3261,24 @@ func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore)
 	}
 }
 
-// A CALL FROM A JOB THAT IS OVER IS NOT THE NEXT JOB'S. Every append names the
-// job its session was opened for, and once the row has moved on — a second
-// launch on the same turn — a call still in flight from the first is not
-// recorded, neither its log entry nor its spend, because the second job's
-// resume would pay for it as its own. The second job starts with nothing
-// bridged.
+// A CALL FROM A ROUND THAT IS OVER IS NOT THE NEXT ROUND'S. Every append names
+// the job its session was opened for and the round that job works in, and once
+// the row has moved on to a new round — a second launch on the same turn that
+// carries no round on, as a send-back's does — a call still in flight from the
+// first is not recorded, neither its log entry nor its spend: the new round
+// numbers its own calls, and its job's resume would pay for the call as its
+// own. The second job starts with nothing bridged. (A relaunch that carries
+// the round on lists such a call, marked late, and pays it to nobody:
+// lateCases.)
 //
 // BOTH SHAPES, and the second is the one a session that learned its job from
 // the row got wrong: a session whose earlier call landed, and a session whose
 // FIRST call is the late one — a delegated worker the harness opened with, still
 // running when the reviewer relaunched. Neither may land.
-func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.PendingStore) {
+//
+// Mutation: list a late call by its round whatever the log's round, and it
+// lands in the new round.
+func testABridgedCallOutlivingItsRoundIsNotTheNextRounds(t *testing.T, s sandbox.PendingStore) {
 	for _, tc := range []struct {
 		name   string
 		landed bool
@@ -3282,9 +3290,10 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 			ctx := t.Context()
 			r := run("t-bridge-pin-" + fmt.Sprint(tc.landed))
 			first := mustLaunched(t, s, r)
+			round := mustGet(t, s, r.TurnID).Round
 			if tc.landed {
 				if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-					Launch: first, Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1),
+					Launch: first, Round: round, Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1),
 				}); err != nil || !recorded {
 					t.Fatalf("the first job's own call = %v, %v", recorded, err)
 				}
@@ -3298,13 +3307,16 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 				t.Fatalf("a fresh job starts with the last one's bridged spend: %+v", got)
 			}
 
+			if got := mustGet(t, s, r.TurnID).Round; got == round {
+				t.Fatalf("the second launch carried round %q on — the case exercises nothing", round)
+			}
 			recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-				Launch: first, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(4)})
+				Launch: first, Round: round, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(4)})
 			if err != nil {
 				t.Fatalf("a late call was an error: %v", err)
 			}
 			if recorded {
-				t.Error("a call from a job that is over was recorded on the next one")
+				t.Error("a call from a round that is over was recorded on the next one")
 			}
 			got := mustLogged(t, s, r.TurnID)
 			if len(got.Log.Calls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {

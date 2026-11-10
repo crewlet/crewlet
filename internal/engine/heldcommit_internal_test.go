@@ -83,8 +83,11 @@ func heldAttemptOn(t *testing.T, store *sandbox.CoordStore, seal *sandbox.CallSe
 // its claim is given back and the answer attempted again. The claim that takes
 // it again reads the row as the first attempt left it, and the commit the
 // runner is handed answers from that read: the result recorded, or, where the
-// first attempt stopped before it recorded one, unknown; and the call's
-// arguments stay sealed, since nothing makes it again. The runner asks this
+// first attempt stopped before it recorded one, unknown — and, where the node
+// carrying the run on cannot open the result recorded, made all the same, with
+// whether the tool reported a failure off the call's entry recorded with it,
+// since the round's log lists the call made and the lead is its only telling;
+// and the call's arguments stay sealed, since nothing makes it again. The runner asks this
 // before it holds the call to the tools and skills it carries the run on with
 // ([runner.HeldCommit.Marked]), so a guard or a tool that changed in between
 // never tells the run a call it made was not made. The mark's own answer
@@ -93,16 +96,24 @@ func heldAttemptOn(t *testing.T, store *sandbox.CoordStore, seal *sandbox.CallSe
 // Mutation: have Marked answer false for a claim that read the call marked, or
 // drop its result, and the later attempt is not answered from the mark; open
 // the arguments of a marked call, and they are opened for a call that never
-// runs again.
+// runs again; answer a result this node cannot open as no result, or without
+// whether the tool failed, and the run is told the call may never have been
+// made.
 func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		records bool
-		want    runner.HeldPrior
+		records, failed bool
+		// elsewhere is a later attempt on a node holding no key the first's
+		// result was sealed under.
+		elsewhere bool
+		want      runner.HeldPrior
 	}{
 		"the first attempt recorded what the call returned": {records: true,
 			want: runner.HeldPrior{Made: true, Result: sandbox.HeldResult{Output: "posted"}}},
 		"the first attempt stopped before it recorded anything": {},
+		"the first attempt recorded a failure this node cannot open": {records: true, failed: true,
+			elsewhere: true, want: runner.HeldPrior{Made: true, Unread: true,
+				Result: sandbox.HeldResult{Failed: true}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -124,9 +135,9 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 				t.Fatalf("Begin = %+v, %v, want this mark the first", prior, err)
 			}
 			if tc.records {
-				if err := first.Commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{
-					Output: "posted", Origin: tools.Origin("vendor"), Server: "vendor",
-					Source: tools.Origin("vendor")}); err != nil {
+				if err := first.Commit.Record(ctx, sandbox.HeldResult{Output: "posted", Failed: tc.failed},
+					toolloop.ToolResult{Output: "posted", Failed: tc.failed, Origin: tools.Origin("vendor"),
+						Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
 					t.Fatalf("Record: %v", err)
 				}
 			}
@@ -136,7 +147,11 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 				t.Fatalf("ReleaseClaim = %v, %v", ok, err)
 			}
 
-			again := heldAttemptOn(t, store, seal, "run-1", launch)
+			opens := seal
+			if tc.elsewhere {
+				opens = sandbox.NewCallSeal(valueRing(t, "k2"))
+			}
+			again := heldAttemptOn(t, store, opens, "run-1", launch)
 			if prior, marked := again.Commit.Marked(ctx); !marked || prior != tc.want {
 				t.Fatalf("the later attempt's claim reads %+v (marked %v), want %+v off the mark",
 					prior, marked, tc.want)
