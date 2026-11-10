@@ -153,3 +153,55 @@ func TestAPageActorCrossesTheWireAsItWasStated(t *testing.T) {
 		}
 	}
 }
+
+// A PAGE WRITE CARRIES WHOM IT WAS WRITTEN FOR WHERE IT MAY WAKE AN AGENT, AND
+// NOWHERE ELSE (ADR-0109), as its decide proves from the record's own Notify.
+// A page an agent creates in a container offers the container's lead, whom
+// only the parser's chart names, so it always carries, however few watch it.
+// An agent's comment that asks nothing wakes only the askers its thread
+// awaits: with none it carries nothing and stays at the version main reads,
+// however many people watch the page, and as a reply to an agent's open ask
+// it carries.
+//
+// Mutation: drop the arm for a change that offers the lead, and the page
+// carries nobody; carry on every Notify, and the comment that asks nothing
+// carries ada.
+func TestAPageWriteCarriesWhomItWasWrittenForWhereItMayWakeAnAgent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := agent("dev")
+	forAda.WrittenFor = types.ForTurn(ada)
+	expect := func(what string, want *types.WorkingFor, version int) {
+		t.Helper()
+		record, err := doclet.Decode(r.lastRecord())
+		if err != nil {
+			t.Fatalf("decode %s: %v", what, err)
+		}
+		if !reflect.DeepEqual(record.WorkingFor, want) || record.V != version {
+			t.Errorf("%s is recorded written for %+v at version %d, want %+v at %d",
+				what, record.WorkingFor, record.V, want, version)
+		}
+	}
+
+	r.write(forAda, doclet.NewPage{Title: "Runbook for ada", Body: "prose"})
+	expect("the page dev made for ada in ENG", ada, 4)
+
+	page := r.write(author("jane"), doclet.NewPage{Title: "Jane's notes", Body: "prose"})
+	if _, _, err := r.store.Comment(t.Context(), forAda, page.Page.ID,
+		doclet.NewComment{Body: "noted", Asks: ptr(false)}); err != nil {
+		t.Fatalf("dev remarks on jane's page: %v", err)
+	}
+	expect("dev's remark that asks nothing", nil, 3)
+
+	ask, _, err := r.store.Comment(t.Context(), agent("qa"), page.Page.ID,
+		doclet.NewComment{Body: "@dev is this current?", Mentions: []string{"dev"}, Asks: ptr(true)})
+	if err != nil {
+		t.Fatalf("qa asks dev: %v", err)
+	}
+	if _, _, err := r.store.Comment(t.Context(), forAda, page.Page.ID,
+		doclet.NewComment{Body: "it is", ReplyTo: ask.ID, Asks: ptr(false)}); err != nil {
+		t.Fatalf("dev answers qa for ada: %v", err)
+	}
+	expect("dev's reply to qa's open ask", ada, 4)
+}

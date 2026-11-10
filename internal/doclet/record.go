@@ -269,11 +269,13 @@ type MutationRecord struct {
 	// credential it would read as a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
 
-	// WorkingFor is whom an [AuthorAgent] record that wakes somebody was
+	// WorkingFor is whom an [AuthorAgent] record that may wake an agent was
 	// written for (ADR-0109): whoever the turn that wrote it worked for,
-	// composed from that turn's own bound ceiling, and absent on every other
-	// record: an agent's write made for nobody else, every other author's,
-	// and one that wakes nobody (a gate among them). NOT APPLIED to any row:
+	// composed from that turn's own bound ceiling, on a record whose Notify
+	// proves an agent other than the writer may wake ([Actor.recordedFor]),
+	// and absent on every other record: an agent's write made for nobody
+	// else, every other author's, and one no agent wakes for (a gate among
+	// them). NOT APPLIED to any row:
 	// the change feed reads it, and the turn the record wakes works for them
 	// (notify.FirstPartyWriter), never for the writing seat, which holds every
 	// app. Version 4: an older build retains a record carrying it rather than

@@ -3,10 +3,12 @@
 -- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
 -- CREWLET_TRACKER_LOG stream by its one applier, as the rest of tracker_history.
 --
--- `working_for` is the carrier an agent's record that wakes somebody rode
--- (`MutationRecord.WorkingFor`, record version 12, ADR-0109), as its JSON, and
--- NULL on every other row: a record that carries none, every record below
--- version 12, and every row applied before this migration ran. It lands in the
+-- `working_for` is the carrier an agent's record rode (`MutationRecord.WorkingFor`,
+-- record version 12, ADR-0109): every creation and assignment, which the work
+-- pickup reads to learn whom an item's work is for, and any other record that
+-- may wake an agent. It is held as the carrier's JSON, and NULL on every other
+-- row: a record that carries none, every record below version 12, and every
+-- row applied before this migration ran. It lands in the
 -- build that introduces the carrier, before anything reads it, because a
 -- replicated migration runs on each node when it opens and not at a log
 -- position: a column a later build added and filled from version-12 records

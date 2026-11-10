@@ -215,11 +215,13 @@ type MutationRecord struct {
 	TurnID     string     `json:"turn_id,omitempty"`
 	Chain      []string   `json:"chain,omitempty"`
 
-	// WorkingFor is whom an [AuthorAgent] record that wakes somebody was
-	// written for (ADR-0109): whoever the turn that wrote it worked for,
-	// composed from that turn's own bound ceiling, and absent on every other
-	// record: an agent's write made for nobody else, every other author's,
-	// and one that wakes nobody (an erase and a prune among them, which no
+	// WorkingFor is whom an [AuthorAgent] record that routes to somebody
+	// ([Notify.Recipients]) was written for (ADR-0109): whoever the turn that
+	// wrote it worked for, composed from that turn's own bound ceiling, and
+	// absent on every other record: an agent's write made for nobody else,
+	// every other author's, and one that routes to nobody, a silent message
+	// whose named seats were all held back included (an erase and a prune
+	// among them, which no
 	// versioned field may ride). The change feed reads it, and the turn the
 	// record wakes works for them (notify.FirstPartyWriter), never for the
 	// writing seat, which holds every app. KEPT ON THE MESSAGE A POST WRITES

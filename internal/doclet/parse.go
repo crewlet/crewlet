@@ -116,29 +116,13 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	base := p.inbound(record)
 	actor := record.Actor
 
-	// THE TRACKER'S RULE AT ITS SMALLEST (internal/routing): two reasons in
-	// precedence order and a chain of one lead to fall back on. A mention
-	// outranks a watch, so a watcher who is also named hears that they were
-	// named, and hears it once.
-	var b routing.Builder[string]
-	b.AddAll(record.Notify.Mentions, ViaMention, true)
-	b.AddAll(record.Notify.Awaiting, ViaThread, false)
-	// THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted once at
-	// write time — so this can never forget to, and a handle that unwatched
-	// is not woken by a set that still remembers them.
-	b.AddAll(record.Notify.Recipients, ViaWatcher, false)
-	// AN ORDINARY SAVE NOBODY FOLLOWS falls back on nobody. A wiki fills up
-	// with pages nobody watches, and waking a lead for every one of them is
-	// how a lead learns to ignore the knowledge base entirely — so only a
-	// change [LeadWorthy] names offers the container's lead, and Route keeps
-	// that copy only when nobody named survived.
 	container := record.Notify.Container
-	offered := container != "" && LeadWorthy(record.Notify.Kind)
+	offered := offersLead(record.Notify)
 	lead := ""
 	if offered {
 		lead = p.leads[ContainerKey(container)]
-		b.Fallback(ViaLeadFallback, lead)
 	}
+	candidates := pageCandidates(record.Notify, lead)
 
 	// THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT. The
 	// lead map is built from one epoch's org and this parser outlives that
@@ -153,7 +137,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// in their own container, like anybody saving a page they watch, has
 	// nothing to learn from the change they just made.
 	refused := 0
-	heard := routing.Heard(b.Candidates(), employs(reg, &refused), actor, nil)
+	heard := routing.Heard(candidates, employs(reg, &refused), actor, nil)
 	routed := routing.Waking(heard)
 	if agentReference(record) {
 		routed = peopleAndAskers(routed, reg, record.Notify.Awaiting)
@@ -223,9 +207,71 @@ func employs(reg *notify.Registry, refused *int) func(string) bool {
 // wakes only the agents that asked in its thread, while the people it reaches
 // are told as before (ADR-0113). An unstated one routes as it always did.
 func agentReference(record MutationRecord) bool {
-	n := record.Notify
-	return record.ActorKind == AuthorAgent && n.Asks != nil && !*n.Asks &&
+	return referenceOnly(record.ActorKind, record.Notify)
+}
+
+// referenceOnly is [agentReference] over what a writer's decide holds: an
+// agent's comment or edit that states it asks nothing.
+func referenceOnly(kind AuthorKind, n *Notify) bool {
+	return kind == AuthorAgent && n != nil && n.Asks != nil && !*n.Asks &&
 		(n.Kind == ChangeComment || n.Kind == ChangeCommentEdited)
+}
+
+// pageCandidates are a change's candidates in precedence order, from its Notify
+// alone, with lead the container's lead its chart names, or none.
+//
+// THE TRACKER'S RULE AT ITS SMALLEST (internal/routing): two reasons in
+// precedence order and a chain of one lead to fall back on. A mention outranks
+// a watch, so a watcher who is also named hears that they were named, and
+// hears it once. THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted
+// once at write time — so this can never forget to, and a handle that
+// unwatched is not woken by a set that still remembers them.
+//
+// ONE BUILDER for the parser, which routes by it, and for the store's decide,
+// which asks it whether an agent other than the actor may wake
+// ([mayWakeAnAgent]) with no lead, which only the parser's chart can name.
+func pageCandidates(n *Notify, lead string) []routing.Candidate[string] {
+	var b routing.Builder[string]
+	b.AddAll(n.Mentions, ViaMention, true)
+	b.AddAll(n.Awaiting, ViaThread, false)
+	b.AddAll(n.Recipients, ViaWatcher, false)
+	if offersLead(n) {
+		b.Fallback(ViaLeadFallback, lead)
+	}
+	return b.Candidates()
+}
+
+// offersLead reports a change that falls back on its container's lead. AN
+// ORDINARY SAVE NOBODY FOLLOWS falls back on nobody: a wiki fills up with
+// pages nobody watches, and waking a lead for every one of them is how a lead
+// learns to ignore the knowledge base entirely, so only a change [LeadWorthy]
+// names offers the lead, and Route keeps that copy only when nobody named
+// survived.
+func offersLead(n *Notify) bool { return n.Container != "" && LeadWorthy(n.Kind) }
+
+// mayWakeAnAgent reports whether a change by actor may wake an agent other than
+// actor (ADR-0109), proved at decide time from its Notify alone
+// ([Actor.recordedFor]):
+//
+//   - a change that offers its container's lead always may: the lead is the
+//     parser's chart's to name, which the decide cannot see;
+//   - an agent's comment or edit that asks nothing wakes only the people it
+//     reaches and the askers its thread awaits ([Parser.Parse]), so it may
+//     where the thread awaits anybody but actor;
+//   - any other change may where anybody but actor is offered, since every
+//     offered handle the roster still holds wakes.
+func mayWakeAnAgent(n *Notify, actor Actor) bool {
+	switch {
+	case n == nil:
+		return false
+	case offersLead(n):
+		return true
+	case referenceOnly(actor.Kind, n):
+		return slices.ContainsFunc(n.Awaiting, func(h string) bool { return h != actor.Handle })
+	}
+	return slices.ContainsFunc(pageCandidates(n, ""), func(c routing.Candidate[string]) bool {
+		return c.Hears(actor.Handle, nil)
+	})
 }
 
 // peopleAndAskers keeps the routed people and the agents that asked in the

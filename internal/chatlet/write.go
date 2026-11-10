@@ -483,16 +483,23 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 // recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
-// or why this actor may write none: an agent's carrier on a record that wakes
-// somebody, nobody on one that wakes nobody (a narration, an erase and a prune
-// among them, which every build reads), and a refusal for an agent that
+// or why this actor may write none: an agent's carrier on a record that routes
+// to somebody ([Notify.Recipients]), the only records a later turn reads to
+// learn whom it works for; nobody on any other, a narration, an erase and a
+// prune among them, which every build reads; and a refusal for an agent that
 // states nobody, or for any other kind carrying somebody
 // ([types.WrittenFor.For]).
 //
-// ASKED OF EVERY RECORD, quiet or not, in the one builder every gesture shares
-// ([decide]): the rule is the actor's, and an agent's actor whose builder
-// forgot whom its turn works for is a bug however its next record happens to
-// route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
+// DECIDED BY THE RECIPIENTS, which the write path routed the record to in the
+// decide's own snapshot and which every seat it wakes is among, never by
+// whether the message was silent: a silent message answering an asker still
+// wakes them. A seat the routing held back ([Notify.Held]) is woken by
+// nothing, so it does not count.
+//
+// ASKED OF EVERY RECORD, whether it carries or not, in the one builder every
+// gesture shares ([decide]): the rule is the actor's, and an agent's actor
+// whose builder forgot whom its turn works for is a bug however its next
+// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
 // ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
 // older node never sends.
 func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
@@ -500,7 +507,7 @@ func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chatlet: %s's write: %w", a.Name(), err)
 	}
-	if notify == nil {
+	if notify == nil || len(notify.Recipients) == 0 {
 		return nil, nil
 	}
 	return carrier, nil

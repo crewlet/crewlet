@@ -211,3 +211,68 @@ func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 		}
 	}
 }
+
+// A MESSAGE CARRIES WHOM IT WAS WRITTEN FOR WHERE IT ROUTES TO SOMEBODY, AND
+// NOWHERE ELSE (ADR-0109): the records a later turn reads to learn whom it
+// works for are the ones it wakes, and which seats it wakes is its record's
+// recipients, never whether the message was silent. An agent's silent message
+// that names a colleague holds the colleague back and wakes nobody, so it
+// carries nothing and stays at the version every older build reads, held
+// seats and all; a silent reply that answers the colleague's open ask wakes
+// the asker, so it carries; and an edit that adds a mention to a silent
+// message wakes nobody either.
+//
+// Mutation: decide by silent() rather than by the recipients, and the answer
+// carries nobody; carry on every Notify, and the silent message and its edit
+// carry ada.
+func TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := seat("pm", "run-1")
+	forAda.WrittenFor = types.ForTurn(ada)
+	room := r.room(forAda, "launch", "pm", "eng", "jane")
+	ctx := t.Context()
+
+	if _, err := r.store.Post(ctx, keyed(forAda, requested("k-silent")), room.Channel.ID,
+		chatlet.NewMessage{Body: "@eng for the record", Mentions: []string{"eng"}}); err != nil {
+		t.Fatalf("pm says something silent for ada: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); rec.WorkingFor != nil || rec.V > 2 || rec.Notify == nil || len(rec.Notify.Held) == 0 {
+		t.Errorf("pm's silent message is recorded written for %+v at version %d, holding %v, want nobody "+
+			"at 2 or below, holding eng", rec.WorkingFor, rec.V, rec.Notify)
+	}
+
+	plain, err := r.store.Post(ctx, keyed(forAda, requested("k-plain")), room.Channel.ID,
+		chatlet.NewMessage{Body: "for the record"})
+	if err != nil {
+		t.Fatalf("pm says something for ada: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Edit(ctx, keyed(forAda, requested("k-edit")), room.Channel.ID, plain.Message.ID,
+		chatlet.EditMessage{Body: "@eng for the record", Mentions: []string{"eng"}}); err != nil {
+		t.Fatalf("pm edits a mention into its silent message: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); rec.WorkingFor != nil || rec.V > 2 {
+		t.Errorf("pm's edit naming eng, which wakes nobody, is recorded written for %+v at version %d, "+
+			"want nobody at 2 or below", rec.WorkingFor, rec.V)
+	}
+
+	ask, err := r.store.Post(ctx, keyed(seat("eng", "run-e"), requested("k-ask")), room.Channel.ID,
+		chatlet.NewMessage{Body: "@pm is the deploy done?", Mentions: []string{"pm"}, Asks: true})
+	if err != nil {
+		t.Fatalf("eng asks pm: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Reply(ctx, keyed(forAda, requested("k-answer")), room.Channel.ID, ask.Message.ID,
+		chatlet.NewMessage{Body: "yes, it is out"}); err != nil {
+		t.Fatalf("pm answers eng for ada: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); !reflect.DeepEqual(rec.WorkingFor, ada) || rec.V != 3 {
+		t.Errorf("pm's silent answer to eng's ask is recorded written for %+v at version %d, want ada at 3",
+			rec.WorkingFor, rec.V)
+	}
+}

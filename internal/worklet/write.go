@@ -529,39 +529,65 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 }
 
 // recordedApps are the apps a record carries beside its actor
-// ([MutationRecord.ActorApps]): the writer's own, on a record that wakes
-// somebody, and nothing on one that wakes nobody. Only a wake is read for them
-// — the turn it starts is bounded by them — and a record that wakes nobody
-// stays at the base version every build reads: a gate (an eviction) is read
-// by every build there will ever be.
-func (w *Writer) recordedApps(notify *Notify) []iam.Grant {
-	if notify == nil {
+// ([MutationRecord.ActorApps]): the writer's own on a record a later turn reads
+// to learn whom it works for ([Writer.carries]), and nothing on any other.
+// Asked by the same rule as [Writer.recordedFor], because the turn a record
+// wakes or picks up is bounded by both, and a record a turn never reads stays
+// at the version every build reads.
+func (w *Writer) recordedApps(carries bool) []iam.Grant {
+	if !carries {
 		return nil
 	}
 	return slices.Clone(w.ActorApps)
 }
 
 // recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
-// or why this writer may write none: an agent's carrier on a record that wakes
-// somebody, nobody on one that wakes nobody (for [Writer.recordedApps]'
-// reason: only a wake reads it, and a record that wakes nobody stays at the
-// version every build reads), and a refusal for a writer acting as an agent
-// that states nobody, or as anybody else carrying somebody
-// ([types.WrittenFor.For]).
+// or why this writer may write none: an agent's carrier on a record a later
+// turn reads to learn whom it works for ([Writer.carries]), nobody on any
+// other, which stays at the version every build reads, and a refusal for a
+// writer acting as an agent that states nobody, or as anybody else carrying
+// somebody ([types.WrittenFor.For]).
 //
-// ASKED OF EVERY RECORD, quiet or not, because the rule is the actor's: an
-// agent's writer whose builder forgot whom its turn works for is a bug however
-// its next record happens to route, and refusing it only where a record woke
-// somebody would let it pass every test that never wakes anybody.
-func (w *Writer) recordedFor(notify *Notify) (*types.WorkingFor, error) {
+// ASKED OF EVERY RECORD, whether it carries or not, because the rule is the
+// actor's: an agent's writer whose builder forgot whom its turn works for is
+// a bug however its next record happens to route, and refusing it only where
+// a record carried would let it pass every test that never wakes anybody.
+func (w *Writer) recordedFor(carries bool) (*types.WorkingFor, error) {
 	carrier, err := w.writtenFor.For(iam.ActorKind(w.ActorKind))
 	if err != nil {
 		return nil, fmt.Errorf("worklet: a writer acting as %q: %w", w.Actor, err)
 	}
-	if notify == nil {
+	if !carries {
 		return nil, nil
 	}
 	return carrier, nil
+}
+
+// carries reports whether a record is one a later turn reads to learn whom it
+// works for (ADR-0109), so it carries the writer's carrier and apps:
+//
+//   - EVERY CREATION AND EVERY ASSIGNMENT, whatever it wakes now: the work
+//     pickup reads an item's creation row and its last assignment to learn
+//     whom the work it hands a seat is for (ADR-0112), long after the record
+//     woke anybody or nobody. An assignment is a record of kind
+//     [ChangeAssignee] (a reassertion that moves nothing included) or one
+//     whose patch moves the assignee, whatever kind it ends with
+//     (assigns, which only the decide that holds the current row can tell);
+//   - ANY OTHER RECORD only where its own Notify proves an agent other than
+//     the actor may be woken by it ([mayWakeAnAgent]).
+//
+// NEVER A RECORD EVERY BUILD MUST READ — a gate, a barrier, a trimmed marker,
+// a generation — which no versioned field may ride ([RecordEnvelope.readByEveryBuild]).
+func (w *Writer) carries(subject Subject, op OpKind, kind ChangeKind, assigns bool,
+	notify *Notify) bool {
+
+	switch {
+	case RecordEnvelope{Subject: subject, Op: op}.readByEveryBuild():
+		return false
+	case op == OpCreate, kind == ChangeAssignee, assigns:
+		return true
+	}
+	return mayWakeAnAgent(notify, w.Actor)
 }
 
 // origin is the origin a create states: the writer's own, and none where the
@@ -1302,8 +1328,12 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 			}
-			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
-				charged, notify, at)
+			// AN ASSIGNMENT WHATEVER ITS KIND: a status move that takes the
+			// item is recorded under `status`, which outranks `assignee`, and
+			// it is still the row the pickup reads for whom the work is for.
+			assigns := charged.Assignee != nil && *charged.Assignee != current.Assignee
+			decision, err := w.decideAssigning(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
+				charged, notify, at, assigns)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -2196,6 +2226,16 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
 	payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
+	return w.decideAssigning(ctx, tx, stamp, subject, op, kind, scope, opID, payload, notify, at, false)
+}
+
+// decideAssigning is [Writer.decide] for a record that may move an item's
+// assignee whatever its kind, saying whether it does (assigns): a task patch,
+// whose decide alone holds the row the patch is compared against.
+func (w *Writer) decideAssigning(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
+	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
+	payload any, notify *Notify, at time.Time, assigns bool) (statelog.Decision, error) {
+
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
 	}
@@ -2223,10 +2263,12 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 			"empty one resolves to the workspace and files its deferral where "+
 			"no project-scoped probe looks", op, subject, subject.Kind)
 	}
-	writtenFor, err := w.recordedFor(notify)
+	carries := w.carries(subject, op, kind, assigns, notify)
+	writtenFor, err := w.recordedFor(carries)
 	if err != nil {
 		return statelog.Decision{}, err
 	}
+	apps := w.recordedApps(carries)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("worklet: encode the %s payload "+
@@ -2243,9 +2285,9 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		Mutation:  body,
 		Actor:     w.Actor,
 		ActorKind: w.ActorKind,
-		ActorApps: w.recordedApps(notify),
+		ActorApps: apps,
 		// THE HISTORY ROW KEEPS THEM from this version on (ADR-0112).
-		ActorAppsKept: len(w.recordedApps(notify)) > 0,
+		ActorAppsKept: len(apps) > 0,
 		// THE NOTICE ROWS KEEP THE STATEMENT from this version on.
 		NoticeAsksKept: notify != nil && notify.Snapshot.CommentAsks != nil,
 		// AND WHETHER IT WOKE EACH RECIPIENT, from this version on, where it

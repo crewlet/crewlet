@@ -560,15 +560,17 @@ func (a Actor) operatorApps(notify *Notify) []iam.Grant {
 }
 
 // recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
-// or why this actor may write none: an agent's carrier on a record that wakes
-// somebody, nobody on one that wakes nobody (for [Actor.operatorApps]'
-// reason), and a refusal for an agent that states nobody, or for any other
-// kind carrying somebody ([types.WrittenFor.For]).
+// or why this actor may write none: an agent's carrier on a record its Notify
+// proves may wake an agent other than the actor ([mayWakeAnAgent]), the only
+// records a later turn reads to learn whom it works for, nobody on any other,
+// which stays at the version every build reads, and a refusal for an agent
+// that states nobody, or for any other kind carrying somebody
+// ([types.WrittenFor.For]).
 //
-// ASKED OF EVERY RECORD, quiet or not, and in the one builder every write
-// shares ([Store.decide]): the rule is the actor's, and an agent's actor whose
-// builder forgot whom its turn works for is a bug however its next record
-// happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
+// ASKED OF EVERY RECORD, whether it carries or not, and in the one builder
+// every write shares ([Store.decide]): the rule is the actor's, and an agent's
+// actor whose builder forgot whom its turn works for is a bug however its next
+// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
 // ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
 // older node never sends.
 func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
@@ -576,7 +578,7 @@ func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("doclet: %s's write: %w", a.Name(), err)
 	}
-	if notify == nil {
+	if !mayWakeAnAgent(notify, a) {
 		return nil, nil
 	}
 	return carrier, nil
