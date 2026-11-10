@@ -197,7 +197,9 @@ type AfterSave struct {
 	// does not list is no estimate. A call an older version appended in a
 	// fleet mid-upgrade carries no number, so where such a call is listed it
 	// may be counted here as well as listed — an over-count, held to the
-	// calls the record dropped at all, never an under-count.
+	// calls the record dropped at all, never an under-count. So may a late
+	// call the record dropped past the save, counted here by its number and
+	// again under LateDropped.
 	Dropped int
 
 	// Tally is the record's line for every call it dropped
@@ -229,15 +231,13 @@ type AfterSave struct {
 
 	// LateDropped is how many calls the record took late and then dropped
 	// from the middle of a long run's record (sandbox.BridgeLog.LateElided),
-	// counted in Late's section ([droppedLate]), beside Tally, where they are
-	// the only dropped calls the session lacks: the copy of a session its
-	// job's own box holds where its harness ended its own run, which holds
-	// every other call its record dropped (internal/agent/runner's
-	// inPlaceAfter). Said under the words of calls after a save, they would
-	// be calls the session's own run made after it was saved, which neither
-	// is true of. A session told the calls after a point counts the late
-	// ones it dropped among Dropped instead, beside the other calls dropped
-	// past that point.
+	// counted in Late's section ([droppedLate]) whatever the session's save
+	// point, beside Tally where no count of calls after the save carries it:
+	// a dropped call keeps no mark and no number, so no point can be read
+	// against it. Said under the words of calls after a save, they would be
+	// calls the session's own run made after it was saved, which no late call
+	// is. One past the save point is counted among Dropped as well, by its
+	// number: an over-count, never an under-count.
 	LateDropped int
 }
 
@@ -248,8 +248,8 @@ type AfterSave struct {
 // session cut off, as calls it may already show ([AfterSave.Interrupted]) —
 // and then, in a section of its own, the calls that finished only after the run
 // that made them was replaced ([AfterSave.Late]), and how many more such calls
-// the record dropped where it counts them there ([AfterSave.LateDropped]). ""
-// where there is none of either.
+// the record dropped ([AfterSave.LateDropped]). "" where there is none of
+// either.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if since := calledSince(after); since != "" {

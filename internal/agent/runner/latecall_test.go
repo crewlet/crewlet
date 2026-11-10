@@ -223,23 +223,23 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 // call of the round the log took after the job that made it was replaced —
 // here an earlier job's worker that finished after this job opened, which this
 // job's brief never told — under the late calls' own words, a submission among
-// them as none of the round's, once each. Where the job's harness ended its own
-// run, its copy holds every other call of the round — here its job's own, and
-// the rest its job's brief told — so it is told the late ones alone, with how
-// many the log dropped from its middle and the round's tally, and nothing that
-// says it was or may have been cut off, nor the notes the turn has read, which
-// it holds; where it was cut off, every call of the round, the late ones apart
-// from the rest. Where the job's box is gone, which no launch continues in,
-// nothing of it is built, whatever its harness's end. All of it is in the
-// brief the launch continues the copy with, which the floor of that launch
-// counts where a capture measured the copy.
+// them as none of the round's, once each, and how many of them the log dropped
+// from its middle, whatever the harness's end. Where the job's harness ended its
+// own run, its copy holds every other call of the round — here its job's own,
+// and the rest its job's brief told — so it is told the late ones alone, with
+// the round's tally, and nothing that says it was or may have been cut off, nor
+// the notes the turn has read, which it holds; where it was cut off, every call
+// of the round, the late ones apart from the rest. Where the job's box is gone,
+// which no launch continues in, nothing of it is built, whatever its harness's
+// end. All of it is in the brief the launch continues the copy with, which the
+// floor of that launch counts where a capture measured the copy.
 //
 // Mutation: tell an own run's copy nothing, read a late call as one it holds,
 // tell a cut-off copy's late calls among the round's other calls, leave the
-// late submission's line out, leave the dropped late calls uncounted, tell an
-// own run's copy it was or may have been cut off or the notes the turn has
-// read, or build an own run's telling where its box is gone, and a case goes
-// red.
+// late submission's line out, leave the dropped late calls uncounted or count
+// them under the late calls' words only for an own run's copy, tell an own
+// run's copy it was or may have been cut off or the notes the turn has read, or
+// build an own run's telling where its box is gone, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	t.Parallel()
 	const lateHeading = "## Calls that finished after the run that made them was replaced"
@@ -286,7 +286,7 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 				}
 				apart := brief[at:]
 				for _, want := range []string{"an earlier job's late issue", "an earlier job's late submission",
-					"does NOT stand as this work's submission"} {
+					"does NOT stand as this work's submission", "(+1 further such call,"} {
 					if !strings.Contains(apart, want) || strings.Count(brief, want) != 1 {
 						t.Errorf("the copy is not told %q once, apart under the late calls' words:\n%s", want, brief)
 					}
@@ -299,9 +299,9 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 								"untrue of it:\n%s", not, brief)
 						}
 					}
-					if !strings.Contains(apart, "(+1 further such call,") || !strings.Contains(apart, "slack_read") {
-						t.Errorf("a copy whose harness ended its own run is not told the late call its log "+
-							"dropped, with the round's tally:\n%s", brief)
+					if !strings.Contains(apart, "slack_read") {
+						t.Errorf("a copy whose harness ended its own run is not told the round's tally beside the "+
+							"late call its log dropped:\n%s", brief)
 					}
 					return
 				}

@@ -356,15 +356,22 @@ func (r *Runner) checkoutName() string {
 // in the order the bridge admitted them — the ones it took after that read,
 // with how many more it took after the read and dropped from its middle and
 // the round's tally of every call it dropped ([droppedAfterSave]); and, apart,
-// the ones it took late ([BridgedCall.Late]).
+// the ones it took late ([BridgedCall.Late]), with how many late ones it
+// dropped from its middle ([prompts.AfterSave.LateDropped]).
 //
 // A NIL through is the job's own copy of its session in its box whose harness
 // ended its own run, as [heldAt] reads it: it holds every call its job made and
 // every one its job's brief told — every call of the round but the late ones,
 // listed or dropped, where that brief told the round's calls — so it is told
-// the late ones alone: the ones listed, and how many the log dropped from its
-// middle ([prompts.AfterSave.LateDropped]), with the round's tally, under the
-// late calls' own words, since no save placed that copy.
+// the late ones alone, listed and dropped, as every continuation is told them,
+// with the round's tally.
+//
+// A DROPPED LATE CALL IS COUNTED UNDER THE LATE CALLS' WORDS, WHATEVER THE
+// POINT: it keeps no mark and no number, so no save point can be read against
+// it, and counted under the words of calls after a save it would read as one
+// the session's own run made after it was saved, which no late call is. One
+// past the point is counted among the calls dropped after it as well, by its
+// number ([droppedAfterSave]): an over-count, never an under-count.
 //
 // A LATE CALL IS TOLD APART, under words of its own whatever the session's end
 // ([prompts.AfterSave.Late]): it finished only after the run that made it was
@@ -394,9 +401,8 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	)
 	if through != nil {
 		out.Dropped = droppedAfterSave(round, *through)
-	} else {
-		out.LateDropped = min(round.lateElided, ledger.Count(round.elided))
 	}
+	out.LateDropped = min(round.lateElided, ledger.Count(round.elided))
 	for _, call := range inAdmissionOrder(round.bridged) {
 		if heldAt(call, through) || slices.Contains(r.cfg.SkipNames, call.Name) {
 			continue
@@ -503,9 +509,10 @@ func heldAt(call BridgedCall, through *int) bool {
 // droppedAfterSave is how many of the calls round's log took after the save
 // point through it dropped from its middle, which no list can tell a session
 // one by one: the log's appends past the point, less the calls it still lists
-// numbered past it — and every LATE call it dropped, whatever its number
-// ([roundCalls.lateElided]): no save point holds a late call, and a dropped
-// one keeps no mark to be told by.
+// numbered past it. NOT THE LATE ONES APART: a dropped late call keeps no mark
+// to be told by, so every continuation is told how many the log dropped
+// ([roundCalls.lateElided]) under the late calls' own words, whatever its point
+// ([Runner.calledAfter]) — and one past the point is counted here as well.
 //
 // EXACT, because every append is numbered one past the last
 // ([BridgedCall.Appended]) and each call the log took is listed or counted
@@ -514,7 +521,7 @@ func heldAt(call BridgedCall, through *int) bool {
 // A listed call with no number is not subtracted, its place unknown, so a log
 // an older build appended to may over-count, held to the dropped calls the
 // round counts at all; it never under-counts. So may a dropped late call past
-// the point, counted among those past it and again as late: the same
+// the point, counted here and again under the late calls' words: the same
 // over-count, under the same hold.
 func droppedAfterSave(round roundCalls, through int) int {
 	dropped := ledger.Count(round.elided)
@@ -524,7 +531,7 @@ func droppedAfterSave(round roundCalls, through int) int {
 			pastPoint--
 		}
 	}
-	return min(max(pastPoint, 0)+round.lateElided, dropped)
+	return min(max(pastPoint, 0), dropped)
 }
 
 // unreadSince is every note the turn has read that a session saved with cursor

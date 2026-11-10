@@ -1421,10 +1421,14 @@ made it was replaced, the session may show it with no outcome or as interrupted,
 or an earlier brief may have told it, and it is one call, made once, whose
 outcome as told stands (internal/agent/prompts' `lateCallsHeader`) — the telling
 counted in the continued launch's floor where a capture measured the session;
-and a dropped late call is counted among the calls dropped after any save point.
-One carried late after its own append failed is told again although its job's
-session holds its answer: the safe direction. No rebuilt skill guard counts a
-skill a late call loaded, which is loaded again before a call the skill covers.
+and how many late calls the log dropped from its middle is told under those
+words too, whatever the point (`prompts.AfterSave.LateDropped`): a dropped call
+keeps no mark and no number, and under the words of calls after a save the count
+would say the session's own run made them after it was saved; one past the point
+is counted among those as well, by its number, an over-count. One carried late
+after its own append failed is told again although its job's session holds its
+answer: the safe direction. No rebuilt skill guard counts a skill a late call
+loaded, which is loaded again before a call the skill covers.
 
 **And told in the job's own box.** A person's answer or a replaced sign-in that
 carries the round on in the job's own box, taking up no kept capture of it,
@@ -1435,15 +1439,12 @@ every call its job made and every one its job's brief told — every call of the
 round but the late ones, wherever that brief told the round's calls (a fresh
 run's brief tells none) — so the copy is told the late ones alone, under their
 own words, with the line on a late submission and how many of them the log
-dropped from its middle — counted under the late calls' words
-(`prompts.AfterSave.LateDropped`), since under those of calls after a save the
-count would say the copy's own run made them after it was saved; where the
-harness may have been cut off, the copy is told every call of the round, the
-late ones apart. Its guard counts none of a late call's loads, and the telling
-is in the brief the copy is continued with, which its launch's floor counts
-where a capture measured the copy. So every continuation of the round built
-after a marked call landed is told it, in a kept session and in the job's own
-box alike.
+dropped from its middle, as every continuation counts them; where the harness
+may have been cut off, the copy is told every call of the round, the late ones
+apart. Its guard counts none of a late call's loads, and the telling is in the
+brief the copy is continued with, which its launch's floor counts where a
+capture measured the copy. So every continuation of the round built after a
+marked call landed is told it, in a kept session and in the job's own box alike.
 
 **Never the round's submission.** The round's collection never takes a late
 `submit_work` for the round's submission (`sinceAnswer`), and the log never

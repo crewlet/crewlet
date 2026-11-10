@@ -394,10 +394,11 @@ type Resume struct {
 	Absorbed []ledger.Elided
 
 	// LateElided is how many of Elided's calls the log took late
-	// (sandbox.BridgeLog.LateElided): dropped, they keep no mark, so a
-	// relaunch that continues a kept session counts them among the calls
-	// dropped after its save point whatever that point is
-	// ([droppedAfterSave]), since no save point holds a late call.
+	// (sandbox.BridgeLog.LateElided): dropped, they keep no mark, so every
+	// relaunch that continues the round's session is told how many there
+	// were, under the late calls' own words, whatever its save point
+	// ([Runner.calledAfter], prompts.AfterSave.LateDropped), since no save
+	// point holds a late call.
 	LateElided int
 
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round

@@ -1968,11 +1968,13 @@ type BridgeLog struct {
 	// LateElided is how many of those dropped calls were LATE
 	// ([BridgeCall.Late]): a dropped call keeps its identity and nothing else
 	// ([BridgeLog.ElidedCalls]), so not its mark, and no save point may hold a
-	// late call — so this count is told to every continuation of the round,
-	// whatever its save point, beside the dropped calls after it
-	// (internal/agent/runner's droppedAfterSave). The middle gives up a late
-	// call only once no ordinary call is left there ([appendBounded]), so it
-	// is zero but for a log whose middle holds nothing else. THE ROUND'S, AS
+	// late call — so every continuation of the round is told this count under
+	// the late calls' own words, whatever its save point, never as calls its
+	// session's own run made after it was saved (internal/agent/runner's
+	// calledAfter, internal/agent/prompts' AfterSave.LateDropped). The middle
+	// gives up a late call only once no ordinary call is left there
+	// ([appendBounded]), so it is zero but for a log whose middle holds
+	// nothing else. THE ROUND'S, AS
 	// THE LOG IS: kept by every opening that carries the round on, and a new
 	// round's log starts without it. ADDITIVE ON THE WIRE: a build that does
 	// not know it carries it in Extra (wirekeys.go), and counts no late call

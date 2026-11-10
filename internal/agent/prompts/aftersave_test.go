@@ -148,12 +148,11 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	}
 }
 
-// A LATE CALL THE RECORD DROPPED IS COUNTED UNDER THE LATE CALLS' WORDS where
-// those are the only dropped calls the session lacks: a job's own copy of its
-// session in its box whose harness ended its own run holds every other call its
-// record dropped, and a count under the words of calls after a save would say
-// its own run made them after it was saved, which neither is true of. So the
-// count follows the late calls in their section, after the line on a late
+// A LATE CALL THE RECORD DROPPED IS COUNTED UNDER THE LATE CALLS' WORDS,
+// whatever the session's save point: a dropped call keeps no mark and no
+// number, and a count under the words of calls after a save would say the
+// session's own run made them after it was saved, which no late call is. So
+// the count follows the late calls in their section, after the line on a late
 // submission, with the record's tally once; alone in that section where the
 // record lists no late call; and beside a count of calls after the save, the
 // tally is told there and not again.
