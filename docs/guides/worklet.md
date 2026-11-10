@@ -1950,7 +1950,10 @@ may say why in its body.
 **Every question an agent seat puts to a person carries one.** An `ask` from
 an agent seat that names a person (any seat the org chart does not hold as an
 agent) is refused without a `decision`, on both asking tools, and nothing is
-posted. A request an agent would make in words ("the merge is yours", "please
+posted. So is an agent's comment that asks (`asks` true) and names a person's
+seat in its words without making them its `ask`: the question would reach them
+as a mention, never among the decisions waiting on them. Naming a team, or a
+person in a comment that asks nothing, is a reference and is posted. A request an agent would make in words ("the merge is yours", "please
 run the script") is a choice between the answers it expects, with the one it
 recommends: the person answers with one press, and can still answer in their
 own words through **Something else**. A question between two agent seats may
