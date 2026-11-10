@@ -665,20 +665,101 @@ func stillBegun(run PendingRun, capture SessionCapture) bool {
 	return newest != nil && capture.sameTake(*newest) && newest.State == CaptureBegun
 }
 
-// stampCapture is the write [CoordStore.StampCapture] and
-// [CoordStore.SettleBegun] make: the row's own rule ([stampOnto]), where over
-// — nil for none — holds of the row as the write finds it.
-func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture SessionCapture,
-	over func(PendingRun, SessionCapture) bool) (bool, error) {
+// StandBy records capture's take as the read standing by for the row's newest
+// capture. See the contract on [PendingStore].
+//
+// THE SAME READ-DECIDE-WRITE AS EVERY STAMP ([CoordStore.writeFound]), on the
+// row as it stands: two reads that find one place taken each ask, and the
+// store lets one of them stand.
+func (s *CoordStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if err := stampable(turnID, capture); err != nil {
+		return false, err
+	}
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		newest := run.Capture
+		held = newest != nil && newest.standsBy(capture)
+		if held || newest == nil || !newest.samePlace(capture) || newest.Launch != capture.Launch ||
+			capture.sameTake(*newest) || newest.State == CaptureLanded || !newest.StandbyAt.IsZero() {
+			return false
+		}
+		stood := *newest
+		stood.StandbyTaker, stood.StandbyTakerEpoch, stood.StandbyAt = capture.Taker, capture.TakerEpoch, capture.At
+		run.Capture = &stood
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
+}
 
+// TakeOver stamps capture in the place after the capture standby stood by for.
+// See the contract on [PendingStore].
+//
+// THE SAME WRITE AS [CoordStore.StampCapture], its condition decided in the
+// same read-decide-write on the row as it stands ([stoodByUnlanded]).
+func (s *CoordStore) TakeOver(ctx context.Context, turnID string, standby, capture SessionCapture) (bool, error) {
+	return s.stampCapture(ctx, turnID, capture, func(run PendingRun, _ SessionCapture) bool {
+		return stoodByUnlanded(run, standby)
+	})
+}
+
+// stoodByUnlanded reports whether run's newest capture is one standby stands by
+// for and that did not land: the capture a standby may take the next place
+// after ([PendingStore.TakeOver]).
+func stoodByUnlanded(run PendingRun, standby SessionCapture) bool {
+	newest := run.Capture
+	return newest != nil && newest.State != CaptureLanded && newest.standsBy(standby)
+}
+
+// StandDown withdraws standby from the row's newest capture. See the contract
+// on [PendingStore].
+func (s *CoordStore) StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error) {
+	if err := stampable(turnID, standby); err != nil {
+		return false, err
+	}
+	_, won, _, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		newest := run.Capture
+		if newest == nil || !newest.standsBy(standby) {
+			return false
+		}
+		withdrawn := *newest
+		withdrawn.StandbyTaker, withdrawn.StandbyTakerEpoch, withdrawn.StandbyAt = "", 0, time.Time{}
+		run.Capture = &withdrawn
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return won, nil
+}
+
+// stampable is why capture cannot be stamped on run turnID's row, nil where it
+// can: placed from (1, 1), in a state this build knows, and within the bounds
+// the row holds a capture to ([SessionCapture.Bounded]) — what every write of
+// a capture's stamp holds it to before it reaches the row.
+func stampable(turnID string, capture SessionCapture) error {
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
-		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
+		return fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
 	// HELD TO ITS BOUNDS before it reaches the row: see [SessionCapture.Bounded].
 	if err := capture.Bounded(); err != nil {
-		return false, fmt.Errorf("sandbox: a capture of run %s: %w", turnID, err)
+		return fmt.Errorf("sandbox: a capture of run %s: %w", turnID, err)
+	}
+	return nil
+}
+
+// stampCapture is the write [CoordStore.StampCapture], [CoordStore.SettleBegun]
+// and [CoordStore.TakeOver] make: the row's own rule ([stampOnto]), where over
+// — nil for none — holds of the row as the write finds it.
+func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture SessionCapture,
+	over func(PendingRun, SessionCapture) bool) (bool, error) {
+
+	if err := stampable(turnID, capture); err != nil {
+		return false, err
 	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: the last
 	// one is the row the answer is about — where the last attempt found one

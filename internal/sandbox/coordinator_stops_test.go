@@ -1211,6 +1211,27 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 	return s.inner.SettleBegun(ctx, turnID, capture)
 }
 
+func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if s.called("StandBy") {
+		return false, errRefusedCall
+	}
+	return s.inner.StandBy(ctx, turnID, capture)
+}
+
+func (s *refusingStore) TakeOver(ctx context.Context, turnID string, standby, capture SessionCapture) (bool, error) {
+	if s.called("TakeOver") {
+		return false, errRefusedCall
+	}
+	return s.inner.TakeOver(ctx, turnID, standby, capture)
+}
+
+func (s *refusingStore) StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error) {
+	if s.called("StandDown") {
+		return false, errRefusedCall
+	}
+	return s.inner.StandDown(ctx, turnID, standby)
+}
+
 func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
 	if s.called("RetireSessions") {
 		return errRefusedCall

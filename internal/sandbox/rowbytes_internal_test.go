@@ -299,7 +299,8 @@ func worstRow(t *testing.T) PendingRun {
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128), ArchiveFormat: 99,
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
-		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64}
+		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
+		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -532,7 +533,9 @@ const elidedWorst = 100
 // Mutation: raise MaxAnswerBytes, MaxHeldArgsBytes or ConversationBaseMaxBytes
 // past what the rest has room for, raise MaxRunRepos, MaxConePaths or
 // MaxCodeHolds far enough, or let a note's seal or a held call's result grow,
-// and the rest overruns its share.
+// and the rest overruns its share; and raise maxIncarnationBytes to 700,000,
+// and the row's incarnations at that bound — its owner's, and the taker and the
+// standby's taker of each capture it holds — overrun it too.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)

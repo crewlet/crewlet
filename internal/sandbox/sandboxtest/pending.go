@@ -8,7 +8,10 @@
 // conditional write, not
 // code around one, so a suite that ran only against a fake would assert the
 // author's intent and nothing about the store. So are a person's notes on a
-// run's record (notes.go): filed, taken, pinned and bounded by the same writes. The one implementation is
+// run's record (notes.go): filed, taken, pinned and bounded by the same writes. So is
+// which of two reads of one job keeps its session (standby.go): the place given
+// to one, the other standing by, and the next place taken only after a capture
+// that did not land. The one implementation is
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
@@ -182,6 +185,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, heldCases...)
 	cases = append(cases, bytesCases...)
 	cases = append(cases, refusalCases...)
+	cases = append(cases, standbyCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
