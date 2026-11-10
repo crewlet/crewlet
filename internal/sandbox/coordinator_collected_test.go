@@ -437,6 +437,39 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 	}
 }
 
+// A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, and every
+// record says the kills its job saw and the ceiling it was held to, a run that
+// survived a killed command included, so its box's size is evidence on any end.
+//
+// Mutation: class the run by its kills alone, or drop them from a record that
+// did not fail, and a row goes red.
+func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		result Result
+		kind   string
+		kills  int64
+	}{
+		{"the harness killed", Result{Error: "exit 137", OutOfMemory: true, MemoryKills: 1, MemoryBytes: 2 << 30},
+			types.ExecutorErrorOutOfMemory, 1},
+		{"a command killed, the run failing on", Result{Error: "exit 1", MemoryKills: 2, MemoryBytes: 2 << 30},
+			types.ExecutorErrorLaunchFailed, 2},
+		{"a command killed, the run finishing", Result{Success: true, MemoryKills: 1, MemoryBytes: 2 << 30}, "", 1},
+		{"context first", Result{Error: "too long", ContextExhausted: true, OutOfMemory: true, MemoryKills: 1},
+			types.ExecutorErrorContextExhausted, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.result, time.Now())
+			if rec.ErrorKind != c.kind || rec.MemoryKills != c.kills || rec.MemoryBytes != c.result.MemoryBytes {
+				t.Errorf("record kind %q, kills %d, ceiling %d; want %q, %d, %d",
+					rec.ErrorKind, rec.MemoryKills, rec.MemoryBytes, c.kind, c.kills, c.result.MemoryBytes)
+			}
+		})
+	}
+}
+
 // A CLAUDE CODE RECORD STATES THE WINDOW ITS RUN WAS PINNED TO, from the model its
 // launch recorded, so a report of a context loop names the window that run had.
 //

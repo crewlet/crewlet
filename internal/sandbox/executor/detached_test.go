@@ -44,7 +44,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := executor.PathsFor(b)
 	for _, path := range []string{
-		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
+		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.ClaudeSkillsSettings(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
@@ -196,6 +196,8 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	for _, want := range []string{
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(),
+		// The previous job's memory records, which would count its kills as this one's.
+		p.MemoryBefore(), p.MemoryAfter(),
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),

@@ -234,6 +234,14 @@ func (p Paths) Done() string { return p.WorkDir() + "/done" }
 // ExitCode is the wrapper's status, surfaced on collect to explain a crash.
 func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
 
+// MemoryBefore and MemoryAfter are the job's memory domain as its script read
+// it before its harness started and after it exited ([sandbox.MemoryDomainScript]):
+// a kill the kernel counted between them is one for memory during the job.
+func (p Paths) MemoryBefore() string { return p.WorkDir() + "/memory_before" }
+
+// MemoryAfter is the job's memory domain after its harness exited.
+func (p Paths) MemoryAfter() string { return p.WorkDir() + "/memory_after" }
+
 // JobScript is where a run's script records, before it does anything else, the
 // end protocol it speaks and its own pid — `1 <pid>` — once it has set the
 // handler that ends its job on SIGUSR1 (end.go): what the read that ends a

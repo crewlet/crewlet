@@ -36,13 +36,13 @@ func TestABoxIsReadIntoClosedValuesOnly(t *testing.T) {
 		err  bool
 	}{
 		{name: "a container box held below its machine",
-			out:  "browser=chromium\nruntime=docker\ncgroup=4294967296\ntotal_kb=16303104\n",
+			out:  "browser=chromium\nruntime=docker\noom_kill=0\nlimit=4294967296\ntotal_kb=16303104\n",
 			want: BoxFacts{MemoryBytes: 4 << 30, Browser: "chromium", ContainerRuntime: "docker"}},
 		{name: "an unlimited cgroup is the machine's memory",
-			out:  "cgroup=max\ntotal_kb=8388608\n",
+			out:  "oom_kill=3\nlimit=max\ntotal_kb=8388608\n",
 			want: BoxFacts{MemoryBytes: 8 << 30}},
 		{name: "a cgroup v1 ceiling above the machine is the machine's memory",
-			out:  "cgroup=9223372036854771712\ntotal_kb=2097152\n",
+			out:  "limit=9223372036854771712\ntotal_kb=2097152\n",
 			want: BoxFacts{MemoryBytes: 2 << 30}},
 		{name: "a host that counts its memory in bytes",
 			out:  "browser=firefox\ntotal=34359738368\n",
@@ -96,7 +96,7 @@ func TestAFreshBoxIsReadOnceAndTheLaunchSaysWhatItFound(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.provider.Made = func(box *FakeSandbox) {
-		answersFacts(box, "browser=chromium\ncgroup=2147483648\ntotal_kb=8388608\n")
+		answersFacts(box, "browser=chromium\nlimit=2147483648\ntotal_kb=8388608\n")
 	}
 	unasked := launchReq("t0")
 	res, err := rig.launchVia(t.Context(), rig.manager, unasked)
