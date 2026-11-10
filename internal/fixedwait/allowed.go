@@ -520,7 +520,6 @@ var allowed = []Entry{
 	{File: "internal/code/gitproc/run_test.go", Func: "TestSlotsBoundConcurrentGit", HeadStart: 2, Piece: 3},
 	{File: "internal/code/gitproc/run_test.go", Func: "hold", ExemptWait: 1, ExemptElapsed: 1, Piece: 3},
 	{File: "internal/code/gitproc/run_test.go", Func: "keepalive.Read", ExemptWait: 1, Piece: 3},
-	{File: "internal/code/gitproc/run_test.go", Func: "slowWriter.Write", ExemptWait: 1, Piece: 3},
 	{File: "internal/code/gitproc/run_test.go", Func: "trickle.Read", ExemptWait: 1, Piece: 3},
 	{File: "internal/code/gitproc/share_bench_test.go", Func: "BenchmarkTransferShare", ExemptElapsed: 1, Piece: 3},
 	{File: "internal/code/gitproc/share_bench_test.go", Func: "boxesHold", ExemptWait: 1, ExemptElapsed: 2, Piece: 3},

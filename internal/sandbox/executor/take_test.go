@@ -2,12 +2,15 @@ package executor_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -181,10 +184,14 @@ func TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox(t *testing.T) {
 
 // A JOB THAT NEVER PACKED IS PACKED ON DEMAND BY THE RUNNER'S OWN PACK, which
 // keeps its digest in the box as the run's script's pack does: the archive is
-// the session's whole, and the box knows it holds it.
+// the session's whole, the box knows it holds it, and it is the read's own —
+// at the pack's own place, never over the job's capture, which only the job's
+// script writes — and gone once the read is done with it.
 //
 // Mutation: pack anywhere but the runner, or leave the digest out of the pack,
-// and the box takes its own archive for another box's.
+// and the box takes its own archive for another box's; move the pack over the
+// job's capture, as a pack of a job that is over once did, and its archive is
+// found there.
 func TestAPackOnDemandKeepsItsDigestInTheBox(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -195,23 +202,31 @@ func TestAPackOnDemandKeepsItsDigestInTheBox(t *testing.T) {
 		sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	described, body, _, err := runner.PackCapture(t.Context(), b, false)
+	described, body, release, err := runner.PackCapture(t.Context(), b, false)
 	if err != nil || body == nil {
 		t.Fatalf("PackCapture = %v, %v", body, err)
 	}
-	defer func() { _ = body.Close() }()
-	if described.SessionID != res.SessionID || described.Path != paths(b).SessionCapture() {
-		t.Errorf("the pack describes %+v, want session %s at %s", described, res.SessionID,
-			paths(b).SessionCapture())
+	if described.SessionID != res.SessionID || !strings.HasPrefix(described.Path,
+		paths(b).WorkDir()+"/session-pack-staging.") || !strings.HasSuffix(described.Path, ".held") {
+		t.Errorf("the pack describes %+v, want session %s at a place of the pack's own", described, res.SessionID)
 	}
 	members := archiveMembers(t, body)
+	_ = body.Close()
 	if _, ok := members["projects/"+executor.ClaudeProjectDir+"/"+res.SessionID+".jsonl"]; !ok {
 		t.Errorf("the pack holds no transcript: %v", members)
 	}
-	capture := []byte(boxFile(t, b, paths(b).SessionCapture()))
+	archive := []byte(boxFile(t, b, described.Path))
 	if digests := boxFile(t, b, paths(b).SessionDigests()); !strings.Contains(digests,
-		res.SessionID+" "+digestOf(t, capture)+"\n") {
+		res.SessionID+" "+digestOf(t, archive)+"\n") {
 		t.Errorf("the pack kept no digest of the archive it made: %q", digests)
+	}
+	if left := boxFile(t, b, paths(b).SessionCapture()); left != "" {
+		t.Errorf("the job's capture holds %d bytes after a pack on demand: the pack moved its archive there",
+			len(left))
+	}
+	release(t.Context())
+	if left := packStagingLeft(t, b); len(left) > 0 {
+		t.Errorf("the pack left its files once its read was done: %s", strings.Join(left, ", "))
 	}
 }
 
@@ -338,8 +353,11 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 // its read is not taken whole; and the second pack's move finds nothing to
 // move. Have a pack's start clear every pack's staging directory, and the first
 // pack's move finds nothing to move. Either way the box holds one staging
-// directory as the second pack writes. Leave a pack's directory behind, or the
-// archive a read of a job still working was handed, and it is found after.
+// directory as the second pack writes. Leave behind the archive a read was
+// handed, once it is read, and it is found after; a staging directory a pack's
+// script leaves is removed by the take's release too, so the run's own end,
+// which has no release, holds the script to removing it
+// (TestTheRunsOwnEndPackLeavesNoStagingDirectoryBehind).
 func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 	t.Parallel()
 	harnesses := []struct {
@@ -667,6 +685,552 @@ func TestTheClearBeforeEveryRunRemovesEveryPacksStagingDirectory(t *testing.T) {
 			if left := packStagingLeft(t, b); len(left) > 0 {
 				t.Errorf("the clear left packs' staging directories: %s", strings.Join(left, ", "))
 			}
+		})
+	}
+}
+
+// heldTake is a box a take of its job's session reads through, held at one
+// step of the take — its pack, the login shell a pack on demand runs in (pack),
+// or its at-th open of an archive (at) — closing held as it gets there, and
+// going on only once resume is closed: so a case orders two takes of one job,
+// or lands an archive, between the steps it holds them at. A Claude Code
+// take's second open is its scrub's, opening its archive again by its path for
+// the second pass; an OpenCode take's first is the one pass it reads.
+type heldTake struct {
+	sandbox.Sandbox
+	pack         bool
+	at           int
+	held, resume chan struct{}
+
+	mu             sync.Mutex
+	packed, opened int
+}
+
+// newHeldTake is a [heldTake] through b, held at its pack where pack is set
+// and at its at-th open where at is above zero.
+func newHeldTake(b sandbox.Sandbox, pack bool, at int) *heldTake {
+	return &heldTake{Sandbox: b, pack: pack, at: at, held: make(chan struct{}), resume: make(chan struct{})}
+}
+
+// wait says the take is held, and waits for its word to go on.
+func (b *heldTake) wait(ctx context.Context) error {
+	close(b.held)
+	select {
+	case <-b.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *heldTake) Exec(ctx context.Context, cmd string, opts sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	b.mu.Lock()
+	hold := b.pack && b.packed == 0 && strings.HasPrefix(cmd, "sh -lc ")
+	if hold {
+		b.packed++
+	}
+	b.mu.Unlock()
+	if hold {
+		if err := b.wait(ctx); err != nil {
+			return sandbox.ExecResult{}, err
+		}
+	}
+	return b.Sandbox.Exec(ctx, cmd, opts)
+}
+
+func (b *heldTake) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	b.mu.Lock()
+	b.opened++
+	hold := b.at > 0 && b.opened == b.at
+	b.mu.Unlock()
+	if hold {
+		if err := b.wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return b.Sandbox.OpenFile(ctx, path)
+}
+
+// readBack is one take of a box's session as its reader read it: the archive,
+// whole, or why the take was refused or not read whole.
+type readBack struct {
+	archive []byte
+	err     error
+}
+
+// takeWhole takes the session of b's job, which is over, as a read of it does
+// (packed now where the job left no archive), and reads it to its end.
+func takeWhole(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox) readBack {
+	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{MaxBytes: takeBound})
+	switch {
+	case err != nil:
+		return readBack{err: err}
+	case taken.Body == nil:
+		return readBack{err: errors.New("the take handed back no archive")}
+	}
+	archive, err := io.ReadAll(taken.Body)
+	_ = taken.Body.Close()
+	return readBack{archive: archive, err: err}
+}
+
+// wentOnMark is what a session written on past a pack holds and that pack's
+// archive does not.
+const wentOnMark = "written on once the first read had packed"
+
+// overJob is a harness's job that is over and left no archive of its session,
+// as the cases of two reads of one job have it.
+type overJob struct {
+	name string
+	// at is the open of its archive at which a take of the harness's goes on
+	// to the pass that streams it ([heldTake]).
+	at int
+	// job is a box whose job is over and left no archive: its runner, the
+	// box, the session's id, and goOn, which writes the session on past what a
+	// pack made before it holds, as a process the job's harness started and
+	// that outlived it may.
+	job func(t *testing.T) (runner *executor.Runner, b sandbox.Sandbox, session string, goOn func())
+	// wentOn reports whether archive, as a read handed it back, holds what
+	// goOn wrote, failing the case where it is no whole archive of session.
+	wentOn func(t *testing.T, archive []byte, session string) bool
+}
+
+// overJobs are [overJob] on either harness.
+func overJobs() []overJob {
+	return []overJob{
+		{name: "Claude Code", at: 2,
+			job: func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string, func()) {
+				runner, b := sessionBox(t, "2.1.310")
+				_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+				forgetCapture(t, b)
+				goOn := func() {
+					line := shQuote(`{"type":"user","text":"` + wentOnMark + `"}`)
+					if _, err := b.Exec(t.Context(), "printf '%s\\n' "+line+" >> "+
+						shQuote(transcriptOf(b, ran.SessionID)), sandbox.ExecOptions{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return runner, b, ran.SessionID, goOn
+			},
+			wentOn: func(t *testing.T, archive []byte, session string) bool {
+				transcript, ok := archiveMembers(t, bytes.NewReader(archive))[filesOf(session).transcript]
+				if !ok || !strings.Contains(transcript, `"sessionId":"`+session+`"`) {
+					t.Errorf("a read handed back an archive without the session's transcript, its first line "+
+						"its own: %q", transcript)
+				}
+				return strings.Contains(transcript, wentOnMark)
+			}},
+		{name: "OpenCode", at: 1,
+			job: func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string, func()) {
+				runner, b := openCodeBox(t, t.TempDir())
+				dir := t.TempDir()
+				writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
+					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+				const session = "ses_0123456789abcdef0123456789"
+				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
+					[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+					t.Fatal(err)
+				}
+				// THE BOX'S OPENCODE HOLDS THE SESSION, and no run's script
+				// exported it.
+				if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				goOn := func() {
+					messages := `[{"id":"msg_1","type":"user","text":"fix the flake"},` +
+						`{"id":"msg_2","type":"user","text":"` + wentOnMark + `"}]`
+					if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return runner, b, session, goOn
+			},
+			wentOn: func(t *testing.T, archive []byte, session string) bool {
+				export := gunzipped(t, archive)
+				if !json.Valid(export) || !strings.Contains(string(export), `"id":"`+session+`"`) {
+					t.Errorf("a read handed back %q, want one JSON document of the session", export)
+				}
+				return strings.Contains(string(export), wentOnMark)
+			}},
+	}
+}
+
+// startTake starts a take of the session of the job of held's box, and answers
+// once it holds where held holds it, with where its whole read lands; a take
+// that ends before it holds fails the case.
+func startTake(t *testing.T, runner *executor.Runner, held *heldTake) <-chan readBack {
+	t.Helper()
+	read := make(chan readBack, 1)
+	go func() { read <- takeWhole(t.Context(), runner, held) }()
+	select {
+	case <-held.held:
+	case got := <-read:
+		t.Fatalf("a read ended before it held where the case holds it: %q, %v", got.archive, got.err)
+	}
+	return read
+}
+
+// THE RUN'S OWN END PACK LEAVES NO STAGING DIRECTORY BEHIND. A run's script
+// packs its session as its harness exits in a staging directory
+// (executor.Paths.SessionStaging), and removes it once the archive is moved
+// over the job's capture: nothing else removes it before the clear that comes
+// with the box's next run, which may be long after. A pack on demand's
+// staging directory is removed by its take's release as well, so only the
+// run's own end shows whether a pack's script removes what it staged. Here,
+// on either harness, a run ends by itself: its capture is there, and its
+// staging directory is not.
+//
+// Mutation: have either harness's pack leave its staging directory, and the
+// run's own end leaves it behind.
+func TestTheRunsOwnEndPackLeavesNoStagingDirectoryBehind(t *testing.T) {
+	t.Parallel()
+	t.Run("Claude Code", func(t *testing.T) {
+		t.Parallel()
+		runner, b := sessionBox(t, "2.1.310")
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+		if res.Captured == nil {
+			t.Fatalf("the run's own end packed nothing:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		if boxHas(t, b, paths(b).SessionStaging()) {
+			t.Error("the run's own end pack left its staging directory behind")
+		}
+	})
+	t.Run("OpenCode", func(t *testing.T) {
+		t.Parallel()
+		j := startScript(t, scriptOpts{env: []string{"FAKE_RUN_UNTIL=ended"}})
+		if err := os.WriteFile(filepath.Join(j.dir, "ended"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := j.wait()
+		if _, err := os.Stat(j.paths.SessionCapture()); err != nil {
+			t.Fatalf("the run's own end exported nothing: %v\n%s", err, run.stderr)
+		}
+		if _, err := os.Stat(j.paths.SessionStaging()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the run's own end export left its staging directory behind: %v", err)
+		}
+	})
+}
+
+// TWO READS OF A JOB THAT IS OVER EACH STREAM THE ARCHIVE THEIR OWN PACK MADE.
+// A stop's read and a collection's of one job may take its session at once,
+// and where the job left no archive each packs it now. Here, on either
+// harness, the two meet where a shared destination does them the most harm:
+// the second read finds no archive the job left and holds before its pack;
+// the first read then finds none either, packs the job, and holds before the
+// pass that streams what its pack made — a Claude Code take's second, which
+// opens its archive again by its path; an OpenCode take's one. The session is
+// written on, as a process the job's harness started and that outlived it may
+// write it, and only then does the second read pack and stream it, whole; then
+// the first goes on. Neither read is refused, each hands back a whole archive
+// of the session — the first's without what was written after its pack and
+// the second's with it — nothing of either lands over the job's capture, and
+// neither pack leaves a file behind.
+//
+// Mutation: move a pack on demand of a job that is over over the job's
+// capture and stream what the capture holds, as such packs once did, and the
+// first read streams the second's archive, moved there between its pack and
+// its pass: Claude Code's second pass finds a member changed under it and the
+// take is refused, and OpenCode's hands back what was written after its own
+// pack; and the capture holds an archive after.
+func TestTwoReadsOfAJobThatIsOverEachStreamTheirOwnPacksArchive(t *testing.T) {
+	t.Parallel()
+	for _, h := range overJobs() {
+		t.Run(h.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b, session, goOn := h.job(t)
+			second := newHeldTake(b, true, 0)
+			secondRead := startTake(t, runner, second)
+			first := newHeldTake(b, false, h.at)
+			firstRead := startTake(t, runner, first)
+			goOn()
+			close(second.resume)
+			secondGot := <-secondRead
+			close(first.resume)
+			reads := []struct {
+				which  string
+				got    readBack
+				wentOn bool
+			}{{"the first read", <-firstRead, false}, {"the second read", secondGot, true}}
+			for _, r := range reads {
+				switch {
+				case r.got.err != nil:
+					t.Errorf("%s was refused: %v", r.which, r.got.err)
+				case h.wentOn(t, r.got.archive, session) != r.wentOn:
+					t.Errorf("%s handed back an archive that holds what was written after the first pack: %v, "+
+						"want %v — another read's archive, not the one its own pack made", r.which, !r.wentOn,
+						r.wentOn)
+				}
+			}
+			if boxHas(t, b, paths(b).SessionCapture()) {
+				t.Error("a read's pack moved its archive over the job's capture, which only the job's own script writes")
+			}
+			if left := packStagingLeft(t, b); len(left) > 0 {
+				t.Errorf("the packs left their files behind: %s", strings.Join(left, ", "))
+			}
+		})
+	}
+}
+
+// THE JOB'S OWN END PACK LANDING AS A READ STREAMS CHANGES NOTHING THAT READ
+// STREAMS. The capture is the job's own script's, moved into place once as its
+// harness exits, and a read that finds the job over with no archive packs it
+// now — which the script, outliving what the read saw of its job, can still
+// land its own over while that read streams. Here, on either harness, the read
+// holds before the pass that streams what its pack made, and an archive is
+// moved over the job's capture, as the job's end pack moves its own: the read
+// goes on, hands back the whole archive its own pack made, and the capture
+// holds the end pack's archive after it.
+//
+// Mutation: move a pack on demand of a job that is over over the job's capture
+// and stream what the capture holds, as such packs once did, and the read
+// streams the end pack's archive, which is no archive its scrub can read: the
+// take is refused.
+func TestTheJobsOwnEndPackLandingAsAReadStreamsChangesNothingItReads(t *testing.T) {
+	t.Parallel()
+	const final = "the job's own final archive, moved over the capture as its harness exited"
+	for _, h := range overJobs() {
+		t.Run(h.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b, session, _ := h.job(t)
+			p := paths(b)
+			first := newHeldTake(b, false, h.at)
+			read := startTake(t, runner, first)
+			if res, err := b.Exec(t.Context(), "printf '%s' "+shQuote(final)+" > "+shQuote(p.SessionCapture()+".next")+
+				" && mv -f "+shQuote(p.SessionCapture()+".next")+" "+shQuote(p.SessionCapture()),
+				sandbox.ExecOptions{}); err != nil || res.ExitCode != 0 {
+				t.Fatalf("landing the job's own end pack: %v (exit %d) %s", err, res.ExitCode, res.Stderr)
+			}
+			close(first.resume)
+			switch got := <-read; {
+			case got.err != nil:
+				t.Errorf("the read was refused: %v", got.err)
+			case h.wentOn(t, got.archive, session):
+				t.Error("the read handed back what no pack of its made")
+			}
+			if got := boxFile(t, b, p.SessionCapture()); got != final {
+				t.Errorf("the job's capture holds %d bytes after the read, not the job's own end pack's archive",
+					len(got))
+			}
+			if left := packStagingLeft(t, b); len(left) > 0 {
+				t.Errorf("the read's pack left its files behind: %s", strings.Join(left, ", "))
+			}
+		})
+	}
+}
+
+// brokenDigestLists are the ways a box's list of the digests of the archives
+// its copy holds (executor.Paths.SessionDigests) keeps no line a pack appends,
+// each made by the shell's how, handed the list's path: a directory where the
+// list belongs, which refuses the append; and a link to /dev/null, which takes
+// the append — its writer told it landed — and keeps nothing, as a full disk
+// can.
+var brokenDigestLists = []struct{ name, how string }{
+	{name: "a list the box refuses the line", how: "mkdir"},
+	{name: "a list that keeps nothing it is handed", how: "ln -s /dev/null"},
+}
+
+// breakDigestList makes path, where a local box keeps its digest list on this
+// host, the list how makes ([brokenDigestLists]).
+func breakDigestList(t *testing.T, path, how string) {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "sh", "-c", `mkdir -p "${1%/*}" && rm -rf "$1" && `+how+` "$1"`,
+		"sh", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("making the digest list at %s keep nothing: %v\n%s", path, err, out)
+	}
+}
+
+// saysDigestUnrecorded is what a pack whose digest the box did not record says.
+const saysDigestUnrecorded = "digest could not be recorded"
+
+// A PACK REPORTS ITS ARCHIVE MADE ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX.
+// Every pack of a box's session records its archive's digest in the box's
+// list of the archives its copy holds, so the box never takes an archive of
+// its own for another box's and restores it over the copy that went on past
+// it; and a pack reported its archive made — moved to where its read reads
+// it — before it appended that line, whose write nothing checked. Here the
+// list keeps no line ([brokenDigestLists]), and every pack, on either harness,
+// fails saying why and moves nothing to where its read reads it: a pack on
+// demand of a job that is over and one beside a harness that may still work,
+// and the run's own as its harness exits, whose run's error stream says why
+// and whose collection finds no capture.
+//
+// Mutation: move the archive into place and report it made before its digest
+// is recorded, the line's append unchecked, as the packs once did, and every
+// pack here holds; take the append's exit for the line, never reading it
+// back, and every pack beside the list that keeps nothing holds.
+func TestAPackReportsItsArchiveMadeOnlyOnceItsDigestIsRecorded(t *testing.T) {
+	t.Parallel()
+	for _, list := range brokenDigestLists {
+		t.Run(list.name, func(t *testing.T) {
+			t.Parallel()
+			for _, h := range overJobs() {
+				t.Run(h.name+" packed on demand", func(t *testing.T) {
+					t.Parallel()
+					runner, b, _, _ := h.job(t)
+					breakDigestList(t, paths(b).SessionDigests(), list.how)
+					for _, working := range []bool{false, true} {
+						_, body, _, err := runner.PackCapture(t.Context(), b, working)
+						if body != nil {
+							_ = body.Close()
+						}
+						if err == nil || !strings.Contains(err.Error(), saysDigestUnrecorded) {
+							t.Errorf("a pack (beside a working harness: %v) whose digest the box kept no line of "+
+								"answered %v, want it refused saying %q", working, err, saysDigestUnrecorded)
+						}
+					}
+					if left := packStagingLeft(t, b); len(left) > 0 {
+						t.Errorf("the refused packs left their files behind: %s", strings.Join(left, ", "))
+					}
+				})
+			}
+			t.Run("a Claude Code run's own end", func(t *testing.T) {
+				t.Parallel()
+				runner, b := sessionBox(t, "2.1.310")
+				breakDigestList(t, paths(b).SessionDigests(), list.how)
+				_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+				if res.Captured != nil || boxHas(t, b, paths(b).SessionCapture()) {
+					t.Errorf("the run's own end packed its session with no digest of it recorded: %+v", res.Captured)
+				}
+				if said := boxFile(t, b, paths(b).Err()); !strings.Contains(said, "was not packed") ||
+					!strings.Contains(said, saysDigestUnrecorded) {
+					t.Errorf("the run's error stream says %q, want that the session was not packed, and why", said)
+				}
+			})
+			t.Run("an OpenCode run's own end", func(t *testing.T) {
+				t.Parallel()
+				j := startScript(t, scriptOpts{env: []string{"FAKE_RUN_UNTIL=ended"}})
+				breakDigestList(t, j.paths.SessionDigests(), list.how)
+				if err := os.WriteFile(filepath.Join(j.dir, "ended"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				run := j.wait()
+				if _, err := os.Stat(j.paths.SessionCapture()); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("the run's own end exported its session with no digest of it recorded: %v", err)
+				}
+				if !strings.Contains(run.stderr, "was not exported") || !strings.Contains(run.stderr, saysDigestUnrecorded) {
+					t.Errorf("the run's error stream says %q, want that the session was not exported, and why", run.stderr)
+				}
+			})
+		})
+	}
+}
+
+// releaseWatch is a box that records the deadline every release of a pack on
+// demand's own files is asked under: the `rm -rf` of the pack's staging
+// directory and the archive it kept for its read.
+type releaseWatch struct {
+	sandbox.Sandbox
+
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (b *releaseWatch) Exec(ctx context.Context, cmd string, opts sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	if strings.HasPrefix(cmd, "rm -rf ") && strings.Contains(cmd, "/session-pack-staging.") {
+		deadline, _ := ctx.Deadline()
+		b.mu.Lock()
+		b.deadlines = append(b.deadlines, deadline)
+		b.mu.Unlock()
+	}
+	return b.Sandbox.Exec(ctx, cmd, opts)
+}
+
+// A PACK'S RELEASE IS HELD TO ITS TAKE'S OWN DEADLINE. A pack on demand keeps
+// its archive for its take alone and removes it once the take has read it, on
+// the take's close path, which the read the take is part of waits on; so the
+// removal is held to the take's own deadline — the time that read leaves it —
+// and not to a bound of its own from the moment it runs, under which a box that
+// stopped answering once its archive was read held the read up to the two
+// minutes a pack may take past it, into the room left for the outcome stamp and
+// the box's pause. Here a take with a minute to go packs a job that left no
+// archive, and is read whole and closed: the release ran, under a deadline no
+// later than the take's, and left nothing behind.
+//
+// Mutation: bound the release by the pack's own wait from the moment it runs,
+// as it was, and it is asked under a deadline past the take's.
+func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	forgetCapture(t, b)
+	watched := &releaseWatch{Sandbox: b}
+	deadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
+	if got := takeWhole(ctx, runner, watched); got.err != nil {
+		t.Fatalf("the take was refused: %v", got.err)
+	}
+	watched.mu.Lock()
+	asked := append([]time.Time(nil), watched.deadlines...)
+	watched.mu.Unlock()
+	if len(asked) == 0 {
+		t.Fatal("the take's pack was never released")
+	}
+	for _, at := range asked {
+		if at.IsZero() || deadline.Before(at) {
+			t.Errorf("a release was asked under the deadline %v, past the take's own %v", at, deadline)
+		}
+	}
+	if left := packStagingLeft(t, b); len(left) > 0 {
+		t.Errorf("the release left the pack's files behind: %s", strings.Join(left, ", "))
+	}
+}
+
+// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX. A run that
+// continues a session carried into its box restores the archive over the box's
+// own copy where that copy does not hold it, and records the archive's digest
+// in the box's list of the archives its copy holds, so the archive carried in
+// again is never restored over the copy that went on past it; that line was
+// appended once the restore was done, and nothing checked it. Here the list
+// keeps no line ([brokenDigestLists]) and a session is carried into a box that
+// holds none, on either harness: the run does not continue what it restored, it
+// starts the session minted for it in its place and says why.
+//
+// Mutation: continue the restore whose digest went unrecorded, as the restores
+// once did, and the run takes up the carried session with no line of it in the
+// box.
+func TestARestoreIsContinuedOnlyOnceItsDigestIsRecorded(t *testing.T) {
+	t.Parallel()
+	for _, list := range brokenDigestLists {
+		t.Run(list.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("Claude Code", func(t *testing.T) {
+				t.Parallel()
+				first, a := sessionBox(t, "2.1.310")
+				_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
+				described, body, err := first.OpenCapture(t.Context(), a)
+				if err != nil || body == nil {
+					t.Fatalf("OpenCapture = %v, %v", body, err)
+				}
+				defer func() { _ = body.Close() }()
+				second, b := sessionBox(t, "2.1.310")
+				breakDigestList(t, paths(b).SessionDigests(), list.how)
+				_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+					Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
+				if argv := argvOf(t, b); after(argv, "--resume") != "" || res.Continued || res.SessionID == ran.SessionID {
+					t.Errorf("the run continued %q (argv %q) with no digest of its archive recorded in the box",
+						res.SessionID, argv)
+				}
+				if !strings.Contains(res.FellBack, saysDigestUnrecorded) {
+					t.Errorf("the run reports it fell back because %q, want %q", res.FellBack, saysDigestUnrecorded)
+				}
+			})
+			t.Run("OpenCode", func(t *testing.T) {
+				t.Parallel()
+				run := runScript(t, scriptOpts{session: &continuingOpenCode, carried: openCodeExport(carriedOpenCode),
+					req:           sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly, Steer: steerWiring},
+					brokenDigests: list.how})
+				if got := sessionOf(t, run); got != freshOpenCode {
+					t.Errorf("the run worked in %q with no digest of its export recorded in the box, want the "+
+						"session minted for it, %q", got, freshOpenCode)
+				}
+				if why := recordedWhy(t, run); !strings.Contains(why, saysDigestUnrecorded) {
+					t.Errorf("the run's record says it started anew because %q, want %q", why, saysDigestUnrecorded)
+				}
+			})
 		})
 	}
 }

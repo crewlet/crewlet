@@ -459,7 +459,9 @@ func claudeNotesGate(hooked, notes, plain string) string {
 // regular file, and the sidecar and task-list directories where it has them,
 // a link in place of any left behind — on a release that continues a carried
 // session ([claudeCarryFloor]), with tar and gzip in the box; and its digest
-// is kept. Restored or not, the archive is removed: nothing reads it again.
+// is kept: recorded, and read back, once it is restored ([recordDigest]), and a
+// restore whose digest could not be is not continued. Restored or not, the
+// archive is removed: nothing reads it again.
 // Where the session is neither held nor restored, the run starts the session
 // minted for it in its place and says why, on its error stream and in its
 // record, rather than resume a session the harness does not hold, which fails the
@@ -530,7 +532,15 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 		floorArgs(claudeCarryFloor), claudeCarryFloor)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
-	line(`  else [ -z "$d" ] || printf '%%s %%s\n' "$s" "$d" >> %s`, digests)
+	// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED, and read back
+	// ([recordDigest]): continued with no line of the archive in the list —
+	// a full disk, a cksum that failed — the box's copy would go on past an
+	// archive the box does not know it holds, and that archive carried in
+	// again would be restored over it. So the run starts a session of its
+	// own instead, and the copy restored is never gone on past. Recorded
+	// before the restore, a restore that failed after the box's own copy
+	// went would leave the line naming a copy that does not hold it.
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -606,7 +616,9 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 // results spilled to files) and its task list, the last two where they are
 // there and are directories rather than links — packed in the staging
 // directory and moved over [Paths.SessionCapture] whole, its digest kept as
-// one the box's copy of the session holds ([Paths.SessionDigests]).
+// one the box's copy of the session holds ([Paths.SessionDigests]): recorded,
+// and read back, before the archive is moved, so no archive stands there whose
+// digest the box does not hold ([packDigest]).
 //
 // NEVER ANYTHING ELSE: not the login (`.credentials.json`) or the harness's own
 // state (`.claude.json`), which the pinned configuration directory holds beside
@@ -629,10 +641,9 @@ type packAt struct {
 	// staged is the directory the archive is made in, and dest the path it is
 	// moved over whole once it is made: the run's script's own pair
 	// ([Paths.SessionStaging], [Paths.SessionCapture]); a pack on demand's,
-	// its own [Paths.SessionPackStaging] and the same capture for a job that
-	// is over, its own [Paths.SessionPackHeld] for one still working; or a
-	// save's, its own [Paths.SessionSaveStaging] and its taker's
-	// [Paths.SessionSave].
+	// its own [Paths.SessionPackStaging] and its own [Paths.SessionPackHeld],
+	// of a job that is over or still working; or a save's, its own
+	// [Paths.SessionSaveStaging] and its own [Paths.SessionSave].
 	staged, dest string
 
 	// working says the pack is made beside a harness that may still be
@@ -675,9 +686,9 @@ func claudePack(paths Paths, at packAt) string {
 	if at.working {
 		tar = claudeHeldTar(cfg, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, q(at.staged+"/capture"), q(at.dest), q(at.dest),
-		q(paths.SessionDigests()), q(at.staged+"/error"))
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
+		q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -820,10 +831,10 @@ func claudePack(paths Paths, at packAt) string {
 // subagent's thread appended to while tar read it is archived as tar first
 // saw it, a whole prefix of what the harness wrote, at most its last line torn,
 // which the restore cuts back ([claudeSessionGate]). A pack that fails leaves
-// nothing of its own: its staging directory goes with it, and the archive
-// already at its destination — the last save its taker made — is never moved
-// over; a pack on demand of a job still working moves nothing over the job's
-// capture at all ([Paths.SessionPackHeld]).
+// nothing of its own: its staging directory goes with it, and nothing is moved
+// to its destination, which is that pack's own ([Paths.SessionPackHeld],
+// [Paths.SessionSave]) — no pack on demand or save moves anything over the
+// job's capture, or over another's archive, at all.
 //
 // THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, whatever any list
 // says of it — its proof rests on no list — and of the other `.jsonl` members
@@ -1366,11 +1377,11 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into staged, this pack's own staging directory, and over dest — the job's
-// capture for a job that is over, the pack's own for one still working
-// ([Paths.SessionPackHeld]) — its digest kept, ending [packNothing] where the
-// harness wrote no transcript, and [packFailed] where it did and no archive was
-// made, its error stream saying why ([Runner.PackCapture]).
+// into staged, this pack's own staging directory, and over dest — the pack's
+// own place, held for its read ([Paths.SessionPackHeld]), never the job's
+// capture — its digest kept, ending [packNothing] where the harness wrote no
+// transcript, and [packFailed] where it did and no archive was made, its error
+// stream saying why ([Runner.PackCapture]).
 //
 // HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
 // working says the job may still be working — one its box would not end, its
@@ -1385,13 +1396,14 @@ func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) 
 }
 
 // PackSave packs a save of session now, beside a harness that may still be
-// working, for taker ([saver]): the same members as every pack, held to the
-// rule of a pack beside a working harness ([claudeHeldTar]), into staged, this
-// save's own staging directory, and over taker's own path — never the job's
-// capture, which every read of a job that is over takes as its final archive —
-// its digest kept, ending as [ClaudeCode.Pack] does ([Runner.PackSave]).
-func (ClaudeCode) PackSave(paths Paths, session, staged, taker string) string {
-	return claudeOnDemand(paths, session, packAt{staged: staged, dest: paths.SessionSave(taker), working: true})
+// working ([saver]): the same members as every pack, held to the rule of a
+// pack beside a working harness ([claudeHeldTar]), into staged, this save's
+// own staging directory, and over dest, this save's own place — never the
+// job's capture, which every read of a job that is over takes as its final
+// archive — its digest kept, ending as [ClaudeCode.Pack] does
+// ([Runner.PackSave]).
+func (ClaudeCode) PackSave(paths Paths, session, staged, dest string) string {
+	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: true})
 }
 
 // claudeOnDemand is a pack the engine makes of session, outside the run's own
