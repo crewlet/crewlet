@@ -2177,7 +2177,9 @@ const (
 	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
 	// measured size's next KiB: 5697 KiB. Spend's turns that changed nothing
 	// took it to 5699.4 KiB (5,836,141 bytes, +2,713, all script): 5700 KiB.
-	treeBudget = 5<<20 + 580<<10
+	// The go-live review of what each agent can do took it to 5701.4 KiB
+	// (5,838,227 bytes, +2,086, all script): 5702 KiB.
+	treeBudget = 5<<20 + 582<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -23,6 +23,7 @@
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { IssueReportsAnswer } from "./issueReports.ts";
+import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
 import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
@@ -7853,6 +7854,7 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   issue_reports: IssueReportsAnswer;
+  go_live_review: GoLiveReviewAnswer;
   turn_outcomes: TurnOutcomesAnswer;
   advisor: AdvisorAnswer;
   advisor_access: AccessFixAnswer;

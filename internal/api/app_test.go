@@ -161,6 +161,8 @@ func (f *fakeRuntime) IssueReports() queries.IssueReportReader { return nil }
 
 func (f *fakeRuntime) SeatPauses() queries.SeatPauseLister { return nil }
 
+func (f *fakeRuntime) AgentAccess() queries.AgentAccess { return nil }
+
 // MCPApprovals holds no run: what an approval does is held by mcpapi's own
 // suite.
 func (f *fakeRuntime) MCPApprovals() mcpapi.Approvals { return nil }
