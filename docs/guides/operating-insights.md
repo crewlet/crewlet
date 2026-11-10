@@ -20,6 +20,8 @@ diagnostics:
 
 `accepted` must name the schema of the catalogue this build carries. A build whose catalogue is newer shares nothing, every class alike and not only the ones that changed, until an administrator accepts it again.
 
+In the dashboard, **Settings › Diagnostics › Usage insights to Crewlet** writes the same setting: **Don't share**, **Review each record first** or **Send automatically**, and choosing to share accepts the catalogue this build carries. When the catalogue is newer than the one accepted, the page says nothing is shared and offers to accept it. In review mode, **Waiting for your review** lists each record with **Send**, **Don't send** and **Always send this pattern**, which adds the class to `always` and sends that record. **Usage insights kept** lists every record with its status, and each opens its exact bytes; a sample record of every class shows what one would send.
+
 ## What is sent
 
 One record per class per ISO week, for the patterns the [advisor](advisor.md) finds in the company's own records. A class is eligible once its finding holds on two days in a row of one week, and each record leaves at its own random time within a day of being sent. A record is the class, the ISO week, the release tag (or `main` for any other public build) and at most four facts, each a bucket of a share or a count:
