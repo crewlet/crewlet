@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -200,11 +201,27 @@ func build(t *testing.T, opts backup.Options) *backup.Service {
 	if len(opts.Keyring.Keys) == 0 {
 		opts.Keyring = suiteRing
 	}
+	if opts.Logs == nil {
+		opts.Logs = suiteLogs()
+	}
 	s, err := backup.New(opts)
 	if err != nil {
 		t.Fatalf("backup.New: %v", err)
 	}
 	return s
+}
+
+// suiteLogs is the register a case that names none is built with: the
+// tracker's log, which the suite seeds checkpoints on, and every log a declared
+// table is written by, which the window reads.
+func suiteLogs() []string {
+	logs := []string{trackerLogStream}
+	for _, t := range references.All {
+		if t.Log != "" && !slices.Contains(logs, t.Log) {
+			logs = append(logs, t.Log)
+		}
+	}
+	return logs
 }
 
 // The whole point, end to end: both estates captured from inside the process
@@ -499,7 +516,9 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 // CREWLET_NODE_ID would share one hold and announce a point the register
 // refuses. And a node holding the replicated estate needs the KEYRING its
 // logs' records are signed under, or the first file written while a backup
-// runs is a record it cannot read — refused at New, not at that record.
+// runs is a record it cannot read — refused at New, not at that record. Such a
+// node needs the build's REGISTER of logs too, or its manifest names only the
+// logs that happen to hold a checkpoint.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -513,7 +532,11 @@ func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 		"NodeID":  {NodeID: "  ", Store: db, Estate: held, Holds: fleet, Backups: fleet},
 		// A KEYRING THAT VERIFIES NOTHING, on a node whose backup reads
 		// the signed records a restore replays past its copy.
-		"Keyring": {NodeID: "n", Store: db, Estate: held, Holds: fleet, Backups: fleet},
+		"Keyring": {NodeID: "n", Store: db, Estate: held, Holds: fleet, Backups: fleet,
+			Logs: suiteLogs()},
+		// NO REGISTER, on a node whose manifest names every registered log.
+		"Logs": {NodeID: "n", Store: db, Estate: held, Holds: fleet, Backups: fleet,
+			Keyring: suiteRing},
 	} {
 		svc, err := backup.New(opts)
 		if err == nil {

@@ -125,7 +125,7 @@ func TestAPageWriteNobodyAnsweredForIsAnUnknown(t *testing.T) {
 	kb.writeErr = unanswered
 	got := callNoTurn(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb,
 		Actor: operator}), builtin.CommentOnPageTool,
-		map[string]any{"page": "p1", "body": "a remark"})
+		map[string]any{"asks": false, "page": "p1", "body": "a remark"})
 	if !got.Failed || !tools.UnknownOf(got) || tools.RefusalOf(got) != tools.RefusalUnavailable {
 		t.Fatalf("a page write nobody answered for answered %q (%s, unknown %v), "+
 			"want an unknown outcome", got.Output, tools.RefusalOf(got), tools.UnknownOf(got))
@@ -304,7 +304,7 @@ func TestAKeyedCommentNobodyAnsweredIsOfferedTheSameCall(t *testing.T) {
 	kb.writeErr = fmt.Errorf("%w (pages.comment, asked of data-b, data-c)",
 		estate.ErrOutcomeUnknown)
 	got := callWork(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}),
-		builtin.CommentOnPageTool, map[string]any{"page": "p1", "body": "a remark"})
+		builtin.CommentOnPageTool, map[string]any{"asks": false, "page": "p1", "body": "a remark"})
 	if !got.Failed || !tools.UnknownOf(got) {
 		t.Fatalf("a comment nobody answered answered %q, want unknown", got.Output)
 	}
@@ -327,7 +327,7 @@ func TestAKeyedCommentNobodyAnsweredIsOfferedTheSameCall(t *testing.T) {
 	}
 	got = callNoTurn(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb,
 		Actor: operator}), builtin.CommentOnPageTool,
-		map[string]any{"page": "p1", "body": "a remark"})
+		map[string]any{"asks": false, "page": "p1", "body": "a remark"})
 	if !strings.Contains(got.Output, "Read the page's comments with get_page before "+
 		"making it again") {
 		t.Errorf("an unkeyed comment nobody answered is not told to look first: %s",

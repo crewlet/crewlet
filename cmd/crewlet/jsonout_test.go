@@ -78,6 +78,7 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /gitlet/repos", answer(whole))
 	mux.HandleFunc("POST /gitlet/repos/web/verify", answer(verified))
 	mux.HandleFunc("GET /feeds/dead-letters", answer(whole))
+	mux.HandleFunc("GET /advisor", answer(whole))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -123,6 +124,8 @@ func jsonOutputs(t *testing.T) map[string]struct {
 		"gitletVerify": {args: []string{"gitlet", "verify", "-repo", "web", "-json", node},
 			want: []string{markupText}, node: true},
 		"feedsDeadLetters": {args: []string{"feeds", "dead-letters", "-json", node},
+			want: []string{markupText}, node: true},
+		"runDoctor": {args: []string{"doctor", "-json", node},
 			want: []string{markupText}, node: true},
 	}
 }

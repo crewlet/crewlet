@@ -45,8 +45,15 @@ func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
 
 // turnSet is an asking turn's own set of the items it wrote, in its process.
 type turnSet struct {
-	mu    sync.Mutex
-	items []types.WorkItem
+	mu      sync.Mutex
+	items   []types.WorkItem
+	changes []types.CommittedChange
+}
+
+func (s *turnSet) Commit(c types.CommittedChange) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.changes = append(s.changes, c)
 }
 
 func (s *turnSet) Add(item types.WorkItem) {

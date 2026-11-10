@@ -894,6 +894,7 @@ func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool st
 		r := d.failedWrite(ctx, turn, tool, c, repo, p.OpID, err)
 		return code.ChangeResult{}, &r
 	}
+	commit(turn, res.Outcome, types.CommittedCode)
 	if res.Refusal != "" {
 		r := changeRefused(tool, res)
 		return code.ChangeResult{}, &r

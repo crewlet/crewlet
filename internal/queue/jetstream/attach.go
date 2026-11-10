@@ -112,7 +112,18 @@ func (q *Queue) nakCeiling() time.Duration {
 	return defaultNakCeiling
 }
 
-// nakBackoff is how long the nth redelivery of a failing message waits.
+// nakJitter spreads each redelivery across a fifth of its wait, as the engine's
+// other retries of a failing dependency do, so seats that failed together do
+// not all come back on the same second.
+const nakJitter = 0.2
+
+// nakBackoff is how long the nth redelivery of a failing message waits: its
+// [Queue.nakSpacing], spread by [nakJitter].
+func (q *Queue) nakBackoff(failures uint64) time.Duration {
+	return backoff.Jitter(q.nakSpacing(failures), nakJitter)
+}
+
+// nakSpacing is the wait the nth redelivery is spread around.
 //
 // The first failure waits [Queue.nakDelay] and each one after that waits
 // twice as long, up to [Queue.nakCeiling]. failures is how many times THIS
@@ -123,7 +134,7 @@ func (q *Queue) nakCeiling() time.Duration {
 // wire from overflowing into a negative wait. The count is clamped to an int
 // before it gets there, because a uint64 past the int range would convert to
 // a negative attempt and read as the first failure rather than the latest.
-func (q *Queue) nakBackoff(failures uint64) time.Duration {
+func (q *Queue) nakSpacing(failures uint64) time.Duration {
 	return backoff.Doubling(int(min(failures, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 

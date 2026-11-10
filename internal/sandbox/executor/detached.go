@@ -560,16 +560,19 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// instead, the glob outside the quotes. Left, the job before's save would
 	// be read by a take of this job's that names the same taker, described by
 	// this job's record as this job's session, and a stopped node's would
-	// wait in the box for as long as the box lives. EVERY PACK ON DEMAND'S
-	// STAGING DIRECTORY goes the same way, each named for its pack alone
-	// ([Paths.SessionPackStaging]): one a pack cut short left, its node
-	// stopped as it packed, would otherwise stay in the box for its life.
-	workDir := sandbox.ShellQuote(p.WorkDir())
+	// wait in the box for as long as the box lives.
+	//
+	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack
+	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
+	// removes what matches instead, the glob outside the quotes: one a pack
+	// cut short left, its node stopped as it packed, would otherwise stay in
+	// the box for its life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
 			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
-		"; rm -rf " + workDir + "/" + saveFiles + "; rm -rf " + workDir + "/" + packStagingFiles
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}

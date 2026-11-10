@@ -1089,7 +1089,7 @@ new task will be filed at, so the two can never share a place.
 
 ## What a seat can do
 
-Eighteen tools, and they are deliberately few — nine that act on a task,
+Nineteen tools, and they are deliberately few: ten that act on a task,
 three that read the container it is filed into, one that writes the one part of
 that container a seat owns, one about CHANGE rather than about state, and four
 over the project's [files](#a-projects-files):
@@ -1102,6 +1102,7 @@ over the project's [files](#a-projects-files):
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the one field that is not every caller's to set: it belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
+| `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or a write permission of the seat's own GitHub App), as a decision on the item that needs it: the grant or declining. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. `mode` picks the ranking: `hybrid` (the default) fuses the words and, where the company has an embeddings provider, the meaning; `keyword` ranks by the words alone, for an exact name or error text; `semantic` by meaning alone (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. The answer says the `mode` it **served**, and carries a `degraded` sentence whenever that is not the one asked for — a hybrid search with nothing to rank by meaning ranks by the words and says so, while a `semantic` one runs nothing at all and says that this tells the seat nothing about whether the work exists. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Across two projects the subtasks cannot follow — a subtask lives in its parent's project, and one under an item in another project is drawn under it on neither board — so a merge whose duplicate **has subtasks to carry** into an item in another project is refused before it writes anything unless `move_subtasks` is false: move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false`. A duplicate with no subtasks merges across projects either way, since nothing moves. So is one moving the subtasks onto one of them refused, since a subtask would end up under itself, and one moving them while a **cross-project move has not yet carried** the duplicate or the survivor answers **unavailable** — the walk is about to change which project that end is in, and the same call a moment later is decided on where it went. Both items must be live: a merge of an item in the **trash**, or into one, is refused whichever way the subtasks go (restore it first), and a subtask in the trash is frozen, so it stays under the duplicate, where a restore finds it. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running. One only a person can unblock waits, named on every tick with what releases it, without holding up the rest: a survivor that went to the trash since (`tracker_merges_waiting_on_the_trash`) until it is restored, a duplicate that did (`tracker_merges_of_items_in_the_trash`) until it is restored — the trash takes no write, so nothing moves on its behalf meanwhile — and a survivor filed under one of the duplicate's subtasks since (`tracker_merges_waiting_on_a_cycle`) until it is filed elsewhere. One whose survivor was purged has nothing left to merge into, so its mark is cleared and the duplicate stays open |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. It takes the authority `routing_unit` does — the **lead** of the item's project, or an administrator. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
@@ -1170,26 +1171,39 @@ dropped. Silently ignoring a due date is the worst of the three outcomes: the
 write succeeds, the answer says `applied`, and the task simply has no due date
 — which a model reads as having set one.
 
-`my_work` is the call a turn opens with, and it answers **seven lists** rather
+`my_work` is the call a turn opens with, and it answers **eight lists** rather
 than one: the seat's priorities in the order somebody put them, the work it
 holds, the questions waiting on its answer (each with the literal call that
 answers it), the checklist items it claimed on **other people's** tasks, the
-work it was brought onto without owning, what moved on what it follows, and
-what just became workable. Each is a different claim on the reader's
-attention, and a seat that saw only its assignments would miss six of them.
-One call rather than seven because assembled separately a seat could see a
+work it was brought onto without owning, what moved on what it follows, what
+just became workable, and **what it is holding up**: the open work it holds
+that other open work waits on, the most waited on first. Each is a different
+claim on the reader's attention, and a seat that saw only its assignments would
+miss seven of them. One call rather than eight because assembled separately a seat could see a
 task in `assigned` that had already moved out of it by the time `priorities`
 was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
 
-Each list is a **page of at most 20**, and beside the seven lists the answer
+Each list is a **page of at most 20**, and beside the eight lists the answer
 carries `totals` — one `{total, capped}` per list, counted by the same
 predicate in the same read. The page is twenty; the claim is not, and a count
 taken from a list's length says 20 for the seat holding two hundred. `capped`
 means the count stopped at 10,000, so the number is a floor. `priorities` is
 cut **after** finished and removed entries are dropped, so a list whose head is
 done work still shows its first twenty open entries in the order they were put.
+
+A `holding_up` row is the task plus `blocks` (how many open items wait on it,
+directly or through another waiting item, each counted once; `blocks_capped`
+says the count is a floor, past 512 waiting items or past the 2,048 items one
+read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
+left out, at most eight) and `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over). It is
+the one list about who waits on the reader rather than what waits for them, and
+it is the same for a person, whose dashboard shows it under My work. The list
+ranks the first 100 such items in the queue's own order: a person
+holding a review or a decision as a work item can stall a team that nothing
+else tells them about. What to do with a row is the tracker's own actions, taken
+by the reader.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like
@@ -2202,7 +2216,8 @@ something of the seat that holds it
 
 | Reason | Starts a turn |
 |---|---|
-| `mention`, `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
+| `mention` | always, but for an agent named in another agent's comment that states it asks nothing (`asks: false`): that @-mention is a reference, while a person it names is addressed as ever |
+| `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
 | `watcher` | for a person's comment that names nobody |
@@ -2213,8 +2228,9 @@ So **a person's comment that names nobody wakes everyone on the task**: a
 person writing on a task speaks to whoever follows it. **A comment that names
 somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
 seats it names, and everyone else on the task reads it in their inbox.
-**Another agent's comment wakes only the seats it names**: by @-mention, with
-`ask`, or by answering their question; a reply in a thread wakes only the
+**Another agent's comment wakes only the seats it asks**: by @-mention with
+`asks: true`, with `ask`, or by answering their question; an @-mention in a
+comment with `asks: false` is a reference, read in the inbox, and wakes nobody; a reply in a thread wakes only the
 seats with a stake there, the asker of an open ask and the seat that owes it,
 so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so

@@ -90,6 +90,11 @@ func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
 	return call(ctx, w.r, opThread, nil, threadArgs{Query: q, Fresh: fresh})
 }
 
+// WorkPatterns answers what the company's comments and answers did in a window.
+func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return call(ctx, w.r, opWorkPatterns, nil, q)
+}
+
 // Activity answers what happened to a task or a project.
 func (w Work) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 	worklet.ActivityAnswer, error) {
@@ -1084,6 +1089,11 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 func (u Usage) ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) (
 	[]usage.ServerToolCallsRow, error) {
 	return call(ctx, u.r, opUsageServerToolCalls, nil, q)
+}
+
+// TurnLedger answers every seat's turns by what woke them and what they did.
+func (u Usage) TurnLedger(ctx context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
+	return call(ctx, u.r, opUsageTurnLedger, nil, q)
 }
 
 // ToolsElided answers how many (server, tool) entries the per-seat-day cap

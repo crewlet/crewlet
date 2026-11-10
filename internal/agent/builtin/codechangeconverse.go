@@ -150,6 +150,7 @@ func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (cod
 		r := g.deps.failedWrite(ctx, g.turn, g.tool, g.c, g.repo, w.OpID, err)
 		return code.ConversationResult{}, &r
 	}
+	commit(g.turn, res.Outcome, conversed(w))
 	if res.Refusal != "" {
 		r := conversationRefused(g.tool, res)
 		return code.ConversationResult{}, &r

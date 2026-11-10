@@ -14,13 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // Chatlet's tool names, re-exported from the package that owns the
@@ -832,35 +832,6 @@ func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMes
 	return in
 }
 
-// asksParam is the `asks` argument every posting tool requires of an agent:
-// its own statement that its message asks something (ADR-0113). Not in the
-// schema's required list, because a person's message asks whatever it says.
-func asksParam() map[string]any {
-	return map[string]any{
-		"type": "boolean",
-		"description": "Required of an agent. true when the message asks someone for an " +
-			"answer or an action: a question, a request, a hand-off. Whoever it " +
-			"asks, or the other side of a direct conversation, must then answer. false for " +
-			"news, status notes, acknowledgements and thanks: it wakes only the " +
-			"colleagues you @-mention, told it asks nothing, whoever's question it " +
-			"answers, and anyone with an open question in the thread.",
-	}
-}
-
-// asksOf is the call's `asks`, or, for an agent, the refusal of a call that
-// left it out: whether its message asks is the author's to say, never the
-// engine's guess. A person's message asks whatever it says, so a person's call
-// may leave it out.
-func asksOf(tool string, args map[string]any, author chatlet.AuthorKind) (bool, *tools.Result) {
-	asks, typed := argval.Bool(args["asks"])
-	if !typed && author == chatlet.AuthorAgent {
-		refused := failed(tool + " needs `asks`: true when the message asks someone " +
-			"for an answer or an action, false otherwise.")
-		return false, &refused
-	}
-	return asks, nil
-}
-
 // ChatMessage is what a post carries, read from the words a person or a model
 // wrote: the seats it names (through mentions, which may be nil) and whether
 // it addresses the whole room.
@@ -967,7 +938,7 @@ func (t *postMessage) Description() string {
 	return "Say something new in a room. This starts a TOP-LEVEL message: to " +
 		"answer something somebody said, use " + ReplyInThreadTool + " instead, which " +
 		"puts your answer beside the question where the next reader will " +
-		"find it. @-mention a colleague by handle to reach them specifically; " +
+		"find it. @-mention a colleague by handle, with `asks: true`, to wake them; " +
 		"write @channel only when everybody in the room genuinely needs to " +
 		"stop what they are doing."
 }
@@ -991,7 +962,7 @@ func (t *postMessage) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"channel", "body"},
 	}
@@ -1016,7 +987,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	asks, refused := asksOf(PostMessageTool, args, actor.Kind)
+	asks, refused := asksOf(PostMessageTool, args, actor.Kind == chatlet.AuthorAgent)
 	if refused != nil {
 		return *refused, nil
 	}
@@ -1027,6 +998,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(PostMessageTool, written, id, again)
 }
@@ -1068,7 +1040,7 @@ func (t *replyInThread) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs, %s. No file attachments.",
 					chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"channel", "reply_to", "body"},
 	}
@@ -1097,7 +1069,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	asks, refused := asksOf(ReplyInThreadTool, args, actor.Kind)
+	asks, refused := asksOf(ReplyInThreadTool, args, actor.Kind == chatlet.AuthorAgent)
 	if refused != nil {
 		return *refused, nil
 	}
@@ -1108,6 +1080,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(ReplyInThreadTool, written, id, again)
 }
@@ -1144,7 +1117,7 @@ func (t *sendDM) Parameters() map[string]any {
 				"description": fmt.Sprintf("Up to %d URLs this message points "+
 					"at, %s. There are no file attachments.", chatlet.MaxLinks, linkShape),
 			},
-			"asks": asksParam(),
+			"asks": asksParam(chatAsks),
 		},
 		"required": []any{"to", "body"},
 	}
@@ -1180,7 +1153,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	asks, refused := asksOf(SendDMTool, args, actor.Kind)
+	asks, refused := asksOf(SendDMTool, args, actor.Kind == chatlet.AuthorAgent)
 	if refused != nil {
 		return *refused, nil
 	}
@@ -1220,6 +1193,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return directPostFailure(ctx, to, room, err, again), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		// THE OPEN LANDED AND THE ANSWER SAYS SO, as a refused post's does:

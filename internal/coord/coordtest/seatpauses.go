@@ -167,6 +167,33 @@ var seatPauseCases = []fleetCase{{
 		}
 	},
 }, {
+	// A FAILURE'S PAUSE IS THE ENGINE'S AND SAYS WHAT FAILED ON WHAT: read back
+	// whole, so an apply can tell whether the settings it failed on changed;
+	// one with half of that, or by anybody but the engine, is refused.
+	name: "a failure's pause keeps its kind and basis, and only the engine takes one",
+	fn: func(h *fleetHarness) {
+		swe := seatID("swe")
+		failure := &coord.SeatFailure{Kind: "sandbox_configuration", Basis: "b1"}
+		for _, bad := range []coord.SeatPause{
+			{Seat: swe, By: "engine", ByKind: iam.ActorSystem, At: h.now(), Failure: &coord.SeatFailure{Kind: "sandbox_configuration"}},
+			{Seat: swe, By: "engine", ByKind: iam.ActorSystem, At: h.now(), Failure: &coord.SeatFailure{Basis: "b1"}},
+			{Seat: swe, By: "jane-doe", ByKind: iam.ActorHuman, At: h.now(), Failure: failure},
+		} {
+			if _, created, err := h.f.CreateSeatPause(h.ctx, bad); err == nil || created {
+				h.t.Errorf("CreateSeatPause(%+v) = (%v, %v), want a refusal", bad, created, err)
+			}
+		}
+		if _, created, err := h.f.CreateSeatPause(h.ctx, coord.SeatPause{Seat: swe, By: "engine",
+			ByKind: iam.ActorSystem, At: h.now(), Failure: failure}); err != nil || !created {
+			h.t.Fatalf("CreateSeatPause for a failure = (%v, %v), want created", created, err)
+		}
+		got, paused, err := h.f.SeatPause(h.ctx, swe)
+		if err != nil || !paused || got.Failure == nil || *got.Failure != *failure {
+			h.t.Errorf("the failure's pause reads back as %+v (paused %v, err %v), want its failure %+v",
+				got, paused, err, *failure)
+		}
+	},
+}, {
 	// ORDERED BY SEAT ID, the key a pause is filed under, so two backends
 	// answer a listing in the same order — and each seat's pause is its own:
 	// pausing one names that seat and no other.

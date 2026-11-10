@@ -103,6 +103,9 @@ var contract = []Entry{
 	{"CHANGES", ReadLiteral, "internal/worklet.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
 	{"GROUP_AXES", ReadLiteral, "internal/worklet.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
 	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+
+	// advisor.ts
+	{"ACCESS_OPTION_PREFIX", ReadScalar, "internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,

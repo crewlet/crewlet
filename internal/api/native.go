@@ -359,6 +359,14 @@ func (l liveWork) Thread(ctx context.Context, q worklet.ThreadQuery,
 	return r.Thread(ctx, q, fresh)
 }
 
+func (l liveWork) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	r, err := l.reader()
+	if err != nil {
+		return worklet.WorkPatterns{}, err
+	}
+	return r.WorkPatterns(ctx, q)
+}
+
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 

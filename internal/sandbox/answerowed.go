@@ -300,6 +300,11 @@ type Reply struct {
 	// seat, the engine itself), whose reply answers no parked question
 	// ([Reply.putTo]).
 	Writer string
+
+	// Says is whether the delivery carries words its writer addressed to the
+	// conversation (a message, a comment, a review), judged by the engine from
+	// the event's surface. Only such a delivery answers a parked question.
+	Says bool
 }
 
 // Posted is when the delivery's NEWEST event was posted — the vendor's own
@@ -359,6 +364,9 @@ func (r Reply) ids() []string {
 // ([PendingStore.MarkAwaiting] refuses one without), and every event carries
 // its instant.
 func (r Reply) qualifies(run PendingRun) bool {
+	if !r.Says {
+		return false
+	}
 	if posted := r.Posted(); run.AskedAt.IsZero() || posted.IsZero() || posted.Before(run.AskedAt) {
 		return false
 	}

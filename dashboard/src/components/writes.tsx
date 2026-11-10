@@ -15,7 +15,7 @@
  */
 
 import { usePresentedDialog } from "./dialogPresenter.tsx";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Checkbox,
@@ -47,6 +47,8 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { isAccessOption } from "~/lib/grants.ts";
+import { AccessGrantDialog } from "~/components/advisorFix.tsx";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
 import { useAnswerHold, useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
@@ -659,6 +661,63 @@ const OTHER = "\u0000other";
  */
 const DECISION_REPLY_MAX = 2000;
 
+type AskOption = { id: string; label: string; detail?: string };
+
+/** What a grant option's button says before the engine's words arrive. */
+const GRANT_LABEL = "Review the access change";
+
+/**
+ * A grant option drawn in the engine's words (ADR-0118), never the asker's:
+ * the label and note of the change `advisor_access` builds for the asker.
+ */
+function useGrantWords(options: readonly AskOption[], seat: string): readonly AskOption[] {
+  const grant = options.find((o) => isAccessOption(o.id))?.id;
+  const { data } = useQuery("advisor_access", { seat, access: grant }, { enabled: !!grant });
+  const words = data?.fix.options[0];
+  return useMemo(
+    () =>
+      options.map((o) =>
+        isAccessOption(o.id)
+          ? {
+              id: o.id,
+              label: o.id === grant && words ? words.label : GRANT_LABEL,
+              detail: o.id === grant && data ? data.fix.unchanged : undefined,
+            }
+          : o,
+      ),
+    [options, grant, words, data],
+  );
+}
+
+/** What an ask is answered from; see [AnswerAsk]. */
+type AnswerAskProps = {
+  /**
+   * The task's address ([itemAddress]): its key, or its id where another
+   * task claimed that key first and the key would answer on the claimant.
+   */
+  item: string;
+  /** What the answer's toast calls the task (its key) where `item` is its id. */
+  label?: string;
+  /** The ask's comment id, which the answer names. */
+  comment: string;
+  /** Who asked, by name, for the reply field's placeholder. */
+  asker: string;
+  /** The ask's options; empty for an ask answered in words. */
+  options: readonly { id: string; label: string; detail?: string }[];
+  /** The option the asker recommends, if any. */
+  recommended?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called once the engine has the answer. */
+  onAnswered: (answer: AskAnswer) => void;
+  /** How the answer is laid out; see above. */
+  layout?: "line" | "row" | "buttons";
+  /** The asker's handle: whose access a grant option would change. */
+  askedBy: string;
+  /** The question asked, for a grant's preview title. */
+  question?: string;
+};
+
 /**
  * Answer an ask in place: accept its recommendation, choose another option,
  * or reply in your own words.
@@ -694,7 +753,20 @@ const DECISION_REPLY_MAX = 2000;
  * answered in that field from the start. Whichever the layout, the answer
  * goes through this one write, so the rules above hold for all three.
  */
-export function AnswerAsk({
+export function AnswerAsk(props: AnswerAskProps) {
+  // A GRANT IS DRAWN IN THE ENGINE'S WORDS, read only where an option is one.
+  return props.options.some((o) => isAccessOption(o.id)) ? (
+    <GrantAnswer {...props} />
+  ) : (
+    <AskAnswer {...props} />
+  );
+}
+
+function GrantAnswer(props: AnswerAskProps) {
+  return <AskAnswer {...props} options={useGrantWords(props.options, props.askedBy)} />;
+}
+
+function AskAnswer({
   item,
   comment,
   asker,
@@ -705,29 +777,9 @@ export function AnswerAsk({
   onAnswered,
   layout = "line",
   label,
-}: {
-  /**
-   * The task's address ([itemAddress]): its key, or its id where another
-   * task claimed that key first and the key would answer on the claimant.
-   */
-  item: string;
-  /** What the answer's toast calls the task — its key — where `item` is its id. */
-  label?: string;
-  /** The ask's comment id, which the answer names. */
-  comment: string;
-  /** Who asked, by name, for the reply field's placeholder. */
-  asker: string;
-  /** The ask's options; empty for an ask answered in words. */
-  options: readonly { id: string; label: string; detail?: string }[];
-  /** The option the asker recommends, if any. */
-  recommended?: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Called once the engine has the answer. */
-  onAnswered: (answer: AskAnswer) => void;
-  /** How the answer is laid out; see above. */
-  layout?: "line" | "row" | "buttons";
-}) {
+  askedBy,
+  question,
+}: AnswerAskProps) {
   const write = useAct("comment_on_work_item");
   const named = label || item;
   const rec = options.find((o) => o.id === recommended);
@@ -741,7 +793,18 @@ export function AnswerAsk({
     onOpenChange(false);
   };
 
+  // A GRANT IS PREVIEWED AND SAVED BEFORE IT IS ANSWERED (ADR-0118), so a
+  // person who chose it never leaves the agent told yes with nothing changed.
+  const [granting, setGranting] = useState<string | null>(null);
   const send = async (choice: string) => {
+    if (isAccessOption(choice) && options.some((o) => o.id === choice)) {
+      setGranting(choice);
+      return;
+    }
+    await answer(choice);
+  };
+
+  const answer = async (choice: string) => {
     const option = options.find((o) => o.id === choice);
     const body = text.trim();
     const result = option
@@ -811,129 +874,150 @@ export function AnswerAsk({
     />
   );
 
-  if (layout === "buttons") {
-    // THE FIELD IN THE OPTIONS' PLACE, once "Something else" opened it, and
-    // from the start for an ask that offers none. It takes the focus only
-    // when a press opened it: stepping onto an ask with j or k must not drop
-    // the reader into a field.
-    if (words || open) {
+  const view = (): ReactNode => {
+    if (layout === "buttons") {
+      // THE FIELD IN THE OPTIONS' PLACE, once "Something else" opened it, and
+      // from the start for an ask that offers none. It takes the focus only
+      // when a press opened it: stepping onto an ask with j or k must not drop
+      // the reader into a field.
+      if (words || open) {
+        return (
+          <Stack gap={2}>
+            <Composer
+              label={`Reply to ${asker}`}
+              value={text}
+              onChange={setText}
+              onSubmit={submit}
+              maxLength={DECISION_REPLY_MAX}
+              placeholder={placeholder}
+              disabled={!write.access.can || write.busy}
+              autoFocus={!words}
+              actions={
+                <>
+                  {!words && (
+                    <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+                      Cancel
+                    </Button>
+                  )}
+                  <WriteButton
+                    write={write}
+                    size="small"
+                    variant="primary"
+                    blocked={text.trim() ? undefined : "Write the reply first."}
+                    showRefusal={false}
+                    onPress={submit}
+                  >
+                    Send
+                  </WriteButton>
+                </>
+              }
+            />
+            <RefusalNote write={write} />
+          </Stack>
+        );
+      }
       return (
-        <Stack gap={2}>
-          <Composer
-            label={`Reply to ${asker}`}
-            value={text}
-            onChange={setText}
-            onSubmit={submit}
-            maxLength={DECISION_REPLY_MAX}
-            placeholder={placeholder}
-            disabled={!write.access.can || write.busy}
-            autoFocus={!words}
-            actions={
-              <>
-                {!words && (
-                  <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
-                    Cancel
-                  </Button>
-                )}
-                <WriteButton
-                  write={write}
-                  size="small"
-                  variant="primary"
-                  blocked={text.trim() ? undefined : "Write the reply first."}
-                  showRefusal={false}
-                  onPress={submit}
-                >
-                  Send
-                </WriteButton>
-              </>
-            }
-          />
-          <RefusalNote write={write} />
-        </Stack>
+        <AnswerChoices
+          write={write}
+          options={options}
+          recommended={recommended}
+          pending={write.busy ? chosen : null}
+          onChoose={(choice) => {
+            setChosen(choice);
+            void send(choice);
+          }}
+          onSomethingElse={() => {
+            setChosen(OTHER);
+            onOpenChange(true);
+          }}
+        />
       );
     }
-    return (
-      <AnswerChoices
-        write={write}
-        options={options}
-        recommended={recommended}
-        pending={write.busy ? chosen : null}
-        onChoose={(choice) => {
-          setChosen(choice);
-          void send(choice);
-        }}
-        onSomethingElse={() => {
-          setChosen(OTHER);
-          onOpenChange(true);
-        }}
-      />
-    );
-  }
 
-  if (!open) {
-    const row = layout === "row";
-    return (
-      <div className={row ? "decision-answer decision-answer--row" : "decision-answer"}>
-        {!row && <Recommendation options={options} recommended={recommended} />}
-        <span className="decision-answer-actions">
-          {rec && (
+    if (!open) {
+      const row = layout === "row";
+      return (
+        <div className={row ? "decision-answer decision-answer--row" : "decision-answer"}>
+          {!row && <Recommendation options={options} recommended={recommended} />}
+          <span className="decision-answer-actions">
+            {rec && (
+              <WriteButton
+                write={write}
+                size="small"
+                variant="primary"
+                showRefusal={false}
+                onPress={() => void send(rec.id)}
+              >
+                Accept
+              </WriteButton>
+            )}
             <WriteButton
               write={write}
               size="small"
-              variant="primary"
+              variant={rec ? (row ? "ghost" : "secondary") : "primary"}
               showRefusal={false}
-              onPress={() => void send(rec.id)}
+              pressing={false}
+              blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+              onPress={() => onOpenChange(true)}
             >
-              Accept
+              {rec ? "Change" : words ? "Reply" : "Answer"}
             </WriteButton>
-          )}
-          <WriteButton
-            write={write}
-            size="small"
-            variant={rec ? (row ? "ghost" : "secondary") : "primary"}
-            showRefusal={false}
-            pressing={false}
-            blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
-            onPress={() => onOpenChange(true)}
-          >
-            {rec ? "Change" : words ? "Reply" : "Answer"}
-          </WriteButton>
-        </span>
+          </span>
+          <RefusalNote write={write} />
+        </div>
+      );
+    }
+
+    return (
+      <div className="decision-answer is-open">
+        {words ? (
+          composer
+        ) : (
+          <ChoiceList
+            label="Answers"
+            value={chosen}
+            onChange={setChosen}
+            disabled={!write.access.can || write.busy}
+            options={[
+              ...options.map((o) => ({
+                value: o.id,
+                label: o.label,
+                detail: o.detail,
+                tag: o.id === recommended ? "Recommended" : undefined,
+              })),
+              {
+                value: OTHER,
+                label: "Something else",
+                detail: "Reply in your own words instead.",
+                separated: true,
+                panel: composer,
+              },
+            ]}
+            footer={other ? undefined : actions}
+          />
+        )}
         <RefusalNote write={write} />
       </div>
     );
-  }
+  };
 
+  const grant = granting && (
+    <AccessGrantDialog
+      seat={askedBy}
+      access={granting}
+      question={question ?? "Allow this access?"}
+      onClose={() => setGranting(null)}
+      onApplied={() => {
+        setGranting(null);
+        void answer(granting);
+      }}
+    />
+  );
   return (
-    <div className="decision-answer is-open">
-      {words ? (
-        composer
-      ) : (
-        <ChoiceList
-          label="Answers"
-          value={chosen}
-          onChange={setChosen}
-          disabled={!write.access.can || write.busy}
-          options={[
-            ...options.map((o) => ({
-              value: o.id,
-              label: o.label,
-              detail: o.detail,
-              tag: o.id === recommended ? "Recommended" : undefined,
-            })),
-            {
-              value: OTHER,
-              label: "Something else",
-              detail: "Reply in your own words instead.",
-              separated: true,
-              panel: composer,
-            },
-          ]}
-          footer={other ? undefined : actions}
-        />
-      )}
-      <RefusalNote write={write} />
-    </div>
+    <>
+      {view()}
+      {grant}
+    </>
   );
 }
 

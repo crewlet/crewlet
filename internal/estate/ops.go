@@ -55,6 +55,7 @@ type TrackerReader interface {
 	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
+	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
 	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 		worklet.ActivityAnswer, error)
 	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
@@ -227,6 +228,7 @@ type UsageReader interface {
 	ReadsElided(ctx context.Context, from, to string) (int64, error)
 	ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error)
 	ToolsElided(ctx context.Context, from, to string) (int64, error)
+	TurnLedger(ctx context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error)
 	RepoReadsPage(ctx context.Context, q usage.RepoReadsQuery, after usage.Group, budget int) (usage.Page[usage.RepoReader], error)
 	RepoReadsElided(ctx context.Context, q usage.RepoReadsQuery) (int64, error)
 }
@@ -755,6 +757,14 @@ var opThread = define("tracker.thread", opRead, trackerDomain, false,
 			return worklet.ResolvedThread{}, errNoHalf
 		}
 		return b.Tracker.Thread(ctx, a.Query, a.Fresh)
+	})
+
+var opWorkPatterns = define("tracker.work_patterns", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+		if b.Tracker == nil {
+			return worklet.WorkPatterns{}, errNoHalf
+		}
+		return b.Tracker.WorkPatterns(ctx, q)
 	})
 
 type activityArgs struct {
@@ -1956,6 +1966,16 @@ var opUsageServerToolCalls = define("usage.server_tool_calls", opRead, usageDoma
 			return nil, errNoHalf
 		}
 		return b.Usage.ServerToolCalls(ctx, q)
+	}).floorless()
+
+// A SEAT'S TURNS BY WAKE AND OUTCOME are one answer, one row per (seat, wake,
+// disposition, outcome) over the range, every node and day summed.
+var opUsageTurnLedger = define("usage.turn_ledger", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
+		if b.Usage == nil {
+			return nil, errNoHalf
+		}
+		return b.Usage.TurnLedger(ctx, q)
 	}).floorless()
 
 var opUsageToolsElided = define("usage.tools_elided", opRead, usageDomain, false,

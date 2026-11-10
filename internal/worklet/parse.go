@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/routing"
 )
 
 // The metadata keys the prompt reads back.
@@ -157,14 +158,25 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// writes AS that seat (iam.ActorFor), so the handle their own gestures
 	// land on — the watch a create leaves, the watch a comment leaves — is
 	// the author the record already carries.
-	routed := Route(candidates, registryHas(reg), record.Actor)
-	if len(routed) == 0 {
+	heard := Heard(candidates, registryHas(reg), record.Actor)
+	routed := routing.Waking(heard)
+	held := routing.Held(heard, routed)
+	if len(routed) == 0 && len(held) == 0 {
 		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",
 			"task", record.Notify.Snapshot.Key, "kind", string(record.Notify.Kind))
 		return nil, nil
 	}
 
-	out := make([]notify.Routed, 0, len(routed))
+	out := make([]notify.Routed, 0, len(routed)+len(held))
+	for _, c := range held {
+		// TOLD AND NOT WOKEN: the notice row is the applier's; this is the
+		// held wake's record, under the reason the seat was told.
+		out = append(out, notify.Routed{Inbound: notify.Inbound{Source: base.Source,
+			Origin: types.TriggerOrigin{Kind: types.OriginWorkItem, ID: record.Notify.Snapshot.Key,
+				Reason: string(c.Reason)}},
+			To: notify.Recipient{Handle: c.Handle}, Held: true,
+			WakeID: changefeed.WakeID(record.OpID, c.Handle), WakeAt: record.CreatedAt})
+	}
 	for _, c := range routed {
 		inbound := base
 		inbound.Metadata = withVia(base.Metadata, string(c.Reason))

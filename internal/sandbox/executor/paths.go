@@ -164,11 +164,13 @@ func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging"
 // AND NEVER ANOTHER PACK'S, for the same reason: two reads of one job at once
 // — a stop's and a collection's — each take its session, and where the job
 // left no archive, or its box would not end it, each packs it now. Sharing one
-// directory, each pack's start cleared the other's files: a pack beside a
-// working harness read the other's lists for its own, or found its own gone,
-// and one moved the other's archive half made, or one whose checks never ran,
-// over the job's capture as its own. Each in its own, the two archives are
-// each whole, each moved over the capture in one rename.
+// directory, each pack's start would clear the other's files: one would move
+// over the job's capture an archive the other had half made, as its own, and
+// the other's move would find nothing to move. Beside a working harness, too,
+// a pack would read the other's lists for its own, or find its own gone, and
+// the archive it moved could be one whose checks never ran ([claudeHeldTar]).
+// Each in its own, the two archives are each whole, each moved over the
+// capture in one rename.
 //
 // Removed whole by the pack when it is done, and by the clear before every
 // run, which removes every pack's, whichever read made it ([packStagingFiles],

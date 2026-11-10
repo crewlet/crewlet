@@ -1,0 +1,20 @@
+{
+  "name": "agent_mentions_without_ask",
+  "pattern": "agent_mentions_without_ask",
+  "seats": [
+    {"handle": "owner", "kind": "person"},
+    {"handle": "pm", "kind": "agent"},
+    {"handle": "backend", "kind": "agent"}
+  ],
+  "steps": [
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "backend", "expect": {"woken": ["backend"]}},
+    {"at": 40, "actor": "backend", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["pm"], "expect": {"woken": ["pm"]}},
+    {"at": 85, "actor": "pm", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["backend"], "expect": {"woken": ["backend"]}},
+    {"at": 130, "actor": "backend", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["pm"], "expect": {"woken": ["pm"]}},
+    {"at": 172, "actor": "pm", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["backend"], "expect": {"woken": ["backend"]}},
+    {"at": 220, "actor": "backend", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["pm"], "expect": {"woken": ["pm"]}},
+    {"at": 263, "actor": "pm", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["backend"], "expect": {"woken": ["backend"]}},
+    {"at": 300, "actor": "backend", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["pm"], "asks": false, "expect": {"woken": []}},
+    {"at": 340, "actor": "pm", "verb": "comment", "item": "W-1", "say": "ack", "mentions": ["backend"], "asks": false, "expect": {"woken": []}}
+  ]
+}

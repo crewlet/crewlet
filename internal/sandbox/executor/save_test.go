@@ -501,19 +501,6 @@ var heldPacks = []struct {
 		staged: packStagingLeft},
 }
 
-// packStagingLeft is every staging directory a pack on demand left in box: each
-// is named for its pack alone (executor.Paths.SessionPackStaging), so it is
-// found by its pattern rather than named.
-func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
-	t.Helper()
-	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).WorkDir())+"/session-pack-staging.*; do "+
-		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
-	if err != nil {
-		t.Fatalf("asking the box for its packs' staging directories: %v", err)
-	}
-	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
-}
-
 // A PACK BESIDE A WORKING HARNESS PROVES THE SESSION'S OWN TRANSCRIPT WHATEVER
 // ITS FIND READS OF IT. Claude Code rewrites that transcript in place where it
 // withdraws a message (2.1.310's removeTranscriptMessage, read in its shipped
@@ -1518,35 +1505,5 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	}
 	if got := boxFile(t, b, p.SessionDigests()); got != digests || got == "" {
 		t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
-	}
-}
-
-// THE CLEAR BEFORE EVERY RUN REMOVES EVERY PACK ON DEMAND'S STAGING DIRECTORY,
-// whichever read made it: each is named for its pack alone
-// (executor.Paths.SessionPackStaging), so the clear removes what matches their
-// pattern, and two that packs cut short left — their node stopped as they
-// packed — outlive no clear.
-//
-// Mutation: leave the packs' staging directories out of the clear, or quote
-// their pattern so it matches nothing, and they outlive it.
-func TestTheClearBeforeEveryRunRemovesEveryPacksStagingDirectory(t *testing.T) {
-	t.Parallel()
-	runner, b := sessionBox(t, "2.1.310")
-	p := paths(b)
-	cut := []string{p.SessionPackStaging("a-pack-cut-short"), p.SessionPackStaging("another-cut-short")}
-	for _, staged := range cut {
-		if err := b.WriteFile(t.Context(), staged+"/capture", []byte("part of a pack")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := packStagingLeft(t, b); len(got) != len(cut) {
-		t.Fatalf("the box holds %d packs' staging directories before the clear, want the %d the case left: %s",
-			len(got), len(cut), strings.Join(got, ", "))
-	}
-	if err := runner.ClearArtifacts(t.Context(), b); err != nil {
-		t.Fatalf("ClearArtifacts: %v", err)
-	}
-	if left := packStagingLeft(t, b); len(left) > 0 {
-		t.Errorf("the clear left packs' staging directories: %s", strings.Join(left, ", "))
 	}
 }

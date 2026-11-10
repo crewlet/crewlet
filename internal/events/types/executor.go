@@ -558,6 +558,16 @@ const (
 	// models unreachable, a defect it keeps meeting), never the box, which
 	// answered.
 	ExecutorFailureResumeFailing = "resume_failing"
+
+	// ExecutorFailureStateRetired is a run whose parked turn was saved in a format
+	// no live node reads any more: an upgrade retired it, so it is ended, never
+	// retried, and a person's reply on it goes back to the seat.
+	ExecutorFailureStateRetired = "state_retired"
+
+	// ExecutorFailureItemFinished is a run parked on a question about a work item
+	// that was finished or removed since: the question is moot, so the run is
+	// ended and a person's reply on it goes back to the seat.
+	ExecutorFailureItemFinished = "item_finished"
 )
 
 // EventType is the "executor_failed" wire type.

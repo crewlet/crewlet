@@ -147,16 +147,16 @@
 //     and its notification's excerpt again up to [MaxExcerpt];
 //   - a comment: 3 037 bytes at 1 KiB, carried twice the same way, with the
 //     commenter's watch;
-//   - an edit: 1 157 bytes for a status change — the change itself is a few
+//   - an edit: 1 181 bytes for a status change — the change itself is a few
 //     bytes, and the rest the record's envelope, its frame and the routing
 //     snapshot every notification takes;
 //   - a turn charged to its task: 1 608 bytes with its summary at
 //     [MaxTurnSummary].
 //
-// So the day is 9.9 MB of records — 1.44 MB of tasks, 2.50 of comments, 1.16
+// So the day is 9.9 MB of records — 1.44 MB of tasks, 2.50 of comments, 1.18
 // of edits and 4.82 of turns: half of it is the turns, whose every field is
 // capped, so the text a company writes moves it less than its rate of turns
-// does (a 1 KiB description and a 512-byte comment make it 9.1 MB). Its keys
+// does (a 1 KiB description and a 512-byte comment make it 9.2 MB). Its keys
 // are a new project's, one or two digits, where a project of the reference
 // company's writes five by its fifth year: three bytes more wherever a key is
 // written, about 8 kB of the day. Beside the records the seats' 12 500

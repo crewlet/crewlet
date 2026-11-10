@@ -264,6 +264,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   config: "settings",
   "code-settings": "settings",
   diagnostics: "settings",
+  advisor: "settings",
   backups: "settings",
   storage: "settings",
   account: "account",

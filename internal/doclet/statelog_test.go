@@ -165,6 +165,33 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE, whose apps ride beside its login.
 		rec.Actor, rec.ActorKind, rec.OperatorID = "token:ci", doclet.AuthorOperator, "token:ci"
 		rec.ActorApps = []iam.Grant{iam.GrantDoclet}
+	case "Notify.Asks":
+		// AN AGENT'S COMMENT STATING IT ASKS NOTHING, which every build must
+		// carry: the statement is what makes it wake no agent.
+		asks := false
+		rec.Actor, rec.ActorKind = "ana", doclet.AuthorAgent
+		rec.Notify = &doclet.Notify{Kind: doclet.ChangeComment, PageID: "p-1", Asks: &asks}
+	case "Notify.Awaiting":
+		// A REPLY NAMING THE AGENT THAT ASKED IN ITS THREAD.
+		rec.Notify = &doclet.Notify{Kind: doclet.ChangeComment, PageID: "p-1",
+			Awaiting: []string{"ana"}}
+	case "CommentPatch.Closes":
+		// A COMMENT ANSWERING AN OPEN ASK, which the applier marks answered.
+		body, err := json.Marshal(doclet.PagePatch{V: doclet.DocumentVersion,
+			Comment: &doclet.CommentPatch{ID: "c-2", Closes: []string{"c-1"}}})
+		if err != nil {
+			return nil, err
+		}
+		rec.Mutation = body
+	case "CommentPatch.Asks":
+		// A COMMENT KEEPING ITS AUTHOR'S STATEMENT, for its edits and replies.
+		asks := true
+		body, err := json.Marshal(doclet.PagePatch{V: doclet.DocumentVersion,
+			Comment: &doclet.CommentPatch{ID: "c-1", Asks: &asks}})
+		if err != nil {
+			return nil, err
+		}
+		rec.Mutation = body
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

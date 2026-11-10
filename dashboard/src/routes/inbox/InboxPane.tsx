@@ -610,6 +610,8 @@ function AskPane({
             label={frame.itemKey}
             comment={ask.comment}
             asker={frame.name}
+            askedBy={ask.asked_by}
+            question={ask.decision?.question}
             options={options}
             recommended={decision?.recommended}
             open={open}

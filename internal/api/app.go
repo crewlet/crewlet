@@ -943,6 +943,9 @@ func New(opts Options) (*App, error) {
 	// And the node's latest alarm evaluation, which the Models and the MCP
 	// servers answers carry their kinds from.
 	sources.Alarms = opts.Runtime.LatestAlarms
+	sources.AlarmsEvaluated = opts.Runtime.AlarmsEvaluated
+	// And every seat's pause, which the advisor reads for a failure's.
+	sources.Pauses = opts.Runtime.SeatPauses()
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()

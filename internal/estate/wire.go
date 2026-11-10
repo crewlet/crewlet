@@ -482,6 +482,10 @@ type reply struct {
 	// included, since a walking gesture's earlier steps committed whether
 	// or not a later one failed.
 	Written []types.WorkItem `json:"written,omitempty"`
+
+	// Committed is the kinds of change those writes were, for the asking
+	// turn's outcome ([worklet.WriteLog.Commit]).
+	Committed []types.CommittedChange `json:"committed,omitempty"`
 }
 
 // Answers is the id of the request this reply answers ([signedask.Reply]).

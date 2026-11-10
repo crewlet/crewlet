@@ -644,6 +644,10 @@ func taskReads() map[string]indexedRead {
 		"the move stragglers walk":      seek(stranded, strandedAfterStatement, "", WalkBatch),
 		"the apply's duplicate probe": seek(ranks, rankDuplicateStatement,
 			"P01", "P01", "a000001", "t-00002"),
+		"the advisor's answers in a window": seek(key, patternAnswersStatement,
+			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
+		"the advisor's idle reviews": seek("tracker_tasks_queue_idx", patternIdleReviewsStatement,
+			"qa", string(GroupActive), store.EncodeTime(planNow), store.EncodeTime(planNow)),
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
@@ -790,6 +794,12 @@ func taskReads() map[string]indexedRead {
 			claimsPageStatement, person, 21),
 		"the checklist items counted": seek("tracker_checklist_items_assignee_idx",
 			cappedCountStatement(claimsFrom, claimsWhere), person, TotalHintCeiling+1),
+		// A HELD ITEM'S WALK, one step at a time: what waits on an item, by
+		// the dependency key's blocker prefix.
+		"what waits on a held item": func() indexedRead {
+			statement, open := holdingWaitersStatement()
+			return seek(blockers, statement, append([]any{task}, open...)...)
+		}(),
 	} {
 		reads[name] = read
 	}
@@ -802,6 +812,7 @@ func taskReads() map[string]indexedRead {
 		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
 		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
 		"unblocked":     {unblockedBlock(person), queue},
+		"holding up":    {holdingBlock(person), queue},
 		// THE WORK PICKUP'S TWO READY BLOCKS, each a seek of the queue
 		// by the seat and the status group.
 		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
@@ -1115,13 +1126,15 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			len(marked), err)
 	}
 	reads := map[string]indexedRead{
-		"a task's own history":          seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
-		"a purged task's rows":          seek(subject, purgedHistoryStatement, purged),
-		"one change's routing":          seek(historyKey, routingRecordStatement, record),
-		"where a change sits":           seek(historyKey, recordPositionStatement, record),
-		"a person's inbox":              seek(historyKey, page[0].sql, page[0].args...),
-		"an inbox's unread marks below": seek(historyKey, marked[1].sql, marked[1].args...),
-		"the repair's horizon":          seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
+		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
+		"when an item last changed hands": seek(subject, handedOverStatement, task),
+		"a task's own history":            seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"a purged task's rows":            seek(subject, purgedHistoryStatement, purged),
+		"one change's routing":            seek(historyKey, routingRecordStatement, record),
+		"where a change sits":             seek(historyKey, recordPositionStatement, record),
+		"a person's inbox":                seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's unread marks below":   seek(historyKey, marked[1].sql, marked[1].args...),
+		"the repair's horizon":            seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,
 			at(9_000), at(9_500), 64),
 		"a subject's effective instant": seek(subject, effectiveAtStatement,
@@ -1129,8 +1142,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
-		"who last changed a seat's ready work": seek(subject, arms(2, readyMovedArm),
+		"what last woke a seat to its ready work": seek("tracker_notifications_woke_idx", arms(2, readyMovedArm),
 			task, "ana", "t-0008", "ana"),
+		"who asked for a seat's reviews": seek(subject, arms(2, readyReviewArm), task, "t-0008"),
 		"when a seat's own ready work was filed": seek(subject, arms(2, readyFirstArm),
 			task, "t-0008"),
 		"a seat's progress on its started work": seek(subject, arms(2, readyProgressArm),

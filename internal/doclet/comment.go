@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,6 +36,10 @@ type NewComment struct {
 	// Mentions are handles this comment named. Each is woken whether or
 	// not they watch, and each is subscribed.
 	Mentions []string
+
+	// Asks is an agent author's statement of whether the comment asks
+	// ([Notify.Asks]); nil for a person's.
+	Asks *bool
 
 	Quiet bool
 }
@@ -86,10 +91,16 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				if err = s.refuseReserved(actor, head.Container, false); err != nil {
 					return statelog.Decision{}, err
 				}
+				asks := statedBy(actor, in.Asks)
+				wakes, closes, err := stakesTx(ctx, tx, pageID, comment.ReplyTo,
+					actor.Name(), mentions, asks != nil && *asks)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
 				patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
 					ID: comment.ID, Body: &body, Author: comment.Author,
 					AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
-					Mentions: mentions,
+					Mentions: mentions, Asks: asks, Closes: closes,
 				}}
 				// A MENTION SUBSCRIBES, and nothing else does. It is
 				// carried on the patch as the whole watcher set, because
@@ -102,6 +113,9 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				scope := ScopeSet{Subject: true, Container: head.Container}
 				notify := s.notifyOf(in.Quiet, ChangeComment, head,
 					excerpt(body), mentions)
+				if notify != nil {
+					notify.Asks, notify.Awaiting = asks, wakes
+				}
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 			},
 		}
@@ -198,11 +212,13 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 				scope := ScopeSet{Subject: true, Container: head.Container}
 				notify := s.notifyOf(false, ChangeCommentEdited, head,
 					excerpt(body), nil)
+				// AN EDIT KEEPS THE STATEMENT ITS COMMENT WAS POSTED WITH.
+				notify.Asks = held.Asks
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 					V: DocumentVersion, Comment: &CommentPatch{
 						ID: commentID, Body: &body, Author: held.Author,
 						AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
-						Mentions: held.Mentions,
+						Mentions: held.Mentions, Asks: held.Asks,
 					},
 				}, notify, at)
 			},
@@ -350,6 +366,95 @@ func subscribeMentions(page *Page, mentions []string) bool {
 }
 
 // readCommentTx reads one comment from inside a decision's own transaction.
+// statedBy is an agent's statement of whether its comment asks, which every
+// agent comment carries, and nil for anybody else's.
+func statedBy(actor Actor, asks *bool) *bool {
+	if actor.Kind != AuthorAgent {
+		return nil
+	}
+	stated := asks != nil && *asks
+	return &stated
+}
+
+// stakesTx is what a comment by author does to the open asks on its page
+// (ADR-0113): the agents it wakes for one, and the asks it answers. A reply
+// wakes the authors of the open asks in its thread, less a co-asker, and an
+// ask is answered by a later comment that asks nothing, by a seat it named or
+// by anybody when it named nobody; at the top level the same holds for the
+// asks of the agents a comment names. An asker's own comments answer nothing.
+func stakesTx(ctx context.Context, tx *sql.Tx, pageID, replyTo, author string,
+	mentions []string, asks bool) (wakes, closes []string, err error) {
+
+	var open []Comment
+	switch {
+	case replyTo != "":
+		root := replyTo
+		switch replied, rerr := readCommentTx(ctx, tx, pageID, replyTo); {
+		case errors.Is(rerr, ErrNotFound):
+			return nil, nil, nil
+		case rerr != nil:
+			return nil, nil, rerr
+		case replied.ReplyTo != "":
+			root = replied.ReplyTo
+		}
+		open, err = openAsksTx(ctx, tx, openInThreadStatement, pageID, root, root, MaxOpenAsks)
+	case len(mentions) > 0:
+		open, err = openAsksTx(ctx, tx, openOnPageStatement, pageID, MaxOpenAsks)
+		open = slices.DeleteFunc(open, func(c Comment) bool {
+			return !slices.Contains(mentions, c.Author) || !slices.Contains(c.Mentions, author)
+		})
+	}
+	if err != nil || len(open) == 0 {
+		return nil, nil, err
+	}
+	owes := false
+	var own []string
+	for _, c := range open {
+		owes = owes || (c.Author != author && slices.Contains(c.Mentions, author))
+		if c.Author == author {
+			own = append(own, c.Mentions...)
+		}
+	}
+	for _, c := range open {
+		if c.Author == author {
+			continue
+		}
+		if !asks && (len(c.Mentions) == 0 || slices.Contains(c.Mentions, author)) {
+			closes = append(closes, c.ID)
+		}
+		// A CO-ASKER'S REPLY: an author whose only stake is awaiting the seat
+		// this asker awaits does not wake it.
+		coAsker := !owes && slices.ContainsFunc(c.Mentions, func(h string) bool {
+			return slices.Contains(own, h)
+		})
+		if !coAsker && !slices.Contains(wakes, c.Author) && len(wakes) < MaxAwaiting {
+			wakes = append(wakes, c.Author)
+		}
+	}
+	return wakes, closes, nil
+}
+
+// openAsksTx reads the open asking comments one statement selects, in log
+// order.
+func openAsksTx(ctx context.Context, tx *sql.Tx, statement string, args ...any) ([]Comment, error) {
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("doclet: read the open asks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Comment
+	for rows.Next() {
+		var document []byte
+		if err := rows.Scan(&document); err != nil {
+			return nil, err
+		}
+		if c, err := DecodeComment(document); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out, rows.Err()
+}
+
 func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 	Comment, error) {
 
@@ -487,6 +592,20 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 // commentTxStatement is [readCommentTx]'s read of one comment on one page, by
 // its key, named for the plan gate.
 const commentTxStatement = `SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`
+
+// openInThreadStatement reads the open asks of one comment thread, its root
+// and its replies, and openOnPageStatement every open ask on a page, in log
+// order. The literal `asks = 1 AND answered = 0` is what matches the partial
+// index.
+const openInThreadStatement = `
+	SELECT document FROM pages_comments
+	WHERE page_id = ? AND asks = 1 AND answered = 0 AND (id = ? OR reply_to = ?)
+	ORDER BY version LIMIT ?`
+
+const openOnPageStatement = `
+	SELECT document FROM pages_comments
+	WHERE page_id = ? AND asks = 1 AND answered = 0
+	ORDER BY version LIMIT ?`
 
 // revisionStatement reads one immutable body by its page and its number — the
 // statement [Store.Revision] and [Reader.Revision] both read it with, named for

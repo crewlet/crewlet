@@ -28,6 +28,7 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	patterns      worklet.WorkPatterns
 	places        map[string]worklet.TurnPlace
 	placesAsked   []string
 	turns         worklet.TaskTurns
@@ -100,6 +101,10 @@ type stubWork struct {
 
 // Thread answers the asked probe from [stubWork.asks], as the tracker's own
 // inference would: the one open ask addressed to the author, or none.
+func (s *stubWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return s.patterns, nil
+}
+
 func (s *stubWork) Thread(_ context.Context, q worklet.ThreadQuery,
 	_ statelog.Freshness) (worklet.ResolvedThread, error) {
 

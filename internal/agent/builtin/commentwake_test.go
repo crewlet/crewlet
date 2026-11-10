@@ -28,9 +28,11 @@ func TestTheCommentToolSaysACommentWakesOnlyWhomItNames(t *testing.T) {
 	}
 	text := entry.Tool.Description()
 	for _, want := range []string{
-		"wakes a colleague to act on it only when you @-mention them",
-		"question to them with `ask`",
-		"reply (`reply_to`) in a thread they wrote in",
+		"wakes a colleague to act on it only when it asks them",
+		"an @-mention with `asks: true`",
+		"a question put to them with `ask`",
+		"in a thread where they asked or were asked something still open",
+		"is a reference and wakes nobody",
 		"wakes nobody, not even the item's assignee or its reporter",
 		"name whoever you need to act",
 	} {

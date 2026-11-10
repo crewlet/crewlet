@@ -49,8 +49,8 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.ClaudeSkillsSettings(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
-		p.SessionPackStaging("a-pack"), p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
-		p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
+		p.SessionPackStaging("a-pack"), p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
+		p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -174,7 +174,9 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 // would otherwise read as its own — each with the file it was written beside.
 //
 // Mutation: leave either record, or the file beside it, out of the clear, and
-// its row goes red.
+// its row goes red. Join the removal of every pack's staging directory to the
+// statement before it by `&&`, or leave the work directory it names unquoted,
+// and the clear no longer ends with that removal as a statement of its own.
 func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -227,6 +229,14 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
+	}
+	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, by its pattern, in a
+	// statement of its own — joined to the one before by `&&`, a directory
+	// that would not go would keep them all — under the work directory as
+	// quoted, so a home whose path holds a space is never split into words.
+	packs := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-pack-staging.*"
+	if !strings.HasSuffix(cleared, packs) {
+		t.Fatalf("the clear does not end with %q, every pack's staging directory removed: %s", packs, cleared)
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
 	// reuse a box — and so is the harness's own session store, which is the

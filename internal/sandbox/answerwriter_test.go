@@ -29,7 +29,7 @@ func TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation(t *testing.T) {
 	}
 	reply := func(writer string) Reply {
 		return Reply{Conv: answerOnTheDM, Events: []*events.Event{replyAt("use main", asked.Add(time.Second))},
-			Writer: writer}
+			Writer: writer, Says: true}
 	}
 	for name, tc := range map[string]struct {
 		run     PendingRun

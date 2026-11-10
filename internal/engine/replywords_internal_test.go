@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -11,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A REPLY'S WORDS ARE ITS WRITERS', EACH UNDER THEIR OWN NAME WHERE THERE ARE
@@ -121,5 +124,41 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 			!slices.Equal(got.Authors, tc.want.Authors) {
 			t.Errorf("%s: the reply is labelled %+v; want %+v", name, got, tc.want)
 		}
+	}
+}
+
+// ONLY WORDS ADDRESSED TO THE CONVERSATION ANSWER A PARKED QUESTION: a chat
+// message, a work item or page comment does; a field or status change, a page
+// save, an alarm and a work pickup on the same conversation never do, whoever
+// wrote them. A notification no prompt classifies is answered as before.
+func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) {
+	t.Parallel()
+	prompts := notify.NewPrompts(slack.Prompt(), worklet.Prompt{}, doclet.Prompt{}, alarmwake.Prompt{})
+	notice := func(source, kind string) *events.Event {
+		return events.New(types.ExternalNotification{NotificationSource: source, SourceEventType: kind,
+			Body: "words", Metadata: map[string]string{}}, events.TraceContext{})
+	}
+	for _, tc := range []struct {
+		name string
+		ev   *events.Event
+		says bool
+	}{
+		{"a chat message", notice("slack", "message"), true},
+		{"a work item comment", notice(worklet.Source, string(worklet.ChangeComment)), true},
+		{"a page comment", notice(doclet.Source, string(doclet.ChangeComment)), true},
+		{"a work item status change", notice(worklet.Source, string(worklet.ChangeStatus)), false},
+		{"a page save", notice(doclet.Source, string(doclet.ChangeSaved)), false},
+		{"an alarm", notice(alarmwake.Source, "fired"), false},
+		{"a work pickup", events.New(types.WorkPickup{}, events.TraceContext{}), false},
+		{"a notification no prompt classifies", notice("unregistered", "message"), true},
+	} {
+		if got := replySays(prompts, nil, "app", []*events.Event{tc.ev}); got != tc.says {
+			t.Errorf("%s: says = %v, want %v", tc.name, got, tc.says)
+		}
+	}
+	mixed := []*events.Event{notice(worklet.Source, string(worklet.ChangeStatus)),
+		notice(worklet.Source, string(worklet.ChangeComment))}
+	if !replySays(prompts, nil, "app", mixed) {
+		t.Error("a comment beside a status change in one delivery says nothing; the comment is words")
 	}
 }

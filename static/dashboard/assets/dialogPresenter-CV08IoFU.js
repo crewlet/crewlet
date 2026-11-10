@@ -1,1 +1,0 @@
-import{r as e}from"./rolldown-runtime-XKyaHtl9.js";import{i as t}from"./react-C1iE8mnY.js";var n=e(t(),1),r=(0,n.createContext)(null),i=r.Provider;function a(){let e=(0,n.useContext)(r),[t,i]=(0,n.useState)(null),a=(0,n.useCallback)(t=>e?e(t):i(t),[e]);return[e?null:t,a]}export{a as n,i as t};

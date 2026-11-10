@@ -32,6 +32,20 @@ func (r *roundTrip) restoreCounter(project string) {
 // exactly as the node that wins its delivery reads it.
 func (r *roundTrip) wokenBy(handle string, parties *notify.Registry) notify.Inbound {
 	r.t.Helper()
+	routed, last := r.routedOfLast(parties)
+	for _, wake := range routed {
+		if wake.To.Handle == handle && !wake.Held {
+			return wake.Inbound
+		}
+	}
+	r.t.Fatalf("record %d woke %+v and not %s", last, routed, handle)
+	return notify.Inbound{}
+}
+
+// routedOfLast is everything the newest record on the log routes, woken and
+// held, through the change feed's translator and the parser.
+func (r *roundTrip) routedOfLast(parties *notify.Registry) ([]notify.Routed, uint64) {
+	r.t.Helper()
 	last, err := r.log.End(r.t.Context())
 	if err != nil {
 		r.t.Fatalf("read the log's end: %v", err)
@@ -50,13 +64,7 @@ func (r *roundTrip) wokenBy(handle string, parties *notify.Registry) notify.Inbo
 	if err != nil {
 		r.t.Fatalf("parse record %d: %v", last, err)
 	}
-	for _, wake := range routed {
-		if wake.To.Handle == handle {
-			return wake.Inbound
-		}
-	}
-	r.t.Fatalf("record %d reached %+v and not %s", last, routed, handle)
-	return notify.Inbound{}
+	return routed, last
 }
 
 // A WAKE ABOUT THE DUPLICATE OF A KEY SENDS THE SEAT TO ITS ID.

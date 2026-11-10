@@ -2,15 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestATrackerHandsOnEveryTransitionOnce`, `internal/engine.TestAnAlarmTransitionIsPublishedUntilTheBrokerTakesIt`, `internal/alarmwake.TestAnAlarmTransitionWakesEachGrantedSeatOnce`
+- **Enforced-by:** `internal/statelog.TestATrackerHandsOnEveryTransitionOnce`, `internal/engine.TestAnAlarmTransitionIsPublishedUntilTheBrokerTakesIt`, `internal/alarmwake.TestAnAlarmTransitionWakesEachGrantedSeatOnce`, `internal/statelog.TestARestartDoesNotReRaiseAStandingAlarm`
 - **Cost-when-tried:** not tried here: before this record no alarm woke anybody, and a seat learned the deployment's health only by asking. The cost the decision avoids is the one each alternative below names — a flap lost between two reads of a current value, a wake that never happens because the log it would be written on is the one the alarm says is full, and a wake lost to a broker blip with a logged line and no retry (ADR-0012's first failure mode).
 - **Tag-status:** unreleased
 
 ## The decision
 
-An alarm TRANSITION — one instance of the alarm table firing, clearing, or
-found firing by a tracker's first evaluation (`firing_at_boot`) — is handed on
-by the tracker that observed it (`Tracker.OnTransition`) as one
+An alarm TRANSITION, one instance of the alarm table firing or clearing, is
+handed on by the tracker that observed it (`Tracker.OnTransition`) as one
 `AlarmTransition`, whose id the tracker derives from the node, the alarm, the
 log a per-log alarm stands on, the change and the instant the instance was
 raised. The node publishes it as an inbound delivery (`topics.NotificationsInbound`,
@@ -23,10 +22,16 @@ wakes on whichever node takes it — one for every agent seat whose role carries
 republish collapses into the wakes it already made. Nothing commits beside the
 publish, so no publish trails a commit.
 
-A transition its node did not live to publish is not recovered, and need not
+A RESTART IS NOT A TRANSITION. The tracker keeps every instance whose raise the
+broker took in the node's own file (`alarm_standing`), and its first evaluation
+after a restart diffs against them: an instance still up is no transition, one
+that cleared while the node was down is one clear with its original instant,
+and a raise the broker never took is raised again. Before this, every restart
+announced every standing alarm again (`firing_at_boot`, now retired), and a
+node that restarted often woke its health seats about one alarm hundreds of
+times. A clear its node did not live to publish is not recovered, and need not
 be: what is firing NOW is every node's own heartbeat's to say (`fleet_health`),
-which a wake only prompts a seat to read, and a restarted node's first
-evaluation publishes what is still firing as `firing_at_boot`.
+which a wake only prompts a seat to read.
 
 ## Why the obvious alternative is wrong
 

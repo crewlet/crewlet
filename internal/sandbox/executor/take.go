@@ -264,7 +264,15 @@ func (t *takenBody) Close() error {
 // EVERY PACK IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionPackStaging]),
 // named here for that pack alone: two reads of one job at once — a stop's and
 // a collection's — may each pack it, and two packs in one directory clear each
-// other's files and can move each other's archives.
+// other's files and can move each other's archives. Each moves its own over the
+// capture whole, and its read streams what the capture holds when it opens it:
+// its own archive, or the other's where that one's move came after its own.
+//
+// BUT THE CAPTURE IS ONE PATH, and a Claude Code take reads its archive twice,
+// opening the capture again for its second pass ([scrubTar]): where the session
+// changed between the two packs — a job still working — and the other pack's
+// move lands between this take's two passes, the take fails as it is read, its
+// archive changed under it. An OpenCode export is read once.
 //
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the

@@ -439,7 +439,7 @@ describe("the section tabs fold what does not fit into More", () => {
       lay(800);
       mount(["me"]);
       await waitFor(() => expect(drawn()).toHaveLength(6));
-      expect(drawn().at(-1)).toBe("watching");
+      expect(drawn().at(-1)).toBe("collaborating");
       // THE FOLDED TAB IS OUT OF REACH on the strip, and in the menu instead.
       const folded = strip().querySelector("a.is-folded")!;
       expect(folded.getAttribute("aria-hidden")).toBe("true");
@@ -462,7 +462,7 @@ describe("the section tabs fold what does not fit into More", () => {
     test("a strip with room for every tab draws no More", async () => {
       lay(2000);
       mount(["me"]);
-      await waitFor(() => expect(drawn()).toHaveLength(8));
+      await waitFor(() => expect(drawn()).toHaveLength(9));
       expect(screen.queryByRole("button", { name: /^More sections of / })).toBeNull();
     });
   });

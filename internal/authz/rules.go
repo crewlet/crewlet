@@ -308,6 +308,9 @@ const (
 	// ActionWithdrawAsk is a seat withdrawing its own question, or a call its
 	// executor holds for approval (ADR-0111): an agent's alone, on its own.
 	ActionWithdrawAsk Action = toolname.WithdrawAsk
+	// ActionRequestAccess is a seat asking a person for one grant from a
+	// closed list (ADR-0118): an agent's own question, on a work item.
+	ActionRequestAccess Action = toolname.RequestAccess
 
 	// --- the org chart ---------------------------------------------- //
 	//
@@ -1556,6 +1559,10 @@ var rules = map[Action]rule{
 	// A SEAT'S OWN QUESTION WITHDRAWN: the tracker's writer holds it to its
 	// author and a run to its seat, so the row asks nothing more.
 	ActionWithdrawAsk: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
+	// A SEAT ASKING FOR ACCESS: the question is posted through the work
+	// comment's own gate, and the grant is a person's write, so the row asks
+	// nothing more.
+	ActionRequestAccess: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
 	// seat's turn, and the ROLE decides which seats are offered it. No
 	// person takes it — see [rule.seatOnly].
@@ -2219,6 +2226,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
 	ActionWithdrawAsk: {"an agent seat's own verb: a person resolves their own question from its " +
 		"work item, and withdraws nothing an agent's run waits on", tellSeat},
+	ActionRequestAccess: {"an agent seat's own verb: a person changes an agent's access in the " +
+		"organization, and asks nobody for it", tellSeat},
 	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
 		"person reads a seat's as its trail", tellSeat},
 	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +

@@ -355,7 +355,7 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Mentions: fakeMentions{"pm"}})
 
-	got := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{
+	got := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{"asks": false,
 		"page": "p1", "body": "@pm is this still right?",
 	})
 	if got.Failed {
@@ -373,7 +373,7 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	}
 	rerun := newFakeKB()
 	if got := callWork(t, kbRegistry(t, builtin.PageDeps{Reader: rerun, Writer: rerun,
-		Mentions: fakeMentions{"pm"}}), builtin.CommentOnPageTool, map[string]any{
+		Mentions: fakeMentions{"pm"}}), builtin.CommentOnPageTool, map[string]any{"asks": false,
 		"page": "p1", "body": "@pm is this still right?",
 	}); got.Failed || len(rerun.keys) != 1 || rerun.keys[0] != kb.keys[0] {
 		t.Errorf("a re-run of the same turn's comment carried key %v, want %q — "+
@@ -432,7 +432,7 @@ func TestCommentOnPageEditsWhenGivenACommentID(t *testing.T) {
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 
-	out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{
+	out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{"asks": false,
 		"page": "p1", "body": "a better thought", "edit": "m1",
 	})
 	if out.Failed {
@@ -460,7 +460,7 @@ func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 
-	if out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{
+	if out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{"asks": false,
 		"page": "p1", "body": "a first thought",
 	}); out.Failed {
 		t.Fatalf("comment failed: %s", out.Output)
@@ -810,7 +810,7 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
 	for _, body := range []string{"blocked", "blocked", "unblocked", "blocked"} {
 		res, err := surface.Execute(t.Context(), llm.ToolCall{
-			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": "p1", "body": body},
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"asks": false, "page": "p1", "body": body},
 		})
 		if err != nil || res.Failed {
 			t.Fatalf("comment %q = (%+v, %v)", body, res, err)
@@ -853,7 +853,7 @@ func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
 	for _, call := range [][2]string{{"p1", "ok"}, {"p1", "ok"}, {"p1 ", "ok"},
 		{"p1", "other"}, {"p1", "ok"}} {
 		res, err := surface.Execute(t.Context(), llm.ToolCall{
-			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": call[0], "body": call[1]},
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"asks": false, "page": call[0], "body": call[1]},
 		})
 		if err != nil || res.Failed {
 			t.Fatalf("comment %q on %q = (%+v, %v)", call[1], call[0], res, err)
@@ -889,7 +889,7 @@ func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
 	calls := map[string]map[string]any{
 		builtin.WritePageTool: {"title": "New Page", "body": "text", "container": "ENG"},
 		builtin.SavePageTool:  {"page": "p1", "body": "text", "base_version": 4},
-		"comment":             {"page": "p1", "body": "a remark"},
+		"comment":             {"page": "p1", "body": "a remark", "asks": false},
 		"edit":                {"page": "p1", "body": "a remark", "edit": "m1"},
 	}
 	for _, unvouched := range []bool{false, true} {
@@ -988,7 +988,7 @@ func TestAPageWriteReportsItsOutcomeAndPosition(t *testing.T) {
 	for name, args := range map[string]map[string]any{
 		builtin.WritePageTool:     {"title": "New Page", "body": "text", "container": "ENG"},
 		builtin.SavePageTool:      {"page": "p1", "body": "text", "base_version": 4},
-		builtin.CommentOnPageTool: {"page": "p1", "body": "a remark"},
+		builtin.CommentOnPageTool: {"asks": false, "page": "p1", "body": "a remark"},
 	} {
 		kb := newFakeKB()
 		pending := landedAt(21)

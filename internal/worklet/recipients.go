@@ -224,7 +224,12 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 		b.AddAll(handles, reason, addressed)
 	}
 
-	addAll(n.Mentions, ReasonMention, true)
+	// AN AGENT'S MENTION OF AN AGENT THAT ASKS NOTHING IS A REFERENCE: told,
+	// never woken or obliged (ADR-0113); a person named is addressed as ever.
+	for _, handle := range n.Mentions {
+		named := !n.agentReference() || !slices.Contains(n.Snapshot.MentionedAgents, handle)
+		b.AddWaking(handle, ReasonMention, named, named)
+	}
 	if n.Kind == ChangePrioritised {
 		add(n.Snapshot.Person, ReasonPrioritised, true)
 	}
@@ -429,6 +434,19 @@ func (n *Notify) watcherAsked() bool {
 	return n.Kind.Conversation() && n.personComment() && !n.addressedToSomebody()
 }
 
+// MentionsWake reports whether the seats this change @-mentions are woken:
+// every author's but an agent's comment that does not say it asks.
+func (n *Notify) MentionsWake() bool { return n != nil && !n.agentReference() }
+
+// agentReference reports an agent's comment that states it asks nothing, whose
+// mentions of agents are references (ADR-0113). A record with no statement, a
+// person's or an older build's, routes as it always did.
+func (n *Notify) agentReference() bool {
+	asks := n.Snapshot.CommentAsks
+	return n.Kind.Conversation() && n.Snapshot.CommentAuthorKind == AuthorAgent &&
+		asks != nil && !*asks
+}
+
 // personComment reports a comment a person wrote ([AuthorKind.Person]).
 func (n *Notify) personComment() bool { return n.Snapshot.CommentAuthorKind.Person() }
 
@@ -496,4 +514,30 @@ func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
 	actor string) []routing.Candidate[Reason] {
 
 	return routing.Route(candidates, registry, actor, Reason.WakesActor)
+}
+
+// noticeWakes is, for the handles a change's notice rows go to, which it woke
+// by the notifier's own rule, and whether it tells any of them without waking
+// them. Every handle reads employed: the runtime registry is not the record's,
+// so a seat it no longer holds can be marked woken where the parser falls back
+// to its lead instead.
+func noticeWakes(n *Notify, actor string) (map[string]bool, bool) {
+	candidates := Candidates(n)
+	woken := map[string]bool{}
+	for _, c := range routing.Waking(Heard(candidates, nil, actor)) {
+		woken[c.Handle] = true
+	}
+	for _, c := range candidates {
+		if c.Hears(actor, Reason.WakesActor) && !woken[c.Handle] {
+			return woken, true
+		}
+	}
+	return woken, false
+}
+
+// Heard is [Route] without its last step: everybody told, woken or not.
+func Heard(candidates []routing.Candidate[Reason], registry func(string) bool,
+	actor string) []routing.Candidate[Reason] {
+
+	return routing.Heard(candidates, registry, actor, Reason.WakesActor)
 }

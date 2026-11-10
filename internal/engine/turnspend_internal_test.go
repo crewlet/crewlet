@@ -693,7 +693,8 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 	dispatch.startedAt = start
 	parked := dispatch.chargeFor(first, turn.Result{Suspended: true}, nil, start.Add(time.Minute))
 	if want := (execstate.TurnSoFar{DurationMS: 60_000, Reviews: 2, SentBack: 1, Unaccepted: 1,
-		Tools: first.Tools}); parked.soFar == nil || !reflect.DeepEqual(*parked.soFar, want) {
+		Tools: first.Tools, Wake: types.WakeOf(dispatch.trigger)}); parked.soFar == nil ||
+		!reflect.DeepEqual(*parked.soFar, want) {
 		t.Fatalf("the parked segment hands on %+v, want its own span, reviews and calls %+v", parked.soFar, want)
 	}
 	e, p, tel := failing(t)
@@ -718,6 +719,7 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 			e.publishTurnCompleted(t.Context(), tel, second, c.res, nil, tel.startedAt.Add(30*time.Second))
 			got := only[*types.TurnCompleted](t, p, "turn_completed")
 			want := types.TurnTally{DurationMS: 90_000, Failed: c.failed, Reviews: 3, SentBack: 1, Unaccepted: 1,
+				Wake: parked.soFar.Wake, Outcome: types.OutcomeNothing,
 				Tools: []types.ToolTally{
 					{Server: "github", Tool: "github_get_issue", Calls: 3, Failed: 1, TotalMS: 400,
 						LastAt: start.Add(time.Hour + 5*time.Second)},

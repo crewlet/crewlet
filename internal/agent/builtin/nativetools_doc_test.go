@@ -325,7 +325,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			spelled(t, len(tracker)) + " in full"},
 		{"docs/getting-started/choosing-your-stack.md",
 			readPage(t, "docs/getting-started/choosing-your-stack.md"),
-			"seats get " + spelled(t, total) + " tools for them — " +
+			"seats get " + spelled(t, total) + " tools for them (" +
 				spelled(t, len(tracker)) + " over the tracker and " +
 				spelled(t, len(pages)) + " over the pages"},
 		{"docs/guides/worklet.md", readPage(t, "docs/guides/worklet.md"),

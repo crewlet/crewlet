@@ -350,7 +350,9 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 		Units: []config.Unit{{
 			Name:    "Platform",
 			Channel: "platform",
-			Roles:   []config.Role{{Name: "SWE", Handle: "swe"}},
+			// HEALTH_TOOLS HELD, so no advisory about alarms nobody hears
+			// joins the one this case counts.
+			Roles: []config.Role{{Name: "SWE", Handle: "swe", HealthTools: true}},
 		}},
 	}
 	// A SUBMITTED DOCUMENT IS REFUSED, and a running one is not: the key
@@ -419,7 +421,8 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 		// raises nothing.
 		Units: []config.Unit{
 			{Name: "Product", ID: "product", Channel: "product",
-				Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+				// Holding health_tools, so no alarm advisory joins the count.
+				Roles: []config.Role{{Name: "PM", Handle: "pm", HealthTools: true}}},
 			{Name: "Engineering", ID: "engineering", Channel: "engineering", Children: []config.Unit{
 				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
 			}},

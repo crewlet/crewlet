@@ -196,9 +196,8 @@ func TestAnAlarmTransitionWakesEachGrantedSeatOnce(t *testing.T) {
 // Every copy names the alarm, the node, the log a per-log alarm stands on and
 // the measurement, says what the alarm means in the table's own words, gives
 // the remedy while it stands, and sends the seat to fleet_health, asking for
-// the nodes with an alarm firing, before it acts: a fire says when it fired, a
-// clear how long it stood and no remedy, a first look since a start that it
-// may have been firing before. Nobody is waiting on an answer, and the trigger
+// the nodes with an alarm firing, before it acts: a fire says when it fired and
+// a clear how long it stood and no remedy. Nobody is waiting on an answer, and the trigger
 // is a pointer. One alarm is one conversation, on every node and log it stands
 // on; another alarm is another.
 //
@@ -224,9 +223,8 @@ func TestAnAlarmWakeSendsItsSeatToTheFleetsCurrentState(t *testing.T) {
 	p := alarmwake.NewParser(alarmwake.ParserOptions{Granted: []string{"sre"}})
 	prompt := alarmwake.Prompt{}
 	for change, want := range map[statelog.TransitionChange][]string{
-		statelog.TransitionFiringAtBoot: {"first look", "may have been firing before", remedy},
-		statelog.TransitionCleared:      {"it cleared", "having stood since"},
-		statelog.TransitionFired:        {"it fired", remedy},
+		statelog.TransitionCleared: {"it cleared", "having stood since"},
+		statelog.TransitionFired:   {"it fired", remedy},
 	} {
 		tr, ok := byChange[change]
 		if !ok {

@@ -23,6 +23,7 @@
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { IssueReportsAnswer } from "./issueReports.ts";
+import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
 import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
@@ -1589,6 +1590,8 @@ export interface ConfigWarning {
   /** Display text: what it names. */
   to: string;
   message: string;
+  /** What an advisory is about, for the setup advisor; absent on most warnings. */
+  class?: string;
 }
 
 /** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
@@ -5513,9 +5516,22 @@ export interface WorkMyWorkTotals {
   collaborating: WorkClaimTotal;
   watching_recent: WorkClaimTotal;
   unblocked_recent: WorkClaimTotal;
+  holding_up: WorkClaimTotal;
 }
 
-/** Everything one person is expected to look at — seven different CLAIMS on
+/** One open item a person holds that other open work waits on. */
+export interface WorkHoldingRow extends WorkSummary {
+  /** How many open items wait on it, directly or through another, each once. */
+  blocks: number;
+  /** The count stopped at the engine's ceiling, so `blocks` is a floor. */
+  blocks_capped?: boolean;
+  /** Who holds the waiting work, the person left out, sorted, at most eight. */
+  holders: string[];
+  /** When it was last assigned, or filed already assigned. */
+  held_since: string;
+}
+
+/** Everything one person is expected to look at — eight different CLAIMS on
  *  their attention, each bounded the same so no block crowds out another. */
 export interface WorkMyWork {
   handle: string;
@@ -5528,6 +5544,8 @@ export interface WorkMyWork {
   collaborating: WorkSummary[];
   watching_recent: WorkSummary[];
   unblocked_recent: WorkSummary[];
+  /** What they hold that other open work waits on, the most waited on first. */
+  holding_up: WorkHoldingRow[];
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
@@ -5917,7 +5935,7 @@ export interface TurnRow {
  *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
  *  (`id` the change as the Gitlet screens name it, `web!42`, `reason` the code
  *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
- *  `reason` its transition: `fired`, `cleared` or `firing_at_boot`). OPEN, for
+ *  `reason` its transition: `fired` or `cleared`). OPEN, for
  *  a kind a newer engine adds. */
 export interface TurnOrigin {
   kind:
@@ -7834,6 +7852,8 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   issue_reports: IssueReportsAnswer;
+  advisor: AdvisorAnswer;
+  advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
   backups: BackupsAnswer;

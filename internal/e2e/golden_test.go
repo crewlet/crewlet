@@ -1594,7 +1594,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// tracker's to assign.
 	const summary = "Three PRs merged, one incident, zero regressions."
 	n.model.callOnExecute(builtin.CommentOnWorkTool, map[string]any{
-		"item": task.ID, "body": summary,
+		"item": task.ID, "body": summary, "asks": false,
 	})
 	n.model.callOnExecute(runner.SubmitWorkTool, map[string]any{
 		"outcome": string(turn.OutcomeDelivered), "summary": summary,
