@@ -30,7 +30,7 @@ func TestTheBrokerIsIdleOnlyOnceNothingCanStillDeliver(t *testing.T) {
 	t.Run("an_open_linger_window_until_the_drain_its_flush_starts_returns", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
-			q := idleCaseQueue(t)
+			q := startedTwin(t)
 			var mu sync.Mutex
 			var batches int
 			subscribeLingering(t, q, func(context.Context, []*events.Event) queue.Result {
@@ -58,7 +58,7 @@ func TestTheBrokerIsIdleOnlyOnceNothingCanStillDeliver(t *testing.T) {
 	t.Run("a_drain_whose_handler_is_running", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
-			q := idleCaseQueue(t)
+			q := startedTwin(t)
 			entered, release := make(chan struct{}), make(chan struct{})
 			if err := q.Subscribe(t.Context(), "idle.t", "g",
 				func(context.Context, *events.Event) queue.Result {
@@ -91,7 +91,7 @@ func TestTheBrokerIsIdleOnlyOnceNothingCanStillDeliver(t *testing.T) {
 	t.Run("a_window_closed_undelivered", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
-			q := idleCaseQueue(t)
+			q := startedTwin(t)
 			subscribeLingering(t, q, func(context.Context, []*events.Event) queue.Result {
 				t.Error("a detached consumer's window delivered")
 				return queue.Ack()
@@ -110,8 +110,8 @@ func TestTheBrokerIsIdleOnlyOnceNothingCanStillDeliver(t *testing.T) {
 	})
 }
 
-// idleCaseQueue is a started twin of its own broker, stopped when the case ends.
-func idleCaseQueue(t *testing.T) *memory.Queue {
+// startedTwin is a started twin of its own broker, stopped when the case ends.
+func startedTwin(t *testing.T) *memory.Queue {
 	t.Helper()
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {

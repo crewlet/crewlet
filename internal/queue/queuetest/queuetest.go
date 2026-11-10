@@ -13,10 +13,15 @@
 // something that would have carried what it rules out — a later broadcast of
 // the same sender, a fence through the same feed, a barrier through the
 // listeners, a withdrawal's answer to its own bound, the backend's own count,
-// its own report that it has settled ([Capabilities.Settle]) — or, where
-// nothing does yet, holds a quiet window open. An assertion that reads state
-// the instant after Publish returns would pass on the twin and fail on a real
-// broker, which is precisely the divergence this suite exists to prevent.
+// its own report that it has settled ([Capabilities.Settle]). Where nothing a
+// backend exports would carry it, the absence is decided beside the backend,
+// where it can be exact, and never behind a quiet window here: that a handler
+// never runs beside itself, a listener's or a self-publishing subscription's,
+// is decided on the twin in a bubble and on JetStream by where its code sits
+// (runBroadcast's and runReentrancy's one-at-a-time cases name both). An
+// assertion that reads state the instant after Publish returns would pass on
+// the twin and fail on a real broker, which is precisely the divergence this
+// suite exists to prevent.
 //
 // Subtests are named after the contract clause they certify, so a failure
 // here names the rule it broke rather than the call it made.

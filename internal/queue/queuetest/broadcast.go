@@ -175,20 +175,28 @@ func (s *suite) runBroadcast(t *testing.T) {
 		}
 	})
 
+	// ONE MESSAGE AT A TIME, of which this case decides the half every
+	// backend can show. That no delivery runs beside another is an absence
+	// a case here could read only behind a quiet window — this one slept a
+	// millisecond in each handler for an overlap to show, and a second
+	// delivery the runner made late passed it with the bug present — so
+	// each backend's half is decided where it can be exact: the twin's in a
+	// bubble (memory's TestAHandlerNeverRunsBesideItself), JetStream's by
+	// where its code sits (jetstream's
+	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery). What is
+	// left here is a positive: a listener handed a burst one message at a
+	// time hears every message of it once, in the order it was sent. It is
+	// read once the last is heard, a wait for deliveries that must happen,
+	// so it needs waitFor's liveness bound and no other.
+	//
+	// Mutation: lose one broadcast of the burst for its listener, or hand it
+	// over twice, and the listener's record is not the burst.
 	t.Run("one_listener_hears_one_message_at_a_time", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		subject := ns(t) + ".room"
-		var inside, overlapped atomic.Int32
 		h := newHeard()
-		listen(ctx, t, q, subject, func(subject string, payload []byte) {
-			if inside.Add(1) > 1 {
-				overlapped.Add(1)
-			}
-			time.Sleep(time.Millisecond)
-			inside.Add(-1)
-			h.record(subject, payload)
-		})
+		listen(ctx, t, q, subject, h.record)
 		var want []string
 		for i := range 20 {
 			body := fmt.Sprintf("m%02d", i)
@@ -196,9 +204,9 @@ func (s *suite) runBroadcast(t *testing.T) {
 			broadcast(ctx, t, q, subject, []byte(body))
 		}
 		h.waitFor(t, "the listener", want...)
-		if n := overlapped.Load(); n > 0 {
-			t.Fatalf("one listener's handler ran %d time(s) beside itself; a handler "+
-				"that takes its own lock would be raced by the backend", n)
+		if got := h.all(); !slices.Equal(got, want) {
+			t.Fatalf("one listener heard a burst of one sender's broadcasts as %v, want each "+
+				"once, in the order sent, %v", got, want)
 		}
 	})
 
