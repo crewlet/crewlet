@@ -777,7 +777,6 @@ func (t turnTelemetry) measuredWhole() bool { return !t.resumed || t.soFar != ni
 // runner's tally of its phase records. A segment that parks hands it on ([segmentCharge.soFar]); the one
 // that ends the turn states it ([Engine.publishTurnCompleted]).
 func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.TurnSoFar {
-	aux := t.auxSpent.Total()
 	out := execstate.TurnSoFar{
 		DurationMS: int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Reviews:    spend.Reviews,
@@ -786,12 +785,8 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 		Tools:      types.SumToolTallies(spend.Tools),
 		Refusals:   types.SumRefusals(spend.Refusals),
 		Wake:       types.WakeOf(t.trigger),
-		Tokens: types.TurnTokens{
-			Input:     spend.InputTokens + spend.WorkerInput + spend.JudgeInput,
-			Output:    spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput,
-			CacheRead: spend.CacheRead, CacheWrite: spend.CacheWrite,
-			AuxInput: aux.Input, AuxOutput: aux.Output,
-		},
+		// THE RUN IT COLLECTED INCLUDED, which is most of an executor turn.
+		Tokens: t.segmentTokens(spend),
 	}
 	if t.soFar != nil {
 		out.DurationMS += t.soFar.DurationMS
@@ -1085,6 +1080,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// WHAT THE RUN PUSHED ON GITLET is code the turn committed, collected here.
 	if len(in.Account.Pushed) > 0 {
 		t.written.Commit(types.CommittedCode)
+	}
+	// AND WHAT ITS CALLS COMMITTED, off its call log: they were made after
+	// the park recorded the set above, so the outcome is settled here.
+	for _, c := range in.Bridged.Changes() {
+		t.written.Commit(types.CommittedChange(c))
 	}
 	// THE HOLDS THE ROW CARRIES, OFF THE RESUMED TURN for the reason its
 	// unit of work is (resumedTurn read the row into it, with the row's

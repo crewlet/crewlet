@@ -746,6 +746,11 @@ type BridgeCall struct {
 	// it carries it in Extra.
 	HeldID string `json:"held_id,omitempty"`
 
+	// Committed is the kinds of change the call committed to its turn
+	// (types.CommittedChange), which the run's collection settles the
+	// turn's outcome by. Additive on the wire.
+	Committed []string `json:"committed,omitempty"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.
@@ -1964,6 +1969,11 @@ type BridgeLog struct {
 	PriorCalls       []string `json:"prior_calls,omitempty"`
 	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
 
+	// Committed is every kind of change the job's calls committed, each once:
+	// kept whole when the calls themselves are condensed, so the collection
+	// settles the turn's outcome by all of them.
+	Committed []string `json:"committed,omitempty"`
+
 	// Extra is every key of the log this build does not know, kept verbatim
 	// and written back by every write of it (wirekeys.go). Filled by the
 	// decode, never by a caller.
@@ -2096,6 +2106,27 @@ func (l BridgeLog) LastSeq() int {
 // bound dropped from the middle ([MaxBridgeCalls]), and the calls an older
 // build appended without numbering them.
 func (l BridgeLog) Appends() int { return len(l.Calls) + l.Elided }
+
+// Changes is every kind of change the job's calls committed, each once: the
+// log's own record of them, and any a listed call carries that it lacks (an
+// append an older build made).
+func (l BridgeLog) Changes() []string {
+	out := slices.Clone(l.Committed)
+	for _, call := range l.Calls {
+		out = committedOnce(out, call.Committed)
+	}
+	return out
+}
+
+// committedOnce is have with every kind of more it lacks, in first-seen order.
+func committedOnce(have, more []string) []string {
+	for _, c := range more {
+		if c != "" && !slices.Contains(have, c) {
+			have = append(have, c)
+		}
+	}
+	return have
+}
 
 // HeldSince is when this run's box started being held as a snapshot nothing is
 // driving, and whether it is being held at all.
