@@ -43,11 +43,17 @@ type ledgerCommit struct {
 	// unseen is a mark the attempt's claim did not read: [ledgerCommit.Marked]
 	// answers the call unmarked, and [ledgerCommit.Begin] finds it marked.
 	unseen bool
+	// unread is a result recorded that the node the attempt runs on cannot
+	// open: the call is answered made, with whether it failed alone.
+	unread bool
 }
 
 // prior is how the row holds the call once some attempt marked it.
 func (l *ledgerCommit) prior() HeldPrior {
-	if l.result != nil {
+	switch {
+	case l.result != nil && l.unread:
+		return HeldPrior{Made: true, Unread: true, Result: sandbox.HeldResult{Failed: l.result.Failed}}
+	case l.result != nil:
 		return HeldPrior{Made: true, Result: *l.result}
 	}
 	return HeldPrior{}
@@ -366,5 +372,49 @@ func TestAnApprovedCallsUnkeptOutputReachesTheRunAlone(t *testing.T) {
 	if commit.result == nil || strings.Contains(commit.result.Output, "closed #7") ||
 		!strings.Contains(commit.result.Output, "output not kept") {
 		t.Fatalf("the row keeps %+v, want the output's size and digest alone", commit.result)
+	}
+}
+
+// A MADE CALL WHOSE RESULT CANNOT BE READ HERE IS TOLD AS MADE. An earlier
+// attempt at the answer made the call a person allowed and recorded what it
+// returned, and the node carrying the run on holds no key that record was
+// sealed under. The run is told the call was made, and whether the tool
+// reported a failure, which is what the round's log lists of the call — never
+// that the node making it stopped before its result was recorded, which it did
+// not, and which sends the run to doubt a call it need not. A later attempt
+// tells the call by this lead alone: no list of the round's calls in the brief
+// it leads tells it again. And it is not made again.
+//
+// Mutation: tell an unreadable result as no result recorded, or as a result
+// that returned nothing, and a case goes red.
+func TestAMadeCallWhoseResultCannotBeReadHereIsToldAsMade(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		failed bool
+		said   string
+	}{
+		"the tool reported success":   {said: "reported success, so it ALREADY RAN"},
+		"the tool reported a failure": {failed: true, said: "reported a failure"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tool := &closeIssue{digest: "sha256:d1"}
+			held := &HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:d1",
+				Choice: sandbox.HeldOnce, Commit: &ledgerCommit{marked: true, unread: true,
+					result: &sandbox.HeldResult{Failed: tc.failed}}}
+			if err := makeHeld(t.Context(), heldSurface(t, tool), held); err != nil {
+				t.Fatal(err)
+			}
+			got := Asked{Held: held}.Continuation(provenance.NewBoundary())
+			if !strings.Contains(got, "The call was made, and the tool "+tc.said) ||
+				!strings.Contains(got, "cannot be read on the node carrying this run on") ||
+				strings.Contains(got, "may or may not have taken effect") {
+				t.Errorf("a made call whose result cannot be read here is told:\n%s\nwant it made, %q, and "+
+					"its result recorded but unreadable here", got, tc.said)
+			}
+			if len(tool.calls) != 0 {
+				t.Errorf("the call was made again (%d calls)", len(tool.calls))
+			}
+		})
 	}
 }

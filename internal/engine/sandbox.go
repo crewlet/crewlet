@@ -1896,11 +1896,17 @@ func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.Hel
 	result, err := h.seal.OpenResult(h.held.TurnID, call)
 	if err != nil {
 		// RECORDED, AND UNREADABLE HERE: the call was made, and what it
-		// returned cannot be handed over, which the run is told as a call
-		// whose result is unknown. Never made again.
+		// returned cannot be handed over. The run is told it was made, and
+		// whether the tool reported a failure — off the call's entry the
+		// result was recorded with, which is what the round's log lists of it
+		// — never as a call whose result is unknown, which it is not: a later
+		// attempt at the answer tells the call by this lead alone, the list of
+		// the round's calls leaving it out (runner.HeldPrior.Unread). Never
+		// made again.
 		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
 			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
-		return runner.HeldPrior{}
+		return runner.HeldPrior{Made: true, Unread: true,
+			Result: sandbox.HeldResult{Failed: call.Call != nil && call.Call.Failed}}
 	}
 	return runner.HeldPrior{Made: true, Result: result}
 }
