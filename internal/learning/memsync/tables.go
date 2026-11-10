@@ -137,7 +137,7 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "embedding_model", "created_at",
+			"embedding", "embedding_model", "created_at", "provenance", "engine_build",
 		},
 		blobs:       []string{"embedding"},
 		watermark:   "change_seq",
