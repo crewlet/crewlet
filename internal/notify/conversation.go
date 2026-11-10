@@ -100,7 +100,12 @@ import (
 // for them. One seat's writes for two requesters are two partitions and two
 // turns, since a turn works for one writer and for one whom: coalesced, the
 // second requester's write would be worked inside the first's turn, held to the
-// first's apps.
+// first's apps. ONE DELIBERATE EXCEPTION: ADR-0120's seen-through mark keys on
+// the thread ([KeyOfAll]), never on this partition, so a completed turn
+// absorbs a later wake at or below its mark that obliges the seat to nothing,
+// whatever that wake's writer or whom. Absorption only drops, so nothing
+// widens; but two requesters are two turns only for wakes that oblige the
+// seat (ADR-0109).
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -262,7 +267,9 @@ func Namespaced(source, local string) string {
 // ONE TURN WORKS FOR ONE WRITER (see "THE PARTITION FUNCTION SPLITS THE STAMPED
 // KEY BY WRITER" above): a person's four messages in a thread are one turn, and
 // a second person's message in the same thread is a turn of its own. And for
-// one whom: an agent's writes for two requesters are two turns. Only an
+// one whom: an agent's writes for two requesters are two turns, for every wake
+// that obliges the seat (ADR-0120's seen-through mark, keyed on [KeyOfAll],
+// absorbs one that obliges it to nothing, whatever its writer). Only an
 // external notification names a writer; an A2A ask, a task assignment and a
 // schedule's fire partition by their stamped key as before. A per-event
 // fallback is a partition of one already, and gets no writer.

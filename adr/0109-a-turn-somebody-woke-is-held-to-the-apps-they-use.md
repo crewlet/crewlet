@@ -174,7 +174,12 @@ puts it on the wake's writer (`NotificationWriter.WorkingFor`), for an agent's w
 Chatlet's inbound now states its writer as the other families' do, so its partition keys on the
 seat (`seat:`) rather than the actor. The partition function appends the whole carrier to an agent
 writer's key, escaped (`notify.ForSeparator`), a credential's apps included: a turn works for one
-writer and for one whom, so one seat's writes for two requesters are two turns. The woken turn reads
+writer and for one whom, so one seat's writes for two requesters are two turns. One deliberate
+exception keeps the thread as its key: ADR-0120's seen-through mark (`notify.KeyOfAll`, the thread and
+never the thread split by writer). A completed turn absorbs a later wake at or below its mark that
+obliges the seat to nothing, whatever that wake's writer or carrier. Absorption only drops a wake and
+runs nothing for anybody, so nothing widens; but two requesters are two turns only for wakes that
+oblige the seat. The woken turn reads
 the carrier off the first constituent (internal/engine's `workingForIn`), which the partition makes
 every constituent's, and composes it again on its own node as an ask's carrier is. Whom it replies
 to stays the writing seat (`requesterOf`).
@@ -208,6 +213,8 @@ writer alone until crewlet#798's piece 4b-ii: the work pickup's read of an item'
 (ADR-0112), which names the agent that assigned it; the thread's waiting messages a turn records as
 worked through, matched by sender, so an agent's message for one requester can be worked inside a
 turn for another; and a parked run's answer in its conversation, matched by its writer.
+ADR-0120's seen-through mark is not one of them: it stays keyed on the thread by design (the
+partition above), and 4b-ii leaves it so.
 
 **An optional field was refused**: a site that forgot it would write for nobody in silence, the
 side entrance this record closes. **A carrier read from a tool's arguments** would let a model name
