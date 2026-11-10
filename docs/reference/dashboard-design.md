@@ -7364,8 +7364,17 @@ is one of the rules on this page applied to a tracker.
   be loaded — and a column the grammar has no key for is therefore NOT
   sortable, because the query grammar refuses an unknown key rather than
   ignoring it: one wrong header would take the board down with a refusal rather
-  than mis-ordering a column. `status` is the one a reader expects and cannot
-  have; grouping by status is what that question actually wants.
+  than mis-ordering a column. Key, Status, Type and Assignee sort by what the
+  value means (a key's number, the board's status order, the catalogue's type
+  order, a seat's name), which only the engine can give, since a comparator
+  over the drawn cells would order `ENG-10` before `ENG-9`.
+- **A column is headed in words.** Type and Assignee were glyph heads over a
+  mark per row, which read as decoration rather than as columns and left no
+  word for a sort button; each is now a word over its centred mark, and the
+  type's mark carries the type's name as its tooltip and accessible name. A
+  list held to one assignee (My work's Queue) draws that one person on every
+  row, so there Assignee is a column the Display menu offers off rather than
+  one drawn by default.
 - **The four shapes ask four different questions of ONE grammar, and each
   difference is its own axis.** A board is `group_by` and no cursor, because
   across a set of columns there is no single order to be after. A list and a

@@ -47,6 +47,9 @@ export interface DisplayMenuProps {
   /** The company's list rather than one project's, which decides whether the
    *  grid has a Project column to offer. */
   workspace: boolean;
+  /** Every row is held by the one person the screen names, so Assignee is a
+   *  column offered off rather than drawn on (`shapes/Grid.tsx`). */
+  assigneeFixed?: boolean;
   /** A trash listing, whose default order is the removal order. */
   trash?: boolean;
   /**
@@ -135,6 +138,7 @@ function DisplayPanel({
   arrange,
   shape,
   workspace,
+  assigneeFixed = false,
   trash = false,
   viewShape,
   groupBy,
@@ -155,7 +159,7 @@ function DisplayPanel({
   // THE ACTIVE SET'S OWN CHOICES. Both grid shapes have columns and they are
   // not the same columns in the same order, so the set is asked for by shape
   // rather than derived once — see `shapes/Grid.tsx`.
-  const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
+  const columns = isGridShape(shape) ? columnChoices(shape, workspace, assigneeFixed) : [];
   const board = shape === "board";
   const lanes = board ? hidden : [];
   const ordered = shape !== "calendar";
