@@ -38,15 +38,15 @@ type Currency struct {
 	AccessChangedAt time.Time
 }
 
-// HeldBack reports whether e may be false at c: a platform note another build
+// HeldBack reports whether d may be false at c: a platform note another build
 // wrote, or a capability note written before the seat's access last changed.
 // A note of any other class is never held back.
-func (e DiaryEntry) HeldBack(c Currency) bool {
-	switch e.About {
+func (d DiaryEntry) HeldBack(c Currency) bool {
+	switch d.About {
 	case AboutPlatform:
-		return c.Build != "" && e.EngineBuild != c.Build
+		return c.Build != "" && d.EngineBuild != c.Build
 	case AboutCapability:
-		return !c.AccessChangedAt.IsZero() && e.CreatedAt.Before(c.AccessChangedAt)
+		return !c.AccessChangedAt.IsZero() && d.CreatedAt.Before(c.AccessChangedAt)
 	}
 	return false
 }
