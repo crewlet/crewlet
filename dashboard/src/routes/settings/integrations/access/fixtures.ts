@@ -1,6 +1,6 @@
 /**
  * Per-seat access answers as the engine sends them, for the Agents tab's
- * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
+ * suites: Acme's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
  * projects), its Cloudflare (SRE able to purge, the rest off), its Expo (QA's
@@ -56,7 +56,7 @@ const GITHUB_OPTIONS: AccessOptions = {
   ],
   scoped: true,
   scope_live: true,
-  scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
+  scope: ["acme/backend", "acme/frontend", "acme/mobile-app"],
 };
 
 const MATTERMOST_OPTIONS: AccessOptions = {
@@ -125,7 +125,7 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
 };
 
 /** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
-const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/acme/settings/access-tokens";
 
 /** Scaleway's two projects, by the IDs a policy names, and the names a person reads. */
 export const SCW_PROD = "11111111-1111-4111-8111-111111111111";
@@ -159,7 +159,7 @@ const SCALEWAY_OPTIONS: AccessOptions = {
   scope_live: true,
   scope_required: true,
   scope: [SCW_PROD, SCW_STAGING],
-  scope_names: { [SCW_PROD]: "gophrase-prod", [SCW_STAGING]: "gophrase-staging" },
+  scope_names: { [SCW_PROD]: "acme-prod", [SCW_STAGING]: "acme-staging" },
 };
 
 const EXPO_OPTIONS: AccessOptions = {
@@ -215,7 +215,7 @@ const DIGITALOCEAN_OPTIONS: AccessOptions = {
   live: false,
   rotatable: true,
   action_url: DO_TOKENS_PAGE,
-  vendor_account: "gophrase",
+  vendor_account: "acme",
   levels: [
     { id: "read", name: "Read", grants: DO_READ },
     { id: "operate", name: "Operate", grants: DO_OPERATE },
@@ -281,8 +281,8 @@ const GOOGLE_CLOUD_OPTIONS: AccessOptions = {
     },
   ],
   scoped: true,
-  scope: ["gophrase-prod", "gophrase-staging"],
-  scope_names: { "gophrase-prod": "GoPhrase Production", "gophrase-staging": "GoPhrase Staging" },
+  scope: ["acme-prod", "acme-staging"],
+  scope_names: { "acme-prod": "Acme Production", "acme-staging": "Acme Staging" },
   scope_live: true,
   scope_required: true,
 };
@@ -425,14 +425,14 @@ export function githubAnswer(): AccessAnswer {
       seat("qa", "QA", {
         github: onLane({
           variable: "GITHUB_APP_KEY_QA",
-          desired: { enabled: true, permissions: { ...REVIEW }, scope: ["gophrase/backend"] },
+          desired: { enabled: true, permissions: { ...REVIEW }, scope: ["acme/backend"] },
           observed: {
             exists: true,
             enabled: true,
-            account: "gophrase-qa[bot]",
+            account: "acme-qa[bot]",
             permissions: { ...REVIEW },
             ceiling: { ...REVIEW },
-            scope: ["gophrase/backend"],
+            scope: ["acme/backend"],
             credential: { variable: "GITHUB_APP_KEY_QA", minted_at: ago(12 * DAY) },
           },
         }),
@@ -452,13 +452,13 @@ export function gitlabAnswer(): AccessAnswer {
       seat("dev", "Dev", {
         gitlab: onLane({
           variable: "GITLAB_TOKEN_DEV",
-          desired: { enabled: true, level: "30", scope: ["gophrase/backend"] },
+          desired: { enabled: true, level: "30", scope: ["acme/backend"] },
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet-gophrase-dev",
+            account: "crewlet-acme-dev",
             level: "30",
-            scope: ["gophrase/backend"],
+            scope: ["acme/backend"],
             credential: { variable: "GITLAB_TOKEN_DEV", minted_at: ago(DAY) },
           },
         }),
@@ -550,7 +550,7 @@ export function cloudflareAnswer(): AccessAnswer {
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet-gophrase-sre",
+            account: "crewlet-acme-sre",
             level: "operate",
             credential: { variable: "CLOUDFLARE_API_TOKEN_SRE", minted_at: ago(DAY) },
           },
@@ -586,7 +586,7 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet-gophrase-qa",
+            account: "crewlet-acme-qa",
             level: "developer",
             credential: { variable: "EXPO_TOKEN_QA", minted_at: ago(DAY) },
           },
@@ -597,14 +597,14 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
   };
 }
 
-const PM_ROBOT = "crewlet-gophrase-pm";
+const PM_ROBOT = "crewlet-acme-pm";
 
 /** The engine's sentence for each wait the Set up sheet opens on, for PM's robot at Runner. */
 const EXPO_WAITS: Record<HandoffStep, string> = {
   create: `Add a robot named ${PM_ROBOT} with the Runner role at Expo`,
   mint: `Create a new access token for robot ${PM_ROBOT}, then paste it here`,
   rerole:
-    "This robot is a Developer on gophrase, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here",
+    "This robot is a Developer on acme, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here",
 };
 
 /**
@@ -670,7 +670,7 @@ export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswe
     steps: [],
     error: {
       step: "revoke",
-      said: `Delete robot crewlet-gophrase-qa's other tokens ${labels.join(", ")} at Expo`,
+      said: `Delete robot crewlet-acme-qa's other tokens ${labels.join(", ")} at Expo`,
       remedy: "",
       actor: "you",
       action_url: EXPO_TOKENS_PAGE,
@@ -747,7 +747,7 @@ const doBox = (handle: string): AccessBox => ({
 });
 
 /** Whose token every DigitalOcean seat holds: the person who made it, on the company's team. */
-const DO_OWNER = "Miles on gophrase";
+const DO_OWNER = "Alex on acme";
 
 /**
  * DigitalOcean with SRE's token at Operate, live through its box, and PM off
@@ -765,14 +765,14 @@ export function digitaloceanAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer 
       seat("pm", "PM", {
         digitalocean: {
           ...offLane("read"),
-          hand_in: { name: "crewlet-gophrase-pm-read" },
+          hand_in: { name: "crewlet-acme-pm-read" },
         },
       }),
       seat("sre", "SRE", {
         digitalocean: onLane({
           variable: "DIGITALOCEAN_TOKEN_SRE",
           box: doBox("SRE"),
-          hand_in: { name: "crewlet-gophrase-sre-operate" },
+          hand_in: { name: "crewlet-acme-sre-operate" },
           desired: { enabled: true, level: "operate" },
           observed: {
             exists: true,
@@ -820,8 +820,8 @@ export function digitaloceanWaitingAnswer(
         error: {
           step,
           said: renew
-            ? "Create a new token crewlet-gophrase-pm-operate with the Operate scopes, then paste it here"
-            : "Create a personal access token named crewlet-gophrase-pm-operate with Custom Scopes for the Operate level, then paste it here",
+            ? "Create a new token crewlet-acme-pm-operate with the Operate scopes, then paste it here"
+            : "Create a personal access token named crewlet-acme-pm-operate with Custom Scopes for the Operate level, then paste it here",
           remedy: "",
           actor: "you",
         },
@@ -829,7 +829,7 @@ export function digitaloceanWaitingAnswer(
       plan: [],
       tool: "off",
       box: doBox("PM"),
-      ...(named ? { hand_in: { name: "crewlet-gophrase-pm-operate" } } : {}),
+      ...(named ? { hand_in: { name: "crewlet-acme-pm-operate" } } : {}),
     },
   });
   return answer;
@@ -869,7 +869,7 @@ export function scalewayAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet-gophrase-sre",
+            account: "crewlet-acme-sre",
             level: "operate",
             scope: [SCW_PROD],
             credential: {
@@ -927,7 +927,7 @@ export function awsAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet/gophrase/seat/crewlet-sre-7c2e",
+            account: "crewlet/acme/seat/crewlet-sre-7c2e",
             account_id: "AROA4EXAMPLE7C2EROLE",
             level: "operate",
             credential: { variable: "AWS_CREDENTIALS_SRE", source: "issued" },
@@ -979,14 +979,14 @@ export function googleCloudAnswer(
       seat("sre", "SRE", {
         google_cloud: onLane({
           variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE",
-          desired: { enabled: true, level: "operator", scope: ["gophrase-prod"] },
+          desired: { enabled: true, level: "operator", scope: ["acme-prod"] },
           observed: {
             exists: true,
             enabled: true,
-            account: "crewlet-sre-3f9a@gophrase-crewlet-id.iam.gserviceaccount.com",
+            account: "crewlet-sre-3f9a@acme-crewlet-id.iam.gserviceaccount.com",
             account_id: "104829377165514428863",
             level: "operator",
-            scope: ["gophrase-prod"],
+            scope: ["acme-prod"],
             credential: { variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE", source: "issued" },
             created_at: ago(DAY),
           },

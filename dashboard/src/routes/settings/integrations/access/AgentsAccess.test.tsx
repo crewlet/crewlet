@@ -456,7 +456,7 @@ test("a Cloudflare seat's details name its token, its permissions and its tool",
   draw(cloudflareAnswer());
   details("SRE", "Cloudflare");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Cloudflare"]')!);
-  expect(facts.getByText("crewlet-gophrase-sre")).toBeTruthy();
+  expect(facts.getByText("crewlet-acme-sre")).toBeTruthy();
   expect(facts.getByText("Token permissions")).toBeTruthy();
   expect(facts.getByText("Operate")).toBeTruthy();
   expect(facts.getByText("CLOUDFLARE_API_TOKEN_SRE")).toBeTruthy();
@@ -554,7 +554,7 @@ test("an Expo seat's details name its robot, its role and the CLI it uses", () =
   draw(expoAnswer());
   details("QA", "Expo");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="QA on Expo"]')!);
-  expect(facts.getByText("crewlet-gophrase-qa")).toBeTruthy();
+  expect(facts.getByText("crewlet-acme-qa")).toBeTruthy();
   expect(facts.getByText("Role at Expo")).toBeTruthy();
   expect(facts.getByText("Developer")).toBeTruthy();
   expect(facts.getByText("EXPO_TOKEN_QA")).toBeTruthy();
@@ -1135,7 +1135,7 @@ test("a DigitalOcean seat's details say whose token it is, its level and both ro
   const facts = within(
     document.querySelector<HTMLElement>('dl[aria-label="SRE on DigitalOcean"]')!,
   );
-  expect(facts.getByText("Miles on gophrase")).toBeTruthy();
+  expect(facts.getByText("Alex on acme")).toBeTruthy();
   expect(facts.getByText("Token scopes")).toBeTruthy();
   expect(facts.getByText("Operate")).toBeTruthy();
   expect(facts.getByText("DIGITALOCEAN_TOKEN_SRE")).toBeTruthy();
@@ -1227,10 +1227,10 @@ test("an Expo robot to delete at Expo is a plain wait with Open Expo, not the sh
   pm.sync!.error = {
     ...pm.sync!.error!,
     step: "remove",
-    said: "Delete robot crewlet-gophrase-pm at Expo",
+    said: "Delete robot crewlet-acme-pm at Expo",
   };
   draw(answer);
-  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.getByText("Delete robot crewlet-acme-pm at Expo.")).toBeTruthy();
   expect(screen.getByRole("link", { name: /Open Expo/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Done, check again" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Set up|Paste/ })).toBeNull();
@@ -1249,8 +1249,8 @@ test("turning an Expo agent on reviews the robot and the token as a person's ste
           op: "create",
           verb: "create",
           by: "you",
-          text: "Add a robot named `crewlet-gophrase-pm` with the Viewer role at Expo",
-          action_url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+          text: "Add a robot named `crewlet-acme-pm` with the Viewer role at Expo",
+          action_url: "https://expo.dev/accounts/acme/settings/access-tokens",
         },
         {
           op: "create",
@@ -1274,7 +1274,7 @@ test("turning an Expo agent on reviews the robot and the token as a person's ste
   const steps = await within(dialog).findAllByRole("listitem");
   const words = (li: HTMLElement) => li.querySelector(".agent-access-step")?.textContent;
   expect(steps.map(words)).toEqual([
-    "Add a robot named crewlet-gophrase-pm with the Viewer role at Expo" + "You",
+    "Add a robot named crewlet-acme-pm with the Viewer role at Expo" + "You",
     "Create an access token for it, then paste it here" + "You",
     "Check the token and seal it as EXPO_TOKEN_PM",
   ]);
@@ -1302,11 +1302,11 @@ test("an Expo robot's old token still at Expo reads as one line with its label a
     within(under as HTMLElement)
       .getByRole("link", { name: /Open Expo/ })
       .getAttribute("href"),
-  ).toBe("https://expo.dev/accounts/gophrase/settings/access-tokens");
+  ).toBe("https://expo.dev/accounts/acme/settings/access-tokens");
   expect(
     within(under as HTMLElement).getByRole("button", { name: "Done, check again" }),
   ).toBeTruthy();
-  expect(screen.queryByText(/Delete robot crewlet-gophrase-qa's other tokens/)).toBeNull();
+  expect(screen.queryByText(/Delete robot crewlet-acme-qa's other tokens/)).toBeNull();
 });
 
 test("several old tokens are counted, and a lane with no words of its own says credentials", () => {
@@ -1329,7 +1329,7 @@ test("a robot to delete at Expo can be kept there instead", async () => {
   pm.sync!.error = {
     ...pm.sync!.error!,
     step: "remove",
-    said: "Delete robot crewlet-gophrase-pm at Expo",
+    said: "Delete robot crewlet-acme-pm at Expo",
   };
   draw(answer);
   fireEvent.click(screen.getByRole("button", { name: "Keep the robot at Expo" }));
@@ -1353,10 +1353,10 @@ test("a lane that does not allow keeping the account offers no button to keep it
   pm.sync!.error = {
     ...pm.sync!.error!,
     step: "remove",
-    said: "Delete robot crewlet-gophrase-pm at Expo",
+    said: "Delete robot crewlet-acme-pm at Expo",
   };
   draw(answer);
-  expect(screen.getByText("Delete robot crewlet-gophrase-pm at Expo.")).toBeTruthy();
+  expect(screen.getByText("Delete robot crewlet-acme-pm at Expo.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /^Keep the/ })).toBeNull();
 });
 
@@ -1375,7 +1375,7 @@ test("an agent's repositories read as chips beside a pencil, or the lane's words
   );
   draw(data);
   const edit = screen.getByRole("button", { name: "Edit QA's GitHub repositories" });
-  expect(within(cellWith("gophrase/backend")).getAllByRole("button")).toEqual([edit]);
+  expect(within(cellWith("acme/backend")).getAllByRole("button")).toEqual([edit]);
   expect(glyphIn(edit)).toBe(PENCIL);
   expect(screen.getByText("All installed repositories")).toBeTruthy();
   expect(glyphIn(screen.getByRole("button", { name: "Choose PM's GitHub repositories" }))).toBe(
@@ -1393,15 +1393,15 @@ test("the repositories dialog lists what the installation reaches, and a choice 
   const dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
   expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
   const box = (name: string) => within(dialog).getByRole("checkbox", { name }) as HTMLInputElement;
-  expect(box("gophrase/backend").checked).toBe(true);
-  expect(box("gophrase/frontend").checked).toBe(false);
+  expect(box("acme/backend").checked).toBe(true);
+  expect(box("acme/frontend").checked).toBe(false);
   // WHAT IS TICKED IS COUNTED on the choice, and focus starts on it.
   const chosen = within(dialog).getByRole("radio", { name: /^Chosen repositories,\s*1 chosen$/ });
   expect((chosen as HTMLInputElement).checked).toBe(true);
   await waitFor(() => expect(document.activeElement).toBe(chosen));
   // A SHORT LIST IS READ WHOLE, with nothing to search.
   expect(within(dialog).queryByRole("searchbox")).toBeNull();
-  fireEvent.click(box("gophrase/frontend"));
+  fireEvent.click(box("acme/frontend"));
   expect(within(dialog).getByRole("radio", { name: /^Chosen repositories,\s*2 chosen$/ })).toBe(
     chosen,
   );
@@ -1409,12 +1409,12 @@ test("the repositories dialog lists what the installation reaches, and a choice 
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(screen.getByText("Not saved")).toBeTruthy();
   // ONE CHIP AND A COUNT, which names the rest.
-  const more = within(cellWith("gophrase/backend")).getByText("1 more repository");
-  expect(more.closest("[title]")?.getAttribute("title")).toBe("gophrase/frontend");
+  const more = within(cellWith("acme/backend")).getByText("1 more repository");
+  expect(more.closest("[title]")?.getAttribute("title")).toBe("acme/frontend");
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(calls.plan).toHaveLength(1));
   expect(calls.plan[0]).toMatchObject({
-    seats: { qa: { github: { scope: ["gophrase/backend", "gophrase/frontend"] } } },
+    seats: { qa: { github: { scope: ["acme/backend", "acme/frontend"] } } },
   });
 });
 
@@ -1450,7 +1450,7 @@ test("choosing all installed repositories clears the picks", async () => {
 test("a long repository list is searched, and offers only what the installation reaches", async () => {
   const data = githubAnswer();
   const many = Array.from({ length: 12 }, (_, i) => `example/service-${i + 1}`);
-  data.options[0] = { ...data.options[0]!, scope: ["gophrase/backend", ...many] };
+  data.options[0] = { ...data.options[0]!, scope: ["acme/backend", ...many] };
   draw(data);
   fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub repositories" }));
   const dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
@@ -1477,7 +1477,7 @@ test("the repositories control is held for an agent that is off or gone, on a he
         desired: {
           enabled: true,
           permissions: { contents: "read" },
-          scope: ["gophrase/mobile-app"],
+          scope: ["acme/mobile-app"],
         },
       }),
     }),
@@ -1494,7 +1494,7 @@ test("the repositories control is held for an agent that is off or gone, on a he
   expect(held("Edit QA's GitHub repositories")).toBe(true);
   cleanup();
   draw(githubAnswer(), { readOnly: OPERATOR_MANAGED });
-  expect(within(cellWith("gophrase/backend")).queryByRole("button")).toBeNull();
+  expect(within(cellWith("acme/backend")).queryByRole("button")).toBeNull();
   expect(screen.queryByRole("button", { name: /GitHub repositories$/ })).toBeNull();
 });
 
@@ -1544,15 +1544,15 @@ test.each([
       return data;
     },
     who: "QA's GitHub repositories",
-    typed: "gophrase/web",
-    sent: { qa: { github: { scope: ["gophrase/backend", "gophrase/web"] } } },
+    typed: "acme/web",
+    sent: { qa: { github: { scope: ["acme/backend", "acme/web"] } } },
   },
   {
     vendor: "GitLab",
     answer: gitlabAnswer,
     who: "Dev's GitLab projects",
-    typed: "gophrase/infra",
-    sent: { dev: { gitlab: { scope: ["gophrase/backend", "gophrase/infra"] } } },
+    typed: "acme/infra",
+    sent: { dev: { gitlab: { scope: ["acme/backend", "acme/infra"] } } },
   },
 ])("an open $vendor connection takes a typed entry", async ({ answer, who, typed, sent }) => {
   draw(answer());
@@ -1608,14 +1608,14 @@ test("an agent turned on with no scope where none reaches nothing is held at the
 // like any other change. A seat turned on anywhere else takes nothing.
 test("an agent turned on where one entry is all there is takes it", async () => {
   const data = githubAnswer();
-  data.options[0] = { ...data.options[0]!, scope: ["gophrase/backend"], scope_required: true };
+  data.options[0] = { ...data.options[0]!, scope: ["acme/backend"], scope_required: true };
   data.seats.push(seat("pm", "PM", { github: offLane() }));
   draw(data);
   fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(calls.plan).toHaveLength(1));
   expect(calls.plan[0]).toMatchObject({
-    seats: { pm: { github: { enabled: true, scope: ["gophrase/backend"] } } },
+    seats: { pm: { github: { enabled: true, scope: ["acme/backend"] } } },
   });
   cleanup();
   calls.plan = [];
@@ -1722,7 +1722,7 @@ test("a Scaleway seat's details name its application, its permission sets, its k
   draw(scalewayAnswer());
   details("SRE", "Scaleway");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on Scaleway"]')!);
-  expect(facts.getByText("crewlet-gophrase-sre")).toBeTruthy();
+  expect(facts.getByText("crewlet-acme-sre")).toBeTruthy();
   expect(facts.getByText("Permission sets")).toBeTruthy();
   expect(facts.getByText("Operate")).toBeTruthy();
   expect(facts.getByText("SCALEWAY_SECRET_KEY_SRE")).toBeTruthy();
@@ -1743,7 +1743,7 @@ test("a Scaleway seat's details name its application, its permission sets, its k
 // project's name, never its UUID.
 test("a Scaleway seat's projects read by name", () => {
   draw(scalewayAnswer());
-  const chips = cellWith("gophrase-prod");
+  const chips = cellWith("acme-prod");
   expect(chips.textContent).not.toContain("11111111");
 });
 
@@ -1788,7 +1788,7 @@ test("an AWS seat's details name its role, 15-minute credentials and the CLI's c
   draw(awsAnswer());
   details("SRE", "AWS");
   const facts = within(document.querySelector<HTMLElement>('dl[aria-label="SRE on AWS"]')!);
-  expect(facts.getByText("crewlet/gophrase/seat/crewlet-sre-7c2e")).toBeTruthy();
+  expect(facts.getByText("crewlet/acme/seat/crewlet-sre-7c2e")).toBeTruthy();
   expect(facts.getByText("Permissions policies")).toBeTruthy();
   expect(facts.getByText("Operate")).toBeTruthy();
   expect(facts.getByText("AWS_CREDENTIALS_SRE").parentElement!.textContent).toBe(
@@ -1836,9 +1836,7 @@ test("a Google Cloud seat's details name its account, an issued token and what C
   details("SRE", "Google Cloud");
   const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Google Cloud"]')!;
   const facts = within(list);
-  expect(
-    facts.getByText("crewlet-sre-3f9a@gophrase-crewlet-id.iam.gserviceaccount.com"),
-  ).toBeTruthy();
+  expect(facts.getByText("crewlet-sre-3f9a@acme-crewlet-id.iam.gserviceaccount.com")).toBeTruthy();
   expect(facts.getByText("Roles on its projects")).toBeTruthy();
   expect(facts.getByText("Operator")).toBeTruthy();
   expect(facts.getByText("GOOGLE_CLOUD_ACCESS_TOKEN_SRE").parentElement!.textContent).toBe(
@@ -1874,7 +1872,7 @@ test("a Google Cloud seat waiting on Google says so in its tool, never Needs you
 // Crewlet is pointed at the docs section that sets one up.
 test("a Google Cloud project reads by its name, and none set up links to preparing one", () => {
   const { redraw } = draw(googleCloudAnswer());
-  expect(screen.getByText("GoPhrase Production")).toBeTruthy();
+  expect(screen.getByText("Acme Production")).toBeTruthy();
   const none = googleCloudAnswer(undefined, { scope: [], scope_names: {} });
   none.seats[1]!.lanes.google_cloud!.desired.scope = [];
   redraw(none);
