@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // A FRESH BOX IS READ ONCE, after its setup and before its job: the memory the
@@ -20,22 +22,11 @@ import (
 type BoxFacts struct {
 	// MemoryBytes is the memory the box is held to, 0 where it could not be read.
 	MemoryBytes int64
-	// Browser and ContainerRuntime name what the box has, from [Browsers]
-	// and [ContainerRuntimes]; empty for none.
+	// Browser and ContainerRuntime name what the box has, from
+	// [coord.BoxBrowsers] and [coord.BoxContainerRuntimes]; empty for none.
 	Browser          string
 	ContainerRuntime string
 }
-
-// Browsers are the browsers a box is read for, in the order one is preferred,
-// and PlaywrightChromium the browser a Playwright install carries.
-var Browsers = []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "firefox"}
-
-// PlaywrightChromium is the browser a box has where only Playwright's own
-// download of Chromium is in it.
-const PlaywrightChromium = "Playwright's Chromium"
-
-// ContainerRuntimes are the container runtimes a box is read for.
-var ContainerRuntimes = []string{"docker", "podman"}
 
 // boxFactsTimeout bounds the whole read: each runtime's `info` is held to five
 // seconds where the box has `timeout`, and the rest is a handful of reads.
@@ -44,10 +35,10 @@ const boxFactsTimeout = 20
 // boxFactsScript prints one `key=value` line per fact it finds and always exits
 // 0: a box without a fact is an answer, not a failure.
 var boxFactsScript = strings.Join([]string{
-	`for b in ` + strings.Join(Browsers, " ") + `; do if command -v "$b" >/dev/null 2>&1; then echo "browser=$b"; break; fi; done`,
+	`for b in ` + strings.Join(coord.BoxBrowsers, " ") + `; do if command -v "$b" >/dev/null 2>&1; then echo "browser=$b"; break; fi; done`,
 	`for d in "${PLAYWRIGHT_BROWSERS_PATH:-}" /ms-playwright "$HOME/.cache/ms-playwright"; do if [ -n "$d" ] && ls -d "$d"/chromium-* >/dev/null 2>&1; then echo "playwright=chromium"; break; fi; done`,
 	`t=""; if command -v timeout >/dev/null 2>&1; then t="timeout 5"; fi`,
-	`for r in ` + strings.Join(ContainerRuntimes, " ") + `; do if command -v "$r" >/dev/null 2>&1 && $t "$r" info >/dev/null 2>&1; then echo "runtime=$r"; break; fi; done`,
+	`for r in ` + strings.Join(coord.BoxContainerRuntimes, " ") + `; do if command -v "$r" >/dev/null 2>&1 && $t "$r" info >/dev/null 2>&1; then echo "runtime=$r"; break; fi; done`,
 	`if [ -r /sys/fs/cgroup/memory.max ]; then echo "cgroup=$(cat /sys/fs/cgroup/memory.max)"; elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then echo "cgroup=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"; fi`,
 	`if [ -r /proc/meminfo ]; then awk '/^MemTotal:/ {print "total_kb=" $2}' /proc/meminfo; elif command -v sysctl >/dev/null 2>&1; then echo "total=$(sysctl -n hw.memsize 2>/dev/null)"; fi`,
 	`exit 0`,
@@ -84,13 +75,13 @@ func parseBoxFacts(out string) (BoxFacts, error) {
 		value = strings.TrimSpace(value)
 		switch key {
 		case "browser":
-			if slices.Contains(Browsers, value) {
+			if slices.Contains(coord.BoxBrowsers, value) {
 				read.Browser, said = value, true
 			}
 		case "playwright":
 			playwright, said = value == "chromium", said || value == "chromium"
 		case "runtime":
-			if slices.Contains(ContainerRuntimes, value) {
+			if slices.Contains(coord.BoxContainerRuntimes, value) {
 				read.ContainerRuntime, said = value, true
 			}
 		case "cgroup":
@@ -111,7 +102,7 @@ func parseBoxFacts(out string) (BoxFacts, error) {
 		return BoxFacts{}, errBoxFactsEmpty
 	}
 	if read.Browser == "" && playwright {
-		read.Browser = PlaywrightChromium
+		read.Browser = coord.BoxPlaywrightChromium
 	}
 	switch {
 	case cgroup > 0 && (total == 0 || cgroup < total):

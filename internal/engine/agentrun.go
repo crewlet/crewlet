@@ -451,6 +451,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       ref,
+		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
 		Setup:      runEnv.setup,
 		MCPServers: servers,

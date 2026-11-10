@@ -80,8 +80,8 @@ func continuing(asked *AskedRun) LaunchRequest {
 func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	// Every box answers its read, so only the launch's own choice keeps a
-	// reused box from being read again.
+	// Every box answers its read and the relaunch asks for one, so only the
+	// launch's own choice keeps a reused box from being read again.
 	rig.provider.Made = func(box *FakeSandbox) { answersFacts(box, "total_kb=1048576\n") }
 	var relaunched LaunchResult
 	run := askAndAnswer(t, rig, false, func(ctx context.Context, r PendingRun, asked *AskedRun) {
@@ -90,7 +90,9 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 				"its kept box", asked)
 			return
 		}
-		res, err := rig.launchVia(ctx, rig.manager, continuing(asked))
+		req := continuing(asked)
+		req.ReadBox = true
+		res, err := rig.launchVia(ctx, rig.manager, req)
 		if err != nil {
 			t.Errorf("relaunch: %v", err)
 		}

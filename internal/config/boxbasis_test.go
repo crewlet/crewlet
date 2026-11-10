@@ -8,43 +8,47 @@ import (
 )
 
 // A CONTAINER BOX'S MEMORY IS READ AS ITS RUNTIME READS IT: binary units, the
-// last flag written wins, and a size that does not parse is no ceiling rather
-// than a guess.
+// last flag written wins, none written is no ceiling, and a size the runtime
+// would refuse is an error, refused by validation at its argument.
 //
-// Mutation: read decimal units, take the first flag, or answer a bad size with
-// a number, and this goes red.
+// Mutation: read decimal units, take the first flag, answer a bad size with a
+// number, or let validation pass it, and this goes red.
 func TestAContainerBoxMemoryIsReadAsItsRuntimeReadsIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want int64
-		ok   bool
+		bad  bool
 	}{
-		{args: []string{"--cpus", "2", "--memory", "4g"}, want: 4 << 30, ok: true},
-		{args: []string{"--memory=512m"}, want: 512 << 20, ok: true},
-		{args: []string{"-m", "2GiB"}, want: 2 << 30, ok: true},
-		{args: []string{"-m=1.5g"}, want: 3 << 29, ok: true},
-		{args: []string{"--memory", "1g", "--memory", "8g"}, want: 8 << 30, ok: true},
-		{args: []string{"--memory", "1048576"}, want: 1 << 20, ok: true},
-		{args: []string{"--memory", "lots"}},
-		{args: []string{"--memory"}},
+		{args: []string{"--cpus", "2", "--memory", "4g"}, want: 4 << 30},
+		{args: []string{"--memory=512m"}, want: 512 << 20},
+		{args: []string{"-m", "2GiB"}, want: 2 << 30},
+		{args: []string{"-m=1.5g"}, want: 3 << 29},
+		{args: []string{"--memory", "1g", "--memory", "8g"}, want: 8 << 30},
+		{args: []string{"--memory", "1048576"}, want: 1 << 20},
 		{args: []string{"--memory-swap", "4g"}},
 		{},
+		{args: []string{"--memory", "lots"}, bad: true},
+		{args: []string{"--memory"}, bad: true},
+		{args: []string{"--memory=8g", "-m", "0"}, bad: true},
 	} {
-		got, ok := (&config.LocalSandbox{RunArgs: tc.args}).MemoryLimit()
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("MemoryLimit(%q) = %d, %v, want %d, %v", tc.args, got, ok, tc.want, tc.ok)
+		got, err := (&config.LocalSandbox{RunArgs: tc.args}).MemoryLimit()
+		if got != tc.want || (err != nil) != tc.bad {
+			t.Errorf("MemoryLimit(%q) = %d, %v, want %d, refused %v", tc.args, got, err, tc.want, tc.bad)
 		}
 	}
-	if _, ok := (*config.LocalSandbox)(nil).MemoryLimit(); ok {
-		t.Error("a company with no local block holds a container box to a memory")
+	if got, err := (*config.LocalSandbox)(nil).MemoryLimit(); got != 0 || err != nil {
+		t.Errorf("a company with no local block holds a container box to %d (%v)", got, err)
+	}
+	_, err := config.ParseCompany([]byte(strings.Replace(boxDoc, `"4g"`, `"lots"`, 1)))
+	if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.run_args[1]") ||
+		!strings.Contains(err.Error(), "is not a memory size") {
+		t.Fatalf("a memory size the runtime would refuse is answered %v, want a refusal at its argument", err)
 	}
 }
 
-// boxCompany is a company whose one agent seat runs in a container box.
-func boxCompany(t *testing.T, edit func(string) string) *config.Company {
-	t.Helper()
-	doc := `name: Acme
+// boxDoc is a company whose one agent seat runs in a container box.
+const boxDoc = `name: Acme
 providers:
   sandbox:
     local:
@@ -61,6 +65,11 @@ providers:
 roles:
   - name: SWE
 `
+
+// boxCompany is a company whose one agent seat runs in a container box.
+func boxCompany(t *testing.T, edit func(string) string) *config.Company {
+	t.Helper()
+	doc := boxDoc
 	if edit != nil {
 		doc = edit(doc)
 	}

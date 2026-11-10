@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"regexp"
@@ -84,27 +86,49 @@ func (c *Company) SeatBoxesOf(handle string) []SeatBox {
 
 // MemoryLimit is the memory a container box is held to by run_args, as the
 // container runtime reads `--memory`, `--memory=`, `-m` and `-m=` (the last one
-// written wins), in bytes; false where none is written or it does not parse.
-func (l *LocalSandbox) MemoryLimit() (int64, bool) {
+// written wins), in bytes: 0 where none is written, and an error naming the
+// argument where its size is one the runtime would refuse.
+func (l *LocalSandbox) MemoryLimit() (int64, error) {
 	if l == nil {
-		return 0, false
+		return 0, nil
 	}
-	var value string
-	for i := 0; i < len(l.RunArgs); i++ {
-		arg := strings.TrimSpace(l.RunArgs[i])
+	at, value := memoryArg(l.RunArgs)
+	if at < 0 {
+		return 0, nil
+	}
+	n, ok := ramInBytes(value)
+	if !ok {
+		return 0, errors.New(memorySizeRefused(value))
+	}
+	return n, nil
+}
+
+// memorySizeRefused is why value is no memory size.
+func memorySizeRefused(value string) string {
+	return fmt.Sprintf("%q is not a memory size the container runtime reads: a number and "+
+		"an optional unit, b, k, m, g or t", value)
+}
+
+// memoryArg is the index in args of the memory size the runtime reads, and the
+// size; -1 where none is written. A flag with no value after it is its own.
+func memoryArg(args []string) (int, string) {
+	at, value := -1, ""
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
 		switch {
 		case arg == "--memory" || arg == "-m":
-			if i+1 < len(l.RunArgs) {
+			at, value = i, ""
+			if i+1 < len(args) {
 				i++
-				value = l.RunArgs[i]
+				at, value = i, args[i]
 			}
 		case strings.HasPrefix(arg, "--memory="):
-			value = strings.TrimPrefix(arg, "--memory=")
+			at, value = i, strings.TrimPrefix(arg, "--memory=")
 		case strings.HasPrefix(arg, "-m="):
-			value = strings.TrimPrefix(arg, "-m=")
+			at, value = i, strings.TrimPrefix(arg, "-m=")
 		}
 	}
-	return ramInBytes(value)
+	return at, value
 }
 
 // ramSize is a container runtime's memory size: a number and a binary unit.

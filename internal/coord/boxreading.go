@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,9 +40,17 @@ type BoxReading struct {
 	At               time.Time `json:"at"`
 }
 
-// boxReadingMaxName bounds a browser's or a runtime's name, which a reading
-// takes from a closed list.
-const boxReadingMaxName = 64
+// BoxBrowsers are the browsers a reading names, in the order one is preferred,
+// and BoxPlaywrightChromium the one a Playwright install carries: a reading's
+// browser is one of them, so no other text reaches a seat's prompt.
+var BoxBrowsers = []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "firefox"}
+
+// BoxPlaywrightChromium is the browser of a box that has only Playwright's own
+// download of Chromium.
+const BoxPlaywrightChromium = "Playwright's Chromium"
+
+// BoxContainerRuntimes are the container runtimes a reading names.
+var BoxContainerRuntimes = []string{"docker", "podman"}
 
 // Validate reports why a reading cannot be kept.
 func (r BoxReading) Validate() error {
@@ -52,8 +61,10 @@ func (r BoxReading) Validate() error {
 		return errors.New("coord: a box reading names the basis its box was made from")
 	case r.MemoryBytes < 0:
 		return errors.New("coord: a box reading's memory is never negative")
-	case len(r.Browser) > boxReadingMaxName || len(r.ContainerRuntime) > boxReadingMaxName:
-		return errors.New("coord: a box reading names a browser and a runtime by a short name")
+	case r.Browser != "" && r.Browser != BoxPlaywrightChromium && !slices.Contains(BoxBrowsers, r.Browser):
+		return errors.New("coord: a box reading names a browser from the closed list")
+	case r.ContainerRuntime != "" && !slices.Contains(BoxContainerRuntimes, r.ContainerRuntime):
+		return errors.New("coord: a box reading names a container runtime from the closed list")
 	case r.At.IsZero():
 		return errors.New("coord: a box reading needs the instant it was taken")
 	}

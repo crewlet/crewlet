@@ -33,7 +33,12 @@ func (e *Engine) seatBoxes(ctx context.Context, cfg *config.Company, o *org.Orga
 	for _, b := range boxes {
 		box := capability.Box{Cell: string(b.Cell)}
 		if b.Cell == config.PlacementContainer {
-			box.MemoryBytes, _ = cfg.Providers.Sandbox.Local.MemoryLimit()
+			memory, err := cfg.Providers.Sandbox.Local.MemoryLimit()
+			if err != nil {
+				// Validation refuses such a document; one built by hand says so.
+				log.WarnContext(ctx, "box_memory_unread", "agent", handle, "error", err.Error())
+			}
+			box.MemoryBytes = memory
 		}
 		if readings != nil && seated {
 			r, found, err := readings.BoxReading(ctx, seat, string(b.Cell))
@@ -41,7 +46,7 @@ func (e *Engine) seatBoxes(ctx context.Context, cfg *config.Company, o *org.Orga
 			case err != nil:
 				log.WarnContext(ctx, "box_reading_unread", "agent", handle, "cell", string(b.Cell),
 					"error", err.Error(), "detail", "this turn is told its box from the document alone")
-			case found && r.Basis == cfg.BoxBasis(b.Seat, b.Cell):
+			case found && r.Basis == cfg.BoxBasis(b.Seat, b.Cell) && r.Validate() == nil:
 				box.Observed, box.Browser, box.ContainerRuntime = true, r.Browser, r.ContainerRuntime
 				if r.MemoryBytes > 0 {
 					box.MemoryBytes = r.MemoryBytes
@@ -51,6 +56,34 @@ func (e *Engine) seatBoxes(ctx context.Context, cfg *config.Company, o *org.Orga
 		out = append(out, box)
 	}
 	return out
+}
+
+// boxUnread reports whether a launch of seat handle in cell should read its
+// fresh box: no valid reading is kept under the box's basis. A store that does
+// not answer asks for the read, which costs one bounded command.
+func (e *Engine) boxUnread(ctx context.Context, company *Company, handle string, cell sandbox.Placement) bool {
+	readings := e.boxReadings()
+	if readings == nil || company == nil || company.Config == nil || company.Org == nil {
+		return false
+	}
+	seat, ok := company.Org.AgentIDFor(company.Org.AgentSeatByHandle(handle))
+	basis := boxBasisOf(company.Config, handle, cell)
+	if !ok || basis == "" {
+		return false
+	}
+	r, found, err := readings.BoxReading(ctx, seat, string(cell))
+	return err != nil || !found || r.Basis != basis || r.Validate() != nil
+}
+
+// boxBasisOf is the basis of seat handle's box in cell, "" where the document
+// places none there.
+func boxBasisOf(cfg *config.Company, handle string, cell sandbox.Placement) string {
+	for _, b := range cfg.SeatBoxesOf(handle) {
+		if string(b.Cell) == string(cell) {
+			return cfg.BoxBasis(b.Seat, b.Cell)
+		}
+	}
+	return ""
 }
 
 // keepBoxReading keeps what a launch of seat handle in cell found in its fresh
@@ -68,12 +101,7 @@ func (e *Engine) keepBoxReading(ctx context.Context, company *Company, handle st
 	if !ok {
 		return
 	}
-	var basis string
-	for _, b := range company.Config.SeatBoxesOf(handle) {
-		if string(b.Cell) == string(cell) {
-			basis = company.Config.BoxBasis(b.Seat, b.Cell)
-		}
-	}
+	basis := boxBasisOf(company.Config, handle, cell)
 	if basis == "" {
 		return
 	}

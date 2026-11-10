@@ -150,6 +150,10 @@ type TurnRef struct {
 type LaunchRequest struct {
 	Turn TurnRef
 
+	// ReadBox asks a fresh box to be read once after its setup ([ReadBoxFacts]):
+	// set where no reading is kept for the box as it is made now.
+	ReadBox bool
+
 	// System is the run's own standing instructions: the seat's executor
 	// prompt. It is FRAMED as the brief is: what the box provides, and how
 	// to ask a person, follow it ([buildSystem]).
@@ -726,7 +730,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 	var read *BoxFacts
-	if !reused {
+	if !reused && req.ReadBox {
 		read = readFresh(ctx, box)
 	}
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from

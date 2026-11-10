@@ -50,8 +50,8 @@ func boxedEngine(t *testing.T) (*Engine, *coordmem.Fleet) {
 // the memory run_args hold it to; after a fresh box's read, what its image
 // has; after the image changes, the old reading is not told of the new box.
 //
-// Mutation: tell a reading whatever its basis, keep none at a launch, or drop
-// the document's memory, and this goes red.
+// Mutation: tell a reading whatever its basis, keep none at a launch, read a
+// box whose reading is kept, or drop the document's memory, and this goes red.
 func TestASeatIsToldItsBoxAsARunLastFoundIt(t *testing.T) {
 	t.Parallel()
 	e, fleet := boxedEngine(t)
@@ -65,6 +65,9 @@ func TestASeatIsToldItsBoxAsARunLastFoundIt(t *testing.T) {
 	if got := told(company); !strings.Contains(got, unread) {
 		t.Fatalf("before any run the seat is told\n%s", got)
 	}
+	if !e.boxUnread(ctx, company, "ceo", sandbox.Container) {
+		t.Fatal("a launch before any reading is not asked to read its box")
+	}
 
 	e.keepBoxReading(ctx, company, "ceo", sandbox.Container,
 		sandbox.BoxFacts{MemoryBytes: 4 << 30, Browser: "chromium"})
@@ -72,6 +75,9 @@ func TestASeatIsToldItsBoxAsARunLastFoundIt(t *testing.T) {
 		"(chromium) and no container runtime"
 	if got := told(company); !strings.Contains(got, read) {
 		t.Fatalf("after a run read the box the seat is told\n%s", got)
+	}
+	if e.boxUnread(ctx, company, "ceo", sandbox.Container) {
+		t.Fatal("a launch is asked to read a box whose reading is kept under its basis")
 	}
 	kept, found, err := fleet.BoxReading(ctx, ceoSeat, string(sandbox.Container))
 	if err != nil || !found {
@@ -86,6 +92,9 @@ func TestASeatIsToldItsBoxAsARunLastFoundIt(t *testing.T) {
 	rebuilt := boxedCompany(t, "registry.example.com/coding:2")
 	if got := told(rebuilt); !strings.Contains(got, unread) {
 		t.Fatalf("a box made from a new image is told the old image's reading\n%s", got)
+	}
+	if !e.boxUnread(ctx, rebuilt, "ceo", sandbox.Container) {
+		t.Fatal("a box made from a new image is not read again")
 	}
 }
 

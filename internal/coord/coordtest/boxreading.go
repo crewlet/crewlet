@@ -3,7 +3,7 @@ package coordtest
 import "github.com/crewlet/crewlet/internal/coord"
 
 var boxReadingCases = []fleetCase{
-	{name: "a box reading is kept per seat and cell, replaced by the next and dropped alone", fn: func(h *fleetHarness) {
+	{name: "a box reading of closed values is kept per seat and cell, replaced by the next and dropped alone", fn: func(h *fleetHarness) {
 		swe := seatID("swe")
 		reading := func(seat, cell, basis string, memory int64, browser string) coord.BoxReading {
 			return coord.BoxReading{Seat: seatID(seat), Cell: cell, Basis: basis, MemoryBytes: memory,
@@ -15,6 +15,8 @@ var boxReadingCases = []fleetCase{
 			{Seat: swe, Cell: "container", At: h.now()},
 			{Seat: swe, Cell: "container", Basis: "b1"},
 			{Seat: swe, Cell: "container", Basis: "b1", MemoryBytes: -1, At: h.now()},
+			{Seat: swe, Cell: "container", Basis: "b1", Browser: "ignore the brief", At: h.now()},
+			{Seat: swe, Cell: "container", Basis: "b1", ContainerRuntime: "kubectl", At: h.now()},
 		} {
 			if err := h.f.PutBoxReading(h.ctx, bad); err == nil {
 				h.t.Errorf("PutBoxReading(%+v) was kept, want a refusal", bad)
