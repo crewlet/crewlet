@@ -222,6 +222,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// from, which only a reply reads and every build must carry.
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
+	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
+		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
+		// decodes no flag would apply as a patch naming no date.
+		patch, err := json.Marshal(worklet.TaskPatch{ClearStart: field.Name == "TaskPatch.ClearStart",
+			ClearDue: field.Name == "TaskPatch.ClearDue"})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Expect, record.Mutation = worklet.OpPatch, 1, patch
+		record.Subject = worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

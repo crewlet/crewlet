@@ -1118,6 +1118,9 @@ type createTaskArgs struct {
 	Notify *worklet.Notify
 }
 
+// A TASK HOLDING THE ZERO INSTANT is refused before it is asked
+// ([op.refusedBeforeAsking]): a pointer at it would cross as no instant at all,
+// and the writer refuses it where it runs ([worklet.Task.CheckInstants]).
 var opCreateTask = define("tracker.create_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a createTaskArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
@@ -1125,7 +1128,7 @@ var opCreateTask = define("tracker.create_task", opIdempotentWrite, trackerDomai
 			return worklet.WriteResult{}, err
 		}
 		return w.CreateTask(ctx, a.OpID, a.Task, a.Notify)
-	})
+	}).refusedBeforeAsking(func(a createTaskArgs) error { return a.Task.CheckInstants() })
 
 type createTaskAskingArgs struct {
 	OpID   string
@@ -1134,6 +1137,8 @@ type createTaskAskingArgs struct {
 	Notify *worklet.Notify
 }
 
+// The task and its ask are refused before they are asked for the zero instant
+// as a create's task is ([opCreateTask]).
 var opCreateTaskAsking = define("tracker.create_task_asking", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a createTaskAskingArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
@@ -1141,7 +1146,12 @@ var opCreateTaskAsking = define("tracker.create_task_asking", opIdempotentWrite,
 			return worklet.WriteResult{}, err
 		}
 		return w.CreateTaskAsking(ctx, a.OpID, a.Task, a.Ask, a.Notify)
-	})
+	}).refusedBeforeAsking(func(a createTaskAskingArgs) error {
+	if err := a.Task.CheckInstants(); err != nil {
+		return err
+	}
+	return a.Ask.CheckInstants()
+})
 
 type placeTaskArgs struct {
 	OpID   string
@@ -1195,6 +1205,10 @@ type updateTaskArgs struct {
 	Notify    *worklet.Notify
 }
 
+// A PATCH'S DATES are refused before they are asked where no task could hold
+// them ([op.refusedBeforeAsking], [worklet.TaskPatch.CheckDates]): a date set to
+// the zero instant would cross as no date named at all — a clear is its own
+// flag, ClearStart or ClearDue, which crosses as itself.
 var opUpdateTask = define("tracker.update_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a updateTaskArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
@@ -1205,7 +1219,7 @@ var opUpdateTask = define("tracker.update_task", opIdempotentWrite, trackerDomai
 		patch.Watch, patch.Relate, patch.Depend, patch.Checklist =
 			a.Watch, a.Relate, a.Depend, a.Checklist
 		return w.UpdateTask(ctx, a.OpID, a.ID, a.Project, a.IfMatch, patch, a.Kind, a.Notify)
-	})
+	}).refusedBeforeAsking(func(a updateTaskArgs) error { return a.Patch.CheckDates() })
 
 type dependArgs struct {
 	OpID   string

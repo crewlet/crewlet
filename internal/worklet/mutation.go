@@ -52,7 +52,11 @@ import (
 // ([MutationRecord.NoticeAsksKept]).
 // Version 7 is a notice row that keeps whether the change woke its recipient
 // ([MutationRecord.NoticeWokeKept]).
-const RecordVersion = 7
+// Version 8 is a task patch taking a date off by its flag
+// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 7 decodes
+// neither, and would apply the patch as one that names no date — keeping a
+// date every newer node cleared.
+const RecordVersion = 8
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -116,6 +120,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
 	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
 	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
+	{Name: "TaskPatch.ClearStart", Since: 8, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
+	{Name: "TaskPatch.ClearDue", Since: 8, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -144,6 +145,11 @@ type fakeNode struct {
 	// indexBuilding is a node whose index has not finished its first lap.
 	indexBuilding bool
 
+	// gestures is every inbox gesture it was asked to make, and
+	// taskQueries every query a task read asked it (routedzero_test.go).
+	gestures    []inbox.Gesture[worklet.Reason]
+	taskQueries []worklet.Query
+
 	// proposals is every push proposed to this node's committer,
 	// compactions every compaction, expunges every expunge record, changes
 	// every write of a change, conversations every write of a change's
@@ -222,6 +228,9 @@ func (f *fakeNode) set(change func(*fakeNode)) {
 
 func (f *fakeNode) Tasks(ctx context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	f.note("tasks")
+	f.mu.Lock()
+	f.taskQueries = append(f.taskQueries, q)
+	f.mu.Unlock()
 	if q.Units != f.units {
 		return worklet.Answer{}, errors.New("the serving node's chart was not attached")
 	}

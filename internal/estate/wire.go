@@ -587,6 +587,34 @@ type op[A, R any] struct {
 	// (Timing.GitWriteAttemptFor) — and nil for every operation whose
 	// attempt is its class's alone ([Router.wholeAttempt]).
 	attempt func(A, Timing) time.Duration
+
+	// asked is the check the ASKING node makes of the arguments before the
+	// request runs anywhere ([op.refusedBeforeAsking]), nil for every
+	// operation that declares none.
+	asked func(A) error
+}
+
+// refusedBeforeAsking declares a check the ASKING node makes of an operation's
+// arguments before the request runs anywhere — this node's own copy in process,
+// or a data node it routes to — refusing with check's error whatever check
+// refuses, so nothing is asked.
+//
+// FOR A VALUE THE WIRE DOES NOT CARRY AS ITSELF. A field at its zero is left
+// off the wire ([encodeInput]), and a pointer whose type's own IsZero calls
+// what it points at zero is such a field: it crosses as no value at all, and
+// the serving node decodes nil. A writer that refuses such a value where it
+// runs refused it on a data node's own seats and was handed nil from every
+// other node — one request, two answers, by which node asked. Checked where
+// the request is asked, it is refused alike from every node; the writer keeps
+// its own check for whatever reaches it another way. The wire gate holds every
+// such field to a reason ([zeroThroughPointer], wirerule_test.go), and a field
+// refused here names its check there.
+//
+// A property of the asking side, like [op.keyedBy]: the server runs the
+// operation as it always did.
+func (o op[A, R]) refusedBeforeAsking(check func(A) error) op[A, R] {
+	o.asked = check
+	return o
 }
 
 // attemptBy declares a git write whose attempt on one Gitlet node follows its
@@ -657,6 +685,32 @@ func (s *opSpec) surfaceWrite() bool {
 // a build that cannot serve, so it panics rather than silently shadowing, and
 // so does a domain this package knows no log for, whose copy no verdict
 // judges and whose floor no log holds.
+//
+// # A FIELD'S ZERO MEANS WHAT AN OLDER BUILD DOES
+//
+// A is the operation's arguments as the wire carries them, and every field of
+// it, at every depth, crosses only where it holds a value: the router leaves a
+// field at its zero off the wire ([encodeInput]), and the serving node decodes
+// its absence as Go's zero. So a field a later build adds to A — or to any type
+// A holds — must mean, at its zero, exactly what a build without the field
+// does: a request that does not use it then reaches a data node of either build
+// as it did before the field existed. A field whose zero would mean something
+// else would change what every older
+// build's request means, so spell it so that its zero does not: a flag `Keep`
+// whose zero keeps nothing is spelled `Drop`, whose zero drops nothing.
+//
+// A TYPE'S OWN IsZero DECIDES THAT ZERO where it has one, as encoding/json/v2's
+// OmitZeroStructFields asks it — and it asks it THROUGH a pointer, so a pointer
+// at a value such a type calls zero crosses as nil, exactly as a nil pointer
+// does: a pointer at a type with its own IsZero crosses only where it points at
+// what that type calls non-zero. The wire gate holds every such type to a
+// reason its absence drops nothing a reader misses (wirerule_test.go's
+// zeroByMethod), and every pointer at one to a reason no reader tells nil from
+// a pointer at that zero (zeroThroughPointer). Where one would, the field is
+// reshaped until none does: a clear said by a flag of its own
+// (worklet.TaskPatch.ClearDue), a bound held as a value whose zero means unset
+// (worklet.ShowClosed.Since), or a value no request may carry refused before it
+// is asked ([op.refusedBeforeAsking]).
 func define[A, R any](name string, class opClass, domain string, actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {

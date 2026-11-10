@@ -767,6 +767,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"the resolve from the stored row and refuses anybody but its author",
 			patch.Comment.ID, id)
 	}
+	if err := patch.CheckDates(); err != nil {
+		return WriteResult{}, err
+	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
 

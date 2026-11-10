@@ -625,6 +625,13 @@ func callAs[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, 
 	here bool) (R, error) {
 	var zero R
 	spec := o.spec
+	if o.asked != nil {
+		// REFUSED BEFORE IT IS ASKED ANYWHERE ([op.refusedBeforeAsking]),
+		// in process as routed, so the answer is the same from every node.
+		if err := o.asked(args); err != nil {
+			return zero, err
+		}
+	}
 	var written worklet.WriteLog
 	if actor != nil && actor.Provenance.Written != nil {
 		// THE TURN'S SET OF ITEMS IT WROTE is in this process, so a node
@@ -703,7 +710,10 @@ func exchangesOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writt
 func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, written worklet.WriteLog,
 	key string) (exchange, error) {
 
-	encoded, err := json.Marshal(args)
+	// UNDER THE WIRE'S RULE FOR AN OPERATION'S ARGUMENTS ([encodeInput]): a
+	// field at its zero stays off, so a data node of a build that does not
+	// declare it is sent nothing it would have to read.
+	encoded, err := encodeInput(args)
 	if err != nil {
 		return exchange{}, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
 	}
