@@ -478,7 +478,7 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 			byID[r.AgentID] = s
 			out = append(out, s)
 		}
-		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
+		s.tokens += r.Tokens()
 		s.auxiliary += r.AuxInput + r.AuxOutput
 		outcome := types.TurnOutcome(r.Outcome)
 		// A SCHEDULE'S TURNS ARE THE OWNER'S CHOICE, and a check that finds

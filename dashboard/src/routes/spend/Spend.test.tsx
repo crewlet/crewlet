@@ -1088,3 +1088,58 @@ test("By agent's figure columns take their heads' width", async () => {
     expect(tracks[at], figure).toBe("max-content");
   }
 });
+
+// TURNS THAT CHANGED NOTHING are read over the window the figures are, costliest
+// first, each by what woke it and who can make it happen less; a reason whose
+// turns all changed something is left out.
+test("turns that changed nothing are listed by agent and wake, over the same window", async () => {
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(48_600_000),
+    turn_outcomes: {
+      from: "2026-01-01",
+      to: "2026-01-30",
+      rows: [
+        {
+          seat: "ceo",
+          agent_id: "a-1",
+          wake: "schedule:standup",
+          turns: 10,
+          tokens: 900,
+          nothing: 8,
+          nothing_tokens: 700,
+        },
+        {
+          seat: "swe",
+          agent_id: "a-2",
+          wake: "work_item:pickup",
+          turns: 4,
+          tokens: 2_000,
+          nothing: 3,
+          nothing_tokens: 1_500,
+        },
+        {
+          seat: "swe",
+          agent_id: "a-2",
+          wake: "chat_message:mention",
+          turns: 5,
+          tokens: 300,
+          nothing: 0,
+          nothing_tokens: 0,
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(params("turn_outcomes")[0]).toEqual(params("tokens")[0]);
+  const grid = screen.getByRole("table", { name: /Turns that changed nothing/ });
+  const rows = within(grid).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(2);
+  expect(rows[0]?.textContent).toContain("Work handed to it while idle");
+  expect(rows[0]?.textContent).toContain("3 of 4 (75%)");
+  expect(rows[1]?.textContent).toContain("Schedule standup");
+  expect(
+    within(rows[1] as HTMLElement).getByRole("link", {
+      name: "An admin, by changing how often it runs",
+    }),
+  ).toBeTruthy();
+});
