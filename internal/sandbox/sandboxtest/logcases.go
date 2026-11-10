@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -33,13 +34,26 @@ var stagedLogCases = []struct {
 
 // stagedRuns is a coordination store's run records with the next write of a
 // log staged: before it reaches the store, before runs once, and fail, if
-// set, is what it answers instead of landing.
+// set, is what it answers instead of landing. And rowAsks counts every
+// read-decide-write of a run's record itself, for a case whose subject is a
+// write that must leave the record alone.
 type stagedRuns struct {
 	records
 
 	mu     sync.Mutex
 	before func(ctx context.Context)
 	fail   error
+
+	rowAsks atomic.Int64
+}
+
+// MutateSandboxRun counts each read-decide-write of a run's record
+// ([stagedRuns.rowAsks]) and makes it as the records would.
+func (r *stagedRuns) MutateSandboxRun(ctx context.Context, turnID string,
+	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
+
+	r.rowAsks.Add(1)
+	return r.records.MutateSandboxRun(ctx, turnID, decide)
 }
 
 // records is the store's run records, embedded under a name of their own:

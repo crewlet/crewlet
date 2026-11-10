@@ -206,6 +206,14 @@ type ActivityQuery struct {
 	From time.Time
 	To   time.Time
 
+	// Kinds keeps the changes of these kinds. A kind that names a field
+	// keeps every change that moved the field, whatever kind its record
+	// ended with ([ChangeKind.MovedFields]): one write that hands an item
+	// over and sets its status is a `status` row whose deltas carry the
+	// assignee, and `assignee` read off the kind alone missed it (#930). A
+	// creation stays `created` alone: its row records every value the item
+	// was filed with as a move from nothing, and a feed asked for status
+	// changes is not asked for every item filed.
 	Kinds []ChangeKind
 	Actor string
 
@@ -918,10 +926,18 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	}
 	if len(q.Kinds) > 0 {
 		values := make([]any, 0, len(q.Kinds))
+		var moved []string
 		for _, kind := range q.Kinds {
 			values = append(values, string(kind))
+			for _, field := range kind.MovedFields() {
+				moved = append(moved, "json_extract(h.fields_json, '$."+field+"') IS NOT NULL")
+			}
 		}
-		add("h.kind IN ("+placeholders(len(values))+")", values...)
+		clause := "h.kind IN (" + placeholders(len(values)) + ")"
+		if len(moved) > 0 {
+			clause = "(" + clause + " OR (h.kind <> 'created' AND (" + strings.Join(moved, " OR ") + ")))"
+		}
+		add(clause, values...)
 	}
 	if actor := strings.TrimSpace(q.Actor); actor != "" {
 		add("h.actor = ?", actor)

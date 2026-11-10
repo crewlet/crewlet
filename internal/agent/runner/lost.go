@@ -127,6 +127,11 @@ type carried interface {
 	// brief, each under the fence token of the turn that relaunches it.
 	continuation(provenance.Boundary) string
 	reseed(provenance.Boundary) string
+	// tellsHeld is the held call the continuation tells what became of
+	// ([Asked.Held]), "" where it tells none: the call a person approved for
+	// it is told there, by the lead of the brief the continuation opens, and
+	// in no list of the round's calls that brief tells ([Runner.calledAfter]).
+	tellsHeld() string
 	// keeps says the round may be carried on in the turn's kept session at
 	// all (continued.go); branch is the work-in-progress branch the run
 	// before pushed, where the engine knows it, for a box that replaced its.
@@ -145,6 +150,19 @@ func (a *Asked) reseed(b provenance.Boundary) string       { return a.Reseed(b) 
 func (a *Asked) keeps() bool                               { return true }
 func (a *Asked) branch() string                            { return a.Branch }
 func (a *Asked) refusal() error                            { return nil }
+
+// tellsHeld is the held call the question was about, which the answer's
+// continuation tells what became of ([Asked.Continuation]): that the call was
+// made and what it returned, or that it may or may not have taken effect — or
+// that it was not made, where nothing of it is in the round's log. "" for a
+// question about no held call, and for a reply refused, whose continuation
+// tells only the refusal (a chat reply never answers a held call).
+func (a *Asked) tellsHeld() string {
+	if a.Held == nil || a.Refused != nil {
+		return ""
+	}
+	return a.Held.HeldID
+}
 
 // what names the carrying on, an answer's or a refused reply's.
 func (a *Asked) what() string {
@@ -166,6 +184,7 @@ func (l *Lost) session() string                         { return "" }
 func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
+func (l *Lost) tellsHeld() string                       { return "" }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }
 func (l *Lost) what() string                            { return "carrying on the round its host lost" }

@@ -229,6 +229,83 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	}
 }
 
+// THE PICKUP READS AN ASSIGNMENT BY ITS ASSIGNEE DELTA, WHATEVER KIND ITS
+// RECORD ENDED WITH (ADR-0112, #930). A write that hands an item over and moves
+// another field in the same call is filed under the other change's kind, and
+// the turn the pickup starts works for that write's writer, not for whoever
+// assigned the item before it. Another agent's reassertion to the seat that
+// already holds the item moves nothing, so whom the work is for stays put.
+//
+// Mutation: select the assignment by `h.kind = 'assignee'`, and each hand-off
+// reads the assigner before it while the reassertion reads the agent that made
+// it.
+func TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
+	lead := r.writer.As("lead", worklet.AuthorHuman, worklet.Provenance{})
+	ops := r.writer.As("ops", worklet.AuthorHuman, worklet.Provenance{})
+	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{})
+	ana, bo := "ana", "bo"
+	started := worklet.StatusInProgress
+	write := func(w *worklet.Writer, op, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
+		t.Helper()
+		if _, err := w.UpdateTask(t.Context(), op, id, "ENG", worklet.NoIfMatch, patch, kind,
+			nil); err != nil {
+			t.Fatalf("%s on %s: %v", op, id, err)
+		}
+		r.drain()
+	}
+	file := func(id string) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		if _, err := pm.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	handOffs := []struct {
+		id    string
+		patch worklet.TaskPatch
+		kind  worklet.ChangeKind
+	}{
+		{"with-status", worklet.TaskPatch{Assignee: &ana, Status: &started}, worklet.ChangeStatus},
+		{"with-tags", worklet.TaskPatch{Assignee: &ana, Tags: &[]string{"handed-over"}}, worklet.ChangeTags},
+		{"with-watchers", worklet.TaskPatch{Assignee: &ana, Watchers: &[]string{"pm"}},
+			worklet.ChangeWatchers},
+	}
+	if _, err := r.writer.WriteTags(t.Context(), "op-tags-handed-over", "ENG",
+		worklet.TagEdit{Add: []worklet.Tag{{Slug: "handed-over", Label: "Handed over"}}},
+		worklet.TagAuthority{}); err != nil {
+		t.Fatalf("declare ENG's tag: %v", err)
+	}
+	r.drain()
+	for _, h := range handOffs {
+		file(h.id)
+		write(lead, "op-lead-"+h.id, h.id, worklet.TaskPatch{Assignee: &bo}, worklet.ChangeAssignee)
+		write(ops, "op-ops-"+h.id, h.id, h.patch, h.kind)
+	}
+	file("reasserted")
+	write(ops, "op-ops-reasserted", "reasserted", worklet.TaskPatch{Assignee: &ana}, worklet.ChangeAssignee)
+	write(cy, "op-cy-reasserted", "reasserted", worklet.TaskPatch{Assignee: &ana}, worklet.ChangeAssignee)
+
+	got := map[string]string{}
+	for _, item := range r.readyWork("ana").Items {
+		got[item.ID] = "nobody"
+		if w := item.For; w != nil {
+			got[item.ID] = string(w.Kind) + " " + w.Seat + w.Login
+		}
+	}
+	byOps := string(types.WorkingForSeat) + " ops"
+	want := map[string]string{
+		"with-status": byOps, "with-tags": byOps, "with-watchers": byOps, "reasserted": byOps,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the work is for %v, want every item worked for ops, whose write handed it to ana", got)
+	}
+}
+
 // THE WAKE INSTANT IS THE CHANGE THE KEY NAMES, and the seat's progress on
 // started work is its own change other than a comment: a comment moves
 // neither, a field it sets moves the progress alone.

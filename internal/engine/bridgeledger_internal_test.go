@@ -64,8 +64,9 @@ func (m *steppingMeter) Total() runner.Bridged {
 // METER.
 //
 // Every append — the first included — names the job the launch bound the
-// session to before its box existed, so a call that outlives its job is refused
-// by the store rather than landing on the next job's record. And every append
+// session to before its box existed, so a call that outlives its job never lands
+// on the next job's record as that job's: the store lists it, marked late, in the
+// round it was made in, or drops it once a new round has started. And every append
 // carries the meter's running total as the row stores it — every figure, the
 // cache shares and the workers included — for the segment that resumes from
 // the run to pay.
@@ -77,7 +78,7 @@ func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing
 	store := &appendingStore{}
 	meter := &steppingMeter{}
 	l := &bridgeLedger{store: store, spend: meter}
-	l.bind("launch-1")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 	for range 3 {
 		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "query_episodes"}}); err != nil {
 			t.Fatalf("Append: %v", err)
@@ -133,7 +134,7 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
 	l := newBridgeLedger(store, nil)
-	l.bind("launch-1")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 	started := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
 		Call: tools.Call{Name: "list_issues", Args: map[string]any{"repo": "core"}, Output: "[]"},
@@ -156,11 +157,14 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 // WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on
 // the turn's record of the call, and the size of the whole arguments and output
 // where the log kept less, which the collection's replay decides by — and the
-// calls the log dropped, by identity, in the turn's own shape.
+// calls the log dropped, by identity, in the turn's own shape. And of the call
+// a person approved, the held call it was made for, which tells the one a
+// relaunch's lead tells from one an earlier answer approved.
 //
 // Mutation: drop the digest or either size on the way to the runner, or the
 // tally, and a resumed segment seeds a cut call as another and replays a cut
-// submission as the run's.
+// submission as the run's; drop the held call's id, and a later attempt at an
+// answer lists the call its lead tells among the round's calls again.
 func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	t.Parallel()
 	got := bridgedCalls([]sandbox.BridgeCall{{Name: "code_commit_files",
@@ -180,7 +184,7 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	// the tool called with none — and as WHICH of the two it is, which the
 	// execute phase's record says in place of its arguments.
 	withheld := bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
-		{Name: "close_issue", Approved: true}})
+		{Name: "close_issue", Approved: true, HeldID: "held-1"}})
 	for _, call := range withheld {
 		if !call.Withheld || call.Digest != "" || len(call.Args) != 0 {
 			t.Errorf("a held or approved call reads %+v, want it withheld", call.Call)
@@ -189,6 +193,10 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	if !withheld[0].Held || withheld[0].Approved || withheld[1].Held || !withheld[1].Approved {
 		t.Errorf("the held and approved calls read %+v and %+v, want each marked as the one it is",
 			withheld[0], withheld[1])
+	}
+	if withheld[0].HeldID != "" || withheld[1].HeldID != "held-1" {
+		t.Errorf("the held and approved calls name held calls %q and %q, want none and the one the approved "+
+			"call was made for", withheld[0].HeldID, withheld[1].HeldID)
 	}
 }
 
@@ -245,14 +253,14 @@ func TestAResumeHandsTheRunnerTheRoundsCallsAsItsLogNumberedThem(t *testing.T) {
 	}
 }
 
-// A SESSION WITH NO METER SENDS NO SPEND, and a call its job no longer takes
+// A SESSION WITH NO METER SENDS NO SPEND, and a call its round no longer takes
 // is not an error to the box: the store's "not recorded" is the ordinary end
-// of a job.
+// of a round.
 func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
 	l := newBridgeLedger(store, nil)
-	l.bind("launch-0")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-0"})
 	for range 2 {
 		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}}); err != nil {
 			t.Fatalf("Append on a job the row no longer holds: %v", err)
@@ -268,9 +276,10 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 // A RUN'S SUBMISSION, ONCE IN ITS LOG, TELLS THE WAITER THAT DRIVES IT TO LOOK
 // NOW: its harness is about to exit, and its completion is found within seconds of
 // that rather than up to a poll interval later. Only the submission, only one
-// the gate let through, and only one recorded on the run's own job — a
-// refused submission is no end, and one its job no longer takes names a job
-// that is over.
+// the gate let through, and only one the log recorded — a refused submission
+// is no end, and one the log did not take, its round over, names a job that is
+// over. (A late one of the round, which the log records, names its own job,
+// which the row has moved on from and no waiter polls for it.)
 //
 // Mutation: nudge on every recorded call, on a refused submission or ask, or
 // on one the log did not take, and this goes red.
@@ -297,7 +306,7 @@ func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 			var got []sandbox.Nudge
 			l := newBridgeLedger(&appendingStore{}, nil)
 			l.nudge = func(_ context.Context, n sandbox.Nudge) { got = append(got, n) }
-			l.bind(tc.launch)
+			l.bind(sandbox.OpenedJob{LaunchID: tc.launch})
 			if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tc.call}); err != nil {
 				t.Fatalf("Append: %v", err)
 			}
@@ -342,7 +351,8 @@ var errSpendRefused = errors.New("the record took the call's log but not its spe
 // first append asked of it and whose record refuses the spend beside it — the
 // calls are in the log, and the write of what they cost failed after it — and
 // which answers every attempt after that one as then does: the spend refused
-// again, the store out of reach, or the log moved on to the run's next job.
+// again, the store out of reach, or the job replaced — by a new round, or by a
+// later job of its own round, which lists the calls there.
 type spendlessStore struct {
 	sandbox.PendingStore
 	then  func() (bool, error)
@@ -366,20 +376,25 @@ func (s *spendlessStore) AppendBridgeCall(_ context.Context, _ string, a sandbox
 // answers the calls recorded beside the error. They are in the log, and
 // nothing an attempt after that one answers takes them out of it: the attempts
 // after it are for the spend alone, whether they meet the spend refused again,
-// the store out of reach, or the log moved on to the run's next job. So
-// neither the call nor what the append carried is owed — owed, the session's
-// next append would carry calls the log already lists, and its end would name
-// them on no record — nor said to be on no record of the run, a carry of them
-// is answered carried, and the run's waiter is still nudged for a submission
-// that landed; the spend is cumulative, so the next append that lands carries
-// it. On a bubble's clock, so the retries cost the suite nothing.
+// the store out of reach, or the job replaced — by a new round, or by a later
+// job of its own round, whose log lists the calls. So neither the call nor what
+// the append carried is owed — owed, the session's next append would carry
+// calls the log already lists, and its end would name them on no record — nor
+// said to be on no record of the run, a carry of them is answered carried, and
+// the run's waiter is still nudged for a submission that landed; the spend is
+// cumulative, so the next append that lands carries it. And the error answered
+// is the spend's, the one write that failed, WHICHEVER RELAUNCH REPLACED THE
+// JOB: never the store's word that its job was replaced, which no write
+// failed over. On a bubble's clock, so the retries cost the suite nothing.
 //
 // Mutation: answer an append as its last attempt alone, and a call the first
 // attempt put in the log is owed again where the store was then out of reach,
 // and said to be on no record where the log then moved on, its submission's
 // waiter never told; owe a call on any error the append answers, and the next
 // append carries the submission the log already holds; nudge only on an append
-// that answered no error, and the waiter is not told the run's work is in.
+// that answered no error, and the waiter is not told the run's work is in;
+// take the store's word that the job was replaced in its round for another
+// write's failure, and the spend's own error is lost.
 func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
 	t.Parallel()
 	carried := sandbox.OwedAppend{Call: sandbox.BridgeCall{Name: "post_message", Seq: 1,
@@ -394,6 +409,9 @@ func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
 			return false, errors.New("the coordination store is electing a leader")
 		}},
 		{"the log moved on after the attempt it took", func() (bool, error) { return false, nil }},
+		{"a later job of its round took the log after the attempt it took", func() (bool, error) {
+			return true, sandbox.ErrJobReplaced
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -405,8 +423,8 @@ func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
 				var nudged []sandbox.Nudge
 				l.nudge = func(_ context.Context, n sandbox.Nudge) { nudged = append(nudged, n) }
 				if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
-					Call: tools.Call{Name: sandbox.SubmitWorkTool}, Seq: 2, Digest: strings.Repeat("d2", 32)}); err == nil {
-					t.Error("an append whose spend never reached the record answered no error")
+					Call: tools.Call{Name: sandbox.SubmitWorkTool}, Seq: 2, Digest: strings.Repeat("d2", 32)}); !errors.Is(err, errSpendRefused) {
+					t.Errorf("an append whose spend never reached the record answered %v, want the spend's error", err)
 				}
 				if first := store.asked[0]; len(first.Owed) != 1 || first.Owed[0].Call.Seq != 1 {
 					t.Fatalf("the first attempt carried %+v, want the call the session owed", first.Owed)
@@ -469,7 +487,7 @@ func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) 
 	t.Parallel()
 	blip := &flakyStore{fail: func(attempt int, _ sandbox.BridgeAppend) bool { return attempt == 1 }}
 	l := newBridgeLedger(blip, nil)
-	l.bind("launch-1")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
 		Seq: 1, Digest: "d1"}); err != nil {
 		t.Fatalf("an append the store refused once = %v; want it landed on its retry", err)
@@ -480,7 +498,7 @@ func TestABridgedCallsRecordThatDidNotLandIsTriedAgainAndThenOwed(t *testing.T) 
 
 	down := &flakyStore{fail: func(_ int, a sandbox.BridgeAppend) bool { return a.Call.Seq == 1 }}
 	l = newBridgeLedger(down, nil)
-	l.bind("launch-1")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 	worker := []toolloop.Called{{Tool: "leave_channel", Digest: "w1"}}
 	started := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate", Failed: true},
@@ -557,7 +575,7 @@ func TestABridgedCallsRecordOutlastsALeadersReElection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := &electingStore{}
 		l := newBridgeLedger(store, nil)
-		l.bind("launch-1")
+		l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 		err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message"},
 			Seq: 1, Digest: strings.Repeat("e1", 32)})
 		if err != nil || l.owing() != 0 {
@@ -619,7 +637,7 @@ func newBridgeEndRig(t *testing.T) *bridgeEndRig {
 	turn := &turnctx.Turn{RunID: r.turnID, Seat: seat,
 		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}
 	r.ledger = newBridgeLedger(r.store, nil)
-	r.ledger.bind(r.launch)
+	r.ledger.bind(sandbox.OpenedJob{LaunchID: r.launch})
 	if url := r.bridge.Open(ctx, &mcpbridge.Session{RunID: r.turnID, Launch: r.launch, Handle: "dev",
 		Role: "Engineer", Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).ForTurn(turn),
 		Ledger: r.ledger}); url == "" {
@@ -715,9 +733,9 @@ func TestARunsCollectionHasItsJobsOwedCallsCarriedFirst(t *testing.T) {
 
 // A CARRY THAT CANNOT LAND IS SAID, AND KEPT WHILE IT MIGHT STILL. One the store
 // does not take within its bound is still owed, for the session's next append
-// or its next carry; one the store answers for a log that has moved on — the
-// run's next job replaced this one — is forgotten, since no record of the run
-// will ever take it.
+// or its next carry; one the store answers for a log that has moved on — a
+// relaunch started a new round, or the run ended — is forgotten, since no record
+// of the run will ever take it.
 //
 // Mutation: forget the calls of a carry the store did not take, and a blip that
 // outlasts the collection's ask loses them before the session's end can try.
@@ -733,7 +751,7 @@ func TestACarryThatCannotLandIsKeptWhileItMightStill(t *testing.T) {
 	if n := r.ledger.owing(); n != 1 {
 		t.Fatalf("the ledger owes %d appends after a carry the store refused, want the submission still", n)
 	}
-	r.ledger.bind("another-job")
+	r.ledger.bind(sandbox.OpenedJob{LaunchID: "another-job"})
 	if r.ledger.Settle(t.Context(), r.turnID) || r.ledger.owing() != 0 {
 		t.Errorf("a carry for a job the row no longer holds left %d owed, want it forgotten", r.ledger.owing())
 	}
@@ -741,7 +759,7 @@ func TestACarryThatCannotLandIsKeptWhileItMightStill(t *testing.T) {
 
 // movingStore is a pending store whose bridged appends fail while it is down,
 // and which answers an append for a job its log no longer takes once the log
-// has moved on — a relaunch replaced the job, or the run ended — as the store
+// has moved on — a relaunch started a new round, or the run ended — as the store
 // does: taken, and landed nowhere.
 type movingStore struct {
 	sandbox.PendingStore
@@ -762,7 +780,7 @@ func readingLedger(store sandbox.PendingStore) (*bridgeLedger, *bytes.Buffer) {
 	var logs bytes.Buffer
 	l := newBridgeLedger(store, nil)
 	l.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	l.bind("launch-1")
+	l.bind(sandbox.OpenedJob{LaunchID: "launch-1"})
 	return l, &logs
 }
 
@@ -806,11 +824,11 @@ func named(rec map[string]any) []string {
 
 // AN OWED CALL NO RECORD WILL TAKE IS NAMED, CALL BY CALL, AT WARNING. Calls
 // whose records did not land are owed to the session's next append or carry,
-// and the log may have moved on before either lands — a relaunch replaced the
-// job while one of its calls was still in flight, or the run ended. Whichever
+// and the log may have moved on before either lands — a relaunch started a new
+// round while one of its calls was still in flight, or the run ended. Whichever
 // append then takes them to the log — a carry of the session's, or a later call
-// of the old job, whose own drop is the ordinary end of a job — the store
-// answers it for a job the log no longer takes, and the calls it carried are on
+// of the old job, whose own drop is the ordinary end of a round — the store
+// answers it for a round the log no longer takes, and the calls it carried are on
 // no record of the run: each is named, by its tool, its place and the opening
 // of its identity, so the line says WHICH calls a resumed segment cannot
 // count, and the session forgets them.

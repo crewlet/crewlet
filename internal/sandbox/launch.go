@@ -410,6 +410,13 @@ type OpenedJob struct {
 	// the run's row holds ([PendingRun.LaunchID]).
 	LaunchID string
 
+	// Round is the round the job works in ([PendingRun.Round]), as the write
+	// that named the job decided it: what every append of the job's calls
+	// names beside the job ([BridgeAppend.Round]), so a call still running
+	// when a relaunch carries the round on to a later job is still listed in
+	// the round's log, marked late ([BridgeCall.Late]).
+	Round string
+
 	// LastSeq is the place of the last bridged call the run's log keeps from
 	// before this job ([BridgeLog.LastSeq]): zero for a job whose round
 	// starts its log afresh, and the asking job's last call for a job that
@@ -422,6 +429,15 @@ type OpenedJob struct {
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
 	LastSeq int
+}
+
+// NamedJob is the job r's row names, as what serves its box is told it
+// ([OpenedJob]), its calls numbered after lastSeq: the job and the round it
+// works in, off the one row. ONE CONSTRUCTOR for the launch that opens the job
+// and for a node that serves it again after taking its seat over
+// (internal/engine's reopenAgentRun), so neither names a job without its round.
+func (r PendingRun) NamedJob(lastSeq int) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -461,6 +477,19 @@ type Continuation struct {
 	// Reason is why the round is carried on, where the job's collection
 	// acts on it ([LaunchRecord.FollowUp]); empty otherwise.
 	Reason FollowUpReason
+
+	// BriefRead is how many calls the round's log had taken at the read the
+	// launch's briefs were built from ([ResumeRequest.BridgedRead]): every
+	// call of the round a brief of this launch can tell. The opening of the
+	// job's log marks every call of the round the log took after it late
+	// ([BridgeCall.Late]) — calls of the job this one replaces that landed
+	// while the relaunch was readied, after the read and before the log moved
+	// on, which no brief of the round told and which a later capture of this
+	// job, placed by its own read, would otherwise count as held — but the
+	// call a person approved, which the brief's lead tells
+	// ([PendingRun.BriefRead]). NIL marks none: a launch that knows no such
+	// read.
+	BriefRead *int
 }
 
 // LaunchResult reports what a launch produced.
@@ -610,8 +639,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// names this node with this job's box ([BoxRef.Node]).
 		LaunchNode: c.node,
 		// The round carried on, whose earlier calls the log keeps — see
-		// [PendingRun.Continues].
-		Continues: req.Continue != nil,
+		// [PendingRun.Continues] — and the read its briefs were built from,
+		// past which the opening marks the round's calls late
+		// ([PendingRun.BriefRead]).
+		Continues: req.Continue != nil, BriefRead: briefReadOf(req.Continue),
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
@@ -684,7 +715,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.OpenedAfter})
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -1354,4 +1385,13 @@ func followUpOf(c *Continuation) FollowUpReason {
 		return ""
 	}
 	return c.Reason
+}
+
+// briefReadOf is the read c's briefs were built from ([Continuation.BriefRead]),
+// nil for a launch that carries no round on or knows no such read.
+func briefReadOf(c *Continuation) *int {
+	if c == nil {
+		return nil
+	}
+	return c.BriefRead
 }
