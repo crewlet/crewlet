@@ -55,6 +55,9 @@ type Notice struct {
 	Since time.Time `json:"since,omitzero"`
 	// Nodes are the nodes an alarm stands on, sorted; empty for a finding.
 	Nodes []string `json:"nodes,omitempty"`
+	// Alarm is the alarm kind that raised a finding's notice, so a reader
+	// without the finding can still say what stands; empty otherwise.
+	Alarm string `json:"alarm,omitempty"`
 }
 
 // key is what makes two notices one.
@@ -86,7 +89,9 @@ func FromAlarms(nodes []NodeAlarms, now time.Time) []Notice {
 	for _, n := range nodes {
 		for _, m := range n.Marks {
 			notice, ok := alarmFindings[m.Kind]
-			if !ok {
+			if ok {
+				notice.Alarm = m.Kind
+			} else {
 				notice = Notice{Class: ClassAlarm, Subject: advisor.Subject{Kind: SubjectAlarm, Name: m.Kind}}
 			}
 			notice.Since, notice.Nodes = m.Since, []string{n.Node}
