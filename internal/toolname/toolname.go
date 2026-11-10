@@ -119,10 +119,10 @@ const LoadToolSkill = "load_tool_skill"
 // name only where the text marks it as code (see the suite).
 const Delegate = "delegate"
 
-// The tracker's two tools the escalation guidance names. The tracker owns its
-// vocabulary; these two are here because the prompts, which import only the
-// org model and the provenance fence, render the guidance only when the seat
-// holds the first.
+// The tracker's tools the escalation guidance and the work pickup's brief
+// name. The tracker owns its vocabulary; these are here because the prompts,
+// which import only the org model and the provenance fence, render the
+// guidance only when the seat holds the first.
 const (
 	// CommentOnWorkItem comments on a work item, an ask among them.
 	CommentOnWorkItem = "comment_on_work_item"
@@ -132,6 +132,9 @@ const (
 	// pickup's brief (internal/events/types) names it, and the tracker
 	// imports that package.
 	GetWorkItem = "get_work_item"
+	// UpdateWorkItem changes a work item; the work pickup's brief names it
+	// for a wait.
+	UpdateWorkItem = "update_work_item"
 )
 
 // WithdrawAsk withdraws a seat's own question or held call; here because the
