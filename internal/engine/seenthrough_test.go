@@ -60,7 +60,7 @@ func TestAWakeACompletedTurnReadPastIsAbsorbed(t *testing.T) {
 	if got := ran(itemWake("W-1", 40, false)); len(got) != 1 {
 		t.Fatalf("the first notice ran %v, want a turn", got)
 	}
-	if mark := d.SeenThrough.Mark(ctx, "pm", "worklet:W-1"); mark.Seq != 40 {
+	if mark := d.SeenThrough.Mark(ctx, "pm", "worklet:W-1", "worklet"); mark.Seq != 40 {
 		t.Fatalf("the completed turn marked %v, want position 40", mark)
 	}
 	if got := ran(itemWake("W-1", 38, false)); got != nil {
@@ -76,6 +76,16 @@ func TestAWakeACompletedTurnReadPastIsAbsorbed(t *testing.T) {
 	low, mid, high := itemWake("W-1", 37, false), itemWake("W-1", 40, false), itemWake("W-1", 41, false)
 	if got := ran(low, mid, high); !slices.Equal(got, []string{high.ID.String()}) {
 		t.Errorf("the delivery ran %v, want only the notice past the mark", got)
+	}
+	// TWO LOGS IN ONE CONVERSATION keep a mark each: a turn woken on the
+	// other log leaves this log's mark where it was.
+	other := itemWake("W-1", 5, false)
+	other.Payload[notify.TriggerField] = statelog.Position{Stream: "chatlet", Generation: 1, Seq: 5}.String()
+	if got := ran(other); len(got) != 1 {
+		t.Errorf("the first notice on another log ran %v, want a turn", got)
+	}
+	if got := ran(itemWake("W-1", 39, false)); got != nil {
+		t.Errorf("after a turn on another log, a notice this log's mark covers ran %v", got)
 	}
 	for name, wake := range map[string]*events.Event{
 		"an addressed notice the turn read past": itemWake("W-1", 39, true),

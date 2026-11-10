@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// SeenThrough is how far a seat's completed turns read each conversation
-// (ADR-0120), moved forward only.
+// SeenThrough is how far a seat's completed turns read each conversation on
+// each log (ADR-0120), moved forward only.
 type SeenThrough struct{ marks coord.SeenMarks }
 
 // NewSeenThrough keeps the marks on marks.
@@ -20,10 +20,10 @@ func NewMemorySeenThrough() *SeenThrough {
 	return &SeenThrough{marks: &memorySeen{rows: map[string]seen{}}}
 }
 
-// Mark is the position handle's turns read conversation through, zero where none.
-// FAILS OPEN: an unreadable mark is none, so nothing is absorbed.
-func (s *SeenThrough) Mark(ctx context.Context, handle, conversation string) statelog.Position {
-	raw, _, err := s.marks.SeenThrough(ctx, handle, conversation)
+// Mark is the position handle's turns read conversation through on stream, zero
+// where none. FAILS OPEN: an unreadable mark is none, so nothing is absorbed.
+func (s *SeenThrough) Mark(ctx context.Context, handle, conversation, stream string) statelog.Position {
+	raw, _, err := s.marks.SeenThrough(ctx, handle, markKey(conversation, stream))
 	if err != nil {
 		log.WarnContext(ctx, "seen_through_unreadable", "seat", handle, "error", err,
 			"detail", "absorbing nothing, so a wake already read may start a turn")
@@ -32,21 +32,23 @@ func (s *SeenThrough) Mark(ctx context.Context, handle, conversation string) sta
 	return parsedMark(raw)
 }
 
-// Advance moves the mark to at where at is past it; a mark another node moved
-// further is kept. Best effort, as the completion ledger's writes are.
+// Advance moves the mark on at's log to at where at is past it; a mark another
+// node moved further is kept. Best effort, as the completion ledger's writes are.
 func (s *SeenThrough) Advance(ctx context.Context, handle, conversation string, at statelog.Position) error {
-	if handle == "" || conversation == "" || at.Valid() != nil {
+	// A POSITION NAMING NO LOG moves no mark: there is nothing to compare it with.
+	if positioned := at.Valid() == nil; !positioned || handle == "" || conversation == "" {
 		return nil
 	}
+	key := markKey(conversation, at.Stream)
 	for range 3 {
-		raw, revision, err := s.marks.SeenThrough(ctx, handle, conversation)
+		raw, revision, err := s.marks.SeenThrough(ctx, handle, key)
 		if err != nil {
 			return err
 		}
 		if !Past(at, parsedMark(raw)) {
 			return nil
 		}
-		moved, err := s.marks.MarkSeenThrough(ctx, handle, conversation, at.String(), revision)
+		moved, err := s.marks.MarkSeenThrough(ctx, handle, key, at.String(), revision)
 		if err != nil || moved {
 			return err
 		}
@@ -54,8 +56,12 @@ func (s *SeenThrough) Advance(ctx context.Context, handle, conversation string, 
 	return nil
 }
 
+// markKey keeps one mark per log a conversation's wakes come from, so a
+// position on one log never stands in for another's.
+func markKey(conversation, stream string) string { return conversation + "|" + stream }
+
 // Past reports whether at lies after mark: a later record on the same stream
-// and generation, or a mark at, or a later generation of, another log.
+// and generation, a later generation, or any position where there is no mark.
 func Past(at, mark statelog.Position) bool {
 	switch {
 	case mark.IsZero() || mark.Stream != at.Stream:
