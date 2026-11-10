@@ -82,7 +82,8 @@ func TestAPlatformNoticeClearsWithItsCondition(t *testing.T) {
 
 // THE BACKUP ALARM IS THE ADVISOR'S FINDING, NOT A SECOND NOTICE: its notice
 // carries the class and subject the advisor's own finding has, so the dashboard
-// attaches that fix, and the finding read off the same alarm adds no notice.
+// attaches that fix, and its alarm kind, for a reader without the finding; the
+// finding read off the same alarm adds no notice.
 func TestTheBackupAlarmIsTheAdvisorsFinding(t *testing.T) {
 	t.Parallel()
 	found := advisor.Detect(advisor.Evidence{Until: t0, Backup: advisor.Backup{Standing: true, Logs: 2}}, nil)
@@ -91,7 +92,8 @@ func TestTheBackupAlarmIsTheAdvisorsFinding(t *testing.T) {
 	}
 	backup := string(statelog.KindBackupAge)
 	got := notice.FromAlarms([]notice.NodeAlarms{marks("node-a", map[string]time.Time{backup: t0})}, t0.Add(notice.AlarmAfter))
-	want := []notice.Notice{{Class: string(found[0].Class), Subject: found[0].Subject, Since: t0, Nodes: []string{"node-a"}}}
+	want := []notice.Notice{{Class: string(found[0].Class), Subject: found[0].Subject, Since: t0,
+		Nodes: []string{"node-a"}, Alarm: backup}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the backup alarm's notice is\n%+v\nwant the finding's class and subject\n%+v", got, want)
 	}

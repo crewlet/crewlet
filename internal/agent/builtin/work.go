@@ -3563,6 +3563,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
+	if refused := t.deps.checkAsksOfNamed(CommentOnWorkTool, actor, asks, ask, comment.Mentions); refused != nil {
+		return *refused, nil
+	}
 	query := worklet.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),

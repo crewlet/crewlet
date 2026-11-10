@@ -1431,6 +1431,7 @@ func askWatchOf(current Task, patch TaskPatch) []string {
 // person other than one comment, named for the plan test.
 const openAskToStatement = `SELECT 1 FROM tracker_comments
 	WHERE task_id = ? AND ask = ? AND id <> ? AND resolved = 0 AND answered_by IS NULL AND removed = 0
+	  AND overtaken = ''
 	LIMIT 1`
 
 // endAskWatch ends the watch a question added once it has nothing left to
@@ -2151,6 +2152,8 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
+	// A CREDENTIAL IS NOBODY'S INBOX: the record offers none as a recipient.
+	notify = notify.withoutCredentials()
 	if err = notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
