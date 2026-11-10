@@ -643,7 +643,7 @@ type packAt struct {
 	// ([Paths.SessionStaging], [Paths.SessionCapture]); a pack on demand's,
 	// its own [Paths.SessionPackStaging] and its own [Paths.SessionPackHeld],
 	// of a job that is over or still working; or a save's, its own
-	// [Paths.SessionSaveStaging] and its taker's [Paths.SessionSave].
+	// [Paths.SessionSaveStaging] and its own [Paths.SessionSave].
 	staged, dest string
 
 	// working says the pack is made beside a harness that may still be
@@ -831,10 +831,10 @@ func claudePack(paths Paths, at packAt) string {
 // subagent's thread appended to while tar read it is archived as tar first
 // saw it, a whole prefix of what the harness wrote, at most its last line torn,
 // which the restore cuts back ([claudeSessionGate]). A pack that fails leaves
-// nothing of its own: its staging directory goes with it, and the archive
-// already at its destination — the last save its taker made — is never moved
-// over; and no pack on demand moves anything over the job's capture at all
-// ([Paths.SessionPackHeld]).
+// nothing of its own: its staging directory goes with it, and nothing is moved
+// to its destination, which is that pack's own ([Paths.SessionPackHeld],
+// [Paths.SessionSave]) — no pack on demand or save moves anything over the
+// job's capture, or over another's archive, at all.
 //
 // THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, whatever any list
 // says of it — its proof rests on no list — and of the other `.jsonl` members
@@ -1396,13 +1396,14 @@ func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) 
 }
 
 // PackSave packs a save of session now, beside a harness that may still be
-// working, for taker ([saver]): the same members as every pack, held to the
-// rule of a pack beside a working harness ([claudeHeldTar]), into staged, this
-// save's own staging directory, and over taker's own path — never the job's
-// capture, which every read of a job that is over takes as its final archive —
-// its digest kept, ending as [ClaudeCode.Pack] does ([Runner.PackSave]).
-func (ClaudeCode) PackSave(paths Paths, session, staged, taker string) string {
-	return claudeOnDemand(paths, session, packAt{staged: staged, dest: paths.SessionSave(taker), working: true})
+// working ([saver]): the same members as every pack, held to the rule of a
+// pack beside a working harness ([claudeHeldTar]), into staged, this save's
+// own staging directory, and over dest, this save's own place — never the
+// job's capture, which every read of a job that is over takes as its final
+// archive — its digest kept, ending as [ClaudeCode.Pack] does
+// ([Runner.PackSave]).
+func (ClaudeCode) PackSave(paths Paths, session, staged, dest string) string {
+	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: true})
 }
 
 // claudeOnDemand is a pack the engine makes of session, outside the run's own

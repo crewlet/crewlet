@@ -52,11 +52,12 @@
 // rewrote under the pack fails the pack rather than riding the archive torn
 // ([claudeHeldTar]): a job a box would not end, packed on demand for the read
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
-// SAVE, packed to its taker's own path ([Runner.PackSave],
-// [Paths.SessionSave]) — neither ever where the job's final archive is read.
-// Only Claude Code's runner makes a save ([saver]). And a job that is over and
-// left no archive is packed on demand for its read alone too, by the run's own
-// end's rule: the capture is the job's own script's, which nothing else writes.
+// SAVE, packed to a place of that save's own, named after its taker
+// ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
+// neither ever where the job's final archive is read. Only Claude Code's
+// runner makes a save ([saver]). And a job that is over and left no archive is
+// packed on demand for its read alone too, by the run's own end's rule: the
+// capture is the job's own script's, which nothing else writes.
 //
 // # A run ends on request
 //
@@ -221,37 +222,46 @@ func (p Paths) SessionPackHeld(pack string) string {
 // which the clear quotes.
 const packStagingFiles = "session-pack-staging.*"
 
-// SessionSave is where a SAVE of the session a run's harness is still working
-// in is packed for taker, the holder of the lease it is taken under
-// (`<node>:<uuid>`, internal/sandbox's taker lease): moved into place whole from
-// that save's own [Paths.SessionSaveStaging] by [Runner.PackSave], and read by
-// the take that names the same taker ([sandbox.SessionTake.Save]).
+// SessionSave is where ONE SAVE of the session a run's harness is still
+// working in is packed for taker, the holder of the lease it is taken under
+// (`<node>:<uuid>`, internal/sandbox's taker lease), named by pack, the name
+// the runner mints for that save alone: moved into place whole from that
+// save's own [Paths.SessionSaveStaging] by [Runner.PackSave], streamed by the
+// take that names it ([sandbox.SessionTake.Save]), and removed once that take
+// is done with it.
 //
-// THE TAKER'S OWN, AND NEVER [Paths.SessionCapture]. That path is the job's
-// final archive to every read of a job that is over — its collection, a stop's,
-// a loss's — so a save left there would be taken as the last archive of a job
-// whose own exit pack failed, a session from before its last calls read as
-// everything it did. And one path per taker, so two processes that each save
-// one box — an e2b box whose waiter duty changed hands mid-save — never pack
-// into, or read, one file.
+// NEVER [Paths.SessionCapture]. That path is the job's final archive to every
+// read of a job that is over — its collection, a stop's, a loss's — so a save
+// left there would be taken as the last archive of a job whose own exit pack
+// failed, a session from before its last calls read as everything it did.
+//
+// AND THE SAVE'S OWN, never one path per taker: two saves of one taker at once
+// — the drain's beside one the waiter asked for — each moved its archive over
+// the taker's one path, and a Claude Code take reads its archive twice,
+// opening it again by its path for its second pass ([scrubTar]), so a take of
+// the one save was refused wherever the other's move fell between its passes.
+// Each save's own, a take streams the archive its own save made and nothing
+// else, as a pack on demand's take streams its own ([Paths.SessionPackHeld]);
+// and two processes that each save one box — an e2b box whose waiter duty
+// changed hands mid-save — never pack into, or read, one file.
 //
 // NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
 // holder carries a node's id, which is the deployment's to choose and is no
 // file name's to trust.
-func (p Paths) SessionSave(taker string) string {
-	return p.WorkDir() + "/session-save." + saveTag(taker)
+func (p Paths) SessionSave(taker, pack string) string {
+	return p.WorkDir() + "/session-save." + saveTag(taker) + "." + pack
 }
 
 // SessionSaveStaging is the DIRECTORY one save for taker is packed in before it
-// is moved over [Paths.SessionSave] ([Runner.PackSave]), named by pack, a name
-// the runner mints for that save alone, after its taker's tag: its own, for
-// [Paths.SessionPackStaging]'s reasons — the run's script's staging directory,
-// another pack's, ANOTHER SAVE'S, even its own taker's: two saves of one taker
-// at once sharing one directory, each one's start would clear the other's
-// lists and archive, and one's move could put over the taker's save an
-// archive the other had half made, whose checks never ran. Removed whole by the
-// pack when it is done, and by the clear before every run, which removes every
-// save's files, whoever took them ([Runner.ClearArtifacts]).
+// is moved to its own place ([Paths.SessionSave], [Runner.PackSave]), named by
+// pack, the name the runner mints for that save alone, after its taker's tag:
+// its own, for [Paths.SessionPackStaging]'s reasons — the run's script's
+// staging directory, another pack's, ANOTHER SAVE'S, even its own taker's: two
+// saves of one taker at once sharing one directory, each one's start would
+// clear the other's lists and archive, and one's move could put in its place
+// an archive the other had half made, whose checks never ran. Removed whole by
+// the pack when it is done, and by the clear before every run, which removes
+// every save's files, whoever took them ([Runner.ClearArtifacts]).
 func (p Paths) SessionSaveStaging(taker, pack string) string {
 	return p.WorkDir() + "/session-save-staging." + saveTag(taker) + "." + pack
 }

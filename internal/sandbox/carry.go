@@ -197,16 +197,19 @@ type SessionTake struct {
 	// takes its own archive for another box's.
 	Pack bool
 
-	// Save names the TAKER whose save is taken — the holder of the taker
-	// lease the save is taken under, the taking process's incarnation
-	// (`<node>:<uuid>`, [SessionCapture.Taker]) — in place of the job's own
-	// session: the archive internal/sandbox/executor's Runner.PackSave last
-	// packed of the box's session for that taker, while its job still
-	// worked, at that taker's own path. Never the job's capture, which every
-	// read of a job that is over takes as its final archive, and never packed
-	// by the take: the save is packed first, so the scrub's values (Scrub)
-	// are read after the pack, and hold every value the box was handed by
-	// then. With Pack set it is refused. "" takes the job's own session.
+	// Save names the SAVE taken in place of the job's own session: the path
+	// internal/sandbox/executor's Runner.PackSave packed it to and described
+	// it at ([SessionArchive.Path]) — a save the taking process packed of the
+	// box's session while its job still worked, under its taker lease
+	// ([SessionCapture.Taker]), at a place of that save's own — streamed by
+	// this take alone and removed once it is done with it. Never the job's
+	// capture, which every read of a job that is over takes as its final
+	// archive; never a path another save moves over, which a take that reads
+	// its archive twice would find changed between its passes; and never
+	// packed by the take: the save is packed first, so the scrub's values
+	// (Scrub) are read after the pack, and hold every value the box was
+	// handed by then. A path that is no save of the box's is refused, and so
+	// is Pack set beside it. "" takes the job's own session.
 	Save string
 
 	// Scrub is every secret the engine itself put in the box, by value — its

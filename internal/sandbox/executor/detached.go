@@ -274,7 +274,8 @@ type carrier interface {
 
 // saver is a [carrier] whose session the engine packs WHILE ITS RUN STILL WORKS,
 // as a save ([Runner.PackSave]): beside its harness, from outside the run's own
-// script, to the path of the taker the save is taken under.
+// script, to a place of that save's own, named after the taker it is taken
+// under.
 //
 // OPTIONAL, as [carrier] is, and only Claude Code's runner is one: its session
 // is files a pack beside the harness can read, in a store its harness takes no
@@ -286,12 +287,13 @@ type saver interface {
 	// PackSave is the script that packs session now, beside a harness that
 	// may still be working, held to the rule a pack beside one keeps
 	// ([claudeHeldTar]), into staged, this save's own staging directory
-	// ([Paths.SessionSaveStaging]), and moved over taker's own path
-	// ([Paths.SessionSave]) — never [Paths.SessionCapture] — its digest kept
-	// as every pack's is. It ends as [carrier.Pack] does: [packNothing] where
-	// the harness wrote no transcript, [packFailed] where no save was made,
-	// its error stream saying why. Run as [carrier.Pack] is.
-	PackSave(paths Paths, session, staged, taker string) string
+	// ([Paths.SessionSaveStaging]), and moved to dest, this save's own place
+	// ([Paths.SessionSave]) — never [Paths.SessionCapture], nor a place another
+	// save moves over — its digest kept as every pack's is. It ends as
+	// [carrier.Pack] does: [packNothing] where the harness wrote no
+	// transcript, [packFailed] where no save was made, its error stream saying
+	// why. Run as [carrier.Pack] is.
+	PackSave(paths Paths, session, staged, dest string) string
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
@@ -527,8 +529,8 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
 // killed part way left; and EVERY SAVE of the previous job's session, with its
-// staging directory, whichever taker packed it ([Paths.SessionSave]), so no
-// take of this job's save reads the last job's. And the wiring a run that
+// staging directory, whichever taker packed it ([Paths.SessionSave]), so none
+// a take never removed waits in the box for its life. And the wiring a run that
 // continued a session was handed for a session of its own ([Paths.MCPConfigFresh],
 // [Paths.OpenCodeValuesFresh]), which its script removes before its harness
 // starts and one killed before it could leaves behind: this run writes its own
@@ -556,11 +558,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// joined by `&&`, so a file that will not go never keeps a directory.
 	//
 	// AND EVERY SAVE'S FILES, whoever took them ([Paths.SessionSave]): each is
-	// named by its taker, so the clear cannot list them — the taker of a box's
-	// last save may be a process that is gone — and removes what matches
-	// instead, the glob outside the quotes. Left, the job before's save would
-	// be read by a take of this job's that names the same taker, described by
-	// this job's record as this job's session, and a stopped node's would
+	// named by its taker and its own save, so the clear cannot list them — the
+	// taker of a box's last save may be a process that is gone — and removes
+	// what matches instead, the glob outside the quotes. Left, a save its take
+	// never removed — its node stopped between its pack and its take — would
 	// wait in the box for as long as the box lives.
 	//
 	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack

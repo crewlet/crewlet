@@ -1118,6 +1118,67 @@ func TestAPackReportsItsArchiveMadeOnlyOnceItsDigestIsRecorded(t *testing.T) {
 	}
 }
 
+// releaseWatch is a box that records the deadline every release of a pack on
+// demand's own files is asked under: the `rm -rf` of the pack's staging
+// directory and the archive it kept for its read.
+type releaseWatch struct {
+	sandbox.Sandbox
+
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (b *releaseWatch) Exec(ctx context.Context, cmd string, opts sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	if strings.HasPrefix(cmd, "rm -rf ") && strings.Contains(cmd, "/session-pack-staging.") {
+		deadline, _ := ctx.Deadline()
+		b.mu.Lock()
+		b.deadlines = append(b.deadlines, deadline)
+		b.mu.Unlock()
+	}
+	return b.Sandbox.Exec(ctx, cmd, opts)
+}
+
+// A PACK'S RELEASE IS HELD TO ITS TAKE'S OWN DEADLINE. A pack on demand keeps
+// its archive for its take alone and removes it once the take has read it, on
+// the take's close path, which the read the take is part of waits on; so the
+// removal is held to the take's own deadline — the time that read leaves it —
+// and not to a bound of its own from the moment it runs, under which a box that
+// stopped answering once its archive was read held the read up to the two
+// minutes a pack may take past it, into the room left for the outcome stamp and
+// the box's pause. Here a take with a minute to go packs a job that left no
+// archive, and is read whole and closed: the release ran, under a deadline no
+// later than the take's, and left nothing behind.
+//
+// Mutation: bound the release by the pack's own wait from the moment it runs,
+// as it was, and it is asked under a deadline past the take's.
+func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	forgetCapture(t, b)
+	watched := &releaseWatch{Sandbox: b}
+	deadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
+	if got := takeWhole(ctx, runner, watched); got.err != nil {
+		t.Fatalf("the take was refused: %v", got.err)
+	}
+	watched.mu.Lock()
+	asked := append([]time.Time(nil), watched.deadlines...)
+	watched.mu.Unlock()
+	if len(asked) == 0 {
+		t.Fatal("the take's pack was never released")
+	}
+	for _, at := range asked {
+		if at.IsZero() || deadline.Before(at) {
+			t.Errorf("a release was asked under the deadline %v, past the take's own %v", at, deadline)
+		}
+	}
+	if left := packStagingLeft(t, b); len(left) > 0 {
+		t.Errorf("the release left the pack's files behind: %s", strings.Join(left, ", "))
+	}
+}
+
 // A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX. A run that
 // continues a session carried into its box restores the archive over the box's
 // own copy where that copy does not hold it, and records the archive's digest

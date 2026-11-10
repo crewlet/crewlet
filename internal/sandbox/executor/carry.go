@@ -159,7 +159,8 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 }
 
 // archiveAt describes the session archive the box holds at path — the run's
-// capture ([Paths.SessionCapture]), or a taker's save ([Paths.SessionSave]) —
+// capture ([Paths.SessionCapture]), a pack on demand's ([Paths.SessionPackHeld])
+// or a save ([Paths.SessionSave]) —
 // for the session rec names, or nil where there is none: a harness that
 // carries no session, no archive there, a record that names no session, or a
 // path that holds no regular file — the box's own doing, which costs the

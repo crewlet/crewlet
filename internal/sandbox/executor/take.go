@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,9 +22,10 @@ import (
 // got to pack — killed before it could, lost with its engine with its box left
 // behind, still working where a box would not end it — is packed now, by the
 // very pack its script runs ([Runner.PackCapture]); and a SAVE, packed while
-// the job still works to the path of the taker it is taken under
-// ([Runner.PackSave]), is taken from that path alone ([sandbox.SessionTake.Save]),
-// never read as the job's final archive and never packed by the take. Every way,
+// the job still works to a place of that save's own, named after the taker it
+// is taken under ([Runner.PackSave]), is taken from that place alone by the
+// take that names it ([sandbox.SessionTake.Save]), never read as the job's
+// final archive and never packed by the take. Every way,
 // the archive leaves the box through ONE scrub ([scrubArchive]): every value the
 // engine put in the box taken out, and every file redacted, each read and
 // written as what it is, so what is kept is the session minus the secrets and
@@ -42,14 +44,15 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // TakeSession streams the session the box's last run worked in, as a capture
 // keeps it ([sandbox.SessionTaker]): packed now where take says so, and else
 // the archive the run's script left, or — where it left none — one packed now;
-// or, for a take that names a taker's save, that save as [Runner.PackSave] left
-// it, packed by nothing here; scrubbed of take's values and redacted, a piece
-// at a time, within the bounds take's archive bound sets ([scrubBounds]). The
-// zero value where the box holds no session: a harness this runner carries
-// none for, a run whose record names none, one whose harness wrote nothing to
-// pack, or a taker that left no save. An error where it holds one that cannot
-// be taken: a pack that failed, or an archive the box describes as past take's
-// bound, refused before a byte of it is read.
+// or, for a take that names a save, that save as [Runner.PackSave] left it,
+// packed by nothing here; scrubbed of take's values and redacted, a piece at a
+// time, within the bounds take's archive bound sets ([scrubBounds]). The zero
+// value where the box holds no session: a harness this runner carries none
+// for, a run whose record names none, one whose harness wrote nothing to pack,
+// or a save no longer there. An error where it holds one that cannot be taken:
+// a pack that failed, an archive the box describes as past take's bound,
+// refused before a byte of it is read, or a save named by a path that is no
+// save's.
 func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	take sandbox.SessionTake) (sandbox.TakenSession, error) {
 
@@ -67,18 +70,19 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// by the same pack, under the rule its own end packs by, its harness
 	// gone; a job still working is packed now as it stands, held to the rule
 	// of a pack beside a harness that may still write (take.Pack says which).
-	// A SAVE is its taker's own archive and nothing else: never the job's
+	// A SAVE is that save's own archive and nothing else: never the job's
 	// capture, which every read of a job that is over takes as its last,
 	// and never packed here: it is packed first, so that the scrub's values
 	// are read once it is.
 	//
 	// EVERY READ STREAMS AN ARCHIVE NOTHING MOVES OVER WHILE IT READS IT:
 	// the one its own pack made, kept for this take alone
-	// ([Paths.SessionPackHeld]) and released once the take is done with it —
+	// ([Paths.SessionPackHeld]), or the one its own save made
+	// ([Paths.SessionSave]), each released once the take is done with it —
 	// once both passes of the scrub have read it, or once it is refused
-	// unread; the archive its taker's save left; or, where the job's script
-	// packed it, the job's capture, which only that script writes, once, as
-	// its harness exits ([Runner.PackCapture] says why).
+	// unread; or, where the job's script packed it, the job's capture, which
+	// only that script writes, once, as its harness exits
+	// ([Runner.PackCapture] says why).
 	var (
 		archive sandbox.SessionArchive
 		body    io.ReadCloser
@@ -90,7 +94,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take of a save packs nothing: the save is " +
 			"packed to its taker's own path first, and the take reads it there")
 	case take.Save != "":
-		archive, body, err = r.openSave(ctx, box, take.Save)
+		archive, body, release, err = r.openSave(ctx, box, take.Save)
 	default:
 		if !take.Pack {
 			archive, body, err = r.OpenCapture(ctx, box)
@@ -341,38 +345,75 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	return *described, body, release, nil
 }
 
-// dropPack removes a pack on demand's own files — its staging directory, which
-// its script removes itself unless it was cut short, and the archive it kept
-// for its read ([Paths.SessionPackHeld]), of a job over or still working —
-// once that read is done with them.
+// dropPack removes what a pack on demand or a save left for its read once that
+// read is done with it — the archive it kept for the read
+// ([Paths.SessionPackHeld], [Paths.SessionSave]), of a job over or still
+// working, and the staging directory a pack on demand's script removes itself
+// unless it was cut short — files, the last of them named in what it logs.
 //
-// PAST ctx, WITHIN THE PACK'S OWN BOUND ([sandbox.SessionPackWait]): ctx may be
-// the very thing that ended the read, and a cleanup that inherits a dead
-// context does nothing; this is the last of the pack's own work, so it is held
-// to what the pack is. Files it could not remove are said in the log and left
-// to the clear before the box's next run ([Runner.ClearArtifacts]), which
-// removes every pack's by their pattern.
-func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, staged, held string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandbox.SessionPackWait)
+// PAST ctx'S CANCELLATION, AND WITHIN ITS DEADLINE ([releaseContext]): ctx may
+// be the very thing that ended the read, and a cleanup that inherits a dead
+// context does nothing; but the release runs on its read's close path, which
+// the read waits on, so a box that stops answering once the archive is read
+// holds the read no longer than its take's own time. Files it could not remove
+// are said in the log and left to the clear before the box's next run
+// ([Runner.ClearArtifacts]), which removes every pack's and every save's by
+// their patterns.
+func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, files ...string) {
+	ctx, cancel := releaseContext(ctx)
 	defer cancel()
-	res, err := box.Exec(ctx, "rm -rf "+shellQuoteAll([]string{staged, held}), sandbox.ExecOptions{})
+	res, err := box.Exec(ctx, "rm -rf "+shellQuoteAll(files), sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	if err != nil {
-		log.WarnContext(ctx, "harness_pack_not_removed", "harness", r.harness.Name(), "path", held,
+		log.WarnContext(ctx, "harness_pack_not_removed", "harness", r.harness.Name(), "path", files[len(files)-1],
 			"error", err.Error(), "detail", "the archive a pack made for its read was not removed once "+
 				"read; the clear before the box's next run removes it")
 	}
 }
 
+// releaseContext is the context a pack's release runs under ([Runner.dropPack]):
+// past ctx's cancellation, and never past ctx's own deadline — the take's,
+// which leaves the outcome stamp and the box's pause their room after it
+// (internal/sandbox's takeContext) — unless that leaves less than
+// [packReleaseFloor], which it is given instead, nor past the pack's own bound
+// ([sandbox.SessionPackWait]), which bounds a release made under no deadline.
+// A fresh pack's bound on every release let a box that stopped answering once
+// its archive was read hold the read two minutes past the take's time, into
+// what it leaves the stamp and the pause.
+func releaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	now := time.Now()
+	deadline := now.Add(sandbox.SessionPackWait)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if floor := now.Add(packReleaseFloor); deadline.Before(floor) {
+		deadline = floor
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+}
+
+// packReleaseFloor is the least a pack's release is given ([releaseContext]),
+// where the take it was made for has less time left, or none.
+//
+// FIVE SECONDS, and a judgment: the release is one `rm` of a file and a
+// directory, which a box that answers at all answers in a fraction of a second
+// — a local exec in milliseconds, a container's or an e2b sandbox's command in
+// a few hundred — and past it the box is one that has stopped answering, whose
+// leftovers the clear before its next run removes. It comes out of the half
+// minute the take leaves its outcome stamp, a write the coordination store
+// answers in milliseconds.
+const packReleaseFloor = 5 * time.Second
+
 // PackSave packs, NOW, a SAVE of the session the box's run is still working in,
 // for taker — the holder of the lease the save is taken under, the taking
 // process's incarnation (`<node>:<uuid>`) — by its harness's save pack
-// ([saver]), into the taker's own path ([Paths.SessionSave]) and nowhere else,
-// its digest kept in the box as every pack's is; and describes it, for a take
-// that names the same taker to stream ([sandbox.SessionTake.Save]). Packed
-// first and taken after, so whatever the take reads for its scrub — the
+// ([saver]), into a place of that save's own, named after its taker
+// ([Paths.SessionSave]), and nowhere else, its digest kept in the box as every
+// pack's is; and describes it there, for the take that names it to stream
+// ([sandbox.SessionTake.Save]), which removes it once it is done with it.
+// Packed first and taken after, so whatever the take reads for its scrub — the
 // tokens renewed in the box, a login exported as it ran — is read once the
 // session is packed.
 //
@@ -380,14 +421,20 @@ func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, staged, held
 // working, and [Paths.SessionCapture] is what every read of a job that is over
 // takes as its last (its collection, a stop's, a loss's) — a save moved there
 // was collected as the final archive of a job whose own exit pack failed. And
-// each taker's own path, so two processes that save one box never share a
-// file. HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]):
-// a file the harness rewrote under the pack fails it. A SAVE THAT FAILS LEAVES
-// THE TAKER'S LAST SAVE STANDING: the archive at the taker's path is moved over
-// only by a pack that held. EVERY SAVE IN A STAGING DIRECTORY OF ITS OWN
-// ([Paths.SessionSaveStaging]), named here for that save alone, as a pack on
-// demand's is: two saves of one taker at once never clear each other's lists
-// or archive, and each that holds moves its own over the taker's path whole.
+// each save's own place, so two processes that save one box never share a
+// file, and two saves of one taker at once — the drain's beside one the waiter
+// asked for — each hand their take the archive they made: one path per taker,
+// each moved its archive over the other's, and a Claude Code take, which opens
+// its archive again by its path for its second pass ([scrubTar]), was refused
+// wherever the other's move fell between its passes. HELD TO THE RULE OF A PACK
+// BESIDE A WORKING HARNESS ([claudeHeldTar]): a file the harness rewrote under
+// the pack fails it. A SAVE THAT FAILS LEAVES NOTHING: no archive of its own,
+// its staging directory gone, and every other save's archive as it was. EVERY
+// SAVE IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionSaveStaging]), named
+// here for that save alone, as a pack on demand's is: two saves of one taker
+// at once never clear each other's lists or archive. A save packed and never
+// taken stays in the box until the clear before its next run, which removes
+// every save's files.
 //
 // A zero description where there is nothing to save: a harness whose session
 // the engine packs none of beside its run (OpenCode's, [saver]), a run whose
@@ -401,46 +448,75 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 	}
 	if taker == "" {
 		return sandbox.SessionArchive{}, errors.New("executor: a save names no taker, and a save is packed " +
-			"to its taker's own path alone")
+			"to a place named after its taker")
 	}
-	staged := PathsFor(box).SessionSaveStaging(taker, uuid.NewString())
+	pack := uuid.NewString()
+	paths := PathsFor(box)
+	staged, dest := paths.SessionSaveStaging(taker, pack), paths.SessionSave(taker, pack)
 	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return saves.PackSave(paths, session, staged, taker)
+		return saves.PackSave(paths, session, staged, dest)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, err
 	}
-	paths := PathsFor(box)
-	described, err := r.archiveAt(ctx, box, paths.SessionSave(taker), rec)
-	switch {
-	case err != nil:
+	described, err := r.archiveAt(ctx, box, dest, rec)
+	if err == nil && described == nil {
+		err = fmt.Errorf("executor: %s's session %s was saved and left no archive behind", r.harness.Name(), rec.id)
+	}
+	if err != nil {
+		r.dropPack(ctx, box, staged, dest)
 		return sandbox.SessionArchive{}, err
-	case described == nil:
-		return sandbox.SessionArchive{}, fmt.Errorf("executor: %s's session %s was saved and left no archive "+
-			"behind", r.harness.Name(), rec.id)
 	}
 	return *described, nil
 }
 
-// openSave streams the save taker last packed of the session the box's run
-// works in ([Runner.PackSave]), described, as [Runner.OpenCapture] streams the
-// job's capture — a nil reader and a zero description where the taker left
-// none, or the record names no session.
-func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, taker string) (sandbox.SessionArchive, io.ReadCloser, error) {
+// openSave streams the save at path ([Runner.PackSave], [Paths.SessionSave]),
+// described, as [Runner.OpenCapture] streams the job's capture, with release,
+// which removes it once its take is done with it — a nil reader and a zero
+// description where nothing is there (a save already taken) or the record
+// names no session, the save removed either way. A path that is no save of
+// the box's ([savePath]) is refused unread: a take of a save streams that save
+// and no other file of the box.
+func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.SessionArchive,
+	io.ReadCloser, func(context.Context), error) {
+
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
-	if err != nil || refusal != "" {
-		return sandbox.SessionArchive{}, nil, err
+	if !savePath(paths, path) {
+		return sandbox.SessionArchive{}, nil, nil, fmt.Errorf("executor: %q is no save a runner packed in the "+
+			"box, and a take of a save streams one and nothing else", path)
 	}
-	described, err := r.archiveAt(ctx, box, paths.SessionSave(taker), rec)
+	release := func(ctx context.Context) { r.dropPack(ctx, box, path) }
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	var described *sandbox.SessionArchive
+	if err == nil && refusal == "" {
+		described, err = r.archiveAt(ctx, box, path, rec)
+	}
 	if err != nil || described == nil {
-		return sandbox.SessionArchive{}, nil, err
+		release(ctx)
+		return sandbox.SessionArchive{}, nil, nil, err
 	}
 	body, err := box.OpenFile(ctx, described.Path)
 	if err != nil {
-		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: opening the session the run saved: %w", err)
+		release(ctx)
+		return sandbox.SessionArchive{}, nil, nil, fmt.Errorf("executor: opening the session the run saved: %w", err)
 	}
-	return *described, body, nil
+	return *described, body, release, nil
+}
+
+// savePath reports whether path names a save in the box paths lay out
+// ([Paths.SessionSave]): in its work directory, after a taker's tag
+// ([saveTag]) and a name minted for one save, and nothing past them.
+func savePath(paths Paths, path string) bool {
+	rest, ok := strings.CutPrefix(path, paths.WorkDir()+"/session-save.")
+	if !ok {
+		return false
+	}
+	tag, pack, ok := strings.Cut(rest, ".")
+	if !ok || len(tag) != 2*saveTagBytes || strings.Trim(tag, "0123456789abcdef") != "" || len(pack) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(pack)
+	return err == nil
 }
 
 // packNow runs pack — a harness's script that packs a session now, beside or
