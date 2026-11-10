@@ -1165,12 +1165,12 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 	if q.AskedOf != "" {
 		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = "+
 			on.col("id")+" AND m.ask = ? AND m.resolved = 0 AND "+
-			"m.answered_by IS NULL AND m.removed = 0)", q.AskedOf)
+			"m.answered_by IS NULL AND m.removed = 0 AND m.overtaken = '')", q.AskedOf)
 	}
 	if q.AskedBy != "" {
 		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = "+
 			on.col("id")+" AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
-			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
+			"AND m.answered_by IS NULL AND m.removed = 0 AND m.overtaken = '')", q.AskedBy)
 	}
 	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
 	// is holding something up" reads the dependency table by BLOCKER_ID

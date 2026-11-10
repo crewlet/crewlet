@@ -74,6 +74,7 @@ var namedRoutes = []struct {
 	// parameter of it: the two answers have different shapes, and one route
 	// returning either would make every caller branch on what came back.
 	{method: "GET", pattern: "/tokens/series", what: "token_series"},
+	{method: "GET", pattern: "/tokens/turn-outcomes", what: "turn_outcomes"},
 	// EVERY SEAT'S TURNS over company days. A literal segment under
 	// /agents, which the stream service serves exactly and nothing deeper.
 	{method: "GET", pattern: "/agents/activity", what: "seat_activity"},
@@ -91,6 +92,9 @@ var namedRoutes = []struct {
 	// WHAT THE COMPANY REPORTED AND WHAT A REPORT WOULD SAY. The write is the
 	// setting's own, `diagnostics.issue_reports.enabled` under /config.
 	{method: "GET", pattern: "/diagnostics/issue-reports", what: "issue_reports"},
+	// THE OPERATING INSIGHTS: the consent, the catalogue and every record kept;
+	// the consent is the setting's own, `diagnostics.insights` under /config.
+	{method: "GET", pattern: "/diagnostics/insights", what: "diagnostics_insights"},
 	// WHAT THE COMPANY'S SETUP COSTS IT, each finding with its fix. The
 	// fixes are written through the /config entity routes, never here.
 	{method: "GET", pattern: "/advisor", what: "advisor"},

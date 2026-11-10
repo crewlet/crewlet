@@ -176,12 +176,12 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// of each, are those same replicated rows.
 		{"the usage domain alone", queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}},
 			[]string{"company_feed", "page_reads", "schedule_runs", "seat_activity",
-				"token_series", "viewer"}},
+				"token_series", "turn_outcomes", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		}, []string{"agent", "company_feed", "event", "event_series", "events", "live_call",
 			"page_reads", "phases", "schedule_runs", "seat_activity", "token_series", "tokens",
-			"trace", "turn", "turns", "viewer"}},
+			"trace", "turn", "turn_outcomes", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)

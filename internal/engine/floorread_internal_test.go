@@ -169,6 +169,13 @@ func (f *listingsHeld) ListConversationHolds(ctx context.Context) ([]coord.Conve
 	return f.wrappedFleet.ListConversationHolds(ctx)
 }
 
+func (f *listingsHeld) ListBoxReadings(ctx context.Context) ([]coord.BoxReading, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.ListBoxReadings(ctx)
+}
+
 func (f *listingsHeld) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

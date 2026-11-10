@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -231,6 +232,43 @@ func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decid
 		"you would ask in words still has answers you expect: offer them, and the "+
 		"person can always answer in their own words instead. Nothing was posted.",
 		tool, clip(asked), decision.MinOptions, decision.MaxOptions)))
+}
+
+// checkAsksOfNamed refuses an agent seat's comment that asks (`asks`) and names a
+// person it does not put the question to as an ask (ADR-0100): what an agent asks
+// a person reaches their decisions only as an ask carrying a decision.
+func (d WorkDeps) checkAsksOfNamed(tool string, actor Actor, asks bool, ask string, named []string) *tools.Result {
+	if !asks || actor.Kind != worklet.AuthorAgent {
+		return nil
+	}
+	var persons []string
+	for _, handle := range named {
+		if handle != ask && d.personSeat(handle) && !slices.Contains(persons, handle) {
+			persons = append(persons, handle)
+		}
+	}
+	if len(persons) == 0 {
+		return nil
+	}
+	return refusalOf(failed(fmt.Sprintf("%s: `asks` is true and this names a person (%s) "+
+		"outside `ask`. An agent's question to a person reaches their decisions only as an "+
+		"ask: set `ask` to their handle and give it a `decision` with %d to %d `options` they "+
+		"answer with one press, the one you `recommended`, your `rationale` and the `role` "+
+		"they answer in. If you only mention them, set `asks` to false. Nothing was posted.",
+		tool, words.And(persons), decision.MinOptions, decision.MaxOptions)))
+}
+
+// personSeat is whether the roster names handle as a person's seat.
+func (d WorkDeps) personSeat(handle string) bool {
+	if d.Seats == nil {
+		return false
+	}
+	for _, seat := range d.Seats() {
+		if seat.Handle == handle {
+			return seat.Kind == string(org.KindHuman)
+		}
+	}
+	return false
 }
 
 // statedAsks is an agent's statement of whether its comment asks, which every

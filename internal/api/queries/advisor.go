@@ -42,15 +42,22 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	fleet, fleetKnown := s.fleetAlarms(ctx)
 	held, heldKnown := s.heldConversations(ctx)
-	noticed := func(a advisor.Answer) advisorAnswer {
-		return noticedWith(a, fleet, fleetKnown, held, heldKnown, now)
+	answer, err := s.advisorRead(ctx, now)
+	if err != nil {
+		return nil, err
 	}
+	return noticedWith(answer, fleet, fleetKnown, held, heldKnown, now), nil
+}
+
+// advisorRead is the advisor's findings at now, typed: what `advisor` answers
+// beside its notices, and what the insights sharer reads.
+func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer, error) {
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}), nil
+		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
 	}
 	if err != nil {
-		return nil, revisionRefusal("advisor", err)
+		return advisor.Answer{}, revisionRefusal("advisor", err)
 	}
 	in := advisor.Inputs{Company: company.Redact(), Revision: revision}
 	// THE INTEGRATIONS' LAST RECONCILE, from the read the integrations answer
@@ -60,7 +67,7 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return noticed(advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now))), nil
+	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), nil
 }
 
 // noticedWith is the answer with the notices its findings, the fleet's alarms
