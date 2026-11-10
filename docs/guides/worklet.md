@@ -2141,6 +2141,11 @@ it.
 first reason in the precedence order wins and the rest are dropped. Somebody
 mentioned on a task they are watching hears that they were mentioned.
 
+**An assignment to whoever already holds the task wakes nobody** when nothing
+else changed with it: there is no change to tell, and a wake would oblige its
+holder to answer a notice that the assignee changed when it did not. A real
+reassignment wakes the new holder once.
+
 **And nothing wakes you for your own write.** The person who made a change is
 dropped from its own wake: being told what you just did is a turn spent on
 nothing. There is one name to compare against: a person the identity directory

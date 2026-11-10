@@ -69,9 +69,8 @@ func TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup(t *testing.T) {
 	holder := "ana"
 	reassign := change("op-reassign", "qa", worklet.AuthorAgent, worklet.TaskPatch{Assignee: &holder},
 		worklet.ChangeAssignee, nil, nil)
-	// asRouted is a row whose wake is routing's own call, held only to the
-	// invariant: the key moves exactly when the holder is woken.
-	asRouted := (*bool)(nil)
+	reassignByPerson := change("op-reassign-person", "pm", worklet.AuthorHuman,
+		worklet.TaskPatch{Assignee: &holder}, worklet.ChangeAssignee, nil, nil)
 	for _, row := range []struct {
 		name   string
 		change func()
@@ -80,7 +79,9 @@ func TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup(t *testing.T) {
 		{"another agent's comment that asks nothing and names nobody", comment("c-1", "qa", worklet.AuthorAgent, &no), &no},
 		{"another agent's comment that names the holder and asks nothing", comment("c-2", "qa", worklet.AuthorAgent, &no, "ana"), &no},
 		{"another agent adds a watcher", watch, &no},
-		{"another agent assigns the item to its holder again", reassign, asRouted},
+		// A REASSIGNMENT TO THE HOLDER CHANGES NOTHING, whoever makes it.
+		{"another agent assigns the item to its holder again", reassign, &no},
+		{"a person assigns the item to its holder again", reassignByPerson, &no},
 		{"another agent's comment that asks the holder", comment("c-3", "qa", worklet.AuthorAgent, &yes, "ana"), &yes},
 		{"the holder's own comment", comment("c-4", "ana", worklet.AuthorAgent, &no), &no},
 		{"a person's comment that names nobody", comment("c-5", "pm", worklet.AuthorHuman, nil), &yes},
