@@ -195,4 +195,7 @@ type Outcome struct {
 type Result struct {
 	Hits []Hit
 	Outcome
+	// VendorStatus is a vendor's knowledge base refusing the searching
+	// credential (401 or 403): nothing was searched. Zero otherwise.
+	VendorStatus int `json:"-"`
 }

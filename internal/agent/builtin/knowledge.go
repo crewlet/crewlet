@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -185,6 +186,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
+	if result.VendorStatus != 0 {
+		return vendorRefused(turn, result.VendorStatus), nil
+	}
 	hits := result.Hits
 	degraded := degradedNote(mode, result.Outcome)
 	if len(hits) == 0 && result.ServedMode == "" {
@@ -297,4 +301,32 @@ func partialNote(c knowledge.Coverage) string {
 	}
 	return "\n\nThis search covered only part of the knowledge base — some of the " +
 		"fleet did not answer in time — so a page not listed here may still exist."
+}
+
+// vendorRefused is a vendor's refusal of the searching credential, said from
+// the engine's own knowledge of the seat's grant (E21): a 403 the grant does
+// not cover is vendor_forbidden, naming the permission the tool declares; a 403
+// the grant covers, or a 401 (the credential itself), stays a plain failure.
+func vendorRefused(turn *turnctx.Turn, status int) tools.Result {
+	filing, _ := FilingOf(SearchKnowledgeTool)
+	need := filing.Vendor
+	switch {
+	case status == http.StatusUnauthorized:
+		return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor +
+			" refused this agent's credential itself: it is expired or revoked. An administrator " +
+			"renews it in the agent's " + need.Vendor + " access. Nothing was searched."}
+	case status == http.StatusForbidden && !need.HeldBy(seatOf(turn)):
+		return refusedBy(tools.RefusalVendorForbidden, nil, need.Refusal(SearchKnowledgeTool))
+	}
+	return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor +
+		" refused the search although this agent's access includes reading it; a space's own " +
+		"permissions may withhold it. Nothing was searched, so this says nothing about whether a page exists."}
+}
+
+// seatOf is the turn's seat, nil outside a turn.
+func seatOf(turn *turnctx.Turn) *org.Role {
+	if turn == nil {
+		return nil
+	}
+	return turn.Seat
 }

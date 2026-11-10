@@ -753,6 +753,10 @@ const (
 	// carries no Retry-After.
 	CodeStoreFull Code = "store_full"
 
+	// CodeVendorForbidden is a vendor refusing the credential the engine
+	// minted for the seat, which lacks the permission the tool needs.
+	CodeVendorForbidden Code = "vendor_forbidden"
+
 	// THE ACT ROUTE'S OWN — `POST /operator/act/{tool}`, the dashboard's
 	// write transport — about the request rather than the tool.
 
@@ -1480,6 +1484,8 @@ var codes = map[Code]string{
 	CodeStoreFull: "The company's file store has no room left, so nothing was " +
 		"stored. An operator has to make room for it; sending it again changes " +
 		"nothing until then.",
+	CodeVendorForbidden: "The service refused: the access the engine holds for it " +
+		"does not include this. An administrator can grant it in the agent's access.",
 	CodeUnknownTool: "This engine does not support that change. It may be " +
 		"running a different version. Reload the page.",
 	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +

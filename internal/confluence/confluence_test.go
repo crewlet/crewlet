@@ -228,6 +228,34 @@ func TestASiteThatFailsTheSearchServesNoMode(t *testing.T) {
 	}
 }
 
+// A SITE THAT REFUSES THE SEAT'S CREDENTIAL SAYS SO (E21): a 401 or 403 is the
+// credential's to fix, so the answer marks the vendor's refusal rather than a
+// site that could not be searched, and a 503 still is the latter.
+func TestASiteThatRefusesTheCredentialMarksTheVendorsRefusal(t *testing.T) {
+	t.Parallel()
+	for status, refused := range map[int]int{403: 403, 401: 401, 503: 0} {
+		inst := newInstance(t, func(string) (int, string) {
+			return status, `{"message":"no"}`
+		})
+		seat := &org.Role{Name: "SWE", DeclaredHandle: "swe"}
+		searcher := confluence.NewSearcher(confluence.SearcherOptions{
+			Org: client(t, inst),
+			ForSeat: func(*org.Role) (*confluence.Client, bool) {
+				return client(t, inst), true
+			},
+		})
+		o := &org.Organization{Name: "nimbus"}
+		o.Normalize()
+		got := searcher.Search(context.Background(), knowledge.Query{
+			Text: "how do we deploy", Org: o, Seat: seat, Mode: knowledge.ModeKeyword,
+		})
+		if got.VendorStatus != refused || len(got.Hits) != 0 || got.Coverage.Complete {
+			t.Errorf("a %d answered vendor status %d with %d hits, complete %v; want %d, nothing searched",
+				status, got.VendorStatus, len(got.Hits), got.Coverage.Complete, refused)
+		}
+	}
+}
+
 // A SEAT WITH ITS OWN CREDENTIAL SEARCHES UNSCOPED, because Confluence's own
 // ACLs bound what comes back.
 func TestASeatWithItsOwnCredentialSearchesUnscoped(t *testing.T) {

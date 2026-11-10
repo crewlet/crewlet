@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // stubSearcher is a knowledge backend with a scripted answer and a record of
@@ -23,12 +24,17 @@ type stubSearcher struct {
 	// in as a complete hybrid answer, which is what every case that is
 	// not about the outcome wants.
 	outcome *knowledge.Outcome
+	// refused is the vendor's status refusing the searching credential.
+	refused int
 }
 
 func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.can }
 
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.queries = append(s.queries, q)
+	if s.refused != 0 {
+		return knowledge.Result{VendorStatus: s.refused}
+	}
 	if s.outcome != nil {
 		return knowledge.Result{Hits: s.hits, Outcome: *s.outcome}
 	}
@@ -275,5 +281,48 @@ func TestSearchKnowledgeFencesWhatAPageSays(t *testing.T) {
 	}
 	if !strings.Contains(out[end:], "look it up by title") {
 		t.Fatalf("the pointer moved inside the fence or vanished:\n%s", out)
+	}
+}
+
+// A VENDOR'S REFUSAL IS SAID FROM THE ENGINE'S OWN KNOWLEDGE OF THE GRANT (E21):
+// a 403 to a seat off the Confluence lane is vendor_forbidden naming the
+// permission the tool declares; a 403 to a seat on it, and a 401 (the
+// credential itself), stay plain failures that name no permission.
+func TestSearchKnowledgeSaysTheVendorRefusedFromTheGrant(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		status   int
+		lanes    []string
+		refusal  tools.Refusal
+		says     string
+		namesUse bool
+	}{
+		{"a 403 the grant does not cover", 403, nil, tools.RefusalVendorForbidden, "read access", true},
+		{"a 403 the grant covers", 403, []string{"confluence"}, "", "includes reading it", false},
+		{"a 401", 401, []string{"confluence"}, "", "expired or revoked", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			turn := searchTurn()
+			seat := *turn.Seat
+			seat.AccessLanes = c.lanes
+			turn.Seat = &seat
+			res, err := (&searchKnowledge{search: &stubSearcher{can: true, refused: c.status}}).CallForTurn(
+				context.Background(), turn, map[string]any{"query": "staging"})
+			if err != nil {
+				t.Fatalf("CallForTurn: %v", err)
+			}
+			if !res.Failed || tools.RefusalOf(res) != c.refusal || !strings.Contains(res.Output, c.says) {
+				t.Fatalf("answered %+v (class %q), want failed as %q saying %q", res, tools.RefusalOf(res),
+					c.refusal, c.says)
+			}
+			if names := strings.Contains(res.Output, "the spaces it searches"); names != c.namesUse {
+				t.Errorf("naming the declared permission: %v, want %v (%q)", names, c.namesUse, res.Output)
+			}
+			if strings.Contains(res.Output, "No team documents match") {
+				t.Errorf("a refused search reads as an empty knowledge base: %q", res.Output)
+			}
+		})
 	}
 }
