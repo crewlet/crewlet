@@ -530,7 +530,10 @@ func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
 // A LIST OF ITS OWN, since l is a copy whose list its caller may still hold.
 // A call taken after told with no number — an older build's append, in a fleet
 // mid-upgrade — is counted among the dropped ones: an over-count, the safe
-// direction, and it is told at every save point anyway.
+// direction. Unmarked, it is held at no save point a capture states, so a
+// continuation of a capture is told it anyway; a job's own copy of its session
+// in its box, where its harness ended its own run, holds it as it holds every
+// call but a late one, and is told only the count.
 func (l BridgeLog) lateAfter(told int) BridgeLog {
 	l.Calls = slices.Clone(l.Calls)
 	listed := 0

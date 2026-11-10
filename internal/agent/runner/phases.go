@@ -359,6 +359,8 @@ type Resume struct {
 	// nothing was recorded — every call of the round and every note the turn
 	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
 	// [Runner.sessionDecided]): the safe direction for a word that never came.
+	// An own run's copy is told the calls the round's log took late alone,
+	// which it is not known to hold, and its guard counts none of their loads.
 	HarnessEnd sandbox.HarnessEnd
 
 	// Answer is the run's closing text: what its harness said last, which the
@@ -492,11 +494,12 @@ type BridgedCall struct {
 
 	// Late is a call the round's log took after its job was replaced by a
 	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
-	// an earlier job of the round, which no brief of the round told and the
-	// session of the job that made it may not hold. HELD BY NO SAVE POINT
-	// ([heldAt]), so every continuation of the round is told it, under words
-	// of its own, and no rebuilt guard counts a load it made; and never the
-	// round's submission ([sinceAnswer]).
+	// an earlier job of the round, which no brief of the round had told when
+	// the log took it and the session of the job that made it may not hold.
+	// HELD BY NO SAVE POINT ([heldAt]), so every continuation of the round
+	// built after it landed is told it, under words of its own, and no rebuilt
+	// guard counts a load it made; and never the round's submission
+	// ([sinceAnswer]).
 	Late bool
 
 	// StartedAt is when the call was handed to the seat's surface, and

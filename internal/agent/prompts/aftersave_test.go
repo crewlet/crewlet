@@ -147,3 +147,40 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 		t.Errorf("the line under a late submission does not say it does not stand: %q", lateSubmission)
 	}
 }
+
+// A LATE CALL THE RECORD DROPPED IS COUNTED UNDER THE LATE CALLS' WORDS where
+// those are the only dropped calls the session lacks: a job's own copy of its
+// session in its box whose harness ended its own run holds every other call its
+// record dropped, and a count under the words of calls after a save would say
+// its own run made them after it was saved, which neither is true of. So the
+// count follows the late calls in their section, after the line on a late
+// submission, with the record's tally once; alone in that section where the
+// record lists no late call; and beside a count of calls after the save, the
+// tally is told there and not again.
+//
+// Mutation: leave the count out, tell it under the heading of calls after a
+// save, or say the tally in both sections, and a case goes red.
+func TestALateCallTheRecordDroppedIsCountedUnderTheLateCallsWords(t *testing.T) {
+	t.Parallel()
+	const (
+		late  = "- jira_create({\"summary\":\"the late one\"}) → success"
+		tally = "(dropped from the middle: jira_create ×3)"
+	)
+	count := droppedLate(1)
+	if !strings.HasPrefix(count, "(+1 further such call,") || !strings.Contains(count, "check whether its tool") {
+		t.Fatalf("one dropped late call is counted as %q", count)
+	}
+	got := CalledAfter(AfterSave{Late: late, LateSubmission: true, LateDropped: 1, Tally: tally})
+	if want := lateCallsHeader + "\n" + late + "\n" + lateSubmission + "\n" + count + "\n" + tally; got != want {
+		t.Errorf("a late call listed beside one dropped is told:\n%s\nwant:\n%s", got, want)
+	}
+	if got := CalledAfter(AfterSave{LateDropped: 1, Tally: tally}); got != lateCallsHeader+"\n"+count+"\n"+tally {
+		t.Errorf("a session whose only untold call is a dropped late one is told:\n%s\nwant its count alone, "+
+			"under the late calls' heading", got)
+	}
+	got = CalledAfter(AfterSave{Dropped: 2, Tally: tally, LateDropped: 1})
+	if strings.Count(got, tally) != 1 || !strings.Contains(got, lateCallsHeader+"\n"+count) {
+		t.Errorf("a count of calls after the save beside one of late calls is told:\n%s\nwant the late count "+
+			"under its own heading and the tally once", got)
+	}
+}

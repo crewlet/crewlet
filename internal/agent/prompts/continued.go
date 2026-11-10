@@ -203,7 +203,7 @@ type AfterSave struct {
 	// Tally is the record's line for every call it dropped
 	// (ledger.FormatElided), those made before the save among them: what
 	// Dropped's calls were, by tool, beside calls the session holds. Said
-	// only beside a Dropped it accounts for.
+	// only beside a Dropped or a LateDropped it accounts for, and once.
 	Tally string
 
 	// Interrupted says the session was, or may have been, cut off
@@ -226,6 +226,19 @@ type AfterSave struct {
 	// LateSubmission says a successful `submit_work` is among Late, which is
 	// told as no submission of the work ([lateSubmission]).
 	LateSubmission bool
+
+	// LateDropped is how many calls the record took late and then dropped
+	// from the middle of a long run's record (sandbox.BridgeLog.LateElided),
+	// counted in Late's section ([droppedLate]), beside Tally, where they are
+	// the only dropped calls the session lacks: the copy of a session its
+	// job's own box holds where its harness ended its own run, which holds
+	// every other call its record dropped (internal/agent/runner's
+	// inPlaceAfter). Said under the words of calls after a save, they would
+	// be calls the session's own run made after it was saved, which neither
+	// is true of. A session told the calls after a point counts the late
+	// ones it dropped among Dropped instead, beside the other calls dropped
+	// past that point.
+	LateDropped int
 }
 
 // CalledAfter is the section telling a run that continues a session what its
@@ -234,17 +247,30 @@ type AfterSave struct {
 // way every other reader of a long run's calls is told what was dropped — of a
 // session cut off, as calls it may already show ([AfterSave.Interrupted]) —
 // and then, in a section of its own, the calls that finished only after the run
-// that made them was replaced ([AfterSave.Late]). "" where there is none of
-// either.
+// that made them was replaced ([AfterSave.Late]), and how many more such calls
+// the record dropped where it counts them there ([AfterSave.LateDropped]). ""
+// where there is none of either.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if since := calledSince(after); since != "" {
 		sections = append(sections, since)
 	}
-	if late := strings.TrimSpace(after.Late); late != "" {
-		parts := []string{lateCallsHeader, late}
+	late := strings.TrimSpace(after.Late)
+	if late != "" || after.LateDropped > 0 {
+		parts := []string{lateCallsHeader}
+		if late != "" {
+			parts = append(parts, late)
+		}
 		if after.LateSubmission {
 			parts = append(parts, lateSubmission)
+		}
+		if after.LateDropped > 0 {
+			parts = append(parts, droppedLate(after.LateDropped))
+			// THE TALLY ONCE: beside the calls after the save where the record
+			// dropped any of those, and here where it dropped only late ones.
+			if tally := strings.TrimSpace(after.Tally); tally != "" && after.Dropped <= 0 {
+				parts = append(parts, tally)
+			}
 		}
 		sections = append(sections, strings.Join(parts, "\n"))
 	}
@@ -295,6 +321,23 @@ func droppedAfter(n int, interrupted bool) string {
 		" last and only a tally of those between. The tally below counts calls made " + before + " as well." +
 		" A call counted only in the tally has no outcome here: check whether its tool already did what it" +
 		" was for before doing it again.)"
+}
+
+// droppedLate says that n more calls like the ones under [lateCallsHeader] are
+// counted only in the record's tally ([AfterSave.LateDropped]), and what a call
+// counted only there asks of the run, as [droppedAfter] says of the calls after
+// a save: it has no outcome to go by. Said as calls the record took late — made
+// by an earlier run, never this session's run after a save — and as counted
+// beside other calls, which the tally names too.
+func droppedLate(n int) string {
+	calls := "calls"
+	if n == 1 {
+		calls = "call"
+	}
+	return "(+" + strconv.Itoa(n) + " further such " + calls + ", which the record did not keep one by one:" +
+		" past two hundred calls a run's record keeps its first and last and only a tally of those between." +
+		" The tally below counts other calls as well. A call counted only in the tally has no outcome here:" +
+		" check whether its tool already did what it was for before doing it again.)"
 }
 
 // notesAgainHeader opens the notes a session that may have been cut off is told

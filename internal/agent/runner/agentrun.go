@@ -217,8 +217,12 @@ type Continuation struct {
 	// what carries it on; where the job's harness is not known to have ended
 	// its own run, that the session was cut off or may have been, every call
 	// of the round and every note the turn has read, any of which such a copy
-	// may lack ([Runner.inPlaceAfter]); and the notes [AgentRunRequest.Notes]
-	// carries, which no copy has read.
+	// may lack, and where it did, the calls the round's log took late, which
+	// no copy is known to hold ([Runner.inPlaceAfter]); and the notes
+	// [AgentRunRequest.Notes] carries, which no copy has read. The floor of a
+	// launch that continues the copy counts all of it where a capture measured
+	// the copy's context, and is the static floor where none did
+	// (internal/engine's continuedFloor).
 	SessionID string
 	Brief     string
 

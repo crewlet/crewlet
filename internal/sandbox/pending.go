@@ -686,8 +686,11 @@ type BridgeCall struct {
 	// number, and a dropped one is counted apart ([BridgeLog.LateElided]).
 	//
 	// ZERO ON A CALL AN OLDER BUILD APPENDED, which numbered none, in a fleet
-	// mid-upgrade: read as after every save point, so a continuation is told it
-	// again rather than never. Its append still counts, since the older
+	// mid-upgrade: read as after every save point a capture states, so a
+	// continuation of a capture is told it again rather than never, while a
+	// job's own copy of its session in its box, where its harness ended its own
+	// run, holds it as it holds every call of the round but a late one
+	// (internal/agent/runner's heldAt). Its append still counts, since the older
 	// build's grew the log alike; only its own place is unknown, so the count
 	// of the dropped calls after a save point may take it for one of them — an
 	// over-count, never an under-count.
@@ -707,18 +710,19 @@ type BridgeCall struct {
 	// approved, which the store appends for its own round and the relaunch's
 	// lead tells ([approvedCall]).
 	//
-	// HELD BY NO SAVE POINT. No brief of the round told it — it landed after
-	// the read the briefs of the job carrying the round on were built from —
-	// and the session of the job that made it may not hold it, its harness
-	// having died, given up on the call or been replaced before the call
-	// returned; yet a later capture of the job carrying the round on, placed by
-	// its own read, counts it among the calls its session holds, since a save
-	// point is a prefix of the log and cannot leave one call out. So every
-	// continuation of the round is told it, whatever its save point — again by
-	// every later continuation, under words that say it may be shown or told
-	// already and is one call — no rebuilt skill guard counts a load it made,
-	// and the round's collection never takes it for the round's submission,
-	// which is the job carrying the round on to make, nor keeps it whole as one
+	// HELD BY NO SAVE POINT. No brief of the round had told it when the log
+	// took it — it landed after the read the briefs of the job carrying the
+	// round on were built from — and the session of the job that made it may
+	// not hold it, its harness having died, given up on the call or been
+	// replaced before the call returned; yet a later capture of the job
+	// carrying the round on, placed by its own read, counts it among the calls
+	// its session holds, since a save point is a prefix of the log and cannot
+	// leave one call out. So every continuation of the round built after it
+	// landed is told it, whatever its save point — again by every later
+	// continuation, under words that say it may be shown or told already and
+	// is one call — no rebuilt skill guard counts a load it made, and the
+	// round's collection never takes it for the round's submission, which is
+	// the job carrying the round on to make, nor keeps it whole as one
 	// ([MaxSubmissionArgsBytes]; internal/agent/runner's heldAt and
 	// sinceAnswer). One carried late after its own append failed is told
 	// again although its job's session holds its answer: the safe direction. A

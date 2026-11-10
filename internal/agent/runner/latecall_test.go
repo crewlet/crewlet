@@ -6,17 +6,21 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A LATE CALL: one the round's log took after its job was replaced by a
 // relaunch that carried the round on (runner.BridgedCall.Late), so after the
-// brief of the job carrying the round on was built. No brief of the round told
-// it, the session of the job that made it may not hold it, and no save point
-// holds it.
+// brief of the job carrying the round on was built. No brief of the round had
+// told it when the log took it, the session of the job that made it may not
+// hold it, and no save point holds it.
 
 // EVERY CONTINUATION OF THE ROUND IS TOLD A LATE CALL, WHATEVER ITS SAVE POINT.
 // A later capture of the job that carried the round on, placed by its own read
@@ -47,14 +51,16 @@ func TestEveryContinuationOfTheRoundIsToldALateCall(t *testing.T) {
 	}
 }
 
-// NO GUARD COUNTS A LOAD THE LOG TOOK LATE. No brief of the round told a skill a
-// late call loaded, and the session of the job that made the call may not hold
-// it, yet the call's place can fall past the calls the round held when the next
+// NO GUARD COUNTS A LOAD THE LOG TOOK LATE. No brief of the round had told a
+// skill a late call loaded when the log took the call, and the session of the
+// job that made it may not hold it, yet the call's place can fall past the calls the round held when the next
 // job's session opened — its own job's session gave it — and its number at or
-// below that job's save point. So neither the guard
-// of a relaunch that continues a kept session nor the one a node rebuilds for
-// a run it took over while it works holds the skill: the tool it covers is
-// refused until the skill is loaded again, the safe direction.
+// below that job's save point. So neither the guard of a relaunch that
+// continues a kept session, nor the one of a relaunch that continues its job's
+// own copy in its box after its harness ended its own run, which holds every
+// load its job made, nor the one a node rebuilds for a run it took over while
+// it works holds the skill: the tool it covers is refused until the skill is
+// loaded again, the safe direction.
 //
 // Mutation: count a late call's load as any other's, and the covered tool is
 // let through.
@@ -70,6 +76,25 @@ func TestNoGuardCountsALoadTheLogTookLate(t *testing.T) {
 			t.Fatalf("slack_post ran (%q) on a skill a late call loaded", bridged[0].Result)
 		}
 	})
+	t.Run("a relaunch continuing its job's copy in its box, its harness having ended its own run",
+		func(t *testing.T) {
+			t.Parallel()
+			inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+			active := guarded{basis: inBox}.relaunch(t).Surface.Active()
+			req := guarded{basis: inBox, state: execstate.State{ActiveTools: active},
+				bridged: []runner.BridgedCall{late}, carry: func(r *runner.Resume) {
+					r.Rotated = &runner.Rotated{SessionID: "sess-1", BoxKept: true}
+					r.HarnessEnd = sandbox.HarnessEndOwnRun
+				}}.relaunch(t)
+			if req.Session != nil || req.Continue == nil || req.Continue.SessionID != "sess-1" {
+				t.Fatalf("the relaunch continues kept %+v and in place %+v, want the job's own session in its box",
+					req.Session, req.Continue)
+			}
+			bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
+			if !bridged[0].Failed {
+				t.Fatalf("slack_post ran (%q) on a skill a late call loaded", bridged[0].Result)
+			}
+		})
 	t.Run("a run taken over while it works", func(t *testing.T) {
 		t.Parallel()
 		r, _ := guardedRunner(t, newCapture(), tools.OriginBuiltin)
@@ -188,6 +213,103 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 		}
 		if said := strings.Contains(brief, notStanding); said == failed {
 			t.Errorf("a late submission that failed (%v) is told %q: %v\n%s", failed, notStanding, said, brief)
+		}
+	}
+}
+
+// A RUN CARRIED ON IN ITS BOX IS TOLD THE CALLS THE LOG TOOK LATE, WHATEVER ITS
+// HARNESS'S END. A person's answer or a replaced sign-in that continues the copy
+// of the session its job's box holds tells it, after what carries it on, every
+// call of the round the log took after the job that made it was replaced —
+// here an earlier job's worker that finished after this job opened, which this
+// job's brief never told — under the late calls' own words, a submission among
+// them as none of the round's, once each. Where the job's harness ended its own
+// run, its copy holds every other call of the round — here its job's own, and
+// the rest its job's brief told — so it is told the late ones alone, with how
+// many the log dropped from its middle and the round's tally, and nothing that
+// says it was or may have been cut off, nor the notes the turn has read, which
+// it holds; where it was cut off, every call of the round, the late ones apart
+// from the rest. Where the job's box is gone, which no launch continues in,
+// nothing of it is built, whatever its harness's end. All of it is in the
+// brief the launch continues the copy with, which the floor of that launch
+// counts where a capture measured the copy.
+//
+// Mutation: tell an own run's copy nothing, read a late call as one it holds,
+// tell a cut-off copy's late calls among the round's other calls, leave the
+// late submission's line out, leave the dropped late calls uncounted, tell an
+// own run's copy it was or may have been cut off or the notes the turn has
+// read, or build an own run's telling where its box is gone, and a case goes
+// red.
+func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
+	t.Parallel()
+	const lateHeading = "## Calls that finished after the run that made them was replaced"
+	own := numbered("slack_post", map[string]any{"text": "the job's own post"}, 2, 2)
+	late := numbered("jira_create", map[string]any{"summary": "an earlier job's late issue"}, 1, 3)
+	late.Late = true
+	submitted := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+		Args:   map[string]any{"outcome": "delivered", "summary": "an earlier job's late submission"},
+		Result: "submitted"}, Seq: 3, Appended: 4, Late: true}
+	// A NOTE THE TURN HAS READ, which a copy whose harness ended its own run
+	// holds, and one cut off is told again.
+	read := steer.Read{Note: steer.Note{ID: "read", Text: "a note the job read", By: "founder"},
+		Reading: steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1,
+			Boundary: types.SteerBoundaryToolBatch, Launch: "job-1", Order: 1}}
+	for name, tc := range map[string]struct {
+		end     sandbox.HarnessEnd
+		boxGone bool
+	}{
+		"its harness ended its own run":               {end: sandbox.HarnessEndOwnRun},
+		"its harness was cut off":                     {end: sandbox.HarnessEndCutOff},
+		"its harness ended its own run, its box gone": {end: sandbox.HarnessEndOwnRun, boxGone: true},
+	} {
+		for _, carry := range inBoxCarries {
+			t.Run(carry.name+", "+name, func(t *testing.T) {
+				t.Parallel()
+				brief := inPlaceBrief(t, carry, !tc.boxGone, 1, nil, func(r *runner.Resume) {
+					r.Bridged, r.HarnessEnd = []runner.BridgedCall{own, late, submitted}, tc.end
+					r.Elided, r.LateElided = []ledger.Elided{{Name: "slack_read", Calls: 3}}, 1
+					r.Steered, r.Run = []steer.Read{read}, runner.RunRecord{LaunchID: "job-1"}
+				})
+				at := strings.Index(brief, lateHeading)
+				if tc.boxGone {
+					if at >= 0 || strings.Contains(brief, "an earlier job's late issue") {
+						t.Errorf("a copy whose box is gone, which no launch continues in, is told the calls the "+
+							"log took late:\n%s", brief)
+					}
+					if carry.lead == runner.RotatedContinuation && brief != carry.lead {
+						t.Errorf("the copy is told more than what carries it on:\n%s", brief)
+					}
+					return
+				}
+				if at < 0 {
+					t.Fatalf("the copy is told no call the log took late, under its own words:\n%s", brief)
+				}
+				apart := brief[at:]
+				for _, want := range []string{"an earlier job's late issue", "an earlier job's late submission",
+					"does NOT stand as this work's submission"} {
+					if !strings.Contains(apart, want) || strings.Count(brief, want) != 1 {
+						t.Errorf("the copy is not told %q once, apart under the late calls' words:\n%s", want, brief)
+					}
+				}
+				if tc.end.EndedOwnRun() {
+					for _, not := range []string{"the job's own post", cutOffHeader, prompts.InterruptedCopy,
+						prompts.MayBeInterruptedCopy, notesAgainHeader} {
+						if strings.Contains(brief, not) {
+							t.Errorf("a copy whose harness ended its own run is told %q, which it holds or which is "+
+								"untrue of it:\n%s", not, brief)
+						}
+					}
+					if !strings.Contains(apart, "(+1 further such call,") || !strings.Contains(apart, "slack_read") {
+						t.Errorf("a copy whose harness ended its own run is not told the late call its log "+
+							"dropped, with the round's tally:\n%s", brief)
+					}
+					return
+				}
+				if since := strings.Index(brief, cutOffHeader); since < 0 || since > at ||
+					!strings.Contains(brief[since:at], "the job's own post") {
+					t.Errorf("a copy cut off is not told the round's other calls before the late ones:\n%s", brief)
+				}
+			})
 		}
 	}
 }
