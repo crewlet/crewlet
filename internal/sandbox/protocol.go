@@ -712,6 +712,15 @@ type Result struct {
 	// coordinator, never by a runner.
 	Kept *SessionKept
 
+	// HarnessEnd is how the job's harness ended, as the read that collected
+	// this result found it ([LaunchRecord.HarnessEnd]): recorded on the job's
+	// record by that read, on the node whose host the box is on, and carried
+	// back with the result for the claim it collects for, which was read
+	// before the record was written ([Coordinator.collectClaimed]). Set by the
+	// coordinator, never by a runner; empty from a host of an older build,
+	// which is never read as an own run.
+	HarnessEnd HarnessEnd
+
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
 	// where the harness reported none. It is what the launch's own record counts

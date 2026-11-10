@@ -70,6 +70,11 @@ var carriedByServer = map[string]string{
 
 	"doclet.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
 		"an answer carries its result as SavedBy and SavedAt",
+
+	"knowledge.Result.VendorStatus": "set only by the Confluence searcher, which runs on the " +
+		"asking node; knowledge.search answers from Doclet's index, which refuses no credential",
+	"knowledge.Result.VendorSelf": "set only by the Confluence searcher, which runs on the " +
+		"asking node; knowledge.search answers from Doclet's index, which refuses no credential",
 }
 
 // plainlyEncoded are the types an operation carries that decode themselves

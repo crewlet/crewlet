@@ -20,6 +20,10 @@ type Learning struct {
 	// Enabled is the master switch for the whole subsystem.
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Master switch for agent learning (default on)."`
 
+	// MaxShare is the most of a seat's company day of spend its learning may
+	// take; 1 leaves it uncapped, and unset reads as [DefaultLearningShare].
+	MaxShare *float64 `yaml:"max_share,omitempty" json:"max_share,omitempty" js:"min=0;max=1" desc:"The most of an agent's day of spend its learning may take, as a fraction (default 0.15; 1 leaves it uncapped). Past it, learning waits for the next company day."`
+
 	Episodic         Episodic         `yaml:"episodic,omitempty" json:"episodic"`
 	Reflect          Reflect          `yaml:"reflect,omitempty" json:"reflect"`
 	Counterparty     Counterparty     `yaml:"counterparty,omitempty" json:"counterparty"`
@@ -46,11 +50,26 @@ func DefaultLearning() Learning {
 	}
 }
 
+// DefaultLearningShare is learning's share of a seat's day of spend by default.
+const DefaultLearningShare = 0.15
+
+// Share is the cap on learning's share of a seat's day, the default applied.
+func (l *Learning) Share() float64 {
+	if l.MaxShare == nil {
+		return DefaultLearningShare
+	}
+	return *l.MaxShare
+}
+
 // On reports whether the subsystem runs, applying the true default.
 func (l *Learning) On() bool { return l.Enabled.Or(true) }
 
 func (l *Learning) validate(path Path) error {
 	var p problems
+	if s := l.MaxShare; s != nil && !(*s > 0 && *s <= 1) {
+		p.add(at(path, "max_share"), ErrOutOfRange,
+			"must be a fraction above 0 and at most 1 (1 leaves learning uncapped), not %v", *s)
+	}
 	p.wrap(l.Episodic.validate(at(path, "episodic")))
 	p.wrap(l.SkillSynthesis.validate(at(path, "skill_synthesis")))
 	p.wrap(l.SkillRefinement.validate(at(path, "skill_refinement")))

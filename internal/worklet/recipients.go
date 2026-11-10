@@ -460,6 +460,10 @@ func (n *Notify) agentReference() bool {
 // personComment reports a comment a person wrote ([AuthorKind.Person]).
 func (n *Notify) personComment() bool { return n.Snapshot.CommentAuthorKind.Person() }
 
+// Moves reports whether a change of this kind moves work: neither the
+// conversation nor who watches. A turn's outcome is read by it.
+func (k ChangeKind) Moves() bool { return k != ChangeWatchers && !k.Conversation() }
+
 // Conversation reports a change that is talk on the task rather than a change
 // to it: a comment, and its edit, resolution or removal.
 func (k ChangeKind) Conversation() bool {

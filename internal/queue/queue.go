@@ -893,7 +893,9 @@ type EventQueue interface {
 	// The returned Unsubscribe cancels the answerer's context and then
 	// WAITS for the answers in flight, bounded by the context it is given
 	// — so a caller that withdraws and then closes what the answerer
-	// reads never closes it under an answer still reading.
+	// reads never closes it under an answer still reading. A bound that
+	// ends first is answered with an error wrapping that context's own,
+	// never with success: the answers are still running.
 	//
 	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
 	// and on a clustered broker no more than that: the other servers learn
@@ -921,6 +923,13 @@ type EventQueue interface {
 	// the broker delivered them. What a message means, and whether a later
 	// one supersedes it, is inside its own bytes.
 	//
+	// ONE PUBLISHER'S ORDER IS KEPT: what one process broadcasts, each call
+	// returning before the next is made, every listener hears in the order
+	// it was sent, of what it hears at all — the source order a broker
+	// keeps per publisher, and the twin's per listener. So a later
+	// broadcast of the same sender is a FENCE: a listener that has heard
+	// it has heard everything of that sender's it ever will.
+	//
 	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
 	// with ErrUnavailable, for Ask's reason: a message written into a
 	// reconnect buffer is a retained one, delivered after its moment. The
@@ -944,7 +953,9 @@ type EventQueue interface {
 	// The returned Unsubscribe stops delivery and then WAITS for a handler
 	// already running, bounded by the context it is given, so a caller
 	// that withdraws and then tears down what the handler reads never
-	// tears it down under a message still being handled. A handler must
+	// tears it down under a message still being handled. A bound that ends
+	// first is answered with an error wrapping that context's own, never
+	// with success: the handler is still running. A handler must
 	// therefore never withdraw its own registration.
 	//
 	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,

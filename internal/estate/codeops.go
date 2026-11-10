@@ -43,6 +43,7 @@ type CodeServer interface {
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error)
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 }
@@ -460,6 +461,17 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
 	}).judgesGrant(func(q code.ReadQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+
+// opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
+// a review: the advisor's read, which names no asker.
+var opCodeTurnsMoved = define("code.turns_moved", opRead, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q code.TurnsMovedQuery) (map[string]bool, error) {
+		if b.Code == nil {
+			return nil, errNoHalf
+		}
+		moved, err := b.Code.TurnsMovedCode(ctx, q)
+		return moved, ranNothing(err)
+	})
 
 // opCodeResolveRef is one ref of one repository, asked of any data node whose
 // code copy serves, at the level the query names — the read a seat's tool

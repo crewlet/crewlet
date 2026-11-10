@@ -9,6 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -2296,6 +2297,7 @@ test("the learned skills say their cut in the header, as the other three lists d
     summary: "",
     version: 1,
     uses: 0,
+    loads: 0,
     updated_at: "",
   });
   mount("#/company/org/seats/swe?tab=memory", {
@@ -2327,6 +2329,7 @@ test("a seat's learned skills are drawn in the Learned grid's columns, in the ho
             summary: "Read the log first.",
             version: 3,
             uses: 12,
+            loads: 3,
             updated_at: "2026-09-20T07:00:00Z",
           },
           {
@@ -2336,10 +2339,21 @@ test("a seat's learned skills are drawn in the Learned grid's columns, in the ho
             summary: "",
             version: 1,
             uses: 40,
+            loads: 10,
             updated_at: "2026-09-19T07:00:00Z",
           },
+          {
+            id: "s3",
+            key: "never-offered",
+            title: "Never offered",
+            summary: "",
+            version: 1,
+            uses: 0,
+            loads: 0,
+            updated_at: "2026-09-18T07:00:00Z",
+          },
         ],
-        skills_total: 2,
+        skills_total: 3,
       }),
     },
   });
@@ -2347,12 +2361,24 @@ test("a seat's learned skills are drawn in the Learned grid's columns, in the ho
   const card = screen.getByText("Skills it taught itself").closest(".crewlet-card") as HTMLElement;
   const table = within(card).getByRole("table");
   const heads = within(table).getAllByRole("columnheader");
-  expect(heads.map((h) => h.textContent)).toEqual(["Skill", "Uses", "Version", "Updated"]);
+  expect(heads.map((h) => h.textContent)).toEqual([
+    "Skill",
+    "Offered",
+    "Loaded",
+    "Load rate",
+    "Version",
+    "Updated",
+  ]);
   for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
   const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
   expect(rows[0]?.contains(title)).toBe(true);
   expect(rows[0]?.textContent).toContain("Read the log first.");
-  expect(rows[0]?.querySelector('[data-label="Uses"]')?.textContent).toBe("12");
+  expect(rows[0]?.querySelector('[data-label="Offered"]')?.textContent).toBe("12");
+  expect(rows[1]?.querySelector('[data-label="Loaded"]')?.textContent).toBe("10");
+  // THE LOAD RATE IS LOADS OVER OFFERS: 10 of 40 offers taken up.
+  expect(rows[1]?.querySelector('[data-label="Load rate"]')?.textContent).toBe("25%");
+  // A SKILL NEVER OFFERED HAS NO RATE, never a false 0%.
+  expect(rows[2]?.querySelector('[data-label="Load rate"]')?.textContent).toBe(EMPTY_VALUE);
   // A SKILL WITH NO TITLE SAYS ITS KEY, as Doclet's does.
   expect(rows[1]?.textContent).toContain("unnamed-skill");
 });
@@ -3594,6 +3620,7 @@ test("a seat's long memory lists start capped, with the way to the rest", async 
     summary: "",
     version: 1,
     uses: 0,
+    loads: 0,
     updated_at: "",
   });
   const colleague = (i: number) => ({

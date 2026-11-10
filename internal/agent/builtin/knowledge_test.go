@@ -5,11 +5,13 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // stubSearcher is a knowledge backend with a scripted answer and a record of
@@ -23,12 +25,19 @@ type stubSearcher struct {
 	// in as a complete hybrid answer, which is what every case that is
 	// not about the outcome wants.
 	outcome *knowledge.Outcome
+	// refused is the vendor's status refusing the searching credential, and
+	// self whether that credential was the seat's own.
+	refused int
+	self    bool
 }
 
 func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.can }
 
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.queries = append(s.queries, q)
+	if s.refused != 0 {
+		return knowledge.Result{VendorStatus: s.refused, VendorSelf: s.self}
+	}
 	if s.outcome != nil {
 		return knowledge.Result{Hits: s.hits, Outcome: *s.outcome}
 	}
@@ -275,5 +284,61 @@ func TestSearchKnowledgeFencesWhatAPageSays(t *testing.T) {
 	}
 	if !strings.Contains(out[end:], "look it up by title") {
 		t.Fatalf("the pointer moved inside the fence or vanished:\n%s", out)
+	}
+}
+
+// A VENDOR'S REFUSAL IS SAID ONLY FROM WHAT THE ENGINE KNOWS: a refusal
+// of the company's connection is the company's; on the agent's own credential a
+// 401 is that credential, a 403 the engine's grant does not hold (as the seat
+// access ledger observed it) is vendor_forbidden naming the declared permission,
+// a 403 the grant holds, or one whose grant cannot be read, is forbidden, and a
+// 401 is unavailable until an administrator renews the credential.
+func TestSearchKnowledgeSaysTheVendorRefusedFromWhatTheEngineKnows(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name         string
+		status       int
+		self         bool
+		held, known  bool
+		refusal      tools.Refusal
+		says         string
+		namesPermits bool
+	}{
+		{"the company's connection refused", 403, false, false, true, tools.RefusalForbidden, "company's connection for this search", false},
+		{"the company's connection expired", 401, false, false, true, tools.RefusalUnavailable, "company's connection itself", false},
+		{"the agent's credential expired", 401, true, true, true, tools.RefusalUnavailable, "this agent's credential itself", false},
+		{"a 403 the grant does not hold", 403, true, false, true, tools.RefusalVendorForbidden, "not in place", true},
+		{"a 403 the grant holds", 403, true, true, true, tools.RefusalForbidden, "grant includes reading it", false},
+		{"a 403 whose grant cannot be read", 403, true, false, false, tools.RefusalForbidden, "could not be read", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var asked []string
+			tool := &searchKnowledge{search: &stubSearcher{can: true, refused: c.status, self: c.self},
+				granted: func(_ context.Context, handle, lane string) (bool, bool) {
+					asked = append(asked, handle+"@"+lane)
+					return c.held, c.known
+				}}
+			res, err := tool.CallForTurn(context.Background(), searchTurn(), map[string]any{"query": "staging"})
+			if err != nil {
+				t.Fatalf("CallForTurn: %v", err)
+			}
+			if !res.Failed || tools.RefusalOf(res) != c.refusal || !strings.Contains(res.Output, c.says) {
+				t.Fatalf("answered %+v (class %q), want failed as %q saying %q", res, tools.RefusalOf(res),
+					c.refusal, c.says)
+			}
+			if c.refusal == tools.RefusalUnavailable && RetryAfter(res.Cause, time.Second) != 0 {
+				t.Errorf("a revoked credential invites a retry: %v", res.Cause)
+			}
+			if names := strings.Contains(res.Output, "the spaces it searches"); names != c.namesPermits {
+				t.Errorf("naming the declared permission: %v, want %v (%q)", names, c.namesPermits, res.Output)
+			}
+			if c.self && c.status == 403 && (len(asked) != 1 || asked[0] != "eng@confluence") {
+				t.Errorf("the grant was read as %v, want the seat on the confluence lane", asked)
+			}
+			if strings.Contains(res.Output, "No team documents match") {
+				t.Errorf("a refused search reads as an empty knowledge base: %q", res.Output)
+			}
+		})
 	}
 }

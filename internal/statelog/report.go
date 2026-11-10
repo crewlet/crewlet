@@ -100,8 +100,13 @@ type Report struct {
 	Replica   ReplicaReport    `json:"replica"`
 
 	// Alarms is every condition currently true on this node, evaluated
-	// once here. The CLI's exit code is derived from THIS field.
+	// once here, and an empty list, never null, when none is. The CLI's
+	// exit code is derived from THIS field.
 	Alarms []Alarm `json:"alarms"`
+
+	// Unjudged is the per-entry instances this evaluation could not judge
+	// ([Unjudged]), which the node's tracker keeps standing.
+	Unjudged []AlarmRef `json:"-"`
 
 	// Maintenance is every capacity operation currently holding the
 	// fleet, the oldest first, and absent when there is none.
@@ -863,9 +868,14 @@ func NewReport(in ReportInputs) Report {
 	for _, d := range in.Domains {
 		rep.Domains = append(rep.Domains, in.domain(d))
 	}
-	rep.Nodes = in.nodes()
-	rep.Snapshots = in.snapshots()
-	rep.Alarms = in.alarms(rep.Domains)
+	// EVERY LIST THE WIRE REQUIRES IS A LIST, NEVER NULL: with no alarm
+	// standing or no domain registered the slice is nil, and a reader
+	// indexing a required array crashes on `null`.
+	rep.Domains = nonNil(rep.Domains)
+	rep.Nodes = nonNil(in.nodes())
+	rep.Snapshots = nonNil(in.snapshots())
+	rep.Alarms = nonNil(in.alarms(rep.Domains))
+	rep.Unjudged = Unjudged(in.Reading)
 	rep.Maintenance = in.Maintenance
 	rep.MaintenanceUnread = in.MaintenanceUnread
 	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the
@@ -874,6 +884,15 @@ func NewReport(in ReportInputs) Report {
 	// says nothing about whether THIS answer can claim an age.
 	rep.ReadLevel = ResolveReplicationLevel(rep.lagKnownHere())
 	return rep
+}
+
+// nonNil is a list that encodes as `[]` rather than `null` when empty, so a
+// reader indexes it without a presence check.
+func nonNil[T any](list []T) []T {
+	if list == nil {
+		return []T{}
+	}
+	return list
 }
 
 // lagKnownHere reports whether this node's own distance from every domain's

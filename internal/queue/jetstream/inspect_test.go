@@ -135,7 +135,7 @@ func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 	}
 	select {
 	case <-handed:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the second event never reached the handler")
 	}
 
@@ -180,7 +180,7 @@ func TestBacklogExcludesMailThisGroupHasAcked(t *testing.T) {
 	}
 	select {
 	case <-acked:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the event never reached the handler")
 	}
 
@@ -210,9 +210,9 @@ func settledBacklog(t *testing.T, q *Queue, topic, group string, want int) []int
 				got = append(got, p.N)
 			}
 		}
-		if len(got) == want || time.Now().After(deadline) {
+		if len(got) == want || time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			return got
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

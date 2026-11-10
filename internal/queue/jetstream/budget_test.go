@@ -279,22 +279,22 @@ type droppedCeilingJS struct {
 	// mu guards what follows: a request nobody answered stays outstanding
 	// while the next is asked, so two of them can be recorded at once.
 	mu sync.Mutex
-	// terms is what each request was given to answer in, in order — or a
-	// negative duration for one handed no deadline at all — and sent when
-	// each was sent.
-	terms []time.Duration
-	sent  []time.Time
+	// deadlines is the deadline each request was handed, in order — the
+	// zero time for one handed none at all — and sent when each was sent.
+	// What a request was given to answer in is the one less the other, and
+	// the case takes it inside its bubble, where both instants are the
+	// bubble's: the time left read here, in a method declared outside the
+	// bubble, reads as the machine's clock to anything reading the source
+	// (internal/fixedwait).
+	deadlines []time.Time
+	sent      []time.Time
 }
 
 func (f *droppedCeilingJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
 	deadline, bounded := ctx.Deadline()
-	left := time.Duration(-1)
-	if bounded {
-		left = time.Until(deadline)
-	}
 	f.mu.Lock()
-	f.terms, f.sent = append(f.terms, left), append(f.sent, time.Now())
-	answer := f.drops >= 0 && len(f.terms) > f.drops
+	f.deadlines, f.sent = append(f.deadlines, deadline), append(f.sent, time.Now())
+	answer := f.drops >= 0 && len(f.sent) > f.drops
 	f.mu.Unlock()
 	if answer {
 		return ceilingStream{maxBytes: f.ceiling}, nil
@@ -347,7 +347,12 @@ func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
 // On the machine's clock the case allowed a read term of slack instead. That
 // was a bound on how late a loaded race-detector run wakes a timer's goroutine,
 // which the read never promised. Its sibling on the provisioning path failed
-// that way, a re-ask 63 ms behind its 70 ms cadence.
+// that way, a re-ask 63 ms behind its 70 ms cadence. What each ask was handed
+// is read there too: its deadline less the instant it was sent, both the
+// bubble's.
+//
+// Mutation: hand the read no deadline of its own, and an ask carries none; ask
+// it on a write's term, and an ask is handed one past the lookup ceiling.
 func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 	t.Parallel()
 	// THE READ TERM AND THE PAUSE SCALED DOWN, and the lookup ceiling with
@@ -375,13 +380,13 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 			}
 			js.mu.Lock()
 			defer js.mu.Unlock()
-			if len(js.terms) != 2 {
+			if len(js.sent) != 2 {
 				t.Fatalf("the ceiling was asked for %d time(s), want 2: the dropped "+
-					"request and the one that was answered", len(js.terms))
+					"request and the one that was answered", len(js.sent))
 			}
-			for i, left := range js.terms {
-				switch {
-				case left < 0:
+			for i, deadline := range js.deadlines {
+				switch left := deadline.Sub(js.sent[i]); {
+				case deadline.IsZero():
 					t.Errorf("ask %d carried no deadline of its own, so the client's "+
 						"five-second default decided it", i+1)
 				case left > timing.Lookup:
@@ -415,10 +420,10 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 			}
 			js.mu.Lock()
 			defer js.mu.Unlock()
-			if len(js.terms) < 2 {
+			if len(js.sent) < 2 {
 				t.Errorf("the ceiling was asked for %d time(s) before the read gave "+
 					"up; the lookup ceiling holds several, and one means it was "+
-					"never asked again", len(js.terms))
+					"never asked again", len(js.sent))
 			}
 		})
 	})

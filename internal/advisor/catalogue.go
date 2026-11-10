@@ -3,6 +3,7 @@ package advisor
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -49,10 +50,12 @@ var catalogue = map[Class]entry{
 		words: func(_ *config.Company, p place, _ config.Warning) (string, string) {
 			s, _ := p.theSchedule()
 			fires, _ := config.ScheduleFiresPerDay(s)
+			window := float64(fires) * float64(PlanWindow) / float64(24*time.Hour)
 			return fmt.Sprintf("%s runs %d times a day.", s.Name, fires),
-				"Each run starts a turn whether or not anything changed. A check that " +
-					"waits for something to happen, such as a deploy or a merge, is " +
-					"better as a work item dated for when to look."
+				fmt.Sprintf("Each run starts a turn on the agent's models whether or not "+
+					"anything changed: about %s turns in every five-hour plan window. A check "+
+					"that waits for something to happen, such as a deploy or a merge, is "+
+					"better as a work item dated for when to look.", oneDecimal(window))
 		},
 		fix: scheduleFix,
 	},

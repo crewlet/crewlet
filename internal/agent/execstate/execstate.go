@@ -114,8 +114,10 @@ type State struct {
 	ActiveTools []string `json:"active_tool_names"`
 
 	// LoadedSkills is the skill-guard state, replayed for the same reason:
-	// the skills the session the launch's run took up held when it started
-	// — none for a session of the run's own.
+	// the skills the session the launch's run took up held when it started,
+	// as the launch armed them before the run started — none for a session
+	// of the run's own, and never a load the run made, which is one of its
+	// job's calls (BridgeFrom).
 	LoadedSkills []string `json:"loaded_skill_keys"`
 
 	// BridgeFrom is the last bridged call the run's record held when the

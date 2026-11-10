@@ -767,7 +767,7 @@ func TestAnEmptyBriefIsRefusedWithTheReason(t *testing.T) {
 
 type skillStore struct {
 	skills []learning.Skill
-	used   []string
+	loaded []string
 }
 
 func (s *skillStore) Get(_ context.Context, handle, name string) (learning.Skill, bool, error) {
@@ -789,8 +789,8 @@ func (s *skillStore) List(_ context.Context, handle string, _ learning.ListOptio
 	return out, nil
 }
 
-func (s *skillStore) MarkUsed(_ context.Context, id string, _ time.Time) learning.Use {
-	s.used = append(s.used, id)
+func (s *skillStore) MarkLoaded(_ context.Context, id string, _ time.Time) learning.Use {
+	s.loaded = append(s.loaded, id)
 	return learning.Use{}
 }
 
@@ -825,7 +825,7 @@ func TestASkillLoadsOnlyForItsOwnSeat(t *testing.T) {
 	}
 }
 
-func TestLoadingASkillRecordsThatItWasUsed(t *testing.T) {
+func TestLoadingASkillCountsALoad(t *testing.T) {
 	t.Parallel()
 	// The telemetry is what answers "do agents actually load the skills the
 	// synthesizer drafts, or is the apparent benefit just extra sampling?"
@@ -834,8 +834,8 @@ func TestLoadingASkillRecordsThatItWasUsed(t *testing.T) {
 	}}
 	tool := registered(t, builtin.Deps{Skills: store}, builtin.UseSkillTool)
 	callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"skill_name": "post"})
-	if len(store.used) != 1 || store.used[0] != "s1" {
-		t.Errorf("used = %v", store.used)
+	if len(store.loaded) != 1 || store.loaded[0] != "s1" {
+		t.Errorf("loaded = %v", store.loaded)
 	}
 }
 

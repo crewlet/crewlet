@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -43,9 +45,16 @@ import (
 // the row sealed, and are opened only for a person who may approve the call
 // (internal/api/queries) and for the resume that makes it.
 type CallHold struct {
-	desk RunAskDesk
-	seal *sandbox.CallSeal
-	now  func() time.Time
+	desk   RunAskDesk
+	seal   *sandbox.CallSeal
+	acting ActedDecisions
+	now    func() time.Time
+}
+
+// ActedDecisions reads the decision answers gave a seat: the newest question
+// the seat asked that a person answered among them, nil for none.
+type ActedDecisions interface {
+	DecisionAnswered(ctx context.Context, answers []string, asker string) (*sandbox.HeldAct, error)
 }
 
 var _ tools.Holder = (*CallHold)(nil)
@@ -54,12 +63,50 @@ var _ tools.Holder = (*CallHold)(nil)
 // seal (what the arguments are sealed under), or nil without either: a
 // surface with no holder refuses every call to a tool at Needs approval,
 // which is the safe reading of a node that cannot record one.
-func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal) *CallHold {
+// A nil acting names no decision on any held call.
+func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal, acting ActedDecisions) *CallHold {
 	if desk == nil || seal == nil {
 		return nil
 	}
-	return &CallHold{desk: desk, seal: seal, now: time.Now}
+	return &CallHold{desk: desk, seal: seal, acting: acting, now: time.Now}
 }
+
+// actedOn is the decision turn's call carries out: a person's answer to the
+// seat's question whose delivery woke the turn. Nil for a turn no such answer
+// woke, or a read that failed: the call is still held, naming no decision.
+func (h *CallHold) actedOn(ctx context.Context, turn *turnctx.Turn) *sandbox.HeldAct {
+	if h.acting == nil || turn == nil || turn.Handle() == "" || len(turn.Answered) == 0 {
+		return nil
+	}
+	act, err := h.acting.DecisionAnswered(ctx, turn.Answered, turn.Handle())
+	if err != nil {
+		log.WarnContext(ctx, "held_call_decision_unread", "seat", turn.Handle(), "error", err.Error(),
+			"detail", "the call is held naming no decision")
+		return nil
+	}
+	return act
+}
+
+// actingWords is what a held call's context says of the decision it carries
+// out, "" for none: an approver reads that the call is a step of an answer
+// already given, not a new question.
+func actingWords(act *sandbox.HeldAct) string {
+	if act == nil {
+		return ""
+	}
+	item := cmp.Or(act.Key, act.Item)
+	question := textcut.Within(act.Question, heldActQuestionBytes)
+	if act.Choice == "" {
+		return fmt.Sprintf(" It carries out a decision on %s: %s answered %q in words.", item,
+			act.AnsweredBy, question)
+	}
+	return fmt.Sprintf(" It carries out a decision on %s: %s answered %q with %q.", item, act.AnsweredBy,
+		question, textcut.Within(act.Choice, heldActQuestionBytes))
+}
+
+// heldActQuestionBytes bounds the question and the choice a held call's
+// context quotes, a change line's bound (capability.MaxLineBytes).
+const heldActQuestionBytes = 300
 
 // Hold records call as the question the run's job parks on. See
 // [tools.Holder].
@@ -88,7 +135,7 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: tool.Server(), Tool: call.Name, Raw: tool.RawName(), Digest: tool.Digest(),
-		HeldAt: h.now().UTC(),
+		HeldAt: h.now().UTC(), Acting: h.actedOn(ctx, turn),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -110,7 +157,7 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 		Context: fmt.Sprintf("%s's run called `%s`, a tool of the MCP server `%s` %s. The call "+
 			"has not been made: it waits for this answer, and the run is parked until then. Its "+
 			"arguments are shown to whoever may approve it.",
-			seat, call.Name, held.Server, why),
+			seat, call.Name, held.Server, why) + actingWords(held.Acting),
 		Decision: sandbox.HeldDecision(question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,
@@ -137,13 +184,14 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
 		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
+		Acting: h.actedOn(ctx, turn),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
 	}
 	question, context := tool.HeldWords(turn, call.Args)
 	return h.record(ctx, runID, launch, call.Name, sandbox.Ask{
-		Question: question, Context: context,
+		Question: question, Context: context + actingWords(held.Acting),
 		Decision: sandbox.HeldFixedDecision(question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,

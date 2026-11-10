@@ -249,11 +249,16 @@ type carrier interface {
 
 	// Pack is the script that packs session NOW, as the run's script packs
 	// it once its harness exits — the same pack, staged in staged, this
-	// pack's own directory ([Paths.SessionPackStaging]), and moved over
-	// [Paths.SessionCapture], its digest kept the same way — for a job that
-	// never got to ([Runner.PackCapture]). Run in a login shell with the
-	// box's bin directory first on its PATH, as the run's wrapper runs.
-	Pack(paths Paths, session, staged string) string
+	// pack's own directory ([Paths.SessionPackStaging]), and moved over dest,
+	// its digest kept the same way — for a job that never got to
+	// ([Runner.PackCapture]): one that is over, moved over
+	// [Paths.SessionCapture], or, where working says so, one its box would not
+	// end, its harness still working, moved to the pack's own
+	// [Paths.SessionPackHeld] for its reader alone, which a harness whose
+	// files a pack reads beside it holds to a stricter rule ([claudeHeldTar]).
+	// Run in a login shell with the box's bin directory first on its PATH, as
+	// the run's wrapper runs.
+	Pack(paths Paths, session, staged, dest string, working bool) string
 
 	// layout is how the harness's archive is laid out, which is what the
 	// scrub a capture streams it through has to read and write it as
@@ -266,6 +271,28 @@ type carrier interface {
 	// what the archive holds is the harness's own record, so reading it is
 	// the same knowledge as packing it, kept beside it.
 	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
+}
+
+// saver is a [carrier] whose session the engine packs WHILE ITS RUN STILL WORKS,
+// as a save ([Runner.PackSave]): beside its harness, from outside the run's own
+// script, to the path of the taker the save is taken under.
+//
+// OPTIONAL, as [carrier] is, and only Claude Code's runner is one: its session
+// is files a pack beside the harness can read, in a store its harness takes no
+// lock on. An OpenCode session lives in the database the run's own server
+// holds, which only the run's script can reach — the server's address and
+// password are the script's alone — so the engine has no pack of its own to
+// make beside an OpenCode run, and saves none.
+type saver interface {
+	// PackSave is the script that packs session now, beside a harness that
+	// may still be working, held to the rule a pack beside one keeps
+	// ([claudeHeldTar]), into staged, this save's own staging directory
+	// ([Paths.SessionSaveStaging]), and moved over taker's own path
+	// ([Paths.SessionSave]) — never [Paths.SessionCapture] — its digest kept
+	// as every pack's is. It ends as [carrier.Pack] does: [packNothing] where
+	// the harness wrote no transcript, [packFailed] where no save was made,
+	// its error stream saying why. Run as [carrier.Pack] is.
+	PackSave(paths Paths, session, staged, taker string) string
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
@@ -500,8 +527,10 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
-// killed part way left. And the wiring a run that continued a session was
-// handed for a session of its own ([Paths.MCPConfigFresh],
+// killed part way left; and EVERY SAVE of the previous job's session, with its
+// staging directory, whichever taker packed it ([Paths.SessionSave]), so no
+// take of this job's save reads the last job's. And the wiring a run that
+// continued a session was handed for a session of its own ([Paths.MCPConfigFresh],
 // [Paths.OpenCodeValuesFresh]), which its script removes before its harness
 // starts and one killed before it could leaves behind: this run writes its own
 // where it has one, and none is left beside a run that has none.
@@ -527,15 +556,26 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// file, removed as it always was. Separate statements rather than one
 	// joined by `&&`, so a file that will not go never keeps a directory.
 	//
+	// AND EVERY SAVE'S FILES, whoever took them ([Paths.SessionSave]): each is
+	// named by its taker, so the clear cannot list them — the taker of a box's
+	// last save may be a process that is gone — and removes what matches
+	// instead, the glob outside the quotes. Left, the job before's save would
+	// be read by a take of this job's that names the same taker, described by
+	// this job's record as this job's session, and a stopped node's would
+	// wait in the box for as long as the box lives.
+	//
 	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack
 	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
 	// removes what matches instead, the glob outside the quotes: one a pack
 	// cut short left, its node stopped as it packed, would otherwise stay in
-	// the box for its life.
+	// the box for its life — as would the archive a pack of a job still
+	// working keeps beside it for its read ([Paths.SessionPackHeld]), where
+	// that read was cut short before it removed it.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
 			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
 		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
@@ -768,6 +808,11 @@ func (r *Runner) refuseCarried(req sandbox.RunRequest) error {
 // on a release that states each run's own spend ([claudeCarryFloor]), which no
 // base is taken off. Logged as an overcharge, every carried session's first run
 // in a new box would be one that was never charged twice.
+//
+// A JOB BEFORE THAT STOPPED BEFORE ITS RESULT states no totals and was charged
+// nothing, so the base it kept is still what the session had been charged for:
+// carried forward, the next result is charged the stopped job's calls with its
+// own. A stopped last job's calls are charged by no later result.
 func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
 	if _, totals := r.harness.(sessionTotals); !totals || req.Resume == "" {
 		return "", nil
@@ -780,17 +825,39 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 	if err != nil {
 		return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
 	}
+	if refusal == "" && r.statesTotalsOf(raw, req.Resume) {
+		return raw, nil
+	}
 	if refusal == "" && strings.TrimSpace(raw) == "" && req.Carried != nil {
 		return "", nil
 	}
-	if refusal != "" || strings.TrimSpace(raw) == "" {
-		log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
-			"detail", "this run continues a session, and the result the job before it left "+
-				"could not be read, so the run is charged the spend its harness states, which counts "+
-				"the session's earlier jobs again", "refusal", refusal)
-		return "", nil
+	if req.Carried == nil {
+		kept, keptRefusal, err := readWhole(ctx, box, paths.BaseResult(), "the base the job before it kept")
+		if err != nil {
+			return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
+		}
+		if keptRefusal == "" && r.statesTotalsOf(kept, req.Resume) {
+			return kept, nil
+		}
 	}
-	return raw, nil
+	if refusal == "" && strings.TrimSpace(raw) != "" {
+		refusal = "it is no result of the session this run continues"
+	}
+	log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
+		"detail", "this run continues a session, and the result the job before it left "+
+			"could not be read, so the run is charged the spend its harness states, which counts "+
+			"the session's earlier jobs again", "refusal", refusal)
+	return "", nil
+}
+
+// statesTotalsOf reports whether raw is a harness result naming session, so
+// what it states is that session's totals.
+func (r *Runner) statesTotalsOf(raw, session string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	got := r.harness.Parse(raw).SessionID
+	return sandbox.ValidSessionID(got) && got == session
 }
 
 // ownSpend is result charged what THIS run spent ([sessionTotals],
@@ -803,9 +870,11 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 // ONLY A RUN THAT DID CONTINUE ITS SESSION took up its totals, as its script
 // recorded ([sessionRecord]): one asked to continue a session that its box
 // neither held nor could restore started a new one, whose totals begin at the
-// run, and less the base it kept it would be charged below nothing.
+// run, and less the base it kept it would be charged below nothing. So would a
+// run whose harness stopped before its result (a stalled or killed relaunch),
+// which states no totals at all.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	result sandbox.Result, streamed *runSpend, rec sessionRecord) (sandbox.Result, error) {
+	result sandbox.Result, streamed *runSpend, rec sessionRecord, stated string) (sandbox.Result, error) {
 
 	if streamed != nil {
 		return streamed.on(result), nil
@@ -826,7 +895,14 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	if !totals.TotalsRestored(rec.release) {
 		return result, nil
 	}
-	return less(result, r.harness.Parse(raw)), nil
+	// ONLY A RESULT STATING THE BASE'S OWN SESSION'S TOTALS (stated, the
+	// session its harness's result names) has them taken off: a run that
+	// stopped before its result states none, and would be charged below nothing.
+	base := r.harness.Parse(raw)
+	if !sandbox.ValidSessionID(stated) || stated != base.SessionID {
+		return result, nil
+	}
+	return less(result, base), nil
 }
 
 // wrapperScript is the shell line a job runs under: the harness with its stdout
@@ -1104,6 +1180,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// the launch's record and is handed to a later run's script (the
 	// assistant's deep work resumes its run by it), so one that is no id is
 	// none, as the record's is.
+	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
@@ -1116,7 +1193,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
-	result, err = r.ownSpend(ctx, box, paths, result, spent, rec)
+	result, err = r.ownSpend(ctx, box, paths, result, spent, rec, stated)
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}

@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The turn-level events, published around turn.Run.
@@ -163,7 +164,9 @@ type turnTelemetry struct {
 	// trigger's, the asker's or the parked row's — and workItemBasis the
 	// rule that named it; both empty for a turn nothing named an item for.
 	// See worksubject.go for the rules and their order.
-	workItem      *types.WorkItem
+	workItem *types.WorkItem
+	// answered are the answers whose deliveries woke the turn ([turnctx.Turn.Answered]).
+	answered      []string
 	workItemBasis types.WorkItemBasis
 
 	// written is the set of items this turn's writes commit to, shared with
@@ -374,6 +377,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// THE ITEM, from the same first event the trigger is described from,
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
+	t.answered = worklet.AnswersIn(req.Events)
 	t.written = &turnctx.Written{}
 	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
 	// held in this process's memory while the turn runs, which this node
@@ -492,6 +496,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// thing a turn points at, shared by every tool call.
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
+			Answered:      t.answered,
 			Written:       t.written,
 			// AND WHAT IT HOLDS FROM GITLET'S EXPIRY, which every
 			// tool call takes its hold in before its request.
@@ -714,6 +719,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ToolSequence:    spend.ExecuteTools,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
+		Acted:           actedOutside(spend.ToolExecutions, deliverySurface(e.ToolsFor(t.handle))),
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -738,6 +744,18 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	e.publishReflectionDue(ctx, completed, t)
 }
 
+// actedOutside reports whether a successful call among execs could reach
+// somebody outside the engine on the seat's surface ([turn.Deliverable]).
+func actedOutside(execs []types.ToolExecution, s turn.Surface) bool {
+	for _, ex := range execs {
+		name, _ := ex["name"].(string)
+		if ok, _ := ex["success"].(bool); ok && turn.Deliverable(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // measuredWhole reports whether this segment knows the whole turn before it: a
 // first segment does, and a resumed one only if the conversation it resumed
 // carried what the segments before it measured. A build that did not measure
@@ -759,7 +777,6 @@ func (t turnTelemetry) measuredWhole() bool { return !t.resumed || t.soFar != ni
 // runner's tally of its phase records. A segment that parks hands it on ([segmentCharge.soFar]); the one
 // that ends the turn states it ([Engine.publishTurnCompleted]).
 func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.TurnSoFar {
-	aux := t.auxSpent.Total()
 	out := execstate.TurnSoFar{
 		DurationMS: int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Reviews:    spend.Reviews,
@@ -768,12 +785,8 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 		Tools:      types.SumToolTallies(spend.Tools),
 		Refusals:   types.SumRefusals(spend.Refusals),
 		Wake:       types.WakeOf(t.trigger),
-		Tokens: types.TurnTokens{
-			Input:     spend.InputTokens + spend.WorkerInput + spend.JudgeInput,
-			Output:    spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput,
-			CacheRead: spend.CacheRead, CacheWrite: spend.CacheWrite,
-			AuxInput: aux.Input, AuxOutput: aux.Output,
-		},
+		// THE RUN IT COLLECTED INCLUDED, which is most of an executor turn.
+		Tokens: t.segmentTokens(spend),
 	}
 	if t.soFar != nil {
 		out.DurationMS += t.soFar.DurationMS
@@ -1057,6 +1070,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// carried on the suspension, so a completion concluding a sole write
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
+	// AND THE ANSWERS THAT WOKE IT, off the row for the same reason.
+	t.answered = slices.Clone(in.Run.Answered)
 	committed := make([]types.CommittedChange, 0, len(in.State.Committed))
 	for _, c := range in.State.Committed {
 		committed = append(committed, types.CommittedChange(c))
@@ -1065,6 +1080,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// WHAT THE RUN PUSHED ON GITLET is code the turn committed, collected here.
 	if len(in.Account.Pushed) > 0 {
 		t.written.Commit(types.CommittedCode)
+	}
+	// AND WHAT ITS CALLS COMMITTED, off its call log: they were made after
+	// the park recorded the set above, so the outcome is settled here.
+	for _, c := range in.Bridged.Changes() {
+		t.written.Commit(types.CommittedChange(c))
 	}
 	// THE HOLDS THE ROW CARRIES, OFF THE RESUMED TURN for the reason its
 	// unit of work is (resumedTurn read the row into it, with the row's

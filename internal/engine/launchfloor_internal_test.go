@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -118,6 +119,75 @@ func TestASessionTheLaunchsModelCannotCarryIsNotContinued(t *testing.T) {
 			}
 			if want := sandbox.ClaudeCodeWindow(c.model).Carries(floor.context, floor.brief); !want && c.continues {
 				t.Errorf("the floor kept (%d, %d), which the run's own window cannot carry", floor.context, floor.brief)
+			}
+		})
+	}
+}
+
+// EACH SESSION A LAUNCH MAY CONTINUE IS HELD TO ITS OWN FLOOR. A relaunch may be
+// offered the turn's kept session and the job before's own copy in its box, each
+// with a brief of its own, and its box decides which it takes up as the run
+// starts — the kept one where it can restore it, the copy only where it cannot.
+// So a session whose own floor one request of the launch's model cannot carry is
+// dropped alone, the other still offered; the launch is held to the larger floor
+// of the sessions it still offers, since its box may take up either; and only
+// where neither is left does its run start a session of its own, on the static
+// floor. Held both to the larger floor and dropped together, a kept session
+// whose short brief fits was dropped for the copy's longer one, which the launch
+// sends only where its box cannot restore the kept session.
+//
+// Mutation: drop both sessions where either cannot be carried, or hold the
+// launch to the floor of a session it dropped, and a row goes red.
+func TestEachSessionALaunchMayContinueIsHeldToItsOwnFloor(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	l := &agentLauncher{engine: &Engine{}, seat: seat, turn: &turnctx.Turn{RunID: "run-1", Seat: seat}}
+	const model = "claude-haiku-4-5"
+	member := harnessProvider(t, chainMember{key: "head", agent: executor.ClaudeCodeName, model: model})
+	// A CONTEXT ONE REQUEST UNDER THE MODEL'S WINDOW CARRIES with a short brief,
+	// and not with a long one.
+	const contextTokens = 150_000
+	short, long := "carry on", strings.Repeat("a call the copy may lack. ", 40_000)
+	window := sandbox.ClaudeCodeWindow(model)
+	carriesShort := window.Carries(contextTokens, harness.EstimateTokens(short))
+	carriesLong := window.Carries(contextTokens, harness.EstimateTokens(long))
+	if !carriesShort || carriesLong {
+		t.Fatalf("the %d-token window carries the short brief %v and the long one %v: the case is not the one "+
+			"it means", window.Tokens, carriesShort, carriesLong)
+	}
+	for name, tc := range map[string]struct {
+		kept, inPlace string
+		// keeps and copies say which sessions the launch still offers; floor is
+		// the brief of the one whose floor it is held to, "" for the static one.
+		keeps, copies bool
+		floor         string
+	}{
+		"both carried":                       {kept: short, inPlace: short, keeps: true, copies: true, floor: short},
+		"the copy's longer brief is not":     {kept: short, inPlace: long, keeps: true, floor: short},
+		"the kept one's longer brief is not": {kept: long, inPlace: short, copies: true, floor: short},
+		"neither is carried":                 {kept: long, inPlace: long},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := runner.AgentRunRequest{
+				Session: &runner.SessionContinuation{Brief: tc.kept, Replaced: tc.kept,
+					Basis: runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1",
+						Harness: executor.ClaudeCodeName, ContextTokens: contextTokens}},
+				Continue: &runner.Continuation{SessionID: "s-1", Brief: tc.inPlace, ContextTokens: contextTokens},
+			}
+			got, floor := l.continuedFloor(t.Context(), req, member, true)
+			if keeps := got.Session != nil; keeps != tc.keeps {
+				t.Errorf("the launch offers the kept session: %v, want %v", keeps, tc.keeps)
+			}
+			if copies := got.Continue != nil && got.Continue.SessionID != ""; copies != tc.copies {
+				t.Errorf("the launch offers the copy in its box: %v, want %v", copies, tc.copies)
+			}
+			want := staticFloor(nil)
+			if tc.floor != "" {
+				want = want.continuing(contextTokens, harness.EstimateTokens(tc.floor))
+			}
+			if floor != want {
+				t.Errorf("the launch is held to %+v, want %+v", floor, want)
 			}
 		})
 	}

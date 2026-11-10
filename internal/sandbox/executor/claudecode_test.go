@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // realBox is a local box on the engine host with the runner's plumbing
@@ -880,4 +881,76 @@ func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
 			}
 		})
 	}
+}
+
+// CLAUDE CODE'S FILE-HISTORY IS NAMED FILE-EDIT SNAPSHOTS, NEVER CHECKPOINTS.
+// What a session's archive never holds is said beside the pack that takes a
+// session out of its box, where "checkpoint" is the word a reader would take
+// for one of the engine's own takes of a session while it works: so every
+// passage that speaks of Claude Code's `file-history/` — the pack's own doc,
+// the sandbox's list of what an archive never holds, and the page that
+// documents the pack — names it file-edit snapshots, and none says checkpoint.
+//
+// Mutation: put "checkpoint" back in any of the three passages, or take
+// file-history out of one, and this goes red.
+func TestTheFileEditSnapshotsAreNamedSo(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	for _, rel := range []string{"internal/sandbox/executor/claudecode.go", "internal/sandbox/carry.go",
+		"docs/concepts/code-sandbox.md"} {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read := 0
+		for _, passage := range passages(string(raw), strings.HasSuffix(rel, ".go")) {
+			if !strings.Contains(passage, "file-history") {
+				continue
+			}
+			read++
+			if !strings.Contains(passage, "file-edit snapshot") {
+				t.Errorf("%s speaks of file-history/ without naming it file-edit snapshots: %s", rel, passage)
+			}
+			if strings.Contains(strings.ToLower(passage), "checkpoint") {
+				t.Errorf("%s calls something beside file-history/ a checkpoint: %s", rel, passage)
+			}
+		}
+		if read == 0 {
+			t.Errorf("%s says nothing of file-history/: the passage this holds was moved or reworded, so "+
+				"this case reads nothing", rel)
+		}
+	}
+}
+
+// passages is text's paragraphs, each one line: for Go source, its comments' —
+// each `//` line's text, a blank comment line or a line of code ending one —
+// and for a page, its runs of lines that are not blank.
+func passages(text string, goSource bool) []string {
+	var (
+		out []string
+		cur []string
+	)
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, strings.Join(cur, " "))
+			cur = nil
+		}
+	}
+	for line := range strings.Lines(text) {
+		line = strings.TrimSpace(line)
+		if goSource {
+			body, comment := strings.CutPrefix(line, "//")
+			if body = strings.TrimSpace(body); !comment || body == "" {
+				flush()
+				continue
+			}
+			line = body
+		} else if line == "" {
+			flush()
+			continue
+		}
+		cur = append(cur, line)
+	}
+	flush()
+	return out
 }

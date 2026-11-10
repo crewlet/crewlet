@@ -19,9 +19,10 @@ import (
 // that archive, written into the box before its run starts
 // ([RunRequest.Carried]) and restored there by the run's own script before its
 // harness takes the session up. What a harness's archive holds, and what it never holds
-// — a login, the harness's own settings, a checkpoint of files — is its runner's to
-// say (internal/sandbox/executor), and so is whether a box can continue one
-// at all ([CarryCheck]).
+// — a login, the harness's own settings, Claude Code's file-edit snapshots of the
+// files a run edited (`file-history/`) — is its runner's to say
+// (internal/sandbox/executor), and so is whether a box can continue one at all
+// ([CarryCheck]).
 
 // SessionArchive describes a harness's session packed into one archive: by
 // the box its run ended in, or as it is carried into another.
@@ -161,7 +162,7 @@ type SessionRestorer interface {
 // the end a stop, a loss or its turn's cap asked of it — or one packed now, on
 // demand, for a job that never got to: one killed before its script could
 // pack, one lost with its engine whose box is still there, one a box would not
-// end.
+// end; or a save a taker packed while the job still worked ([SessionTake.Save]).
 //
 // THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
 // holds no session to take — a harness that wrote none, a run whose record
@@ -189,6 +190,18 @@ type SessionTake struct {
 	// pack records the archive's digest in the box as the script's does, so
 	// the box never takes its own archive for another box's.
 	Pack bool
+
+	// Save names the TAKER whose save is taken — the holder of the taker
+	// lease the save is taken under, the taking process's incarnation
+	// (`<node>:<uuid>`, [SessionCapture.Taker]) — in place of the job's own
+	// session: the archive internal/sandbox/executor's Runner.PackSave last
+	// packed of the box's session for that taker, while its job still
+	// worked, at that taker's own path. Never the job's capture, which every
+	// read of a job that is over takes as its final archive, and never packed
+	// by the take: the save is packed first, so the scrub's values (Scrub)
+	// are read after the pack, and hold every value the box was handed by
+	// then. With Pack set it is refused. "" takes the job's own session.
+	Save string
 
 	// Scrub is every secret the engine itself put in the box, by value — its
 	// login, its environment's credentials ([HandedSecrets]) — which is taken
@@ -242,7 +255,7 @@ type TakenSession struct {
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box
-// ([SessionTake.Pack]).
+// ([SessionTake.Pack]), a save's among them.
 //
 // TWO MINUTES: a minute for what a box's harness takes to come up on a
 // contended box (an OpenCode export runs against a private server it starts,
@@ -252,4 +265,20 @@ type TakenSession struct {
 // mebibytes a second a contended box still packs at. A pack that has not
 // finished by then is not going to, and the capture is refused rather than
 // left holding the box.
+//
+// A CLAUDE CODE PACK BESIDE A WORKING HARNESS starts no server, and its first
+// minute is what its checks add (internal/sandbox/executor's claudeHeldTar):
+// the wait for the box's clock, five seconds at most; walks of the session's
+// files with find, milliseconds (7 to 22 ms measured for the whole manifest),
+// and one more before the marker, which sets a file stamped in the box's
+// future back to the box's present; and its archive decompressed once to list
+// it, once more for the session's own transcript, which it reads back on every
+// pack, and once more for each subagent's thread written as it was packed,
+// each such pass reading the whole archive. gunzip reads several times faster
+// than gzip compresses — a judgment, decompression's pace unmeasured — so at
+// the tens of mebibytes a second the pack's own minute is sized by, a pass
+// over a session at its plaintext bound takes a few seconds, and that first
+// minute covers some ten read-backs — the main transcript's, and those of its
+// subagents' threads growing as the session is packed. A pack past it is
+// refused as any other is, the session's last capture standing.
 const SessionPackWait = 2 * time.Minute

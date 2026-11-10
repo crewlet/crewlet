@@ -69,10 +69,10 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 	others := []string{c.Configs[0].ServerName, c.Configs[1].ServerName}
 	deadline := time.Now().Add(30 * time.Second)
 	for !routesTo(c.Servers[member].RoutePeers(), others) {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the restarted member routes to %v, want %v", c.Servers[member].RoutePeers(), others)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	group := awaitGroup(t, c.Servers[member], func(g js.MetaGroup) bool {
 		return g.Leader != "" && len(g.Peers) == 3
@@ -140,7 +140,7 @@ func landAppend(ctx context.Context, c *Cluster, log *js.DomainLog, stream, subj
 			return nil
 		case !jsprovision.Unanswered(ctx, err) && !errors.Is(err, jetstream.ErrNoStreamResponse):
 			return err
-		case time.Now().After(deadline):
+		case time.Until(deadline) <= 0: //fixedwait:measure a poll's own deadline
 			return fmt.Errorf("still unanswered after %s, the longest silence the server keeps, with %v "+
 				"leading the stream: %w", jsprovision.LookupBudget, c.streamLeaders(stream), err)
 		}

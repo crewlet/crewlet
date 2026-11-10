@@ -588,14 +588,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // continuedFloor is req as the seat's budget lets it be launched on member — the
 // member the launch picked, nil where it could pick none — and the floor it is
 // held to ([launchFloor]): the larger of the static floor and, for each session
-// the launch may continue, that session's context with the brief that continues
-// it — the turn's kept capture, in the longer of its two briefs, since which
-// box the launch gets is the launch's to learn; the session its conversation's
-// last turn left, with the brief that continues it in a box of its own, the one
-// box it is continued in; and the job before's own copy in its box with the
-// brief that carries it on, where inBox says the launch can continue in that
-// box at all ([agentLauncher.continuesInItsBox]). A context no capture measured
-// is unknown, and holds the launch to the static floor.
+// the launch may still continue, that session's context with the brief that
+// continues it — the turn's kept capture, in the longer of its two briefs, since
+// which box the launch gets is the launch's to learn; the session its
+// conversation's last turn left, with the brief that continues it in a box of
+// its own, the one box it is continued in; and the job before's own copy in its
+// box with the brief that carries it on, where inBox says the launch can
+// continue in that box at all ([agentLauncher.continuesInItsBox]). A context no
+// capture measured is unknown, and holds the launch to the static floor.
 //
 // THE SESSION ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
 // ([runner.SessionBasis.Harness]): a session is continued only by its own
@@ -605,11 +605,25 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // floor of that box's session.
 //
 // A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]) is not waited
-// for: req goes without the sessions it would continue, its run starts a
-// session of its own on the static floor, which config already holds every
-// ceiling above, and the line says why. A seat with no capped window carries
-// any session. Nor is a session one request of member's model cannot carry
-// ([launchFloor.carriedBy]), under the window its run is pinned to.
+// for: req goes without the session it would continue at that floor, and the
+// line says why. A seat with no capped window carries any session. Nor is a
+// session one request of member's model cannot carry ([launchFloor.carriedBy]),
+// under the window its run is pinned to.
+//
+// EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
+// offered both the session it was asked to continue in any box and the job
+// before's own copy in its box, each with a brief of its own, and its box
+// decides which it takes up as the run starts: the first where it can, and the
+// copy only where it cannot (internal/sandbox's continueSession). So a session
+// whose own floor no window or model can carry is dropped alone, and the launch
+// still offers the other; and it is held to the larger floor of the sessions it
+// still offers, since its box may take up either. Held both to the larger of
+// the two floors and dropped together where that one failed, a kept capture
+// whose short brief fits was dropped for the copy's longer brief, which the
+// launch sends only where its box cannot restore the kept one, and its run
+// started a session of its own. Where neither is left, its run starts a session
+// of its own on the static floor, which config already holds every ceiling
+// above.
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
@@ -622,54 +636,77 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		req.Session = nil
 	}
 	static := staticFloor(l.company)
+	m := l.engine.meterFor(l.company, l.seat.Handle())
 	floor := static
+	var keptWhy, inPlaceWhy string
 	if s := req.Session; s != nil {
-		switch {
-		case s.Basis.Continues():
-			floor = floor.atLeast(static.continuing(s.Basis.ContextTokens,
-				max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))))
-		case s.Basis.ContinuesBase():
-			// THE BASE'S OWN CONTEXT, never the job before's: that one sizes
-			// the in-place floor below, and a base is continued only in a box
-			// of its own, with its one brief.
-			floor = floor.atLeast(static.continuing(s.Basis.Base.ContextTokens,
-				harness.EstimateTokens(s.Replaced)))
+		kept := keptFloor(static, s)
+		if keptWhy = uncarried(member, m, kept); keptWhy == "" {
+			floor = floor.atLeast(kept)
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
-		floor = floor.atLeast(static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief)))
-	}
-	if member != nil && member.Harness() == executor.ClaudeCodeName {
-		if why := floor.carriedBy(sandbox.ClaudeCodeWindow(member.ModelArgument())); why != "" {
-			return l.startsFresh(ctx, req, why), static
+		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
+		if inPlaceWhy = uncarried(member, m, inPlace); inPlaceWhy == "" {
+			floor = floor.atLeast(inPlace)
 		}
 	}
-	m := l.engine.meterFor(l.company, l.seat.Handle())
-	if m == nil {
-		return req, floor
+	if keptWhy != "" {
+		req.Session = nil
 	}
-	why := floor.fits(m.basis)
-	if why == "" {
-		return req, floor
-	}
-	return l.startsFresh(ctx, req, why), static
-}
-
-// startsFresh is req without the sessions it would continue, its run starting a
-// session of its own, logged with why.
-func (l *agentLauncher) startsFresh(ctx context.Context, req runner.AgentRunRequest,
-	why string) runner.AgentRunRequest {
-
-	log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-		"turn_id", l.turn.RunID, "detail", why,
-		"outcome", "the run starts a session of its own, on the static floor")
-	req.Session = nil
-	if c := req.Continue; c != nil {
-		fresh := *c
+	if inPlaceWhy != "" {
+		fresh := *req.Continue
 		fresh.SessionID = ""
 		req.Continue = &fresh
 	}
-	return req
+	// SAID ONCE BOTH ARE DECIDED, so the line names what the launch still
+	// offers its run rather than what it offered before the other was judged.
+	outcome := "the run starts a session of its own, on the static floor"
+	if req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "" && inBox) {
+		outcome = "the launch offers its run the other session it may continue, which its box takes " +
+			"up where it can; otherwise the run starts a session of its own"
+	}
+	for _, why := range []string{keptWhy, inPlaceWhy} {
+		if why != "" {
+			log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", outcome)
+		}
+	}
+	return req, floor
+}
+
+// keptFloor is the floor of a launch that continues s, the session it was asked
+// to continue in any box ([runner.AgentRunRequest.Session]): the turn's kept
+// capture, in the longer of its two briefs, or the session its conversation's
+// last turn left, in its one; static where s names neither.
+func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
+	switch {
+	case s.Basis.Continues():
+		return static.continuing(s.Basis.ContextTokens,
+			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced)))
+	case s.Basis.ContinuesBase():
+		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
+		// in-place floor, and a base is continued only in a box of its own,
+		// with its one brief.
+		return static.continuing(s.Basis.Base.ContextTokens, harness.EstimateTokens(s.Replaced))
+	}
+	return static
+}
+
+// uncarried is why no launch on member can carry f, "" where one can: one
+// request of a Claude Code member's model, under the window its run is pinned
+// to ([launchFloor.carriedBy]), and a window of the seat's budget as it turns
+// over ([launchFloor.fits]), where m meters the seat at all.
+func uncarried(member *harness.Provider, m *meter, f launchFloor) string {
+	if member != nil && member.Harness() == executor.ClaudeCodeName {
+		if why := f.carriedBy(sandbox.ClaudeCodeWindow(member.ModelArgument())); why != "" {
+			return why
+		}
+	}
+	if m == nil {
+		return ""
+	}
+	return f.fits(m.basis)
 }
 
 // continuesInItsBox reports whether a launch on agent, its run in cell, could

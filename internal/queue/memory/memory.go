@@ -199,15 +199,25 @@ type Broker struct {
 
 	// down is set by [Broker.Fail] and never cleared.
 	down bool
+
+	// busy counts what on this broker can still hand a subscription's
+	// handler a delivery: a drain running, and a linger window open. idle
+	// is closed exactly while busy is zero, and replaced by an open one
+	// when it leaves zero. See [Broker.Idle].
+	busy int
+	idle chan struct{}
 }
 
 // NewBroker returns an empty broker with no clients.
 func NewBroker() *Broker {
+	idle := make(chan struct{})
+	close(idle)
 	return &Broker{
 		subs:        map[subKey]*subscription{},
 		deadLetters: map[string][]letter{},
 		now:         func() time.Time { return time.Now().UTC() },
 		maxHistory:  defaultMaxHistory,
+		idle:        idle,
 	}
 }
 
@@ -405,6 +415,19 @@ type Queue struct {
 	// fixed at construction and read without the lock for that reason.
 	contract queue.Options
 
+	// clock is what this client's linger windows are timed on
+	// ([lingerClock]): nil is the wall clock, resolved by
+	// [Queue.windowClock] alone.
+	//
+	// It exists for the conformance suite, as [Queue.Quiescing] and
+	// [Queue.Lingering] are reported for it: its LingerClock capability
+	// builds a client on a clock the case moves, so a case ends a window
+	// after a verb rather than racing one. No option a caller outside this
+	// package can name sets it: only this package's own tests do, at
+	// construction (export_test.go's WithLingerClock). Never a peer's:
+	// [Queue.Client] mints another node, whose clock is its own.
+	clock lingerClock
+
 	// Everything below is guarded by broker.mu. Node state, not broker
 	// state: every gate here describes THIS process's consumer, and a
 	// subscription-level answer would let one node's pause hold, or one
@@ -550,7 +573,7 @@ func (q *Queue) dropMembersLocked(sub *subscription) int {
 	}
 	for _, m := range mine {
 		m.detached = true
-		m.closeWindowLocked()
+		q.broker.closeWindowLocked(m)
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })
 	if len(sub.members) == 0 {
@@ -1379,6 +1402,113 @@ func (q *Queue) Quiescing(topic, group string) bool {
 	defer q.broker.mu.Unlock()
 	_, held := q.quiescing[subKey{topic, group}]
 	return held
+}
+
+// Lingering reports whether THIS client holds a batch for a subscription in an
+// open linger window: what is published now joins that batch only because the
+// window is open.
+//
+// Read off the window itself, the state that decides the linger, and never a
+// copy of it: a window of nothing opens none, because it dispatches inline.
+// Reported so the conformance suite can see it — a case asking whether a window
+// coalesces publishes into one this reports open.
+func (q *Queue) Lingering(topic, group string) bool {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(sub.membersOf(q), func(m *consumer) bool { return m.window != nil })
+}
+
+// InWindow reports how many events THIS client holds for a subscription in an
+// open linger window — the batch the window hands over when it ends — and zero
+// while no window of it is open.
+//
+// Read off the mailbox under the broker's lock, because a window here keeps no
+// batch of its own: what its flush takes is the head of the mailbox, up to the
+// consumer's cap. Reported so the conformance suite can see it, beside
+// [Queue.Lingering]: a case asking whether a window coalesces ends the window
+// on a clock it moves once the window holds the event it published into it.
+func (q *Queue) InWindow(topic, group string) int {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return 0
+	}
+	for _, m := range sub.membersOf(q) {
+		if m.window != nil {
+			return min(len(sub.mail), m.options.EffectiveMaxBatch())
+		}
+	}
+	return 0
+}
+
+// Idle returns a channel that is closed while nothing on this broker can hand
+// a subscription's handler a delivery: no drain is running and no linger
+// window is open, on any client of it.
+//
+// Reported so the conformance suite can see it. A case asserting that nothing
+// more was delivered reads its journal once the backend has nothing left that
+// could deliver, rather than after a window of elapsed time. Dispatch here is
+// inline, so a handler runs only inside a drain, and a drain starts only from a
+// verb or from a linger window's flush: once the verbs have returned, the
+// windows are what is left, and a window stays counted until it is closed
+// undelivered or the drain its flush starts has returned. A broker-wide answer,
+// because a drain one client's verb starts runs every member's handler.
+//
+// THE CHANNEL OF THE MOMENT IT IS ASKED: one returned while the broker is busy
+// is closed when it next goes idle, and a drain started afterwards is waited
+// for by asking again.
+func (b *Broker) Idle() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.idle
+}
+
+// busyLocked counts one more thing that can hand a handler a delivery — a
+// drain starting, or a linger window opening. See [Broker.Idle].
+func (b *Broker) busyLocked() {
+	if b.busy == 0 {
+		b.idle = make(chan struct{})
+	}
+	b.busy++
+}
+
+// restLocked counts one of them done, and wakes every [Broker.Idle] waiter
+// when it was the last. A rest with nothing busy cannot take the count
+// negative: it would leave a broker that never reads as idle again.
+func (b *Broker) restLocked() {
+	if b.busy == 0 {
+		return
+	}
+	b.busy--
+	if b.busy == 0 {
+		close(b.idle)
+	}
+}
+
+// StreamSubscriptions reports how many stream subscriptions THIS client holds
+// ([Queue.SubscribeStream]): registered, and neither unsubscribed nor ended by
+// a Stop.
+//
+// The twin's answer to the number the JetStream backend reports under the same
+// name, and reported so the conformance suite can see it: a case asserting that
+// an unsubscribed stream receives nothing reads it after the subscription is
+// gone. Here that is the moment its Unsubscribe returns, because publishing
+// reads the registrations under the same lock that removes one.
+func (q *Queue) StreamSubscriptions() int {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	n := 0
+	for _, s := range q.broker.streams {
+		if s.owner == q {
+			n++
+		}
+	}
+	return n
 }
 
 // History reports every event published through this broker, bounded by

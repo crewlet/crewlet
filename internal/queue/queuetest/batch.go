@@ -78,28 +78,56 @@ func (s *suite) runBatch(t *testing.T) {
 		// batch its first event opened, so it costs one turn rather than
 		// one per event.
 		//
-		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately
-		// and by a margin. Published back to back, a pull backend's drain
-		// collects both in the one short tail fetch it runs at ANY window,
-		// zero included, so a backend that ignored the linger passed this
-		// case. The gap is quietFor because what it has to outlast is the
-		// collection a zero window still does, which is the question a
-		// negative assertion's window answers.
+		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately:
+		// once the backend reports the first event's window past what a
+		// window of nothing collects (Capabilities.Lingering). Published
+		// back to back, a pull backend's drain collects both in the one
+		// short tail fetch it runs at ANY window, zero included, so a
+		// backend that ignored the linger passed this case. A fixed gap
+		// stood here, and a runner that scheduled the drain later than the
+		// gap had it fetch both events at once: the case passed whether the
+		// window did anything or not.
 		//
-		// AND THE WINDOW IS racingWindow, because that arrival is SETUP
-		// which has to land while the window is still open — the rule
-		// racingWindow states. At lingerFor the case was already a race
-		// with nothing but the second publish's round trip in it, and a
-		// loaded runner's round trip outlasts fifty milliseconds (see
-		// max_batch_chunks_oversized_buffers, which lost the same race).
-		q := s.start(ctx, t)
+		// AND THE WINDOW ENDS ON THE CASE'S CLOCK (Capabilities.LingerClock),
+		// because that arrival is SETUP which has to land while the window
+		// is still open. On the wall clock it was a race: at lingerFor with
+		// nothing but the second publish's round trip in it, and a loaded
+		// runner's round trip outlasts fifty milliseconds; at a window of a
+		// second it was still one, and measured with each publish 1.2 s late
+		// the window ended first, split the batch, and failed a healthy
+		// build.
+		//
+		// THE ORDER: the first event opens the window (Lingering), the second
+		// is published, the window holds it (Capabilities.InWindow), and only
+		// then does the clock move past the window's end.
+		//
+		// Mutation: dispatch a backend's first event without its window
+		// (a linger of nothing), or end the window at its first fetch, and
+		// the window is never reported, so the case waits out its bound; a
+		// backend that never counts what its window holds fails the wait
+		// for the second event.
+		lingering := s.needLingering(t)
+		inWindow := s.needInWindow(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(racingWindow.Seconds(), 20))
+			queue.NewBatchOptions(clockedWindow.Seconds(), 20))
 
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
-		time.Sleep(quietFor)
+		// LIVENESS: a backend that ignores the linger never reports a
+		// window, so settleFor only ends that case's wait.
+		awaitState(t, "the first event's window to outlast what no window collects", func() bool {
+			return lingering(q, "t", "g")
+		})
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
+		// LIVENESS, as above: a window that never holds the second event
+		// fails here.
+		awaitState(t, "the window to hold the second event", func() bool {
+			return inWindow(q, "t", "g") == 2
+		})
+		clock.Advance(clockedWindow)
 
 		batches.await(t, "one coalesced batch", func(got [][]string) bool {
 			return len(got) == 1 && equalStrings(got[0], []string{"a", "b"})
@@ -168,7 +196,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// case, which is where the two numbers a handler is told stop
 		// being the same number.
 		newQueueWithAttempts := s.needAttempts(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		var attempts int
@@ -247,7 +275,7 @@ func (s *suite) runBatch(t *testing.T) {
 		newQueueWithAttempts := s.needAttempts(t)
 		quiescing := s.needQuiescing(t)
 		const attempts = 6
-		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
 		const topic, group, conv = "t.mixed", "g", "c1"
 		older := newConvEvent("older", conv)
@@ -361,9 +389,22 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// A handler failure on one conversation must not replay or block
 		// the other conversation from the same flush.
+		//
+		// QUEUED BEFORE THE ATTACHMENT, so the two conversations ARE one
+		// flush. Published to an attached consumer, the second had to land
+		// inside the first's window, and a runner that published it later
+		// handed them over in two drains, where the case passed without a
+		// flush to share: measured with every publish 1.2 s late, a backend
+		// whose failed partition failed the rest of its drain — c2's event
+		// handled, and handed back all the same — passed. See queueBacklog.
+		//
+		// Mutation: let a failed partition fail the rest of its drain —
+		// the other conversation handled, and handed back with the failure
+		// all the same — and c2 runs again with every redelivery of c1.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		queueBacklog(ctx, t, q, "t", "g", newConvEvent("a", "c1"), newConvEvent("b", "c2"))
 
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
@@ -378,9 +419,6 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
-		publish(ctx, t, q, "t", newConvEvent("b", "c2"))
-
 		attempts.await(t, "c1 to exhaust its budget while c2 runs once", func(seen []string) bool {
 			var c1, c2 int
 			for _, conv := range seen {
@@ -393,7 +431,7 @@ func (s *suite) runBatch(t *testing.T) {
 			}
 			return c1 == 3 && c2 == 1
 		})
-		attempts.staysAt(t, 4, "a dead-lettered partition kept being redelivered")
+		attempts.staysAt(ctx, t, 4, "a dead-lettered partition kept being redelivered")
 		awaitState(t, "c1's event to reach the dead-letter subject", func() bool {
 			return len(deadLetters(q, "t", "g")) == 1
 		})
@@ -403,7 +441,18 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// Key derivation must never block delivery — a key function that
 		// blows up degrades to per-event partitions.
+		//
+		// QUEUED BEFORE THE ATTACHMENT, so both events are in ONE drain,
+		// where per-event partitions are a question: two drains of one
+		// event each give one partition apiece whatever the fallback does.
+		// Published to an attached consumer, the second had to land inside
+		// the first's window, and measured with every publish 1.2 s late, a
+		// fallback that gave every event one key passed. See queueBacklog.
+		//
+		// Mutation: fall back to one key for every event, and the drain's
+		// two events become one partition.
 		q := s.start(ctx, t)
+		queueBacklog(ctx, t, q, "t", "g", newEvent("a"), newEvent("b"))
 		batches := newBatchJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
 			func(_ context.Context, evs []*events.Event) queue.Result {
@@ -414,9 +463,6 @@ func (s *suite) runBatch(t *testing.T) {
 			queue.NewBatchOptions(lingerFor.Seconds(), 20)); err != nil {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
-
-		publish(ctx, t, q, "t", newEvent("a"))
-		publish(ctx, t, q, "t", newEvent("b"))
 
 		batches.awaitSizes(t, "each event to become its own partition", 1, 1)
 	})
@@ -434,14 +480,31 @@ func (s *suite) runBatch(t *testing.T) {
 		// during it opened the next batch's window at the old length. See
 		// queue.BatchOptions.
 		//
-		// WHY THE GAP, and why that case could not see it: published back
-		// to back, the two events land in the one tail fetch a pull drain
-		// runs at any window, zero included, so the old length collected
-		// both and this passed with the reload ignored. The gap puts the
-		// third event past what a zero window collects — the same
+		// WHY THE THIRD EVENT WAITS, and why that case could not see it:
+		// published back to back, the two events land in the one tail
+		// fetch a pull drain runs at any window, zero included, so the old
+		// length collected both and this passed with the reload ignored.
+		// The third event is published once the backend reports the
+		// second's window past what a zero window collects — the same
 		// construction as linger_coalesces_same_key_events_into_one_batch,
-		// with the window at racingWindow for the reason given there.
-		q := s.start(ctx, t)
+		// with the window ending on the case's clock for the reason given
+		// there.
+		//
+		// THE ORDER: the first event goes out with no window; the reload
+		// lands; the second event opens the reloaded window (Lingering); the
+		// third is published, the window holds both (InWindow); and only then
+		// does the clock move past the window's end. The reloaded options
+		// say one batch of the two.
+		//
+		// Mutation: read the options before the idle wait, or once at
+		// subscribe, and the second event's window is the old one, of
+		// nothing, which is never reported; a backend that never counts what
+		// its window holds fails the wait for the third event.
+		lingering := s.needLingering(t)
+		inWindow := s.needInWindow(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
 		batches := newBatchJournal()
 		opts := queue.NewBatchOptions(0, 20)
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches), opts)
@@ -449,29 +512,78 @@ func (s *suite) runBatch(t *testing.T) {
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		batches.awaitSizes(t, "the un-lingered first event", 1)
 
-		opts.Set(racingWindow.Seconds(), 20)
+		opts.Set(clockedWindow.Seconds(), 20)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
-		time.Sleep(quietFor)
+		// LIVENESS: a backend that keeps the old window, of nothing, never
+		// reports one, so settleFor only ends that case's wait.
+		awaitState(t, "the reloaded window to outlast what no window collects", func() bool {
+			return lingering(q, "t", "g")
+		})
 		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
+		// LIVENESS, as above: a window that never holds the third event
+		// fails here.
+		awaitState(t, "the reloaded window to hold the second and third events", func() bool {
+			return inWindow(q, "t", "g") == 2
+		})
+		clock.Advance(clockedWindow)
 		batches.awaitSizes(t, "the next cycle to honour the new linger", 1, 2)
 	})
 
+	// THE THREE CASES BELOW END THEIR WINDOW ON A CLOCK THEY MOVE
+	// (Capabilities.LingerClock): each needs a window open when its verb lands
+	// and ended after it, and on the wall clock nothing orders the two. They
+	// paid a window of a second (five, for the stop) for the verb to land
+	// inside, and a loaded runner still landed it late. Measured with the verb
+	// landing just past the window (1.2 s behind its opening for the pause and
+	// the hold, 5.2 s for the stop), every one of them failed a healthy build,
+	// and the pause and the stop blamed the suite's own lost race in the very
+	// words they gave a backend that flushed past the verb under the same
+	// delay. Here the window is opened, read off the backend's report that it
+	// holds the mail (Capabilities.Lingering), the verb lands, the consumer
+	// takes it in (Capabilities.Parked, or Settle behind a stop, which leaves
+	// no consumer to park), and only then is the window ended, at
+	// clockedWindow: the clock moves behind a signal, never behind elapsed
+	// time, and how late the verb lands changes nothing.
+
 	t.Run("stop_cancels_pending_lingered_flush", func(t *testing.T) {
 		t.Parallel()
+		// A stop that lands while a window holds mail ends the window
+		// undelivered, and the window's end coming afterwards delivers
+		// nothing.
+		//
+		// THE ORDER: the window opens (Lingering reports it holding the
+		// mail), the stop lands, the stopped queue settles (Settle: on
+		// JetStream its consume loop has ended), and only then does the
+		// clock move past the window's end.
+		//
+		// Mutation: a Stop that leaves the client's consumers attached —
+		// the window still open on the twin, which then never settles, a
+		// drain's batch dispatched on JetStream past every gate the stop
+		// shuts — and the batch is not retained.
 		backlog := s.needBacklog(t)
-		q := s.start(ctx, t)
+		lingering := s.needLingering(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(5.0, 20))
+			queue.NewBatchOptions(clockedWindow.Seconds(), 20))
 
-		setup := time.Now()
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		// LIVENESS: a backend that ignores the linger never reports a
+		// window, so settleFor only ends that case's wait.
+		awaitState(t, "the window to hold the published event", func() bool {
+			return lingering(q, "t", "g")
+		})
 		if err := q.Stop(ctx); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-		setupTook := time.Since(setup)
-		batches.staysAtRacing(t, 0, "a stopped queue flushed its linger window",
-			5*time.Second, setupTook)
+		if err := settleStarted(ctx, t); err != nil {
+			t.Fatalf("the stopped queue did not settle before its window's end: %v; handlers saw %v",
+				err, batches.all())
+		}
+		clock.Advance(clockedWindow)
+		batches.staysAt(ctx, t, 0, "a stopped queue flushed its linger window")
 
 		// RETAINED, not dropped: the linger buffer IS the backlog, and a
 		// subscription's mail outlives every attachment.
@@ -484,24 +596,41 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// Dropping them meant a graceful drain silently destroyed
 		// whatever was mid-window.
+		//
+		// THE ORDER: the window opens (Lingering reports it holding the
+		// mail), the pause lands, the consumer parks on it (Parked), and only
+		// then does the clock move past the window's end. So what holds the
+		// mail is the pause and never the clock: a consumer that read its
+		// gate only at the window's end would flush nothing here either, but
+		// it would be the end of the window that stopped it.
+		//
+		// Mutation: let a paused consumer dispatch — on the twin, drop the
+		// pause from the gate a window's flush reads; on JetStream, drop the
+		// gates behind the drain, after it and before each partition — and
+		// the batch is delivered. Drop JetStream's gate from the drain too,
+		// or from the drain alone, and the consumer never parks on the
+		// pause; keep the twin's window on the wall clock, whatever clock it
+		// was handed, and it never settles.
 		backlog := s.needBacklog(t)
-		q := s.start(ctx, t)
+		lingering := s.needLingering(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(racingWindow.Seconds(), 20))
+			queue.NewBatchOptions(clockedWindow.Seconds(), 20))
 
-		// The window must be OPEN when the pause lands and must EXPIRE while
-		// it is held — no ordering removes that, so this case buys slack with
-		// a longer window rather than pretending the race is gone.
-		setup := time.Now()
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		// LIVENESS, as in the stop case above.
+		awaitState(t, "the window to hold the published event", func() bool {
+			return lingering(q, "t", "g")
+		})
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
-		setupTook := time.Since(setup)
-		time.Sleep(racingWindow + quietFor)
-		batches.staysAtRacing(t, 0, "a paused queue flushed its linger window",
-			racingWindow, setupTook)
+		s.awaitParked(ctx, t, q, "t", "g")
+		clock.Advance(clockedWindow)
+		batches.staysAt(ctx, t, 0, "a paused queue flushed its linger window")
 
 		if got := labelsOf(backlog(q, "t", "g")); !equalStrings(got, []string{"a"}) {
 			t.Fatalf("backlog after a pause mid-window = %v, want [a]", got)
@@ -523,27 +652,57 @@ func (s *suite) runBatch(t *testing.T) {
 		// accumulates — which is why it survived: every other assertion
 		// about holds pauses BEFORE anything is in the window, and the
 		// single-event path answers the same condition correctly.
-		q := s.start(ctx, t)
+		//
+		// THE ORDER: the window opens (Lingering reports it holding the
+		// mail), the hold lands, the consumer parks on it (Parked), the clock
+		// moves past the window's end, and the batch stays undelivered. Then
+		// the hold lifts, the held mail opens a window again (Lingering), the
+		// clock moves past that one, and the batch arrives; then an event
+		// published after it opens one more, the clock moves past it, and
+		// that event arrives too.
+		//
+		// Mutation: let a held consumer dispatch (the twin's gate without
+		// its holds; JetStream's gates behind the drain), and the held batch
+		// is delivered; end JetStream's loop on the hold rather than going
+		// round it, or read its gate only at the window's end, and it never
+		// parks; keep either backend's window on the wall clock, whatever
+		// clock it was handed, and a window of clockedWindow never ends.
+		lingering := s.needLingering(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t.hold", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(racingWindow.Seconds(), 20))
+			queue.NewBatchOptions(clockedWindow.Seconds(), 20))
+		// LIVENESS: a backend whose window never opens fails each of these
+		// waits, at settleFor.
+		awaitWindow := func(what string) {
+			t.Helper()
+			awaitState(t, what, func() bool { return lingering(q, "t.hold", "g") })
+		}
 
 		// Open the window, then take the hold while it is open.
 		publish(ctx, t, q, "t.hold", newConvEvent("during", "c1"))
+		awaitWindow("the window to hold the published event")
 		if err := q.PauseTopic(ctx, "t.hold", "g", "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		time.Sleep(racingWindow + quietFor)
-		batches.staysAt(t, 0, "a held attachment dispatched its window")
+		s.awaitParked(ctx, t, q, "t.hold", "g")
+		clock.Advance(clockedWindow)
+		batches.staysAt(ctx, t, 0, "a held attachment dispatched its window")
 
 		if err := q.ResumeTopic(ctx, "t.hold", "g", "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
+		awaitWindow("the held event to open a window once the hold lifts")
+		clock.Advance(clockedWindow)
 		batches.awaitSizes(t, "the held batch once the hold lifts", 1)
 
 		// And the attachment is still ALIVE, not merely flushed once:
 		// something published after the resume must arrive too.
 		publish(ctx, t, q, "t.hold", newConvEvent("after", "c1"))
+		awaitWindow("an event published after the hold lifted to open a window")
+		clock.Advance(clockedWindow)
 		batches.awaitSizes(t, "an event published after the hold lifted", 1, 1)
 	})
 
@@ -782,7 +941,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the deferral did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the deferral did not stop the batch")
 
 		awaitState(t, "the whole batch to return in partition order", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.b", "grp")), []string{"a", "b", "c"})
@@ -824,7 +983,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the hold did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the hold did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.hold", "grp")), []string{"b", "c"})
 		})
@@ -887,7 +1046,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the detach did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the detach did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.detach", "grp")), []string{"b", "c"})
 		})
@@ -947,7 +1106,7 @@ func (s *suite) runBatch(t *testing.T) {
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
-		seen.staysAt(t, 1, "the drain pause did not stop the batch")
+		seen.staysAt(ctx, t, 1, "the drain pause did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.drain", "grp")), []string{"b", "c"})
 		})
@@ -1010,7 +1169,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// mischarged hand-back send a reader to opposite places.
 		newQueueWithAttempts := s.needAttempts(t)
 		const attempts = 5
-		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
 		const topic, group = "topic.charged", "grp"
 		fill := holdForOneBatch(ctx, t, q, topic, group)
@@ -1048,7 +1207,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		fill("a", "b")
 		j.awaitLabels(t, "only the first partition to be handled", "a")
-		j.staysAt(t, 1, "the hold did not stop the batch")
+		j.staysAt(ctx, t, 1, "the hold did not stop the batch")
 
 		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)

@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"regexp"
@@ -1277,6 +1278,71 @@ func TestADomainWithNoConclusionSaysSoAndCarriesNoNullTerms(t *testing.T) {
 			t.Errorf("%q is not Valid()", s)
 		}
 	}
+}
+
+// A REPORT WITH NOTHING STANDING CARRIES NO NULL: every list the wire requires
+// encodes as a list, and every optional field is absent rather than null.
+func TestAReportWithNothingStandingCarriesNoNull(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		in   statelog.ReportInputs
+	}{
+		{"a healthy fleet", statelog.ReportInputs{
+			NodeID: "node-1", At: reportAt, RegisterReadable: true,
+			Domains: []statelog.DomainInputs{healthyDomain("tracker", true)},
+			Register: []coord.NodePositions{{NodeID: "node-1", At: reportAt,
+				Domains: map[string]coord.DomainPosition{
+					"tracker": {Seq: 900, AppliedThrough: 900}}}},
+		}},
+		{"nothing read at all", statelog.ReportInputs{NodeID: "node-1", At: reportAt}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rep := statelog.NewReport(c.in)
+			if len(rep.Alarms) != 0 {
+				t.Fatalf("the case raises %v, so it is not one with nothing standing",
+					rep.Alarms)
+			}
+			body, err := json.Marshal(rep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"alarms":[]`) {
+				t.Errorf("the report encodes %s, want \"alarms\":[] in it", body)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(body, &doc); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"domains", "nodes", "snapshots", "alarms"} {
+				if _, list := doc[key].([]any); !list {
+					t.Errorf("%s encodes as %v, want a list", key, doc[key])
+				}
+			}
+			if found := nulls("report", doc); len(found) > 0 {
+				t.Errorf("the report carries null at %v: %s", found, body)
+			}
+		})
+	}
+}
+
+// nulls is the path of every null in a decoded JSON value.
+func nulls(path string, v any) []string {
+	var out []string
+	switch v := v.(type) {
+	case nil:
+		out = append(out, path)
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			out = append(out, nulls(path+"."+k, v[k])...)
+		}
+	case []any:
+		for i, e := range v {
+			out = append(out, nulls(fmt.Sprintf("%s[%d]", path, i), e)...)
+		}
+	}
+	return out
 }
 
 // A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT COMPARED.

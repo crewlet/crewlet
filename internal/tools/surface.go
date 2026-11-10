@@ -239,6 +239,15 @@ func (s *Surface) ForTurn(t *turnctx.Turn) *Surface {
 // Turn reports who this surface acts for, or nil.
 func (s *Surface) Turn() *turnctx.Turn { return s.turn }
 
+// Written is the set the surface's turn commits its writes to, nil for a
+// surface with no turn.
+func (s *Surface) Written() *turnctx.Written {
+	if s.turn == nil {
+		return nil
+	}
+	return s.turn.Written
+}
+
 // Phase names the phase, for telemetry.
 func (s *Surface) Phase() string { return s.phase }
 

@@ -1,9 +1,9 @@
 package jetstream
 
 import (
+	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -28,8 +28,22 @@ import (
 // enforces per pull, and the fetch drains whatever a pull delivered. This test
 // drives the consumer exactly as the applier does — the framework's own pull
 // constants, an acknowledgement after each batch — over a backlog larger than
-// that ceiling, and requires the replay to be CONTIGUOUS and to finish well
-// inside one ack window.
+// that ceiling, and requires the replay to be CONTIGUOUS and every record of
+// it DELIVERED ONCE.
+//
+// # Once, by the broker's count rather than the clock
+//
+// A record a pull left delivered and unconsumed comes back only when its ack
+// window has run out, and the broker counts every delivery it makes, a
+// redelivery included: a replay that waited out a window took more deliveries
+// than it has records, however it reached the end. It used to be held to half
+// a window by the test's clock, which a runner that lost fifteen seconds in
+// the replay failed.
+//
+// Mutation: hand over every delivery but acknowledge none, and the in-flight
+// ceiling holds the rest back until the window returns the first of them;
+// hand the last record of a burst back rather than over, and it is delivered
+// twice.
 func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_REPLAY_LOG", "crewlet.replay.log")
@@ -48,18 +62,19 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 		t.Fatalf("open the consumer: %v", err)
 	}
 
-	started := time.Now()
+	// LIVENESS: four ack windows. A replay that leaves nothing unconsumed
+	// ends at once, and one that waited out a window ends a window later,
+	// which the delivery count below tells apart; this only ends a replay
+	// that never ends, as the failure it is.
+	ctx, cancel := context.WithTimeout(t.Context(), 4*domainConsumerAckWait)
+	defer cancel()
 	var next uint64 = 1
 	pulls := 0
 	for next <= total {
-		if time.Since(started) > 15*time.Second {
-			t.Fatalf("the replay reached sequence %d of %d after %d pull(s) and "+
-				"15 seconds — a pull that leaves delivered records unconsumed "+
-				"stalls the applier for the whole ack window", next-1, total, pulls)
-		}
-		batch, err := cons.Fetch(t.Context(), statelog.FetchMessages, statelog.FetchBytes, statelog.FetchWait)
+		batch, err := cons.Fetch(ctx, statelog.FetchMessages, statelog.FetchBytes, statelog.FetchWait)
 		if err != nil {
-			t.Fatalf("pull %d: %v", pulls, err)
+			t.Fatalf("pull %d, at sequence %d of %d: %v — a replay still short of its "+
+				"records four ack windows in", pulls, next-1, total, err)
 		}
 		pulls++
 		for _, msg := range batch {
@@ -89,6 +104,13 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	if pulls < 2 {
 		t.Fatalf("%d records arrived in %d pull(s), so the ceiling did not bind "+
 			"and this test proved nothing about the withheld remainder", total, pulls)
+	}
+	// AND EVERY RECORD DELIVERED ONCE: none of them waited out an ack window
+	// to come back.
+	if info.Delivered.Consumer != total {
+		t.Fatalf("the replay of %d records took %d deliveries — a record left "+
+			"delivered and unconsumed came back only once its %s ack window ran out",
+			total, info.Delivered.Consumer, domainConsumerAckWait)
 	}
 }
 

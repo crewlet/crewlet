@@ -38,7 +38,13 @@ func fromIntegration(kind integration.Kind, name string, f integration.Finding) 
 			Options: []Option{}},
 	}
 	if out.Title == "" {
-		out.Title = name + ": " + strings.ReplaceAll(string(f.Kind), "_", " ") + "."
+		// The reconcile's subject names which one, so two findings of a kind
+		// on one surface (two agents' refusals, say) do not read alike.
+		out.Title = name + ": " + strings.ReplaceAll(string(f.Kind), "_", " ")
+		if f.Subject != "" {
+			out.Title += " (" + f.Subject + ")"
+		}
+		out.Title += "."
 	}
 	if actor == integration.ActorAdmin || actor == integration.ActorOperator {
 		out.Actor = ActorOwner

@@ -386,3 +386,42 @@ func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 			"no app anywhere reports %+v", bare.Findings())
 	}
 }
+
+// NO COVERAGE NOTE WHERE NOTHING ARRIVES. At an address GitHub cannot deliver
+// to, or with no address, no agent's app delivers either: the one finding is
+// the one that says so, never a second coverage finding saying some events
+// arrive.
+func TestNoCoverageNoteWhereNothingArrives(t *testing.T) {
+	t.Parallel()
+	for name, base := range map[string]string{
+		"an address GitHub cannot reach": "http://127.0.0.1:9000",
+		"no address":                     "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res, err := github.Reconcile(context.Background(), github.Options{
+				Config: &config.GitHub{
+					Enabled: true, WebhookSecret: "s",
+					Provisioning: &config.GitHubProvisioning{
+						Org: "acme", OrgWebhook: config.ContainerWebhookNever,
+					},
+				},
+				WebhookBase:    base,
+				WebhookBaseKey: "api.external_url",
+				SeatApps:       2,
+			})
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			var said []integration.Finding
+			for _, f := range res.Findings() {
+				if f.Kind == integration.FindingCoveragePartial || f.Kind == integration.FindingIngressBlocked {
+					said = append(said, f)
+				}
+			}
+			if len(said) != 1 || said[0].Subject != "api.external_url" {
+				t.Fatalf("findings = %+v, want the one finding on api.external_url", said)
+			}
+		})
+	}
+}

@@ -401,7 +401,7 @@ every other route.
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | The token-spend rollup by phase / model / provider entry / worker / seat — the live 24 hours, or any window of up to 90 company days from the replicated usage domain (see [below](#token-spend-breakdown)) |
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
-| `GET` | `/tokens/turn-outcomes` | Over the same window as `/tokens` (`days`, `since` and `until`, `previous`, `seat`), each agent's started turns by what woke them (`wake`, as the turn ledger keys it: `schedule:<name>`, `work_item:<reason>`, `chat_message:<reason>` and the like), with `turns` and `tokens` (input, output and the auxiliary calls'; the prompt cache is a share of the input, never added to it), and `nothing` and `nothing_tokens` for the turns that committed nothing |
+| `GET` | `/tokens/turn-outcomes` | Over the same window as `/tokens` (`days`, `since` and `until`, `previous`, `seat`), each agent's started turns by what woke them (`wake`, as the turn ledger keys it: `schedule:<name>`, `work_item:<reason>`, `chat_message:<reason>` and the like), with `turns` and `tokens` (input, output and the auxiliary calls'; the prompt cache is a share of the input, never added to it), and `nothing` and `nothing_tokens` for the turns that committed nothing. An executor turn's outcome and tokens are settled when its run is collected, the run's own writes and model tokens included |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + the company's recent fires and what became of each |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, the fleet's activation and each node's config record — the revision it last attempted, how that went and the revision it runs — and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `admin`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
@@ -8236,6 +8236,10 @@ is three per-node facts attributed to a fleet.
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
 ```
+
+`domains`, `nodes`, `snapshots`, `alarms` and each domain's `terms` are always
+lists: one that holds nothing is `[]`, never `null`, so a node with no alarm
+standing answers `"alarms": []`.
 
 **`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `detail` (the
 measurement, in the units of the thing measured) and `remedy`. A condition that

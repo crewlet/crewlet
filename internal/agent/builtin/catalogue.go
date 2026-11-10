@@ -207,6 +207,9 @@ func (g Gate) Valid() bool { return slices.Contains(Gates, g) }
 type Filing struct {
 	Group Group
 	Gate  Gate
+	// Vendor is the vendor permission the tool needs, the zero value for one
+	// the engine's own estates serve.
+	Vendor VendorNeed
 	// Rank orders the tools of one group: reads before writes, the
 	// everyday before the rare.
 	Rank int
@@ -219,67 +222,68 @@ type Filing struct {
 // annotations are ([annotationsFor]): a property of the NAME, which one tool
 // type serving two surfaces shares.
 var filed = []struct {
-	tool  string
-	group Group
-	gate  Gate
+	tool   string
+	group  Group
+	gate   Gate
+	vendor VendorNeed
 }{
-	{ListWorkItemsTool, GroupWork, GateWorklet},
-	{GetWorkItemTool, GroupWork, GateWorkletAsked},
-	{SearchWorkItemsTool, GroupWork, GateWorklet},
-	{worklet.GetWorkCatalogueTool, GroupWork, GateWorklet},
-	{worklet.TaskActivityTool, GroupWork, GateWorklet},
-	{worklet.MyWorkTool, GroupWork, GateWorklet},
-	{CreateWorkItemTool, GroupWork, GateWorklet},
-	{UpdateWorkItemTool, GroupWork, GateWorklet},
-	{CommentOnWorkTool, GroupWork, GateWorkletAsked},
+	{ListWorkItemsTool, GroupWork, GateWorklet, reachesNoVendor},
+	{GetWorkItemTool, GroupWork, GateWorkletAsked, reachesNoVendor},
+	{SearchWorkItemsTool, GroupWork, GateWorklet, reachesNoVendor},
+	{worklet.GetWorkCatalogueTool, GroupWork, GateWorklet, reachesNoVendor},
+	{worklet.TaskActivityTool, GroupWork, GateWorklet, reachesNoVendor},
+	{worklet.MyWorkTool, GroupWork, GateWorklet, reachesNoVendor},
+	{CreateWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
+	{UpdateWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
+	{CommentOnWorkTool, GroupWork, GateWorkletAsked, reachesNoVendor},
 	// A SEAT'S OWN QUESTION, withdrawn: its own as its sessions are.
-	{WithdrawAskTool, GroupWork, GateSelf},
-	{RequestAccessTool, GroupWork, GateSelf},
-	{MergeWorkItemTool, GroupWork, GateWorklet},
-	{worklet.MoveWorkItemTool, GroupWork, GateProjectLead},
+	{WithdrawAskTool, GroupWork, GateSelf, reachesNoVendor},
+	{RequestAccessTool, GroupWork, GateSelf, reachesNoVendor},
+	{MergeWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
+	{worklet.MoveWorkItemTool, GroupWork, GateProjectLead, reachesNoVendor},
 
-	{worklet.ListProjectsTool, GroupProjects, GateWorklet},
-	{worklet.DescribeProjectTool, GroupProjects, GateWorklet},
-	{worklet.WriteProjectTool, GroupProjects, GateWorklet},
-	{worklet.ListProjectFilesTool, GroupProjects, GateWorklet},
-	{worklet.ReadProjectFileTool, GroupProjects, GateWorklet},
-	{worklet.WriteProjectFileTool, GroupProjects, GateWorklet},
-	{worklet.RemoveProjectFileTool, GroupProjects, GateProjectLead},
+	{worklet.ListProjectsTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.DescribeProjectTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.WriteProjectTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.ListProjectFilesTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.ReadProjectFileTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.WriteProjectFileTool, GroupProjects, GateWorklet, reachesNoVendor},
+	{worklet.RemoveProjectFileTool, GroupProjects, GateProjectLead, reachesNoVendor},
 
-	{SearchKnowledgeTool, GroupKnowledge, GateDoclet},
-	{ListPagesTool, GroupKnowledge, GateDoclet},
-	{GetPageTool, GroupKnowledge, GateDoclet},
-	{WritePageTool, GroupKnowledge, GateDoclet},
-	{SavePageTool, GroupKnowledge, GateDoclet},
-	{CommentOnPageTool, GroupKnowledge, GateDoclet},
+	{SearchKnowledgeTool, GroupKnowledge, GateDoclet, searchesConfluence},
+	{ListPagesTool, GroupKnowledge, GateDoclet, reachesNoVendor},
+	{GetPageTool, GroupKnowledge, GateDoclet, reachesNoVendor},
+	{WritePageTool, GroupKnowledge, GateDoclet, reachesNoVendor},
+	{SavePageTool, GroupKnowledge, GateDoclet, reachesNoVendor},
+	{CommentOnPageTool, GroupKnowledge, GateDoclet, reachesNoVendor},
 
-	{ListChannelsTool, GroupChat, GateChatlet},
-	{ReadChannelTool, GroupChat, GateChatlet},
-	{SearchMessagesTool, GroupChat, GateChatlet},
-	{PostMessageTool, GroupChat, GateChatlet},
-	{ReplyInThreadTool, GroupChat, GateChatlet},
-	{SendDMTool, GroupChat, GateChatlet},
-	{ReactToMessageTool, GroupChat, GateChatlet},
-	{JoinChannelTool, GroupChat, GateChatlet},
-	{LeaveChannelTool, GroupChat, GateChatlet},
+	{ListChannelsTool, GroupChat, GateChatlet, reachesNoVendor},
+	{ReadChannelTool, GroupChat, GateChatlet, reachesNoVendor},
+	{SearchMessagesTool, GroupChat, GateChatlet, reachesNoVendor},
+	{PostMessageTool, GroupChat, GateChatlet, reachesNoVendor},
+	{ReplyInThreadTool, GroupChat, GateChatlet, reachesNoVendor},
+	{SendDMTool, GroupChat, GateChatlet, reachesNoVendor},
+	{ReactToMessageTool, GroupChat, GateChatlet, reachesNoVendor},
+	{JoinChannelTool, GroupChat, GateChatlet, reachesNoVendor},
+	{LeaveChannelTool, GroupChat, GateChatlet, reachesNoVendor},
 
-	{ListArtifactsTool, GroupArtifacts, GateEverybody},
-	{GetArtifactTool, GroupArtifacts, GateArtifactViewer},
-	{ArtifactFormatTool, GroupArtifacts, GateEverybody},
-	{CompanyBrandTool, GroupArtifacts, GateEverybody},
-	{DashboardSourcesTool, GroupArtifacts, GateEverybody},
-	{ReadArtifactDataTool, GroupArtifacts, GateArtifactViewer},
-	{QueryArtifactDataTool, GroupArtifacts, GateArtifactViewer},
-	{CreateArtifactTool, GroupArtifacts, GateArtifacts},
-	{PublishArtifactTool, GroupArtifacts, GateArtifactEditor},
-	{UpdateArtifactTool, GroupArtifacts, GateArtifactEditor},
-	{ShareArtifactTool, GroupArtifacts, GateArtifactOwner},
-	{UnshareArtifactTool, GroupArtifacts, GateArtifactOwner},
-	{UploadArtifactAssetTool, GroupArtifacts, GateArtifactEditor},
-	{CreateArtifactFolderTool, GroupArtifacts, GateArtifacts},
-	{MoveArtifactTool, GroupArtifacts, GateArtifactEditor},
-	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer},
-	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor},
+	{ListArtifactsTool, GroupArtifacts, GateEverybody, reachesNoVendor},
+	{GetArtifactTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{ArtifactFormatTool, GroupArtifacts, GateEverybody, reachesNoVendor},
+	{CompanyBrandTool, GroupArtifacts, GateEverybody, reachesNoVendor},
+	{DashboardSourcesTool, GroupArtifacts, GateEverybody, reachesNoVendor},
+	{ReadArtifactDataTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{QueryArtifactDataTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{CreateArtifactTool, GroupArtifacts, GateArtifacts, reachesNoVendor},
+	{PublishArtifactTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
+	{UpdateArtifactTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
+	{ShareArtifactTool, GroupArtifacts, GateArtifactOwner, reachesNoVendor},
+	{UnshareArtifactTool, GroupArtifacts, GateArtifactOwner, reachesNoVendor},
+	{UploadArtifactAssetTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
+	{CreateArtifactFolderTool, GroupArtifacts, GateArtifacts, reachesNoVendor},
+	{MoveArtifactTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
+	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
 
 	// GITLET'S TOOLS TAKE THE APP ON THE TABLE (ADR-0110), which every
 	// seat holds as it holds every app, and which a turn somebody woke holds
@@ -291,67 +295,67 @@ var filed = []struct {
 	// conversation, and its checks. Not the three a person alone makes
 	// (code_report_check, code_purge_unreachable, code_import_repo), whose
 	// rows bar every agent, so no seat is offered them.
-	{CodeListReposTool, GroupCode, GateGitlet},
-	{CodeGetRepoTool, GroupCode, GateGitlet},
-	{CodeResolveTool, GroupCode, GateGitlet},
-	{CodeReadTool, GroupCode, GateGitlet},
-	{CodeSearchTool, GroupCode, GateGitlet},
-	{CodeDiffTool, GroupCode, GateGitlet},
-	{CodeCompareTool, GroupCode, GateGitlet},
-	{CodeLandedInTool, GroupCode, GateGitlet},
-	{CodeLogTool, GroupCode, GateGitlet},
-	{CodeBlameTool, GroupCode, GateGitlet},
-	{CodeListChangesTool, GroupCode, GateGitlet},
-	{CodeGetChangeTool, GroupCode, GateGitlet},
-	{CodeGetCheckFailuresTool, GroupCode, GateGitlet},
-	{CodeCommitFilesTool, GroupCode, GateGitlet},
-	{CodeRevertTool, GroupCode, GateGitlet},
-	{CodeCherryPickTool, GroupCode, GateGitlet},
-	{CodeCreateBranchTool, GroupCode, GateGitlet},
-	{CodeDeleteBranchTool, GroupCode, GateGitlet},
-	{CodeCreateRepoTool, GroupCode, GateGitlet},
-	{CodeUpdateRepoTool, GroupCode, GateGitlet},
-	{CodeDeleteRepoTool, GroupCode, GateGitlet},
-	{CodeRestoreRepoTool, GroupCode, GateGitlet},
-	{CodeProtectBranchTool, GroupCode, GateGitlet},
-	{CodeOpenChangeTool, GroupCode, GateGitlet},
-	{CodeUpdateChangeTool, GroupCode, GateGitlet},
-	{CodeCloseChangeTool, GroupCode, GateGitlet},
-	{CodeRequestReviewTool, GroupCode, GateGitlet},
-	{CodeReviewChangeTool, GroupCode, GateGitlet},
-	{CodeCommentOnChangeTool, GroupCode, GateGitlet},
-	{CodeResolveFindingTool, GroupCode, GateGitlet},
-	{CodeApplySuggestionsTool, GroupCode, GateGitlet},
-	{CodeRebaseChangeTool, GroupCode, GateGitlet},
-	{CodeMergeChangeTool, GroupCode, GateGitlet},
-	{CodeDequeueChangeTool, GroupCode, GateGitlet},
-	{CodeRevertChangeTool, GroupCode, GateGitlet},
-	{CodeRerunChecksTool, GroupCode, GateGitlet},
+	{CodeListReposTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeGetRepoTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeResolveTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeReadTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeSearchTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDiffTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCompareTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeLandedInTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeLogTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeBlameTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeListChangesTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeGetChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeGetCheckFailuresTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCommitFilesTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRevertTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCherryPickTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCreateBranchTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDeleteBranchTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCreateRepoTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeUpdateRepoTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDeleteRepoTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRestoreRepoTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeProtectBranchTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeOpenChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeUpdateChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCloseChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRequestReviewTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeReviewChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCommentOnChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeResolveFindingTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeApplySuggestionsTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRebaseChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeMergeChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDequeueChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRevertChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeRerunChecksTool, GroupCode, GateGitlet, reachesNoVendor},
 
-	{FleetHealthTool, GroupHealth, GateHealthTools},
-	{CodeStatusTool, GroupHealth, GateHealthTools},
+	{FleetHealthTool, GroupHealth, GateHealthTools, reachesNoVendor},
+	{CodeStatusTool, GroupHealth, GateHealthTools, reachesNoVendor},
 
-	{SSHReadTool, GroupServers, GateSSHRead},
-	{SSHOperateTool, GroupServers, GateSSHOperate},
+	{SSHReadTool, GroupServers, GateSSHRead, reachesNoVendor},
+	{SSHOperateTool, GroupServers, GateSSHOperate, reachesNoVendor},
 
-	{LookupColleagueTool, GroupColleagues, GateEverybody},
-	{A2AAskTool, GroupColleagues, GateEverybody},
+	{LookupColleagueTool, GroupColleagues, GateEverybody, reachesNoVendor},
+	{A2AAskTool, GroupColleagues, GateEverybody, reachesNoVendor},
 
-	{RefreshMemoryTool, GroupMemory, GateSelf},
-	{QueryEpisodesTool, GroupMemory, GateSelf},
-	{ListSessionsTool, GroupMemory, GateSelf},
-	{ReadSessionTool, GroupMemory, GateSelf},
-	{ReflectAndPersistTool, GroupMemory, GateSelf},
-	{UseSkillTool, GroupMemory, GateSelf},
-	{RefineSkillTool, GroupMemory, GateSelf},
-	{LoadToolSkillTool, GroupMemory, GateSelf},
-	{MarkOnboardedTool, GroupMemory, GateSelf},
+	{RefreshMemoryTool, GroupMemory, GateSelf, reachesNoVendor},
+	{QueryEpisodesTool, GroupMemory, GateSelf, reachesNoVendor},
+	{ListSessionsTool, GroupMemory, GateSelf, reachesNoVendor},
+	{ReadSessionTool, GroupMemory, GateSelf, reachesNoVendor},
+	{ReflectAndPersistTool, GroupMemory, GateSelf, reachesNoVendor},
+	{UseSkillTool, GroupMemory, GateSelf, reachesNoVendor},
+	{RefineSkillTool, GroupMemory, GateSelf, reachesNoVendor},
+	{LoadToolSkillTool, GroupMemory, GateSelf, reachesNoVendor},
+	{MarkOnboardedTool, GroupMemory, GateSelf, reachesNoVendor},
 
 	// NO AUTHORITY ROW DECIDES THESE TWO (internal/toolname says why):
 	// the runner hands them to every phase that discovers, and nothing is
 	// asked of the caller.
-	{toolname.ListMCPServerTools, GroupDiscovery, GateEverybody},
-	{toolname.Activate, GroupDiscovery, GateEverybody},
+	{toolname.ListMCPServerTools, GroupDiscovery, GateEverybody, reachesNoVendor},
+	{toolname.Activate, GroupDiscovery, GateEverybody, reachesNoVendor},
 }
 
 // filings indexes [filed] by tool, once.
@@ -359,7 +363,7 @@ var filings = sync.OnceValue(func() map[string]Filing {
 	out := make(map[string]Filing, len(filed))
 	ranks := map[Group]int{}
 	for _, f := range filed {
-		out[f.tool] = Filing{Group: f.group, Gate: f.gate, Rank: ranks[f.group]}
+		out[f.tool] = Filing{Group: f.group, Gate: f.gate, Rank: ranks[f.group], Vendor: f.vendor}
 		ranks[f.group]++
 	}
 	return out

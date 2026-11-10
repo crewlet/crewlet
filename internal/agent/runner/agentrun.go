@@ -214,8 +214,11 @@ type AgentRunRequest struct {
 // [AgentRunRequest.Continue].
 type Continuation struct {
 	// SessionID is the asking run's harness session; Brief its next prompt —
-	// the answer, and the notes [AgentRunRequest.Notes] carries: only those,
-	// because the session already holds every note it read before it asked.
+	// what carries it on; where the job's harness is not known to have ended
+	// its own run, that the session was cut off or may have been, every call
+	// of the round and every note the turn has read, any of which such a copy
+	// may lack ([Runner.inPlaceAfter]); and the notes [AgentRunRequest.Notes]
+	// carries, which no copy has read.
 	SessionID string
 	Brief     string
 
@@ -285,13 +288,17 @@ type SessionBasis struct {
 	// placed by, its own or, where its harness may not have written every call
 	// it made, an earlier capture's (sandbox.SessionCapture.Through), every
 	// call the log took after it ([BridgedCall.Appended] past it) being one the
-	// session may not have been answered — and the last note read. Zero holds
-	// none of the round's calls.
+	// session may not have been answered — and the last note read the run's
+	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
+	// its harness ended its own run: a session cut off is told every note the
+	// turn has read ([Runner.keptSession]). Zero holds none of the round's
+	// calls.
 	Through    int
 	NoteCursor int
 
 	// Interrupted says the session was captured from a harness that was cut
-	// off, so its transcript may end mid-call.
+	// off, so its transcript may end mid-call, and may lack the brief its job
+	// was handed and the notes its job read.
 	Interrupted bool
 
 	// Home is where the session was last worked: absolute paths in its
@@ -527,7 +534,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
-	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom)
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom,
+		decided.skills())
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
@@ -611,8 +619,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
 	// a fresh run's after every note the turn read, as any brief does; the
-	// asking run's own session after the answer alone, since that session
-	// already holds every note it read.
+	// asking run's own session after the answer — and, where its harness is
+	// not known to have ended its own run, after every note the turn has
+	// read, which such a copy may lack ([Runner.inPlaceAfter]): a copy whose
+	// harness ended its own run holds every note it read, and its brief's.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -638,6 +648,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
 	}
+	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
+	// that carries the round on in the job's box rather than from its kept
+	// capture, built here for the same reason ([Runner.inPlaceAfter]).
+	inPlaceAfter := r.inPlaceAfter(ctx, carry, round, built)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
 	// after the session's save, each past its budget, are rewritten by the
@@ -686,6 +700,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the message that woke the turn is ([Asked.Continuation]).
 	fence := r.cfg.Turn.Context.FenceBoundary()
 	continued := carry.continuation(fence)
+	for _, part := range inPlaceAfter {
+		continued += "\n\n" + part
+	}
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
@@ -698,7 +715,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// to its question and what the call the person approved returned, now
 	// that it is made.
 	inPlace := carry.session()
-	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls}
+	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls,
+		endedOwnRun: r.cfg.Resume.HarnessEnd.EndedOwnRun()}
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
@@ -767,7 +785,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		launchedAt = began
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
-		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed, launched.BridgeFrom)
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed, launched.BridgeFrom,
+		decided.skills())
 	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
@@ -777,9 +796,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}, describe(surface), nil
 }
 
-// recordAgentSuspension captures what the run's collection needs.
+// recordAgentSuspension captures what the run's collection needs: armed is the
+// skills the launch armed the run's guard with as it decided
+// ([launchDecided.skills]).
 func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
-	began time.Time, launched time.Duration, handed HandedSkills, bridgeFrom int,
+	began time.Time, launched time.Duration, handed HandedSkills, bridgeFrom int, armed []string,
 ) {
 	state := execstate.State{
 		Version:     execstate.Version,
@@ -787,8 +808,14 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 		// THE SKILLS THE SESSION THE LAUNCH DECIDED ON HOLDS, as its guard
 		// was armed ([Runner.sessionDecided]), and the call the job's own
 		// calls are numbered after: every rebuild of the run's guard replays
-		// this job's loads on top of these, and no other job's.
-		LoadedSkills: r.loadedSkills(),
+		// this job's loads on top of these, and no other job's. AS ARMED,
+		// never read off the guard once the launch returns: the run starts
+		// inside the launch, so a load its harness reported by then is one
+		// of the job's own calls, and recorded here as one its launch armed
+		// it would be armed by every rebuild that arms none of them — the
+		// job's copy in its box continued after its harness was cut off, or
+		// a capture of it saved before the load.
+		LoadedSkills: armed,
 		BridgeFrom:   bridgeFrom,
 		// THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, which every
 		// later opening of its bridge reads a reported load by, and every

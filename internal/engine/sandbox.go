@@ -1758,6 +1758,13 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// continues the job's session — holds the skills its launch armed only
 		// where the box took that session up ([runner.Resume.Continued]).
 		Continued: in.Run.Launch.SessionStart == sandbox.SessionStartContinued,
+		// HOW THE JOB'S HARNESS ENDED, off the job's own record, as it
+		// says it: a relaunch carrying its round on in its box tells the
+		// session there that it was cut off — or may have been, where the
+		// record says nothing — every call of the round and every note the
+		// turn has read, and arms its guard without the job's own loads,
+		// unless its harness ended its own run ([runner.Resume.HarnessEnd]).
+		HarnessEnd: in.Run.Launch.HarnessEnd,
 		// WHICH BOX DID THE WORK, and what it delivered — see
 		// [runRecordOf].
 		Run: runRecordOf(in.Run, in.Account),
@@ -2396,7 +2403,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		Reply: t.Reply,
 		// AND THE ITEM, for the same reason: the resumed turn is charged
 		// to what this one was on, and has no trigger to resolve it from.
-		WorkItem: t.WorkItem,
+		WorkItem: t.WorkItem, Answered: slices.Clone(t.Answered),
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
 		Requester: t.Requester, WorkingFor: t.WorkingFor,

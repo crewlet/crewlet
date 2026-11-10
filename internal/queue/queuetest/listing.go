@@ -142,7 +142,7 @@ func (s *suite) runListing(t *testing.T) {
 		// duty, and the node that created the mailbox may be gone.
 		peer := s.needPeer(t)
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 		if _, err := a.EnsureSubscription(ctx, "fleet.alice.inbox", "agent-alice"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}

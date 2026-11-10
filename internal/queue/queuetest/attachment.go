@@ -34,7 +34,7 @@ func (s *suite) runAttachment(t *testing.T) {
 
 		publish(ctx, t, q, "topic.a", newEvent("e2"))
 		other.awaitLabels(t, "an untouched group to keep receiving", "e1", "e2")
-		mine.staysAt(t, 1, "a detached pair kept receiving")
+		mine.staysAt(ctx, t, 1, "a detached pair kept receiving")
 
 		if backlog := s.optionalBacklog(t); backlog != nil {
 			// RETAINED for whoever attaches next — that is the whole
@@ -132,7 +132,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		}
 
 		seen.awaitLabels(t, "only the first event to be handled", "e1")
-		seen.staysAt(t, 1, "the detach did not stop the next delivery")
+		seen.staysAt(ctx, t, 1, "the detach did not stop the next delivery")
 
 		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "the undelivered event to be retained", func() bool {
@@ -155,7 +155,7 @@ func (s *suite) runAttachment(t *testing.T) {
 			t.Fatalf("Detach: %v", err)
 		}
 		publish(ctx, t, q, "topic.b", newConvEvent("e2", "k"))
-		batches.staysAt(t, 1, "a detached batch consumer kept receiving")
+		batches.staysAt(ctx, t, 1, "a detached batch consumer kept receiving")
 
 		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "e2 to be retained", func() bool {
@@ -219,7 +219,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		}
 
 		publish(ctx, t, q, "seat.inbox", newEvent("held"))
-		j.staysAt(t, 0, "a quiesced attachment took new work")
+		j.staysAt(ctx, t, 0, "a quiesced attachment took new work")
 		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "the held event to stay in the mailbox", func() bool {
 				return equalStrings(labelsOf(backlog(q, "seat.inbox", "grp")), []string{"held"})
@@ -265,7 +265,7 @@ func (s *suite) runAttachment(t *testing.T) {
 				t.Fatalf("pause holds after Unquiesce = %v, want [%s]", got, holdReason)
 			}
 		}
-		j.staysAt(t, 0, "Unquiesce lifted a pause hold it does not own")
+		j.staysAt(ctx, t, 0, "Unquiesce lifted a pause hold it does not own")
 	})
 
 	t.Run("re_attaching_clears_a_stale_quiesce", func(t *testing.T) {
@@ -316,7 +316,7 @@ func (s *suite) runAttachment(t *testing.T) {
 				close(release)
 				t.Fatalf("Detach: %v", err)
 			}
-		case <-time.After(settleFor):
+		case <-time.After(settleFor): //fixedwait:liveness
 			// Release the handler so the process can still exit: a
 			// conformance suite that hangs a backend's test binary costs
 			// its author ten minutes and a goroutine dump to learn what
@@ -365,7 +365,7 @@ func (s *suite) runFleet(t *testing.T) {
 			t.Skip("backend cannot report which pairs a client is attached to")
 		}
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 
 		gotA, gotB := newJournal(), newJournal()
 		subscribe(ctx, t, a, "seat.inbox", "grp", recordingHandler(gotA))
@@ -383,7 +383,7 @@ func (s *suite) runFleet(t *testing.T) {
 
 		publish(ctx, t, a, "seat.inbox", newEvent("after"))
 		gotB.awaitLabels(t, "the surviving peer to keep serving the seat", "after")
-		gotA.staysAt(t, 0, "the detached client kept receiving")
+		gotA.staysAt(ctx, t, 0, "the detached client kept receiving")
 	})
 
 	t.Run("a_clients_pause_does_not_gate_its_peers", func(t *testing.T) {
@@ -393,7 +393,7 @@ func (s *suite) runFleet(t *testing.T) {
 		// peer from serving the seat it owns.
 		peer := s.needPeer(t)
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 
 		gotB := newJournal()
 		subscribe(ctx, t, a, "seat.inbox", "grp", func(context.Context, *events.Event) queue.Result {
@@ -425,7 +425,7 @@ func (s *suite) runFleet(t *testing.T) {
 		t.Parallel()
 		peer := s.needPeer(t)
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 
 		gotB := newJournal()
 		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
@@ -445,7 +445,7 @@ func (s *suite) runFleet(t *testing.T) {
 		// and invisible in a way that looks exactly like a quiet company.
 		peer := s.needPeer(t)
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 
 		watching := newJournal()
 		streamTo(ctx, t, a, "crewlet.events.>", watching)
@@ -462,7 +462,7 @@ func (s *suite) runFleet(t *testing.T) {
 		peer := s.needPeer(t)
 		backlog := s.needBacklog(t)
 		a := s.start(ctx, t)
-		b := startQueue(ctx, t, peer(t, a))
+		b := s.startQueue(ctx, t, peer(t, a))
 
 		if _, err := a.EnsureSubscription(ctx, "seat.gone", "grp"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)

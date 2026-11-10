@@ -162,6 +162,9 @@ func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 // series counts them whenever they are recorded, since an exporter diffs its
 // own scrapes.
 func (r *Recorder) AddAt(name string, n uint64, at time.Time, attrs Attrs) {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	inst, known := r.byName[name]
@@ -193,6 +196,9 @@ func (r *Recorder) Set(name string, v float64, attrs Attrs) {
 // than readings, and withdrawing one would rewrite what already happened. An
 // unknown name, a non-gauge and a series never written are all no-ops.
 func (r *Recorder) Unset(name string, attrs Attrs) {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	inst, known := r.byName[name]
@@ -207,8 +213,12 @@ func (r *Recorder) Unset(name string, attrs Attrs) {
 // record is the one write path. An unknown name is DROPPED rather than
 // registered on the fly: a typo would otherwise become a time series with no
 // entry in the catalogue and no documentation, which is the state the
-// catalogue exists to make impossible.
+// catalogue exists to make impossible. A nil Recorder (a node run without
+// metrics) records nothing, so no write site needs its own guard.
 func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	inst, known := r.byName[name]

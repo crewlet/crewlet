@@ -195,7 +195,7 @@ func TestAPackOnDemandKeepsItsDigestInTheBox(t *testing.T) {
 		sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	described, body, err := runner.PackCapture(t.Context(), b)
+	described, body, _, err := runner.PackCapture(t.Context(), b, false)
 	if err != nil || body == nil {
 		t.Fatalf("PackCapture = %v, %v", body, err)
 	}
@@ -261,7 +261,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		runner, b := sessionBox(t, "2.1.310")
 		runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 		writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\necho 'tar: the disk broke' >&2\nexit 2\n")
-		described, body, err := runner.PackCapture(t.Context(), b)
+		described, body, _, err := runner.PackCapture(t.Context(), b, false)
 		if err == nil || body != nil || !strings.Contains(err.Error(), "the disk broke") {
 			t.Fatalf("PackCapture with a tar that breaks = %+v, %v, %v; want an error saying why", described, body, err)
 		}
@@ -277,7 +277,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 		said := "tar: projects/" + executor.ClaudeProjectDir + "/" + ran.SessionID +
 			"/subagents/workflow/agent-a1b2c3d4e5f6a7b8c.jsonl: Cannot open: Permission denied"
 		writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\necho "+shQuote(said)+" >&2\nexit 2\n")
-		_, body, err := runner.PackCapture(t.Context(), b)
+		_, body, _, err := runner.PackCapture(t.Context(), b, false)
 		if body != nil {
 			_ = body.Close()
 		}
@@ -294,7 +294,7 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 			sandbox.ExecOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		described, body, err := runner.PackCapture(t.Context(), b)
+		described, body, _, err := runner.PackCapture(t.Context(), b, false)
 		if err != nil || body != nil {
 			t.Fatalf("PackCapture with no transcript = %+v, %v, %v; want nothing", described, body, err)
 		}
@@ -326,18 +326,20 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 // (sandbox.SessionTake.Pack), as a read of a job its box would not end does. In
 // both the job's harness has exited, so the case holds a read's way to its pack
 // and not a job still working, whose session can change between two packs:
-// what that costs a Claude Code read (executor.Runner.PackCapture) the case
-// does not assert.
+// that each read of one streams its own archive, never moved over the job's
+// capture, TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture
+// holds.
 //
 // Mutation: stage both packs in one directory — the runner naming every pack's
 // alike, or a harness's pack staging in a directory of its own choosing rather
 // than the one it is handed — and the second pack's start clears the first's
-// archive: the first pack moves the second's, half made, over the job's
-// capture, and its read is not taken whole; and the second pack's move finds
-// nothing to move. Have a pack's start clear every pack's staging directory,
-// and the first pack's move finds nothing to move. Either way the box holds one
-// staging directory as the second pack writes. Leave a pack's directory behind,
-// and it is found after.
+// archive: the first pack moves the second's, half made, into place — over the
+// job's capture, or where a read of a job still working reads its own — and
+// its read is not taken whole; and the second pack's move finds nothing to
+// move. Have a pack's start clear every pack's staging directory, and the first
+// pack's move finds nothing to move. Either way the box holds one staging
+// directory as the second pack writes. Leave a pack's directory behind, or the
+// archive a read of a job still working was handed, and it is found after.
 func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 	t.Parallel()
 	harnesses := []struct {
@@ -579,7 +581,7 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 	return "#!/bin/sh\n" +
 		"own=" + tool(packer) + " whole=" + at("whole") + "\n" +
 		`if [ "$1" != ` + shQuote(word) + ` ]; then exec "$own" "$@"; fi` + "\n" +
-		`if mkdir ` + at("claimed") + ` 2> /dev/null; then` + "\n" +
+		`if ` + claim(filepath.Join(flags, "claimed")) + `; then` + "\n" +
 		`  "$own" "$@"; st=$?` + "\n" +
 		`  : > ` + at("first-packed") + "\n" +
 		`  printf 'held\n' > ` + at("held") + "\n" +
@@ -602,9 +604,10 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 		`exit "$st"` + "\n"
 }
 
-// packStagingLeft is every staging directory a pack on demand left in box: each
-// is named for its pack alone (executor.Paths.SessionPackStaging), so it is
-// found by its pattern rather than named.
+// packStagingLeft is every staging directory a pack on demand left in box, and
+// every archive one kept for its read (executor.Paths.SessionPackHeld): each is
+// named for its pack alone (executor.Paths.SessionPackStaging), so it is found
+// by its pattern rather than named.
 func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
 	t.Helper()
 	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).WorkDir())+"/session-pack-staging.*; do "+

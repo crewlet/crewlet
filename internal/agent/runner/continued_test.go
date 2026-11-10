@@ -258,6 +258,133 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	}
 }
 
+// A KEPT SESSION CUT OFF IS TOLD AGAIN EVERY NOTE THE TURN HAS READ. A capture
+// whose harness was cut off may lack its job's last take of the notes, recorded
+// read before its answer reached the harness, and is not known to hold its
+// job's brief, which told the notes the session it continued lacked — an
+// earlier job's among them. No record says which those were, so a relaunch
+// that continues it — a person's answer or a loss alike — tells it, after the
+// calls it may not show and before the note waiting for it, every note the turn
+// has read, once each, in the order read, under a header that counts them and
+// says a note shown both above and there is one note — a second copy of one,
+// unheaded, would read as a note of its own; the note waiting follows, once.
+// Whatever cursor its capture states: none, as this build stamps a capture cut
+// off, or the notes before its job's last take, as an older build stamped one.
+// A capture whose harness ended its own run holds every note read up to its
+// cursor, and is told those read after it, and only those, as before.
+//
+// Mutation: tell a session cut off only the notes past its cursor, head them
+// only where its capture states a cursor, tell them without their header, after
+// the note waiting or a second time with no header, or tell a whole session its
+// notes as ones it may already show or none of those read after its cursor, and
+// a case goes red.
+func TestAKeptSessionCutOffIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	read := func(id, text string, order int, ph types.Phase, boundary types.SteerBoundary, job string) steer.Read {
+		return steer.Read{Note: steer.Note{ID: id, Text: text, By: "founder"},
+			Reading: steer.Reading{Phase: ph, Iteration: 1, Round: 1, Boundary: boundary, Launch: job, Order: order}}
+	}
+	steered := []steer.Read{
+		read("earlier", "an earlier job's note", 1, types.PhaseExecute, types.SteerBoundaryToolBatch, "job-0"),
+		read("brief", "the note the job's brief carried", 2, types.PhaseExecute, types.SteerBoundaryBrief, "job-1"),
+		read("take", "the note the job's last take read", 3, types.PhaseExecute, types.SteerBoundaryToolBatch,
+			"job-1"),
+		read("review", "the note a review read after the save", 4, types.PhaseReview, types.SteerBoundaryRound, ""),
+	}
+	told := make([]string, 0, len(steered))
+	for _, r := range steered {
+		told = append(told, prompts.SteerMessage(r.By, r.Text))
+	}
+	answer := func(r *runner.Resume) {
+		r.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+			SessionID: "s-1", BoxKept: true}
+	}
+	loss := func(r *runner.Resume) {
+		r.Lost = &runner.Lost{Why: "the engine it ran under restarted, which killed it", BoxKept: true,
+			Losses: 1, Limit: 2}
+	}
+	type notesCase struct {
+		basis     runner.SessionBasis
+		carry     func(*runner.Resume)
+		told, not []string
+		// again says the notes are told as ones the session may already show.
+		again bool
+	}
+	// WHOLE, holding every note read when it was packed.
+	whole := keptBasis
+	whole.NoteCursor = 3
+	cases := map[string]notesCase{
+		"a person's answer, its kept session whole": {basis: whole, carry: answer, told: told[3:], not: told[:3]},
+	}
+	// CUT OFF, every call of the round after its save point, whatever cursor it
+	// states: none, as this build stamps a capture cut off (internal/sandbox's
+	// notesHeld), and the notes before its job's last take, as an older build
+	// stamped one.
+	for stamped, cursor := range map[string]int{"as this build stamps it": 0, "as an older build stamped it": 2} {
+		cutOff := keptBasis
+		cutOff.Interrupted, cutOff.Through, cutOff.NoteCursor = true, 0, cursor
+		cases["a person's answer, its kept session cut off "+stamped] = notesCase{basis: cutOff, carry: answer,
+			told: told, again: true}
+		cases["a loss, its kept session cut off "+stamped] = notesCase{basis: cutOff, carry: loss, told: told,
+			again: true}
+	}
+	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box := steer.New()
+			box.Offer(waiting)
+			relauncher := &probingLauncher{basis: tc.basis}
+			resume := &runner.Resume{State: parked.State, Steered: steered, Bridged: []runner.BridgedCall{
+				numbered("jira_create", map[string]any{"summary": "the job's issue"}, 1, 1)}}
+			tc.carry(resume)
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				steer: box, resume: resume})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.SessionID != "s-1" {
+				t.Fatalf("the relaunch continues %+v, want the turn's kept session", again.Session)
+			}
+			brief := again.Session.Brief
+			waitingMsg := prompts.SteerMessage(waiting.By, waiting.Text)
+			last := strings.Index(brief, waitingMsg)
+			if last < 0 || strings.Count(brief, waitingMsg) != 1 {
+				t.Fatalf("the session is not told the note waiting for it once:\n%s", brief)
+			}
+			for _, not := range tc.not {
+				if strings.Contains(brief, not) {
+					t.Errorf("a session whose harness ended its own run is told %q again:\n%s", not, brief)
+				}
+			}
+			header := strings.Index(brief, notesAgainHeader)
+			switch {
+			case !tc.again && header >= 0:
+				t.Errorf("a session whose harness ended its own run is told its notes as ones it may "+
+					"already show:\n%s", brief)
+			case tc.again && (header < strings.Index(brief, cutOffHeader) ||
+				!strings.Contains(brief[max(header, 0):], "the 4 notes below")):
+				t.Errorf("the notes told again are not headed, after the calls it may not show, as the 4 "+
+					"notes below the session may not show:\n%s", brief)
+			}
+			at := header
+			for _, want := range tc.told {
+				i := strings.Index(brief, want)
+				if i < 0 || i < at || i > last || strings.Count(brief, want) != 1 {
+					t.Errorf("the session is not told %q once, in the order read and before the note waiting:\n%s",
+						want, brief)
+				}
+				at = i
+			}
+		})
+	}
+}
+
 // AN ANSWERED OR A REFUSED RUN'S SESSION IS CONTINUED, TOLD WHAT CARRIES IT ON.
 // A person's answer carries the asking run on in the session that asked, and a
 // replaced sign-in the refused run's: the job each follows left its session
@@ -454,6 +581,9 @@ type guarded struct {
 	decides   func(runner.AgentRunRequest) runner.SessionDecision
 	says      *bool
 	carry     func(*runner.Resume)
+	// during is what the run does once its launch has decided and before the
+	// launch returns ([playLauncher.during]).
+	during func(runner.AgentRunRequest)
 }
 
 // loadSkill is a call that loaded the seat's one required skill, the seq'th
@@ -467,6 +597,13 @@ func loadSkill(seq int) runner.BridgedCall {
 // relaunch builds g's seat and relaunches its executor, returning what the
 // launch was handed.
 func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
+	t.Helper()
+	_, req := g.relaunched(t)
+	return req
+}
+
+// relaunched is [guarded.relaunch] with the runner that launched.
+func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunRequest) {
 	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
@@ -491,7 +628,7 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &probingLauncher{basis: g.basis}
-	launcher.decides, launcher.says = g.decides, g.says
+	launcher.decides, launcher.says, launcher.during = g.decides, g.says, g.during
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
 	resume := &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued}
@@ -514,12 +651,72 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 		if _, _, err := r.Resume(t.Context(), g.history); err != nil {
 			t.Fatalf("Resume: %v", err)
 		}
-		return launcher.last(t)
+		return r, launcher.last(t)
 	}
 	if _, _, err := r.Execute(t.Context(), 2, "thread the reply", g.history); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	return launcher.last(t)
+	return r, launcher.last(t)
+}
+
+// A LAUNCH RECORDS THE SKILLS IT ARMED, NEVER A LOAD ITS RUN MADE AS IT STARTED.
+// The run starts inside its launch, on the guard the launch armed, so its
+// harness can report a skill load over the bridge before the launch returns.
+// That load is a call of the job's own, placed past its BridgeFrom, which every
+// rebuild of its guard replays only where the session it continues holds it —
+// never where the job's own copy in its box is continued after its harness was
+// cut off, or a capture of it saved before the load. So the job's parked state
+// records the skills its launch armed as it armed them, before the run started,
+// on a first launch and on a relaunch alike: none for a session of the run's
+// own, and the ones the session it continues held for a capture its launch
+// takes up.
+//
+// Mutation: record the guard as it stands once the launch returns, at either
+// launch, and the load is recorded as one the launch armed; record the guard
+// before the launch arms it, and the continued capture's skill is not.
+func TestALaunchRecordsTheSkillsItArmedNeverALoadItsRunMadeAsItStarted(t *testing.T) {
+	t.Parallel()
+	inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+	active := guarded{basis: inBox}.relaunch(t).Surface.Active()
+	rotated := func(r *runner.Resume) { r.Rotated = &runner.Rotated{SessionID: "sess-1", BoxKept: true} }
+	for name, tc := range map[string]struct {
+		g     guarded
+		loads bool
+		want  []string
+	}{
+		"a first launch, its run loading a skill as it starts": {loads: true},
+		"a relaunch carrying the round on in its job's box, its run loading a skill as it starts": {
+			g: guarded{basis: inBox, state: execstate.State{ActiveTools: active}, carry: rotated}, loads: true},
+		"a relaunch continuing a capture whose session held a skill": {g: guarded{basis: keptBasis,
+			continued: true, state: execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}},
+			carry: rotated}, want: []string{"chat-conventions"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// THE LOAD, made as the run starts: once its launch has decided,
+			// before the launch returns.
+			var made []runner.BridgedCall
+			g := tc.g
+			if tc.loads {
+				g.during = func(req runner.AgentRunRequest) {
+					made = play(t, req, run{calls: []llm.ToolCall{
+						call(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`)}})
+				}
+			}
+			r, _ := g.relaunched(t)
+			if tc.loads && (len(made) != 1 || made[0].Failed) {
+				t.Fatalf("the run's load as it started = %+v, want it made", made)
+			}
+			parked, ok := r.Suspended()
+			if !ok {
+				t.Fatal("the launch recorded no state")
+			}
+			if got := parked.State.LoadedSkills; !slices.Equal(got, tc.want) && len(got)+len(tc.want) > 0 {
+				t.Errorf("the parked state records %v as the skills its launch armed, want %v: a load the "+
+					"run made as it started is one of the job's own calls", got, tc.want)
+			}
+		})
+	}
 }
 
 // A RELAUNCH'S GUARD HOLDS WHAT THE SESSION ITS RUN TAKES UP LOADED, AND NOTHING

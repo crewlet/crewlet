@@ -81,9 +81,11 @@ type Evidence struct {
 	Paused []PausedSeat
 	// MemoryKills is every run in the window the kernel stopped for memory.
 	MemoryKills []MemoryKill
+	// Fires is every schedule fire in the window whose turn could be read.
+	Fires []ScheduleFire
 	// WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread and RunsUnread say the
 	// caller could not read that source, so its classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread bool
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
 }
 
 // source is the record a detector reads.
@@ -100,6 +102,8 @@ const (
 	sourcePauses
 	// sourceRuns is the executor runs' records, [Evidence.MemoryKills].
 	sourceRuns
+	// sourceFires is the schedules' fires and what their turns wrote, [Evidence.Fires].
+	sourceFires
 )
 
 // unread reports whether ev could not read src.
@@ -115,6 +119,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.PausesUnread
 	case sourceRuns:
 		return ev.RunsUnread
+	case sourceFires:
+		return ev.FiresUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -202,13 +208,13 @@ const (
 	auxiliaryPercent = 15
 )
 
-// EvidenceClasses is every class a detector or a paused seat raises.
+// EvidenceClasses is every class a detector, a paused seat or a schedule's fires raise.
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return append(out, pausedClasses()...)
+	return append(append(out, pausedClasses()...), ClassScheduleUnproductive)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
@@ -260,7 +266,7 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			s.Name = seatName(c, s.Seat)
 		}
 	}
-	answer.Findings = append(answer.Findings, found...)
+	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)
@@ -276,6 +282,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.RunsUnread {
 		answer.Unread = append(answer.Unread, UnreadRuns)
+	}
+	if ev.FiresUnread {
+		answer.Unread = append(answer.Unread, UnreadFires)
 	}
 	return answer
 }

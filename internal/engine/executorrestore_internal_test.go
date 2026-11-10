@@ -434,6 +434,38 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 	}
 }
 
+// A RESUME READS HOW THE JOB'S HARNESS ENDED, off the job's record, as the record
+// says it: a relaunch that carries the round on in the job's box tells the
+// session there that it was cut off, or may have been, every call of the round
+// and every note the turn has read unless the record says its harness ended its
+// own run, so only that word says so — a cut-off end, a job an older build
+// collected, which recorded nothing, and a word this build does not know all say
+// it may lack them — and the word itself reaches the relaunch, which tells a
+// copy recorded cut off that it was and any other that it may have been.
+//
+// Mutation: read anything but a cut-off end as an own run, and the rows of the
+// older build's collection and the unknown word go red; hand the relaunch a
+// word other than the record's own, and a row goes red.
+func TestAResumeReadsHowTheJobsHarnessEnded(t *testing.T) {
+	t.Parallel()
+	for end, ownRun := range map[sandbox.HarnessEnd]bool{
+		sandbox.HarnessEndOwnRun: true,
+		sandbox.HarnessEndCutOff: false,
+		"":                       false,
+		"saved":                  false,
+	} {
+		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{HarnessEnd: end}}}
+		got := runnerResume(in, nil, nil).HarnessEnd
+		if got != end {
+			t.Errorf("a job whose record says its harness ended %q resumes with %q", end, got)
+		}
+		if got.EndedOwnRun() != ownRun {
+			t.Errorf("a job whose record says its harness ended %q resumes as ending its own run %v, want %v",
+				end, got.EndedOwnRun(), ownRun)
+		}
+	}
+}
+
 // A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, as the node
 // holding the seat picks it ([Engine.RelaunchTargets], which a node with no
 // broker, the whole fleet, answers from its own pick): the seat's first member

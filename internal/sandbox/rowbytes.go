@@ -94,7 +94,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,700,752  (with 2,989,126 to spare)
+//	every other field, measured ..... 1,700,801  (with 2,989,077 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -466,6 +466,7 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // IN PLACE ON l's OWN CALLS: a caller holding a log it shares with another —
 // a copy whose list is another's too — clones the list first.
 func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
+	l.Committed = committedOnce(l.Committed, next.Committed)
 	dropped, taken := l.Unlisted(), l.Absorbed()
 	next.Appended = l.Appends() + 1
 	var elided []BridgeCall

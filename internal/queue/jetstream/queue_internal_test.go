@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -209,17 +210,17 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 			t.Fatalf("the failure map held %d entries when the redelivery ran, "+
 				"want the 1 its NAK recorded — this case never drove the hazard", held)
 		}
-	case <-time.After(20 * time.Second):
+	case <-time.After(20 * time.Second): //fixedwait:liveness
 		t.Fatal("the redelivery never reached the handler")
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
 	for failureEntries(q, topic, group) != 0 {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the failure map still holds %d settled message(s) after the "+
 				"partition acked", failureEntries(q, topic, group))
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -248,34 +249,43 @@ func failureEntries(q *Queue, topic, group string) int {
 // cancellation only when the fetch ended, so every stop of a queue holding an
 // idle attachment spent the whole stop grace and then closed the connection
 // under the loop anyway.
+//
+// NEITHER IS DECIDED ON THE MACHINE'S CLOCK. The broker ends an idle request at
+// the expiry the request carries, by its own timer, so the first half is that
+// expiry, read where the vendored client writes it; it was a measured fetch
+// held to a second past its wait, which a runner that lost a second failed,
+// and which a fetch never sent at all passed. The second half needs the loop
+// in its fetch before the stop lands, and waits for the fetch's request to
+// reach the broker; it slept a tenth of a second for that, and a loop
+// scheduled later than the stop's grace failed a healthy build while one
+// scheduled after the stop passed with the stop reaching no fetch at all.
+//
+// Mutation: drop expiryHeldBack's share from the deadline and the request
+// expires a tenth early; drop the first FetchContext and it expires at the
+// client's thirty seconds; let a stop leave the fetch alone (no abandon) and
+// the loop is still in it when Stop returns.
 func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 	t.Parallel()
 
 	t.Run("an idle fetch ends at its wait", func(t *testing.T) {
 		t.Parallel()
-		const wait = 500 * time.Millisecond
-		q := newQueue(t)
-		topic, group := seatInbox("idle"), seatGroup("idle")
-		if _, err := q.EnsureSubscription(t.Context(), topic, group); err != nil {
-			t.Fatal(err)
-		}
-		cons, err := q.js.Consumer(t.Context(), q.mustStream(t, topic), consumerName(topic, group))
-		if err != nil {
-			t.Fatal(err)
-		}
-		a := &attachment{cons: cons, fetching: t.Context()}
-		start := time.Now()
-		if err := a.fetch(1, wait, func(jetstream.Msg) {
-			t.Error("an empty mailbox handed over a message")
-		}); err != nil {
-			t.Fatalf("fetch: %v", err)
-		}
-		// THE BROKER CANNOT ANSWER BEFORE ITS EXPIRY, so the lower bound
-		// is exact; the upper one is the client's own second of grace past
-		// it, which only a broker that never answered spends.
-		if took := time.Since(start); took < wait-10*time.Millisecond || took > wait+time.Second {
-			t.Errorf("an idle fetch asked to wait %v ended after %v", wait, took)
-		}
+		// IN A BUBBLE, so the instant the fetch takes its deadline and the
+		// instant the client reads what is left of it are one instant: on
+		// the machine's clock the expiry is short of the wait by whatever
+		// a loaded runner spent between the two.
+		inBubble(t, func(t *testing.T) {
+			const wait = 500 * time.Millisecond
+			cons := &expiryRecorder{}
+			a := &attachment{cons: cons, fetching: t.Context()}
+			if err := a.fetch(1, wait, func(jetstream.Msg) {
+				t.Error("an empty mailbox handed over a message")
+			}); err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+			if len(cons.expiries) != 1 || cons.expiries[0] != wait {
+				t.Errorf("a fetch asked to wait %v asked the broker for %v", wait, cons.expiries)
+			}
+		})
 	})
 
 	t.Run("a stop ends an idle fetch at once", func(t *testing.T) {
@@ -284,6 +294,7 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 		// outstanding long after the stop's own grace.
 		q := newQueueWith(t, Config{FetchWait: time.Minute})
 		topic, group := seatInbox("stopping"), seatGroup("stopping")
+		inFetch := fetchSent(t, q, topic, group)
 		if err := q.Subscribe(t.Context(), topic, group,
 			func(context.Context, *events.Event) queue.Result { return queue.Ack() }); err != nil {
 			t.Fatal(err)
@@ -292,9 +303,11 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 		if len(atts) != 1 {
 			t.Fatalf("%d attachments, want 1", len(atts))
 		}
-		// Long enough that the loop is parked in its fetch: the attachment
-		// is registered before the loop starts.
-		time.Sleep(100 * time.Millisecond)
+		// THE LOOP PARKED IN ITS FETCH, waited for rather than slept
+		// toward: once its request is at the broker, only the stop can
+		// end that fetch inside the minute, however late the runner
+		// scheduled the loop.
+		inFetch()
 		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
 			t.Fatal(err)
 		}
@@ -306,6 +319,81 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 				"abandoned")
 		}
 	})
+}
+
+// expiryRecorder is a consumer with nothing for a fetch: it sends no request,
+// and records the expiry the vendored client would have put on each one.
+//
+// THE CLIENT'S OWN OPTIONS, applied as its Fetch applies them. A fetch's
+// options are functions over the client's unexported request, so the request
+// is built by reflection, at the client's default expiry as Fetch starts it,
+// and each option is applied in order. What is read back is the client's own
+// arithmetic on the deadline it was handed: an upgrade that moves it moves this
+// reading, and one that reshapes the options fails here by name.
+type expiryRecorder struct {
+	jetstream.Consumer
+	expiries []time.Duration
+}
+
+func (r *expiryRecorder) Fetch(batch int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
+	var req reflect.Value
+	for _, opt := range opts {
+		apply := reflect.ValueOf(opt)
+		if !req.IsValid() {
+			req = reflect.New(apply.Type().In(0).Elem())
+			req.Elem().FieldByName("Batch").SetInt(int64(batch))
+			req.Elem().FieldByName("Expires").SetInt(int64(jetstream.DefaultExpires))
+		}
+		if err, _ := apply.Call([]reflect.Value{req})[0].Interface().(error); err != nil {
+			return nil, err
+		}
+	}
+	if !req.IsValid() {
+		r.expiries = append(r.expiries, jetstream.DefaultExpires)
+	} else {
+		r.expiries = append(r.expiries, time.Duration(req.Elem().FieldByName("Expires").Int()))
+	}
+	nothing := make(chan jetstream.Msg)
+	close(nothing)
+	return emptyBatch(nothing), nil
+}
+
+// emptyBatch is a fetch that came back with nothing.
+type emptyBatch <-chan jetstream.Msg
+
+func (b emptyBatch) Messages() <-chan jetstream.Msg { return b }
+
+func (emptyBatch) Error() error { return nil }
+
+// fetchSent subscribes to the requests the fetches of topic's consumer for
+// group send the broker, and returns the wait for the first: the moment a
+// consume loop's fetch is at the broker, with the loop parked in it.
+//
+// ON THE SUBJECT THE BROKER'S JETSTREAM SERVES, which a domain's own form is
+// mapped to before any subscriber reads it, and ON THE QUEUE'S OWN CONNECTION,
+// whose protocol the broker reads in order: subscribed before the queue
+// fetches, the subscription is in place before any fetch's request arrives.
+func fetchSent(t *testing.T, q *Queue, topic, group string) func() {
+	t.Helper()
+	subject := "$JS.API.CONSUMER.MSG.NEXT." + q.mustStream(t, topic) + "." + consumerName(topic, group)
+	sub, err := q.nc.SubscribeSync(subject)
+	if err != nil {
+		t.Fatalf("subscribe to %s: %v", subject, err)
+	}
+	return func() {
+		t.Helper()
+		// LIVENESS: a loop that never fetches never sends a request, and
+		// the bound only ends that case's wait; a loop that fetches late
+		// is waited for.
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancel()
+		if _, err := sub.NextMsgWithContext(ctx); err != nil {
+			t.Fatalf("no fetch reached the broker on %s: %v", subject, err)
+		}
+		if err := sub.Unsubscribe(); err != nil {
+			t.Fatalf("unsubscribe from %s: %v", subject, err)
+		}
+	}
 }
 
 // A FETCH WHOSE WINDOW LAPSED BEFORE IT WAS SENT IS AN EMPTY ONE, and the
