@@ -486,6 +486,12 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 		{"it moved work", func(x *types.TurnCompleted) {
 			x.Turn = &types.TurnTally{Outcome: types.OutcomeMoved}
 		}, true},
+		// A REPLY ON A VENDOR'S CHAT commits nothing of the engine's own, and
+		// the seat still answered somebody: it engaged.
+		{"it reached somebody outside the engine and committed nothing", func(x *types.TurnCompleted) {
+			x.Turn = &types.TurnTally{Outcome: types.OutcomeNothing}
+			x.Acted = true
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

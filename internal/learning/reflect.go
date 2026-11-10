@@ -273,17 +273,27 @@ func (t Turn) SelfPersisted() bool {
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
 //
-// WHAT THE TURN COMMITTED decides where its tally states it: a turn that moved
-// work or said words engaged, and one that committed nothing did not, however
-// many tools it read with. An unstated outcome (a parked segment) falls back.
+// WHAT THE TURN DID decides where its tally states it: a turn that moved work,
+// said words, or reached somebody outside the engine (a reply on a vendor's
+// chat) engaged, and one that only read did not, however many tools it read
+// with. An unstated outcome (a parked segment) falls back.
 func (t Turn) Engaged() bool {
 	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
 	}
-	if tally := t.Event.Turn; tally != nil && tally.Outcome != "" {
-		return tally.Outcome != types.OutcomeNothing
+	if outcome := t.CommittedOutcome(); outcome != "" {
+		return outcome != types.OutcomeNothing || t.Event.Acted
 	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
+}
+
+// CommittedOutcome is the outcome the turn's tally states, "" where it states
+// none (a parked segment), which is what [Turn.Engaged] decides by.
+func (t Turn) CommittedOutcome() types.TurnOutcome {
+	if t.Event.Turn == nil {
+		return ""
+	}
+	return t.Event.Turn.Outcome
 }
 
 // Worker is one post-turn learning pass.
@@ -688,7 +698,8 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
 			"agent_handle", tc.AgentHandle,
-			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
+			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome,
+			"turn_outcome", turn.CommittedOutcome(), "acted", tc.Acted)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
 		// learn from and a turn reflection never reached look identical
 		// on every surface otherwise, and the second is a bug while the

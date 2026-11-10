@@ -714,6 +714,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ToolSequence:    spend.ExecuteTools,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
+		Acted:           actedOutside(spend.ToolExecutions, deliverySurface(e.ToolsFor(t.handle))),
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -736,6 +737,18 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	}
 	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)
+}
+
+// actedOutside reports whether a successful call among execs could reach
+// somebody outside the engine on the seat's surface ([turn.Deliverable]).
+func actedOutside(execs []types.ToolExecution, s turn.Surface) bool {
+	for _, ex := range execs {
+		name, _ := ex["name"].(string)
+		if ok, _ := ex["success"].(bool); ok && turn.Deliverable(name, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // measuredWhole reports whether this segment knows the whole turn before it: a
