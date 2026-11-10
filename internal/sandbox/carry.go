@@ -192,8 +192,9 @@ type SessionTake struct {
 	// alone writes: so each read streams the archive its own pack made, and
 	// one that streams the job's capture streams an archive nothing moves
 	// over while it reads it. Every pack records the archive's digest in the
-	// box as the script's does, so the box never takes its own archive for
-	// another box's.
+	// box as the script's does — before it moves the archive where its read
+	// reads it, so a pack that could not record it fails — so the box never
+	// takes its own archive for another box's.
 	Pack bool
 
 	// Save names the TAKER whose save is taken — the holder of the taker

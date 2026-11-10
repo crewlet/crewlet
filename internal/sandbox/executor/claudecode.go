@@ -459,7 +459,9 @@ func claudeNotesGate(hooked, notes, plain string) string {
 // regular file, and the sidecar and task-list directories where it has them,
 // a link in place of any left behind — on a release that continues a carried
 // session ([claudeCarryFloor]), with tar and gzip in the box; and its digest
-// is kept. Restored or not, the archive is removed: nothing reads it again.
+// is kept: recorded, and read back, once it is restored ([recordDigest]), and a
+// restore whose digest could not be is not continued. Restored or not, the
+// archive is removed: nothing reads it again.
 // Where the session is neither held nor restored, the run starts the session
 // minted for it in its place and says why, on its error stream and in its
 // record, rather than resume a session the harness does not hold, which fails the
@@ -530,7 +532,15 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 		floorArgs(claudeCarryFloor), claudeCarryFloor)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
-	line(`  else [ -z "$d" ] || printf '%%s %%s\n' "$s" "$d" >> %s`, digests)
+	// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED, and read back
+	// ([recordDigest]): continued with no line of the archive in the list —
+	// a full disk, a cksum that failed — the box's copy would go on past an
+	// archive the box does not know it holds, and that archive carried in
+	// again would be restored over it. So the run starts a session of its
+	// own instead, and the copy restored is never gone on past. Recorded
+	// before the restore, a restore that failed after the box's own copy
+	// went would leave the line naming a copy that does not hold it.
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -606,7 +616,9 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 // results spilled to files) and its task list, the last two where they are
 // there and are directories rather than links — packed in the staging
 // directory and moved over [Paths.SessionCapture] whole, its digest kept as
-// one the box's copy of the session holds ([Paths.SessionDigests]).
+// one the box's copy of the session holds ([Paths.SessionDigests]): recorded,
+// and read back, before the archive is moved, so no archive stands there whose
+// digest the box does not hold ([packDigest]).
 //
 // NEVER ANYTHING ELSE: not the login (`.credentials.json`) or the harness's own
 // state (`.claude.json`), which the pinned configuration directory holds beside
@@ -674,9 +686,9 @@ func claudePack(paths Paths, at packAt) string {
 	if at.working {
 		tar = claudeHeldTar(cfg, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, q(at.staged+"/capture"), q(at.dest), q(at.dest),
-		q(paths.SessionDigests()), q(at.staged+"/error"))
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
+		q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)

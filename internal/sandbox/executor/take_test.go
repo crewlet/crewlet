@@ -1019,3 +1019,157 @@ func TestTheJobsOwnEndPackLandingAsAReadStreamsChangesNothingItReads(t *testing.
 		})
 	}
 }
+
+// brokenDigestLists are the ways a box's list of the digests of the archives
+// its copy holds (executor.Paths.SessionDigests) keeps no line a pack appends,
+// each made by the shell's how, handed the list's path: a directory where the
+// list belongs, which refuses the append; and a link to /dev/null, which takes
+// the append — its writer told it landed — and keeps nothing, as a full disk
+// can.
+var brokenDigestLists = []struct{ name, how string }{
+	{name: "a list the box refuses the line", how: "mkdir"},
+	{name: "a list that keeps nothing it is handed", how: "ln -s /dev/null"},
+}
+
+// breakDigestList makes path, where a local box keeps its digest list on this
+// host, the list how makes ([brokenDigestLists]).
+func breakDigestList(t *testing.T, path, how string) {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "sh", "-c", `mkdir -p "${1%/*}" && rm -rf "$1" && `+how+` "$1"`,
+		"sh", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("making the digest list at %s keep nothing: %v\n%s", path, err, out)
+	}
+}
+
+// saysDigestUnrecorded is what a pack whose digest the box did not record says.
+const saysDigestUnrecorded = "digest could not be recorded"
+
+// A PACK REPORTS ITS ARCHIVE MADE ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX.
+// Every pack of a box's session records its archive's digest in the box's
+// list of the archives its copy holds, so the box never takes an archive of
+// its own for another box's and restores it over the copy that went on past
+// it; and a pack reported its archive made — moved to where its read reads
+// it — before it appended that line, whose write nothing checked. Here the
+// list keeps no line ([brokenDigestLists]), and every pack, on either harness,
+// fails saying why and moves nothing to where its read reads it: a pack on
+// demand of a job that is over and one beside a harness that may still work,
+// and the run's own as its harness exits, whose run's error stream says why
+// and whose collection finds no capture.
+//
+// Mutation: move the archive into place and report it made before its digest
+// is recorded, the line's append unchecked, as the packs once did, and every
+// pack here holds; take the append's exit for the line, never reading it
+// back, and every pack beside the list that keeps nothing holds.
+func TestAPackReportsItsArchiveMadeOnlyOnceItsDigestIsRecorded(t *testing.T) {
+	t.Parallel()
+	for _, list := range brokenDigestLists {
+		t.Run(list.name, func(t *testing.T) {
+			t.Parallel()
+			for _, h := range overJobs() {
+				t.Run(h.name+" packed on demand", func(t *testing.T) {
+					t.Parallel()
+					runner, b, _, _ := h.job(t)
+					breakDigestList(t, paths(b).SessionDigests(), list.how)
+					for _, working := range []bool{false, true} {
+						_, body, _, err := runner.PackCapture(t.Context(), b, working)
+						if body != nil {
+							_ = body.Close()
+						}
+						if err == nil || !strings.Contains(err.Error(), saysDigestUnrecorded) {
+							t.Errorf("a pack (beside a working harness: %v) whose digest the box kept no line of "+
+								"answered %v, want it refused saying %q", working, err, saysDigestUnrecorded)
+						}
+					}
+					if left := packStagingLeft(t, b); len(left) > 0 {
+						t.Errorf("the refused packs left their files behind: %s", strings.Join(left, ", "))
+					}
+				})
+			}
+			t.Run("a Claude Code run's own end", func(t *testing.T) {
+				t.Parallel()
+				runner, b := sessionBox(t, "2.1.310")
+				breakDigestList(t, paths(b).SessionDigests(), list.how)
+				_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+				if res.Captured != nil || boxHas(t, b, paths(b).SessionCapture()) {
+					t.Errorf("the run's own end packed its session with no digest of it recorded: %+v", res.Captured)
+				}
+				if said := boxFile(t, b, paths(b).Err()); !strings.Contains(said, "was not packed") ||
+					!strings.Contains(said, saysDigestUnrecorded) {
+					t.Errorf("the run's error stream says %q, want that the session was not packed, and why", said)
+				}
+			})
+			t.Run("an OpenCode run's own end", func(t *testing.T) {
+				t.Parallel()
+				j := startScript(t, scriptOpts{env: []string{"FAKE_RUN_UNTIL=ended"}})
+				breakDigestList(t, j.paths.SessionDigests(), list.how)
+				if err := os.WriteFile(filepath.Join(j.dir, "ended"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				run := j.wait()
+				if _, err := os.Stat(j.paths.SessionCapture()); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("the run's own end exported its session with no digest of it recorded: %v", err)
+				}
+				if !strings.Contains(run.stderr, "was not exported") || !strings.Contains(run.stderr, saysDigestUnrecorded) {
+					t.Errorf("the run's error stream says %q, want that the session was not exported, and why", run.stderr)
+				}
+			})
+		})
+	}
+}
+
+// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX. A run that
+// continues a session carried into its box restores the archive over the box's
+// own copy where that copy does not hold it, and records the archive's digest
+// in the box's list of the archives its copy holds, so the archive carried in
+// again is never restored over the copy that went on past it; that line was
+// appended once the restore was done, and nothing checked it. Here the list
+// keeps no line ([brokenDigestLists]) and a session is carried into a box that
+// holds none, on either harness: the run does not continue what it restored, it
+// starts the session minted for it in its place and says why.
+//
+// Mutation: continue the restore whose digest went unrecorded, as the restores
+// once did, and the run takes up the carried session with no line of it in the
+// box.
+func TestARestoreIsContinuedOnlyOnceItsDigestIsRecorded(t *testing.T) {
+	t.Parallel()
+	for _, list := range brokenDigestLists {
+		t.Run(list.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("Claude Code", func(t *testing.T) {
+				t.Parallel()
+				first, a := sessionBox(t, "2.1.310")
+				_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "begin"})
+				described, body, err := first.OpenCapture(t.Context(), a)
+				if err != nil || body == nil {
+					t.Fatalf("OpenCapture = %v, %v", body, err)
+				}
+				defer func() { _ = body.Close() }()
+				second, b := sessionBox(t, "2.1.310")
+				breakDigestList(t, paths(b).SessionDigests(), list.how)
+				_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+					Carried: &sandbox.CarriedSession{Archive: described, Body: body}})
+				if argv := argvOf(t, b); after(argv, "--resume") != "" || res.Continued || res.SessionID == ran.SessionID {
+					t.Errorf("the run continued %q (argv %q) with no digest of its archive recorded in the box",
+						res.SessionID, argv)
+				}
+				if !strings.Contains(res.FellBack, saysDigestUnrecorded) {
+					t.Errorf("the run reports it fell back because %q, want %q", res.FellBack, saysDigestUnrecorded)
+				}
+			})
+			t.Run("OpenCode", func(t *testing.T) {
+				t.Parallel()
+				run := runScript(t, scriptOpts{session: &continuingOpenCode, carried: openCodeExport(carriedOpenCode),
+					req:           sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly, Steer: steerWiring},
+					brokenDigests: list.how})
+				if got := sessionOf(t, run); got != freshOpenCode {
+					t.Errorf("the run worked in %q with no digest of its export recorded in the box, want the "+
+						"session minted for it, %q", got, freshOpenCode)
+				}
+				if why := recordedWhy(t, run); !strings.Contains(why, saysDigestUnrecorded) {
+					t.Errorf("the run's record says it started anew because %q, want %q", why, saysDigestUnrecorded)
+				}
+			})
+		})
+	}
+}

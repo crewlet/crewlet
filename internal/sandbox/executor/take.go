@@ -512,6 +512,60 @@ const (
 	packNothing = 3
 )
 
+// packDigest is the part of every pack — the run's own as its harness exits,
+// one made on demand, a save — that records the digest of the archive it made
+// at staged/capture as one of the session the shell variable session names that
+// the box's own copy holds ([Paths.SessionDigests]), and reads that line back,
+// BEFORE the archive is moved to where its read reads it: failing, its reason
+// written to staged/error, where the line is not there after.
+//
+// A PACK REPORTS ITS ARCHIVE MADE ONLY ONCE ITS DIGEST IS RECORDED. Every pack
+// keeps its digest so the box never takes an archive of its own for another
+// box's and restores it over the copy that went on past it (carry.go). The
+// packs used to move their archive into place, report it made and only then
+// append its digest, a write nothing checked: on a full disk the archive stood
+// where its read reads it with no digest of it in the box. So the digest is
+// recorded first, of the archive as it will be moved, and the move is made only
+// once the line is there — which a digest recorded and its archive then not
+// moved never makes false, the box's copy holding that archive's session
+// either way. READ BACK, never taken on the append's word: a write a full disk
+// lost can be one the writer was told landed, as [claudeHeldTar]'s lists are
+// read back for. A box without cksum or grep, which every box's userland has,
+// packs nothing it cannot record.
+func packDigest(paths Paths, session, staged string) string {
+	q := sandbox.ShellQuote
+	return fmt.Sprintf(`{ d=$(cksum < %[1]s 2> /dev/null) && %[2]s || { printf '%%s\n' %[3]s > %[4]s 2> /dev/null; false; }; }`,
+		q(staged+"/capture"), recordDigest(paths, session, "d"), q(digestUnrecorded), q(staged+"/error"))
+}
+
+// recordDigest is the part of a box's script that records the line `<session>
+// <digest>` — the values of the shell variables session and digest name — in
+// the box's list of the archives its copy holds ([Paths.SessionDigests]) and
+// reads it back: true only where the digest is not empty and the line is
+// there after. READ BACK, never taken on the append's word: a write a full
+// disk lost can be one its writer was told landed. What every pack records
+// before it moves its archive into place ([packDigest]), and every restore
+// before its run continues what it restored ([claudeSessionGate],
+// [openCodeSessionGate]).
+func recordDigest(paths Paths, session, digest string) string {
+	return fmt.Sprintf(`[ -n "$%[2]s" ] && { printf '%%s %%s\n' "$%[1]s" "$%[2]s" >> %[3]s; } 2> /dev/null && grep -qxF "$%[1]s $%[2]s" %[3]s 2> /dev/null`,
+		session, digest, sandbox.ShellQuote(paths.SessionDigests()))
+}
+
+// digestUnrecorded is why a pack whose digest the box did not record failed
+// ([packDigest]).
+const digestUnrecorded = "the archive's digest could not be recorded in the box's list of the archives " +
+	"its copy of the session holds — taken by the box's cksum, read back by its grep — so the archive was " +
+	"not moved into place"
+
+// restoreDigestUnrecorded is why a run asked to continue a session carried into
+// its box starts one of its own where the carried archive's digest could not
+// be recorded once it was restored ([recordDigest]): continued without it, the
+// box's copy would go on past an archive the box does not know it holds, and
+// that archive, carried in again, would be restored over it.
+const restoreDigestUnrecorded = "its archive's digest could not be recorded in this box's list of the " +
+	"archives its copy of the session holds, so the copy restored from it is not continued"
+
 // keepDigest records digest — `<crc> <length>`, as POSIX cksum prints it for its
 // standard input — as the digest of an archive of session the box's own copy
 // holds ([Paths.SessionDigests]): the line a run's script writes for an archive
