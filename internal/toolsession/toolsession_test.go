@@ -519,12 +519,12 @@ func (d *waitingDispatcher) Call(call toolsession.Call) toolsession.Result {
 }
 
 // A CALL ITS HARNESS GAVE UP ON REACHES THE DISPATCHER AS ABANDONED. A harness
-// that stops waiting for a call cancels its request — Claude Code does at its
-// tool timeout, and discards a late answer — while the call goes on under its
-// run's context, whose effect then happens with no reader for its answer. So the
-// dispatcher is handed whether the request is still waited on, and only that:
-// closed once the harness cancelled the call, and open as a call returns to a
-// harness still waiting for it.
+// that stops waiting for a call can cancel its request — Claude Code does at
+// its tool timeout, and discards a late answer — while the call goes on under
+// its run's context, whose effect then happens with no reader for its answer.
+// So the dispatcher is handed whether the request was cancelled, and only
+// that: closed once the harness cancelled the call, and open as a call returns
+// to a harness still waiting for it.
 //
 // Mutation: hand the dispatcher no signal, or one that is never closed, and the
 // call the harness gave up on is read as one it was answered.

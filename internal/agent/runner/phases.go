@@ -504,7 +504,7 @@ type BridgedCall struct {
 	Late bool
 
 	// Abandoned is a call nobody waited for by the time it returned
-	// (sandbox.BridgeCall.Abandoned): its harness had given up on it — Claude
+	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
 	// Code cancels a call at its tool timeout and discards a late answer — or
 	// its job's session on the bridge had ended. It ran and its effect
 	// happened, while the session of the job that made it shows it with no

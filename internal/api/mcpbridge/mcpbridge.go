@@ -1816,9 +1816,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.stop(after)
 	}
 	// WHETHER ANYBODY STILL WAITS FOR THE ANSWER, read as the tool returns and
-	// before the record: a harness that gave up on the call cancelled its
-	// request, and one whose opening ended has its session closed behind it
-	// ([Call.Abandoned]).
+	// before the record: the harness cancelled its request, or the opening
+	// ended and its session is closed behind it ([Call.Abandoned]). A harness
+	// that stopped waiting without cancelling is not seen here: a request this
+	// transport carries runs on when its harness hangs up on its POST.
 	abandoned := gone(in.Abandoned) || o.over()
 	recorded := args
 	if res.Held {

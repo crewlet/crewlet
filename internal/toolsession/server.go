@@ -38,11 +38,12 @@ type Dispatcher interface {
 	//
 	// NO CONTEXT, deliberately. The only one a session could hand over is
 	// the MCP request's, and a call must never run under it: a harness that
-	// gives up on a call, or dies, cancels its request, and a tool half-way
-	// through a write would stop there. So a call runs under the context of
-	// the run the dispatcher serves, which it holds, and the request's is not
-	// even on offer to be used by mistake: all it is handed of the request is
-	// whether anybody still waits for the answer ([Call.Abandoned]).
+	// gives up on a call can cancel its request, one that dies can end the
+	// connection it came on, and a tool half-way through a write would stop
+	// there. So a call runs under the context of the run the dispatcher
+	// serves, which it holds, and the request's is not even on offer to be
+	// used by mistake: all it is handed of the request is whether the request
+	// ended, cancelled or its connection lost ([Call.Abandoned]).
 	Call(call Call) Result
 }
 
@@ -75,10 +76,13 @@ type Call struct {
 	Meta map[string]any
 
 	// Abandoned is closed once the harness has STOPPED WAITING FOR THE
-	// ANSWER: it cancelled the request (`notifications/cancelled` — Claude
-	// Code sends one at its tool timeout, and discards a late answer), or the
-	// connection the request came on failed. Nil, never closed, for a call no
-	// request carries.
+	// ANSWER and its request shows it: it cancelled the request
+	// (`notifications/cancelled` — Claude Code sends one at its tool timeout,
+	// and discards a late answer), or the connection the request came on
+	// failed (a relay's socket closed). A harness that stops waiting without
+	// either leaves it open: a streamable HTTP POST its harness hangs up on
+	// leaves its request running. Nil, never closed, for a call no request
+	// carries.
 	//
 	// A SIGNAL, NEVER A CONTEXT, for the reason [Dispatcher.Call] takes none:
 	// the call runs under its run's context whatever becomes of the request,

@@ -1757,24 +1757,25 @@ relaunches tells the call twice, as before. No state-log record and no
 ## Amendment: a call nobody waited for is held by no save point
 
 The bridge runs a call under the run's context, never the request's, so a call
-goes on after its harness stops waiting for it. Claude Code, at its tool
-timeout, cancels the call (`notifications/cancelled`) and discards a late
-answer, so its model reads the call as timed out; and a call still running as
-the job's session on the bridge ends — the run settled, or its next job's
-opening replaced it — has no harness left to answer. The call's effect happens
-all the same. A harness that gave up on a call can still end its own run, since
-it waits for no answer it gave up on, and its job can park on a question with
-the call still running. Landing before a relaunch read the round's log, the
-call was listed as its job's own and unmarked: the job's own copy in its box,
-where its harness ended its own run, held it by the line the amendment on that
-copy draws, and a capture of that session placed by its own read counted it at
-its save point — while the session held only that the call timed out. No
-continuation was told it, and a run could make it again.
+goes on after its harness stops waiting for it, which the bridge sees in two
+ways. The harness cancels the request (`notifications/cancelled`), as Claude
+Code does at its tool timeout, discarding a late answer, so its model reads the
+call as timed out. Or the job's session on the bridge ends with the call still
+running — the run settled, or its next job's opening replaced it — and no
+harness is left to answer. The call's effect happens all the same. A harness
+that gave up on a call can still end its own run, since it waits for no answer
+it gave up on, and its job can park on a question with the call still running.
+Landing before a relaunch read the round's log, the call was listed as its
+job's own and unmarked: the job's own copy in its box, where its harness ended
+its own run, held it by the line the amendment on that copy draws, and a
+capture of that session placed by its own read counted it at its save point —
+while the session held only that the call timed out. No continuation was told
+it, and a run could make it again.
 
 **Marked by the bridge, as its tool returns.** The tool session hands the
-dispatcher whether the request is still waited on
-(`toolsession.Call.Abandoned`, the request's `Done` and nothing else of it, so a
-call still never runs under the request); the bridge reads it as the call's
+dispatcher whether the harness cancelled the request
+(`toolsession.Call.Abandoned`, the request's `Done` and nothing else of it, so
+a call still never runs under the request); the bridge reads it as the call's
 tool returns, beside whether the opening has ended, and records the call as one
 nobody waited for where either says so (`mcpbridge.Call.Abandoned`); the
 engine's ledger carries the mark to the round's log
@@ -1804,11 +1805,13 @@ takes it before its round's last collection reads the log (below).
 
 **What it costs.** Each such call is told to every continuation of its round,
 in its brief and so in the continued launch's floor where a capture measured
-the session, and again by every later one. A call still running as its opening
-ended is marked though its harness, alive, may still be handed the answer once
-the session's close lets it go: told again, the safe direction. The worst call
-the log keeps carries the mark within the per-call share the other fields are
-held to (`TestABridgedCallIsHeldToItsShare`).
+the session, and again by every later one. The harness of a call still running
+as its opening ended is never handed the answer: the opening's end closes the
+box's sessions on the bridge, and a session whose close has begun writes no
+answer. Only a call that returns between the opening's end and its sessions'
+close is both marked and answered: told again, the safe direction. The worst
+call the log keeps carries the mark within the per-call share the other fields
+are held to (`TestABridgedCallIsHeldToItsShare`).
 
 **Mid-upgrade.** A build that does not know the mark carries it in `Extra`, and
 holds the call at a save point as any call; no release ships either build, so
@@ -1817,11 +1820,16 @@ change.
 
 **What it does not reach.** A harness that stops waiting for a call without
 cancelling its request, while its job's session on the bridge is still open as
-the call returns: the bridge cannot tell it from one still waiting. And a
-harness that gives up on a call in the moment between the tool's answer and
-that answer's delivery, while the bridge records the call. And what such a call
-committed counts in the turn's outcome only where the log takes it before its
-round's last collection reads the log, as a late call's does: a call still
-running as its run settles lands after that read, and so does one still running
-as a send-back's new round opens the log afresh, so what either committed is in
-no outcome.
+the call returns: the bridge cannot tell it from one still waiting, since a
+request its transport carries runs on when the harness hangs up on its POST.
+Claude Code's own watchdogs on a call give up this way, answering its model
+with an error and cancelling nothing: on 2.1.310, at the settings the engine
+runs it with, every call whose answer has not begun within a minute (measured).
+Such a call lands unmarked, and a save point holds it as any call, though its
+session holds it as timed out. And a harness that gives up on a call in the
+moment between the tool's answer and that answer's delivery, while the bridge
+records the call. And what such a call committed counts in the turn's outcome
+only where the log takes it before its round's last collection reads the log,
+as a late call's does: a call still running as its run settles lands after that
+read, and so does one still running as a send-back's new round opens the log
+afresh, so what either committed is in no outcome.

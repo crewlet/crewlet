@@ -306,7 +306,7 @@ func TestClosingOneRunLeavesAnotherServing(t *testing.T) {
 }
 
 // A CALL NOBODY WAITED FOR IS RECORDED SO. The bridge runs a call under its
-// run's context, so a call goes on once its harness gives up on it — Claude
+// run's context, so a call goes on once its harness cancels it — Claude
 // Code cancels the request at its tool timeout and discards a late answer — and
 // once the opening it was made on ends, its box's sessions closed behind it.
 // Either way its effect happens and no harness is handed its answer: the session

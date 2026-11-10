@@ -744,7 +744,7 @@ type BridgeCall struct {
 	// every write of the round: a call of its job like any other, listed,
 	// numbered and paid for as its job's own, but one whose outcome the
 	// session of the job that made it does not hold — it shows the call with
-	// no outcome or a failed one, the harness having been told it timed out,
+	// no outcome, or a failed one where its harness was told it timed out,
 	// while the call ran on and its effect happened.
 	//
 	// HELD BY NO SAVE POINT, as a late call is, for the reason a late call is
