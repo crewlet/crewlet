@@ -2184,7 +2184,11 @@ const (
 	// all script): 5712 KiB. A pull request settling the work that waits on it,
 	// and why an item waits (its Waits for line, an overtaken question in the
 	// Inbox), merged on top of it, took it to 5712.1 KiB (5,849,155 bytes, +516,
-	// all script): 5713 KiB.
+	// all script): 5713 KiB. A held call naming the decision it carries out, the
+	// vendor permission a built-in needs, the insights and runs fixes, an item's
+	// wait reason once its date has come and a skill's loads beside its offers,
+	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
+	// script): still 5713 KiB.
 	treeBudget = 5<<20 + 593<<10
 )
 
