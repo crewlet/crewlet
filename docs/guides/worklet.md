@@ -1232,7 +1232,13 @@ has ever made, and it has no cheaper mode to fall back to. Its `kinds` are the
 change kinds below and nothing else: one the tracker does not have is
 **refused** naming every kind it does, never answered with an empty feed — a
 filter that matches nothing reads exactly like a project where nothing
-happened.
+happened. A change carries one kind, so one write that moves several fields is
+filed under one of them: handing an item over and setting its status in one
+update is a `status` change whose `fields` carry the assignee too. A kind that
+names a field — `status`, `assignee`, `collaborators`, `watchers`, `tags`,
+`routed` (the team) or `relations` (any link) — therefore keeps every change
+that moved that field, whatever kind it was filed under; a creation stays
+`created`, though its `fields` carry every value it was filed with.
 
 **Every change carries its own before and after.** A row says what KIND of
 change it was (`status`, `view_saved`, `project_updated`, …) and, in `fields`,
