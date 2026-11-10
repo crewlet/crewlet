@@ -246,6 +246,24 @@ export interface AttentionInput {
   setupUnread: readonly string[];
 }
 
+/** A standing alarm's row: the section that draws it, its nodes and since when. */
+function alarmRow(kind: string, n: AdvisorNotice): Attention {
+  const home = alarmHome(kind);
+  return {
+    id: `alarm-${kind}`,
+    severity: "critical",
+    subject: "alarms",
+    icon: "triangle-alert",
+    title: `${alarmKindTitle(kind)} has not cleared`,
+    detail: "The engine raised this alarm and it has not cleared on its own.",
+    ...(n.nodes?.length ? { technical: `Standing on ${n.nodes.join(", ")}.` } : {}),
+    ...(drawnOnBackups(kind) ? alarmsLink() : { path: home.path }),
+    action: `Open ${home.label}`,
+    clears: "Clears when the alarm clears.",
+    ...(n.since ? { at: n.since } : {}),
+  };
+}
+
 /** Whether a finding is about the subject a notice names. */
 function sameSubject(a: AdvisorSubject, b: AdvisorSubject): boolean {
   return (
@@ -501,20 +519,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     if (n.class === "alarm") {
       const kind = n.subject.name ?? "";
       if (kind === "" || kind.startsWith("mcp_")) continue;
-      const home = alarmHome(kind);
-      out.push({
-        id: `alarm-${kind}`,
-        severity: "critical",
-        subject: "alarms",
-        icon: "triangle-alert",
-        title: `${alarmKindTitle(kind)} has not cleared`,
-        detail: "The engine raised this alarm and it has not cleared on its own.",
-        ...(n.nodes?.length ? { technical: `Standing on ${n.nodes.join(", ")}.` } : {}),
-        ...(drawnOnBackups(kind) ? alarmsLink() : { path: home.path }),
-        action: `Open ${home.label}`,
-        clears: "Clears when the alarm clears.",
-        ...at,
-      });
+      out.push(alarmRow(kind, n));
       continue;
     }
     // A CONVERSATION THE ENGINE HOLDS: nothing to decide, and the row says what
@@ -540,7 +545,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       continue;
     }
     const f = findings.find((f) => f.class === n.class && sameSubject(f.subject, n.subject));
-    if (!f) continue;
+    // AN ALARM'S FINDING THIS ANSWER COULD NOT RAISE (its node has not evaluated
+    // yet) is still said, in the alarm's words.
+    if (!f) {
+      if (n.alarm) out.push(alarmRow(n.alarm, n));
+      continue;
+    }
     out.push({
       id: `setup-${[f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("-")}`,
       severity: "critical",

@@ -91,6 +91,8 @@ export interface AdvisorNotice {
   nodes?: string[];
   /** How a held conversation failed: `context_exhausted` or `out_of_memory`. */
   cause?: string;
+  /** The alarm kind that raised a finding's notice, for a reader without the finding. */
+  alarm?: string;
 }
 
 /** Every finding at one revision, the most costly first. */
@@ -100,7 +102,7 @@ export interface AdvisorAnswer {
   /** What reaches the administrators' Inbox; absent from an engine older than the notices. */
   notices?: AdvisorNotice[];
   /**
-   * What the answer could not read (`integrations`, `work`, `ledger`, `alarms`),
+   * What the answer could not read (`integrations`, `work`, `ledger`, `pauses`, `alarms`),
    * so a short list never reads as all clear.
    */
   unread: string[];

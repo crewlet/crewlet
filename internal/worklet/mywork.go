@@ -512,7 +512,7 @@ const (
 		JOIN tracker_tasks t ON t.id = c.task_id`
 	openAsksWhere = `c.ask = ?
 		  AND c.resolved = 0 AND c.answered_by IS NULL
-		  AND c.removed = 0 AND t.removed_at IS NULL`
+		  AND c.removed = 0 AND c.overtaken = '' AND t.removed_at IS NULL`
 
 	// asksPageStatement is [readAsks]' page of them, newest first.
 	asksPageStatement = `

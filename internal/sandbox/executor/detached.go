@@ -248,11 +248,12 @@ type carrier interface {
 	Continues(box, writer string) (bool, string)
 
 	// Pack is the script that packs session NOW, as the run's script packs
-	// it once its harness exits — the same pack, into
-	// [Paths.SessionPackStaging], its digest kept the same way — for a job
-	// that never got to ([Runner.PackCapture]). Run in a login shell with
-	// the box's bin directory first on its PATH, as the run's wrapper runs.
-	Pack(paths Paths, session string) string
+	// it once its harness exits — the same pack, staged in staged, this
+	// pack's own directory ([Paths.SessionPackStaging]), and moved over
+	// [Paths.SessionCapture], its digest kept the same way — for a job that
+	// never got to ([Runner.PackCapture]). Run in a login shell with the
+	// box's bin directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session, staged string) string
 
 	// layout is how the harness's archive is laid out, which is what the
 	// scrub a capture streams it through has to read and write it as
@@ -523,12 +524,19 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		files = append(files, out.Stdout)
 	}
 	// The directories alone are removed recursively; every other target is a
-	// file, removed as it always was. Two statements rather than one joined
-	// by `&&`, so a file that will not go never keeps a directory.
+	// file, removed as it always was. Separate statements rather than one
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	//
+	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack
+	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
+	// removes what matches instead, the glob outside the quotes: one a pack
+	// cut short left, its node stopped as it packed, would otherwise stay in
+	// the box for its life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
-			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
-			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
