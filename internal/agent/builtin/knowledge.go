@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -53,6 +54,10 @@ type KnowledgeSearcher interface {
 // so, never a failed turn.
 type searchKnowledge struct {
 	search KnowledgeSearcher
+
+	// granted reads whether the engine's grant to a seat on a lane is in
+	// place ([Deps.GrantHeld]); nil knows nothing.
+	granted func(ctx context.Context, handle, lane string) (held, known bool)
 
 	// org answers which company is in scope when there is no turn to ask.
 	//
@@ -185,6 +190,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
+	if result.VendorStatus != 0 {
+		return t.vendorRefused(ctx, turn, result), nil
+	}
 	hits := result.Hits
 	degraded := degradedNote(mode, result.Outcome)
 	if len(hits) == 0 && result.ServedMode == "" {
@@ -297,4 +305,48 @@ func partialNote(c knowledge.Coverage) string {
 	}
 	return "\n\nThis search covered only part of the knowledge base — some of the " +
 		"fleet did not answer in time — so a page not listed here may still exist."
+}
+
+// vendorRefused is a vendor's refusal of the searching credential, said only
+// from what the engine knows (E21): the company's connection's refusal is the
+// company's; on the agent's own credential a 401 is that credential, a 403 its
+// grant does not hold is vendor_forbidden, and any other 403 is a plain failure.
+func (t *searchKnowledge) vendorRefused(ctx context.Context, turn *turnctx.Turn, result knowledge.Result) tools.Result {
+	filing, _ := FilingOf(SearchKnowledgeTool)
+	need := filing.Vendor
+	failed := func(words string) tools.Result {
+		return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor + " " + words +
+			" Nothing was searched, so this says nothing about whether a page exists."}
+	}
+	switch {
+	case !result.VendorSelf && result.VendorStatus == http.StatusUnauthorized:
+		return failed("refused the company's connection itself: it is expired or revoked, and an " +
+			"administrator renews it in the " + need.Vendor + " integration.")
+	case !result.VendorSelf:
+		return failed("refused the company's connection for this search: the spaces its account may " +
+			"read may not include these.")
+	case result.VendorStatus == http.StatusUnauthorized:
+		return failed("refused this agent's credential itself: it is expired or revoked, and an " +
+			"administrator renews it in the agent's " + need.Vendor + " access.")
+	}
+	held, known := false, false
+	if seat := seatOf(turn); seat != nil && t.granted != nil {
+		held, known = t.granted(ctx, seat.Handle(), need.Lane)
+	}
+	switch {
+	case known && !held:
+		return refusedBy(tools.RefusalVendorForbidden, nil, need.Refusal(SearchKnowledgeTool))
+	case held:
+		return failed("refused the search although this agent's grant includes reading it; a space's " +
+			"own permissions may withhold it.")
+	}
+	return failed("refused this agent's credential, and whether its grant is in place could not be read.")
+}
+
+// seatOf is the turn's seat, nil outside a turn.
+func seatOf(turn *turnctx.Turn) *org.Role {
+	if turn == nil {
+		return nil
+	}
+	return turn.Seat
 }

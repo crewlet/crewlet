@@ -62,6 +62,7 @@ const (
 	RefusalStoreFull          = mcp.RefusalStoreFull
 	RefusalUnavailable        = mcp.RefusalUnavailable
 	RefusalInternalError      = mcp.RefusalInternalError
+	RefusalVendorForbidden    = mcp.RefusalVendorForbidden
 )
 
 // The class is READ, never stored: a failed [Result] carries one value, its

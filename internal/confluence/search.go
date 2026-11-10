@@ -2,6 +2,8 @@ package confluence
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -129,6 +131,13 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 	}
 
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
+	var refused *APIError
+	if errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized ||
+		refused.Status == http.StatusForbidden) {
+		// THE CREDENTIAL, not the site: the tool says which from the grant.
+		out.VendorStatus, out.VendorSelf = refused.Status, self
+		return out
+	}
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the turn's knowledge block says the knowledge base could "+

@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -137,9 +138,10 @@ func TestEveryGateNamesARowAToolHas(t *testing.T) {
 			t.Errorf("gate %q names no row shape", g)
 		}
 		if !slices.ContainsFunc(filed, func(f struct {
-			tool  string
-			group Group
-			gate  Gate
+			tool   string
+			group  Group
+			gate   Gate
+			vendor VendorNeed
 		}) bool {
 			return f.gate == g
 		}) {
@@ -262,5 +264,26 @@ func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) 
 	}
 	if decided == 0 {
 		t.Fatal("no tool is filed under the health gate, so this decided nothing")
+	}
+}
+
+// EVERY BUILT-IN DECLARES THE VENDOR PERMISSION IT NEEDS (E21): a closed table,
+// one declaration per filed tool, and one that reaches a vendor says which,
+// on which backend, at which level. A row cannot omit it and compile.
+func TestEveryBuiltInDeclaresTheVendorPermissionItNeeds(t *testing.T) {
+	t.Parallel()
+	reaching := map[string]VendorNeed{}
+	for _, f := range filed {
+		if !f.vendor.Reaches() {
+			continue
+		}
+		if f.vendor.Backend == "" || f.vendor.Lane == "" || f.vendor.Permission == "" || f.vendor.Level == "" {
+			t.Errorf("%s reaches %s and does not say on which backend and lane, for what, at which level",
+				f.tool, f.vendor.Vendor)
+		}
+		reaching[f.tool] = f.vendor
+	}
+	if want := map[string]VendorNeed{SearchKnowledgeTool: searchesConfluence}; !maps.Equal(reaching, want) {
+		t.Errorf("the built-ins reaching a vendor are %v, want %v", reaching, want)
 	}
 }
