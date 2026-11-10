@@ -227,10 +227,10 @@ func awaitGroup(t *testing.T, srv *js.Server, done func(js.MetaGroup) bool) js.M
 		if err == nil && done(group) {
 			return group
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the metadata group never reached the state this case needs: "+
 				"%+v (%v)", group, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 }

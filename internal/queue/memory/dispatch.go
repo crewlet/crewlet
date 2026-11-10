@@ -42,6 +42,10 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 		return
 	}
 	sub.draining = true
+	// Counted for [Broker.Idle] from here until the last pass returns: every
+	// handler call this drain makes is inside that span, and a pass a second
+	// caller asks for runs inside it too.
+	b.busyLocked()
 	b.mu.Unlock()
 
 	for {
@@ -50,6 +54,7 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 		b.mu.Lock()
 		if !sub.drainAgain {
 			sub.draining = false
+			b.restLocked()
 			b.mu.Unlock()
 			return
 		}
@@ -669,11 +674,45 @@ func prepend(head, tail []*events.Event) []*events.Event {
 // a stop can never leave a timer that flushes into a seat this node no longer
 // serves.
 type lingerWindow struct {
-	timer *time.Timer
+	// stop cancels the window's timer, on the clock of the client that
+	// opened it ([lingerClock]).
+	stop func() bool
 	// closed guards against the race every one-shot timer has: the
 	// callback may already be running when Stop is called, so it re-reads
 	// this under the broker lock before it delivers anything.
 	closed bool
+}
+
+// lingerClock is what a client's linger windows are timed on: the wall clock,
+// unless this package's own tests hand the client another (export_test.go).
+//
+// A SEAM FOR THE CONFORMANCE SUITE, and the whole of what the twin's dispatch
+// keeps on a clock: a window's timer is its one timer. A case asking what a
+// pause, a hold or a stop does to a window that is open when it lands needs the
+// window open at the verb and ended after it, and on the wall clock nothing
+// orders the two: a runner that reached the verb late met a window that had
+// already flushed. On a clock the case moves, the window ends where the case
+// says and never before. Nothing else reads it: the instants a dead letter is
+// stamped and let go by are the BROKER's clock, as the stream's are on the
+// backend that ships, and a window is the consuming client's.
+type lingerClock interface {
+	// AfterFunc calls f on a goroutine of its own once d has passed, unless
+	// the stop it returns is called first, which reports whether it was.
+	AfterFunc(d time.Duration, f func()) (stop func() bool)
+}
+
+// wallClock is the wall clock as a [lingerClock].
+type wallClock struct{}
+
+func (wallClock) AfterFunc(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
+
+// windowClock is the clock q's linger windows are timed on, and the one place
+// an unset Queue.clock is read as the wall clock.
+func (q *Queue) windowClock() lingerClock {
+	if q.clock != nil {
+		return q.clock
+	}
+	return wallClock{}
 }
 
 func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *consumer, linger time.Duration) {
@@ -682,6 +721,10 @@ func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *con
 	}
 	w := &lingerWindow{}
 	m.window = w
+	// Counted for [Broker.Idle] until it is closed undelivered or the drain
+	// its flush starts has returned: a window still open is a delivery the
+	// broker owes.
+	b.busyLocked()
 	// The window fires outside any caller's context — the publish that
 	// opened it has long returned — so the flush must not inherit that
 	// caller's cancellation, or a returned request would cancel a delivery
@@ -689,20 +732,23 @@ func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *con
 	// so the trace and the logging fields the batch belongs to survive the
 	// timer hop; a bare Background would drop them.
 	flushCtx := context.WithoutCancel(ctx)
-	w.timer = time.AfterFunc(linger, func() { b.flushWindow(flushCtx, sub, m, w) })
+	w.stop = m.client.windowClock().AfterFunc(linger, func() { b.flushWindow(flushCtx, sub, m, w) })
 }
 
-// closeWindowLocked cancels an open window without delivering. What it was
+// closeWindowLocked cancels m's open window without delivering. What it was
 // collecting is NOT lost: those events are in the mailbox, which outlives every
 // attachment.
-func (m *consumer) closeWindowLocked() {
+func (b *Broker) closeWindowLocked(m *consumer) {
 	w := m.window
 	if w == nil {
 		return
 	}
 	m.window = nil
 	w.closed = true
-	w.timer.Stop()
+	w.stop()
+	// Closed undelivered, so it owes nothing: a flush already waiting on
+	// the lock reads closed and delivers nothing.
+	b.restLocked()
 }
 
 func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer, w *lingerWindow) {
@@ -716,6 +762,14 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 	deliverable := deliverableLocked(m)
 	backlog := len(sub.mail)
 	b.mu.Unlock()
+	// THE WINDOW STAYS COUNTED UNTIL ITS FLUSH HAS RUN ([Broker.Idle]): the
+	// drain below counts itself before this lets go, so the broker never
+	// reads as idle between the two.
+	defer func() {
+		b.mu.Lock()
+		b.restLocked()
+		b.mu.Unlock()
+	}()
 
 	if !deliverable {
 		// A stop or a pause during the window loses nothing: the events

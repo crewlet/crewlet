@@ -14,6 +14,15 @@
 // exactly the thing that would let a caller build its own. A broker that drops
 // the request proves it for any reader, whatever it was built with.
 //
+// The one seam there is sits BELOW the hedge, for what no broker can give: a
+// [jsapi.Meta] puts its pages on a client that answers requests itself, so a
+// case can answer them inside a synctest bubble, where a claim about the
+// clock — the bound a page was given, the instant a listing ended — is exact,
+// and where no broker's reply can reach a request. Every term, bound and
+// re-ask above it is the reader's own, and a case answering through it holds
+// that the pages it asked about reached it; whether a read is asked again
+// across a broker that drops it is proved here.
+//
 // # How
 //
 // A subject MAPPING in the account: every request on one leader read's API

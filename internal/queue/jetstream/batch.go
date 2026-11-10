@@ -44,7 +44,12 @@ func (q *Queue) SubscribeBatch(
 			if ctx.Err() != nil {
 				return
 			}
-			if a.blocked() {
+			// THE LOOP TOP that [Queue.Loops] reports, as on the
+			// single-event loop: the gate is read once, and what it said
+			// is what the loop then does.
+			blocked := a.blocked()
+			a.reachedTop(blocked)
+			if blocked {
 				if sleep(ctx, a.q.fetchWait()) != nil {
 					return
 				}
@@ -97,9 +102,13 @@ func (q *Queue) SubscribeBatch(
 // so the instant that opens it is the instant that says how long it is.
 func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []delivery {
 	var batch []delivery
+	// Counted as it is collected, for [Queue.InWindow], and cleared on every
+	// way out: what a drain that has returned holds is no window's.
+	defer a.windowed.Store(0)
 	collect := func(msg jetstream.Msg) {
 		if d, ok := a.toDelivery(msg); ok {
 			batch = append(batch, d)
+			a.windowed.Store(int64(len(batch)))
 		}
 	}
 	// THE PRIORITY LANE FIRST, and all of it the cap allows, without
@@ -131,13 +140,18 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	// unboundedly. With linger 0 (the default) this still drains
 	// everything already available, so a backlog that accumulated while a
 	// previous handler ran coalesces at zero added latency.
-	deadline := time.Now().Add(linger)
+	//
+	// Where it ends, and whether it has, are read off [lingerClock]: the
+	// wall clock outside this package's own tests.
+	clock := a.q.windowClock()
+	deadline := clock.Now().Add(linger)
+	defer a.lingering.Store(false)
 	for len(batch) < maxBatch {
 		if ctx.Err() != nil || a.blocked() {
 			break
 		}
 		wait := a.q.drainFetchWait()
-		if remaining := time.Until(deadline); remaining > wait {
+		if remaining := deadline.Sub(clock.Now()); remaining > wait {
 			wait = min(remaining, a.q.fetchWait())
 		}
 		//nolint:contextcheck // the attachment's fetch scope, as above
@@ -160,11 +174,48 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		// on the first check, so exactly one tail fetch runs — which asks
 		// for the whole remaining cap and is what drains a backlog that
 		// accumulated while the previous handler ran.
-		if !time.Now().Before(deadline) {
+		if !clock.Now().Before(deadline) {
 			break
 		}
+		// THE WINDOW HAS OUTLIVED A FETCH, which a window of nothing never
+		// does: it ends with its one tail fetch, so what this drain collects
+		// from here it collects because the window is open. Only a window
+		// longer than the poll ([Queue.fetchWait]) gets here, since a fetch
+		// waits at most the poll; the conformance harness polls every 25 ms.
+		a.lingering.Store(true)
 	}
 	return batch
+}
+
+// lingerClock is what a drain's linger window ends on: the wall clock, unless
+// this package's own tests hand the queue another (Config.clock).
+//
+// A SEAM FOR THE CONFORMANCE SUITE. A case asking what a pause, a hold or a
+// stop does to a window that is open when it lands needs the window open at the
+// verb and ended after it, and on the wall clock nothing orders the two: a
+// runner that reached the verb late met a window that had already flushed. On a
+// clock the case moves, the window ends where the case says and never before.
+//
+// THE WINDOW'S END, AND NOTHING ELSE. Where the window ends and whether it has
+// are the drain's own decision, read off this; each fetch inside the window
+// keeps its expiry on the wall clock, for the reason the package doc gives (a
+// linger window ends on a clock the conformance suite can move).
+type lingerClock interface {
+	Now() time.Time
+}
+
+// wallClock is the wall clock as a [lingerClock].
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+// windowClock is the clock q's drains end their linger windows on, and the one
+// place an unset Config.clock is read as the wall clock.
+func (q *Queue) windowClock() lingerClock {
+	if q.cfg.clock != nil {
+		return q.cfg.clock
+	}
+	return wallClock{}
 }
 
 func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {

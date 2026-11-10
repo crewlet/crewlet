@@ -362,6 +362,15 @@ func (s *Server) AwaitClusterReady(ctx context.Context, replicas int) error {
 // listeners partitions nothing — and every fleet-failure case above it then
 // passes for the wrong reason. A partitioned member's list is empty.
 //
+// A ROUTE THIS MEMBER DIALLED IS LISTED BEFORE ITS PEER HAS ADMITTED IT, so
+// the list is not "who admitted this member". The peer sends its INFO the
+// moment it accepts the connection, before it reads the CONNECT it judges, and
+// nats-server registers the dialled route on that INFO (route.go's createRoute
+// and processRouteInfo, v2.15.2): a member whose every dial is refused lists
+// each peer for as long as that peer's refusal takes to arrive (#803). Nothing
+// in nats-server's route report tells such a dial from an established route,
+// so a case about refused routes decides on the refusals, never on this.
+//
 // PEERS RATHER THAN CONNECTIONS, which is the whole reason this is not
 // nats-server's own NumRoutes: since 2.10 a member opens a POOL of route
 // connections to each peer (three by default) plus a pinned one per
@@ -1852,6 +1861,15 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		cancel()
 		return nil, fmt.Errorf("consume stream %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
+	// THE END OF CONSUMPTION, taken now, while the consumption runs: the
+	// client closes this channel once its callback has returned for the last
+	// time, and a Closed asked for only after the subscription is gone
+	// answers closed at once, a callback still running or not. For
+	// [Queue.StreamSubscriptions].
+	ended := consumeCtx.Closed()
+	q.mu.Lock()
+	q.feeds = append(consumingFeeds(q.feeds), ended)
+	q.mu.Unlock()
 
 	var once sync.Once
 	return func(context.Context) error {

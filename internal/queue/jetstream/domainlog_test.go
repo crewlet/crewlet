@@ -327,7 +327,7 @@ func (h *watchHeard) heard() []heardCall {
 // the case naming what it was waiting for when the bound runs out first.
 func (h *watchHeard) await(what string, done func([]heardCall) bool) []heardCall {
 	h.t.Helper()
-	bound := time.NewTimer(watchAwait)
+	bound := time.NewTimer(watchAwait) //fixedwait:liveness
 	defer bound.Stop()
 	for {
 		if heard := h.heard(); done(heard) {
@@ -388,12 +388,12 @@ func awaitReplaced(t *testing.T, w *DomainWatch, lost string) string {
 		if name, serving := w.consumer(); name != lost && serving {
 			return name
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			name, serving := w.consumer()
 			t.Fatalf("the watch never replaced its lost consumer %s within %s "+
 				"(now %s, serving %v)", lost, watchAwait, name, serving)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -853,10 +853,10 @@ func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	heard.await("said its connection was away", atLeast(2))
 	deadline := time.Now().Add(watchAwait)
 	for !q.Conn().IsConnected() || q.Conn().Stats().Reconnects == reconnects {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the queue's connection did not come back within %s", watchAwait)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	second := appendHeard(t, log, "crewlet.probe.log.repo.b")
 	want := []heardCall{first, gapThrough(end), second}

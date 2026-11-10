@@ -72,8 +72,8 @@ func testAuth(t *testing.T, cfg Config) *brokerAuth {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		if cfg.ClusterName != "" {
-			cfg.ClusterHost, cfg.ClusterPort = "127.0.0.1", freePort(t)
-			cfg.ClusterURLs = []string{fmt.Sprintf("nats://127.0.0.1:%d", freePort(t))}
+			cfg.ClusterHost, cfg.ClusterPort = "127.0.0.1", freePort(t.Context(), t)
+			cfg.ClusterURLs = []string{fmt.Sprintf("nats://127.0.0.1:%d", freePort(t.Context(), t))}
 		}
 		e, err := startEmbedded(t.Context(), cfg)
 		if err == nil {

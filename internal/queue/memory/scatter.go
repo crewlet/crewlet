@@ -89,6 +89,29 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	}, nil
 }
 
+// Answering reports, of THIS client's registrations on subject, the answers
+// they are running and the requests they are holding for a slot — the sum of
+// their gates' [queue.AnswerGate.Occupancy].
+//
+// Reported so the conformance suite can see a registration's bound hold a
+// request: here a request waits for a slot on a goroutine of its asker's,
+// parked in the gate, where nothing else this twin exports can see it.
+func (q *Queue) Answering(subject string) (running, waiting int) {
+	q.broker.mu.Lock()
+	var gates []*queue.AnswerGate
+	for _, s := range q.broker.servers {
+		if s.owner == q && s.subject == subject {
+			gates = append(gates, s.gate)
+		}
+	}
+	q.broker.mu.Unlock()
+	for _, g := range gates {
+		r, w := g.Occupancy()
+		running, waiting = running+r, waiting+w
+	}
+	return running, waiting
+}
+
 // Ask scatters one request and collects what answers.
 //
 // # Concurrently, unlike every other dispatch in this twin

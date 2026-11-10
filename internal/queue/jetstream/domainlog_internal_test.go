@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -101,6 +104,46 @@ func inBubble(t *testing.T, f func(*testing.T)) {
 	synctest.Test(t, f)
 }
 
+// armedWaits records each wait a fake was handed: what it waited on, the
+// instant it was armed and the deadline it was armed with. It reads no clock
+// but the one the case runs on — a bubbled case's, where the deadline less the
+// instant is exactly what the wait was handed.
+type armedWaits struct {
+	mu    sync.Mutex
+	waits []armedWait
+}
+
+// armedWait is one wait an [armedWaits] recorded.
+type armedWait struct {
+	what         string
+	at, deadline time.Time
+}
+
+func (w armedWait) String() string {
+	const instant = "15:04:05.999999999"
+	return fmt.Sprintf("%s armed at %s to end at %s", w.what, w.at.Format(instant),
+		w.deadline.Format(instant))
+}
+
+// note records a wait on ctx for what, and reports whether ctx carried a
+// deadline; one with none is not recorded.
+func (w *armedWaits) note(ctx context.Context, what string) bool {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.waits = append(w.waits, armedWait{what: what, at: time.Now(), deadline: deadline})
+	return true
+}
+
+func (w *armedWaits) all() []armedWait {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.waits)
+}
+
 // AND A STREAM THAT REALLY IS GONE IS STILL REPORTED — with its own error,
 // not the deadline's.
 //
@@ -143,23 +186,37 @@ func TestACancelledLookupReturnsAtOnce(t *testing.T) {
 	}
 }
 
-// deadlineJS records the deadline the call it was handed actually carried.
+// deadlineJS is a metadata group that HOLDS every create it is asked — no
+// reply, so each request ends when its own term does, as on a cluster whose
+// group has not settled — and records the wait each one was handed.
 type deadlineJS struct {
 	jetstream.JetStream
-	had   bool
-	until time.Time
+	creates armedWaits
+	// asked counts every create, one with no deadline included, and holds
+	// is how many the case's budget can hold: past it a create is ANSWERED,
+	// so one asked for ever — a create no budget bounds — ends.
+	asked, holds int
+	undeadlined  bool
 }
 
 func (f *deadlineJS) CreateConsumer(ctx context.Context, _ string,
 	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
 
-	f.until, f.had = ctx.Deadline()
-	return nil, errors.New("refused, so the read-back below runs")
+	f.asked++
+	if !f.creates.note(ctx, "create") {
+		f.undeadlined = true
+		return nil, errors.New("a create with no deadline, refused rather than held for ever")
+	}
+	if f.asked > f.holds {
+		return nil, errors.New("a create asked more often than its budget holds, refused")
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 // Consumer is the read-back ensureDurableConsumer makes when a create fails,
-// and it refuses too: this case is about the DEADLINE the create carried, and
-// a read-back that answered would only add a second path to reason about.
+// and it refuses too: this case is about the DEADLINES the creates carried,
+// and a read-back that answered would only add a second path to reason about.
 func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
 	return nil, errors.New("not there either")
 }
@@ -173,27 +230,81 @@ func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consum
 // budget, and shorter than [jsprovision.SlowAfter], so the slow-create
 // breadcrumb beside this call could never fire and the retry window it
 // describes did not exist.
+//
+// # Held, in a bubble, and read off the waits it was handed
+//
+// The create is HELD, as a group that has not settled holds it, so it is
+// asked again until its budget is spent; and the case runs IN A SYNCTEST
+// BUBBLE ([inBubble]), where the two minutes that takes are the bubble's and
+// each request's deadline less the instant it was armed is exactly the term it
+// was handed. So the budget is the instant the last request was armed to end
+// at, held to the clustered budget from the call, and every request's term to
+// the clustered ask term or what the budget had left; and the breadcrumb is
+// seen to fire. It used to be one request, answered at once, whose time left
+// was read off the machine's clock once the call had returned and held above
+// the breadcrumb's threshold: a runner that lost five seconds after the create
+// failed it, and a create on a budget of a single term, or on the solo budget,
+// passed it.
+//
+// Mutation: create on the caller's context with no budget of its own, and the
+// create is asked past the clustered budget; give the budget a single term, or
+// read the topology as solo, and the asking ends early.
 func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
 	t.Parallel()
-	js := &deadlineJS{}
-	// A NAMED CLUSTER is what selects the clustered budget — Replicas does
-	// not, and a test that set only it would exercise the solo path while
-	// claiming to cover this one. See [Queue.Clustered].
-	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+	inBubble(t, func(t *testing.T) {
+		// THE CLUSTERED TIMING AS PRODUCTION HAS IT, which is what the
+		// waits are held to — never the queue's own, which a queue that
+		// read its topology wrongly would answer for the wrong topology.
+		clustered := jsprovision.Clustered(true).Timing()
+		// AT MOST ONE REQUEST A RE-ASK FITS IN THE BUDGET, whatever the
+		// term: a create asked more often than that is one no budget bounds.
+		js := &deadlineJS{holds: int(clustered.Budget/clustered.ReAsk) + 1}
+		var logged bytes.Buffer
+		// A NAMED CLUSTER is what selects the clustered budget — Replicas
+		// does not, and a test that set only it would exercise the solo
+		// path while claiming to cover this one. See [Queue.Clustered].
+		q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"},
+			log: slog.New(slog.NewTextHandler(&logged, nil))}
 
-	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot passes.
-	_, _, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
-		jetstream.ConsumerConfig{Durable: "agent-ceo"})
+		// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot
+		// passes.
+		began := time.Now()
+		_, _, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+			jetstream.ConsumerConfig{Durable: "agent-ceo"})
 
-	if !js.had {
-		t.Fatal("the create ran with no deadline, so nats.go's 5s default " +
-			"applies and neither the budget nor the breadcrumb exists")
-	}
-	// It must be the CLUSTERED budget rather than the client's default.
-	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
-		t.Errorf("the create got %v, which is inside the %v slow threshold — "+
-			"the breadcrumb could never fire", left, jsprovision.SlowAfter)
-	}
+		if js.undeadlined {
+			t.Fatal("the create ran with no deadline, so nats.go's 5s default " +
+				"applies and neither the budget nor the breadcrumb exists")
+		}
+		creates := js.creates.all()
+		if len(creates) == 0 {
+			t.Fatal("the create was never asked")
+		}
+		// THE BUDGET: the creates are asked until the clustered budget
+		// from the call is spent, and no further.
+		budgetEnds := began.Add(clustered.Budget)
+		if last := creates[len(creates)-1]; !last.deadline.Equal(budgetEnds) {
+			t.Errorf("the create was asked until %v after the call (%d requests), want "+
+				"the %v clustered budget exactly", last.deadline.Sub(began), len(creates),
+				clustered.Budget)
+		}
+		// AND EACH REQUEST ITS TERM: the clustered ask term, or what the
+		// budget had left when it was asked.
+		for i, c := range creates {
+			want := min(clustered.AskTerm, budgetEnds.Sub(c.at))
+			if got := c.deadline.Sub(c.at); got != want {
+				t.Errorf("create %d, asked %v after the call, was handed %v, want %v — "+
+					"the clustered %v ask term, or what the budget had left",
+					i+1, c.at.Sub(began), got, want, clustered.AskTerm)
+			}
+		}
+		// The breadcrumb the client's default never let fire.
+		if line := logLine(t, &logged, "jetstream_consumer_slow"); !strings.Contains(line,
+			"waited="+jsprovision.SlowAfter.String()) {
+			t.Errorf("the slow-create breadcrumb fired at another threshold than %v: %s",
+				jsprovision.SlowAfter, line)
+		}
+	})
 }
 
 // racedJS is a broker on which THIS node's create loses: the create reports
@@ -357,7 +468,7 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 // unsettledLookupJS is a metadata group that answers no read of the consumer
 // until the consumer's create reaches it: every lookup is DROPPED — no reply,
 // so it ends when its own term does — and the create is what settles the
-// question. It records how long the create was given to be answered in.
+// question. It records the wait each create was handed.
 type unsettledLookupJS struct {
 	jetstream.JetStream
 
@@ -365,10 +476,10 @@ type unsettledLookupJS struct {
 	// the next is asked, so two of them can count at once.
 	lookups atomic.Int32
 	creates int
-	// left is the time the create's context had left when the create
-	// arrived — negative for one handed no deadline at all.
-	left time.Duration
-	made *jetstream.ConsumerInfo
+	armed   armedWaits
+	// undeadlined is a create handed no deadline at all.
+	undeadlined bool
+	made        *jetstream.ConsumerInfo
 }
 
 func (f *unsettledLookupJS) Consumer(ctx context.Context, _, _ string) (jetstream.Consumer, error) {
@@ -384,9 +495,8 @@ func (f *unsettledLookupJS) CreateConsumer(ctx context.Context, _ string,
 	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
 
 	f.creates++
-	f.left = -1
-	if deadline, ok := ctx.Deadline(); ok {
-		f.left = time.Until(deadline)
+	if !f.armed.note(ctx, "create") {
+		f.undeadlined = true
 	}
 	if err := ctx.Err(); err != nil {
 		// A REQUEST ON A SPENT CONTEXT NEVER LEAVES THE CLIENT: nats.go
@@ -422,35 +532,50 @@ func (f *unsettledLookupJS) CreateConsumer(ctx context.Context, _ string,
 // rather than answered, which is the only way the create reaches the budget
 // question at all. The group answers nothing until the create arrives, as one
 // that is still forming does.
+//
+// # The whole budget, exactly
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), the create's deadline less the instant
+// it was armed is exactly what the create was handed, and it must be the whole
+// budget. On the machine's clock it was the time left once the create
+// arrived, held to half the budget: a runner that lost a quarter of a second
+// between deriving the create's deadline and sending it failed that, and a
+// create a quarter of whose budget the lookup had spent passed it.
+//
+// Mutation: derive the create's budget before the lookup, and the create is
+// handed nothing; hand it three quarters of the budget, what a lookup that
+// spent a quarter leaves, and it is short by that quarter.
 func TestAnExhaustedLookupLeavesTheCreateItsWholeBudget(t *testing.T) {
 	t.Parallel()
-	timing := jsprovision.Clustered(false).Timing()
-	timing.Budget, timing.Lookup = 500*time.Millisecond, 500*time.Millisecond
-	timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
-	timing.ReadBack = 200 * time.Millisecond
-	js := &unsettledLookupJS{}
-	q := &Queue{js: js, log: slog.Default(), timing: timing}
+	inBubble(t, func(t *testing.T) {
+		timing := jsprovision.Clustered(false).Timing()
+		timing.Budget, timing.Lookup = 500*time.Millisecond, 500*time.Millisecond
+		timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
+		timing.ReadBack = 200 * time.Millisecond
+		js := &unsettledLookupJS{}
+		q := &Queue{js: js, log: slog.Default(), timing: timing}
 
-	if _, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0); err != nil {
-		t.Fatalf("an open whose lookup went unanswered failed rather than "+
-			"creating the consumer: %v", err)
-	}
-	// HALF THE LOOKUP'S CEILING AS SLACK: a create derived after the lookup
-	// arrives with all but a scheduling delay of its budget left, and one
-	// whose budget ran beside an exhausted lookup arrives with at most the
-	// budget less the whole ceiling.
-	if floor := timing.Budget - timing.Lookup/2; js.left < floor {
-		t.Errorf("the create was handed %v of its %v budget, want at least %v — "+
-			"the lookup before it spent the rest", js.left, timing.Budget, floor)
-	}
-	if js.creates != 1 {
-		t.Errorf("the consumer was created %d time(s), want once", js.creates)
-	}
-	if got := js.lookups.Load(); got < 2 {
-		t.Errorf("the consumer was looked up %d time(s) before the create; the "+
-			"lookup is asked again until its ceiling is spent, and once means "+
-			"this case never reached the exhaustion it is about", got)
-	}
+		if _, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0); err != nil {
+			t.Fatalf("an open whose lookup went unanswered failed rather than "+
+				"creating the consumer: %v", err)
+		}
+		if js.undeadlined {
+			t.Error("the create was handed no deadline at all")
+		}
+		if armed := js.armed.all(); len(armed) != 1 ||
+			armed[0].deadline.Sub(armed[0].at) != timing.Budget {
+			t.Errorf("the create was armed as %v, want its whole %v budget once — "+
+				"the lookup before it spent the rest", armed, timing.Budget)
+		}
+		if js.creates != 1 {
+			t.Errorf("the consumer was created %d time(s), want once", js.creates)
+		}
+		if got := js.lookups.Load(); got < 2 {
+			t.Errorf("the consumer was looked up %d time(s) before the create; the "+
+				"lookup is asked again until its ceiling is spent, and once means "+
+				"this case never reached the exhaustion it is about", got)
+		}
+	})
 }
 
 // existingOnCreateJS is a clustered boot whose lookup fell inside the
@@ -819,19 +944,20 @@ func TestAFailedRebuildKeepsOnlyAConsumerThatCostsTime(t *testing.T) {
 
 // droppedDeleteJS is a metadata group that drops the first delete it is asked
 // for — a leader change, a routed queue discarded at its limit — and answers
-// the second. It records the deadline every delete carried.
+// the second. It records the wait every delete was handed.
 type droppedDeleteJS struct {
 	jetstream.JetStream
-	deletes int
-	had     []bool
-	until   []time.Time
+	asked       int
+	deletes     armedWaits
+	undeadlined bool
 }
 
 func (f *droppedDeleteJS) DeleteConsumer(ctx context.Context, _, _ string) error {
-	f.deletes++
-	until, had := ctx.Deadline()
-	f.until, f.had = append(f.until, until), append(f.had, had)
-	if f.deletes == 1 {
+	f.asked++
+	if !f.deletes.note(ctx, "delete") {
+		f.undeadlined = true
+	}
+	if f.asked == 1 {
 		return nats.ErrTimeout
 	}
 	return nil
@@ -853,40 +979,57 @@ func (f *droppedDeleteJS) CreateConsumer(_ context.Context, _ string,
 // open that now reaches this for a consumer AHEAD of its rows, is a boot that
 // fails over a question nobody heard.
 //
+// A DEADLINE OF ITS OWN is each request's own clustered ask term, from the
+// instant it was asked. IN A SYNCTEST BUBBLE ([inBubble]) that is read off the
+// request's deadline less the instant it was armed, exactly. It used to be
+// each deadline's time left, read off the machine's clock once the reset had
+// returned and held above [jsprovision.SlowAfter]: a runner that lost five
+// seconds in the reset failed it, and a re-ask handed what the first request
+// had left, or the solo term, passed it.
+//
 // What bounds the re-asking as a whole is the provisioning budget, and that is
 // not asserted here: a group that never answers is only distinguishable from
 // one that answers late by waiting the budget out.
+//
+// Mutation: ask the delete once, on the reset's budget, and the dropped one
+// fails the reset; arm one request's deadline for every re-ask, or read the
+// topology as solo, and a delete is handed another term than its own.
 func TestAResetsDeleteIsReAskedOnADeadlineOfItsOwn(t *testing.T) {
 	t.Parallel()
-	js := &droppedDeleteJS{}
-	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
-	c := &DomainConsumer{q: q, stream: "CREWLET_PAGES_LOG", name: "statelog__reset",
-		want: domainConsumerConfig("statelog__reset", 0)}
+	inBubble(t, func(t *testing.T) {
+		js := &droppedDeleteJS{}
+		q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+		c := &DomainConsumer{q: q, stream: "CREWLET_PAGES_LOG", name: "statelog__reset",
+			want: domainConsumerConfig("statelog__reset", 0)}
 
-	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what an adoption
-	// passes.
-	if err := c.Reset(context.Background(), 3); err != nil {
-		t.Fatalf("a reset whose first delete the group dropped failed instead of "+
-			"asking again: %v", err)
-	}
-	if js.deletes != 2 {
-		t.Fatalf("the delete was asked %d time(s), want 2 — once dropped, once "+
-			"answered", js.deletes)
-	}
-	for i, had := range js.had {
-		if !had {
-			t.Fatalf("delete %d carried no deadline, so nats.go's 5s default "+
-				"decides a replicated write", i+1)
+		// A CALLER WITH NO DEADLINE OF ITS OWN, which is what an adoption
+		// passes.
+		if err := c.Reset(context.Background(), 3); err != nil {
+			t.Fatalf("a reset whose first delete the group dropped failed instead of "+
+				"asking again: %v", err)
 		}
-		if left := time.Until(js.until[i]); left <= jsprovision.SlowAfter {
-			t.Errorf("delete %d got %v, inside the %v slow threshold — no "+
-				"clustered term or budget is that short, so this is the "+
-				"client's own default deciding", i+1, left, jsprovision.SlowAfter)
+		if js.asked != 2 {
+			t.Fatalf("the delete was asked %d time(s), want 2 — once dropped, once "+
+				"answered", js.asked)
 		}
-	}
-	if got := c.want.OptStartSeq; got != 4 {
-		t.Fatalf("the reset landed at %d, want 4", got)
-	}
+		if js.undeadlined {
+			t.Fatal("a delete carried no deadline, so nats.go's 5s default decides " +
+				"a replicated write")
+		}
+		// THE CLUSTERED TERM AS PRODUCTION HAS IT, never the queue's own,
+		// which a queue that read its topology wrongly would answer for the
+		// wrong topology.
+		term := jsprovision.Clustered(true).AskTerm()
+		for i, d := range js.deletes.all() {
+			if got := d.deadline.Sub(d.at); got != term {
+				t.Errorf("delete %d was handed %v from the instant it was asked, want "+
+					"the clustered %v ask term of its own", i+1, got, term)
+			}
+		}
+		if got := c.want.OptStartSeq; got != 4 {
+			t.Fatalf("the reset landed at %d, want 4", got)
+		}
+	})
 }
 
 // firstReadJS holds one consumer the last run left, and records how the
@@ -1167,33 +1310,52 @@ func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
 // lifetime, in the loop that also evaluates the node's alarms, and asked until
 // somebody answered, a read of a broker the node could not reach held both for
 // good.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), where the read's timers fire at exactly
+// their time, so the read is held to ending AT its ceiling to the nanosecond.
+// On the machine's clock it was held to ending inside ten of them, which was
+// the claim and a loose one: a read held to five ceilings passed, and a runner
+// that lost ten failed a read that ended at one.
+//
+// Mutation: hold a deadline-less read to another ceiling than the lookup
+// ceiling, and it ends at that one; ask until somebody answers, and it is still
+// being asked ten ceilings on.
 func TestADomainLogReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
 	t.Parallel()
-	s := &silentLeaderStream{}
-	s.lost.Store(1 << 30)
-	l := logOver(s)
-	// A CEILING OF TWENTY REQUESTS rather than production's thirty seconds,
-	// so the case waits it out in about a second.
-	ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
-	l.q.timing.Lookup = ceiling
-	done := make(chan error, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		_, err := l.Stats(ctx)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !jsprovision.Unanswered(ctx, err) {
-			t.Errorf("a read nobody answered ended with %v, not as silence", err)
+	inBubble(t, func(t *testing.T) {
+		s := &silentLeaderStream{}
+		s.lost.Store(1 << 30)
+		l := logOver(s)
+		// A CEILING OF TWENTY REQUESTS rather than production's thirty
+		// seconds, which at this cadence is over five hundred of them, every
+		// one still outstanding when the ceiling ends the read.
+		ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
+		l.q.timing.Lookup = ceiling
+		done := make(chan error, 1)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		began := time.Now()
+		go func() {
+			_, err := l.Stats(ctx)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !jsprovision.Unanswered(ctx, err) {
+				t.Errorf("a read nobody answered ended with %v, not as silence", err)
+			}
+			if took := time.Since(began); took != ceiling {
+				t.Errorf("a read nobody answered ended %v after it began, want "+
+					"exactly its %v lookup ceiling (%d requests)", took, ceiling,
+					s.calls.Load())
+			}
+		case <-time.After(10 * ceiling):
+			cancel()
+			<-done
+			t.Fatalf("a read nobody answers was still being asked %v later, ten "+
+				"times its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
 		}
-	case <-time.After(10 * ceiling):
-		cancel()
-		<-done
-		t.Fatalf("a read nobody answers was still being asked %v later, ten times "+
-			"its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
-	}
+	})
 }
 
 // logOver is a domain log over s, read at [shortReads].
@@ -1216,7 +1378,7 @@ type slowLeaderStream struct {
 func (s *slowLeaderStream) slow(ctx context.Context) error {
 	s.calls.Add(1)
 	select {
-	case <-time.After(s.late):
+	case <-time.After(s.late): //fixedwait:simulated a leader whose backed-up API queue answers each request late
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

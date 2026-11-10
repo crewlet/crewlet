@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -184,10 +183,20 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 // — that lookup bounded by the budget too — and dials each address with an
 // equal share of it. A literal IP is one address, dialled with all of it.
 //
+// IN A SYNCTEST BUBBLE ([inBubble]), where the dialer's clock moves only while
+// every goroutine of the case waits, so what each wait was armed with is read
+// off the instant it was armed and its deadline, exactly: the lookup's whole
+// budget, each address's third of it, and the attempt ending on the sum of
+// those thirds. On the machine's clock each was a reading taken after the
+// arming, short by whatever a loaded runner lost in between — a dial the
+// runner held for half a second read as under half its share, and an attempt
+// it held for a second past the budget as one that took too long.
+//
 // Mutations: drop nats.SkipHostLookup and the client goes back to resolving
 // the name itself; give each address the whole budget and the attempt takes
 // three; leave the lookup unbounded and it waits on DNS for as long as DNS
-// takes.
+// takes; share the budget among one address more than the name has and every
+// dial, the literal IP's too, is handed less than its share.
 func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHas(t *testing.T) {
 	t.Parallel()
 	opts, recorded, err := dialOptions(Config{})
@@ -207,94 +216,77 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 			applied.SkipHostLookup, applied.CustomDialer == recorded)
 	}
 
-	// A silent address answers nothing until its dial's own deadline.
-	type dialled struct {
-		address string
-		budget  time.Duration
-	}
-	silent := func(calls *[]dialled, mu *sync.Mutex) func(context.Context, string, string) (net.Conn, error) {
-		return func(ctx context.Context, _, address string) (net.Conn, error) {
-			deadline, ok := ctx.Deadline()
-			mu.Lock()
-			*calls = append(*calls, dialled{address, time.Until(deadline)})
-			mu.Unlock()
-			if !ok {
-				return nil, errors.New("a dial with no deadline")
-			}
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-	}
-
 	t.Run("a name resolving to three silent addresses", func(t *testing.T) {
 		t.Parallel()
-		d := newInfoDialer(recorded.budget)
-		var looked time.Duration
-		d.lookup = func(ctx context.Context, host string) ([]string, error) {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				return nil, errors.New("a lookup with no deadline")
+		inBubble(t, func(t *testing.T) {
+			d := newInfoDialer(recorded.budget)
+			var looked, dials armedWaits
+			d.lookup = func(ctx context.Context, host string) ([]string, error) {
+				if !looked.note(ctx, host) {
+					return nil, errors.New("a lookup with no deadline")
+				}
+				return []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}, nil
 			}
-			looked = time.Until(deadline)
-			return []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}, nil
-		}
-		var (
-			mu    sync.Mutex
-			calls []dialled
-		)
-		d.connect = silent(&calls, &mu)
-		began := time.Now()
-		if _, err := d.Dial("tcp", "nats.example.com:4222"); err == nil {
-			t.Fatal("a member whose every address is silent was dialled")
-		}
-		took := time.Since(began)
-		if looked <= 0 || looked > externalHandshake {
-			t.Errorf("the lookup was given %v, want at most %v", looked, externalHandshake)
-		}
-		share := externalHandshake / 3
-		tried := map[string]bool{}
-		for _, c := range calls {
-			tried[c.address] = true
-			if c.budget > share || c.budget < share/2 {
-				t.Errorf("%s was dialled with %v, want an equal share of %v: %v",
-					c.address, c.budget, externalHandshake, share)
+			// A silent address answers nothing until its dial's own
+			// deadline.
+			d.connect = func(ctx context.Context, _, address string) (net.Conn, error) {
+				if !dials.note(ctx, address) {
+					return nil, errors.New("a dial with no deadline")
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
 			}
-		}
-		if len(calls) != 3 || len(tried) != 3 {
-			t.Errorf("dialled %v, want each of the three addresses once", calls)
-		}
-		// The shares end on wall-clock deadlines, so the attempt ends on
-		// the budget's; the second of slack is the runner's scheduling,
-		// a third of what giving every address the budget would cost.
-		if took > externalHandshake+time.Second {
-			t.Errorf("one attempt at the member took %v, want about %v", took, externalHandshake)
-		}
+			began := time.Now()
+			if _, err := d.Dial("tcp", "nats.example.com:4222"); err == nil {
+				t.Fatal("a member whose every address is silent was dialled")
+			}
+			took := time.Since(began)
+			if l := looked.all(); len(l) != 1 || l[0].deadline.Sub(l[0].at) != externalHandshake {
+				t.Errorf("the lookup was armed with %v, want the whole %v once", l, externalHandshake)
+			}
+			share := externalHandshake / 3
+			calls := dials.all()
+			tried := map[string]bool{}
+			for _, c := range calls {
+				tried[c.what] = true
+				if got := c.deadline.Sub(c.at); got != share {
+					t.Errorf("%s was dialled with %v, want an equal share of %v: %v",
+						c.what, got, externalHandshake, share)
+				}
+			}
+			if len(calls) != 3 || len(tried) != 3 {
+				t.Errorf("dialled %v, want each of the three addresses once", calls)
+			}
+			// The shares end on their deadlines, so the attempt ends on
+			// their sum: a third of what giving every address the whole
+			// budget would cost.
+			if took > externalHandshake {
+				t.Errorf("one attempt at the member took %v, past the one %v budget it "+
+					"shares among the addresses", took, externalHandshake)
+			}
+		})
 	})
 
 	t.Run("a literal IP", func(t *testing.T) {
 		t.Parallel()
-		d := newInfoDialer(recorded.budget)
-		d.lookup = func(context.Context, string) ([]string, error) {
-			return nil, errors.New("a literal IP was looked up")
-		}
-		var (
-			mu    sync.Mutex
-			calls []dialled
-		)
-		d.connect = func(ctx context.Context, network, address string) (net.Conn, error) {
-			deadline, _ := ctx.Deadline()
-			mu.Lock()
-			calls = append(calls, dialled{address, time.Until(deadline)})
-			mu.Unlock()
-			return nil, errors.New("refused")
-		}
-		if _, err := d.Dial("tcp", "192.0.2.9:4222"); err == nil || err.Error() != "refused" {
-			t.Fatalf("Dial = %v, want the dial's own refusal", err)
-		}
-		if len(calls) != 1 || calls[0].address != "192.0.2.9:4222" ||
-			calls[0].budget > externalHandshake || calls[0].budget < externalHandshake/2 {
-			t.Errorf("dialled %v, want 192.0.2.9:4222 once with the whole %v", calls, externalHandshake)
-		}
+		inBubble(t, func(t *testing.T) {
+			d := newInfoDialer(recorded.budget)
+			d.lookup = func(context.Context, string) ([]string, error) {
+				return nil, errors.New("a literal IP was looked up")
+			}
+			var dials armedWaits
+			d.connect = func(ctx context.Context, _, address string) (net.Conn, error) {
+				dials.note(ctx, address)
+				return nil, errors.New("refused")
+			}
+			if _, err := d.Dial("tcp", "192.0.2.9:4222"); err == nil || err.Error() != "refused" {
+				t.Fatalf("Dial = %v, want the dial's own refusal", err)
+			}
+			if calls := dials.all(); len(calls) != 1 || calls[0].what != "192.0.2.9:4222" ||
+				calls[0].deadline.Sub(calls[0].at) != externalHandshake {
+				t.Errorf("dialled %v, want 192.0.2.9:4222 once with the whole %v", calls, externalHandshake)
+			}
+		})
 	})
 }
 

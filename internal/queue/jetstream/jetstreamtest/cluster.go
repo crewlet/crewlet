@@ -310,8 +310,8 @@ const ClusterStartTerm = ClusterStartBudget / ClusterStartAttempts
 // re-measures, and both retry loops — this package's and [internal/e2e]'s —
 // read this one so the two cannot drift.
 func StartAttemptEnd(now, deadline time.Time) time.Time {
-	if term := now.Add(ClusterStartTerm); term.Before(deadline) {
-		return term
+	if deadline.Sub(now) > ClusterStartTerm { //fixedwait:measure the remaining time only sizes the bound
+		return now.Add(ClusterStartTerm)
 	}
 	return deadline
 }
@@ -417,7 +417,7 @@ func withFreshPorts(ctx context.Context, t testing.TB, what string,
 		// expires never costs a try that was already paid for — and
 		// before the log line, so the last thing a reader sees names
 		// the bound rather than a retry that never happened.
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure the retry's own deadline, which only ends a bring-up that never came up
 			t.Fatalf("no %s came up within %s (%d of %d attempts): %v — the "+
 				"retry is bounded in wall clock as well as in tries, because "+
 				"n attempts at an unbounded cost each is a product nobody "+
