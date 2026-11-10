@@ -70,7 +70,7 @@ import {
   SquareKanbanGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
-import { HELD_REASON, itemHold } from "~/lib/heldConversation.ts";
+import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
 import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -93,6 +93,7 @@ import {
   seatResolvers,
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
+import type { AdvisorNotice } from "~/protocol/advisor.ts";
 import { relTime } from "~/lib/format.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -169,12 +170,12 @@ export function itemFlags(detail: WorkItemDetail) {
  * The engine's hold on the item's conversation (ADR-0117), said where a reader
  * would expect the agent to be working on it, with what releases it.
  */
-export function HeldNote() {
+export function HeldNote({ hold }: { hold: AdvisorNotice }) {
   return (
     <Callout variant="info" icon={<PauseGlyph size="md" />}>
       <span>
-        <strong>Held by the engine:</strong> {HELD_REASON}. Writing on it, or changing the agent's
-        models, releases it.
+        <strong>Held by the engine:</strong> {heldReason(hold)}. Writing on it, or changing the
+        agent's {heldSetting(hold)}, releases it.
       </span>
     </Callout>
   );
@@ -517,7 +518,7 @@ export function WorkItem({ id }: { id: string }) {
                     <>
                       {itemFlags(state.data)}
                       {item.removed && <RemovedNote tomb={item.removed} now={now} />}
-                      {held && <HeldNote />}
+                      {held && <HeldNote hold={held} />}
                       <Coverage answer={state.data} />
                       <ItemEditNote readOnly={READ_ONLY} />
                       <ItemTitle item={item} />

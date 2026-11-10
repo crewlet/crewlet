@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -39,8 +38,8 @@ var boxFactsScript = strings.Join([]string{
 	`for d in "${PLAYWRIGHT_BROWSERS_PATH:-}" /ms-playwright "$HOME/.cache/ms-playwright"; do if [ -n "$d" ] && ls -d "$d"/chromium-* >/dev/null 2>&1; then echo "playwright=chromium"; break; fi; done`,
 	`t=""; if command -v timeout >/dev/null 2>&1; then t="timeout 5"; fi`,
 	`for r in ` + strings.Join(coord.BoxContainerRuntimes, " ") + `; do if command -v "$r" >/dev/null 2>&1 && $t "$r" info >/dev/null 2>&1; then echo "runtime=$r"; break; fi; done`,
-	`if [ -r /sys/fs/cgroup/memory.max ]; then echo "cgroup=$(cat /sys/fs/cgroup/memory.max)"; elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then echo "cgroup=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"; fi`,
-	`if [ -r /proc/meminfo ]; then awk '/^MemTotal:/ {print "total_kb=" $2}' /proc/meminfo; elif command -v sysctl >/dev/null 2>&1; then echo "total=$(sysctl -n hw.memsize 2>/dev/null)"; fi`,
+	MemoryDomainScript,
+	`crewlet_memory`,
 	`exit 0`,
 }, "\n")
 
@@ -61,54 +60,35 @@ func ReadBoxFacts(ctx context.Context, box Sandbox) (BoxFacts, error) {
 }
 
 // parseBoxFacts is the facts in out, each kept only where its value is one
-// this build knows; the memory is the smaller of the cgroup's limit and the
-// machine's.
+// this build knows; the memory is its domain's ceiling ([MemoryDomain.Ceiling]).
 func parseBoxFacts(out string) (BoxFacts, error) {
 	var read BoxFacts
-	var cgroup, total int64
-	var playwright, said bool
+	var playwright bool
 	for line := range strings.Lines(out) {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
 			continue
 		}
-		value = strings.TrimSpace(value)
-		switch key {
+		switch value = strings.TrimSpace(value); key {
 		case "browser":
 			if slices.Contains(coord.BoxBrowsers, value) {
-				read.Browser, said = value, true
+				read.Browser = value
 			}
 		case "playwright":
-			playwright, said = value == "chromium", said || value == "chromium"
+			playwright = value == "chromium"
 		case "runtime":
 			if slices.Contains(coord.BoxContainerRuntimes, value) {
-				read.ContainerRuntime, said = value, true
-			}
-		case "cgroup":
-			if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
-				cgroup, said = n, true
-			}
-		case "total_kb":
-			if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 && n < 1<<53 {
-				total, said = n<<10, true
-			}
-		case "total":
-			if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
-				total, said = n, true
+				read.ContainerRuntime = value
 			}
 		}
-	}
-	if !said {
-		return BoxFacts{}, errBoxFactsEmpty
 	}
 	if read.Browser == "" && playwright {
 		read.Browser = coord.BoxPlaywrightChromium
 	}
-	switch {
-	case cgroup > 0 && (total == 0 || cgroup < total):
-		read.MemoryBytes = cgroup
-	default:
-		read.MemoryBytes = total
+	domain := ParseMemoryDomain(out)
+	read.MemoryBytes = domain.Ceiling()
+	if read == (BoxFacts{}) && !domain.Known() {
+		return BoxFacts{}, errBoxFactsEmpty
 	}
 	return read, nil
 }

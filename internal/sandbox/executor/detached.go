@@ -512,7 +512,7 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(), p.OpenCodeConfig(),
 		p.BaseResult(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh(),
@@ -871,8 +871,13 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if hooks != "" {
 		b.WriteString(attributionExports(hooks))
 	}
-	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
-		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()))
+	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
+	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
+	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
+		sandbox.ShellQuote(paths.MemoryBefore()))
+	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; crewlet_memory > %s 2>/dev/null; ",
+		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()),
+		sandbox.ShellQuote(paths.MemoryAfter()))
 	if out.Result != "" && out.Result != out.Stdout {
 		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
 	}
@@ -1146,6 +1151,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
+
+	// A KILL FOR MEMORY DURING THE JOB, as the kernel counted it in the job's
+	// memory domain; the run ended at its ceiling where its harness was the
+	// process killed (SIGKILL, status 137).
+	result, refused, err = memoryKills(ctx, box, paths, result, refused, code)
+	if err != nil {
+		return sandbox.Result{}, err
+	}
 
 	// WHETHER THE JOB WAS ENDED ON REQUEST, as its script recorded the moment
 	// its harness was over ([Paths.JobEnded]): a run ended so did not finish,
@@ -1517,3 +1530,29 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, l
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
 		"so it was not read", what, path, size, humanSize(int64(limit)))
 }
+
+// memoryKills is result with the kills the kernel made for memory in the job's
+// domain while its harness ran, read off the script's two records of it.
+func memoryKills(ctx context.Context, box sandbox.Sandbox, paths Paths, result sandbox.Result,
+	refused []string, code string) (sandbox.Result, []string, error) {
+
+	var read [2]sandbox.MemoryDomain
+	for i, path := range []string{paths.MemoryBefore(), paths.MemoryAfter()} {
+		text, refusal, err := readWhole(ctx, box, path, "the record of its memory")
+		if err != nil {
+			return sandbox.Result{}, nil, err
+		}
+		if refusal != "" {
+			refused = append(refused, refusal)
+		}
+		read[i] = sandbox.ParseMemoryDomain(text)
+	}
+	if killed, ok := sandbox.KilledBetween(read[0], read[1]); ok && killed > 0 {
+		result.MemoryKills, result.MemoryBytes = killed, read[1].Ceiling()
+		result.OutOfMemory = code == harnessKilled
+	}
+	return result, refused, nil
+}
+
+// harnessKilled is the status a shell gives a child SIGKILL ended: 128 + 9.
+const harnessKilled = "137"

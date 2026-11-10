@@ -2177,7 +2177,10 @@ const (
 	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
 	// measured size's next KiB: 5697 KiB. Spend's turns that changed nothing
 	// took it to 5699.4 KiB (5,836,141 bytes, +2,713, all script): 5700 KiB.
-	treeBudget = 5<<20 + 580<<10
+	// Usage insights in Settings › Diagnostics and the held conversation's
+	// out-of-memory reason, merged on top of it, took it to 5708.4 KiB
+	// (5,845,450 bytes, +9,309, all script): 5709 KiB.
+	treeBudget = 5<<20 + 589<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -508,9 +508,6 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// THE INSIGHTS CONSENT AND QUEUE, until Settings › Diagnostics draws them.
-	"diagnostics_insights": "an administrator's script: GET /diagnostics/insights, as " +
-		"docs/guides/operating-insights.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

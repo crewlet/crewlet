@@ -553,7 +553,9 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # (`response`), delivered refs, activity
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
-                           # error_kind launch_failed or context_exhausted).
+                           # error_kind launch_failed, context_exhausted or
+                           # out_of_memory), and the kills the kernel made
+                           # for memory in its job's domain.
                            # NO PHASE: the
                            # work of the `execute` round that launched it
                            # (`iteration`, `launch_id`), which every spend
