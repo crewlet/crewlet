@@ -260,7 +260,7 @@ func TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith(t *testing.T) {
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
 	lead := r.writer.As("lead", worklet.AuthorHuman, worklet.Provenance{})
 	ops := r.writer.As("ops", worklet.AuthorHuman, worklet.Provenance{})
-	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{})
+	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	ana, bo := "ana", "bo"
 	started := worklet.StatusInProgress
 	write := func(w *worklet.Writer, op, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
