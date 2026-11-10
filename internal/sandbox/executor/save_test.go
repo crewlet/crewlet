@@ -1047,7 +1047,8 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 // place once A's tar read the session; only then does B set it, and only then
 // do A's checks run. A is refused, saying a file was written while the session
 // was packed and naming the task file, and B, whose marker is written after
-// that write, holds.
+// that write, holds. The packs and the case pass their words through fifos the
+// case holds open, so nothing waits on a clock.
 //
 // Mutation: set the files the walk picks to the reference's time rather than
 // the present (`touch -c -r`), and B sets the task file rewritten under A's tar
@@ -1068,48 +1069,50 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	if err := os.MkdirAll(flags, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	claimed, picked := shQuote(flags+"/b-claimed"), flags+"/b-picked"
-	rewritten, set := flags+"/rewritten", flags+"/b-set"
-	sleep, touch := shQuote(hostTool(t, "sleep")), shQuote(hostTool(t, "touch"))
-	// await is shell that waits for flag, thirty seconds at most, and then
-	// exits with status where the flag never came, so an interleaving that
-	// did not happen fails the case rather than pass it.
-	await := func(flag, status string) string {
-		return `i=0; while [ ! -e ` + shQuote(flag) + ` ] && [ "$i" -lt 300 ]; do ` + sleep + ` 0.1; ` +
-			`i=$((i + 1)); done; [ -e ` + shQuote(flag) + ` ] || exit ` + status
-	}
+	// THE WORDS THE PACKS AND THE CASE PASS: B's walk's that it has picked the
+	// task file, which the case waits on before it starts A; A's tar's that the
+	// harness has rewritten that file, which B's walk waits on; and B's walk's
+	// that it has set it, which A's tar waits on. A pack that ends says so in
+	// every fifo a word of its is owed in, so nothing waits on a word that is
+	// not coming (wordInFifo).
+	picked := heldFifo(t, flags, "picked")
+	heldFifo(t, flags, "rewritten")
+	heldFifo(t, flags, "set")
+	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
+	touch := shQuote(hostTool(t, "touch"))
 	// THE FIRST TOUCH OF A WALK IS B'S — the walk's alone passes -c, the
 	// clock's does not — and it says B has picked the task file, then holds
-	// until A's tar has rewritten it; every other touch is this machine's.
+	// until A's tar has had it rewritten; every other touch is this machine's.
 	writeBoxStandIn(t, b, p.BinDir()+"/touch", "#!/bin/sh\n"+
-		`case " $* " in *" -c "*) if mkdir `+claimed+` 2> /dev/null; then : > `+shQuote(picked)+"; "+
-		await(rewritten, "3")+"; "+touch+` "$@"; st=$?; : > `+shQuote(set)+`; exit "$st"; fi;; esac`+"\n"+
+		`case " $* " in *" -c "*) if mkdir `+at("b-claimed")+` 2> /dev/null; then printf 'picked\n' > `+
+		at("picked")+`; read said < `+at("rewritten")+`; [ "$said" = rewritten ] || exit 3; `+touch+` "$@"; `+
+		`st=$?; : > `+at("b-set")+`; printf 'set\n' > `+at("set")+`; exit "$st"; fi;; esac`+"\n"+
 		"exec "+touch+` "$@"`+"\n")
 	// A'S TAR rewrites the task file in place once it has read the session,
 	// and hands A's checks the session only once B has set it.
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `case "$1" in `+
 		shQuote(p.SessionSaveStaging(takerA, ""))+`*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
-		`'{"id":"1","status":"completed"}' > `+shQuote(task)+`; : > `+shQuote(rewritten)+"; "+
-		await(set, "2")+`; exit "$st";; esac`+"\n"+`exec "$tar" -czf "$@"`+"\n"))
+		`'{"id":"1","status":"completed"}' > `+shQuote(task)+`; : > `+at("a-rewrote")+`; printf 'rewritten\n' > `+
+		at("rewritten")+`; read said < `+at("set")+`; [ "$said" = set ] || exit 2; exit "$st";; esac`+"\n"+
+		`exec "$tar" -czf "$@"`+"\n"))
 	packedB := make(chan error, 1)
 	go func() {
 		_, err := runner.PackSave(t.Context(), b, takerB)
+		wordInFifo(flags, "picked", "ended")
+		wordInFifo(flags, "set", "ended")
 		packedB <- err
 	}()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if _, err := os.Stat(picked); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pack B's walk never picked the task file stamped in the box's future")
-		}
-		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
+	word := make([]byte, 64)
+	n, err := picked.Read(word)
+	if err != nil || !strings.HasPrefix(string(word[:n]), "picked") {
+		t.Fatalf("pack B's walk never picked the task file stamped in the box's future: it said %q (%v)",
+			word[:n], err)
 	}
 	_, errA := runner.PackSave(t.Context(), b, takerA)
+	wordInFifo(flags, "rewritten", "ended")
 	errB := <-packedB
-	for _, flag := range []string{rewritten, set} {
-		if _, err := os.Stat(flag); err != nil {
+	for _, flag := range []string{"a-rewrote", "b-set"} {
+		if _, err := os.Stat(filepath.Join(flags, flag)); err != nil {
 			t.Fatalf("the packs never ran as the case has them: no %s (pack A: %v; pack B: %v)", flag, errA,
 				errB)
 		}
@@ -1137,11 +1140,12 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 // appends to its transcript and to a subagent's thread once each pack's tar
 // has read them, as a harness still working does — under each pack, after its
 // tar and before its checks — and the first pack's tar, once it has packed,
-// holds until the second pack's has packed too, so the second pack starts —
-// and lists the session, writes its marker and packs — while the first has yet
-// to check what it packed: each pack holds, each hands back a whole archive
+// holds until the second pack's has packed too, so the second pack lists the
+// session, writes its marker and packs while the first has yet to check what
+// it packed: each pack holds, each hands back a whole archive
 // whose transcript is a byte prefix of what the harness wrote, and once each
-// is released neither leaves a file behind.
+// is released neither leaves a file behind. The tars pass their words through
+// a fifo the case holds open, so nothing waits on a clock.
 //
 // WHAT TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive LEAVES OUT, and
 // only that: that case holds two reads of a job whose harness has exited, on
@@ -1170,7 +1174,10 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	if err := os.MkdirAll(flags, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	first, second := flags+"/first-packed", flags+"/second-packed"
+	// THE SECOND PACK'S WORD that its tar has packed, which the first pack's
+	// tar waits on; a pack that ends says so in its stead (wordInFifo).
+	heldFifo(t, flags, "second")
+	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
 	// THE HARNESS WRITES once a pack's tar has read the session: a line
 	// appended to its transcript and to a subagent's thread, the one change a
 	// pack beside a working harness takes; a write that fails fails the tar.
@@ -1180,15 +1187,14 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 			shQuote(thread) + ` || exit 4`
 	}
 	// THE FIRST TAR TO CLAIM IS THE FIRST PACK'S: it packs, the harness
-	// writes, and it says so and holds — thirty seconds at most, and then
-	// fails, so an interleaving that did not happen fails the case — until the
-	// second pack's tar has packed, the harness has written again, and it has
-	// said so.
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+shQuote(flags+"/claimed")+
-		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; `+writes("first")+`; : > `+shQuote(first)+`; i=0; `+
-		`while [ ! -e `+shQuote(second)+` ] && [ "$i" -lt 300 ]; do `+shQuote(hostTool(t, "sleep"))+` 0.1; `+
-		`i=$((i + 1)); done; [ -e `+shQuote(second)+` ] || exit 3; exit "$st"; fi`+"\n"+
-		`"$tar" -czf "$@"; st=$?; `+writes("second")+`; : > `+shQuote(second)+`; exit "$st"`+"\n"))
+	// writes, and it holds until the second pack's tar has packed and the
+	// harness has written again — failing where the word it is given is any
+	// other, so an interleaving that did not happen fails the case.
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+at("claimed")+
+		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; `+writes("first")+`; : > `+at("first-packed")+`; `+
+		`read said < `+at("second")+`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
+		`"$tar" -czf "$@"; st=$?; `+writes("second")+`; : > `+at("second-packed")+`; printf 'packed\n' > `+
+		at("second")+`; exit "$st"`+"\n"))
 	type packed struct {
 		body    io.ReadCloser
 		release func(context.Context)
@@ -1198,12 +1204,13 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	for range 2 {
 		go func() {
 			_, body, release, err := runner.PackCapture(t.Context(), b, true)
+			wordInFifo(flags, "second", "ended")
 			packs <- packed{body: body, release: release, err: err}
 		}()
 	}
 	results := []packed{<-packs, <-packs}
-	for _, flag := range []string{first, second} {
-		if _, err := os.Stat(flag); err != nil {
+	for _, flag := range []string{"first-packed", "second-packed"} {
+		if _, err := os.Stat(filepath.Join(flags, flag)); err != nil {
 			t.Errorf("the packs never ran as the case has them: no %s", flag)
 		}
 	}
@@ -1591,37 +1598,63 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 // THE CLEAR BEFORE EVERY RUN REMOVES THE SAVES' FILES, whoever took them: two
 // takers' saves and the staging directory a save cut short left, none of which
 // a later job's take may read as its own, and nothing the box keeps for its
-// life — the digests of the archives its copy holds stay.
+// life — the digests of the archives its copy holds stay. In a box whose home's
+// path holds a space, which the clear quotes, as in any other.
 //
 // Mutation: leave the saves out of the clear, or quote their pattern so it
-// matches nothing, and a file outlives it.
+// matches nothing, and a file outlives it; leave the work directory unquoted,
+// and in the box whose home's path holds a space the clear splits that path
+// into words and removes none of them.
 func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	t.Parallel()
-	runner, b := sessionBox(t, "2.1.310")
-	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
-	p := paths(b)
-	for _, taker := range []string{takerA, takerB} {
-		if _, err := runner.PackSave(t.Context(), b, taker); err != nil {
-			t.Fatalf("saving for %s: %v", taker, err)
-		}
-	}
-	// A SAVE CUT SHORT, its node stopped as it packed.
-	if err := b.WriteFile(t.Context(), p.SessionSaveStaging(takerA, "a-save-cut-short")+"/capture",
-		[]byte("part of a save")); err != nil {
-		t.Fatal(err)
-	}
-	digests := boxFile(t, b, p.SessionDigests())
-	if err := runner.ClearArtifacts(t.Context(), b); err != nil {
-		t.Fatalf("ClearArtifacts: %v", err)
-	}
-	for _, left := range []string{p.SessionSave(takerA), p.SessionSave(takerB),
-		p.SessionSaveStaging(takerA, "a-save-cut-short")} {
-		if boxHas(t, b, left) {
-			t.Errorf("%s outlived the clear", left)
-		}
-	}
-	if got := boxFile(t, b, p.SessionDigests()); got != digests || got == "" {
-		t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
+	for _, tc := range []struct{ name, root string }{
+		{name: "a box", root: "boxes"},
+		{name: "a box whose home's path holds a space", root: "the boxes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct,
+				StateDir: filepath.Join(t.TempDir(), tc.root)})
+			if err != nil {
+				t.Fatalf("NewLocal: %v", err)
+			}
+			b, err := local.Create(t.Context(), sandbox.Spec{})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			t.Cleanup(func() { b.Close(t.Context()) })
+			p := paths(b)
+			if strings.Contains(p.WorkDir(), " ") != strings.Contains(tc.root, " ") {
+				t.Fatalf("the box's work directory is %q, under the root %q", p.WorkDir(), tc.root)
+			}
+			// TWO TAKERS' SAVES, AND A SAVE CUT SHORT, its node stopped as it
+			// packed.
+			saved := []string{p.SessionSave(takerA), p.SessionSave(takerB),
+				p.SessionSaveStaging(takerA, "a-save-cut-short") + "/capture"}
+			for _, file := range saved {
+				if err := b.WriteFile(t.Context(), file, []byte("an archive of the session")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			const digests = "0b6e2a1c-3d4f-4a5b-8c7d-9e0f1a2b3c4d 4294967295 42\n"
+			if err := b.WriteFile(t.Context(), p.SessionDigests(), []byte(digests)); err != nil {
+				t.Fatal(err)
+			}
+			if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), b); err != nil {
+				t.Fatalf("ClearArtifacts: %v", err)
+			}
+			for _, file := range saved {
+				if boxHas(t, b, file) {
+					t.Errorf("%s outlived the clear", file)
+				}
+			}
+			if left := saveStagingLeft(t, b, takerA); len(left) > 0 {
+				t.Errorf("the clear left a save's staging directory: %s", strings.Join(left, ", "))
+			}
+			if got := boxFile(t, b, p.SessionDigests()); got != digests {
+				t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
+			}
+		})
 	}
 }
 
