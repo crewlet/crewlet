@@ -57,15 +57,15 @@ func (r *Reader) TurnsMoved(ctx context.Context, q TurnsMovedQuery) (map[string]
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, turnsMovedStatement, string(turns), string(still))
-		if err != nil {
-			return err
+		rows, qerr := tx.QueryContext(ctx, turnsMovedStatement, string(turns), string(still))
+		if qerr != nil {
+			return qerr
 		}
 		for rows.Next() {
 			var turn string
-			if err := rows.Scan(&turn); err != nil {
+			if serr := rows.Scan(&turn); serr != nil {
 				_ = rows.Close()
-				return err
+				return serr
 			}
 			out[turn] = true
 		}
