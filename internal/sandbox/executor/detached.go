@@ -249,14 +249,16 @@ type carrier interface {
 
 	// Pack is the script that packs session NOW, as the run's script packs
 	// it once its harness exits — the same pack, staged in staged, this
-	// pack's own directory ([Paths.SessionPackStaging]), and moved over
-	// [Paths.SessionCapture], its digest kept the same way — for a job that
-	// never got to ([Runner.PackCapture]): one that is over, or, where working
-	// says so, one its box would not end, its harness still working, which a
-	// harness whose files a pack reads beside it holds to a stricter rule
-	// ([claudeHeldTar]). Run in a login shell with the box's bin directory
-	// first on its PATH, as the run's wrapper runs.
-	Pack(paths Paths, session, staged string, working bool) string
+	// pack's own directory ([Paths.SessionPackStaging]), and moved over dest,
+	// its digest kept the same way — for a job that never got to
+	// ([Runner.PackCapture]): one that is over, moved over
+	// [Paths.SessionCapture], or, where working says so, one its box would not
+	// end, its harness still working, moved to the pack's own
+	// [Paths.SessionPackHeld] for its reader alone, which a harness whose
+	// files a pack reads beside it holds to a stricter rule ([claudeHeldTar]).
+	// Run in a login shell with the box's bin directory first on its PATH, as
+	// the run's wrapper runs.
+	Pack(paths Paths, session, staged, dest string, working bool) string
 
 	// layout is how the harness's archive is laid out, which is what the
 	// scrub a capture streams it through has to read and write it as
@@ -566,7 +568,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
 	// removes what matches instead, the glob outside the quotes: one a pack
 	// cut short left, its node stopped as it packed, would otherwise stay in
-	// the box for its life.
+	// the box for its life — as would the archive a pack of a job still
+	// working keeps beside it for its read ([Paths.SessionPackHeld]), where
+	// that read was cut short before it removed it.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),

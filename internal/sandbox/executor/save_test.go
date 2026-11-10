@@ -2,6 +2,8 @@ package executor_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -1037,32 +1039,36 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 }
 
 // TWO PACKS ON DEMAND OF ONE BOX AT ONCE BOTH HOLD BESIDE A HARNESS STILL
-// WRITING, each staged in a directory of its own. Two reads of one job its box
-// would not end — a stop's and a collection's — each pack it now as it stands,
-// by the rule of a pack beside a harness that may still work, and each such
-// pack keeps what it lists, its marker and its archive in its own staging
-// directory. Here the harness appends to its transcript and to a subagent's
-// thread once each pack's tar has read them, as a harness still working does,
-// and the first pack's tar, once it has packed, holds until the second pack's
-// has packed too, so the second pack starts — and lists the session, writes its
-// marker and packs — while the first has yet to check what it packed: each pack
-// holds, each hands back a whole archive whose transcript is a byte prefix of
-// what the harness wrote, and neither leaves a staging directory behind.
+// WRITING, each staged in a directory of its own and each its own read's. Two
+// reads of one job its box would not end — a stop's and a collection's — each
+// pack it now as it stands, by the rule of a pack beside a harness that may
+// still work, and each such pack keeps what it lists, its marker and its
+// archive in its own staging directory, and its archive once made in its own
+// place, for its read (executor.Paths.SessionPackHeld). Here the harness
+// appends to its transcript and to a subagent's thread once each pack's tar
+// has read them, as a harness still working does — under each pack, after its
+// tar and before its checks — and the first pack's tar, once it has packed,
+// holds until the second pack's has packed too, so the second pack starts —
+// and lists the session, writes its marker and packs — while the first has yet
+// to check what it packed: each pack holds, each hands back a whole archive
+// whose transcript is a byte prefix of what the harness wrote, and once each
+// is released neither leaves a file behind.
 //
 // WHAT TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive LEAVES OUT, and
 // only that: that case holds two reads of a job whose harness has exited, on
 // either harness, for a read of a job that left no archive and for one that
 // packs the job as it stands — which here is a pack held to the working rule —
-// so it holds a read's way to its pack, and not a session that changes between
-// and under the two packs, which a pack beside a working harness is made for.
-// A case of two packs once the harness is gone would be that case again.
+// so it holds a read's way to its pack, and not a session that changes under
+// each pack, after its tar and before its checks, which a pack beside a
+// working harness is made for. A case of two packs once the harness is gone
+// would be that case again.
 //
-// Mutation: stage every pack on demand in one directory, and the second pack's
-// start clears the first's lists and its archive — one pack moves the other's
-// archive over the job's capture as its own, and the other's move finds
-// nothing to move — so one of the two is refused. Compare a transcript's whole
-// live file with what the archive holds of it, rather than its first as many
-// bytes, and both packs are refused: the harness wrote after each tar.
+// Mutation: stage every pack on demand in one directory, and the two packs
+// share one archive and one set of lists: the first to move takes the archive
+// and the other's move finds nothing, or the first done removes the other's
+// lists under its checks, so one of the two is refused. Compare a transcript's
+// whole live file with what the archive holds of it, rather than its first as
+// many bytes, and both packs are refused: the harness wrote after each tar.
 func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1095,22 +1101,18 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 		`i=$((i + 1)); done; [ -e `+shQuote(second)+` ] || exit 3; exit "$st"; fi`+"\n"+
 		`"$tar" -czf "$@"; st=$?; `+writes("second")+`; : > `+shQuote(second)+`; exit "$st"`+"\n"))
 	type packed struct {
-		body io.ReadCloser
-		err  error
+		body    io.ReadCloser
+		release func(context.Context)
+		err     error
 	}
 	packs := make(chan packed, 2)
 	for range 2 {
 		go func() {
-			_, body, err := runner.PackCapture(t.Context(), b, true)
-			packs <- packed{body: body, err: err}
+			_, body, release, err := runner.PackCapture(t.Context(), b, true)
+			packs <- packed{body: body, release: release, err: err}
 		}()
 	}
 	results := []packed{<-packs, <-packs}
-	for _, got := range results {
-		if got.body != nil {
-			t.Cleanup(func() { _ = got.body.Close() })
-		}
-	}
 	for _, flag := range []string{first, second} {
 		if _, err := os.Stat(flag); err != nil {
 			t.Errorf("the packs never ran as the case has them: no %s", flag)
@@ -1125,6 +1127,8 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 			t.Error("a pack made beside another of the same box handed back no archive")
 		default:
 			kept, ok := archiveMembers(t, got.body)[f.transcript]
+			_ = got.body.Close()
+			got.release(t.Context())
 			switch {
 			case !ok:
 				t.Error("a pack made beside another of the same box handed back no transcript")
@@ -1135,7 +1139,7 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 		}
 	}
 	if left := packStagingLeft(t, b); len(left) > 0 {
-		t.Errorf("the packs left their staging directories: %s", strings.Join(left, ", "))
+		t.Errorf("the packs left their files behind: %s", strings.Join(left, ", "))
 	}
 }
 
@@ -1526,5 +1530,113 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	}
 	if got := boxFile(t, b, p.SessionDigests()); got != digests || got == "" {
 		t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
+	}
+}
+
+// A TAKE OF A JOB STILL WORKING NEVER MOVES ITS ARCHIVE OVER THE JOB'S CAPTURE.
+// The capture is what every read of a job that is over takes as its last, and
+// the job's own end pack moves its final archive there the moment its harness
+// exits — which can come while a read packs the job as it stands, a pack
+// beside a working harness taking seconds to check what it read. Here, on
+// either harness, the program a pack writes its archive with (Claude Code's
+// tar, an OpenCode export's gzip) is played so that, once the take's pack has
+// written its archive, the job's final archive lands over the capture, as the
+// job's own end pack moves it there: the take hands back a whole archive of
+// the session, packed for it alone (executor.Paths.SessionPackHeld); the
+// capture still holds the job's final archive after it; and once the take's
+// reader is closed, nothing of the pack is left in the box.
+//
+// Mutation: move the archive of a job still working over the capture, as a
+// pack of a job that is over moves its own, or have either harness's pack move
+// it there whatever it is handed, and the job's final archive is replaced by
+// the older one; leave the archive packed for the take behind once the take
+// is done, and it is found after.
+func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testing.T) {
+	t.Parallel()
+	const final = "the job's own final archive, moved over the capture as its harness exited"
+	harnesses := []struct {
+		name string
+		// packer is the program the harness's pack writes its archive with,
+		// and word the first word of the pack's call of it.
+		packer, word string
+		// job is a box whose job is still working, and its session's id.
+		job func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string)
+		// lacks is what archive lacks of a whole archive of session: "" where
+		// it lacks nothing.
+		lacks func(t *testing.T, archive []byte, session string) string
+	}{
+		{name: "Claude Code", packer: "tar", word: "-czf",
+			job: func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string) {
+				runner, b := sessionBox(t, "2.1.310")
+				_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+				forgetCapture(t, b)
+				return runner, b, ran.SessionID
+			},
+			lacks: func(t *testing.T, archive []byte, session string) string {
+				if _, ok := archiveMembers(t, bytes.NewReader(archive))[filesOf(session).transcript]; !ok {
+					return "its transcript"
+				}
+				return ""
+			}},
+		{name: "OpenCode", packer: "gzip", word: "-c",
+			job: func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string) {
+				runner, b := openCodeBox(t, t.TempDir())
+				dir := t.TempDir()
+				writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
+					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+				const session = "ses_0123456789abcdef0123456789"
+				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
+					[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return runner, b, session
+			},
+			lacks: func(t *testing.T, archive []byte, session string) string {
+				if export := gunzipped(t, archive); !json.Valid(export) ||
+					!strings.Contains(string(export), `"id":"`+session+`"`) {
+					return "the one JSON document of the session"
+				}
+				return ""
+			}},
+	}
+	for _, h := range harnesses {
+		t.Run(h.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b, session := h.job(t)
+			p := paths(b)
+			// THE JOB'S OWN END PACK LANDS as the take's pack has written its
+			// archive and has yet to move it.
+			own := shQuote(hostTool(t, h.packer))
+			writeBoxStandIn(t, b, p.BinDir()+"/"+h.packer, "#!/bin/sh\n"+
+				`if [ "$1" != `+shQuote(h.word)+` ]; then exec `+own+` "$@"; fi`+"\n"+
+				own+` "$@"; st=$?`+"\n"+
+				`printf '%s' `+shQuote(final)+` > `+shQuote(p.SessionCapture())+` || exit 5`+"\n"+
+				`exit "$st"`+"\n")
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+			if err != nil || taken.Body == nil {
+				t.Fatalf("the take of a job still working = %+v, %v; want its session packed as it stands", taken, err)
+			}
+			archive, readErr := io.ReadAll(taken.Body)
+			_ = taken.Body.Close()
+			switch {
+			case readErr != nil:
+				t.Errorf("the take was not read whole: %v", readErr)
+			case h.lacks(t, archive, session) != "":
+				t.Errorf("the take handed back an archive of the session without %s", h.lacks(t, archive, session))
+			}
+			if got := boxFile(t, b, p.SessionCapture()); got != final {
+				t.Errorf("the job's capture holds %d bytes after the take, not the job's own final archive: the "+
+					"take moved its archive over it", len(got))
+			}
+			if left := packStagingLeft(t, b); len(left) > 0 {
+				t.Errorf("the take left its pack's files behind: %s", strings.Join(left, ", "))
+			}
+		})
 	}
 }

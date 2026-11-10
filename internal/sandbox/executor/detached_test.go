@@ -49,8 +49,8 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.ClaudeSkillsSettings(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
-		p.SessionPackStaging("a-pack"), p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
-		p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
+		p.SessionPackStaging("a-pack"), p.SessionPackHeld("a-pack"), p.ClaudeConfigDir(), p.JobScript(),
+		p.JobEnded(), p.SessionSave("node-a:a-taker"), p.SessionSaveStaging("node-a:a-taker"),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())

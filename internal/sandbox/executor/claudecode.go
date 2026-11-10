@@ -112,8 +112,8 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // session beside a harness that may still be working by the same pack, held to
 // a stricter rule ([claudeHeldTar]) that first sets every file of the session
 // stamped in the box's future to the box's present: a job its box would not
-// end ([ClaudeCode.Pack]), and a save, to its taker's own path
-// ([ClaudeCode.PackSave]).
+// end ([ClaudeCode.Pack]), for the read that packs it alone, and a save, to its
+// taker's own path ([ClaudeCode.PackSave]).
 //
 // # Its end, on request
 //
@@ -628,9 +628,11 @@ func claudeCapture(paths Paths) string {
 type packAt struct {
 	// staged is the directory the archive is made in, and dest the path it is
 	// moved over whole once it is made: the run's script's own pair
-	// ([Paths.SessionStaging], [Paths.SessionCapture]), a pack on demand's
-	// (its own [Paths.SessionPackStaging], the same capture), or a save's,
-	// its taker's own ([Paths.SessionSaveStaging], [Paths.SessionSave]).
+	// ([Paths.SessionStaging], [Paths.SessionCapture]); a pack on demand's,
+	// its own [Paths.SessionPackStaging] and the same capture for a job that
+	// is over, its own [Paths.SessionPackHeld] for one still working; or a
+	// save's, its taker's own ([Paths.SessionSaveStaging],
+	// [Paths.SessionSave]).
 	staged, dest string
 
 	// working says the pack is made beside a harness that may still be
@@ -809,8 +811,9 @@ func claudePack(paths Paths, at packAt) string {
 // saw it, a whole prefix of what the harness wrote, at most its last line torn,
 // which the restore cuts back ([claudeSessionGate]). A pack that fails leaves
 // nothing of its own: its staging directory goes with it, and the archive
-// already at its destination — the last save its taker made, or the job's
-// capture — is never moved over.
+// already at its destination — the last save its taker made — is never moved
+// over; a pack on demand of a job still working moves nothing over the job's
+// capture at all ([Paths.SessionPackHeld]).
 //
 // THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, and of the other
 // `.jsonl` members only one written since the marker. The transcript is the one
@@ -1335,10 +1338,11 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into staged, this pack's own staging directory, and over the job's capture,
-// its digest kept — ending [packNothing] where the harness wrote no transcript,
-// and [packFailed] where it did and no archive was made, its error stream
-// saying why ([Runner.PackCapture]).
+// into staged, this pack's own staging directory, and over dest — the job's
+// capture for a job that is over, the pack's own for one still working
+// ([Paths.SessionPackHeld]) — its digest kept, ending [packNothing] where the
+// harness wrote no transcript, and [packFailed] where it did and no archive was
+// made, its error stream saying why ([Runner.PackCapture]).
 //
 // HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
 // working says the job may still be working — one its box would not end, its
@@ -1348,9 +1352,8 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // that is over has no harness left to write under a pack, and the working
 // rule would cost it the wait for the box's clock, and refuse a file that a
 // process its harness started, outliving it, writes as it packs.
-func (ClaudeCode) Pack(paths Paths, session, staged string, working bool) string {
-	return claudeOnDemand(paths, session,
-		packAt{staged: staged, dest: paths.SessionCapture(), working: working})
+func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) string {
+	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: working})
 }
 
 // PackSave packs a save of session now, beside a harness that may still be

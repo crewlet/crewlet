@@ -69,10 +69,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// of a pack beside a harness that may still write (take.Pack says which).
 	// A SAVE is its taker's own archive and nothing else: never the job's
 	// capture, which every read of a job that is over takes as its last,
-	// and never one packed here, which would move over that capture.
+	// and never packed here: it is packed first, so that the scrub's values
+	// are read once it is.
+	//
+	// WHAT A PACK MADE HERE LEFT FOR THIS TAKE ALONE — the archive of a job
+	// still working ([Paths.SessionPackHeld]) — is released once the take is
+	// done with it: once both passes of the scrub have read it, or once it is
+	// refused unread.
 	var (
 		archive sandbox.SessionArchive
 		body    io.ReadCloser
+		release = func(context.Context) {}
 		err     error
 	)
 	switch {
@@ -86,7 +93,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			archive, body, err = r.OpenCapture(ctx, box)
 		}
 		if err == nil && body == nil {
-			archive, body, err = r.PackCapture(ctx, box, take.Pack)
+			archive, body, release, err = r.PackCapture(ctx, box, take.Pack)
 		}
 	}
 	if err != nil || body == nil {
@@ -94,6 +101,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	}
 	if archive.Size > take.MaxBytes {
 		_ = body.Close()
+		release(ctx)
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at", archive.Size, take.MaxBytes)
 	}
@@ -128,6 +136,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		// meter's last line.
 		meter.finish(scrubErr)
 		_ = write.CloseWithError(scrubErr)
+		// AFTER THE READER'S END, which a release never holds up, and before
+		// the goroutine's, which the reader's close waits for: no pack's
+		// archive outlives the take that was handed it.
+		release(ctx)
 	}()
 	paths := PathsFor(box)
 	keep := func(ctx context.Context) error {
@@ -225,18 +237,20 @@ func (t *takenBody) Close() error {
 }
 
 // PackCapture packs, NOW, the session the box's last run worked in — by the
-// pack its harness's script makes once the harness exits ([carrier.Pack]), into
-// [Paths.SessionCapture], its digest kept as one the box's copy holds — and
-// streams it, described, as [Runner.OpenCapture] streams the one the script
-// left. For a job that never reached that pack: one killed before its script
-// could pack, one lost with its engine whose box is still there, one whose own
-// pack failed — each over — and one still WORKING where a box would not end it
-// ([sandbox.SessionTake.Pack]), which working says. A job a stop, a loss or its
-// turn's cap ended is taken as its script packed it on its way out (end.go),
-// and packed here only where that pack never landed. A zero description and a
-// nil reader where there is nothing to pack: a harness this runner carries
-// none for, a run whose record names no session, a harness that wrote no
-// transcript.
+// pack its harness's script makes once the harness exits ([carrier.Pack]), its
+// digest kept as one the box's copy holds — and streams it, described, as
+// [Runner.OpenCapture] streams the one the script left; with release, which
+// removes what the pack left in the box for its reader once that reader is
+// done with it, and is never nil beside a reader. For a job that never reached
+// that pack: one killed before its script could pack, one lost with its engine
+// whose box is still there, one whose own pack failed — each over, packed over
+// [Paths.SessionCapture] — and one still WORKING where a box would not end it
+// ([sandbox.SessionTake.Pack]), which working says, packed for this read alone
+// (below). A job a stop, a loss or its turn's cap ended is taken as its script
+// packed it on its way out (end.go), and packed here only where that pack never
+// landed. A zero description and a nil reader where there is nothing to pack: a
+// harness this runner carries none for, a run whose record names no session, a
+// harness that wrote no transcript.
 //
 // THE RUNNER'S OWN PACK, NEVER ONE A CALLER SCRIPTS: every pack of a box's
 // session keeps its digest there, or the box later takes its own archive for
@@ -264,40 +278,88 @@ func (t *takenBody) Close() error {
 // EVERY PACK IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionPackStaging]),
 // named here for that pack alone: two reads of one job at once — a stop's and
 // a collection's — may each pack it, and two packs in one directory clear each
-// other's files and can move each other's archives. Each moves its own over the
-// capture whole, and its read streams what the capture holds when it opens it:
-// its own archive, or the other's where that one's move came after its own.
+// other's files and can move each other's archives. Of a job that is over,
+// each moves its own over the capture whole, and its read streams what the
+// capture holds when it opens it: its own archive, or the other's where that
+// one's move came after its own.
 //
-// BUT THE CAPTURE IS ONE PATH, and a Claude Code take reads its archive twice,
-// opening the capture again for its second pass ([scrubTar]): where the session
-// changed between the two packs — a job still working — and the other pack's
-// move lands between this take's two passes, the take fails as it is read, its
-// archive changed under it. An OpenCode export is read once.
+// AND A JOB STILL WORKING IS PACKED FOR THIS READ ALONE: its archive is moved
+// from its staging directory to the pack's own place beside it
+// ([Paths.SessionPackHeld]), streamed from there — the second pass of a Claude
+// Code take opening it there again ([scrubTar]) — and removed by release, never
+// moved over the capture. The capture is what every read of a job that is over
+// takes as the job's last, and the job's own end pack moves its final archive
+// there the moment its harness exits, which can come while this pack runs: a
+// pack beside a working harness takes seconds to check what it read. Moved
+// there after it, the archive of the job as it stood would replace the final
+// one, read by a read of the job once over as everything the job did — the
+// calls after it neither in its session nor ever told. And over one capture,
+// two reads of a job still working had a Claude Code take refused whenever the
+// other's move fell between its two passes; each now streams its own.
 //
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the
 // run's environment, which no row keeps; a harness the seat's environment
 // moved somewhere its image's profile does not is a pack that finds nothing.
 func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
-	working bool) (sandbox.SessionArchive, io.ReadCloser, error) {
+	working bool) (sandbox.SessionArchive, io.ReadCloser, func(context.Context), error) {
 
 	carries, ok := r.harness.(carrier)
 	if !ok {
-		return sandbox.SessionArchive{}, nil, nil
+		return sandbox.SessionArchive{}, nil, nil, nil
 	}
 	pack := uuid.NewString()
+	paths := PathsFor(box)
+	staged, dest, release := paths.SessionPackStaging(pack), paths.SessionCapture(), func(context.Context) {}
+	if working {
+		dest = paths.SessionPackHeld(pack)
+		release = func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
+	}
 	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return carries.Pack(paths, session, paths.SessionPackStaging(pack), working)
+		return carries.Pack(paths, session, staged, dest, working)
 	})
 	if err != nil || !packed {
-		return sandbox.SessionArchive{}, nil, err
+		release(ctx)
+		return sandbox.SessionArchive{}, nil, nil, err
 	}
-	archive, body, err := r.OpenCapture(ctx, box)
-	if err == nil && body == nil {
-		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: %s's session %s was packed and left no "+
-			"archive behind", r.harness.Name(), rec.id)
+	described, err := r.archiveAt(ctx, box, dest, rec)
+	if err == nil && described == nil {
+		err = fmt.Errorf("executor: %s's session %s was packed and left no archive behind", r.harness.Name(), rec.id)
 	}
-	return archive, body, err
+	if err != nil {
+		release(ctx)
+		return sandbox.SessionArchive{}, nil, nil, err
+	}
+	body, err := box.OpenFile(ctx, described.Path)
+	if err != nil {
+		release(ctx)
+		return sandbox.SessionArchive{}, nil, nil, fmt.Errorf("executor: opening the session the run packed: %w", err)
+	}
+	return *described, body, release, nil
+}
+
+// dropPack removes a pack on demand's own files — its staging directory, which
+// its script removes itself unless it was cut short, and the archive it kept
+// for its read ([Paths.SessionPackHeld]) — once that read is done with them.
+//
+// PAST ctx, WITHIN THE PACK'S OWN BOUND ([sandbox.SessionPackWait]): ctx may be
+// the very thing that ended the read, and a cleanup that inherits a dead
+// context does nothing; this is the last of the pack's own work, so it is held
+// to what the pack is. Files it could not remove are said in the log and left
+// to the clear before the box's next run ([Runner.ClearArtifacts]), which
+// removes every pack's by their pattern.
+func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, staged, held string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandbox.SessionPackWait)
+	defer cancel()
+	res, err := box.Exec(ctx, "rm -rf "+shellQuoteAll([]string{staged, held}), sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		log.WarnContext(ctx, "harness_pack_not_removed", "harness", r.harness.Name(), "path", held,
+			"error", err.Error(), "detail", "the archive packed for a read of a job still working was not "+
+				"removed once read; the clear before the box's next run removes it")
+	}
 }
 
 // PackSave packs, NOW, a SAVE of the session the box's run is still working in,
