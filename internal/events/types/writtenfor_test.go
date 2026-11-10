@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"reflect"
 	"testing"
@@ -64,11 +65,15 @@ func TestAnAgentsWriteStatesWhomItWasMadeFor(t *testing.T) {
 // the field sends it; one carrying somebody goes out with them. On the far
 // side what arrived is stated: a carrier as itself, and an absent one as
 // nobody once the actor's own decode says it arrived ([types.WrittenFor.Received]),
-// which is also what an older node, knowing no carrier, sends.
+// which is also what an older node, knowing no carrier, sends. And it crosses
+// under the rule of what holds it: decoded refusing every member nothing
+// declares, as the estate's wire decodes what an operation takes, a member
+// inside the carrier is refused where it is.
 //
-// Mutation: drop `stated` from UnmarshalJSON — a carrier that crossed the wire
-// is refused as unstated; have IsZero answer the zero value alone — an actor
-// stated for nobody puts a null key on the wire.
+// Mutation: drop `stated` from UnmarshalJSONFrom — a carrier that crossed the
+// wire is refused as unstated; have IsZero answer the zero value alone — an
+// actor stated for nobody puts a null key on the wire; decode the carrier with
+// an encoding/json of its own — the member inside it is dropped.
 func TestWhomAWriteWasMadeForCrossesTheWireAsStated(t *testing.T) {
 	t.Parallel()
 	type actor struct {
@@ -99,9 +104,18 @@ func TestWhomAWriteWasMadeForCrossesTheWireAsStated(t *testing.T) {
 			t.Errorf("%s arrives written for %+v (%v), want %+v", name, carrier, err, c.sent.Carrier())
 		}
 	}
-	// A NULL IS NOBODY, AND STATED.
+	// A NULL IS NOBODY, AND STATED, decoded as the estate's wire decodes it.
 	var null types.WrittenFor
-	if err := json.Unmarshal([]byte(`null`), &null); err != nil || !null.Stated() || null.Carrier() != nil {
+	if err := jsonv2.Unmarshal([]byte(`null`), &null); err != nil || !null.Stated() || null.Carrier() != nil {
 		t.Errorf("a null carrier decoded as %+v (%v), want nobody, stated", null, err)
+	}
+
+	// UNDER THE CALLER'S RULE, through the caller's own decoder.
+	var strict actor
+	err := jsonv2.Unmarshal([]byte(`{"Handle":"dev","WrittenFor":{"kind":"seat","seat":"ada","later":1}}`),
+		&strict, jsonv2.RejectUnknownMembers(true))
+	var semantic *jsonv2.SemanticError
+	if !errors.As(err, &semantic) || !errors.Is(err, jsonv2.ErrUnknownName) || semantic.JSONPointer != "/WrittenFor/later" {
+		t.Errorf("a carrier holding a member nothing declares decoded as %v, want it refused at /WrittenFor/later", err)
 	}
 }

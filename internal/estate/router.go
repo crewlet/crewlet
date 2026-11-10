@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -673,10 +674,20 @@ func callAs[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, 
 	here bool) (R, error) {
 	var zero R
 	spec := o.spec
-	if o.asked != nil {
+	if spec.actor && actor != nil {
+		// AN ACTOR THAT MAY WRITE NOTHING IS REFUSED BEFORE IT IS ASKED
+		// ANYWHERE, as a page or chat write's is through its arguments
+		// ([actorWrites]): the arguments are all [op.refusedBeforeAsking]
+		// sees, and every operation that runs as an actor is checked here,
+		// a read that runs as one (tracker.view_prior) included.
+		if err := actorWrites(actor.Handle, iam.ActorKind(actor.Kind), actor.Provenance.WrittenFor); err != nil {
+			return zero, err
+		}
+	}
+	if spec.asked != nil {
 		// REFUSED BEFORE IT IS ASKED ANYWHERE ([op.refusedBeforeAsking]),
 		// in process as routed, so the answer is the same from every node.
-		if err := o.asked(args); err != nil {
+		if err := spec.asked(args); err != nil {
 			return zero, err
 		}
 	}

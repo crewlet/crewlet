@@ -616,10 +616,24 @@ wrote it. Gitlet's changes, reviews and comments do not carry the requester
 yet either (crewlet#798's piece 4c), nor does the merge queue's close of a
 landed change's work item. To keep the bound, keep agents' work for each other
 on the engine's own surfaces: Worklet, Doclet, Chatlet and `a2a_ask`. During a
-rolling upgrade a node of the older build drops the requester from what it
-writes or reads, so for the minutes of the roll a write can wake its agent in a
-turn worked for the agent that wrote it
+rolling upgrade a node of the older build ignores the requester on what it
+reads, so for the minutes of the roll a write can wake its agent in a turn
+worked for the agent that wrote it
 ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+An older data node refuses a routed write whose actor carries a requester,
+naming the key (`actor.provenance.WrittenFor` for Worklet,
+`args.Actor.WrittenFor` for Doclet and Chatlet), and runs none of it. The
+router asks the next data node, so a data node of the newer build serves it.
+Where none does, the agent's tool answers `fleet_builds_differ` and nothing is
+written: `save_work_view`'s prior read is refused alike, and
+`code_merge_change` merges and leaves its item open, saying so. A write that
+carries nobody (a turn for its own seat, the engine's own write as a seat, a
+person's, a credential's or the engine's) crosses without the key, and either
+build serves it. Upgrading the data nodes first avoids the refusal, and
+[crewlet-operator](https://github.com/crewlet/crewlet-operator/blob/main/docs/concepts/runtime.md#the-seat-pods-follow-the-data-pods)
+rolls the data pods first. An older seat node composes no requester, so a newer
+data node reads its write as made for nobody, and that write wakes its
+colleague in a turn worked for the writing agent until the roll completes.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

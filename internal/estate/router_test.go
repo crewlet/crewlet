@@ -317,6 +317,12 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 	return worklet.WriteResult{}, nil
 }
 
+// ViewPrior answers that no view is held, noting it was asked.
+func (f *fakeNode) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	f.note("view_prior")
+	return worklet.ViewPrior{}, nil
+}
+
 func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
 	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	f.note("comment")

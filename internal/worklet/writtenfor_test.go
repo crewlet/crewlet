@@ -1,7 +1,6 @@
 package worklet_test
 
 import (
-	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -20,9 +19,14 @@ import (
 //
 // AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent's writer that states
 // nobody it writes for writes nothing, and a person's writer handed a carrier
-// writes nothing either, since a person writes for nobody but themselves. A
-// provenance decoded off the estate's wire states it already, so a data node
-// never refuses a write for a key an older node never sends.
+// writes nothing either, since a person writes for nobody but themselves. An
+// actor decoded off the estate's wire states it already, whatever its
+// provenance held, so a data node never refuses a write for a key an older
+// node never sends: that is the actor's own decoder's, held by
+// internal/estate's TestATrackerActorCrossesTheWireAsItWasStated and
+// TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn, and on this
+// writer behind a data node by internal/engine's
+// TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody.
 //
 // Mutation: leave the carrier off the record the writer builds — ada's task
 // carries nobody; keep it on a record that wakes nobody — the quiet task
@@ -82,18 +86,5 @@ func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) 
 		if !errors.Is(err, c.cause) {
 			t.Errorf("%s files a task: %v, want refused for %v", c.name, err, c.cause)
 		}
-	}
-
-	// A PROVENANCE THAT CROSSED THE WIRE carrying nobody is stated: the
-	// node that built it decided, and an older node sends exactly this.
-	var crossed worklet.Provenance
-	if err := json.Unmarshal([]byte(`{"TurnID":"run-9"}`), &crossed); err != nil {
-		t.Fatalf("decode a provenance: %v", err)
-	}
-	task := newTask("t-crossed")
-	task.Key, task.Reporter = "", "dev"
-	if _, err := r.writer.As("dev", worklet.AuthorAgent, crossed).CreateTask(t.Context(), "op-crossed", task,
-		worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil)); err != nil {
-		t.Errorf("an agent's write that crossed the wire carrying nobody was refused: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package chatlet_test
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"reflect"
 	"testing"
@@ -100,53 +101,66 @@ func TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T
 	}
 }
 
-// A CHAT ACTOR THAT CANNOT WRITE IS NEVER SENT (ADR-0109). The node that built
-// it refuses to encode an agent's actor that states nobody it writes for, and
-// a person's handed a carrier, alone or inside the arguments a chat gesture
-// crosses in: the data node it would cross to reads an absent carrier as
-// nobody, so the turn the message woke would work for the writing seat, every
-// app. An agent's actor stated for nobody goes out without the key, byte for
-// byte as a build without the field sends it, and one stated for somebody
-// carries them.
+// A CHAT ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the rule of
+// the arguments it crosses in, as the estate's wire encodes and decodes them
+// (crewlet#910). Through the caller's own encoder every field at its zero is
+// left off, so an agent's actor stated for nobody goes out without the key,
+// byte for byte as a build without the field sends it, and one stated for
+// somebody carries them. Through the caller's own decoder it arrives stated,
+// whatever members did, so an older node's actor, which knows no carrier,
+// arrives as stated nobody; and a member nothing declares, in the actor or in
+// its carrier, is refused where it is rather than dropped below where that
+// rule can see. (That no node asks a chat write whose actor may write nothing
+// is internal/estate's, and held there.)
 //
-// Mutation: drop the check in Actor.MarshalJSON, and the agent's actor that
-// states nothing is encoded.
-func TestAChatActorThatCannotWriteIsNeverSent(t *testing.T) {
+// Mutation: give the actor an UnmarshalJSON over encoding/json in place of
+// its UnmarshalJSONFrom, and the member inside it is dropped; state the actor
+// only where a carrier arrives, and the older node's actor arrives stating
+// nothing.
+func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
-	unstated := seat("pm", "run-1")
-	unstated.WrittenFor = types.WrittenFor{}
-	handed := person("jane")
-	handed.WrittenFor = types.ForTurn(ada)
+	wire := jsonv2.OmitZeroStructFields(true)
 	for name, c := range map[string]struct {
-		actor chatlet.Actor
-		cause error
+		writtenFor types.WrittenFor
+		want       string
 	}{
-		"an agent that states nothing": {unstated, types.ErrWrittenForUnstated},
-		"a person handed a carrier":    {handed, types.ErrWrittenForNotAnAgents},
+		"an agent stated for nobody": {types.ForTurn(nil), `{"Handle":"pm","Kind":"agent"}`},
+		"an agent stated for ada": {types.ForTurn(ada),
+			`{"Handle":"pm","Kind":"agent","WrittenFor":{"kind":"seat","seat":"ada"}}`},
 	} {
-		if _, err := json.Marshal(c.actor); !errors.Is(err, c.cause) {
-			t.Errorf("%s is encoded (%v), want it refused for %v", name, err, c.cause)
+		got, err := jsonv2.Marshal(chatlet.Actor{Handle: "pm", Kind: chatlet.AuthorAgent,
+			WrittenFor: c.writtenFor}, wire)
+		var back chatlet.Actor
+		if err == nil {
+			err = jsonv2.Unmarshal(got, &back, jsonv2.RejectUnknownMembers(true))
 		}
-		if _, err := json.Marshal(struct{ Actor chatlet.Actor }{c.actor}); !errors.Is(err, c.cause) {
-			t.Errorf("arguments carrying %s are encoded (%v), want them refused for %v", name, err, c.cause)
+		if err != nil || string(got) != c.want || !back.WrittenFor.Stated() ||
+			!reflect.DeepEqual(back.WrittenFor.Carrier(), c.writtenFor.Carrier()) {
+			t.Errorf("%s goes out as %s and arrives written for %+v, stated %v (%v), want %s, stated",
+				name, got, back.WrittenFor.Carrier(), back.WrittenFor.Stated(), err, c.want)
 		}
 	}
 
-	stated := chatlet.Actor{Handle: "pm", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
-	got, err := json.Marshal(stated)
-	want := `{"Handle":"pm","Kind":"agent","OperatorID":"","TurnID":"","Chain":null,"OpKey":""}`
-	if err != nil || string(got) != want {
-		t.Errorf("an agent stated for nobody goes out as %s (%v), want %s", got, err, want)
+	var older chatlet.Actor
+	if err := jsonv2.Unmarshal([]byte(`{"Handle":"pm","Kind":"agent"}`), &older,
+		jsonv2.RejectUnknownMembers(true)); err != nil || !older.WrittenFor.Stated() ||
+		older.WrittenFor.Carrier() != nil {
+		t.Errorf("an older node's actor arrives written for %+v, stated %v (%v), want nobody, stated",
+			older.WrittenFor.Carrier(), older.WrittenFor.Stated(), err)
 	}
-	stated.WrittenFor = types.ForTurn(ada)
-	got, err = json.Marshal(stated)
-	var back chatlet.Actor
-	if err == nil {
-		err = json.Unmarshal(got, &back)
-	}
-	if err != nil || !reflect.DeepEqual(back.WrittenFor.Carrier(), ada) {
-		t.Errorf("an agent stated for ada goes out as %s and arrives written for %+v (%v), want ada",
-			got, back.WrittenFor.Carrier(), err)
+
+	for _, c := range []struct{ raw, at string }{
+		{`{"Actor":{"Handle":"pm","Kind":"agent","Later":1}}`, "/Actor/Later"},
+		{`{"Actor":{"Handle":"pm","Kind":"agent","WrittenFor":{"kind":"seat","seat":"ada","later":1}}}`,
+			"/Actor/WrittenFor/later"},
+	} {
+		var args struct{ Actor chatlet.Actor }
+		err := jsonv2.Unmarshal([]byte(c.raw), &args, jsonv2.RejectUnknownMembers(true))
+		var semantic *jsonv2.SemanticError
+		if !errors.As(err, &semantic) || !errors.Is(err, jsonv2.ErrUnknownName) ||
+			string(semantic.JSONPointer) != c.at {
+			t.Errorf("%s decoded as %v, want it refused at %s", c.raw, err, c.at)
+		}
 	}
 }

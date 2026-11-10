@@ -1,7 +1,8 @@
 package types
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -23,9 +24,10 @@ import (
 // works for somebody or for the seat itself, so an agent's actor that states
 // neither came from a builder that forgot, and its write would wake whoever it
 // reaches for the agent with every app: [WrittenFor.For] refuses it, every
-// domain asks it of the actor before it builds a record, and every actor type
-// that crosses the wire asks it before it is sent. A person, a
-// credential acting as no seat and the engine write for nobody but themselves
+// domain asks it of the actor before it builds a record, and internal/estate
+// asks it of every write's actor before the write is asked of any node. A
+// person, a credential acting as no seat and the engine write for nobody but
+// themselves
 // (a principal acting through their own credential is no deputy), so for them
 // the zero value is the answer, and a carrier on their write is refused.
 //
@@ -37,16 +39,30 @@ import (
 //
 // # Across the wire
 //
-// An actor crosses to a data node inside the estate's signed request, and the
-// node that built it refuses to SEND one [WrittenFor.For] refuses: every actor
-// type that crosses checks it in its own MarshalJSON (Doclet's and Chatlet's
-// Actor, and internal/estate's Actor, which carries Worklet's provenance
-// beside its kind). The data node cannot make that check itself, because it
-// cannot tell an absent carrier a current node stated from one an older node,
-// knowing no carrier, never sent. So what arrived is what the node that built
-// it stated ([WrittenFor.Received]): an absent carrier is nobody, the writing
-// seat's own work or, until the roll completes, an older node's write
-// (ADR-0109).
+// An actor crosses to a data node inside the estate's signed request (Doclet's
+// and Chatlet's Actor in a write's arguments, and internal/estate's Actor,
+// which carries Worklet's provenance beside its kind), and the node that asks
+// refuses a write whose actor [WrittenFor.For] refuses BEFORE IT IS ASKED
+// ANYWHERE, its own copy in process included, so the answer is the same from
+// every node (internal/estate: a page or chat write's op.refusedBeforeAsking,
+// and the router's own check of the actor a tracker operation runs as). The
+// data node cannot make that check itself, because it cannot tell an absent
+// carrier a current node stated from one an older node, knowing no carrier,
+// never sent. So what arrived is what the node that built it stated
+// ([WrittenFor.Received]): an absent carrier is nobody, the writing seat's own
+// work or, until the roll completes, an older node's write (ADR-0109).
+//
+// THE CARRIER CROSSES UNDER THE RULE OF WHAT HOLDS IT. It is written and read
+// through the encoder and the decoder of the request it crosses in
+// ([WrittenFor.MarshalJSONTo], [WrittenFor.UnmarshalJSONFrom]), as the actor
+// holding it is, so the estate's rule for what an operation takes reaches
+// inside it: a member at its zero is left off the wire, and one the serving
+// build does not declare refuses the request, named at its path
+// (internal/estate's wirerule.go). A MarshalJSON and an UnmarshalJSON would
+// work on bytes, encoding and decoding them again under encoding/json's own
+// defaults, which hold neither half of that rule: the first would put every
+// zero member on the wire, and the second would drop a member it does not
+// declare without a word.
 type WrittenFor struct {
 	stated  bool
 	carrier *WorkingFor
@@ -105,17 +121,31 @@ var (
 	ErrWrittenForNotAnAgents = errors.New("only an agent's write carries whom it was made for")
 )
 
-// MarshalJSON writes the carrier, or null. An actor's field is omitted where it
-// carries nobody ([WrittenFor.IsZero], `omitzero`), so an actor carrying
-// nobody goes out byte for byte as a build without the field sends it.
-func (f WrittenFor) MarshalJSON() ([]byte, error) { return json.Marshal(f.carrier) }
+// MarshalJSONTo writes the carrier, or null, through the caller's own encoder
+// and so under the caller's options ("Across the wire", on [WrittenFor]). An
+// actor's field is omitted where it carries nobody ([WrittenFor.IsZero],
+// `omitzero`), so an actor carrying nobody goes out byte for byte as a build
+// without the field sends it.
+func (f WrittenFor) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, f.carrier)
+}
 
-// UnmarshalJSON reads the carrier an actor crossed the wire with, stated by the
-// node that built the actor.
-func (f *WrittenFor) UnmarshalJSON(b []byte) error {
+// UnmarshalJSONFrom reads the carrier an actor crossed the wire with, stated by
+// the node that built the actor, through the caller's own decoder and so under
+// the caller's options ("Across the wire", on [WrittenFor]).
+func (f *WrittenFor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var w *WorkingFor
-	if err := json.Unmarshal(b, &w); err != nil {
-		return fmt.Errorf("types: decode whom a write was made for: %w", err)
+	if err := jsonv2.UnmarshalDecode(dec, &w); err != nil {
+		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
+		// hands its caller a *jsonv2.SemanticError a method returns as it
+		// is, and wraps any other in a second one, typed as WrittenFor and
+		// placed wherever the decoder stopped. The estate's wire names a
+		// member it refuses from the first SemanticError it finds (its
+		// decodeInput), so returned bare that is the decoder's own, at the
+		// member's path as the decoder recorded it, never a position
+		// json/v2 inferred, which is the member's only because that is
+		// where the decoder stops.
+		return err
 	}
 	*f = WrittenFor{stated: true, carrier: w}
 	return nil
@@ -128,11 +158,14 @@ func (f *WrittenFor) UnmarshalJSON(b []byte) error {
 func (f WrittenFor) IsZero() bool { return f.carrier == nil }
 
 // Received is f as an actor decoded off the wire carries it: stated, whatever
-// arrived, since a node sends no actor that states nothing (each actor type's
-// MarshalJSON refuses one), and an absent one carrying nobody, which is what
-// an older node sends too: it knows no carrier. Every actor type that crosses
-// the wire calls it from its own UnmarshalJSON, so a data node never refuses an
-// agent's write for a key its sender left out because it carried nobody.
+// arrived, since no node asks a write whose actor states nothing ("Across the
+// wire", on [WrittenFor]), and an absent one carrying nobody, which is what an
+// older node sends too: it knows no carrier. Every actor type that crosses the
+// wire calls it from its own UnmarshalJSONFrom, on the actor itself, whatever
+// members arrived: internal/estate's Actor whether or not a provenance did,
+// since an older node sends an agent's provenance that carries nothing as no
+// member at all. So a data node never refuses an agent's write for a key its
+// sender left out because it carried nobody.
 func (f WrittenFor) Received() WrittenFor {
 	f.stated = true
 	return f

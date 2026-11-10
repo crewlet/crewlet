@@ -685,11 +685,14 @@ type Provenance struct {
 	// NOTHING WRITES NOTHING ([Writer.recordedFor]), and every other author
 	// carries nobody: see [types.WrittenFor].
 	//
-	// SENT ONLY STATED: the actor a provenance crosses inside
-	// (internal/estate's Actor) refuses to encode one that may write nothing,
-	// so a node never sends a data node an agent's write that states nothing.
-	// Sent only where it carries somebody (`omitzero`), as Apps is, and
-	// decoded as stated ([Provenance.UnmarshalJSON]).
+	// ASKED OF NO NODE UNSTATED: internal/estate refuses a tracker write whose
+	// actor may write nothing before the write is asked anywhere, in process
+	// as routed, so no node ever sends a data node an agent's write that
+	// states nothing. Sent only where it carries somebody (`omitzero`), as
+	// Apps is, and stated on arrival by the actor the provenance crosses
+	// inside (internal/estate's Actor), WHATEVER ARRIVED: an older build sends
+	// an agent's provenance that carries nothing as no member at all, so a
+	// decoder of the provenance alone would never run for it.
 	WrittenFor types.WrittenFor `json:",omitzero"`
 
 	// Written is where the tasks this writer's records COMMIT to are
@@ -702,22 +705,6 @@ type Provenance struct {
 	// committed to in the answer instead, and the asking node adds it to
 	// this set itself (internal/estate's reply.Written).
 	Written WriteLog `json:"-"`
-}
-
-// UnmarshalJSON decodes a provenance that crossed to a data node inside the
-// estate's signed envelope (internal/estate's Actor): whom its writes are for
-// is what the node that built it stated ([types.WrittenFor.Received]), since a
-// node sends no actor that states nothing (that Actor's MarshalJSON); an
-// absent carrier is nobody, which is also what an older node sends.
-func (p *Provenance) UnmarshalJSON(b []byte) error {
-	type wire Provenance
-	var w wire
-	if err := json.Unmarshal(b, &w); err != nil {
-		return err
-	}
-	*p = Provenance(w)
-	p.WrittenFor = p.WrittenFor.Received()
-	return nil
 }
 
 // WriteLog is what a turn's writer reports the tasks it committed to into.

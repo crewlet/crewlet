@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"maps"
 	"reflect"
@@ -71,16 +72,37 @@ var carriedByServer = map[string]string{
 		"an answer carries its result as SavedBy and SavedAt",
 }
 
-// plainlyEncoded are the types an operation carries that implement
-// json.Marshaler only to REFUSE a value, and write every value they admit as
-// their plain encoding: the actors, each of which refuses to be sent when it
-// may write nothing (ADR-0109). So [uncarried] walks into them as into any
-// struct, since every field they hold crosses exactly as a plain struct's
-// would, and TestAPlainlyEncodedActorWritesItsPlainEncoding holds each to that.
+// plainlyEncoded are the types an operation carries that decode themselves
+// (jsonv2.UnmarshalerFrom) through the caller's own decoder, only to state on
+// arrival whom their writes are for, and that have no encoder of their own: the
+// actors (ADR-0109). Every field they hold crosses exactly as a plain struct's
+// would, so the gates over what an operation takes ([uncarried] here, and
+// wirerule_test.go's [inputTypes] with every gate that reads it) walk into
+// them as into any struct, and TestAPlainlyEncodedActorWritesItsPlainEncoding
+// holds each to that.
 var plainlyEncoded = map[reflect.Type]bool{
 	reflect.TypeFor[Actor]():         true,
 	reflect.TypeFor[doclet.Actor]():  true,
 	reflect.TypeFor[chatlet.Actor](): true,
+}
+
+// encodesItself reports a type the gates over what an operation takes stop at:
+// one that writes or reads its own encoding — a MarshalJSON, or the standard
+// library's v2 twin of either method (MarshalJSONTo, UnmarshalJSONFrom), on the
+// value or the pointer — so that nothing inside it crosses as a struct's field
+// does. Never one of [plainlyEncoded], or a pointer at one, which are walked
+// into.
+func encodesItself(ty reflect.Type) bool {
+	if plainlyEncoded[ty] || (ty.Kind() == reflect.Pointer && plainlyEncoded[ty.Elem()]) {
+		return false
+	}
+	for _, method := range []reflect.Type{reflect.TypeFor[json.Marshaler](),
+		reflect.TypeFor[jsonv2.MarshalerTo](), reflect.TypeFor[jsonv2.UnmarshalerFrom]()} {
+		if ty.Implements(method) || reflect.PointerTo(ty).Implements(method) {
+			return true
+		}
+	}
+	return false
 }
 
 // extraField is the one field name every record type keeps a newer build's
@@ -113,8 +135,7 @@ func uncarried(t *testing.T) map[string]string {
 			return
 		}
 		seen[ty] = true
-		if !plainlyEncoded[ty] && (ty.Implements(reflect.TypeFor[json.Marshaler]()) ||
-			reflect.PointerTo(ty).Implements(reflect.TypeFor[json.Marshaler]())) {
+		if encodesItself(ty) {
 			return
 		}
 		for i := range ty.NumField() {
@@ -176,39 +197,48 @@ func TestEveryFieldAnOperationCarriesArrives(t *testing.T) {
 	}
 }
 
-// A PLAINLY ENCODED ACTOR WRITES ITS PLAIN ENCODING: each of [plainlyEncoded],
-// given a value it admits with every field it sends set, encodes it exactly as
-// a struct of the same fields and no methods would. That is what lets the sweep
-// above walk into it, and what lets a node's refusal to send an actor that may
-// write nothing change no byte of one it sends.
+// A PLAINLY ENCODED ACTOR WRITES ITS PLAIN ENCODING: each of [plainlyEncoded]
+// encodes under the wire's rule ([encodeInput]) exactly as a struct of the
+// same fields and no methods would — with every field it sends set, and with
+// all but its author left at their zero, which the rule leaves off inside the
+// actor as it does anywhere else in what an operation takes. That is the
+// premise on which the gates walk into an actor despite the decoder it has of
+// its own, so an encoder an actor gains later (a refusal, a renamed key, a
+// MarshalJSON over encoding/json's defaults) fails here rather than leave the
+// gates reading fields that are no longer what crosses.
 //
-// Mutation: have an actor's MarshalJSON write anything but its plain encoding
-// (drop a field, rename a key), and its sample fails here.
+// Mutation: give an actor a MarshalJSON over encoding/json, whose defaults
+// hold no rule of the wire's, and its sample at the zero sends every field it
+// leaves there; give it a MarshalJSONTo that renames a key, and its full
+// sample fails.
 func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
 	t.Parallel()
 	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
 		Apps: []iam.Grant{iam.GrantWorklet}})
 	key := statelog.NewOpID(envelopeInstant, "page")
-	samples := map[reflect.Type]any{
-		reflect.TypeFor[Actor](): Actor{Handle: "swe", Kind: worklet.AuthorAgent, Records: true,
-			Provenance: worklet.Provenance{OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"},
-				Origin: &worklet.Origin{Surface: "slack", Conversation: "C1"},
-				Apps:   []iam.Grant{iam.GrantWorklet}, WrittenFor: carrier}},
-		reflect.TypeFor[doclet.Actor](): doclet.Actor{Handle: "swe", Kind: doclet.AuthorAgent,
-			OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"}, Apps: []iam.Grant{iam.GrantDoclet},
-			WrittenFor: carrier, OpKey: key},
-		reflect.TypeFor[chatlet.Actor](): chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent,
-			OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"}, WrittenFor: carrier, OpKey: key},
+	samples := map[reflect.Type][]any{
+		reflect.TypeFor[Actor](): {
+			Actor{Handle: "swe", Kind: worklet.AuthorAgent, Records: true,
+				Provenance: worklet.Provenance{OperatorID: "pat:1", TurnID: "run-1", Chain: []string{"cto"},
+					Origin: &worklet.Origin{Surface: "slack", Conversation: "C1"},
+					Apps:   []iam.Grant{iam.GrantWorklet}, WrittenFor: carrier}},
+			Actor{Handle: "swe", Kind: worklet.AuthorAgent,
+				Provenance: worklet.Provenance{WrittenFor: types.ForTurn(nil)}},
+		},
+		reflect.TypeFor[doclet.Actor](): {
+			doclet.Actor{Handle: "swe", Kind: doclet.AuthorAgent, OperatorID: "pat:1", TurnID: "run-1",
+				Chain: []string{"cto"}, Apps: []iam.Grant{iam.GrantDoclet}, WrittenFor: carrier, OpKey: key},
+			doclet.Actor{Handle: "swe", Kind: doclet.AuthorAgent, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[chatlet.Actor](): {
+			chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent, OperatorID: "pat:1", TurnID: "run-1",
+				Chain: []string{"cto"}, WrittenFor: carrier, OpKey: key},
+			chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)},
+		},
 	}
 	for ty := range plainlyEncoded {
-		sample, ok := samples[ty]
-		if !ok {
+		if len(samples[ty]) == 0 {
 			t.Errorf("%s is listed as plainly encoded and has no sample here", ty)
-			continue
-		}
-		got, err := json.Marshal(sample)
-		if err != nil {
-			t.Errorf("%s refused a value it admits: %v", ty, err)
 			continue
 		}
 		// THE PLAIN ENCODING: the same fields in a struct with no methods.
@@ -217,9 +247,17 @@ func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
 			f := ty.Field(i)
 			fields[i] = reflect.StructField{Name: f.Name, Type: f.Type, Tag: f.Tag}
 		}
-		want, err := json.Marshal(reflect.ValueOf(sample).Convert(reflect.StructOf(fields)).Interface())
-		if err != nil || string(got) != string(want) {
-			t.Errorf("%s encodes as %s, want its plain encoding %s (%v)", ty, got, want, err)
+		plain := reflect.StructOf(fields)
+		for _, sample := range samples[ty] {
+			got, err := encodeInput(sample)
+			if err != nil {
+				t.Errorf("%s refused a value it admits: %v", ty, err)
+				continue
+			}
+			want, err := encodeInput(reflect.ValueOf(sample).Convert(plain).Interface())
+			if err != nil || string(got) != string(want) {
+				t.Errorf("%s encodes as %s, want its plain encoding %s (%v)", ty, got, want, err)
+			}
 		}
 	}
 }
@@ -473,11 +511,13 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		// THE ACTOR IS AN INPUT OF THE OPERATION, under the wire's rule for
 		// one ([encodeInput]): a field at its zero is not on it at all, so a
 		// data node of a build without a field a newer one added to the
-		// actor serves every write that does not set it.
+		// actor serves every write that does not set it. An agent stated
+		// for nobody sends an empty provenance: being stated is no zero,
+		// and nothing of it crosses (ADR-0109).
 		"a write's last resort": {
 			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 				Deadline: envelopeInstant, AcceptLagging: true},
-			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent"},` +
+			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent","provenance":{}},` +
 				`"deadline":"2026-10-04T12:00:00Z","accept_lagging":true}`,
 		},
 		// A CREDENTIAL'S WRITE CARRIES THE APPS IT USES, which hold the turn

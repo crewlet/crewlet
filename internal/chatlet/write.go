@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -420,12 +422,12 @@ type Actor struct {
 	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([decide]), and every
 	// other kind carries nobody: see [types.WrittenFor]. A read ignores it.
 	//
-	// SENT ONLY STATED: an actor this field refuses is never encoded
-	// ([Actor.MarshalJSON]), so a node never sends a data node an agent's
-	// write that states nothing. Sent only where it carries somebody
-	// (`omitzero`), so an actor carrying nobody goes out byte for byte as a
-	// build without the field sends it, and decoded as stated
-	// ([Actor.UnmarshalJSON]).
+	// ASKED OF NO NODE UNSTATED: internal/estate refuses a chat write whose
+	// actor this field refuses before the write is asked anywhere, in process
+	// as routed, so no node ever sends a data node an agent's write that
+	// states nothing. Sent only where it carries somebody (`omitzero`), so an
+	// actor carrying nobody goes out byte for byte as a build without the
+	// field sends it, and decoded as stated ([Actor.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:",omitzero"`
 
 	// OpKey is the caller's own operation key: the value a RETRY of this
@@ -449,36 +451,33 @@ type Actor struct {
 	OpKey string
 }
 
-// MarshalJSON encodes an actor crossing to a data node in a chat write's
-// arguments (internal/estate), and refuses one that may write nothing
-// ([types.WrittenFor.For]): an agent's actor that states nobody it writes for,
-// and a carrier on any other kind's. Refused HERE, on the node that built it,
-// because the data node cannot tell what never arrived from what an older
-// node, knowing no carrier, never sent: it reads both as nobody
-// ([Actor.UnmarshalJSON]), and the turn the message woke would work for the
-// writing seat. A VALUE RECEIVER, so the actor inside every argument struct
-// is encoded through it, a read's included; the bytes of an actor it admits
-// are its plain encoding's.
-func (a Actor) MarshalJSON() ([]byte, error) {
-	if _, err := a.WrittenFor.For(iam.ActorKind(a.Kind)); err != nil {
-		return nil, fmt.Errorf("chatlet: %s is not sent to a data node: %w", a.Name(), err)
-	}
+// UnmarshalJSONFrom decodes an actor that crossed to a data node in a chat
+// write's arguments (internal/estate): whom its writes are for is what the
+// node that built it stated ([types.WrittenFor.Received]), WHATEVER ARRIVED,
+// since no node asks a chat write whose actor states nothing (the
+// [Actor.WrittenFor] field); an absent carrier is nobody, which is also what
+// an older node sends.
+//
+// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
+// estate's wire a member this build does not declare, in the actor or in its
+// carrier, refuses the request, named at its path, as one anywhere else in
+// the arguments does. An UnmarshalJSON would be handed bytes and decode them
+// again under encoding/json's own defaults, which drop such a member without
+// a word. NO ENCODER OF ITS OWN: what crosses is the plain encoding of its
+// fields under the caller's options.
+func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type wire Actor
-	return json.Marshal(wire(a))
-}
-
-// UnmarshalJSON decodes an actor that crossed to a data node in a chat write's
-// arguments (internal/estate): whom its writes are for is what the node that
-// built it stated ([types.WrittenFor.Received]), since a node sends no actor
-// that states nothing ([Actor.MarshalJSON]); an absent carrier is nobody,
-// which is also what an older node sends.
-func (a *Actor) UnmarshalJSON(b []byte) error {
-	type wire Actor
-	var w wire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
+		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
+		// hands its caller a *jsonv2.SemanticError a method returns as it
+		// is, and wraps any other in a second one, typed as this actor and
+		// placed wherever the decoder stopped. The estate's wire names the
+		// member it refuses from the first SemanticError it finds, so
+		// returned bare that is the decoder's own, at the member's path as
+		// the decoder recorded it, never a position json/v2 inferred, which
+		// is the member's only because that is where the decoder stops.
 		return err
 	}
-	*a = Actor(w)
 	a.WrittenFor = a.WrittenFor.Received()
 	return nil
 }
@@ -494,7 +493,7 @@ func (a *Actor) UnmarshalJSON(b []byte) error {
 // ([decide]): the rule is the actor's, and an agent's actor whose builder
 // forgot whom its turn works for is a bug however its next record happens to
 // route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
-// ([Actor.UnmarshalJSON]), so a data node never refuses a write for a key an
+// ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
 // older node never sends.
 func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
