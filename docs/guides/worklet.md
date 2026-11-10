@@ -1903,7 +1903,11 @@ A comment can carry an `ask`: a colleague's handle, meaning this comment is a
 question that person owes an answer to. They are woken **asking for one**,
 rather than told about activity, and they start following the item. An ask does
 **not** hand the item over and does **not** block a close — a question nobody
-has answered is not a reason to hold delivered work open.
+has answered is not a reason to hold delivered work open. They follow the item only while a question here is theirs to answer: once
+their last open question on it is answered or resolved, or the item finishes,
+the watch the question added ends. A watch they chose stays: watching or
+unwatching the item themselves makes it theirs, and somebody already following
+it was never added by the question.
 
 The answer closes it. `answers` names the question's comment id, and is
 **inferred** when exactly one open question on the item is addressed to the
@@ -2460,6 +2464,14 @@ binding it to a seat would add rather than guessing whose queue to show. A
 person signed in as themselves always has a seat. See [Humans
 in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
 for the binding.
+
+**No notice names a credential.** A token or a service account bound to no seat
+files and watches items like anybody, and the item lists it as its reporter or
+a watcher, but no notice is written for it under any reason. It holds no turn,
+and its inbox is nobody's to read, so a notice to it would be read by nobody.
+The writer leaves every credential out of the recipients a change offers, and
+everybody else the change concerns hears as before. A token bound to a seat
+writes as that seat and hears as it.
 
 **Asked of me is answered where it stands.** Each question put to the person
 is drawn as the landing screen's "Needs your decision" draws it: grouped
