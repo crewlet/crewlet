@@ -461,7 +461,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// middle among them: the session continued is that round's job's.
 		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
 			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
-		briefs.kept = r.keptSession(ctx, basis, collected, built, fresh, "").led(r.sendBackLead(notes))
+		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
+		// approved after the save is told among the rest.
+		briefs.kept = r.keptSession(ctx, basis, collected, "", built, fresh, "").led(r.sendBackLead(notes))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -653,7 +655,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// BUILT HERE, all but its lead ([Runner.keptSession]): telling the session
 	// the calls after its save can call the seat's auxiliary model, which the
 	// budget asked below must count, and the lead says what the call a person
-	// approved returned, which is made only after that.
+	// approved returned, which is made only after that — so neither brief
+	// lists that call, which a later attempt at the answer finds in the
+	// round's log, beside the lead ([carried.tellsHeld]).
 	// THE PROBE IS ASKED OF EVERY RELAUNCH, a round lost a second time
 	// included: it continues nothing, but the session the probe read is the
 	// only record of what the round's jobs did in their boxes, and its run is
@@ -661,7 +665,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	basis := r.sessionBasis(ctx)
 	var kept *keptBrief
 	if carry.keeps() {
-		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
+		kept = r.keptSession(ctx, basis, round, carry.tellsHeld(), built, fresh, carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
 	// that carries the round on in the job's box rather than from its kept

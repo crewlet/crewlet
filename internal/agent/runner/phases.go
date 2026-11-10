@@ -537,6 +537,15 @@ type BridgedCall struct {
 	// whose arguments every record withholds ([ledger.Call.Withheld]), which
 	// the execute phase's record says in place of them.
 	Held, Approved bool
+
+	// HeldID names the held call an Approved call was made for
+	// (sandbox.BridgeCall.HeldID), "" on every other call: what tells the
+	// call a person approved for the answer a relaunch carries the round on
+	// with, whose outcome that relaunch's lead tells ([Asked.Held]), from one
+	// an earlier answer of the round approved, which no lead of the relaunch
+	// tells. So the brief tells the first once, in its lead, and the second
+	// among the round's calls as any call is ([Runner.calledAfter]).
+	HeldID string
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:

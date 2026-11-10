@@ -31,8 +31,10 @@ import (
 //
 //   - what carries it on: the review and the engine's correction with the task
 //     restated and the rules its earlier rounds' calls are read by
-//     ([prompts.BuildContinuedRound]), the answer to its question, or what cut
-//     it off;
+//     ([prompts.BuildContinuedRound]), the answer to its question — and, of a
+//     held call, what became of it, which tells the call a person approved
+//     once: no list below tells it again ([carried.tellsHeld]) — or what cut it
+//     off;
 //   - that it may end mid-call, where its harness was cut off when it was saved;
 //   - every call its run made through the seat's tools that the session may not
 //     have been answered when it was saved — every call the round's log took
@@ -130,12 +132,14 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // session — all of it but what carries the session on, which the caller leads
 // it with ([keptBrief.led]): what came after the session was saved of round,
 // the calls of the round its job worked in, as surface reads them
-// ([Runner.calledAfter]), then every note it has not read — of a session cut
-// off, every note the turn has read, as notes it may already show — and the
-// ones fresh holds, in the box it was last worked in, and in another with what
-// that changes. The engine's own words and the seat's, every foreign word in
-// them fenced or defused under the relaunching segment's token; branch and the
-// basis's home are the engine's record of the session, defused too.
+// ([Runner.calledAfter]) — but the call a person approved for leadHeld, the
+// held call that lead tells what became of ([carried.tellsHeld]), "" for none
+// — then every note it has not read — of a session cut off, every note the
+// turn has read, as notes it may already show — and the ones fresh holds, in
+// the box it was last worked in, and in another with what that changes. The
+// engine's own words and the seat's, every foreign word in them fenced or
+// defused under the relaunching segment's token; branch and the basis's home
+// are the engine's record of the session, defused too.
 //
 // NOT WHAT CARRIED ITS JOB ON: a session cut off is no more known to hold its
 // job's brief than the copy a job's own box holds ([Runner.inPlaceAfter]), and
@@ -152,7 +156,7 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // that call is made only once every check that could refuse the relaunch has
 // passed ([Runner.continueAgentRun]). Led after the check, the brief costs
 // nothing the check did not count.
-func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls,
+func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, leadHeld string,
 	surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
 
 	if !basis.Continues() {
@@ -166,7 +170,8 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
 	// newest its launch is known to hold rather than where it ends
 	// (internal/sandbox's savepoint.go), so the calls after it may be in it.
-	called := r.calledAfter(ctx, round, &basis.Through, surface, b)
+	// AND NEVER THE CALL A PERSON APPROVED THAT ITS LEAD TELLS (leadHeld).
+	called := r.calledAfter(ctx, round, &basis.Through, leadHeld, surface, b)
 	called.Interrupted = basis.Interrupted
 	after = append(after, prompts.CalledAfter(called))
 	// THEN THE NOTES IT HAS NOT READ, past its cursor; of a session cut off,
@@ -194,7 +199,9 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // record says nothing of how its harness ended ([prompts.MayBeInterruptedCopy])
 // — said whether or not a call is listed; every call of the round
 // ([Runner.calledInPlace]), the ones the log took late apart under words of
-// their own; and every note the turn has read ([prompts.NotesReadAgain]).
+// their own — but the call a person approved that the answer carrying the
+// round on tells what became of ([carried.tellsHeld]), which that lead alone
+// tells; and every note the turn has read ([prompts.NotesReadAgain]).
 //
 // WHERE THE HARNESS ENDED ITS OWN RUN, ONLY THE CALLS THE LOG TOOK LATE
 // ([BridgedCall.Late]), which that copy is not known to hold ([heldAt] at a nil
@@ -249,9 +256,9 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 		return nil
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
-	end := r.cfg.Resume.HarnessEnd
+	end, leadHeld := r.cfg.Resume.HarnessEnd, carry.tellsHeld()
 	if end.EndedOwnRun() {
-		if late := prompts.CalledAfter(r.calledAfter(ctx, round, nil, surface, b)); late != "" {
+		if late := prompts.CalledAfter(r.calledAfter(ctx, round, nil, leadHeld, surface, b)); late != "" {
 			return []string{late}
 		}
 		return nil
@@ -260,7 +267,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	if end == sandbox.HarnessEndCutOff {
 		after[0] = prompts.InterruptedCopy
 	}
-	if called := prompts.CalledAfter(r.calledInPlace(ctx, round, surface, b)); called != "" {
+	if called := prompts.CalledAfter(r.calledInPlace(ctx, round, leadHeld, surface, b)); called != "" {
 		after = append(after, called)
 	}
 	if again := prompts.NotesReadAgain(r.carriedSteers()); again != "" {
@@ -382,6 +389,17 @@ func (r *Runner) checkoutName() string {
 // told as no submission of the round ([prompts.AfterSave.LateSubmission]):
 // the round's is the one a run carrying it on makes ([sinceAnswer]).
 //
+// NEVER THE CALL A PERSON APPROVED THAT THE BRIEF'S LEAD TELLS. leadHeld is the
+// held call the continuation leading the brief tells what became of
+// ([carried.tellsHeld]), "" where it tells none, and the call made for it
+// ([BridgedCall.HeldID]) is in neither list. A later attempt at an answer, the
+// first's relaunch refused after it made the call, reads that call in the
+// round's log, placed after every call the log had taken (internal/sandbox's
+// withApproved), so past any save point: listed beside the lead that tells
+// what it returned, it was told twice, the second time as a call of its own. A
+// call an earlier answer of the round approved is told as any call is, since
+// no lead of this relaunch tells it.
+//
 // THE LISTS AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS
 // ([ledger.Format]), fitted together: the meta-tools it skips left out, an
 // argument value or a failed call's error past its budget rewritten by the
@@ -392,8 +410,8 @@ func (r *Runner) checkoutName() string {
 // each up to the 16 KiB a call's record keeps. And defused under b: its
 // arguments are a model's, and a failed call's error is whatever the tool
 // said.
-func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, surface *tools.Surface,
-	b provenance.Boundary) prompts.AfterSave {
+func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, leadHeld string,
+	surface *tools.Surface, b provenance.Boundary) prompts.AfterSave {
 
 	var (
 		after, late []ledger.Call
@@ -405,6 +423,9 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	out.LateDropped = min(round.lateElided, ledger.Count(round.elided))
 	for _, call := range inAdmissionOrder(round.bridged) {
 		if heldAt(call, through) || slices.Contains(r.cfg.SkipNames, call.Name) {
+			continue
+		}
+		if leadHeld != "" && call.Approved && call.HeldID == leadHeld {
 			continue
 		}
 		if call.Late {
@@ -446,18 +467,22 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 //
 // NEVER ONLY THE JOB'S OWN CALLS. The copy is not known to hold the job's
 // brief, which told the round's calls before the job's own — an earlier job's,
-// or the call a person approved, made before the job opened: no probe has
-// measured whether Claude Code 2.1.310 writes the message a continued session
-// is handed before it answers a call, and a copy whose job continued a session
-// and lacks it lacks those calls whatever the job made itself. (2.1.310 was
-// measured answering a fresh session's first two calls before its transcript
-// file existed, but a fresh session cut off then leaves its box nothing to
-// continue: the relaunch starts a session of its own.)
-func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, surface *tools.Surface,
-	b provenance.Boundary) prompts.AfterSave {
+// or the call an earlier answer approved, made before the job opened: no
+// probe has measured whether Claude Code 2.1.310 writes the message a
+// continued session is handed before it answers a call, and a copy whose job
+// continued a session and lacks it lacks those calls whatever the job made
+// itself. (2.1.310 was measured answering a fresh session's first two calls
+// before its transcript file existed, but a fresh session cut off then leaves
+// its box nothing to continue: the relaunch starts a session of its own.)
+//
+// BUT THE CALL A PERSON APPROVED FOR leadHeld, the held call the answer
+// carrying the round on tells what became of, which that lead alone tells
+// ([Runner.calledAfter]).
+func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, leadHeld string,
+	surface *tools.Surface, b provenance.Boundary) prompts.AfterSave {
 
 	start := 0
-	called := r.calledAfter(ctx, round, &start, surface, b)
+	called := r.calledAfter(ctx, round, &start, leadHeld, surface, b)
 	called.Interrupted = true
 	return called
 }

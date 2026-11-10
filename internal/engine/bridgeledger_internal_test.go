@@ -157,11 +157,14 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 // WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on
 // the turn's record of the call, and the size of the whole arguments and output
 // where the log kept less, which the collection's replay decides by — and the
-// calls the log dropped, by identity, in the turn's own shape.
+// calls the log dropped, by identity, in the turn's own shape. And of the call
+// a person approved, the held call it was made for, which tells the one a
+// relaunch's lead tells from one an earlier answer approved.
 //
 // Mutation: drop the digest or either size on the way to the runner, or the
 // tally, and a resumed segment seeds a cut call as another and replays a cut
-// submission as the run's.
+// submission as the run's; drop the held call's id, and a later attempt at an
+// answer lists the call its lead tells among the round's calls again.
 func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	t.Parallel()
 	got := bridgedCalls([]sandbox.BridgeCall{{Name: "code_commit_files",
@@ -181,7 +184,7 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	// the tool called with none — and as WHICH of the two it is, which the
 	// execute phase's record says in place of its arguments.
 	withheld := bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
-		{Name: "close_issue", Approved: true}})
+		{Name: "close_issue", Approved: true, HeldID: "held-1"}})
 	for _, call := range withheld {
 		if !call.Withheld || call.Digest != "" || len(call.Args) != 0 {
 			t.Errorf("a held or approved call reads %+v, want it withheld", call.Call)
@@ -190,6 +193,10 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	if !withheld[0].Held || withheld[0].Approved || withheld[1].Held || !withheld[1].Approved {
 		t.Errorf("the held and approved calls read %+v and %+v, want each marked as the one it is",
 			withheld[0], withheld[1])
+	}
+	if withheld[0].HeldID != "" || withheld[1].HeldID != "held-1" {
+		t.Errorf("the held and approved calls name held calls %q and %q, want none and the one the approved "+
+			"call was made for", withheld[0].HeldID, withheld[1].HeldID)
 	}
 }
 

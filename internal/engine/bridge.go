@@ -62,6 +62,13 @@ import (
 // session tells the calls after its save point by (runner.SessionBasis.Through),
 // and WHETHER THE LOG TOOK IT LATE, after its job was replaced
 // ([sandbox.BridgeCall.Late]), which no save point holds.
+//
+// AND THE HELD CALL AN APPROVED ONE WAS MADE FOR ([sandbox.BridgeCall.HeldID]):
+// a later attempt at an answer reads the call that answer approved in the
+// round's log, which its relaunch's lead tells what became of, so no list of
+// the round's calls in that relaunch's brief tells it again — while one an
+// earlier answer of the round approved, which no lead of it tells, is told as
+// any call is (runner.BridgedCall.HeldID).
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -89,6 +96,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			OutputBytes: call.OutputBytes,
 			Held:        call.Held,
 			Approved:    call.Approved,
+			HeldID:      call.HeldID,
 		})
 	}
 	return out
