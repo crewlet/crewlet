@@ -265,6 +265,17 @@ type Config struct {
 	// listeners and how often it reports a long one; zero is production.
 	// Set by this package's own tests and nothing else — see [startTiming].
 	start startTiming
+
+	// clock is what a client's batch drains end their linger windows on;
+	// nil is the wall clock, resolved by [Queue.windowClock] alone.
+	//
+	// It exists for the conformance suite, as [Queue.Quiescing] and
+	// [Queue.Lingering] are reported for it: its LingerClock capability
+	// builds a queue on a clock the case moves, so a case ends a window
+	// after a verb rather than racing one. Unexported, so no config file,
+	// flag or caller outside this package can reach it; set by this
+	// package's own tests and nothing else — see [lingerClock].
+	clock lingerClock
 }
 
 // TLS is the transport material for an external NATS server.

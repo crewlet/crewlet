@@ -415,6 +415,19 @@ type Queue struct {
 	// fixed at construction and read without the lock for that reason.
 	contract queue.Options
 
+	// clock is what this client's linger windows are timed on
+	// ([lingerClock]): nil is the wall clock, resolved by
+	// [Queue.windowClock] alone.
+	//
+	// It exists for the conformance suite, as [Queue.Quiescing] and
+	// [Queue.Lingering] are reported for it: its LingerClock capability
+	// builds a client on a clock the case moves, so a case ends a window
+	// after a verb rather than racing one. No option a caller outside this
+	// package can name sets it: only this package's own tests do, at
+	// construction (export_test.go's WithLingerClock). Never a peer's:
+	// [Queue.Client] mints another node, whose clock is its own.
+	clock lingerClock
+
 	// Everything below is guarded by broker.mu. Node state, not broker
 	// state: every gate here describes THIS process's consumer, and a
 	// subscription-level answer would let one node's pause hold, or one
@@ -1407,6 +1420,30 @@ func (q *Queue) Lingering(topic, group string) bool {
 		return false
 	}
 	return slices.ContainsFunc(sub.membersOf(q), func(m *consumer) bool { return m.window != nil })
+}
+
+// InWindow reports how many events THIS client holds for a subscription in an
+// open linger window — the batch the window hands over when it ends — and zero
+// while no window of it is open.
+//
+// Read off the mailbox under the broker's lock, because a window here keeps no
+// batch of its own: what its flush takes is the head of the mailbox, up to the
+// consumer's cap. Reported so the conformance suite can see it, beside
+// [Queue.Lingering]: a case asking whether a window coalesces ends the window
+// on a clock it moves once the window holds the event it published into it.
+func (q *Queue) InWindow(topic, group string) int {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return 0
+	}
+	for _, m := range sub.membersOf(q) {
+		if m.window != nil {
+			return min(len(sub.mail), m.options.EffectiveMaxBatch())
+		}
+	}
+	return 0
 }
 
 // Idle returns a channel that is closed while nothing on this broker can hand

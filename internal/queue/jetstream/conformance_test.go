@@ -285,23 +285,73 @@ func settleQueue(ctx context.Context, t *testing.T, eq queue.EventQueue) error {
 	for _, l := range before {
 		since[l.ID] = l.Cycles
 	}
+	return untilLoops(ctx, "consume loops still able to dispatch", func() ([]string, error) {
+		return unsettledLoops(ctx, q, since, down)
+	})
+}
+
+// untilLoops reads q's consume loops through waiting every settlePoll until it
+// names none still to wait for, failing with what it named last, as what,
+// when ctx ends first.
+func untilLoops(ctx context.Context, what string, waiting func() ([]string, error)) error {
 	poll := time.NewTicker(settlePoll) //fixedwait:liveness
 	defer poll.Stop()
 	for {
-		busy, err := unsettledLoops(ctx, q, since, down)
+		names, err := waiting()
 		if err != nil {
 			return err
 		}
-		if len(busy) == 0 {
+		if len(names) == 0 {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("consume loops still able to dispatch: %s: %w",
-				strings.Join(busy, "; "), ctx.Err())
+			return fmt.Errorf("%s: %s: %w", what, strings.Join(names, "; "), ctx.Err())
 		case <-poll.C:
 		}
 	}
+}
+
+// parkedLoops is this backend's Parked: it returns once every consume loop of
+// (topic, group) has come round to the top of its cycle since the call and
+// found its gate shut there ([Queue.Loops]). A loop is the one goroutine that
+// dispatches for its attachment, and it reaches its top only once what it
+// fetched before is dispatched or handed back; with the gate shut there, it
+// fetches nothing more until a verb opens it. A loop that returns instead
+// never comes round again, so it is named when ctx ends — or at once, when it
+// was let go of and has left Loops.
+func parkedLoops(ctx context.Context, _ *testing.T, eq queue.EventQueue, topic, group string) error {
+	q, ok := eq.(*Queue)
+	if !ok {
+		return fmt.Errorf("the Parked capability was handed a %T", eq)
+	}
+	since := map[uint64]uint64{}
+	for _, l := range q.Loops() {
+		if l.Topic == topic && l.Group == group {
+			since[l.ID] = l.Cycles
+		}
+	}
+	if len(since) == 0 {
+		return fmt.Errorf("no consume loop of (%s, %s) in Loops, so there is nothing to park",
+			topic, group)
+	}
+	return untilLoops(ctx, "consume loops not yet parked", func() ([]string, error) {
+		now := q.Loops()
+		var unparked []string
+		for id, cycles := range since {
+			i := slices.IndexFunc(now, func(l Loop) bool { return l.ID == id })
+			switch {
+			case i < 0:
+				return nil, fmt.Errorf("the loop of (%s, %s) at cycle %d ended rather than "+
+					"parking at its gate", topic, group, cycles)
+			case now[i].Cycles > cycles && now[i].Parked:
+			default:
+				unparked = append(unparked, fmt.Sprintf("the loop of (%s, %s) at cycle %d, "+
+					"not yet round to a shut gate", topic, group, now[i].Cycles))
+			}
+		}
+		return unparked, nil
+	})
 }
 
 // unsettledLoops names each loop of q that has not settled since the snapshot
@@ -466,6 +516,20 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		Lingering: func(q queue.EventQueue, topic, group string) bool {
 			return q.(*Queue).Lingering(topic, group)
 		},
+
+		InWindow: func(q queue.EventQueue, topic, group string) int {
+			return q.(*Queue).InWindow(topic, group)
+		},
+
+		// The drain's own reading of where its window ends and whether it
+		// has; each fetch inside the window keeps its expiry on the broker's
+		// clock, so the drain reads this again within the harness's poll.
+		LingerClock: func(t *testing.T, clock *queuetest.Clock) queue.EventQueue {
+			t.Helper()
+			return open(t, Config{clock: clock})
+		},
+
+		Parked: parkedLoops,
 
 		StreamSubscriptions: func(q queue.EventQueue) int {
 			return q.(*Queue).StreamSubscriptions()

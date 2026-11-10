@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/queuetest"
 )
 
 // scriptedConsumer is a consumer whose broker answers each pull request with
@@ -25,6 +26,12 @@ type scriptedConsumer struct {
 	t       *testing.T
 	answers []pullAnswer
 	fetches []time.Time
+
+	// clock, where set, is moved on by step at every pull: a broker whose
+	// every answer takes that long by a clock the case moves, which is the
+	// one a drain handed it ends its linger window on (Config.clock).
+	clock *queuetest.Clock
+	step  time.Duration
 }
 
 // pullAnswer is the batch the vendored client makes of the broker's answer
@@ -44,6 +51,9 @@ func (c *scriptedConsumer) Fetch(int, ...jetstream.FetchOpt) (jetstream.MessageB
 	c.fetches = append(c.fetches, time.Now())
 	if len(c.fetches) > spunPulls {
 		c.t.Fatalf("the broker was asked %d times and the loop never rested", len(c.fetches))
+	}
+	if c.clock != nil {
+		c.clock.Advance(c.step)
 	}
 	answer := c.answers[min(len(c.fetches), len(c.answers))-1]
 	msgs := make(chan jetstream.Msg, len(answer.delivered))

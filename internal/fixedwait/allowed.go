@@ -1253,8 +1253,6 @@ var allowed = []Entry{
 	{File: "internal/providers/llm/llmtest/llmtest.go", Func: "Script.play", NegativeWindow: 1, Piece: 10},
 	{File: "internal/provision/identity_test.go", Func: "TestIdentityLookupsRunAtMostTheCapAtOnce", NegativeWindow: 1, Piece: 14},
 	{File: "internal/queue/jetstream/leaderreads_test.go", Func: "TestASubscriptionListingAMemberDropsIsAskedAgain", ElapsedBound: 1, Piece: 2},
-	{File: "internal/queue/jetstream/smoke_test.go", Func: "TestTheLingerWindowDoesNotSlideWithArrivals", NegativeWindow: 1, ExemptWait: 2, Piece: 2},
-	{File: "internal/queue/queuetest/batch.go", Func: "suite.runBatch", NegativeWindow: 2, ExemptElapsed: 2, Piece: 2},
 	{File: "internal/queue/queuetest/broadcast.go", Func: "suite.runBroadcast", NegativeWindow: 1, Piece: 2},
 	{File: "internal/queue/queuetest/reentrancy.go", Func: "suite.runReentrancy", NegativeWindow: 1, Piece: 2},
 	{File: "internal/redact/linear_test.go", Func: "withinFactor", ElapsedBound: 1, Piece: 14},

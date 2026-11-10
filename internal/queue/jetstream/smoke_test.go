@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/queuetest"
 )
 
 // probe is a minimal registered payload so the smoke tests exercise the real
@@ -523,7 +524,8 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 	return certPEM, keyPEM
 }
 
-// THE LINGER WINDOW IS FIXED, NOT SLIDING.
+// THE LINGER WINDOW IS FIXED, NOT SLIDING: it ends at its opening plus its
+// length, whatever arrives inside it.
 //
 // The drain used to end only on a fetch that produced NOTHING and a passed
 // deadline, so any arrival kept collection going: under a steady trickle the
@@ -533,68 +535,149 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 // run must fit inside the 30-minute ack budget", which is only an argument if
 // collection is actually bounded by the window.
 //
-// Measured rather than reasoned: a trickle published for five times the window
-// must not all land in the first batch.
+// HELD ON A CLOCK THE CASE MOVES (Config.clock), never on arrivals paced
+// against the wall clock. This published a trickle for five times the window
+// and asserted the first batch had not run to the cap; on a runner slow enough
+// that each publish outlasted the window every fetch came back empty, and a
+// window that moved its end with each arrival — or the old one, ended only by
+// an empty fetch — closed on time and passed (measured, a quarter of a second
+// per publish).
+//
+// THE ORDER, every step behind a signal and none behind elapsed time: the
+// first event opens the window (Lingering), the clock moves halfway through
+// it, the second event is published and the broker has handed it to the drain
+// (its consumer counts both delivered and neither settled), and only then does
+// the clock move to the window's original end. The window flushes there, both
+// events in it, by the handler's own reading of the clock. One that moved its
+// end with the arrival is still open there and never flushes, since the clock
+// moves no further.
+//
+// An arrival in every fetch past the end, which the old slide needed to keep
+// going, is the broker's timing to give rather than the case's to arrange:
+// TestTheLingerWindowEndsAtItsDeadlineWhateverItsFetchesBring holds the drain
+// to that, fetch by fetch.
+//
+// Mutation: move the window's end to each arrival, and it never flushes; keep
+// it on the wall clock, whatever clock the drain was handed, and a window of a
+// minute never flushes inside the bound either.
 func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
 	t.Parallel()
-	q := newQueue(t)
+	// A minute, which on this clock costs nothing, and which a drain that
+	// kept its window on the wall clock would hold past every bound below.
+	const window = time.Minute
+	clock := &queuetest.Clock{}
+	// The conformance harness's poll, so each fetch inside the window
+	// returns, and the drain reads the clock again, within milliseconds of
+	// the case moving it.
+	q := newQueueWith(t, Config{FetchWait: 25 * time.Millisecond, clock: clock})
 	ctx := t.Context()
 	topic, group := seatInbox("dora"), seatGroup("dora")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
 
-	const (
-		window  = 200 * time.Millisecond
-		spacing = 25 * time.Millisecond // below drainWait, so every fetch finds one
-		total   = 40
-	)
-
-	batches := make(chan int, 64)
+	type flush struct {
+		size int
+		at   time.Time
+	}
+	flushed := make(chan flush, 4)
 	if err := q.SubscribeBatch(ctx, topic, group,
 		func(_ context.Context, evs []*events.Event) queue.Result {
-			batches <- len(evs)
+			flushed <- flush{size: len(evs), at: clock.Now()}
 			return queue.Ack()
 		},
 		func(*events.Event) string { return "one-conversation" },
-		queue.NewBatchOptions(window.Seconds(), total),
+		queue.NewBatchOptions(window.Seconds(), 10),
 	); err != nil {
 		t.Fatalf("SubscribeBatch: %v", err)
 	}
 
-	go func() {
-		for i := range total {
-			if err := q.Publish(ctx, topic, ev(i)); err != nil {
-				return
-			}
-			time.Sleep(spacing)
-		}
-	}()
+	// The window opens on the first event, at the clock's reading now: the
+	// clock moves only when the case moves it.
+	opened := clock.Now()
+	if err := q.Publish(ctx, topic, ev(0)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	awaitLingering(t, q, topic, group)
+	clock.Advance(window / 2)
+	if err := q.Publish(ctx, topic, ev(1)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	awaitHandedOver(t, q, topic, group, 2)
+	clock.Advance(window / 2)
 
-	var first int
 	select {
-	case first = <-batches:
-	case <-time.After(20 * time.Second):
-		t.Fatal("no batch was ever dispatched")
+	case got := <-flushed:
+		if end := opened.Add(window); got.size != 2 || !got.at.Equal(end) {
+			t.Fatalf("the window opened at %s flushed %d event(s) at %s, want both events "+
+				"at its end, %s", opened, got.size, got.at, end)
+		}
+	case <-time.After(10 * time.Second): //fixedwait:liveness
+		t.Fatalf("the window had not flushed at its end, %s past its opening by the case's "+
+			"clock, with an event that arrived halfway through it: either its end moved "+
+			"with the arrival, or the drain ends it on a clock other than the one it was "+
+			"handed", window)
 	}
-	// The window admits about window/spacing events. The bound is deliberately
-	// loose — this is a wall clock on a shared machine — but a sliding window
-	// runs collection to the cap, so the two outcomes are nowhere near each
-	// other and a slow machine only makes the batch SMALLER.
-	if limit := total / 2; first >= limit {
-		t.Errorf("the first batch collected %d of %d events under a %v window: "+
-			"collection ran to the cap, so the window slid with arrivals rather "+
-			"than closing", first, total, window)
-	}
-	// And nothing is lost: the rest arrive in later batches.
-	seen := first
-	deadline := time.After(30 * time.Second)
-	for seen < total {
+}
+
+// awaitLingering waits until q holds a batch for (topic, group) in a linger
+// window that has outlived a fetch ([Queue.Lingering]).
+func awaitLingering(t *testing.T, q *Queue, topic, group string) {
+	t.Helper()
+	// LIVENESS: a drain that never opens its window fails here, and one
+	// that does reports it a poll after the first event is in hand.
+	bound, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	poll := time.NewTicker(5 * time.Millisecond) //fixedwait:liveness
+	defer poll.Stop()
+	for !q.Lingering(topic, group) {
 		select {
-		case n := <-batches:
-			seen += n
-		case <-deadline:
-			t.Fatalf("only %d of %d events were delivered", seen, total)
+		case <-bound.Done():
+			t.Fatalf("no linger window of (%s, %s) outlived a fetch: %v", topic, group, bound.Err())
+		case <-poll.C:
+		}
+	}
+}
+
+// awaitHandedOver waits until the broker has handed the consumer of (topic,
+// group) n messages, none yet settled and none left to hand over. On a
+// subscription whose one consume loop is lingering, every one of them is in
+// that drain's hands: the broker counts a message delivered as it sends it to
+// the pull request, and the client hands it to the drain before that fetch
+// returns, so ahead of the drain's next reading of its window's clock.
+func awaitHandedOver(t *testing.T, q *Queue, topic, group string, n int) {
+	t.Helper()
+	ctx := t.Context()
+	stream, err := q.streamFor(ctx, topic)
+	if err != nil {
+		t.Fatalf("the stream of %s: %v", topic, err)
+	}
+	cons, err := q.js.Consumer(ctx, stream, consumerName(topic, group))
+	if err != nil {
+		t.Fatalf("the consumer of (%s, %s): %v", topic, group, err)
+	}
+	// LIVENESS: the count reaches n only by the broker handing a message
+	// over, which a healthy one does at the publish; one that never does
+	// fails here.
+	bound, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	poll := time.NewTicker(5 * time.Millisecond) //fixedwait:liveness
+	defer poll.Stop()
+	for {
+		info, err := cons.Info(bound)
+		switch {
+		case err != nil && bound.Err() != nil:
+			t.Fatalf("the broker had not handed over %d message(s) of (%s, %s): %v", n, topic, group, err)
+		case err != nil:
+			t.Fatalf("the consumer of (%s, %s): %v", topic, group, err)
+		case info.NumAckPending == n && info.NumPending == 0:
+			return
+		}
+		select {
+		case <-bound.Done():
+			t.Fatalf("the broker handed over %d message(s) of (%s, %s) with %d still to deliver, want %d",
+				info.NumAckPending, topic, group, info.NumPending, n)
+		case <-poll.C:
 		}
 	}
 }

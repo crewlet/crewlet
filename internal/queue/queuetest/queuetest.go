@@ -161,10 +161,13 @@
 // than excusing them: a guard that names its own assumption DIAGNOSES a race,
 // it does not close one. Check-then-act only shrinks the window — measured in
 // this repo's sibling suite, both failures its guard was written for still
-// happened, one round trip after the check passed. So the racing cases here pay
-// a window sized for the slowest plausible backend AS WELL as reporting which
-// side lost; the message alone would have shipped the same race with a better
-// error string. Read a green from a guarded case as "the race did not fire",
+// happened, one round trip after the check passed. This suite's racing cases
+// learned it twice over: the pause and stop cases paid a window sized for the
+// slowest plausible backend AND reported which side lost, and a loaded runner
+// still lost, with a message that could not tell the suite's lost race from a
+// backend that flushed past the pause. What closed that race was taking the
+// window's end off the wall clock (Capabilities.LingerClock), so that nothing
+// is left to lose. Read a green from a guarded case as "the race did not fire",
 // never as "the race is gone".
 //
 // None of these require anyone to be suspicious at the right moment, which is
@@ -378,6 +381,68 @@ type Capabilities struct {
 	// opens never reports one, so a case waiting on this fails rather than
 	// passing on nothing.
 	Lingering func(q queue.EventQueue, topic, group string) bool
+
+	// InWindow reports how many events this client holds for a subscription
+	// in an open linger window — the batch the window hands over when it
+	// ends — and zero while no window of it is open.
+	//
+	// THE STATE A COALESCING CASE ENDS ITS WINDOW BEHIND. A case asking
+	// whether a window coalesces publishes its next event into the window
+	// and ends the window on a clock it moves (LingerClock) — but only once
+	// the window holds that event: on a backend that fetches, published is
+	// not yet collected, and a window ended a moment early hands over the
+	// first event alone, which the case would read as a window that did not
+	// coalesce. Those cases raced a window of a second on the wall clock
+	// instead, and a runner that published the second event late split the
+	// batch and failed a healthy build. A backend that never counts what its
+	// window holds fails the case's wait rather than passing it.
+	InWindow func(q queue.EventQueue, topic, group string) int
+
+	// LingerClock returns a fresh, UNSTARTED queue whose batch linger windows
+	// end on clock rather than on the wall clock: a window opened on it ends
+	// once the case has moved clock past the window's end ([Clock.Advance]),
+	// and never before, however long the case takes to get there. Like
+	// WithDeliveryAttempts it builds the queue, because the clock is fixed at
+	// construction.
+	//
+	// THE CLOCK A CASE ENDS A WINDOW ON, BEHIND A VERB. What a pause, a hold
+	// or a stop does to a window that is open when it lands — and whether a
+	// window coalesces what is published into it — is asked by a case that
+	// needs the window open at the verb and ended after it, and on the wall
+	// clock nothing orders the two. Those cases bought slack with a window of
+	// a second (five, for the stop) and still lost the race on a loaded
+	// runner: the window ended before the verb landed, and a healthy build
+	// failed — the pause and the stop reporting it as the suite's own lost
+	// race, in the very words a backend that flushed past the verb was
+	// reported in under the same delay. On this clock the case lands its
+	// verb, waits for the backend to have taken it in (Parked, or InWindow
+	// for a publish), and only then ends the window.
+	//
+	// ONLY THE WINDOW'S END IS ON IT. Every other wait a backend keeps — a
+	// fetch's, a redelivery's spacing, an ack window — stays on the wall
+	// clock, so a window the case holds open still costs the backend's
+	// fetches real time, and a case ends one well inside the backend's ack
+	// window rather than at leisure.
+	LingerClock func(t *testing.T, clock *Clock) queue.EventQueue
+
+	// Parked returns once q's consumer of (topic, group) has taken in the
+	// verbs sent to q before the call: it stands with its gate shut and
+	// holds nothing it took before the gate shut, so it hands a handler
+	// nothing until a verb opens the gate again. It fails, naming what it was
+	// still waiting for, when ctx ends first — and at once on a pair nothing
+	// of q's is attached to, where it would decide nothing.
+	//
+	// WHAT A CASE ENDS A WINDOW BEHIND ([Capabilities.LingerClock]). A gate
+	// the verb shut means nothing to the window until the consumer has read
+	// it: a consumer that reads its gate between fetches, as the backend
+	// that ships does, would otherwise see the window end on the clock first
+	// and the gate after, and the case would no longer ask the question it is
+	// named for — whether the gate alone holds the window's mail. On that
+	// backend, the pair's consume loop has come round to its gate since the
+	// call and found it shut; on the twin, which reads its gates under one
+	// lock at every dispatch and every window's flush, it has once the verb
+	// has returned and no handler of q's is running.
+	Parked func(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) error
 
 	// StreamSubscriptions reports how many of q's own stream subscriptions
 	// ([queue.EventQueue.SubscribeStream]) can still hand their handler a
@@ -710,6 +775,25 @@ func settleStarted(ctx context.Context, t *testing.T) error {
 	return nil
 }
 
+// awaitParked waits until q's consumer of (topic, group) has taken in the verbs
+// the case sent it ([Capabilities.Parked]), and fails the case with what it was
+// still waiting for otherwise. A case ends a window on its own clock behind it,
+// so that what closes the window is the gate the verb shut and never the clock.
+//
+// BOUNDED AS LIVENESS by settleFor: a consumer takes a verb in once its loop
+// has come round, which the harnesses keep well inside it, and one that never
+// does — a loop that ended rather than park, a gate it never reads — is what
+// fails here. The bound decides nothing about what was delivered.
+func (s *suite) awaitParked(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) {
+	t.Helper()
+	parking, cancel := context.WithTimeout(ctx, settleFor)
+	defer cancel()
+	if err := s.caps.Parked(parking, t, q, topic, group); err != nil {
+		t.Fatalf("the %s consumer of (%s, %s) did not take the case's verb in: %v",
+			q.Backend(), topic, group, err)
+	}
+}
+
 // holdReason is the pause-hold reason the cases take when one reason is all a
 // case needs.
 //
@@ -748,27 +832,26 @@ const (
 	// it.
 	settleFor = 3 * time.Second
 
-	// quietFor is how long a negative assertion that still has nothing to
-	// read behind — "this must NOT be delivered" — holds the window open.
+	// quietFor is the timeout WaitForHandlers is handed where the case
+	// needs one that is not zero: on an idle queue, which returns without
+	// spending it, and beside a handler the case holds, which outlasts it.
 	//
-	// WHAT IT DOES AND DOES NOT COVER, because the reason here was wrong
-	// before the number was. It used to say a leak "tends to leak
+	// IT WAS HOW LONG A NEGATIVE ASSERTION — "this must NOT be delivered" —
+	// HELD A QUIET WINDOW OPEN, and no case does that any more. Its reason
+	// was wrong before its number was: it said a leak "tends to leak
 	// immediately, so this only has to outlast one dispatch cycle" — written
 	// against a backend whose dispatch cycle is microseconds, and false for
 	// one where a cycle is a network round trip. On a backend slower than
-	// this window, a negative assertion passes because nothing had ARRIVED
-	// yet, not because nothing was leaked.
-	//
-	// That is a false PASS, which is worse than a flake: it quietly weakens
-	// coverage on exactly the backends most likely to leak, and it does so
-	// silently. MEASURED, which is why staysAt no longer pays it: a
-	// redelivery after an ack it dropped, or a detached loop's dispatch a
-	// runner scheduled 300 ms late, passed the window with the bug present,
-	// and staysAt reads behind the backend's Settle instead. What is left
-	// holding one open is the racing cases' tail, which no ordering removes.
-	// Do not read this as a general "wait for something" budget, and do not
-	// add a case whose POSITIVE half depends on it. Positive halves wait on
-	// settleFor and on a signal.
+	// the window, a negative assertion passed because nothing had ARRIVED
+	// yet, not because nothing was leaked: a false PASS, which is worse than
+	// a flake, since it quietly weakens coverage on exactly the backends
+	// most likely to leak. MEASURED: a redelivery after an ack it dropped,
+	// or a detached loop's dispatch a runner scheduled 300 ms late, passed
+	// the window with the bug present, so staysAt reads behind the backend's
+	// Settle instead; and the linger cases whose tail still held one open
+	// end their window on a clock they move (Capabilities.LingerClock). Do
+	// not bring it back as a "wait for something" budget. Positive halves
+	// wait on settleFor and on a signal; negative ones on Settle.
 	quietFor = 150 * time.Millisecond
 
 	// overlapRounds is how many publish/drain pairs the overlap case races
@@ -783,17 +866,29 @@ const (
 	overlapRounds = 200
 
 	// lingerFor is the batch linger window the batching subtests use. It
-	// has to be long enough that several publishes land inside one window,
-	// and short enough that a test waiting out several windows stays quick.
+	// has to be long enough that a drain collects, inside one window, the
+	// mail already waiting for it, and short enough that a test waiting out
+	// several windows stays quick.
 	//
-	// "Several publishes land inside one window" was measured on the
-	// in-memory twin, where a publish is a mutex operation, and that is the
-	// claim to distrust rather than the number: max_batch_chunks_oversized_
-	// buffers needs FIVE publishes inside one window, which is 10ms each on
-	// a backend where a publish is a network round trip. That dependency is
-	// real: the case publishes in a bare loop, unlike the deferral cases,
-	// which go through holdForOneBatch's hold/publish/resume and do not race
-	// the window at all.
+	// NO CASE PUBLISHES INTO A LIVE WINDOW ANY MORE. The cases whose subject
+	// is an arrival joining an open window — coalescing it, held to options
+	// reloaded meanwhile — end their window on a clock they move
+	// (clockedWindow), as the pause, hold and stop cases do. All seven
+	// cases on this one hold their mail before the drain starts. Six queue
+	// a backlog before they attach (queueBacklog):
+	// linger_partitions_by_key_preserving_arrival_order,
+	// failing_partition_redelivers_only_itself,
+	// batch_key_failure_falls_back_to_unique_key,
+	// an_aged_conversation_dispatches_before_a_fresher_one,
+	// within_a_partition_events_are_ordered_by_timestamp and
+	// max_batch_chunks_oversized_buffers, which once published FIVE events
+	// in a bare loop into one window, ten milliseconds a publish where a
+	// publish is a network round trip. The seventh,
+	// an_undispatched_partition_pays_for_its_hand_back, fills a held
+	// subscription (holdForOneBatch). So this window bounds only how long a
+	// drain has to collect what the broker already holds — fetches, not
+	// publishes — and a case whose subject is what one drain does with
+	// several events has them all waiting for that drain.
 	//
 	// The value stands on a NARROWER base than "no backend has reported a
 	// flake" suggests, which is what this used to claim. Ten repeats of the
@@ -828,9 +923,9 @@ const (
 	// acknowledges, taken by a broker goroutine separate from the one that
 	// serves fetches — so the fetch the window opens on can be served
 	// first, and the return then has to land inside the window. That is
-	// one internal hop, cheaper than the publish round trip racingWindow
-	// is sized against (200-330ms worst measured under a parallel -race
-	// suite), and this sits above that measurement rather than at it.
+	// one internal hop, cheaper than a publish round trip (a handful of
+	// those measured 200-330ms at worst under a parallel -race suite), and
+	// this sits above that measurement rather than at it.
 	//
 	// IT USED TO BOUND A REDELIVERY SPACING, as mixedCountLinger, and that
 	// was the defect rather than the margin. Both cases handed their
@@ -844,22 +939,29 @@ const (
 	// Nowhere near queue.MaxLingerSeconds, so no backend has to refuse it.
 	handBackLinger = 400 * time.Millisecond
 
-	// racingWindow is the linger a case gets when its SETUP has to complete
-	// while the window is still open — the pause and stop cases, where the
-	// window must be open when the verb lands AND must expire afterwards.
-	// Neither ordering removes that, so those two pay a longer wait and no
-	// other case does.
+	// clockedWindow is the linger a case gets whose window ends on a clock
+	// it moves ([Capabilities.LingerClock]): the contract's ceiling,
+	// queue.MaxLingerSeconds, which on that clock costs nothing.
 	//
-	// Sized from measurement, but deliberately not from the measurement that
-	// was available: the publish-to-pause gap is 1.0ms worst-case on the
-	// in-memory twin under 10x CPU load with -race -count=6, which made the
-	// old 50ms window look like 50x headroom. That is the FASTEST backend,
-	// where both calls are local mutex operations. On a networked backend a
-	// publish is a round trip, and the measured cost of a handful of those
-	// under a parallel -race suite is 200-330ms. A constant sized against the
-	// quickest backend is how a suite acquires a race it cannot see, so this
-	// is sized for the slowest one plausible.
-	racingWindow = 1 * time.Second
+	// THE CEILING, SO A CLOCK THE BACKEND IGNORED SHOWS. A backend that kept
+	// the window on the wall clock despite the clock it was handed would end
+	// a short window by itself a moment later, and a case could pass on that
+	// as though it had moved the clock; a window of a minute outlasts every
+	// bound the suite waits, so a case whose window only the clock can end
+	// fails instead.
+	//
+	// IT REPLACED racingWindow, a window of a second on the wall clock that
+	// every case whose SETUP had to land inside a window paid: the pause,
+	// the hold, the stop and the two coalescing cases. That was sized for the
+	// slowest backend plausible rather than the measurement to hand — the
+	// twin's publish-to-pause gap was 1.0ms at worst under 10x CPU load,
+	// which made a 50ms window look like 50x headroom, while a handful of
+	// publish round trips under a parallel -race suite measured 200-330ms —
+	// and it still lost to a loaded runner, since no size of window orders a
+	// verb before its end. A constant sized against the quickest backend is
+	// how a suite acquires a race it cannot see; a clock the case moves is
+	// how it gives one up.
+	clockedWindow = time.Duration(queue.MaxLingerSeconds) * time.Second
 )
 
 // --- observing handlers ---------------------------------------------------
@@ -1158,40 +1260,6 @@ func prefixVerdict[T comparable](seen, want []T) deliveryVerdict {
 		}
 	}
 	return verdictPartial
-}
-
-// staysAtRacing is staysAt for a case whose SETUP had to land inside a window
-// the backend was already counting down.
-//
-// A plain negative assertion cannot tell the two causes apart, and its message
-// picked one: "a paused queue flushed its linger window" blames the backend for
-// what may have been the suite losing its own race. So this prints the raw
-// elapsed and lets it decide, which is the only honest split available — and
-// unlike a backend whose clock the suite can move, wall time here is always
-// real evidence, because nothing in this suite can travel.
-//
-// The read itself is staysAt's, behind every queue the case started settling:
-// what the race decides is the setup, never how long the read waits.
-func (b *batchJournal) staysAtRacing(ctx context.Context, t *testing.T, want int, what string, window, setupTook time.Duration) {
-	t.Helper()
-	if err := settleStarted(ctx, t); err != nil {
-		t.Fatalf("%s: delivery could not be read as staying at %d, because %v; "+
-			"handlers saw %v", what, want, err, b.all())
-	}
-	got := b.all()
-	if len(got) == want {
-		return
-	}
-	if setupTook >= window {
-		t.Fatalf("%s: saw %v — but this case's own setup took %s against a %s window, "+
-			"so the SUITE lost its race and this is not a backend defect.\n"+
-			"\tIf a backend genuinely cannot complete the setup inside this window, that "+
-			"is a finding to raise — not a number to quietly raise here, which would blunt "+
-			"the check for every other backend.", what, got, setupTook, window)
-	}
-	t.Fatalf("%s: saw %v; the setup took %s, comfortably inside the %s window, so too "+
-		"little time passed for this suite's own timing to explain it — this is a BACKEND "+
-		"defect.", what, got, setupTook, window)
 }
 
 // batchJournal is journal for batch handlers: it keeps each batch whole,
@@ -1627,6 +1695,29 @@ func (s *suite) needLingering(t *testing.T) func(q queue.EventQueue, topic, grou
 		t.Skip("backend cannot report whether a batch is held in an open linger window")
 	}
 	return s.caps.Lingering
+}
+
+// needInWindow returns the view of how many events an open linger window
+// holds — the state a coalescing case ends its window behind.
+func (s *suite) needInWindow(t *testing.T) func(q queue.EventQueue, topic, group string) int {
+	t.Helper()
+	if s.caps.InWindow == nil {
+		t.Skip("backend cannot report how many events an open linger window holds")
+	}
+	return s.caps.InWindow
+}
+
+// needLingerClock returns a constructor for a queue whose linger windows end on
+// a clock the case moves, skipping the case unless the backend can also report
+// its consumer parked, which a case moving that clock behind a pause or a hold
+// waits for first ([suite.awaitParked]).
+func (s *suite) needLingerClock(t *testing.T) func(t *testing.T, clock *Clock) queue.EventQueue {
+	t.Helper()
+	if s.caps.LingerClock == nil || s.caps.Parked == nil {
+		t.Skip("backend cannot end a linger window on a clock the case moves, " +
+			"or cannot report its consumer parked behind a verb")
+	}
+	return s.caps.LingerClock
 }
 
 // needStreamSubscriptions returns the count of a client's stream subscriptions

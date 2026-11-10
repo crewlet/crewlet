@@ -189,6 +189,12 @@ type attachment struct {
 	// Reported by [Queue.Lingering].
 	lingering atomic.Bool
 
+	// windowed is how many events the drain has collected for the batch it
+	// is building — what its linger window hands over when it ends — set as
+	// each one is collected and cleared when the drain returns
+	// ([attachment.drain]). Reported by [Queue.InWindow].
+	windowed atomic.Int64
+
 	// detached is set the moment Detach or Stop is called. It is what
 	// makes the contract's two halves both true at once: Detach returns
 	// WITHOUT joining a running handler, and yet no NEW handler starts
@@ -531,6 +537,25 @@ func (q *Queue) Lingering(topic, group string) bool {
 		}
 	}
 	return false
+}
+
+// InWindow reports how many events this client holds for a subscription in a
+// batch drain — the batch its linger window hands over when it ends — and zero
+// while no drain of it is collecting.
+//
+// Reported so the conformance suite can see it, beside [Queue.Lingering]. A
+// case asking whether a window coalesces publishes its next event into the
+// window and ends the window on a clock it moves, and it must not move that
+// clock until the window holds the event: published is not yet fetched, and a
+// window ended a moment early hands over the first event alone. NOTHING ELSE
+// THIS BACKEND EXPORTS SAYS IT HOLDS IT: a message a drain has fetched is
+// delivered and unacknowledged, as one a handler is running on is.
+func (q *Queue) InWindow(topic, group string) int {
+	n := 0
+	for _, a := range q.lookup(topic, group) {
+		n += int(a.windowed.Load())
+	}
+	return n
 }
 
 // Loop is one consume loop of this client, as [Queue.Loops] reports it.

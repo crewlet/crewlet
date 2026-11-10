@@ -103,6 +103,30 @@
 // kilobytes of pointers, and up to that many of the group's records held
 // ahead of its reader.
 //
+// # A linger window ends on a clock the conformance suite can move
+//
+// A batch drain decides for itself where its linger window ends and whether it
+// has: it takes the deadline once its first message is in hand, and reads it
+// again after every fetch. That decision, and nothing else, reads the
+// [lingerClock] its queue was handed (Config.clock, unexported, resolved by
+// one accessor): the wall clock, unless this package's own tests hand another.
+// It exists for the conformance suite, whose LingerClock capability builds a
+// queue on a clock the case moves, so a case lands a pause, a hold, a stop or
+// its next event inside a window and only then ends the window, rather than
+// race one on the wall clock.
+//
+// EACH FETCH INSIDE THE WINDOW KEEPS ITS EXPIRY ON THE BROKER'S AND THE
+// CLIENT'S REAL CLOCKS. A test clock decides only where the window ends; it
+// says how much of the window is left, and a fetch is sized from that, never
+// past a poll. The fetch's expiry is the broker's own timeout for the pull
+// request — the 408 the server answers it with once the expiry passes on its
+// clock — and the client's wait past it, on the wall clock. A fake clock under
+// it would bend the broker's own timing rather than the drain's decision: one
+// standing still would have the broker hold a pull request for the whole
+// window, in real time, and one moved past the window's end would send requests
+// already expired. So a fetch returns within its poll whatever the handed
+// clock says, and the drain reads that clock again then.
+//
 // # A watch is told which records moved, and never carries them
 //
 // A state log is read four ways: by its applier's durable consumer, one a
