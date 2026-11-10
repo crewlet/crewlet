@@ -468,6 +468,9 @@ export default defineConfig({
       // Taking a backup (Settings › Backups & retention). The record it
       // lands in is read over the socket.
       "/backup": { target: "http://localhost:8000" },
+      // An administrator's answer to a queued usage insight (Settings ›
+      // Diagnostics). The records themselves are the socket's question.
+      "/diagnostics/insights/decisions": { target: "http://localhost:8000" },
       // Signing in, out and up, and an invitation's redemption — how a
       // browser comes to hold a session cookie (protocol/auth.ts).
       "/auth": { target: "http://localhost:8000" },
