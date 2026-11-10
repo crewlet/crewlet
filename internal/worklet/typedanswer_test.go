@@ -27,7 +27,7 @@ func probeComment(ask string) typedProbe {
 	return func(t *testing.T, r *roundTrip, turn, id string) {
 		t.Helper()
 		c := worklet.Comment{ID: "c-" + turn, Task: id, Author: "ana", AuthorKind: worklet.AuthorAgent,
-			Body: "still waits on the vendor", Ask: ask, CreatedAt: wednesday}
+			Body: "still waits on the vendor", Ask: ask, CreatedAt: r.at}
 		probeUpdate(worklet.TaskPatch{Comment: &c}, worklet.ChangeComment)(t, r, turn, id)
 	}
 }
@@ -89,9 +89,10 @@ func TestATurnsTypedAnswerIsAChangeOnTheItemOrAnAsk(t *testing.T) {
 
 // AN ITEM GOES QUIET ON THE SEAT'S LAST WORD UNLESS THAT WORD IS TYPED
 // (ADR-0122): with nothing from the seat it is quiet since the change that last
-// woke it; a comment that asks nothing moves the instant on; a typed answer
-// holds it, so it carries none; words after a typed answer make it quiet
-// again; and a change of who watches is no word.
+// woke it; a comment that asks nothing moves the instant to the comment's; a
+// typed answer holds it, so it carries none; a change of who watches is no
+// word; and words after a typed answer make it quiet again from their instant.
+// Every instant is the harness's stated authored clock, moved write by write.
 //
 // Mutation: read the seat's last write without its typed flag, and a typed
 // answer leaves the item quiet, so the pickup would hand it back a day later.
@@ -107,34 +108,36 @@ func TestAnItemGoesQuietOnTheSeatsLastWordUnlessItIsTyped(t *testing.T) {
 		}
 		return items[0]
 	}
-	filed := ready()
-	if filed.Quiet.IsZero() || !filed.Quiet.Equal(filed.MovedAt) {
-		t.Fatalf("an item the seat has said nothing on is quiet since %s, want %s, the change that woke it",
-			filed.Quiet, filed.MovedAt)
+	if filed := ready(); !filed.Quiet.Equal(wednesday) || !filed.Quiet.Equal(filed.MovedAt) {
+		t.Fatalf("an item the seat has said nothing on is quiet since %s, want %s, the change "+
+			"that woke it", filed.Quiet, wednesday)
 	}
 
+	said := wednesday.Add(time.Hour)
+	r.at = said
 	probeComment("")(t, r, "turn-1", "w-1")
-	said := ready()
-	if said.Quiet.IsZero() || said.Quiet.Before(filed.Quiet) {
-		t.Fatalf("after the seat's comment the item is quiet since %s, want the comment's instant, "+
-			"not before %s", said.Quiet, filed.Quiet)
+	if got := ready().Quiet; !got.Equal(said) {
+		t.Fatalf("after the seat's comment the item is quiet since %s, want the comment's %s", got, said)
 	}
 
+	r.at = wednesday.Add(2 * time.Hour)
 	urgent := worklet.PriorityUrgent
 	probeUpdate(worklet.TaskPatch{Priority: &urgent}, worklet.ChangeFields)(t, r, "turn-2", "w-1")
-	if typed := ready(); !typed.Quiet.IsZero() {
-		t.Errorf("after the seat's typed answer the item is quiet since %s, want it held", typed.Quiet)
+	if got := ready().Quiet; !got.IsZero() {
+		t.Errorf("after the seat's typed answer the item is quiet since %s, want it held", got)
 	}
 
+	r.at = wednesday.Add(3 * time.Hour)
 	probeUpdate(worklet.TaskPatch{Watch: &worklet.WatchIntent{Handle: "designer", Watch: true}},
 		worklet.ChangeWatchers)(t, r, "turn-3", "w-1")
-	if watched := ready(); !watched.Quiet.IsZero() {
-		t.Errorf("a watcher the seat added counted as its word: quiet since %s", watched.Quiet)
+	if got := ready().Quiet; !got.IsZero() {
+		t.Errorf("a watcher the seat added counted as its word: quiet since %s", got)
 	}
 
+	again := wednesday.Add(4 * time.Hour)
+	r.at = again
 	probeComment("")(t, r, "turn-4", "w-1")
-	if again := ready(); again.Quiet.IsZero() || again.Quiet.Before(said.Quiet) {
-		t.Errorf("words after a typed answer leave the item quiet since %s, want it quiet again "+
-			"from the words", again.Quiet)
+	if got := ready().Quiet; !got.Equal(again) {
+		t.Errorf("words after a typed answer leave the item quiet since %s, want them, at %s", got, again)
 	}
 }
