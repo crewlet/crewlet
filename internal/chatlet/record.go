@@ -37,6 +37,11 @@ import (
 //     ([MutationRecord.WorkingFor], ADR-0109).
 const RecordVersion = 3
 
+// WorkingForVersion is the version from which a record carries whom it was
+// written for ([MutationRecord.WorkingFor]), which the applier keeps on the
+// message a post writes ([Message.WorkingFor]); an older record keeps none.
+const WorkingForVersion = 3
+
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
 //
@@ -71,7 +76,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Notify.Held", Since: 2, Path: []string{"notify", "held"}},
 	{Name: "Notify.Asked", Since: 2, Path: []string{"notify", "asked"}},
 	{Name: "Notify.Answering", Since: 2, Path: []string{"notify", "answering"}},
-	{Name: "MutationRecord.WorkingFor", Since: 3, Path: []string{"working_for"}},
+	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -215,11 +220,13 @@ type MutationRecord struct {
 	// composed from that turn's own bound ceiling, and absent on every other
 	// record: an agent's write made for nobody else, every other author's,
 	// and one that wakes nobody (an erase and a prune among them, which no
-	// versioned field may ride). NOT APPLIED to any row: the change feed
-	// reads it, and the turn the record wakes works for them
-	// (notify.FirstPartyWriter), never for the writing seat, which holds every
-	// app. Version 3: an older build retains a record carrying it rather than
-	// waking a seat for the writing agent.
+	// versioned field may ride). The change feed reads it, and the turn the
+	// record wakes works for them (notify.FirstPartyWriter), never for the
+	// writing seat, which holds every app. KEPT ON THE MESSAGE A POST WRITES
+	// ([Message.WorkingFor], [WorkingForVersion]), applied on every node from
+	// the carrier's first build on, though no read takes it yet. Version 3:
+	// an older build retains a record carrying it rather than waking a seat
+	// for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"

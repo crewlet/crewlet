@@ -164,3 +164,50 @@ func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 		}
 	}
 }
+
+// A POST KEEPS WHOM AN AGENT'S MESSAGE WAS WRITTEN FOR (ADR-0109), on its
+// document and the same on every node: the carrier a version-3 record rode,
+// and nobody for a record that carries none. Kept from the carrier's first
+// build on, before anything reads it, because the applier writes a message's
+// document once, at its post's position: a field a later build began to fill
+// would differ between a node that applied the post before it upgraded and
+// one that applied it after.
+//
+// Mutation: drop the fill, and the post made for ada keeps nobody on both
+// nodes; fill a carrier into a post whose record carries none, and that post
+// keeps one.
+func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	for name, writtenFor := range map[string]*types.WorkingFor{"made for ada": ada, "made for nobody": nil} {
+		documents := map[string]string{}
+		for _, node := range []string{"node-a", "node-b"} {
+			h := newApplyHarness(t)
+			if _, _, err := h.apply(applyCreateRoom("room-1", "shipping")); err != nil {
+				t.Fatalf("%s on %s: create the room: %v", name, node, err)
+			}
+			post := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpPost, "op-post-m-1",
+				chatlet.MessagePost{V: chatlet.DocumentVersion, MessageID: "m-1", Body: "is this current?",
+					Author: "dev", AuthorKind: chatlet.AuthorAgent}, chatlet.ScopeSet{Subject: true})
+			post.V, post.Actor, post.ActorKind = chatlet.WorkingForVersion, "dev", chatlet.AuthorAgent
+			post.WorkingFor = writtenFor
+			if _, _, err := h.apply(post); err != nil {
+				t.Fatalf("%s on %s: apply the post: %v", name, node, err)
+			}
+			document := h.scalar(`SELECT document FROM chat_messages WHERE id = ?`, "m-1")
+			message, err := chatlet.DecodeMessage([]byte(document))
+			if err != nil {
+				t.Fatalf("%s on %s: decode the message: %v", name, node, err)
+			}
+			if !reflect.DeepEqual(message.WorkingFor, writtenFor) {
+				t.Errorf("the post %s keeps written for %+v on %s, want %+v", name, message.WorkingFor, node,
+					writtenFor)
+			}
+			documents[node] = document
+		}
+		if documents["node-a"] != documents["node-b"] {
+			t.Errorf("the post %s is two documents on two nodes:\n%s\n%s", name, documents["node-a"],
+				documents["node-b"])
+		}
+	}
+}

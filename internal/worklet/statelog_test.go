@@ -160,6 +160,14 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	if version == 0 {
 		return record.Encode()
 	}
+	if version >= worklet.WorkingForVersion && id == "suite-b" {
+		// AN AGENT'S WRITE MADE FOR SOMEBODY, on half the objects of a
+		// record version that carries whom it was made for, so the apply
+		// cases hold the history row's column it fills to one value on
+		// every node and through a redelivery (ADR-0109).
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	}
 	return json.Marshal(record)
 }
 

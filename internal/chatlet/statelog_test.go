@@ -214,6 +214,16 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		// the log.
 	}
 	op, payload, scope := suitePayload(chatlet.ObjectKind(kind), id)
+	if post, ok := payload.(chatlet.MessagePost); ok && version >= chatlet.WorkingForVersion && id == "suite-b" {
+		// AN AGENT'S POST MADE FOR SOMEBODY, on half the messages of a
+		// record version that carries whom it was made for, so the apply
+		// cases hold the document's field it fills to one value on every
+		// node and through a redelivery (ADR-0109).
+		post.Author, post.AuthorKind = "dev", chatlet.AuthorAgent
+		payload = post
+		rec.Actor, rec.ActorKind = "dev", chatlet.AuthorAgent
+		rec.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	}
 	rec.Op = op
 	rec.Scope = scope
 	if payload != nil {

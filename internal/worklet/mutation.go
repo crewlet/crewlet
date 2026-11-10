@@ -68,6 +68,11 @@ const RecordVersion = 12
 // apps on its history row; every older record keeps an empty column.
 const AppsKeptVersion = 4
 
+// WorkingForVersion is the version from which a record carries whom it was
+// written for ([MutationRecord.WorkingFor]), which the applier keeps on its
+// history row; every older record keeps the column NULL.
+const WorkingForVersion = 12
+
 // NoticeAsksVersion is the version from which the applier keeps a comment
 // author's statement on its notice rows; every older record leaves it NULL.
 const NoticeAsksVersion = 6
@@ -131,7 +136,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
 	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
-	{Name: "MutationRecord.WorkingFor", Since: 12, Path: []string{"working_for"}},
+	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -836,11 +841,14 @@ type MutationRecord struct {
 	// written for (ADR-0109): whoever the turn that wrote it worked for,
 	// composed from that turn's own bound ceiling, and absent on every other
 	// record: an agent's write made for nobody else, every other author's,
-	// and one that wakes nobody (a gate among them). NOT APPLIED to any row:
-	// the change feed reads it, and the turn the record wakes works for them
+	// and one that wakes nobody (a gate among them). The change feed reads
+	// it, and the turn the record wakes works for them
 	// (notify.FirstPartyWriter), never for the writing seat, which holds every
-	// app. Version 12: an older build retains a record carrying it rather than
-	// waking a seat for the writing agent.
+	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
+	// [WorkingForVersion]), applied on every node from the carrier's first
+	// build on, though no read takes it yet. Version 12: an older build
+	// retains a record carrying it rather than waking a seat for the writing
+	// agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// NoticeAsksKept marks a record whose comment author's statement its notice
