@@ -1162,6 +1162,10 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 // lists under its checks, so one of the two is refused. Compare a transcript's
 // whole live file with what the archive holds of it, rather than its first as
 // many bytes, and both packs are refused: the harness wrote after each tar.
+// Neither mutant is this case's alone — main's case of two reads refuses the
+// first, and the save of a session that only grew the second — and what it
+// holds alone is the two together, packs on demand beside a harness still
+// writing, which no single mutant takes apart.
 func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
