@@ -1,6 +1,7 @@
 /**
  * Settings › Diagnostics: the company's choice to report the engine's own
- * defects, what a report says, and what was reported (ADR-0101).
+ * defects, what a report says, and what was reported (ADR-0101), and its
+ * usage insights ([Insights], ADR-0119).
  *
  * The switch is `diagnostics.issue_reports.enabled` on the company document,
  * written as any setting is, so the same refusals apply. A WRITE APPLIES NOTHING:
@@ -32,6 +33,7 @@ import {
 import { BugGlyph, FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { Insights } from "./Insights.tsx";
 import type {
   IssueReportInert,
   IssueReportRow,
@@ -161,6 +163,7 @@ export function Diagnostics() {
           </>
         )}
       </QueryState>
+      <Insights />
     </>
   );
 }

@@ -19,12 +19,14 @@ import (
 // InsightsAnswer is `diagnostics_insights`: the company's consent to share
 // operating insights, the catalogue it covers, and every record the fleet keeps.
 type InsightsAnswer struct {
-	Share     config.InsightsShare `json:"share"`
-	Accepted  int                  `json:"accepted"`
-	Schema    int                  `json:"schema"`
-	Relay     string               `json:"relay"`
-	Catalogue json.RawMessage      `json:"catalogue"`
-	Records   []InsightRow         `json:"records"`
+	Share    config.InsightsShare `json:"share"`
+	Accepted int                  `json:"accepted"`
+	// Always is the classes sent without review in review mode, always a list.
+	Always    []string        `json:"always"`
+	Schema    int             `json:"schema"`
+	Relay     string          `json:"relay"`
+	Catalogue json.RawMessage `json:"catalogue"`
+	Records   []InsightRow    `json:"records"`
 }
 
 // InsightRow is one class's week as the fleet keeps it, its record as sent or
@@ -69,7 +71,8 @@ func insightsAnswerOf(consent config.InsightsSharing, records []coord.InsightRec
 		}
 		rows = append(rows, row)
 	}
-	return InsightsAnswer{Share: consent.Share, Accepted: consent.Accepted, Schema: insights.SchemaVersion,
+	always := append([]string{}, consent.Always...)
+	return InsightsAnswer{Share: consent.Share, Accepted: consent.Accepted, Always: always, Schema: insights.SchemaVersion,
 		Relay: insights.RelayURL, Catalogue: catalogue, Records: rows}, nil
 }
 
