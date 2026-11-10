@@ -19,7 +19,8 @@ import (
 // floor is the larger of the static floor and the session's context with the
 // brief that continues it beside it, never the static floor alone — the
 // session the turn kept, or the job before's own copy in its box, whichever
-// the launch may take up ([agentLauncher.continuedFloor]). The static floor
+// the launch may take up, each held to its own floor and dropped alone where
+// that one cannot be carried ([agentLauncher.continuedFloor]). The static floor
 // (turn_engine.executor_min_budget_tokens) already counts the harness's own
 // prompt, its tools and the seat's system prompt, which the context's last
 // request counted too, so the two are compared, never added. A session no
@@ -42,10 +43,11 @@ import (
 //
 // AND A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR IS NO FLOOR TO WAIT ON: a
 // session whose context with its brief is past the smallest ceiling a seat's or
-// its company's capped windows hold is not continued, and its launch starts a
-// session of its own on the static floor ([launchFloor.fits]), which config
-// already holds every ceiling above (validateExecutorFloor). Waited for, it
-// would hold the turn for ever. Decided by the launch, where the brief that
+// its company's capped windows hold is not continued ([launchFloor.fits]): its
+// launch continues the other session it may take up where that one's own floor
+// fits, and otherwise starts a session of its own on the static floor, which
+// config already holds every ceiling above (validateExecutorFloor). Waited for,
+// it would hold the turn for ever. Decided by the launch, where the brief that
 // continues the session exists — never by the size of the session alone: a
 // seat with no capped window carries any.
 //
