@@ -286,13 +286,13 @@ type carrier interface {
 type saver interface {
 	// PackSave is the script that packs session now, beside a harness that
 	// may still be working, held to the rule a pack beside one keeps
-	// ([claudeHeldTar]), into taker's own staging directory
-	// ([Paths.SessionSaveStaging]) and moved over taker's own path
+	// ([claudeHeldTar]), into staged, this save's own staging directory
+	// ([Paths.SessionSaveStaging]), and moved over taker's own path
 	// ([Paths.SessionSave]) — never [Paths.SessionCapture] — its digest kept
 	// as every pack's is. It ends as [carrier.Pack] does: [packNothing] where
 	// the harness wrote no transcript, [packFailed] where no save was made,
 	// its error stream saying why. Run as [carrier.Pack] is.
-	PackSave(paths Paths, session, taker string) string
+	PackSave(paths Paths, session, staged, taker string) string
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,

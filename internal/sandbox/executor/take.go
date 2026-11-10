@@ -380,14 +380,16 @@ func (r *Runner) dropPack(ctx context.Context, box sandbox.Sandbox, staged, held
 // file. HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]):
 // a file the harness rewrote under the pack fails it. A SAVE THAT FAILS LEAVES
 // THE TAKER'S LAST SAVE STANDING: the archive at the taker's path is moved over
-// only by a pack that held.
+// only by a pack that held. EVERY SAVE IN A STAGING DIRECTORY OF ITS OWN
+// ([Paths.SessionSaveStaging]), named here for that save alone, as a pack on
+// demand's is: two saves of one taker at once never clear each other's lists
+// or archive, and each that holds moves its own over the taker's path whole.
 //
 // A zero description where there is nothing to save: a harness whose session
 // the engine packs none of beside its run (OpenCode's, [saver]), a run whose
 // record names no session, a harness that wrote no transcript. An error where a
 // save could not be made, saying why — the check that refused it, for a file
-// the harness wrote under the pack — or where taker names none. One taker
-// makes one save of a box at a time: two would share its staging directory.
+// the harness wrote under the pack — or where taker names none.
 func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string) (sandbox.SessionArchive, error) {
 	saves, ok := r.harness.(saver)
 	if !ok {
@@ -397,8 +399,9 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 		return sandbox.SessionArchive{}, errors.New("executor: a save names no taker, and a save is packed " +
 			"to its taker's own path alone")
 	}
+	staged := PathsFor(box).SessionSaveStaging(taker, uuid.NewString())
 	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return saves.PackSave(paths, session, taker)
+		return saves.PackSave(paths, session, staged, taker)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, err

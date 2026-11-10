@@ -212,8 +212,8 @@ const packStagingFiles = "session-pack-staging.*"
 // SessionSave is where a SAVE of the session a run's harness is still working
 // in is packed for taker, the holder of the lease it is taken under
 // (`<node>:<uuid>`, internal/sandbox's taker lease): moved into place whole from
-// [Paths.SessionSaveStaging] by [Runner.PackSave], and read by the take that
-// names the same taker ([sandbox.SessionTake.Save]).
+// that save's own [Paths.SessionSaveStaging] by [Runner.PackSave], and read by
+// the take that names the same taker ([sandbox.SessionTake.Save]).
 //
 // THE TAKER'S OWN, AND NEVER [Paths.SessionCapture]. That path is the job's
 // final archive to every read of a job that is over — its collection, a stop's,
@@ -230,13 +230,18 @@ func (p Paths) SessionSave(taker string) string {
 	return p.WorkDir() + "/session-save." + saveTag(taker)
 }
 
-// SessionSaveStaging is the DIRECTORY a save for taker is packed in before it is
-// moved over [Paths.SessionSave] ([Runner.PackSave]): the taker's own, for
-// [Paths.SessionPackStaging]'s reasons and [Paths.SessionSave]'s. Removed whole
-// by the pack when it is done, and by the clear before every run, which removes
-// every save's files, whoever took them ([Runner.ClearArtifacts]).
-func (p Paths) SessionSaveStaging(taker string) string {
-	return p.WorkDir() + "/session-save-staging." + saveTag(taker)
+// SessionSaveStaging is the DIRECTORY one save for taker is packed in before it
+// is moved over [Paths.SessionSave] ([Runner.PackSave]), named by pack, a name
+// the runner mints for that save alone, after its taker's tag: its own, for
+// [Paths.SessionPackStaging]'s reasons — the run's script's staging directory,
+// another pack's, ANOTHER SAVE'S, even its own taker's: two saves of one taker
+// at once sharing one directory, each one's start would clear the other's
+// lists and archive, and one's move could put over the taker's save an
+// archive the other had half made, whose checks never ran. Removed whole by the
+// pack when it is done, and by the clear before every run, which removes every
+// save's files, whoever took them ([Runner.ClearArtifacts]).
+func (p Paths) SessionSaveStaging(taker, pack string) string {
+	return p.WorkDir() + "/session-save-staging." + saveTag(taker) + "." + pack
 }
 
 // saveFiles is the pattern every save's files match, the archive and its

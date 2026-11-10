@@ -42,6 +42,19 @@ func forgetCapture(t *testing.T, box sandbox.Sandbox) {
 	}
 }
 
+// saveStagingLeft is every staging directory a save of taker's left in box:
+// each is named for its save alone (executor.Paths.SessionSaveStaging), after
+// its taker, so it is found by its pattern rather than named.
+func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
+	t.Helper()
+	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSaveStaging(taker, ""))+"*; do "+
+		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
+	if err != nil {
+		t.Fatalf("asking the box for its saves' staging directories: %v", err)
+	}
+	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
+}
+
 // hostTool is where this machine's own name is, for a stand-in that hands its
 // calls on to it.
 func hostTool(t *testing.T, name string) string {
@@ -129,10 +142,10 @@ func filesOf(s string) sessionFiles {
 
 // A SAVE IS PACKED TO ITS TAKER'S OWN PATH, AND NEVER TAKEN AS THE JOB'S FINAL
 // ARCHIVE. A box whose job's own exit pack never landed is saved by one taker
-// and then another: each save is packed in that taker's own staging directory —
-// a pack on demand's, and another taker's, left as they were — and moved into
-// that taker's own place, named by a digest of the taker rather than the taker
-// itself, its staging directory gone and its digest kept in the box. A take of
+// and then another: each save is packed in a staging directory of its own — a
+// pack on demand's, and another taker's save's, left as they were — and moved
+// into that taker's own place, named by a digest of the taker rather than the
+// taker itself, its staging directory gone and its digest kept in the box. A take of
 // a save reads that taker's alone and packs nothing: the job's capture is
 // still not there after it, nor any digest added, and a taker that saved none
 // is taken as nothing. Only then is the job's final archive read, and a
@@ -153,7 +166,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	// WHAT A PACK ON DEMAND AND ANOTHER TAKER'S SAVE ARE STAGING as this one
 	// packs.
 	elsewhere := []string{p.SessionPackStaging("another-pack") + "/capture",
-		p.SessionSaveStaging(takerB) + "/capture"}
+		p.SessionSaveStaging(takerB, "another-save") + "/capture"}
 	for _, staged := range elsewhere {
 		if err := b.WriteFile(t.Context(), staged, []byte("another pack's archive, half made")); err != nil {
 			t.Fatal(err)
@@ -176,8 +189,8 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	if boxHas(t, b, p.SessionCapture()) {
 		t.Error("the save was moved over the job's capture, which a collection takes as the job's final archive")
 	}
-	if boxHas(t, b, p.SessionSaveStaging(takerA)) {
-		t.Error("the save left its staging directory behind")
+	if left := saveStagingLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the save left its staging directory behind: %s", strings.Join(left, ", "))
 	}
 	for _, staged := range elsewhere {
 		if !boxHas(t, b, staged) {
@@ -484,13 +497,8 @@ var heldPacks = []struct {
 			_, err := runner.PackSave(t.Context(), b, takerA)
 			return err
 		},
-		dest: func(p executor.Paths) string { return p.SessionSave(takerA) },
-		staged: func(t *testing.T, b sandbox.Sandbox) []string {
-			if staging := paths(b).SessionSaveStaging(takerA); boxHas(t, b, staging) {
-				return []string{staging}
-			}
-			return nil
-		}},
+		dest:   func(p executor.Paths) string { return p.SessionSave(takerA) },
+		staged: func(t *testing.T, b sandbox.Sandbox) []string { return saveStagingLeft(t, b, takerA) }},
 	{name: "a take of a job still working",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
 			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
@@ -999,7 +1007,7 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	// A'S TAR rewrites the task file in place once it has read the session,
 	// and hands A's checks the session only once B has set it.
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `case "$1" in `+
-		shQuote(p.SessionSaveStaging(takerA))+`/*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
+		shQuote(p.SessionSaveStaging(takerA, ""))+`*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
 		`'{"id":"1","status":"completed"}' > `+shQuote(task)+`; : > `+shQuote(rewritten)+"; "+
 		await(set, "2")+`; exit "$st";; esac`+"\n"+`exec "$tar" -czf "$@"`+"\n"))
 	packedB := make(chan error, 1)
@@ -1385,7 +1393,8 @@ func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.CommandContext(t.Context(), "sh", "-c", executor.ClaudeCode{}.PackSave(p, session, takerA)) //nolint:gosec // the script under test
+			script := executor.ClaudeCode{}.PackSave(p, session, p.SessionSaveStaging(takerA, "a-save"), takerA)
+			cmd := exec.CommandContext(t.Context(), "sh", "-c", script) //nolint:gosec // the script under test
 			cmd.Env = []string{"PATH=" + bin}
 			var stderr strings.Builder
 			cmd.Stderr = &stderr
@@ -1437,8 +1446,8 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	if got := boxFile(t, b, p.SessionDigests()); got != digests {
 		t.Errorf("the refused save recorded a digest: %q, was %q", got, digests)
 	}
-	if boxHas(t, b, p.SessionSaveStaging(takerA)) {
-		t.Error("the refused save left its staging directory behind")
+	if left := saveStagingLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the refused save left its staging directory behind: %s", strings.Join(left, ", "))
 	}
 
 	if _, err := b.Exec(t.Context(), "rm -f "+shQuote(p.BinDir()+"/tar"), sandbox.ExecOptions{}); err != nil {
@@ -1516,20 +1525,95 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 		}
 	}
 	// A SAVE CUT SHORT, its node stopped as it packed.
-	if err := b.WriteFile(t.Context(), p.SessionSaveStaging(takerA)+"/capture", []byte("part of a save")); err != nil {
+	if err := b.WriteFile(t.Context(), p.SessionSaveStaging(takerA, "a-save-cut-short")+"/capture",
+		[]byte("part of a save")); err != nil {
 		t.Fatal(err)
 	}
 	digests := boxFile(t, b, p.SessionDigests())
 	if err := runner.ClearArtifacts(t.Context(), b); err != nil {
 		t.Fatalf("ClearArtifacts: %v", err)
 	}
-	for _, left := range []string{p.SessionSave(takerA), p.SessionSave(takerB), p.SessionSaveStaging(takerA)} {
+	for _, left := range []string{p.SessionSave(takerA), p.SessionSave(takerB),
+		p.SessionSaveStaging(takerA, "a-save-cut-short")} {
 		if boxHas(t, b, left) {
 			t.Errorf("%s outlived the clear", left)
 		}
 	}
 	if got := boxFile(t, b, p.SessionDigests()); got != digests || got == "" {
 		t.Errorf("the clear changed the digests the box keeps for its life: %q, was %q", got, digests)
+	}
+}
+
+// TWO SAVES OF ONE TAKER AT ONCE BOTH HOLD, each staged in a directory of its
+// own. One taker can save one box twice at once — the drain's save beside one
+// the waiter asked for — and each save keeps what it lists, its marker and its
+// archive in a staging directory named for that save alone, after its taker
+// (executor.Paths.SessionSaveStaging), and moves its archive over the taker's
+// own path whole. Here the first save's tar, once it has packed, holds until
+// the second save's tar has packed too, so the second save clears its staging
+// directory, lists the session, writes its marker and packs while the first
+// has yet to check what it packed: both hold, the taker's path holds a whole
+// archive of the session, and neither save leaves its staging directory
+// behind. The tars pass their words through a fifo the case holds open, so
+// nothing waits on a clock.
+//
+// Mutation: stage every save of a taker in one directory, and the two saves
+// share one archive and one set of lists: the first to move takes the archive
+// and the other's move finds nothing, or the first done removes the other's
+// lists under its checks, so one of the two is refused.
+func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	p := paths(b)
+	forgetCapture(t, b)
+	flags := filepath.Join(b.Home(), "two-saves")
+	if err := os.MkdirAll(flags, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// THE SECOND SAVE'S WORD that its tar has packed, which the first save's
+	// tar waits on; a save that ends says so in its stead (wordInFifo).
+	heldFifo(t, flags, "second")
+	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+at("claimed")+
+		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; : > `+at("first-packed")+`; read said < `+at("second")+
+		`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
+		`"$tar" -czf "$@"; st=$?; : > `+at("second-packed")+`; printf 'packed\n' > `+at("second")+
+		`; exit "$st"`+"\n"))
+	saved := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := runner.PackSave(t.Context(), b, takerA)
+			wordInFifo(flags, "second", "ended")
+			saved <- err
+		}()
+	}
+	for _, err := range []error{<-saved, <-saved} {
+		if err != nil {
+			t.Errorf("a save made beside another of the same taker was refused: %v", err)
+		}
+	}
+	for _, flag := range []string{"first-packed", "second-packed"} {
+		if _, err := os.Stat(filepath.Join(flags, flag)); err != nil {
+			t.Errorf("the saves never ran as the case has them: no %s", flag)
+		}
+	}
+	if _, ok := archiveMembers(t, strings.NewReader(boxFile(t, b, p.SessionSave(takerA))))[filesOf(
+		ran.SessionID).transcript]; !ok {
+		t.Error("the taker's save holds no transcript")
+	}
+	if left := saveStagingLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the saves left their staging directories: %s", strings.Join(left, ", "))
+	}
+}
+
+// wordInFifo writes word, a line, into the fifo name in dir, which the case
+// holds open both ways (heldFifo), so the write never waits: what a pack that
+// has ended says in the stead of a word it owed, so nothing waits on that word.
+func wordInFifo(dir, name, word string) {
+	if fifo, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|unix.O_NONBLOCK, 0); err == nil {
+		_, _ = fifo.WriteString(word + "\n")
+		_ = fifo.Close()
 	}
 }
 
