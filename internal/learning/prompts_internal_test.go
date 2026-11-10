@@ -43,7 +43,7 @@ func TestEveryPassAsksForExactlyTheKeysItsDecoderReads(t *testing.T) {
 		decline string
 	}{
 		{"persist", PersistSystemPrompt,
-			map[string]bool{"kind": true, "content": true, "target_hint": true, "ttl_days": true}, ""},
+			map[string]bool{"kind": true, "content": true, "target_hint": true, "ttl_days": true, "about": true}, ""},
 		{"synthesis", SynthesisSystemPrompt, jsonKeys(skillDraft{}), "{}"},
 		{"cluster", ClusterSystemPrompt, jsonKeys(skillDraft{}), "{}"},
 		{"promotion", PromotionSystemPrompt, jsonKeys(skillDraft{}), "{}"},

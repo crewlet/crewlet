@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Personal memory: what this seat has learned and kept.
@@ -123,21 +125,41 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 		}
 		return EmptyMemoryHint
 	}
-	candidates := f.memoryCandidates(ctx, r, vector)
+	candidates, held := f.memoryCandidates(ctx, r, vector)
 	if len(candidates) == 0 {
-		// Nothing stored. The hint would be a lie: there is no filter to
+		// Nothing offered. The hint would be a lie: there is no filter to
 		// re-run and nothing for it to find.
-		return ""
+		return heldBackLine(held)
 	}
 	selected := f.filterMemories(ctx, r, candidates)
 	if len(selected) == 0 {
-		return EmptyMemoryHint
+		return joinLines(EmptyMemoryHint, heldBackLine(held))
 	}
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
 		bullets = append(bullets, renderMemory(r.Boundary, entry, r.Told))
 	}
-	return joinBullets(bullets)
+	return joinLines(joinBullets(bullets), heldBackLine(held))
+}
+
+// heldBackLine says how many notes a turn was not offered because an upgrade
+// or an access change may have made them false; "" for none.
+func heldBackLine(held int) string {
+	if held == 0 {
+		return ""
+	}
+	notes := "notes"
+	if held == 1 {
+		notes = "note"
+	}
+	return fmt.Sprintf("(%d %s about the platform or your access held back: written before the "+
+		"engine was upgraded or your access last changed. Where one is still true, keep it again "+
+		"with %s.)", held, notes, toolname.ReflectAndPersist)
+}
+
+// joinLines is the non-empty parts, one per line.
+func joinLines(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n")
 }
 
 // memoryCandidates gathers the pool the filter judges.
@@ -149,10 +171,12 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 //
 // The similarity half ranks against the turn's ONE vector, the embedding of
 // what it was asked — shared with episode recall rather than computed again.
-func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVector) []learning.DiaryEntry {
+func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVector) ([]learning.DiaryEntry, int) {
 	now := f.now()
+	currency := currencyOf(f.src.Build, r.Told)
 	var (
 		out  []learning.DiaryEntry
+		held int
 		seen = map[string]bool{}
 	)
 	add := func(entry learning.DiaryEntry) {
@@ -160,6 +184,12 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 			return
 		}
 		seen[entry.ID] = true
+		// HELD BACK, NOT OFFERED: a note an upgrade or an access change may
+		// have made false is never put in front of the filter or the seat.
+		if entry.HeldBack(currency) {
+			held++
+			return
+		}
 		out = append(out, entry)
 	}
 
@@ -178,7 +208,7 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 	for _, entry := range f.recentMemories(ctx, r) {
 		add(entry)
 	}
-	return out
+	return out, held
 }
 
 // recentMemories is the recency half of the pool: the seat's newest live

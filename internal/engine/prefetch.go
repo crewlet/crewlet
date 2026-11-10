@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // What a turn is given before it starts.
@@ -85,7 +87,27 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedText
+	// WHAT A SEAT'S NOTES ARE HELD TO: this build, and what the seat was last
+	// told of its access, read for a memory refresh as a turn's start reads it.
+	src.Build, src.Told = version.String(), e.toldOf
 	return src
+}
+
+// toldOf is the access changes seat handle was told in the told memory window,
+// nil where the access log cannot be read: nothing is held back for a reason
+// the node cannot read.
+func (e *Engine) toldOf(ctx context.Context, handle string) []prefetch.ToldChange {
+	reads, ok := e.accessReads()
+	if !ok {
+		return nil
+	}
+	recent, err := reads.Recent(ctx, handle, time.Now().UTC().Add(-toldMemoryWindow), accessdomain.DispatchRead())
+	if err != nil {
+		log.WarnContext(ctx, "capability_told_unread", "agent", handle, "error", err.Error(),
+			"detail", "this memory read holds back no note for an access change")
+		return nil
+	}
+	return e.toldMemory(ctx, recent.Since)
 }
 
 // prefetchFor renders one turn's context blocks.

@@ -545,6 +545,12 @@ type Parties interface {
 // a company with reflection off or no knowledge backend actually has, and each
 // of those is a supported configuration rather than a degraded one.
 type Sources struct {
+	// Build is the engine build running the turn, and Told what a seat was
+	// told of its access recently (nil reads nothing): together they decide
+	// which notes are held back ([learning.DiaryEntry.HeldBack]).
+	Build string
+	Told  func(ctx context.Context, handle string) []ToldChange
+
 	Diary          Diary
 	Knowledge      knowledge.Searcher
 	Episodes       Episodes

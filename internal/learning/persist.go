@@ -326,6 +326,17 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 
+	// WHAT THE FACT IS ABOUT, company where the model names nothing; a class
+	// this prompt does not offer is no class, and the note is not kept.
+	about := About(strings.ToLower(strings.TrimSpace(stringField(parsed, "about"))))
+	if about == "" {
+		about = AboutCompany
+	}
+	if !about.Valid() && tier != types.PersistDoc {
+		log.WarnContext(ctx, "persist_decider_unknown_about", "turn_id", t.Event.TurnID, "about", string(about))
+		return Decision{Tier: types.PersistNOOP}, nil
+	}
+
 	switch tier {
 	case types.PersistDoc:
 		dir := Directive{
@@ -338,7 +349,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
 
 	case types.PersistLong:
-		entry, err := d.write(ctx, t, content, DiaryLong, time.Time{}, now)
+		entry, err := d.write(ctx, t, content, about, DiaryLong, time.Time{}, now)
 		return Decision{Tier: types.PersistLong, Entry: entry}, err
 
 	case types.PersistShort:
@@ -350,7 +361,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// ever, and the diary refuses a short row with no deadline
 		// precisely so that mistake cannot be made quietly.
 		ttl := now.Add(time.Duration(coerceTTLDays(parsed["ttl_days"])) * 24 * time.Hour)
-		entry, err := d.write(ctx, t, content, DiaryShort, ttl, now)
+		entry, err := d.write(ctx, t, content, about, DiaryShort, ttl, now)
 		return Decision{Tier: types.PersistShort, Entry: entry}, err
 	}
 
@@ -364,13 +375,14 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 
 // write records one row and returns what landed, zero on failure.
 func (d *PersistDecider) write(
-	ctx context.Context, t Turn, content string, kind DiaryKind, ttl, now time.Time,
+	ctx context.Context, t Turn, content string, about About, kind DiaryKind, ttl, now time.Time,
 ) (DiaryEntry, error) {
 	entry := DiaryEntry{
 		ID:       d.newID(),
 		AgentID:  t.Event.Agent,
 		Kind:     kind,
 		Content:  content,
+		About:    about,
 		TTLUntil: ttl,
 		Source:   PersistSource,
 		TurnID:   t.Event.TurnID,
@@ -463,13 +475,16 @@ Rules for LONG and SHORT:
 4. The user prompt may list what is "Already in your memory". Answer NOOP
    when the fact restates an entry there, is a thinner version of one, or
    is an instance a broader entry already covers.
+5. Say what the fact is about in "about": "company" (how the company works),
+   "preference" (how a person likes to work), "capability" (what the agent
+   can reach or run) or "platform" (how the engine itself works).
 
 Answer with one JSON object and nothing else:
 
   {"kind": "NOOP"}
   {"kind": "DOC", "content": "<the rule itself>", "target_hint": "<where it belongs, or empty>"}
-  {"kind": "LONG", "content": "<declarative fact>"}
-  {"kind": "SHORT", "content": "<declarative fact>", "ttl_days": <int>}
+  {"kind": "LONG", "content": "<declarative fact>", "about": "<company|preference|capability|platform>"}
+  {"kind": "SHORT", "content": "<declarative fact>", "ttl_days": <int>, "about": "<company|preference|capability|platform>"}
 ` + "\n" + provenance.StandingInstruction
 
 // buildPersistPrompt renders the turn and the seat's existing memory, every

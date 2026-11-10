@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DiaryKind is how long an observation is meant to live.
@@ -56,6 +58,11 @@ type DiaryEntry struct {
 
 	Kind    DiaryKind
 	Content string
+
+	// About is what the note is about, [AboutCompany] where its writer named
+	// nothing, and EngineBuild the build that wrote it ([DiaryEntry.HeldBack]).
+	About       About
+	EngineBuild string
 
 	// TTLUntil is the deadline for a short entry, zero for a long one.
 	TTLUntil time.Time
@@ -150,6 +157,14 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry needs a deadline", DiaryShort)
 	case e.Kind == DiaryLong && !e.TTLUntil.IsZero():
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
+	case e.About != "" && !e.About.Valid():
+		return fmt.Errorf("learning: a diary entry is about %s, not %q", words.Or(Abouts), e.About)
+	}
+	if e.About == "" {
+		e.About = AboutCompany
+	}
+	if e.EngineBuild == "" {
+		e.EngineBuild = version.String()
 	}
 
 	if len(e.Embedding) == 0 {
@@ -169,12 +184,12 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	if _, err := d.db.SQL().ExecContext(ctx, `
 		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
 			turn_id, metadata, retrieval_count, last_retrieved_at, embedding,
-			embedding_model, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+			embedding_model, created_at, provenance, engine_build)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
 		e.Source, e.TurnID, jsonObject(e.Metadata), blob, model,
-		store.EncodeTime(e.CreatedAt),
+		store.EncodeTime(e.CreatedAt), string(e.About), e.EngineBuild,
 	); err != nil {
 		return fmt.Errorf("learning: write diary entry %s: %w", e.ID, err)
 	}
@@ -183,12 +198,13 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 
 const diaryColumns = `id, agent_id, kind, content, ttl_until, source, turn_id,
 	metadata, retrieval_count, last_retrieved_at, embedding, embedding_model,
-	created_at`
+	created_at, provenance, engine_build`
 
 func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	var (
 		e                  DiaryEntry
 		kind, metadata     string
+		about              string
 		created            int64
 		ttl, lastRetrieved sql.NullInt64
 		embedding          []byte
@@ -196,11 +212,11 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	)
 	if err := rows.Scan(&e.ID, &e.AgentID, &kind, &e.Content, &ttl, &e.Source,
 		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding,
-		&embeddingModel, &created,
+		&embeddingModel, &created, &about, &e.EngineBuild,
 	); err != nil {
 		return DiaryEntry{}, err
 	}
-	e.Kind = DiaryKind(kind)
+	e.Kind, e.About = DiaryKind(kind), About(about)
 	e.TTLUntil = store.TimeAt(ttl)
 	e.LastRetrievedAt = store.TimeAt(lastRetrieved)
 	e.CreatedAt = store.DecodeTime(created)

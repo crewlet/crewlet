@@ -83,3 +83,15 @@ func holdsWord(text, term string) bool {
 }
 
 func wordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// currencyOf is what a seat's notes are held to under build, given the access
+// changes it was told: when its access last changed.
+func currencyOf(build string, told []ToldChange) learning.Currency {
+	c := learning.Currency{Build: build}
+	for _, change := range told {
+		if change.At.After(c.AccessChangedAt) {
+			c.AccessChangedAt = change.At
+		}
+	}
+	return c
+}
