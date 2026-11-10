@@ -40,17 +40,17 @@ func TestTheWorkPatternsReadSeeksItsWindow(t *testing.T) {
 	}
 }
 
-// A PERSON'S NOTICE LOAD IS A SEEK OF THEIR OWN ROWS (any index leading on the
-// recipient), never a walk of every notice the company was sent.
+// A PERSON'S NOTICE LOAD IS A RANGE OF THEIR WEEK, on an index that covers it:
+// never their whole retained inbox, nor every notice the company was sent.
 func TestTheNoticeLoadReadSeeksThePersonsInbox(t *testing.T) {
 	t.Parallel()
 	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
 	plan := storetest.Plan(t, db, patternNoticesStatement,
 		[]any{"owner", store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)})
-	byRecipient := slices.ContainsFunc(plan, func(line string) bool {
-		return strings.Contains(line, "INDEX tracker_notifications_") && strings.Contains(line, "(recipient=?")
+	covered := slices.ContainsFunc(plan, func(line string) bool {
+		return strings.Contains(line, "COVERING INDEX tracker_notifications_load_idx (recipient=? AND created_at>=? AND created_at<?)")
 	})
-	if !byRecipient || storetest.ScansHeap(plan, "tracker_notifications") {
-		t.Errorf("the notice load read does not seek the person's inbox:\n%s", strings.Join(plan, "\n"))
+	if !covered {
+		t.Errorf("the notice load read is no covering range of the person's week:\n%s", strings.Join(plan, "\n"))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -271,9 +272,20 @@ func engineFinding(class Class, subject Subject, title, why string, facts []Fact
 		Class: class, Severity: SeverityNote, Actor: ActorEngine, Source: SourceEvidence,
 		Area: AreaWork, Subject: subject, Title: title, Why: why, Evidence: facts,
 		Records: slices.Clone(records),
-		Fix: Fix{Kind: FixNone, Options: []Option{},
-			Sentence: "The engine wakes an agent only for words that ask it something."},
+		Fix:     Fix{Kind: FixNone, Options: []Option{}, Sentence: engineSentences[class]},
 	}
+}
+
+// engineSentences is what each engine class's note says about the pattern.
+var engineSentences = map[Class]string{
+	ClassAgentMentionsWithoutAsk:  "The engine wakes an agent only for words that ask it something.",
+	ClassPersonRequestsWithoutAsk: "A comment reaches a person's Inbox as a decision only when it asks them a question.",
+	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",
+	ClassReviewIdle:               "An item in review waits on the agent holding it until its next turn on the item.",
+	ClassNoticeLoad:               "Notices that ask something of a person lead their Inbox; the rest are context.",
+	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
+	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
+	ClassAuxiliaryShare:           "Auxiliary calls run on the seat's auxiliary model, and a smaller one costs less.",
 }
 
 func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
@@ -466,12 +478,16 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 			byID[r.AgentID] = s
 			out = append(out, s)
 		}
-		s.turns += r.Turns
 		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
 		s.auxiliary += r.AuxInput + r.AuxOutput
 		outcome := types.TurnOutcome(r.Outcome)
-		if outcome == types.OutcomeNothing {
-			s.nothing += r.Turns
+		// A SCHEDULE'S TURNS ARE THE OWNER'S CHOICE, and a check that finds
+		// nothing commits nothing: the schedule classes read them, not this one.
+		if !strings.HasPrefix(r.Wake, scheduleWake) {
+			s.turns += r.Turns
+			if outcome == types.OutcomeNothing {
+				s.nothing += r.Turns
+			}
 		}
 		if r.Wake == pickupWake {
 			s.pickups += r.Turns
@@ -483,8 +499,12 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 	return out
 }
 
-// pickupWake is the ledger's wake for work handed to an idle seat.
-const pickupWake = types.OriginWorkItem + ":" + types.PickupReason
+// pickupWake is the ledger's wake for work handed to an idle seat, and
+// scheduleWake the prefix of every schedule's.
+const (
+	pickupWake   = types.OriginWorkItem + ":" + types.PickupReason
+	scheduleWake = types.OriginSchedule + ":"
+)
 
 // noopShare is one finding per agent whose started turns often committed nothing.
 func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
@@ -514,9 +534,10 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 		return nil
 	}
 	return []Finding{engineFinding(ClassPickupStillWaiting, Subject{Kind: SubjectCompany},
-		"Agents picked up work that could not move yet.",
-		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only, as when "+
-			"an agent says the item still waits on something.", words, pickups),
+		"Agents picked up work and moved none of it.",
+		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only (a comment, "+
+			"a question or a chat post) and no work moved, as when an agent says the item "+
+			"still waits on something.", words, pickups),
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
 }
 
