@@ -65,6 +65,25 @@ func writeBoxStandIn(t *testing.T, box sandbox.Sandbox, path, script string) {
 // shQuote is s quoted for sh.
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// claim is shell that succeeds in the one process that first runs it on path
+// and fails in every other, then and after: the turn a stand-in takes ahead of
+// the calls of it made beside it — the first of two packs at once to hold, say
+// — taken by creating path, a file, under the shell's own noclobber (`set -C`),
+// which a POSIX shell opens O_CREAT|O_EXCL: one create of a name, which the
+// kernel grants one process alone. Noclobber is set in a subshell of its own,
+// so no redirection the stand-in makes after it is held to it.
+//
+// NEVER `mkdir`, the obvious claim, whose exclusivity is its tool's. uutils
+// coreutils' mkdir — /usr/bin/mkdir on Ubuntu 26.04, and so on CI's runners —
+// has none through 0.10.0: it checks that the name is free, then creates it,
+// and answers a create that failed with success wherever the name is a
+// directory by then (fixed upstream in 0.11.0, "mkdir: do not ignore EEXIST
+// on non-recursive creation"). Measured on ubuntu:26.04: two mkdirs of one
+// name started together both succeeded in 2178 rounds of 3000, and two of
+// these claims in none. Two packs that had each taken the first's turn each
+// held for the other's word, out to the pack's two-minute bound (#946).
+func claim(path string) string { return "( set -C; : > " + shQuote(path) + " ) 2> /dev/null" }
+
 // A STAND-IN RUNS THE MOMENT IT IS HANDED OVER, whatever this process is forking
 // meanwhile — the guard for [writeStandIn]. Eight goroutines fork beside 64
 // stand-ins written and run at once: the forks are the point, because the
@@ -109,3 +128,51 @@ func TestAStandInRunsTheMomentItIsHandedOver(t *testing.T) {
 		t.Fatalf("%d of 64 stand-ins were refused as busy when run the moment they were written", n)
 	}
 }
+
+// A STAND-IN'S CLAIM IS TAKEN BY ONE PROCESS, however many make it at once — the
+// guard for [claim]. Round after round, two of this machine's shells wait at
+// one start line and then claim one name together, and in every round exactly
+// one of them takes it.
+//
+// Mutation: claim with `mkdir`, and on a machine whose mkdir is uutils' through
+// 0.10.0 — CI's — both shells take the claim in most rounds. GNU's mkdir is
+// exclusive, so on a machine with GNU coreutils that mutant passes.
+func TestAStandInsClaimIsTakenByOneProcess(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for round := range claimRounds {
+		name := filepath.Join(dir, "claimed."+strconv.Itoa(round))
+		start := filepath.Join(dir, "start."+strconv.Itoa(round))
+		script := "while [ ! -e " + shQuote(start) + " ]; do :; done; " + claim(name)
+		var shells [2]*exec.Cmd
+		for i := range shells {
+			shells[i] = exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
+			if err := shells[i].Start(); err != nil {
+				t.Fatalf("starting a claim: %v", err)
+			}
+		}
+		if err := os.WriteFile(start, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		won := 0
+		for _, sh := range shells {
+			var lost *exec.ExitError
+			switch err := sh.Wait(); {
+			case err == nil:
+				won++
+			case !errors.As(err, &lost):
+				t.Fatalf("waiting on a claim: %v", err)
+			}
+		}
+		if won != 1 {
+			t.Fatalf("round %d: %d of two shells took one claim made at once, want one", round+1, won)
+		}
+	}
+}
+
+// claimRounds is how many rounds [TestAStandInsClaimIsTakenByOneProcess] makes.
+//
+// FIFTY: on CI's mkdir both shells took the claim in about three rounds of
+// four (2178 of 3000, measured on ubuntu:26.04), so a claim that is not one
+// process's has no round in fifty to hide in, at a hundred short shells.
+const claimRounds = 50

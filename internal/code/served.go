@@ -215,6 +215,15 @@ func (s Served) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	return s.Reader.Read(ctx, q)
 }
 
+// TurnsMovedCode answers which of a set of turns moved work in code: see
+// [Reader.TurnsMovedCode].
+func (s Served) TurnsMovedCode(ctx context.Context, q TurnsMovedQuery) (map[string]bool, error) {
+	if s.Reader == nil {
+		return nil, errNoReader
+	}
+	return s.Reader.TurnsMovedCode(ctx, q)
+}
+
 // ResolveRef answers one ref of one repository — see [Reader.ResolveRef].
 func (s Served) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
 	if s.Reader == nil {

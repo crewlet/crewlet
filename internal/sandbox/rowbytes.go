@@ -497,6 +497,7 @@ func submitted(call BridgeCall) bool {
 // IN PLACE ON l's OWN CALLS: a caller holding a log it shares with another —
 // a copy whose list is another's too — clones the list first.
 func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
+	l.Committed = committedOnce(l.Committed, next.Committed)
 	dropped, taken := l.Unlisted(), l.Absorbed()
 	next.Appended = l.Appends() + 1
 	var elided []BridgeCall

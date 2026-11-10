@@ -1363,6 +1363,9 @@ func registeredStatements() map[string]statement {
 				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)",
 				repoKey + " (id=?)"}},
+		"which of a schedule's turns moved code": {turnsMovedSQL, []any{`["t-1","t-2"]`},
+			[]string{"code_pushes_turn_idx (turn_id=?)", "code_changes_turn_idx (created_turn=?)",
+				"code_reviews_turn_idx (turn_id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
 		// A RUNNER'S CLAIM WALK and A HOME'S SWEEP (checksread.go): the
 		// queued attempts naming one cell oldest queued first after a place,

@@ -137,6 +137,10 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_runs_unreadable", "error", err.Error())
 		ev.RunsUnread = true
 	}
+	if ev.Fires, err = s.scheduleFires(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_schedule_fires_unreadable", "error", err.Error())
+		ev.FiresUnread = true
+	}
 	return ev
 }
 

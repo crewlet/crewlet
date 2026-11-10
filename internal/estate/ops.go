@@ -56,6 +56,7 @@ type TrackerReader interface {
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
 	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
+	TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error)
 	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 		worklet.ActivityAnswer, error)
 	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
@@ -162,6 +163,9 @@ type PageReader interface {
 	Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
 		fresh statelog.Freshness) (doclet.Revision, bool, error)
+
+	// TurnsMovedPages is which of a set of turns moved work on the pages.
+	TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error)
 }
 
 // PageWriter is the knowledge base's write side. The author is an argument
@@ -804,6 +808,14 @@ var opWorkPatterns = define("tracker.work_patterns", opRead, trackerDomain, fals
 			return worklet.WorkPatterns{}, errNoHalf
 		}
 		return b.Tracker.WorkPatterns(ctx, q)
+	})
+
+var opTurnsMoved = define("tracker.turns_moved", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+		if b.Tracker == nil {
+			return nil, errNoHalf
+		}
+		return b.Tracker.TurnsMoved(ctx, q)
 	})
 
 type activityArgs struct {
@@ -1663,6 +1675,14 @@ var opPageActivity = define("pages.activity", opRead, pagesDomain, false,
 			return doclet.PageActivity{}, errNoHalf
 		}
 		return b.Pages.Activity(ctx, q)
+	})
+
+var opPageTurnsMoved = define("pages.turns_moved", opRead, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+		if b.Pages == nil {
+			return nil, errNoHalf
+		}
+		return b.Pages.TurnsMovedPages(ctx, q)
 	})
 
 type revisionArgs struct {

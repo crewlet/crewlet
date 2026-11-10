@@ -107,6 +107,11 @@ func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (workle
 	return call(ctx, w.r, opWorkPatterns, nil, q)
 }
 
+// TurnsMoved answers which of a set of turns moved work on the tracker.
+func (w Work) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, w.r, opTurnsMoved, nil, q)
+}
+
 // Activity answers what happened to a task or a project.
 func (w Work) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 	worklet.ActivityAnswer, error) {
@@ -503,6 +508,11 @@ func (p Pages) Containers(ctx context.Context, fresh statelog.Freshness) (
 // knowledge base.
 func (p Pages) Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error) {
 	return call(ctx, p.r, opPageActivity, nil, q)
+}
+
+// TurnsMovedPages answers which of a set of turns moved work on the pages.
+func (p Pages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, p.r, opPageTurnsMoved, nil, q)
 }
 
 // LinkedFrom answers which pages and tasks link to a page, by its id — from a
@@ -1376,6 +1386,12 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 // compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
+}
+
+// TurnsMovedCode answers which of a set of turns pushed, opened a change or
+// gave a review.
+func (c CodeSeam) TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+	return call(ctx, c.r, opCodeTurnsMoved, nil, q)
 }
 
 // Lifecycle asks a data node to decide one lifecycle request — a tool's

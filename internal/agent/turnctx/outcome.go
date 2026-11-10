@@ -29,5 +29,17 @@ func (w *Written) Changes() []types.CommittedChange {
 	return slices.Clone(w.changes)
 }
 
+// Since is the changes committed after before, a [Written.Changes] read
+// earlier: what the calls between the two reads committed.
+func (w *Written) Since(before []types.CommittedChange) []types.CommittedChange {
+	var out []types.CommittedChange
+	for _, c := range w.Changes() {
+		if !slices.Contains(before, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Outcome is the turn's outcome: the highest its committed changes reach.
 func (w *Written) Outcome() types.TurnOutcome { return types.OutcomeOf(w.Changes()) }

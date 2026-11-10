@@ -869,7 +869,9 @@ to keep, so no day counts it until it settles — counted on both, every reader
 summing the fleet would bill a stateless node's spend twice. Every count of a
 day is read off rows inside it — a turn's reviews, send-backs and duration, and
 its place in the seat's turn ledger (what woke it, whether it moved work, only
-wrote words or did nothing, and what it spent: `usage_turn_ledger`) and its
+wrote words or did nothing, and what it spent: `usage_turn_ledger`; an executor
+turn's are settled when its run is collected, the run's own writes and model
+tokens included) and its
 refused calls by class (`usage_tool_refusals`), off
 the one record that ends the turn, which states the whole turn however its
 other records were spread over the data nodes (a turn whose end states no

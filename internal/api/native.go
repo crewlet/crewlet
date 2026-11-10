@@ -367,6 +367,14 @@ func (l liveWork) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (wo
 	return r.WorkPatterns(ctx, q)
 }
 
+func (l liveWork) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.TurnsMoved(ctx, q)
+}
+
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 
@@ -435,6 +443,14 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 		return doclet.Revision{}, false, err
 	}
 	return r.Revision(ctx, pageID, version, fresh)
+}
+
+func (l livePages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.TurnsMovedPages(ctx, q)
 }
 
 // liveBacklinks is which pages link to a page, resolved per question.

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -358,6 +359,9 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// store holds them to the call's share of the log, so this is
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
+			// WHAT IT COMMITTED, which the run's collection settles the
+			// turn's outcome by ([Engine.describeResume]).
+			Committed: changeNames(call.Committed),
 			// WHETHER ANYBODY WAITED FOR ITS ANSWER as it returned: a call
 			// its harness gave up on, or that outlived its opening, is held by
 			// no save point ([sandbox.BridgeCall.Abandoned]).
@@ -432,6 +436,18 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 // better. A record that missed it is read as a session of the job's own by
 // every later rebuild of the run's guard: the safe direction.
 const sessionStartRecordBudget = 5 * time.Second
+
+// changeNames is changes as the run's call log spells them.
+func changeNames(changes []types.CommittedChange) []string {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(changes))
+	for _, c := range changes {
+		out = append(out, string(c))
+	}
+	return out
+}
 
 // started records which session the job's box said it started
 // ([sandbox.PendingStore.MarkSessionStart]), for every later rebuild of the

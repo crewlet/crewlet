@@ -111,6 +111,7 @@ func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callabl
 	}
 	turn := seatTurn()
 	turn.Calls = turnctx.NewCallLog()
+	turn.Written = &turnctx.Written{}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(turn)
 	g := &gated{fixture: f}
 	f.session = &mcpbridge.Session{
