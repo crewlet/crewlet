@@ -376,6 +376,13 @@ function written<D>(
  * field the screen lets the assistant set (an unknown path is refused, never
  * ignored), every value in its field's shape and taken by its `write`, or the
  * whole change refused in a sentence.
+ *
+ * WRITTEN IN THE SCREEN'S ORDER, never the payload's. A change is a set of
+ * values, and the order a proposal names them in is an accident of how it
+ * was encoded (the engine's encoder sorts them by path). A screen declares its
+ * fields in the order its controls are filled in, so a field whose control
+ * waits on another (an agent's access, chosen once the agent is on) is
+ * written after that one, and its card's rows read in the screen's order.
  */
 export function parseDraftChange<D>(
   spec: AssistantDraftSpec<D>,
@@ -398,13 +405,22 @@ export function parseDraftChange<D>(
   if (entries.length === 0) return refused("That changes nothing in the draft.");
   if (entries.length > ASSISTANT_PAGE_DRAFT_MAX_FIELDS)
     return refused("That changes more fields than the draft has.");
-  let next = spec.value;
-  const rows: PageActionRow[] = [];
+  const given = new Map<string, unknown>();
   for (const [path, value] of entries) {
     const field = spec.fields.find((f) => f.path === path);
     if (!field) return refused(`The draft has no field “${path}”.`);
     if (!settable(field))
       return refused(`${field.label} is not something Ask Crewlet can set here.`);
+    given.set(path, value);
+  }
+  let next = spec.value;
+  const rows: PageActionRow[] = [];
+  for (const field of spec.fields) {
+    // A PATH IS ITS FIRST FIELD'S, as the snapshot lists it and the lookup
+    // above finds it; a repeat is never written twice.
+    if (!given.has(field.path)) continue;
+    const value = given.get(field.path);
+    given.delete(field.path);
     const out = written(field, next, spec.value, value);
     if (typeof out === "string") return refused(out);
     next = out.next;

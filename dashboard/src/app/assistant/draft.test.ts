@@ -286,6 +286,48 @@ describe("draft.set", () => {
     });
   });
 
+  // A CHANGE IS A SET OF VALUES, WRITTEN IN THE SCREEN'S ORDER: the engine's
+  // encoder sorts a proposal's values by path, so a field whose control waits
+  // on another is named before it as often as after. Mutation: write in the
+  // payload's order, and the access named first is refused while the switch
+  // named after it is still off.
+  test("writes the values in the order the screen declares its fields, not the order they are named in", () => {
+    interface Access {
+      on: boolean;
+      level: string;
+    }
+    const access: AssistantDraftSpec<Access> = {
+      kind: "client",
+      scope: "Access (not saved)",
+      value: { on: false, level: "" },
+      fields: [
+        {
+          path: "switch",
+          label: "On",
+          read: (a) => (a.on ? "On" : "Off"),
+          write: (a, v) => ({ ...a, on: v === "On" }),
+        },
+        {
+          path: "access",
+          label: "Access",
+          read: (a) => a.level,
+          write: (a, v) => (a.on ? { ...a, level: String(v) } : refuse("Turn it on first.")),
+        },
+      ],
+      apply: vi.fn(),
+    };
+    expect(parseDraftChange(access, { values: { access: "Admin", switch: "On" } })).toEqual({
+      ok: true,
+      value: {
+        next: { on: true, level: "Admin" },
+        rows: [
+          { field: "On", next: "On", current: "Off" },
+          { field: "Access", next: "Admin", current: "(empty)" },
+        ],
+      },
+    });
+  });
+
   test("refuses a credential, an unknown field, the wrong shape, extra keys, and the screen's own no", () => {
     for (const raw of [
       { values: { password: "x" } },

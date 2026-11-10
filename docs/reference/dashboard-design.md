@@ -5033,14 +5033,16 @@ names a credential by the engine's rule, is sent empty) and bounded (forty
 fields, a thousand characters a value, the rest counted in `more`, and fields
 shed from the end before the turn is ever refused). The same hook declares
 `draft.set`, whose card shows each field's value now beside the proposed one,
-which applies through the screen's setter, and which offers Undo while the
-draft still says what the change made of it. What `draft.set` takes is
-declared as a member per editable field only while one schema holds them (32
-members and 6 KiB, each description cut to 300 characters), and not at all past
-that, where the engine reads the draft's editable fields instead; a page
-context over its budget drops that declaration before any field of the draft.
-Every size is counted in the bytes the engine's own encoding writes, which
-escapes `<`, `>` and `&`. A gate
+which applies through the screen's setter, writing its values in the order the
+screen declares its fields (so a field whose control waits on another is
+written after that one, whatever order the proposal named them in), and which
+offers Undo while the draft still says what the change made of it. What
+`draft.set` takes is declared as a member per editable field only while one
+schema holds them (32 members and 6 KiB, each description cut to 300
+characters), and not at all past that, where the engine reads the draft's
+editable fields instead; a page context over its budget drops that declaration
+before any field of the draft. Every size is counted in the bytes the engine's
+own encoding writes, which escapes `<`, `>` and `&`. A gate
 (`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
 (a leave guard, an editing status, a setup wizard, a rich, inline or list
 editor, a form field) that neither declares a draft nor is listed as part of a

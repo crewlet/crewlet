@@ -107,7 +107,13 @@ describe("a proposed logo's card row", () => {
       values: { "logos.on_dark": REF, "logos.primary": REF },
     });
     if (!parsed.ok) throw new Error(parsed.reason);
-    const [dark, light] = parsed.value.rows;
+    // IN THE SETUP'S ORDER, the primary logo's row before the dark one's,
+    // whatever order the change named them in.
+    expect(parsed.value.rows.map((row) => row.field)).toEqual([
+      "Primary logo",
+      "For dark grounds logo",
+    ]);
+    const [light, dark] = parsed.value.rows;
     expect(dark?.fileGround).toEqual({ tone: "dark", color: "#0d1717" });
     expect(light?.fileGround).toEqual({ tone: "light", color: "#f7faf9" });
   });
