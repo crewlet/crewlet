@@ -735,9 +735,16 @@ with a store directory and no limit (`jetstream.ErrUndeclaredSize`), however
 the case reached it — an engine's boot, a queue opened directly, a Tier A
 file it wrote — and `brokertest`'s
 `TestEveryNATSServerATestBuildsDeclaresItsSize` fails a server built from
-nats-server's options without one. Only a case whose subject is the derived
-limit leaves it unset, and it starts the broker under
-`jetstream.SizedByTheDisk` (an engine under `engine.SizedByTheMachine`)
+nats-server's options without one. A node on an external broker reads the
+account's limit and never the server's cap, and where the account states none
+it stands three quarters of its own volume's free space in for one, so a
+server built from options, its cap declared and its account unlimited,
+refused a node's object bucket on any runner with more than about 92 GB free.
+So a test binary's node also refuses to open on an external broker whose
+account states no limit (`engine.ErrUndeclaredBrokerLimit`), and a node dials
+`externaltest.Start` rather than a server a case builds itself. Only a case
+whose subject is the derived limit leaves it unset, and it starts the broker
+under `jetstream.SizedByTheDisk` (an engine under `engine.SizedByTheMachine`)
 saying why; one about a refusal below the floor states a size of its own.
 A node fixture that declares its broker this way declares its code cache
 beside it with `brokertest.GitletCacheIn`, which sets `gitlet.cache_max_bytes` and

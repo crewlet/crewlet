@@ -46,7 +46,11 @@
 // boots on one fails on a fuller disk. So the server's cap is fixed and its account states a limit
 // below it ([brokertest.StoreMaxBytes]), which the node reads back as an
 // operator's limit like any other. [StartUnstated] is the operator's broker
-// that states none, for a case whose subject is that.
+// that states none, for a case whose subject is that, and a test binary's node
+// refuses to open on it (engine.ErrUndeclaredBrokerLimit) unless the case says
+// so (engine.SizedByTheMachine). A fixed cap alone is half the declaration: a
+// server a case built with its cap fixed and its account unlimited refused the
+// node's bucket on any runner with more than about 92 GB free.
 package externaltest
 
 import (
