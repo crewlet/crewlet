@@ -2,6 +2,8 @@ package fixedwait
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -447,9 +449,10 @@ func TestAStaleMeasureMarkerIsRefused(t *testing.T) {
 }
 
 // A READING OF ELAPSED TIME IN A BUBBLE IS NOT COUNTED, where the clock is
-// exact: in synctest's function, and in a bubble-only helper — one that
-// reads it only through a time.Time's Sub included, whose declaration that
-// Sub keeps from being stale.
+// exact: in synctest's function — a time.Time's Before, After and Compare as
+// much as its Sub — and in a bubble-only helper, one that reads it only
+// through a Sub or only through a Before included, whose declaration that
+// reading keeps from being stale.
 func TestAnElapsedReadingInABubbleIsAccepted(t *testing.T) {
 	t.Parallel()
 	expect(t, fixture(t, "elapsed-bubbled"))
@@ -466,20 +469,38 @@ func TestAnInventoryEntryCoversElapsedReadings(t *testing.T) {
 		at{StaleEntry, "p/p_test.go", 10, ""})
 }
 
-// A Sub IN A FILE THIS PLATFORM DOES NOT BUILD IS REFUSED: the gate cannot
-// type its receiver, and passing it would leave a reading of the clock in no
-// count on any platform.
-func TestASubTheGateCannotTypeIsRefused(t *testing.T) {
+// A Sub, Before, After or Compare IN A FILE THIS PLATFORM DOES NOT BUILD IS
+// REFUSED: the gate cannot type its receiver, and passing it would leave a
+// reading of the clock in no count on any platform. time.After, the wait, is
+// not one: it is package time's function, counted as a wait by its name, so
+// a file that waits on it needs no type and is not refused.
+func TestAMethodTheGateCannotTypeIsRefused(t *testing.T) {
 	t.Parallel()
-	expect(t, fixture(t, "untyped-sub"), at{Untyped, "p/elsewhere_test.go", 12, ""})
+	got := fixture(t, "untyped-receiver")
+	expect(t, got,
+		at{Untyped, "p/elsewhere_test.go", 12, ""},
+		at{Untyped, "p/elsewhere_before_test.go", 12, ""})
+	// Each names the method it could not type, since the file holding it is
+	// what the person moves or splits.
+	for file, says := range map[string]string{
+		"p/elsewhere_test.go":        "this Sub's receiver",
+		"p/elsewhere_before_test.go": "this Before's receiver",
+	} {
+		if !slices.ContainsFunc(got, func(f Finding) bool {
+			return f.File == file && strings.Contains(f.Detail, says)
+		}) {
+			t.Errorf("no refusal in %s says %q", file, says)
+		}
+	}
 }
 
-// THE PREFILTER ADMITS A FILE THAT SPELLS THE IDENTIFIER Sub, and no file
-// that spells it only inside a longer name, so a package whose tests hold a
-// Subscribe and no Sub is not type-checked for nothing. Admitting too much
-// costs only time; admitting too little would leave a time.Time's Sub
-// uncounted, so every way a reference can sit beside its neighbours is a row.
-func TestThePrefilterAdmitsTheIdentifierSubAlone(t *testing.T) {
+// THE PREFILTER ADMITS A FILE THAT SPELLS THE IDENTIFIER Sub, Before, After
+// or Compare, and no file that spells one only inside a longer name, so a
+// package whose tests hold a Subscribe, an AfterFunc or a BeforeEach and none
+// of the four is not parsed for them for nothing. Admitting too much costs
+// only time; admitting too little would leave a time.Time's method uncounted,
+// so every way a reference can sit beside its neighbours is a row.
+func TestThePrefilterAdmitsTheIdentifiersAlone(t *testing.T) {
 	t.Parallel()
 	for src, want := range map[string]bool{
 		"d := end.Sub(start)":    true,
@@ -495,9 +516,60 @@ func TestThePrefilterAdmitsTheIdentifierSubAlone(t *testing.T) {
 		"x.Sub_":                 false,
 		"x.Sub2(y)":              false,
 		"q.Subscribe(); e.Sub()": true,
+		"now.Before(deadline)":   true,
+		"!now.After(deadline)":   true,
+		"a.Compare(b) < 0":       true,
+		"<-time.After(d)":        true,
+		"x./* gap */After(y)":    true,
+		"time.AfterFunc(d, f)":   false,
+		"BeforeEach":             false,
+		"x.Compared":             false,
+		"x.ÅBefore":              false,
+		"a.Equal(b)":             false,
 	} {
-		if got := spellsSub([]byte(src)); got != want {
-			t.Errorf("spellsSub(%q) = %v, want %v", src, got, want)
+		if got := spellsMethod([]byte(src)); got != want {
+			t.Errorf("spellsMethod(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+// ONLY TIME'S OWN After IS TOLD APART WITHOUT TYPES: a selector of one of the
+// four names is a candidate, whose package is type-checked, unless it is
+// time.After through the file's own name for package time where nothing
+// local takes that name — package time's function, the wait, never a
+// method. Everything else is left to the types, another package's Compare
+// included, since a file's imports do not say what a package calls itself.
+// A candidate passed over would leave its method uncounted, so every way a
+// method can be named is a row.
+func TestOnlyTimesOwnAfterIsToldApartWithoutTypes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, src, want string }{
+		{"the wait", `import "time"; func f() { <-time.After(0) }`, ""},
+		{"the wait through an alias", `import tm "time"; func f() { <-tm.After(0) }`, ""},
+		{"the wait through a dot import", `import . "time"; func f() { <-After(0) }`, ""},
+		{"a value's", `import "time"; func f(t time.Time) bool { return t.After(t) }`, "After"},
+		{"a method expression", `import "time"; var f = time.Time.After`, "After"},
+		{"a local named time", `import "time"; type stamp = time.Time
+			func f(time stamp) bool { return time.After(time) }`, "After"},
+		{"another package under time's name", `import time "example.com/clock"
+			func f() { <-time.After(0) }`, "After"},
+		{"the wait, then a value's", `import "time"
+			func f(t time.Time) bool { <-time.After(0); return t.Before(t) }`, "Before"},
+		{"another package's own", `import "strings"; func f() int { return strings.Compare("a", "b") }`, "Compare"},
+		{"in a file that does not import time", `func f(e event) bool { return e.at.Before(e.from) }`, "Before"},
+		{"a Sub", `func f(e event) any { return e.at.Sub(e.from) }`, "Sub"},
+		{"an Equal", `import "time"; func f(t time.Time) bool { return t.Equal(t) }`, ""},
+	} {
+		f, err := parser.ParseFile(token.NewFileSet(), "p_test.go", "package p; "+c.src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		got := ""
+		if id := firstMethod(f); id != nil {
+			got = id.Name
+		}
+		if got != c.want {
+			t.Errorf("%s: the first candidate is %q, want %q", c.name, got, c.want)
 		}
 	}
 }
@@ -510,12 +582,12 @@ func TestAStatedMarkerIsAcceptedOverASub(t *testing.T) {
 	expect(t, fixture(t, "marker-stated"))
 }
 
-// A STATED MARKER COVERS A Sub AND NOTHING ELSE, AND SAYS WHICH INSTANTS: one
-// with no reason is refused and leaves its Sub counted; one over time.Until,
-// which reads now at the call, and one over a fixed wait are refused and
-// leave the reference counted; over a line holding a Since and a Sub it
-// covers the Sub alone, and the Since stays counted.
-func TestAStatedMarkerOverAnythingButASubIsRefused(t *testing.T) {
+// A STATED MARKER COVERS A COMPARISON OF INSTANTS AND NOTHING ELSE, AND SAYS
+// WHICH INSTANTS: one with no reason is refused and leaves its Sub counted;
+// one over time.Until, which reads now at the call, and one over a fixed
+// wait are refused and leave the reference counted; over a line holding a
+// Since and a Sub it covers the Sub alone, and the Since stays counted.
+func TestAStatedMarkerOverAnythingButAComparisonIsRefused(t *testing.T) {
 	t.Parallel()
 	got := fixture(t, "stated-misplaced")
 	expect(t, got,
@@ -578,4 +650,113 @@ func TestEachShapeIsHeldToItsOwnCount(t *testing.T) {
 			t.Errorf("the over-full finding lists %v, want the one reference of its shape", f.Refs)
 		}
 	}
+}
+
+// A time.Time'S Before, After AND Compare ARE REFUSED WHEREVER THE RECEIVER
+// IS ONE, told by its type exactly as a Sub is: called, each the deciding
+// shape a test writes (!time.Now().Before(deadline), time.Now().After(d),
+// time.Now().Compare(d) >= 0); as method values and as method expressions
+// (time.Time.Before, (*time.Time).After, and an alias's, stamp.Compare);
+// through an alias, an embedding that promotes them and a pointer; through a
+// conversion back from a DEFINED type, which has none of them itself; and in
+// a package whose only test file does not import time, which only the
+// prefilter's reading of every test file's bytes reaches.
+func TestATimeTimesBeforeAfterAndCompareAreRefusedByTheReceiversType(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "elapsed-compare"),
+		at{Uncovered, "p/p_test.go", 10, "time.Time.Before"},
+		at{Uncovered, "p/p_test.go", 17, "time.Time.After"},
+		at{Uncovered, "p/p_test.go", 24, "time.Time.Compare"},
+		at{Uncovered, "p/p_test.go", 31, "time.Time.Before"},
+		at{Uncovered, "p/p_test.go", 31, "time.Time.After"},
+		at{Uncovered, "p/p_test.go", 31, "time.Time.Compare"},
+		at{Uncovered, "p/p_test.go", 36, "time.Time.Before"},
+		at{Uncovered, "p/p_test.go", 37, "time.Time.After"},
+		at{Uncovered, "p/p_test.go", 38, "time.Time.Compare"},
+		at{Uncovered, "p/p_test.go", 43, "time.Time.Before"},
+		at{Uncovered, "p/p_test.go", 45, "time.Time.After"},
+		at{Uncovered, "p/p_test.go", 47, "time.Time.Compare"},
+		at{Uncovered, "p/p_test.go", 52, "time.Time.Before"},
+		at{Uncovered, "q/q_test.go", 7, "time.Time.After"})
+}
+
+// NO OTHER COMPARISON IS COUNTED: another type's Before, After and Compare,
+// the ones a defined type over time.Time declares for itself, fields named
+// After and Before, a package's own Compare (strings', bytes', cmp's,
+// slices'), a time.Time's Equal, which decides nothing about elapsed time,
+// and time.After, the wait, which is counted as a wait and never as a
+// reading — here under its liveness marker, which covers a wait alone.
+func TestAnotherTypesComparisonsAndEqualAreNotCounted(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "compare-other"))
+}
+
+// A MEASURE OR A STATED MARKER TAKES A COMPARISON OF INSTANTS OUT OF THE
+// CLASS, trailing it or alone above it: measure over a poll's own deadline
+// and over a logged comparison, stated over instants the case stated, one
+// derived from the other included.
+func TestAMeasureOrStatedMarkerIsAcceptedOverAComparison(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "marker-compare"))
+}
+
+// A MARKER OVER A COMPARISON IT DOES NOT COVER IS STILL REFUSED, and leaves
+// the reference counted: a stated one over a time.Since, which reads now at
+// the call and is never stated; a fixed wait's over a comparison, which is a
+// reading and no wait; and a stated one with no reason over a Compare.
+func TestAMarkerOverAComparisonItDoesNotCoverIsRefused(t *testing.T) {
+	t.Parallel()
+	got := fixture(t, "compare-misplaced")
+	expect(t, got,
+		at{BadMarker, "p/p_test.go", 12, ""},
+		at{Uncovered, "p/p_test.go", 13, "time.Since"},
+		at{BadMarker, "p/p_test.go", 16, ""},
+		at{Uncovered, "p/p_test.go", 17, "time.Time.After"},
+		at{BadMarker, "p/p_test.go", 20, ""},
+		at{Uncovered, "p/p_test.go", 21, "time.Time.Compare"})
+	for line, says := range map[int]string{
+		12: "time.Since or time.Until",
+		16: "//fixedwait:stated <which instants or clock>",
+		20: "says which instants or which clock",
+	} {
+		if !slices.ContainsFunc(got, func(f Finding) bool {
+			return f.Rule == BadMarker && f.Line == line && strings.Contains(f.Detail, says)
+		}) {
+			t.Errorf("no refusal at line %d says %q", line, says)
+		}
+	}
+}
+
+// A COMPARISON OF INSTANTS IS A READING IN THE INVENTORY, held with
+// time.Since's and a Sub's to the readings' fields and never to the waits':
+// an entry recording a function's Since and Before as elapsed bounds, or one
+// of them exempt, passes; one recording a reading too few is over-full, with
+// both listed; and one recording the Before as a wait is over-full in its
+// readings and stale in its waits.
+func TestAComparisonOfInstantsIsAReadingInTheInventory(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "inventory-compare",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 2, Piece: 2}))
+	expect(t, fixture(t, "inventory-compare",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 1, ExemptElapsed: 1, Piece: 2}))
+	short := fixture(t, "inventory-compare",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 1, Piece: 2})
+	expect(t, short, at{OverFull, "p/p_test.go", 10, ""})
+	if len(short) == 1 {
+		var refs []string
+		for _, r := range short[0].Refs {
+			refs = append(refs, r.String())
+		}
+		want := []string{
+			"p/p_test.go:10: TestTwoReadings: time.Since",
+			"p/p_test.go:10: TestTwoReadings: time.Time.Before",
+		}
+		if !slices.Equal(refs, want) {
+			t.Errorf("the over-full finding lists %q, want %q", refs, want)
+		}
+	}
+	expect(t, fixture(t, "inventory-compare",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 1, NegativeWindow: 1, Piece: 2}),
+		at{OverFull, "p/p_test.go", 10, ""},
+		at{StaleEntry, "p/p_test.go", 10, ""})
 }
