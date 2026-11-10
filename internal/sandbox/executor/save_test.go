@@ -1036,85 +1036,106 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	}
 }
 
-// TWO PACKS ON DEMAND OF ONE BOX AT ONCE BOTH HOLD, each staged in a directory
-// of its own. Two reads of one job at once — a stop's and a collection's — each
-// take its session, and each packs it now where the job left no archive or its
-// box would not end it. Here the first pack's tar, once it has packed, holds
-// until the second pack's has packed too, so the second pack starts — and
-// clears and fills its staging directory — while the first is still at work:
-// beside a harness that may still work and once it is gone alike, each pack
-// holds, each hands back a whole archive of the session, and neither leaves a
-// staging directory behind.
+// TWO PACKS ON DEMAND OF ONE BOX AT ONCE BOTH HOLD BESIDE A HARNESS STILL
+// WRITING, each staged in a directory of its own. Two reads of one job its box
+// would not end — a stop's and a collection's — each pack it now as it stands,
+// by the rule of a pack beside a harness that may still work, and each such
+// pack keeps what it lists, its marker and its archive in its own staging
+// directory. Here the harness appends to its transcript and to a subagent's
+// thread once each pack's tar has read them, as a harness still working does,
+// and the first pack's tar, once it has packed, holds until the second pack's
+// has packed too, so the second pack starts — and lists the session, writes its
+// marker and packs — while the first has yet to check what it packed: each pack
+// holds, each hands back a whole archive whose transcript is a byte prefix of
+// what the harness wrote, and neither leaves a staging directory behind.
+//
+// WHAT TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive LEAVES OUT, and
+// only that: that case holds two reads of a job whose harness has exited, on
+// either harness, for a read of a job that left no archive and for one that
+// packs the job as it stands — which here is a pack held to the working rule —
+// so it holds a read's way to its pack, and not a session that changes between
+// and under the two packs, which a pack beside a working harness is made for.
+// A case of two packs once the harness is gone would be that case again.
 //
 // Mutation: stage every pack on demand in one directory, and the second pack's
-// start clears the first's files — one moves the other's archive over the
-// job's capture as its own, and the other's move finds nothing to move — so one
-// of the two is refused.
+// start clears the first's lists and its archive — one pack moves the other's
+// archive over the job's capture as its own, and the other's move finds
+// nothing to move — so one of the two is refused. Compare a transcript's whole
+// live file with what the archive holds of it, rather than its first as many
+// bytes, and both packs are refused: the harness wrote after each tar.
 func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	t.Parallel()
-	for _, working := range []bool{true, false} {
-		name := "beside a harness that may still work"
-		if !working {
-			name = "once its harness is gone"
+	runner, b := sessionBox(t, "2.1.310")
+	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	p := paths(b)
+	forgetCapture(t, b)
+	f := filesOf(ran.SessionID)
+	transcript, thread := p.ClaudeConfigDir()+"/"+f.transcript, p.ClaudeConfigDir()+"/"+f.thread
+	flags := filepath.Join(b.Home(), "two-at-once")
+	if err := os.MkdirAll(flags, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first, second := flags+"/first-packed", flags+"/second-packed"
+	// THE HARNESS WRITES once a pack's tar has read the session: a line
+	// appended to its transcript and to a subagent's thread, the one change a
+	// pack beside a working harness takes; a write that fails fails the tar.
+	writes := func(pack string) string {
+		line := shQuote(`{"type":"user","written":"beside the ` + pack + ` pack"}`)
+		return `printf '%s\n' ` + line + ` >> ` + shQuote(transcript) + ` && printf '%s\n' ` + line + ` >> ` +
+			shQuote(thread) + ` || exit 4`
+	}
+	// THE FIRST TAR TO CLAIM IS THE FIRST PACK'S: it packs, the harness
+	// writes, and it says so and holds — thirty seconds at most, and then
+	// fails, so an interleaving that did not happen fails the case — until the
+	// second pack's tar has packed, the harness has written again, and it has
+	// said so.
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+shQuote(flags+"/claimed")+
+		` 2> /dev/null; then "$tar" -czf "$@"; st=$?; `+writes("first")+`; : > `+shQuote(first)+`; i=0; `+
+		`while [ ! -e `+shQuote(second)+` ] && [ "$i" -lt 300 ]; do `+shQuote(hostTool(t, "sleep"))+` 0.1; `+
+		`i=$((i + 1)); done; [ -e `+shQuote(second)+` ] || exit 3; exit "$st"; fi`+"\n"+
+		`"$tar" -czf "$@"; st=$?; `+writes("second")+`; : > `+shQuote(second)+`; exit "$st"`+"\n"))
+	type packed struct {
+		body io.ReadCloser
+		err  error
+	}
+	packs := make(chan packed, 2)
+	for range 2 {
+		go func() {
+			_, body, err := runner.PackCapture(t.Context(), b, true)
+			packs <- packed{body: body, err: err}
+		}()
+	}
+	results := []packed{<-packs, <-packs}
+	for _, got := range results {
+		if got.body != nil {
+			t.Cleanup(func() { _ = got.body.Close() })
 		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			runner, b := sessionBox(t, "2.1.310")
-			_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
-			p := paths(b)
-			forgetCapture(t, b)
-			flags := filepath.Join(b.Home(), "two-at-once")
-			if err := os.MkdirAll(flags, 0o700); err != nil {
-				t.Fatal(err)
+	}
+	for _, flag := range []string{first, second} {
+		if _, err := os.Stat(flag); err != nil {
+			t.Errorf("the packs never ran as the case has them: no %s", flag)
+		}
+	}
+	live := boxFile(t, b, transcript)
+	for _, got := range results {
+		switch {
+		case got.err != nil:
+			t.Errorf("a pack made beside another of the same box, its harness writing, was refused: %v", got.err)
+		case got.body == nil:
+			t.Error("a pack made beside another of the same box handed back no archive")
+		default:
+			kept, ok := archiveMembers(t, got.body)[f.transcript]
+			switch {
+			case !ok:
+				t.Error("a pack made beside another of the same box handed back no transcript")
+			case kept == "" || !strings.HasPrefix(live, kept):
+				t.Errorf("a pack made beside another of the same box kept the transcript as %q, which is no "+
+					"byte prefix of what its harness wrote, %q", kept, live)
 			}
-			first, second := flags+"/first-packed", flags+"/second-packed"
-			// THE FIRST TAR TO CLAIM IS THE FIRST PACK'S: it packs, says so, and
-			// holds — thirty seconds at most, and then fails, so an interleaving
-			// that did not happen fails the case — until the second pack's tar
-			// has packed and said so.
-			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if mkdir `+shQuote(flags+"/claimed")+
-				` 2> /dev/null; then "$tar" -czf "$@"; st=$?; : > `+shQuote(first)+`; i=0; while [ ! -e `+
-				shQuote(second)+` ] && [ "$i" -lt 300 ]; do `+shQuote(hostTool(t, "sleep"))+` 0.1; `+
-				`i=$((i + 1)); done; [ -e `+shQuote(second)+` ] || exit 3; exit "$st"; fi`+"\n"+
-				`"$tar" -czf "$@"; st=$?; : > `+shQuote(second)+`; exit "$st"`+"\n"))
-			type packed struct {
-				body io.ReadCloser
-				err  error
-			}
-			packs := make(chan packed, 2)
-			for range 2 {
-				go func() {
-					_, body, err := runner.PackCapture(t.Context(), b, working)
-					packs <- packed{body: body, err: err}
-				}()
-			}
-			results := []packed{<-packs, <-packs}
-			for _, got := range results {
-				if got.body != nil {
-					t.Cleanup(func() { _ = got.body.Close() })
-				}
-			}
-			for _, flag := range []string{first, second} {
-				if _, err := os.Stat(flag); err != nil {
-					t.Errorf("the packs never ran as the case has them: no %s", flag)
-				}
-			}
-			for _, got := range results {
-				switch {
-				case got.err != nil:
-					t.Errorf("a pack made beside another of the same box was refused: %v", got.err)
-				case got.body == nil:
-					t.Error("a pack made beside another of the same box handed back no archive")
-				default:
-					if _, ok := archiveMembers(t, got.body)[filesOf(ran.SessionID).transcript]; !ok {
-						t.Error("a pack made beside another of the same box handed back no transcript")
-					}
-				}
-			}
-			if left := packStagingLeft(t, b); len(left) > 0 {
-				t.Errorf("the packs left their staging directories: %s", strings.Join(left, ", "))
-			}
-		})
+		}
+	}
+	if left := packStagingLeft(t, b); len(left) > 0 {
+		t.Errorf("the packs left their staging directories: %s", strings.Join(left, ", "))
 	}
 }
 
