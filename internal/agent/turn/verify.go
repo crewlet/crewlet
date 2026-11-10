@@ -161,7 +161,7 @@ func ParseReply(s string) Reply {
 // PickupUntyped is the correction of a pickup's turn that has put nothing typed
 // on its item: what [Check], [OverrideDone] and the submission check all say,
 // naming the five typed answers (ADR-0122).
-const PickupUntyped = "This turn answers a work pickup, and nothing typed is on the item " +
+const PickupUntyped = "this turn answers a work pickup, and nothing typed is on the item " +
 	"you were handed yet: a comment alone, or words in your report, records nothing the " +
 	"engine can act on, so the item would sit with you unanswered. Answer it with one of " +
 	"these five, on the item itself:\n" + types.PickupAnswers + "\nThen report what you did"
