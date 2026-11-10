@@ -11,8 +11,8 @@ import (
 
 // AN ITEM WAITS UNTIL ITS DATE AND SAYS WHY: the seat holding it is not handed
 // it before the date and is after it, the reason is on the item's read, and a
-// start moved without a reason takes the old one off; a reason needs the start
-// it waits until, in one line.
+// start moved or cleared without a reason takes the old one off; a reason needs
+// the start it waits until, in one line.
 func TestAnItemWaitsUntilItsDateAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -77,5 +77,20 @@ func TestAnItemWaitsUntilItsDateAndSaysWhy(t *testing.T) {
 	}
 	if got := held(); got.WaitReason != "" || got.StartAt == nil || !got.StartAt.Equal(later) {
 		t.Errorf("a start moved with no reason left %q beside %v, want no reason", got.WaitReason, got.StartAt)
+	}
+
+	// A WAIT ENDED BY ITS START'S CLEAR takes its reason with it: the clear is
+	// the patch's flag, with no StartAt for the writer to see. Mutation: the
+	// writer clearing a reason only beside a StartAt leaves this one standing
+	// with no date to wait until.
+	again := later.Add(24 * time.Hour)
+	if err := patch("op-wait-again", app, worklet.TaskPatch{StartAt: &again, WaitReason: &reason}); err != nil {
+		t.Fatalf("wait again: %v", err)
+	}
+	if err := patch("op-end", r.writer, worklet.TaskPatch{ClearStart: true}); err != nil {
+		t.Fatalf("end the wait: %v", err)
+	}
+	if got := held(); got.WaitReason != "" || got.StartAt != nil {
+		t.Errorf("a cleared start left %q beside %v, want neither", got.WaitReason, got.StartAt)
 	}
 }

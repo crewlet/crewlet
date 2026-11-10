@@ -403,6 +403,13 @@ var typedKinds = []typedKind{
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 
+	// A REQUEST A DATA NODE'S BUILD CANNOT READ WHOLE, with its own code so
+	// the asking router reads it as "this node ran nothing of it" and asks the
+	// next — never a decode failure lumped with the rest — and so a node that
+	// answered on another's behalf carries the refusal back across a second
+	// hop as itself.
+	{"estate.ErrUnknownKeys", reflect.TypeFor[*ErrUnknownKeys]()},
+
 	// A REFUSAL'S WORDS FOR A PERSON, which a writer puts beside its
 	// error (ADR-0060): carried so a write refused on a data node answers
 	// a person on this one with them. A peer that does not send it is
