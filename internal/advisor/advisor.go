@@ -162,15 +162,16 @@ type Answer struct {
 }
 
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
-// work patterns, the turn ledger, and the alarms (this node's evaluation or the
-// fleet's marks) that could not be read.
+// work patterns, the turn ledger, the alarms (this node's evaluation or the
+// fleet's marks), the seats' pauses and the held conversations that could not
+// be read.
 const (
 	UnreadIntegrations = "integrations"
 	UnreadWork         = "work"
 	UnreadLedger       = "ledger"
 	UnreadAlarms       = "alarms"
-	// UnreadHolds is a fleet whose held conversations could not be read.
-	UnreadHolds = "holds"
+	UnreadPauses       = "pauses"
+	UnreadHolds        = "holds"
 )
 
 // Inputs is what one answer is read from.

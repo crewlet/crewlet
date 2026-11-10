@@ -211,6 +211,26 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			}
 			announceSeatPaused(ctx, t.deps, seat, stored)
 			return pauseAnswer(seat, stored, true)
+		case current.Failure != nil:
+			// A PERSON'S PAUSE SUPERSEDES THE ENGINE'S FAILURE PAUSE: it becomes
+			// theirs and loses the failure, so only a resume ends it (ADR-0117).
+			amended := current
+			amended.Failure = nil
+			amended.StopRunning = current.StopRunning || stop
+			amended.By, amended.ByKind = actor.Handle, iam.ActorKind(actor.Kind)
+			amended.OperatorID = actor.OperatorID
+			if reason != "" {
+				amended.Reason = reason
+			}
+			stored, ok, err := t.deps.Pauses.UpdateSeatPause(ctx, amended)
+			if err != nil {
+				return pauseUnknown(ctx, PauseSeatTool, seat.Handle(), err), nil
+			}
+			if !ok {
+				continue // resumed or amended meanwhile: decide again
+			}
+			announceSeatPaused(ctx, t.deps, seat, stored)
+			return pauseAnswer(seat, stored, true)
 		case stop && !current.StopRunning:
 			amended := current
 			amended.StopRunning = true

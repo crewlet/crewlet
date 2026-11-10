@@ -356,3 +356,35 @@ func TestAPauseOfANameNobodyHoldsIsRefusedAsTheAuthorityRefuses(t *testing.T) {
 			"authority's refusal", res)
 	}
 }
+
+// A PERSON'S PAUSE OF A SEAT THE ENGINE PAUSED FOR A FAILURE MAKES IT THEIRS
+// (ADR-0117): the failure is dropped, so an apply no longer lifts it and only a
+// resume does, and a stop asked with it is added. A resume then lifts it.
+func TestAPersonsPauseSupersedesTheEnginesFailurePause(t *testing.T) {
+	t.Parallel()
+	for _, stop := range []bool{true, false} {
+		store := coordmem.NewFleet()
+		rig := newPauseRig(t, store, boundTo("omar"))
+		if _, created, err := store.CreateSeatPause(context.Background(), coord.SeatPause{
+			Seat: rig.cto, By: "engine", ByKind: iam.ActorSystem, Reason: "Paused by the engine.", At: time.Now(),
+			Failure: &coord.SeatFailure{Kind: "sandbox_configuration", Basis: "b1"},
+		}); err != nil || !created {
+			t.Fatalf("the engine's pause: %v (%v)", created, err)
+		}
+		res, got := rig.call(t, builtin.PauseSeatTool, map[string]any{"handle": "agent-cto", "stop_running": stop})
+		if res.Failed || got["changed"] != true || got["paused_by"] != "omar" || got["stop_running"] != stop {
+			t.Fatalf("stop %v: a person's pause of the engine's = %v (%s), want it made omar's", stop, got, res.Output)
+		}
+		p, _, _ := store.SeatPause(context.Background(), rig.cto)
+		if p.Failure != nil || p.By != "omar" || p.ByKind != iam.ActorHuman || p.StopRunning != stop {
+			t.Errorf("stop %v: the record is %+v, want omar's, with no failure", stop, p)
+		}
+		_, resumed := rig.call(t, builtin.ResumeSeatTool, map[string]any{"handle": "agent-cto"})
+		if resumed["changed"] != true {
+			t.Errorf("stop %v: resume = %v, want the pause lifted", stop, resumed)
+		}
+		if _, found, _ := store.SeatPause(context.Background(), rig.cto); found {
+			t.Errorf("stop %v: the pause is still recorded after a resume", stop)
+		}
+	}
+}
