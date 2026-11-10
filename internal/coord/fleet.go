@@ -1789,6 +1789,7 @@ type Fleet interface {
 	Counter
 	Claims
 	Ledger
+	SeenMarks
 	Budgets
 	Plane
 	Channels

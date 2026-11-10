@@ -65,6 +65,8 @@ type Fleet struct {
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
+	seen                     map[string]seenMark
+	seenRevision             uint64
 	mailboxes                map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
@@ -188,6 +190,7 @@ func NewFleet() *Fleet {
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		seen:              map[string]seenMark{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},
