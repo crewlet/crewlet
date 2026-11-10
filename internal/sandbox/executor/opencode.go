@@ -289,9 +289,9 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // once the run ends ([carrier], [openCodeCapture]) — through a private server of
 // its own (`--standalone`), since the run's server, with the address and the
 // password only its script held, may be gone: the same export, into staged,
-// this pack's own staging directory, and over dest — the job's capture for a
-// job that is over, the pack's own for one still working
-// ([Paths.SessionPackHeld]) — its digest kept.
+// this pack's own staging directory, and over dest — the pack's own place,
+// held for its read ([Paths.SessionPackHeld]), never the job's capture — its
+// digest kept.
 //
 // IT ENDS [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
 // session ([openCodeNotHeld]) — a run whose harness failed before it made one —
@@ -565,7 +565,9 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 // once the export unpacked, and handed to `opencode session import --directory
 // "$PWD"`, which files it under the directory `opencode run` works in (its
 // `$PWD`, as run reads it), keeps its id, and restores its totals; and its
-// digest is kept. The import has to SAY it imported that session — `Imported
+// digest is kept: recorded, and read back, once it is imported
+// ([recordDigest]), and an import whose digest could not be is not
+// continued. The import has to SAY it imported that session — `Imported
 // session: <id>` — because it answers an id the database already holds with
 // "Session already exists" and success, and imports nothing; and `run
 // --session` on an id OpenCode does not hold creates an empty session under
@@ -657,8 +659,16 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`    elif [ -n "$own" ] && ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`)
 	line(`    else`)
 	line(`      out=$(opencode session import --standalone --directory "$PWD" %s < /dev/null 2>&1)`, export)
-	line(`      case "$out" in *%s*) [ -z "$d" ] || printf '%%s %%s\n' "$sid" "$d" >> %s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
-		q("Imported session: "+session.ID), digests)
+	// AN IMPORT IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED, and read back
+	// ([recordDigest]): continued with no line of the export in the list — a
+	// full disk, a cksum that failed — the box's copy would go on past an
+	// export the box does not know it holds, and that export carried in again
+	// would be imported over it. So the run starts a session of its own
+	// instead, and the copy imported is never gone on past. Recorded before
+	// the import, an import that did not happen would leave the line naming
+	// a copy that does not hold it.
+	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
+		q("Imported session: "+session.ID), recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
 	line(`    fi`)
 	line(`    rm -rf %s`, q(staged))
 	line(`  fi`)
@@ -694,7 +704,8 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 // password the script read, gzipped in the staging directory and moved over
 // [Paths.SessionCapture] whole, and only where the export said it succeeded;
 // its digest kept as one the box's copy of the session holds
-// ([Paths.SessionDigests]).
+// ([Paths.SessionDigests]), recorded and read back before the export is moved
+// ([packDigest]).
 //
 // NEVER THE DATABASE: OpenCode keeps its logins in the same file as its
 // sessions, and a file carried to another box would carry the login with it —
@@ -713,9 +724,9 @@ func openCodeCapture(paths Paths) string {
 // the box's database before its server starts ([openCodeSessionGate]) — and
 // packing in the staging directory staged (such a pack's own
 // [Paths.SessionPackStaging]) and moving its archive over dest (the run's
-// [Paths.SessionCapture], or such a pack's: the capture for a job that is over,
-// its own [Paths.SessionPackHeld] for one still working). ONE PACK for both, so
-// either is the same export of the same session, and each keeps its digest.
+// [Paths.SessionCapture], or such a pack's own [Paths.SessionPackHeld], of a
+// job that is over or still working). ONE PACK for both, so either is the same
+// export of the same session, and each keeps its digest.
 //
 // AN EXPORT CARRIES THE SESSION'S SETTLED MESSAGES AND NOTHING ELSE
 // (core/src/session/transfer.ts at 2.0.32 and 2.2.5): not a message still
@@ -727,9 +738,9 @@ func openCodePack(paths Paths, staged, dest, server string) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), q(staged+"/capture"),
-		q(dest), q(dest), q(paths.SessionDigests()), q(staged+"/error"))
+	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), packDigest(paths, "sid", staged),
+		q(staged+"/capture"), q(dest), q(staged+"/error"))
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
 	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)
