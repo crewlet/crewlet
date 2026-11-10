@@ -265,7 +265,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
-		"token_series": "everybody", "seat_activity": "everybody",
+		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
 		"budgets": "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",

@@ -74,6 +74,7 @@ var namedRoutes = []struct {
 	// parameter of it: the two answers have different shapes, and one route
 	// returning either would make every caller branch on what came back.
 	{method: "GET", pattern: "/tokens/series", what: "token_series"},
+	{method: "GET", pattern: "/tokens/turn-outcomes", what: "turn_outcomes"},
 	// EVERY SEAT'S TURNS over company days. A literal segment under
 	// /agents, which the stream service serves exactly and nothing deeper.
 	{method: "GET", pattern: "/agents/activity", what: "seat_activity"},

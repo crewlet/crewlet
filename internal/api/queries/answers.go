@@ -752,6 +752,9 @@ func Register(r *Registry, s Sources) {
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
+		// AND WHAT THOSE TURNS DID, by what woke them: how many changed
+		// nothing and what they spent, from the turn ledger's same rows.
+		r.Register("turn_outcomes", Everybody(), s.turnOutcomes)
 		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
