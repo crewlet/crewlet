@@ -100,7 +100,7 @@ func TestAnAroundTasksNeighboursSeekTheOrder(t *testing.T) {
 	for name, params := range registeredQueries() {
 		q := planQuery(t, params)
 		statements := queryStatements(t, q)
-		terms := sortTerms(q, planFields(q))
+		terms := sortTerms(q, planFields(q), orderBasis{})
 		leading := strings.TrimPrefix(terms[0].Column, rowAlias.col(""))
 		bound := regexp.MustCompile(`\(.*\b` + regexp.QuoteMeta(leading) + `[=<>]`)
 		for _, side := range []struct {

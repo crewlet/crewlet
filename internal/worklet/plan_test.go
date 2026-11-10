@@ -1935,7 +1935,7 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 		}
 		index := indexes[0]
 		walked[index] = true
-		terms := sortTerms(q, planFields(q))
+		terms := sortTerms(q, planFields(q), orderBasis{})
 		leading := strings.TrimPrefix(terms[0].Column, rowAlias.col(""))
 		bound := regexp.MustCompile(`\(.*\b` + regexp.QuoteMeta(leading) + `[=<>]`)
 		t.Run(name, func(t *testing.T) {
@@ -2438,7 +2438,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	terms := sortTerms(q, fields)
+	terms := sortTerms(q, fields, orderBasis{})
 	page, pageArgs := taskRowsStatement(set, terms)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
@@ -2460,8 +2460,8 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	// one pages the list itself.
 	if q.GroupBy == "" && !listOrdered(q) {
 		next := q
-		next.Cursor = mintCursor(keys, renderOrder(terms))
-		resume, err := pageClause(next, fields)
+		next.Cursor = mintCursor(keys, cursorOrder(terms))
+		resume, err := pageClause(next, fields, orderBasis{})
 		if err != nil {
 			t.Fatalf("pageClause: %v", err)
 		}

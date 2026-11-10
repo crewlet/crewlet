@@ -33,6 +33,7 @@ import (
 // type that has since changed.
 var carriedByServer = map[string]string{
 	"worklet.Query.Units":              "the serving node attaches its own chart (opTasks)",
+	"worklet.Query.Roster":             "the serving node attaches its own chart (opTasks)",
 	"worklet.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
 	"worklet.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
 	"worklet.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
