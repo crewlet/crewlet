@@ -289,9 +289,9 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // once the run ends ([carrier], [openCodeCapture]) — through a private server of
 // its own (`--standalone`), since the run's server, with the address and the
 // password only its script held, may be gone: the same export, into staged,
-// this pack's own staging directory, and over dest — the job's capture for a
-// job that is over, the pack's own for one still working
-// ([Paths.SessionPackHeld]) — its digest kept.
+// this pack's own staging directory, and over dest — the pack's own place,
+// held for its read ([Paths.SessionPackHeld]), never the job's capture — its
+// digest kept.
 //
 // IT ENDS [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
 // session ([openCodeNotHeld]) — a run whose harness failed before it made one —
@@ -713,9 +713,9 @@ func openCodeCapture(paths Paths) string {
 // the box's database before its server starts ([openCodeSessionGate]) — and
 // packing in the staging directory staged (such a pack's own
 // [Paths.SessionPackStaging]) and moving its archive over dest (the run's
-// [Paths.SessionCapture], or such a pack's: the capture for a job that is over,
-// its own [Paths.SessionPackHeld] for one still working). ONE PACK for both, so
-// either is the same export of the same session, and each keeps its digest.
+// [Paths.SessionCapture], or such a pack's own [Paths.SessionPackHeld], of a
+// job that is over or still working). ONE PACK for both, so either is the same
+// export of the same session, and each keeps its digest.
 //
 // AN EXPORT CARRIES THE SESSION'S SETTLED MESSAGES AND NOTHING ELSE
 // (core/src/session/transfer.ts at 2.0.32 and 2.2.5): not a message still

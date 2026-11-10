@@ -629,10 +629,9 @@ type packAt struct {
 	// staged is the directory the archive is made in, and dest the path it is
 	// moved over whole once it is made: the run's script's own pair
 	// ([Paths.SessionStaging], [Paths.SessionCapture]); a pack on demand's,
-	// its own [Paths.SessionPackStaging] and the same capture for a job that
-	// is over, its own [Paths.SessionPackHeld] for one still working; or a
-	// save's, its own [Paths.SessionSaveStaging] and its taker's
-	// [Paths.SessionSave].
+	// its own [Paths.SessionPackStaging] and its own [Paths.SessionPackHeld],
+	// of a job that is over or still working; or a save's, its own
+	// [Paths.SessionSaveStaging] and its taker's [Paths.SessionSave].
 	staged, dest string
 
 	// working says the pack is made beside a harness that may still be
@@ -822,8 +821,8 @@ func claudePack(paths Paths, at packAt) string {
 // which the restore cuts back ([claudeSessionGate]). A pack that fails leaves
 // nothing of its own: its staging directory goes with it, and the archive
 // already at its destination — the last save its taker made — is never moved
-// over; a pack on demand of a job still working moves nothing over the job's
-// capture at all ([Paths.SessionPackHeld]).
+// over; and no pack on demand moves anything over the job's capture at all
+// ([Paths.SessionPackHeld]).
 //
 // THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, whatever any list
 // says of it — its proof rests on no list — and of the other `.jsonl` members
@@ -1366,11 +1365,11 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into staged, this pack's own staging directory, and over dest — the job's
-// capture for a job that is over, the pack's own for one still working
-// ([Paths.SessionPackHeld]) — its digest kept, ending [packNothing] where the
-// harness wrote no transcript, and [packFailed] where it did and no archive was
-// made, its error stream saying why ([Runner.PackCapture]).
+// into staged, this pack's own staging directory, and over dest — the pack's
+// own place, held for its read ([Paths.SessionPackHeld]), never the job's
+// capture — its digest kept, ending [packNothing] where the harness wrote no
+// transcript, and [packFailed] where it did and no archive was made, its error
+// stream saying why ([Runner.PackCapture]).
 //
 // HELD TO THE RULE OF A PACK BESIDE A WORKING HARNESS ([claudeHeldTar]) where
 // working says the job may still be working — one its box would not end, its

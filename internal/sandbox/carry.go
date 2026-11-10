@@ -187,8 +187,13 @@ type SessionTake struct {
 	// end, or at the end it was asked for, a stop's, a loss's or its turn's
 	// cap's — and one packed now where it left none (a crash before its pack,
 	// a job killed part way through it, a job lost with its engine). Every
-	// pack records the archive's digest in the box as the script's does, so
-	// the box never takes its own archive for another box's.
+	// pack made now, either way, is the take's own, streamed from a place of
+	// its own and never moved over the job's capture, which the job's script
+	// alone writes: so each read streams the archive its own pack made, and
+	// one that streams the job's capture streams an archive nothing moves
+	// over while it reads it. Every pack records the archive's digest in the
+	// box as the script's does, so the box never takes its own archive for
+	// another box's.
 	Pack bool
 
 	// Save names the TAKER whose save is taken — the holder of the taker

@@ -149,10 +149,11 @@ func filesOf(s string) sessionFiles {
 // a save reads that taker's alone and packs nothing: the job's capture is
 // still not there after it, nor any digest added, and a taker that saved none
 // is taken as nothing. Only then is the job's final archive read, and a
-// collection's read finds none, so the final take packs the job's own.
+// collection's read finds none, so the final take packs the job's own — at
+// that pack's own place, as every pack on demand keeps its archive.
 //
-// Mutation: move a save over the job's capture, as a pack on demand moves its
-// archive, and the collection's read finds it; name one path for every taker
+// Mutation: move a save over the job's capture, and the collection's read
+// finds it; name one path for every taker
 // and the second save replaces the first; stage a save where a pack on demand
 // or another taker stages, and that one's archive is gone; take a save by
 // packing one — over the job's capture or anywhere — or the job's final
@@ -263,8 +264,9 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		t.Fatalf("the final take = %+v, %v", final, err)
 	}
 	_ = final.Body.Close()
-	if final.Archive.Path != p.SessionCapture() {
-		t.Errorf("the final take read %s, want the job's own capture %s", final.Archive.Path, p.SessionCapture())
+	if !strings.HasPrefix(final.Archive.Path, p.WorkDir()+"/session-pack-staging.") || boxHas(t, b, p.SessionCapture()) {
+		t.Errorf("the final take read %s, want the job's own session packed at its pack's own place, and nothing "+
+			"over the job's capture", final.Archive.Path)
 	}
 }
 
@@ -1344,9 +1346,10 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 // take of a job that is over whose script left no archive waits on the box's
 // clock or refuses a file written as it packed — here the task file, touched
 // once tar has read the session, as a process the harness started and that
-// outlived it may touch it — and each lands where the job's final archive is
-// read. (The take packs such a job by tar run beside the configuration
-// directory, never in it, so the case's writer names the file whole.)
+// outlived it may touch it — and each lands where its read reads it: the
+// run's own end over the job's capture, the take's pack at a place of its own.
+// (The take packs such a job by tar run beside the configuration directory,
+// never in it, so the case's writer names the file whole.)
 //
 // Mutation: hold the run's own end to the rule of a pack beside a working
 // harness, or route a take of a job that is over to it, and that pack is
@@ -1380,8 +1383,9 @@ func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 				taken, err)
 		}
 		_ = taken.Body.Close()
-		if taken.Archive.Path != p.SessionCapture() {
-			t.Errorf("the take packed to %s, want the job's capture %s", taken.Archive.Path, p.SessionCapture())
+		if !strings.HasPrefix(taken.Archive.Path, p.WorkDir()+"/session-pack-staging.") || boxHas(t, b, p.SessionCapture()) {
+			t.Errorf("the take packed to %s, want a place of its own pack's, and nothing over the job's capture",
+				taken.Archive.Path)
 		}
 	})
 }
