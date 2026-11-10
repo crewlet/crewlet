@@ -19,6 +19,8 @@
 
 **On by default**, with a ten-minute cooldown (`scheduling.work_pickup`). The wake is a type of its own, `work_pickup`, so a build that does not know it never reads it as a schedule's fire with an empty task. It carries the item, its status, its key and why it was chosen, stamped with the instant of the change its key names and filed under the item's own conversation, so the turn continues the item's session; its brief names the item and the four honest ways to answer it. `crewlet.work.pickups{outcome}` and the `work_pickup_woken` and `work_pickup_skipped` lines are what an operator reads.
 
+**Amended by [ADR-0122](0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md), for the answer.** A pickup's turn is delivered only by a typed answer on its item, never by a comment alone, and an item its holder left without one, in words or with nothing, comes back once a day: a comment no longer holds an item until a change lands.
+
 ## Why the obvious alternative is wrong
 
 **The obvious alternative is to wake the assignee again from the change feed**, on a timer per assignment, as [ADR-0012](0012-a-wake-is-derived-not-published.md) derives every other wake from a committed record. It is wrong because the record that should cause the wake does not exist: what went wrong was that the seat's turn did not start the work, and nothing is written when a turn decides to do something else. A timer per item wakes a busy seat as readily as an idle one, and a seat with ten ready items ten times.
@@ -27,6 +29,6 @@
 
 ## What this does not decide
 
-It does not decide what a seat does with the item; the brief names the choices and the delivery obligation of a `work_pickup` holds the turn to a tool. It does not change how an assignment, a status change or the unblocked repair wakes a seat: those still wake from the change feed, and the pickup is the backstop for the turn that did not act on them. It does not cover a seat on a vendor tracker, which the engine does not read for ready work. It does not decide whom work a seat filed for itself is for: such an item names no other writer, so its pickup is the seat's own work, and whom the filing turn worked for is the write edge ADR-0109 leaves to a record that carries it.
+It does not decide what answers a pickup or how long an answer in words holds the item: ADR-0122 does. It does not change how an assignment, a status change or the unblocked repair wakes a seat: those still wake from the change feed, and the pickup is the backstop for the turn that did not act on them. It does not cover a seat on a vendor tracker, which the engine does not read for ready work. It does not decide whom work a seat filed for itself is for: such an item names no other writer, so its pickup is the seat's own work, and whom the filing turn worked for is the write edge ADR-0109 leaves to a record that carries it.
 
 An older build carries a `work_pickup` losslessly (ADR-0006) and, like any wake type it does not know, runs it as a turn whose ask is the type's name, for the seat itself. Only the node holding a seat publishes its pickup, so this reaches an older build only for a seat that moves to one during a rolling upgrade. The window is minutes, no tag has shipped the earlier rule, and it is accepted as ADR-0109's was.

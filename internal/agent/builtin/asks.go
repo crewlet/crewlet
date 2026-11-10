@@ -44,7 +44,8 @@ func asksParam(s asksSurface) map[string]any {
 	return map[string]any{
 		"type": "boolean",
 		"description": "Required of an agent. true when this asks someone for an " +
-			"answer or an action: a question, a request, a hand-off. " + s.asked +
+			"answer or an action: a question, a request, a hand-off, or a person's " +
+			"approval, review, input or decision. " + s.asked +
 			" false for news, status notes, approvals, acknowledgements and " +
 			"thanks: an @-mention is then a reference that wakes no agent, and only " +
 			s.quiet,

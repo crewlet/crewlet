@@ -9,9 +9,18 @@
 // last progress on it. Its event id is derived from the key, so the fleet's
 // completion ledger refuses it again on any node and across restarts, and a
 // fleet claim on the key keeps two nodes from both sending it during a move.
-// A seat's own comment moves no part of the key, so declining with one is
-// final until somebody else changes the item. A wait until a date is part of
-// the key once it passes, so the item is handed once when its date comes.
+// A seat's own comment moves no part of the key, so a comment alone does not
+// re-arm the item at once. A wait until a date is part of the key once it
+// passes, so the item is handed once when its date comes.
+//
+// # What answers a pickup, and a recheck a day
+//
+// A pickup's turn is delivered only by a typed answer on its item (ADR-0122):
+// a change to its fields or an ask, read off the tracker by the turn's id,
+// never a comment alone. An item the seat left quiet without one, in words or
+// with nothing, comes back once each [RecheckAfter] it stays so: the key gains
+// the instant the recheck came due ([Key.Recheck]), so the ledger takes it as
+// new work, and a typed answer holds the item until it changes.
 //
 // # When a seat is idle
 //
@@ -47,9 +56,17 @@ const Source = "pickup"
 // minute.
 const Tick = time.Minute
 
+// RecheckAfter is how long an item stays quiet without a typed answer before
+// it comes back to its holder (ADR-0122). A day, the stand-up rhythm a team
+// rechecks a stalled item at: long enough that a wait on a person's working
+// day is not nagged, short enough that a condition met overnight is noticed
+// the next morning. A constant: no company has a reason to leave a stall
+// unchecked for longer, and a shorter one would spend a turn an hour on words.
+const RecheckAfter = 24 * time.Hour
+
 // Key identifies one pickup: the seat, the item, the last change somebody
 // other than the seat made to it, its status, the seat's own progress on it
-// when started, and the start it waited until.
+// when started, the start it waited until, and the recheck it came back for.
 type Key struct {
 	Seat       uuid.UUID
 	Item       string
@@ -57,30 +74,65 @@ type Key struct {
 	Status     string
 	Progressed uint64
 	Waited     int64
+
+	// Recheck is the instant, in Unix seconds, the item came due for its
+	// latest recheck: whole [RecheckAfter]s after it went quiet
+	// ([worklet.ReadyItem.Quiet]). Zero before the first.
+	Recheck int64
 }
 
-// KeyOf is the pickup an item would be for seat.
-func KeyOf(seat uuid.UUID, item worklet.ReadyItem) Key {
+// KeyOf is the pickup an item would be for seat at now.
+func KeyOf(seat uuid.UUID, item worklet.ReadyItem, now time.Time) Key {
 	key := Key{Seat: seat, Item: item.ID, Moved: item.Moved, Status: string(item.Status),
 		Progressed: item.Progressed}
 	// Ready means the start has passed: the instant it waited until.
 	if item.Start != nil {
 		key.Waited = item.Start.Unix()
 	}
+	if due, ok := recheckDue(item, now); ok {
+		key.Recheck = due.Unix()
+	}
 	return key
+}
+
+// recheckDue is the instant item came due for its latest recheck at now, and
+// false before its first or for an item a typed answer holds.
+func recheckDue(item worklet.ReadyItem, now time.Time) (time.Time, bool) {
+	if item.Quiet.IsZero() {
+		return time.Time{}, false
+	}
+	n := now.Sub(item.Quiet) / RecheckAfter
+	if n < 1 {
+		return time.Time{}, false
+	}
+	return item.Quiet.Add(n * RecheckAfter), true
+}
+
+// nextRecheck is when item's key next changes on time alone, and false for one
+// it never will: a typed answer holds it.
+func nextRecheck(item worklet.ReadyItem, now time.Time) (time.Time, bool) {
+	if item.Quiet.IsZero() {
+		return time.Time{}, false
+	}
+	n := max(now.Sub(item.Quiet)/RecheckAfter, 0)
+	return item.Quiet.Add((n + 1) * RecheckAfter), true
 }
 
 // pickupNamespace scopes derived pickup ids. Fixed for the life of the
 // deployment: a new one would hand every seat every item again.
 var pickupNamespace = uuid.MustParse("7d0c6f2e-4b1a-5e39-8c27-91f3a6b2d4e8")
 
-// text keeps an item with no start under the key older builds derive.
+// text keeps an item with no start and no recheck under the key older builds
+// derive; a recheck is marked, so it never reads as a start.
 func (k Key) text() string {
 	text := k.Seat.String() + "\x00" + k.Item + "\x00" +
 		strconv.FormatUint(k.Moved, 10) + "\x00" + k.Status + "\x00" +
 		strconv.FormatUint(k.Progressed, 10)
 	if k.Waited != 0 {
 		text += "\x00" + strconv.FormatInt(k.Waited, 10)
+	}
+	if k.Recheck != 0 {
+		text += "\x00r" + strconv.FormatInt(k.Recheck, 10)
 	}
 	return text
 }
@@ -113,13 +165,19 @@ func CooldownKey(seat uuid.UUID) string { return "pickup|seat|" + seat.String() 
 func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready int,
 	capped bool, trace events.TraceContext) *events.Event {
 
-	ev := events.New(types.WorkPickup{
+	payload := types.WorkPickup{
 		Agent: seat.String(), RoleName: role,
 		// THE ADDRESS: the id where another task claimed the key first.
 		Item: item.ID, Key: worklet.ItemAddress(item.ID, item.Key, item.KeyCollision),
 		Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
 		Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
-	}, trace)
+	}
+	if key.Recheck != 0 {
+		// A RECHECK SAYS SO, and since when the item has been quiet.
+		quiet := item.Quiet.UTC()
+		payload.Quiet = &quiet
+	}
+	ev := events.New(payload, trace)
 	ev.ID = key.WakeID()
 	if !item.MovedAt.IsZero() {
 		ev.Timestamp = item.MovedAt.UTC()

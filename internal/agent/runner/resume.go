@@ -56,6 +56,15 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // finished its work and was lost on its way out, so the round is collected.
 func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (_ turn.Work, _ turn.Surface, err error) {
 	defer origin.Stamp(&err)
+	work, surface, err := r.resume(ctx, history)
+	if err == nil && !work.Suspended && r.cfg.Reply.Item != "" {
+		work.Typed = r.typedAnswer(ctx)
+	}
+	return work, surface, err
+}
+
+// resume is [Runner.Resume] before the engine reads the turn's typed answer.
+func (r *Runner) resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
 	}

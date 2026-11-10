@@ -19,6 +19,8 @@
 package runner
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -116,6 +118,33 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 			}
 		}
 		return w, nil
+	}
+}
+
+// typedPickup is decode held to a work pickup's typed answer (ADR-0122): a
+// submission reporting the work delivered or blocked while the turn's record
+// shows nothing typed on the handed item is refused, naming the five answers,
+// while the run can still make one. [turn.Check] and [turn.OverrideDone] say
+// the same after the phase, so what is refused here is refused there too.
+//
+// FIRST, before the decode's own checks: a pickup's run that wrote nothing is
+// told what would answer the pickup rather than that any delivery would do.
+// typed reads the record at the submission, under the call's own context.
+func typedPickup(reply turn.Reply, typed func(context.Context) bool,
+	decode func(map[string]any) (workPayload, error),
+) func(context.Context, map[string]any) (workPayload, error) {
+	return func(ctx context.Context, args map[string]any) (workPayload, error) {
+		if reply.Item == "" {
+			return decode(args)
+		}
+		outcome, _ := args["outcome"].(string)
+		switch turn.Outcome(outcome) {
+		case "", turn.OutcomeDelivered, turn.OutcomeBlocked:
+			if !typed(ctx) {
+				return workPayload{}, errors.New(turn.PickupUntyped)
+			}
+		}
+		return decode(args)
 	}
 }
 

@@ -1168,6 +1168,16 @@ cleared without a reason takes the old reason off, since it said why the item
 waited until the old date. The item's page shows the reason under its start
 date, as **Waits for** until the date comes and **Waited for** after.
 
+A date is for a real date: a release window, an agreed start. **A wait on a
+person is an ask**, never a date, because the date passes whether or not they
+answered and nothing reaches their Inbox. So an agent's `wait_until` whose
+`wait_reason` names a person, by handle (with or without its `@`) or by name,
+is refused with nothing written unless the agent already holds an open ask to
+that person on the item: ask them with `comment_on_work_item` and `ask`
+instead, which holds the item until they answer
+([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+A person's own wait is written as given.
+
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
 totals (`totals=points:sum`, `totals=estimate_min:sum`) and the workload
@@ -2008,8 +2018,12 @@ an agent seat that names a person (any seat the org chart does not hold as an
 agent) is refused without a `decision`, on both asking tools, and nothing is
 posted. So is an agent's comment that asks (`asks` true) and names a person's
 seat in its words without making them its `ask`: the question would reach them
-as a mention, never among the decisions waiting on them. Naming a team, or a
-person in a comment that asks nothing, is a reference and is posted. A page
+as a mention, never among the decisions waiting on them. A request for a
+person's approval, a review, their input or a decision is asking, so it is
+`asks: true` and needs the `ask`. Naming a team, or a person in a comment that
+asks nothing, is a reference and is posted. The advisor's
+`person.requests_without_ask` counts comments by the same rule, so it names
+exactly what this refuses ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)). A page
 comment that asks a person it names is refused the same way, pointing at the
 work item the question concerns, since a page comment carries no decision. A request an agent would make in words ("the merge is yours", "please
 run the script") is a choice between the answers it expects, with the one it

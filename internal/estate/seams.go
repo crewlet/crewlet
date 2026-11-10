@@ -131,6 +131,12 @@ func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.
 	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
 }
 
+// TypedAnswer answers whether a turn put a typed answer on an item: what a work
+// pickup's turn owes (ADR-0122), from whichever data node serves the tracker.
+func (w Work) TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error) {
+	return call(ctx, w.r, opTypedAnswer, nil, q)
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)

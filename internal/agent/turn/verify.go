@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -53,6 +54,13 @@ type Reply struct {
 	// falls back to "any delivery counts" there, because narrowing on a
 	// surface nobody chose would refuse correct turns.
 	Surface string
+
+	// Item is the work item a work pickup handed this turn, by id, and
+	// empty for every other trigger. Its answer is delivered only by a
+	// typed answer on that item, which the engine reads off its own record
+	// ([Work.Typed]): a comment alone records nothing the engine can act on
+	// (ADR-0122).
+	Item string
 }
 
 // ReplyKind is the shape of a turn's delivery obligation.
@@ -112,28 +120,55 @@ func ToolReply(surface string) Reply { return Reply{Kind: ReplyTool, Surface: su
 // value off the wire is not one either: a pending run carries its
 // Reply as a stored string, and a build that reads a value it does not know
 // must say so rather than fall through to whichever branch happens to be
-// last.
+// last. Nor is an item on anything but a tool obligation: a pickup's answer
+// is a tool's write.
 func (r Reply) Valid() bool {
+	if r.Item != "" && r.Kind != ReplyTool {
+		return false
+	}
 	return r.Kind == ReplyNone || r.Kind == ReplyTool || r.Kind == ReplyEngine
 }
 
+// itemMark separates a pickup's item from the rest of a stored obligation. An
+// older build reads `tool@<id>` as a kind it does not know and refuses the
+// resume, so the completion goes back for a build that holds the turn to it.
+const itemMark = "@"
+
 // String encodes the obligation for the one place it is stored rather than
 // passed: a parked run's row, which outlives the process that
-// parked it. `tool:mattermost`, or the bare kind when no surface is named.
+// parked it. `tool:mattermost`, the bare kind when no surface is named, and
+// `tool@<item>` for a pickup's.
 func (r Reply) String() string {
-	if r.Surface == "" {
-		return string(r.Kind)
+	out := string(r.Kind)
+	if r.Surface != "" {
+		out += ":" + r.Surface
 	}
-	return string(r.Kind) + ":" + r.Surface
+	if r.Item != "" {
+		out += itemMark + r.Item
+	}
+	return out
 }
 
 // ParseReply decodes what [Reply.String] wrote. An unrecognised kind comes
 // back as [ReplyUnset] rather than an error, which [Run] then refuses by the
 // same rule as any other invalid input — one refusal, in one place.
 func ParseReply(s string) Reply {
+	s, item, _ := strings.Cut(s, itemMark)
 	kind, surface, _ := strings.Cut(s, ":")
-	return Reply{Kind: ReplyKind(kind), Surface: surface}
+	return Reply{Kind: ReplyKind(kind), Surface: surface, Item: item}
 }
+
+// PickupUntyped is the correction of a pickup's turn that has put nothing typed
+// on its item: what [Check], [OverrideDone] and the submission check all say,
+// naming the five typed answers (ADR-0122).
+const PickupUntyped = "This turn answers a work pickup, and nothing typed is on the item " +
+	"you were handed yet: a comment alone, or words in your report, records nothing the " +
+	"engine can act on, so the item would sit with you unanswered. Answer it with one of " +
+	"these five, on the item itself:\n" + types.PickupAnswers + "\nThen report what you did."
+
+// UntypedPickup reports a pickup's turn whose record shows no typed answer on
+// its item: the one condition the three delivery checks refuse a pickup on.
+func UntypedPickup(w Work, reply Reply) bool { return reply.Item != "" && !w.Typed }
 
 // Awaited reports whether anyone is waiting for this turn's answer.
 func (r Reply) Awaited() bool { return r.Kind == ReplyTool || r.Kind == ReplyEngine }
@@ -488,6 +523,13 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 		return Verdict{}
 	}
 
+	// A PICKUP IS ANSWERED ONLY ON ITS ITEM, typed: a delivery or a block
+	// reported over words alone is sent back naming the five answers. A
+	// no_action is refused below, as on every turn somebody waits on.
+	if (w.Outcome == OutcomeDelivered || w.Outcome == OutcomeBlocked) && UntypedPickup(w, reply) {
+		return Verdict{Correction: PickupUntyped}
+	}
+
 	if w.Outcome == OutcomeNoAction {
 		switch {
 		case reply.Awaited():
@@ -560,6 +602,9 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 ) (override bool, correction string) {
 	record := w.Record(earlier)
+	if UntypedPickup(w, reply) {
+		return true, PickupUntyped
+	}
 	if reply.Kind != ReplyTool || DeliveredTo(record, s, reply) {
 		return false, ""
 	}

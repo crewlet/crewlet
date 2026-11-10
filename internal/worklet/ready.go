@@ -37,8 +37,11 @@ import (
 //
 // [ReadyItem.Moved] is the last change to the item that would have woken the
 // seat, so neither its own comment nor a change that only tells it (another
-// agent's words that ask nothing, a watcher added) hands it the same item again. [ReadyItem.For] is
-// whom the item's work is for, so the turn is held to their apps (ADR-0109).
+// agent's words that ask nothing, a watcher added) hands it the same item
+// again. [ReadyItem.Quiet] is when the item went quiet without a typed answer
+// from the seat, which the pickup rechecks once a day (ADR-0122).
+// [ReadyItem.For] is whom the item's work is for, so the turn is held to
+// their apps (ADR-0109).
 
 // ReadyRows is one page of ready work: the pickup reads the next page only
 // when every item on this one was already offered.
@@ -77,6 +80,12 @@ type ReadyItem struct {
 	// started item other than a comment: its progress, which hands the
 	// item over again. Zero on an item not started.
 	Progressed uint64 `json:"progressed,omitempty"`
+
+	// Quiet is when the item went quiet for the seat: the latest of MovedAt,
+	// the start it waited until and the seat's own last write on it since.
+	// Zero where that last write is a typed answer (typedanswer.go), which
+	// holds the item until a change would wake the seat again (ADR-0122).
+	Quiet time.Time `json:"quiet,omitzero"`
 
 	// For is whom the item's work is for: the writer of its last
 	// assignment by somebody else, else its reporter; nil for the seat's
@@ -195,6 +204,9 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err := loadProgressed(ctx, tx, q.Handle, out.Items); err != nil {
 		return err
 	}
+	if err := loadQuiet(ctx, tx, q.Handle, out.Items); err != nil {
+		return err
+	}
 	return loadFor(ctx, tx, q.Handle, out.Items)
 }
 
@@ -233,6 +245,71 @@ func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []Read
 	}
 	for i := range items {
 		items[i].Progressed = got[items[i].ID].seq
+	}
+	return nil
+}
+
+// readyLastWordArm is the seat's own last write to one item after the change
+// that last woke it (its log position) and the start it waited until (its
+// instant), and whether that write is a typed answer. A creation, a change of
+// who watches and a write that changed nothing are no answer at all.
+const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + typedWrite + `
+	FROM tracker_history h
+	WHERE h.subject_id = ? AND h.actor = ? AND h.log_seq > ? AND h.created_at >= ?
+	  AND h.kind NOT IN ('` + string(ChangeCreated) + `', '` + string(ChangeWatchers) + `')
+	  AND (h.fields_json <> '{}' OR h.kind IN ` + conversationKinds + `)
+	ORDER BY h.log_seq DESC LIMIT 1`
+
+// loadQuiet stamps each item with when it went quiet for the seat: the latest
+// of the change that last woke it, the start it waited until and the seat's
+// own last word on it since, unless that word is a typed answer.
+func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	args := make([]any, 0, 4*len(items))
+	for _, item := range items {
+		var start int64
+		if item.Start != nil {
+			start = store.EncodeTime(*item.Start)
+		}
+		args = append(args, item.ID, handle, int64(item.Moved), start)
+	}
+	rows, err := tx.QueryContext(ctx, arms(len(items), readyLastWordArm), args...)
+	if err != nil {
+		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
+	}
+	type word struct {
+		at    time.Time
+		typed bool
+	}
+	last := map[string]word{}
+	for rows.Next() {
+		var id string
+		var seq, at int64
+		var typed bool
+		if serr := rows.Scan(&id, &seq, &at, &typed); serr != nil {
+			_ = rows.Close()
+			return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, serr)
+		}
+		last[id] = word{at: store.DecodeTime(at), typed: typed}
+	}
+	if err := closeRows(rows); err != nil {
+		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
+	}
+	for i := range items {
+		w, said := last[items[i].ID]
+		if said && w.typed {
+			continue
+		}
+		quiet := items[i].MovedAt
+		if start := items[i].Start; start != nil && start.After(quiet) {
+			quiet = *start
+		}
+		if said && w.at.After(quiet) {
+			quiet = w.at
+		}
+		items[i].Quiet = quiet
 	}
 	return nil
 }
