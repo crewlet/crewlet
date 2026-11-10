@@ -23,6 +23,17 @@ func Bounded(r *Runner, failure, line int) *Runner {
 	return r
 }
 
+// Clocked has r bound a pack's release by now rather than the wall clock
+// ([releaseContext]), and returns r: a case holds the release's deadline to the
+// one its rule gives exactly, however long its take ran.
+func Clocked(r *Runner, now func() time.Time) *Runner {
+	r.now = now
+	return r
+}
+
+// PackReleaseFloor is the least a pack's release is given.
+const PackReleaseFloor = packReleaseFloor
+
 // RedactContext is how much more than it keeps a read from the error stream's
 // end takes, so a credential that began before what is kept is still redacted.
 const RedactContext = redactContext

@@ -1145,37 +1145,69 @@ func (b *releaseWatch) Exec(ctx context.Context, cmd string, opts sandbox.ExecOp
 // and not to a bound of its own from the moment it runs, under which a box that
 // stopped answering once its archive was read held the read up to the two
 // minutes a pack may take past it, into the room left for the outcome stamp and
-// the box's pause. Here a take with a minute to go packs a job that left no
-// archive, and is read whole and closed: the release ran, under a deadline no
-// later than the take's, and left nothing behind.
+// the box's pause. A take with less than the floor left gives its release the
+// floor ([executor.PackReleaseFloor]), and one with no deadline the pack's own
+// bound. Here three takes each pack a job that left no archive and are read
+// whole and closed: one with a minute to go when its release is made, one with
+// a second, one with no deadline. Each release ran under exactly the deadline
+// its rule gives, and left nothing behind.
+//
+// THE RUNNER'S CLOCK IS THE CASE'S ([executor.Clocked]), set to the moment the
+// release is made, so no read of the wall clock decides the case. Read off the
+// wall clock, a take that had run past a minute less the floor gave its release
+// the floor, a deadline past the take's own, and a healthy build failed. Each
+// take still has a minute of the wall clock to run in.
 //
 // Mutation: bound the release by the pack's own wait from the moment it runs,
-// as it was, and it is asked under a deadline past the take's.
+// as it was, and the takes with a deadline are asked under one their rule does
+// not give; drop the floor, or read the wall clock in place of the runner's,
+// and the take with a second to go is asked under its own deadline.
 func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
 	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
-	forgetCapture(t, b)
-	watched := &releaseWatch{Sandbox: b}
-	deadline := time.Now().Add(time.Minute)
-	ctx, cancel := context.WithDeadline(t.Context(), deadline)
-	defer cancel()
-	if got := takeWhole(ctx, runner, watched); got.err != nil {
-		t.Fatalf("the take was refused: %v", got.err)
-	}
-	watched.mu.Lock()
-	asked := append([]time.Time(nil), watched.deadlines...)
-	watched.mu.Unlock()
-	if len(asked) == 0 {
-		t.Fatal("the take's pack was never released")
-	}
-	for _, at := range asked {
-		if at.IsZero() || deadline.Before(at) {
-			t.Errorf("a release was asked under the deadline %v, past the take's own %v", at, deadline)
-		}
-	}
-	if left := packStagingLeft(t, b); len(left) > 0 {
-		t.Errorf("the release left the pack's files behind: %s", strings.Join(left, ", "))
+	for _, tc := range []struct {
+		name string
+		// left is what the take has to go when its release is made, by the
+		// runner's clock; zero is a take with no deadline.
+		left time.Duration
+		// gets is the release's deadline, past the moment it is made.
+		gets time.Duration
+	}{
+		{name: "a take with a minute to go", left: time.Minute, gets: time.Minute},
+		{name: "a take with a second to go", left: time.Second, gets: executor.PackReleaseFloor},
+		{name: "a take with no deadline", gets: sandbox.SessionPackWait},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forgetCapture(t, b)
+			ctx, made := t.Context(), time.Now()
+			if tc.left > 0 {
+				deadline := time.Now().Add(time.Minute)
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, deadline)
+				defer cancel()
+				made = deadline.Add(-tc.left)
+			}
+			executor.Clocked(runner, func() time.Time { return made })
+			watched := &releaseWatch{Sandbox: b}
+			if got := takeWhole(ctx, runner, watched); got.err != nil {
+				t.Fatalf("the take was refused: %v", got.err)
+			}
+			watched.mu.Lock()
+			asked := append([]time.Time(nil), watched.deadlines...)
+			watched.mu.Unlock()
+			if len(asked) == 0 {
+				t.Fatal("the take's pack was never released")
+			}
+			for _, at := range asked {
+				if want := made.Add(tc.gets); !at.Equal(want) {
+					t.Errorf("the release was asked under the deadline %v, want %v", at, want)
+				}
+			}
+			if left := packStagingLeft(t, b); len(left) > 0 {
+				t.Errorf("the release left the pack's files behind: %s", strings.Join(left, ", "))
+			}
+		})
 	}
 }
 
