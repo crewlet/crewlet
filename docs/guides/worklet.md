@@ -1883,6 +1883,22 @@ and those it stamped permanently one-sided (`final`);
 `tracker_one_sided_repair_failed` (a warning) for an edge whose repair failed
 and is retried on the next pass.
 
+**A task can wait on a pull request** on the company's GitHub: give its URL in
+`waiting_on` (any tab of its page reads as the page itself). The task reads
+blocked until the pull request merges or closes, and that is recorded on the
+task by the engine, with no agent's turn: a `change_settled` record that keeps
+the pull request among the task's `changes` (its state, when, and whether the
+webhook or the poll learned it), unblocks the task, and tells whoever holds it
+to update it, addressed. The task's status is never moved. The engine learns it
+from GitHub's webhook as it arrives, or else from a fleet poll that asks GitHub
+about at most fifty open pull requests every 15 minutes, through the agents'
+apps' cached tokens, once the pull request settled more than ten minutes ago.
+Each settle is written once however many deliveries and polls saw it. A wait on
+a pull request has no mirror, is never one-sided, and a pull request cannot be
+made to wait on a task. When the poll keeps settling what no delivery did, the
+advisor says so to the owner as `integration.inbound_silent`
+([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)).
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is

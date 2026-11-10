@@ -135,6 +135,10 @@ type WorkMover interface {
 type WorkDeps struct {
 	Reader WorkReader
 
+	// ChangeRef is a pull request's tracker name, where raw is one on the
+	// company's GitHub; nil, or false, and `waiting_on` names items alone.
+	ChangeRef func(raw string) (string, bool)
+
 	// Authorize decides the checks a tool can only take AFTER a read.
 	//
 	// THE SAME SEAM THE REGISTRATION GATE USES, pushed down by [Register]
@@ -1846,7 +1850,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// nothing was written.
 	var blockers []string
 	for _, ref := range argStrings(args, "waiting_on") {
-		id, refused := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		id, refused := t.deps.resolveBlocker(ctx, CreateWorkItemTool, "waiting_on", ref)
 		if refused != nil {
 			return *refused, nil
 		}
@@ -2602,7 +2606,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"to set — filing your own work into your own team is " +
 					"what `unit` on " + worklet.CreateWorkItemTool + " does.",
 			},
-			"waiting_on":   setArgSchema("The items this one is blocked BY. " + itemRefs),
+			"waiting_on": setArgSchema("The items this one is blocked BY. " + itemRefs +
+				" A pull request on the company's GitHub, by its URL, blocks it until it " +
+				"merges or closes, when you are told to update the item."),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),

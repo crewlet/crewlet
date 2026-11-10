@@ -150,3 +150,21 @@ func (e *Engine) PullRequestPreview(ctx context.Context, ref github.PullRef) (
 
 	return e.githubPulls.read(ctx, ref)
 }
+
+// current is the lookup of the GitHub wiring now in force, nil without one.
+func (g *githubPullReader) current() *github.SeatLookup {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lookup
+}
+
+// ChangeRef is raw's tracker name, where raw is a pull request on the
+// company's GitHub ([github.ChangeRef]).
+func (e *Engine) ChangeRef(raw string) (string, bool) {
+	lookup := e.githubPulls.current()
+	if lookup == nil {
+		return "", false
+	}
+	_, ref, ok := github.ChangeRef(lookup.Opts.WebBase, raw)
+	return ref, ok
+}

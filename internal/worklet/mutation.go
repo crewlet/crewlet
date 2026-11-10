@@ -54,7 +54,8 @@ import (
 // ([MutationRecord.NoticeWokeKept]).
 // Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
 // Version 9 is why a task waits until its start ([TaskPatch.WaitReason]).
-const RecordVersion = 9
+// Version 10 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
+const RecordVersion = 10
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -120,6 +121,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
 	{Name: "TaskPatch.AskWatch", Since: 8, Path: []string{"mutation", "ask_watch"}},
 	{Name: "TaskPatch.WaitReason", Since: 9, Path: []string{"mutation", "wait_reason"}},
+	{Name: "TaskPatch.ChangeSettled", Since: 10, Path: []string{"mutation", "change_settled"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1166,6 +1168,10 @@ const (
 	// account of itself.
 	ChangeFileWritten ChangeKind = "file_written"
 	ChangeFileRemoved ChangeKind = "file_removed"
+
+	// ChangeLinkSettled is a change (a pull request) the task waits on
+	// merged or closed, written by the engine, never by an agent's turn.
+	ChangeLinkSettled ChangeKind = "change_settled"
 )
 
 // ChangeKinds are every change kind this build writes.
@@ -1183,6 +1189,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
+	ChangeLinkSettled,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.

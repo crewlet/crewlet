@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
@@ -33,6 +34,10 @@ const (
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
 	// recommendation on almost every decision it asked of them.
 	ClassApprovalRubberStamp Class = "approval.rubber_stamp"
+	// ClassInboundSilent is the owner's: the pull requests work waited on
+	// reached it only through the engine's poll, so GitHub's webhook is not
+	// reaching the company (ADR-0121).
+	ClassInboundSilent Class = "integration.inbound_silent"
 )
 
 // AreaWork holds the patterns in how the company's work moves, and
@@ -145,6 +150,7 @@ var detectors = []detector{
 	{ClassRedeliveredSeen, sourceLedger, redeliveredSeen},
 	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
 	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
+	{ClassInboundSilent, sourceWork, inboundSilent},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -622,4 +628,36 @@ func appendExamples(records, more []string) []string {
 		records = append(records, r)
 	}
 	return records
+}
+
+// inboundSilent raises when the poll settled a change in the window and the
+// webhook settled none after it: deliveries have not resumed since.
+func inboundSilent(ev Evidence, _ func(string) SeatKind) []Finding {
+	var polled, delivered worklet.ChangeSettles
+	for _, s := range ev.Work.Settled {
+		switch s.Source {
+		case worklet.SettledByPoll:
+			polled = s
+		case worklet.SettledByWebhook:
+			delivered = s
+		}
+	}
+	if polled.Count == 0 || !polled.Newest.After(delivered.Newest) {
+		return nil
+	}
+	kind := integration.KindGitHub
+	name := surfaceName(kind)
+	return []Finding{{
+		Class: ClassInboundSilent, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
+		Area: AreaIntegrations, Subject: Subject{Kind: SubjectIntegration, Name: name},
+		Path:  "integrations." + string(kind),
+		Title: fmt.Sprintf("%d pull requests your work waited on reached it only through the engine's poll.", polled.Count),
+		Why: fmt.Sprintf("When %s's webhook delivers a merge or a close, the item waiting on it hears within a "+
+			"minute. In the last 7 days %d were learned by the poll instead, each at least ten minutes late, "+
+			"and no delivery has settled one since, so the webhook is not reaching this company.", name, polled.Count),
+		Evidence: []Fact{{Key: "polled", Value: int64(polled.Count)}, {Key: "delivered", Value: int64(delivered.Count)}},
+		Fix: Fix{Kind: FixExternalStep, Options: []Option{}, Setting: string(kind),
+			Sentence:  "Open " + name + "'s settings and check that its webhook reaches the engine.",
+			Unchanged: "The poll keeps settling what the webhook misses, ten minutes or more late."},
+	}}
 }
