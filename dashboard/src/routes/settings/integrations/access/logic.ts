@@ -90,7 +90,7 @@ const HANDOFF_STEPS: ReadonlySet<string> = new Set<HandoffStep>(["create", "mint
  *
  * THE ACCOUNT NAMES WHAT TO MAKE ONLY WHERE THE PERSON MAKES AN ACCOUNT (an
  * Expo robot). Where the token is the agent's whole identity, the observed
- * account is whose token it is ("Miles on gophrase"), never a name to type.
+ * account is whose token it is ("Alex on acme"), never a name to type.
  */
 function seatFacts(lane: Lane, saved: AccessSeatLane) {
   const level = (id: string | undefined) => lane.levels.find((l) => l.id !== "" && l.id === id);
@@ -438,7 +438,7 @@ export function scopeLabel(lane: Lane, id: string): string {
   return lane.scope_names?.[id] ?? id;
 }
 
-/** A seat's scope as a sentence fragment: "gophrase/backend and gophrase/web", or the lane's empty words. */
+/** A seat's scope as a sentence fragment: "acme/backend and acme/web", or the lane's empty words. */
 export function scopeWords(lane: Lane, scope: string[] | undefined): string {
   if (!scope || scope.length === 0) return laneWords(lane.key).scope?.empty ?? "None";
   return andList(scope.map((id) => scopeLabel(lane, id)));

@@ -322,10 +322,10 @@ describe("a handoff", () => {
   test("a new agent's wait is a handoff from its robot, at the role chosen here", () => {
     expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("create")))).toEqual({
       step: "create",
-      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
-      said: "Add a robot named crewlet-gophrase-pm with the Runner role at Expo",
-      account: "crewlet-gophrase-pm",
-      name: "crewlet-gophrase-pm",
+      url: "https://expo.dev/accounts/acme/settings/access-tokens",
+      said: "Add a robot named crewlet-acme-pm with the Runner role at Expo",
+      account: "crewlet-acme-pm",
+      name: "crewlet-acme-pm",
       role: { name: "Runner", note: "View all projects and perform low-risk actions on them" },
       level: "runner",
       current: undefined,
@@ -361,8 +361,8 @@ describe("a handoff", () => {
     const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
     expect(rotateHandoffOf(EXPO_LANE, qa)).toMatchObject({
       step: "mint",
-      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
-      account: "crewlet-gophrase-qa",
+      url: "https://expo.dev/accounts/acme/settings/access-tokens",
+      account: "crewlet-acme-qa",
       role: { name: "Developer" },
       renew: true,
       rotating: true,
@@ -390,7 +390,7 @@ describe("a handoff", () => {
 
   // A DIGITALOCEAN TOKEN IS NAMED BY THE ENGINE, NEVER BY WHOSE IT IS: every
   // token there acts as the person who made it, so the observed account
-  // ("Miles on gophrase") is no name to type. Mutation: fall back to the
+  // ("Alex on acme") is no name to type. Mutation: fall back to the
   // observed account and a new token is offered its owner's name.
   test("a DigitalOcean token is named by hand_in alone, never by its owner", () => {
     const pm = (answer: ReturnType<typeof digitaloceanWaitingAnswer>) =>
@@ -398,7 +398,7 @@ describe("a handoff", () => {
     expect(handoffOf(DIGITALOCEAN_LANE, pm(digitaloceanWaitingAnswer("create")))).toMatchObject({
       step: "create",
       url: "https://cloud.digitalocean.com/account/api/tokens",
-      name: "crewlet-gophrase-pm-operate",
+      name: "crewlet-acme-pm-operate",
       level: "operate",
       renew: false,
     });
@@ -406,11 +406,11 @@ describe("a handoff", () => {
       DIGITALOCEAN_LANE,
       pm(digitaloceanWaitingAnswer("mint", { named: false })),
     );
-    expect(renewed).toMatchObject({ account: "Miles on gophrase", renew: true });
+    expect(renewed).toMatchObject({ account: "Alex on acme", renew: true });
     expect(renewed?.name).toBeUndefined();
     const sre = digitaloceanAnswer().seats[1]!.lanes.digitalocean!;
     expect(rotateHandoffOf(DIGITALOCEAN_LANE, sre)).toMatchObject({
-      name: "crewlet-gophrase-sre-operate",
+      name: "crewlet-acme-sre-operate",
       rotating: true,
     });
   });
@@ -516,7 +516,7 @@ test("a scope picker with nothing to offer says whether the list was read", () =
   });
   expect(scopeUnavailable(empty, [])).toEqual({ words: "No repositories to choose from" });
   expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
-  expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
+  expect(scopeUnavailable({ ...empty, scope_live: false }, ["acme/backend"])).toBeNull();
   expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
 });
 
@@ -527,7 +527,7 @@ test("a lane whose empty scope reaches nothing refuses an agent that is on with 
   expect(refusedScope(required, { enabled: true, scope: [] }, "SRE")).toBe(
     "Choose at least one repository for SRE: an agent in no repository can reach nothing.",
   );
-  expect(refusedScope(required, { enabled: true, scope: ["gophrase/backend"] }, "SRE")).toBeNull();
+  expect(refusedScope(required, { enabled: true, scope: ["acme/backend"] }, "SRE")).toBeNull();
   expect(refusedScope(required, { enabled: false }, "SRE")).toBeNull();
   expect(refusedScope(GITHUB_LANE, { enabled: true, scope: [] }, "SRE")).toBeNull();
   expect(emptyScopeHint(required, { enabled: true })).toBe(
@@ -547,13 +547,13 @@ test("a scope is offered only on a lane that narrows by scope", () => {
 // else: not on a lane without the rule, not from several entries or a list
 // that could not be read, and never for a seat that is already on.
 test("a seat turned on takes the only entry there is, and only then", () => {
-  const one: Lane = { ...GITHUB_LANE, scope: ["gophrase/backend"], scope_required: true };
-  expect(onlyScope(one, { enabled: false })).toEqual(["gophrase/backend"]);
+  const one: Lane = { ...GITHUB_LANE, scope: ["acme/backend"], scope_required: true };
+  expect(onlyScope(one, { enabled: false })).toEqual(["acme/backend"]);
   expect(onlyScope({ ...one, scope_required: false }, { enabled: false })).toBeUndefined();
   expect(onlyScope({ ...one, scope_live: false }, { enabled: false })).toBeUndefined();
   expect(onlyScope({ ...one, scope: ["a/b", "a/c"] }, { enabled: false })).toBeUndefined();
   expect(onlyScope(one, { enabled: true })).toBeUndefined();
-  expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
+  expect(onlyScope(one, { enabled: false, scope: ["acme/backend"] })).toBeUndefined();
 });
 
 // A BOX TOOL READING SEVERAL VARIABLES names every one its tool reads, never
@@ -692,7 +692,7 @@ test("a Scaleway seat reads its level, its tool by both routes and what turning 
   expect(toolWords(SCALEWAY_LANE, { ...sre, tool: "no_server" })).toBe(
     "Not set up: no scaleway tool server is declared",
   );
-  expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("gophrase-prod");
+  expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("acme-prod");
   expect(offSentence(SCALEWAY_LANE, offLane("read"))).toBe(
     "Off. Turning it on creates a Scaleway IAM application for the agent, with a policy holding the chosen permission sets on its projects and its own API key.",
   );

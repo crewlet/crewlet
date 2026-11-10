@@ -14,6 +14,9 @@
  * - THE REMOVAL of one agent's account, allowed only once it is off (D1).
  * - GITHUB'S PERMISSIONS for one agent, edited into the draft in GitHub's own
  *   words, so the row stays at one size.
+ * - ONE AGENT'S SCOPE (repositories, projects, spaces, channels, servers),
+ *   ticked from what the connection reaches and edited into the draft, so the
+ *   row shows the choice and never a field.
  */
 
 import {
@@ -29,14 +32,21 @@ import {
   Callout,
   Card,
   ChangeList,
+  Checkbox,
+  ChoiceList,
   DescriptionList,
+  FormField,
+  Inline,
+  Input,
   List,
   Modal,
   SegmentedControl,
   Spinner,
+  Stack,
   Tag,
   Text,
   Timeline,
+  VisuallyHidden,
   type ChangeListRow,
 } from "@crewlethq/ui";
 import {
@@ -50,6 +60,7 @@ import {
   PowerGlyph,
   RefreshCwGlyph,
   RotateCcwGlyph,
+  SearchGlyph,
   ShieldCheckGlyph,
   SlidersVerticalGlyph,
   TrashGlyph,
@@ -81,8 +92,10 @@ import {
   lanesOf,
   levelName,
   levelsHeading,
+  refusedScope,
   reviewWords,
   scopeApplies,
+  scopeChoices,
   scopeWords,
   takesAccessAway,
   type Lane,
@@ -620,6 +633,177 @@ export function PermissionsDialog({
           />,
         ])}
       />
+    </Modal>
+  );
+}
+
+/** Past this many entries the list is searched rather than scrolled: about what a phone's dialog shows at once. */
+const SCOPE_SEARCH_FROM = 8;
+
+/**
+ * One agent's scope, ticked from what the connection reaches; an open one also takes a typed
+ * entry. An empty scope is a choice of its own that clears the list, unless it reaches nothing.
+ */
+export function ScopeDialog({
+  seat,
+  lane,
+  want,
+  refused,
+  onChange,
+  onClose,
+}: {
+  seat: AccessSeat;
+  lane: Lane;
+  want: AccessDesired;
+  /** The engine's refusal of this seat's scope, said over the list until the draft changes. */
+  refused?: string | undefined;
+  onChange: (scope: string[]) => void;
+  onClose: () => void;
+}) {
+  const words = laneWords(lane.key).scope;
+  const noun = (words?.noun ?? "Scope").toLowerCase();
+  const singular = words?.singular ?? "entry";
+  const held = want.scope ?? [];
+  // CHOSEN IS HELD HERE, not read off the draft, so unticking the last entry
+  // keeps the list open under the pointer rather than folding it away.
+  const [chosen, setChosen] = useState(held.length > 0);
+  const [term, setTerm] = useState("");
+  const body = useRef<HTMLDivElement>(null);
+  const title = `${seat.name}'s ${lane.name} ${noun}`;
+  const choices = scopeChoices(lane, held);
+  const find = term.trim().toLowerCase();
+  const shown = find
+    ? choices.filter((c) => `${c.label} ${c.value}`.toLowerCase().includes(find))
+    : choices;
+  const typed =
+    lane.scope_open && find && !choices.some((c) => c.value.toLowerCase() === find)
+      ? term.trim()
+      : null;
+  const add = () => {
+    if (!typed) return;
+    onChange([...held, typed]);
+    setTerm("");
+  };
+  const searchWords = lane.scope_open ? `Find or add a ${singular}` : `Find a ${singular}`;
+  const alone = lane.scope_required || !words;
+
+  const picker = (
+    <Stack gap={3}>
+      {(lane.scope_open || choices.length > SCOPE_SEARCH_FROM) && (
+        <Input
+          type="search"
+          aria-label={searchWords}
+          placeholder={searchWords}
+          inputSize="sm"
+          width="full"
+          leading={<SearchGlyph size="sm" />}
+          value={term}
+          onChange={(e) => setTerm(e.target.value)}
+        />
+      )}
+      {typed && (
+        <span>
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            onClick={add}
+          >
+            {`Add “${typed}”`}
+          </Button>
+        </span>
+      )}
+      {/* A FIELDSET WHOSE LEGEND IS DRAWN ONLY ALONE: under "Chosen
+          repositories" it would say the same word again a line lower. */}
+      <FormField
+        as="fieldset"
+        label={words?.noun ?? "Scope"}
+        hideLabel={!alone}
+        helper={refusedScope(lane, want, seat.name) ?? undefined}
+        error={refused}
+      >
+        {shown.length > 0 ? (
+          <Stack gap={1}>
+            {shown.map((c) => (
+              <Checkbox
+                key={c.value}
+                label={c.label}
+                description={c.description}
+                checked={held.includes(c.value)}
+                onCheckedChange={(on) =>
+                  onChange(on ? [...held, c.value] : held.filter((id) => id !== c.value))
+                }
+              />
+            ))}
+          </Stack>
+        ) : (
+          <Text as="p" variant="caption" tone="secondary">
+            {find ? `No ${singular} matches “${term.trim()}”.` : `Type a ${singular} to add it.`}
+          </Text>
+        )}
+      </FormField>
+    </Stack>
+  );
+
+  return (
+    <Modal
+      open
+      size="md"
+      onClose={onClose}
+      title={title}
+      // FOCUS STARTS ON WHAT IS CHOSEN: the search field over the list, or the
+      // selected choice, never the first choice drawn when it is not the one.
+      initialFocus={() =>
+        body.current?.querySelector<HTMLElement>('input[type="search"]') ??
+        body.current?.querySelector<HTMLElement>('input[type="radio"]:checked') ??
+        null
+      }
+      // ENTER IN THE SEARCH FIELD ADDS what was typed, where an entry may be.
+      {...(lane.scope_open ? { onSubmit: add } : {})}
+      footer={
+        <Button size="small" variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      }
+    >
+      <div ref={body}>
+        {alone ? (
+          picker
+        ) : (
+          <ChoiceList
+            label={title}
+            value={chosen ? "chosen" : "empty"}
+            onChange={(v) => {
+              const next = v === "chosen";
+              setChosen(next);
+              if (!next) {
+                setTerm("");
+                if (held.length > 0) onChange([]);
+              }
+            }}
+            options={[
+              { value: "empty", label: words.empty },
+              {
+                value: "chosen",
+                // WHAT IS TICKED, COUNTED beside the choice, so a long list says
+                // it without scrolling.
+                label: chosen ? (
+                  <Inline as="span" gap={2} align="baseline">
+                    <span>{`Chosen ${noun}`}</span>
+                    <Text as="span" variant="caption" tone="secondary">
+                      <VisuallyHidden>, </VisuallyHidden>
+                      {held.length === 0 ? "none chosen" : `${held.length.toLocaleString()} chosen`}
+                    </Text>
+                  </Inline>
+                ) : (
+                  `Chosen ${noun}`
+                ),
+                panel: picker,
+              },
+            ]}
+          />
+        )}
+      </div>
     </Modal>
   );
 }
