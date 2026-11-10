@@ -131,6 +131,12 @@ func (s *suite) runWire(t *testing.T) {
 		})
 
 		sent := newEvent("wire_probe")
+		// THE TIMESTAMP IS STATED, years from any clock, to the nanosecond:
+		// equal on arrival, it is the one the event was sent with. The
+		// time.Now() newEvent takes, a few microseconds before the publish,
+		// is what a backend re-stamping the envelope at the publish would
+		// write too, inside one tick of its clock, and pass.
+		sent.Timestamp = time.Date(2031, time.March, 4, 5, 6, 7, 123456789, time.UTC)
 		sent.Source = "someone"
 		sent.TraceID, sent.SpanID = "trace-1", "span-1"
 		sent.DelegationDepth = 2
@@ -162,7 +168,8 @@ func (s *suite) runWire(t *testing.T) {
 				t.Errorf("payload map arrived as %v, want conv=c1", got.Payload)
 			}
 			if !got.Timestamp.Equal(sent.Timestamp) {
-				t.Errorf("timestamp arrived as %s, want %s", got.Timestamp, sent.Timestamp)
+				t.Errorf("timestamp arrived as %s, want the %s it was sent with: the envelope's "+
+					"stamp was rewritten in transit", got.Timestamp, sent.Timestamp)
 			}
 		case <-t.Context().Done():
 			t.Fatal("no delivery")
