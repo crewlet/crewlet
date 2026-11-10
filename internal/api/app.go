@@ -956,6 +956,8 @@ func New(opts Options) (*App, error) {
 	sources.AlarmsEvaluated = opts.Runtime.AlarmsEvaluated
 	// And every seat's pause, which the advisor reads for a failure's.
 	sources.Pauses = opts.Runtime.SeatPauses()
+	// And what each agent may do, for the go-live check's review.
+	sources.AgentAccess = opts.Runtime.AgentAccess()
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()

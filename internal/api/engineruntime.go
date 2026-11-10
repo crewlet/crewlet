@@ -185,6 +185,21 @@ func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
 	return nil
 }
 
+// AgentAccess is the engine's read of each agent's access ([engine.Engine.AgentCapabilities]).
+func (r engineRuntime) AgentAccess() queries.AgentAccess {
+	return func(ctx context.Context) ([]queries.AgentAccessRow, error) {
+		agents, err := r.engine.AgentCapabilities(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]queries.AgentAccessRow, len(agents))
+		for i, a := range agents {
+			out[i] = queries.AgentAccessRow{Seat: a.Handle, Name: a.Name, Access: a.Access}
+		}
+		return out, nil
+	}
+}
+
 // IssueReports is the engine's reporter, nil where it has none: a nil pointer
 // in the interface would register a question that panics.
 func (r engineRuntime) IssueReports() queries.IssueReportReader {
