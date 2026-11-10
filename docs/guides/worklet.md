@@ -1164,7 +1164,8 @@ handed it once when the date comes. A wait without a reason, a reason without
 a wait, a wait beside `start`, or a date that has passed is refused with
 nothing written, and `wait_until: null` ends the wait. A `start` moved without
 a reason takes the old reason off, since it said why the item waited until the
-old date.
+old date. The item's page shows the reason under its start date, as **Waits
+for**.
 
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
@@ -1985,6 +1986,8 @@ reopening the item makes them wait again. An overtaken question leaves
 `asked_by=`, and an answer without `answers` is inferred among the questions
 still waiting. Its card carries `overtaken` with the reason, and an answer that
 names it is still recorded. A question somebody answered is never overtaken.
+The Inbox says so on a notice about it: the question no longer needs an answer,
+because it was asked again since or its item is finished.
 
 ### Asking for a decision
 

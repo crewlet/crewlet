@@ -358,6 +358,25 @@ test("a value whose declaration was archived is marked as such", async () => {
   expect(screen.getByText("archived")).toBeTruthy();
 });
 
+// AN ITEM SET ASIDE UNTIL A DATE SAYS WHY, beside the date, as whoever set the
+// wait said it; an item that waits for nothing has no such row.
+test("an item that waits until a date says what it waits for", async () => {
+  rail(
+    detail({
+      task: task({
+        start_at: "2031-04-20T00:00:00Z",
+        wait_reason: "The vendor's window opens Monday",
+      }),
+    }),
+  );
+  await settle();
+  expect(rowValue("Waits for").textContent).toBe("The vendor's window opens Monday");
+  cleanup();
+  rail(detail({ task: task({ start_at: "2031-04-20T00:00:00Z" }) }));
+  await settle();
+  expect(screen.queryByText("Waits for")).toBeNull();
+});
+
 // AN ABSENT VALUE IS A MARKED ABSENCE, never a zero: zero is a measurement,
 // and an unestimated task is one nobody has sized.
 test("an unestimated task shows a marked absence rather than a zero", async () => {
