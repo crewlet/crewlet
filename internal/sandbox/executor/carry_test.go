@@ -25,7 +25,7 @@ import (
 // environment in the box's home, and files the session it was started in where
 // the pinned layout names — its transcript, its sidecar directory and its task
 // list, as Claude Code does — beside what a capture must never take: the
-// session's file checkpoints, the harness's own state, a login, auto memory and
+// session's file-edit snapshots, the harness's own state, a login, auto memory and
 // another session. A session it is asked to resume must already be filed, in
 // any project directory, as Claude Code's must from 2.1.223 ("No conversation
 // found"). It ends on a successful result naming its session.
@@ -43,7 +43,7 @@ printf '{"type":"user","sessionId":"%s"}\n' "$s" >> "$p/$s.jsonl"
 echo subagent > "$p/$s/subagents/agent-1.jsonl"
 echo spilled > "$p/$s/tool-results/out.txt"
 echo task > "$cfg/tasks/$s/1.json"
-echo checkpoint > "$cfg/file-history/$s/edit"
+echo snapshot > "$cfg/file-history/$s/edit"
 echo '{"state":"the harness'\''s own"}' > "$cfg/.claude.json"
 echo '{"token":"a login"}' > "$cfg/.credentials.json"
 echo remembered > "$p/memory/MEMORY.md"
@@ -398,7 +398,7 @@ func archiveMembers(t *testing.T, r io.Reader) map[string]string {
 // transcript, its sidecar directory (the subagents' transcripts and the tool
 // results spilled to files) and its task list, named relative to the harness's
 // configuration directory — and never the login beside them, the harness's own
-// state, the session's file checkpoints, auto memory or another session. The
+// state, the session's file-edit snapshots, auto memory or another session. The
 // collection is told where it is, which session it holds, the release that
 // wrote it and its size, and is handed it as a stream.
 //

@@ -364,7 +364,7 @@ func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *tes
 			// A STAMP THAT ALREADY CARRIES PLACES, as one built from a copy of
 			// another capture would: placed at zero, it carries none of them.
 			capture := SessionCapture{BridgeSeq: 99, BridgeOpen: []int{98}}
-			capture.placeAtNewest(run)
+			capture.placeAtNewest(savePlaces{run: run})
 			through, placed := capture.SavePoint()
 			if !placed || through != tc.through {
 				t.Fatalf("the capture is placed at %d (stated %v), want %d, stated", through, placed, tc.through)
@@ -377,6 +377,80 @@ func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *tes
 				capture.BridgeOpen[0] = -1
 				if tc.kept != nil && slices.Contains(tc.kept.BridgeOpen, -1) {
 					t.Error("the capture shares its open places with the capture it was placed by")
+				}
+			}
+		})
+	}
+}
+
+// A SAVE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO HOLD, AND AT
+// NONE IT IS NOT. A save is packed while its job works, and Claude Code makes a
+// call before it writes it, so nothing read off the log as the save is taken
+// says what the session holds: the save takes the newest of its launch's own
+// landed save and the capture the launch continued, where that capture counts
+// this round's calls, or the round's start. The places an older build reads come
+// from the same capture as the point, copied rather than shared.
+//
+// Mutation: take the turn's kept capture of an earlier launch for this launch's
+// save, the continued capture's point across a new round or from a row that
+// names none, or the first candidate rather than the newest, and a case goes
+// red; place the older build's places off another capture, or share its slice,
+// and the copied case does; leave the places a stamp already carried where no
+// capture places it, and every case placed at zero does.
+func TestASaveIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
+	t.Parallel()
+	// saved is a capture of the job launch (its ordinal seq) at save point
+	// through, placed for an older build at seq of the highest call and open
+	// at the places below it.
+	saved := func(launch string, seq int64, through *int, highest int, open ...int) *SessionCapture {
+		return &SessionCapture{LaunchSeq: seq, CaptureSeq: 1, Launch: launch, State: CaptureLanded,
+			Through: through, BridgeSeq: highest, BridgeOpen: open}
+	}
+	const job1, job2 = "job-1", "job-2"
+	for name, tc := range map[string]struct {
+		round     string
+		kept      *SessionCapture
+		continued *SessionCapture
+		through   int
+		highest   int
+		open      []int
+	}{
+		"a launch that continued nothing and has saved nothing": {round: job2},
+		"a launch that carried its round on from the job before's capture": {round: job1,
+			continued: saved(job1, 1, new(5), 7, 6), through: 5, highest: 7, open: []int{6}},
+		"a launch that began a new round from the job before's capture": {round: job2,
+			continued: saved(job1, 1, new(5), 7, 6)},
+		"a launch whose own save landed": {round: job1, kept: saved(job2, 2, new(9), 11),
+			continued: saved(job1, 1, new(5), 7), through: 9, highest: 11},
+		"the turn's kept capture an earlier launch took": {round: job2, kept: saved(job1, 1, new(9), 11)},
+		"its own landed save stating no save point, an older build's": {round: job1,
+			kept: saved(job2, 2, nil, 11), continued: saved(job1, 1, new(5), 7), through: 5, highest: 7},
+		"a row that names no round, an older build's": {continued: saved(job1, 1, new(5), 7)},
+		"a continued capture newer than its own landed save": {round: job1, kept: saved(job2, 2, new(4), 4),
+			continued: saved(job1, 1, new(6), 8, 7), through: 6, highest: 8, open: []int{7}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := PendingRun{TurnID: "t1", LaunchID: job2, LaunchSeq: 2, Round: tc.round, Kept: tc.kept,
+				Capture: tc.kept}
+			// A STAMP THAT ALREADY CARRIES PLACES, as one built from a copy of
+			// another capture would: placed at zero, it carries none of them.
+			save := SessionCapture{BridgeSeq: 99, BridgeOpen: []int{98}}
+			save.placeAtNewest(savePlaces{run: run, continued: tc.continued})
+			through, placed := save.SavePoint()
+			if !placed || through != tc.through {
+				t.Fatalf("the save is placed at %d (stated %v), want %d, stated", through, placed, tc.through)
+			}
+			if save.BridgeSeq != tc.highest || !slices.Equal(save.BridgeOpen, tc.open) {
+				t.Errorf("the save carries %d and %v for an older build, want %d and %v: the places of the "+
+					"capture its point is", save.BridgeSeq, save.BridgeOpen, tc.highest, tc.open)
+			}
+			if len(save.BridgeOpen) > 0 {
+				save.BridgeOpen[0] = -1
+				for _, source := range []*SessionCapture{tc.kept, tc.continued} {
+					if source != nil && slices.Contains(source.BridgeOpen, -1) {
+						t.Error("the save shares its open places with the capture it was placed by")
+					}
 				}
 			}
 		})

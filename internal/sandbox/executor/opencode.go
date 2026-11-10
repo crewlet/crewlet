@@ -289,7 +289,9 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // once the run ends ([carrier], [openCodeCapture]) — through a private server of
 // its own (`--standalone`), since the run's server, with the address and the
 // password only its script held, may be gone: the same export, into staged,
-// this pack's own staging directory, its digest kept.
+// this pack's own staging directory, and over dest — the job's capture for a
+// job that is over, the pack's own for one still working
+// ([Paths.SessionPackHeld]) — its digest kept.
 //
 // IT ENDS [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
 // session ([openCodeNotHeld]) — a run whose harness failed before it made one —
@@ -305,14 +307,16 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // exports its session through the run's own server on its way out
 // ([openCodeCapture]), so this pack never runs beside a server an end could
 // stop. The cap's take once packed its job as it worked, and so met that busy
-// database beside the run's live server.
-func (OpenCode) Pack(paths Paths, session, staged string) string {
+// database beside the run's live server. Whether the job may still be working
+// changes nothing of the export, which holds only the messages that settled
+// either way, so the pack reads nothing of it but where it goes (dest).
+func (OpenCode) Pack(paths Paths, session, staged, dest string, _ bool) string {
 	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
-		openCodePack(paths, staged, "--standalone") +
+		openCodePack(paths, staged, dest, "--standalone") +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
@@ -700,7 +704,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 // A BOX WITHOUT GZIP, or an export that failed, is said on the error stream,
 // and the run's own status is never the export's.
 func openCodeCapture(paths Paths) string {
-	return openCodePack(paths, paths.SessionStaging(), `--server "$url"`)
+	return openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(), `--server "$url"`)
 }
 
 // openCodePack is [openCodeCapture] exporting through server — the run's own
@@ -708,22 +712,24 @@ func openCodeCapture(paths Paths) string {
 // be gone, a private one of its own (`--standalone`), as the run's script asks
 // the box's database before its server starts ([openCodeSessionGate]) — and
 // packing in the staging directory staged (such a pack's own
-// [Paths.SessionPackStaging]). ONE PACK for both, so either is the same export
-// of the same session, and each keeps its digest.
+// [Paths.SessionPackStaging]) and moving its archive over dest (the run's
+// [Paths.SessionCapture], or such a pack's: the capture for a job that is over,
+// its own [Paths.SessionPackHeld] for one still working). ONE PACK for both, so
+// either is the same export of the same session, and each keeps its digest.
 //
 // AN EXPORT CARRIES THE SESSION'S SETTLED MESSAGES AND NOTHING ELSE
 // (core/src/session/transfer.ts at 2.0.32 and 2.2.5): not a message still
 // being written, which a job packed while it runs leaves out, and not the
 // session's note inbox, so a note the run's plugin admitted and OpenCode never
 // delivered rides no capture whichever server exports it.
-func openCodePack(paths Paths, staged, server string) string {
+func openCodePack(paths Paths, staged, dest, server string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	line(`if command -v gzip > /dev/null 2>&1; then`)
 	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
 		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), q(staged+"/capture"),
-		q(paths.SessionCapture()), q(paths.SessionCapture()), q(paths.SessionDigests()), q(staged+"/error"))
+		q(dest), q(dest), q(paths.SessionDigests()), q(staged+"/error"))
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
 	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)

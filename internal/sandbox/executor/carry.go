@@ -152,20 +152,29 @@ func releaseOf(printed string) string {
 
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is
-// none: a harness that carries no session, a run that packed none, a record that
-// names no session, or a path that holds no regular file — the box's own
-// doing, which costs the capture and nothing else.
+// none ([Runner.archiveAt]).
 func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	rec sessionRecord) (*sandbox.SessionArchive, error) {
+	return r.archiveAt(ctx, box, paths.SessionCapture(), rec)
+}
+
+// archiveAt describes the session archive the box holds at path — the run's
+// capture ([Paths.SessionCapture]), or a taker's save ([Paths.SessionSave]) —
+// for the session rec names, or nil where there is none: a harness that
+// carries no session, no archive there, a record that names no session, or a
+// path that holds no regular file — the box's own doing, which costs the
+// capture and nothing else.
+func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string,
 	rec sessionRecord) (*sandbox.SessionArchive, error) {
 
 	carries, ok := r.harness.(carrier)
 	if !ok || rec.id == "" {
 		return nil, nil
 	}
-	end, err := box.ReadTail(ctx, paths.SessionCapture(), 0)
+	end, err := box.ReadTail(ctx, path, 0)
 	if errors.Is(err, sandbox.ErrNotRegularFile) {
 		log.WarnContext(ctx, "harness_capture_unread", "harness", r.harness.Name(), "session", rec.id,
-			"detail", "the path the run packs its session to holds something other than a file, "+
+			"detail", "the path the run's session is packed to holds something other than a file, "+
 				"so the session was not captured", "error", err.Error())
 		return nil, nil
 	}
@@ -177,7 +186,7 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	}
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
-		Version: releaseOf(rec.release), Size: end.Size, Path: paths.SessionCapture(),
+		Version: releaseOf(rec.release), Size: end.Size, Path: path,
 	}, nil
 }
 
@@ -196,14 +205,14 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 // restorer's checks meet.
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
 	paths := PathsFor(box)
-	recorded, refusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
 	if err != nil {
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: reading which session the run packed: %w", err)
 	}
 	if refusal != "" {
 		return sandbox.SessionArchive{}, nil, nil
 	}
-	described, err := r.captured(ctx, box, paths, parseSessionRecord(recorded))
+	described, err := r.captured(ctx, box, paths, rec)
 	if err != nil || described == nil {
 		return sandbox.SessionArchive{}, nil, err
 	}

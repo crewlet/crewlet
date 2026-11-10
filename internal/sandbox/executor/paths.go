@@ -46,6 +46,16 @@
 // What each harness's archive holds, and never holds, is the harness's own: see
 // carry.go, [ClaudeCode] and [OpenCode].
 //
+// A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
+// it, by the pack the run's own end makes held to a stricter rule — every file
+// it packs listed before the tar and checked after it, so a file the harness
+// rewrote under the pack fails the pack rather than riding the archive torn
+// ([claudeHeldTar]): a job a box would not end, packed on demand for the read
+// that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
+// SAVE, packed to its taker's own path ([Runner.PackSave],
+// [Paths.SessionSave]) — neither ever where the job's final archive is read.
+// Only Claude Code's runner makes a save ([saver]).
+//
 // # A run ends on request
 //
 // The read that takes a stopped or lost job's session, or that of a job still
@@ -64,6 +74,8 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -143,8 +155,9 @@ func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried"
 func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
 
 // SessionPackStaging is the DIRECTORY one pack made on demand
-// ([Runner.PackCapture]) packs a capture in before it moves it over
-// [Paths.SessionCapture], named by pack, a name the runner mints for that pack
+// ([Runner.PackCapture]) packs a capture in before it moves it into place — over
+// [Paths.SessionCapture] for a job that is over, to [Paths.SessionPackHeld] for
+// one still working — named by pack, a name the runner mints for that pack
 // alone: its own, never [Paths.SessionStaging], because the run's script may
 // still be working in that one — a job a box would not end is packed while it
 // runs, and its script packs into the staging directory the moment its harness
@@ -155,8 +168,11 @@ func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging"
 // left no archive, or its box would not end it, each packs it now. Sharing one
 // directory, each pack's start would clear the other's files: one would move
 // over the job's capture an archive the other had half made, as its own, and
-// the other's move would find nothing to move. Each in its own, the two
-// archives are each whole, each moved over the capture in one rename.
+// the other's move would find nothing to move. Beside a working harness, too,
+// a pack would read the other's lists for its own, or find its own gone, and
+// the archive it moved could be one whose checks never ran ([claudeHeldTar]).
+// Each in its own, the two archives are each whole, each moved into place in
+// one rename.
 //
 // Removed whole by the pack when it is done, and by the clear before every
 // run, which removes every pack's, whichever read made it ([packStagingFiles],
@@ -165,11 +181,90 @@ func (p Paths) SessionPackStaging(pack string) string {
 	return p.WorkDir() + "/session-pack-staging." + pack
 }
 
-// packStagingFiles is the pattern every pack on demand's staging directory
-// matches ([Paths.SessionPackStaging]), whichever pack made it — what the clear
-// before every run removes; relative to the work directory, which the clear
-// quotes.
+// SessionPackHeld is where a pack on demand of a job STILL WORKING
+// ([Runner.PackCapture]) keeps its archive, moved there whole from its own
+// staging directory ([Paths.SessionPackStaging]), for the one read that packed
+// it: streamed from there, and removed once that read is done with it.
+//
+// NEVER [Paths.SessionCapture], which every read of a job that is over takes
+// as the job's last archive, and over which the job's own end pack moves its
+// final one the moment its harness exits — which can come while this pack runs,
+// a pack beside a working harness taking seconds to check what it read
+// ([claudeHeldTar]). Moved there after, the archive of the job as it stood
+// would replace the final one, and a read of the job once over would take it as
+// everything the job did. And the pack's own, so two reads of a job still
+// working each stream their own archive, never the other's moved in between
+// a take's two passes over its archive ([scrubTar]).
+//
+// NAMED AFTER THE PACK'S STAGING DIRECTORY, so the clear before every run
+// removes one a read cut short left by the same pattern ([packStagingFiles]).
+func (p Paths) SessionPackHeld(pack string) string {
+	return p.SessionPackStaging(pack) + ".held"
+}
+
+// packStagingFiles is the pattern every pack on demand's files match — its
+// staging directory ([Paths.SessionPackStaging]), and the archive a pack of a
+// job still working keeps beside it ([Paths.SessionPackHeld]) — whichever pack
+// made them: what the clear before every run removes; relative to the work
+// directory, which the clear quotes.
 const packStagingFiles = "session-pack-staging.*"
+
+// SessionSave is where a SAVE of the session a run's harness is still working
+// in is packed for taker, the holder of the lease it is taken under
+// (`<node>:<uuid>`, internal/sandbox's taker lease): moved into place whole from
+// that save's own [Paths.SessionSaveStaging] by [Runner.PackSave], and read by
+// the take that names the same taker ([sandbox.SessionTake.Save]).
+//
+// THE TAKER'S OWN, AND NEVER [Paths.SessionCapture]. That path is the job's
+// final archive to every read of a job that is over — its collection, a stop's,
+// a loss's — so a save left there would be taken as the last archive of a job
+// whose own exit pack failed, a session from before its last calls read as
+// everything it did. And one path per taker, so two processes that each save
+// one box — an e2b box whose waiter duty changed hands mid-save — never pack
+// into, or read, one file.
+//
+// NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
+// holder carries a node's id, which is the deployment's to choose and is no
+// file name's to trust.
+func (p Paths) SessionSave(taker string) string {
+	return p.WorkDir() + "/session-save." + saveTag(taker)
+}
+
+// SessionSaveStaging is the DIRECTORY one save for taker is packed in before it
+// is moved over [Paths.SessionSave] ([Runner.PackSave]), named by pack, a name
+// the runner mints for that save alone, after its taker's tag: its own, for
+// [Paths.SessionPackStaging]'s reasons — the run's script's staging directory,
+// another pack's, ANOTHER SAVE'S, even its own taker's: two saves of one taker
+// at once sharing one directory, each one's start would clear the other's
+// lists and archive, and one's move could put over the taker's save an
+// archive the other had half made, whose checks never ran. Removed whole by the
+// pack when it is done, and by the clear before every run, which removes every
+// save's files, whoever took them ([Runner.ClearArtifacts]).
+func (p Paths) SessionSaveStaging(taker, pack string) string {
+	return p.WorkDir() + "/session-save-staging." + saveTag(taker) + "." + pack
+}
+
+// saveFiles is the pattern every save's files match, the archive and its
+// staging directory alike, whichever taker packed them — what the clear before
+// every run removes ([Runner.ClearArtifacts]); relative to the work directory,
+// which the clear quotes.
+const saveFiles = "session-save*"
+
+// saveTag is the name a taker's own save files carry: the first [saveTagBytes]
+// of the SHA-256 of its holder, in hex — letters and digits alone, whatever
+// the holder holds, and the same on every node that names the same holder.
+func saveTag(taker string) string {
+	sum := sha256.Sum256([]byte(taker))
+	return hex.EncodeToString(sum[:saveTagBytes])
+}
+
+// saveTagBytes is how much of a taker's digest its save files are named by.
+//
+// SIXTEEN BYTES, thirty-two hex digits: the takers that ever save one box are
+// a handful — the node that launched a local box, the waiter duty's holders an
+// e2b box passes between — so a collision of 128 bits is never met, and the
+// name stays short enough to read in a listing of the box.
+const saveTagBytes = 16
 
 // SessionDigests is where a box keeps the digest of every archive of a session
 // its own copy holds — one line, `<session> <cksum of the archive>`, for each

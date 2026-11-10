@@ -527,7 +527,7 @@ type SessionCapture struct {
 	// cleanly by itself, its script packing it — that read is the capture's
 	// own, made once the job was over, after its script packed the archive
 	// and before the take ([Coordinator.takeCapture], savepoint.go);
-	// every other capture — the take of a job still working, and one
+	// every other capture — a save, the take of a job still working, and one
 	// cut off ([SessionCapture.Interrupted]) — is placed by an EARLIER read,
 	// the save point of the newest capture its launch is known to hold, or
 	// zero (savepoint.go), since its harness may have made, and had answered,
@@ -1213,7 +1213,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN —
 	// the job over, its harness gone cleanly by itself and its script packing
 	// it, nothing cut off — which wrote every call it made before it exited.
-	// EVERY OTHER CAPTURE IS PLACED AT THE NEWEST SAVE POINT ITS
+	// EVERY OTHER CAPTURE IS PLACED AS A SAVE IS, AT THE NEWEST SAVE POINT ITS
 	// LAUNCH IS KNOWN TO HOLD ([SessionCapture.placeAtNewest]): a job still
 	// working, and one CUT OFF ([readCapture]) — its harness killed, crashed
 	// or told to stop, or gone with a loss whose read cannot say how. A harness
@@ -1227,7 +1227,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if calls != nil {
 		stamp.placeAt(*calls)
 	} else {
-		stamp.placeAtNewest(current)
+		stamp.placeAtNewest(savePlaces{run: current})
 	}
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
 	// reservation answered after the take's deadline reserves a place for a
