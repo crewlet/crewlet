@@ -1166,7 +1166,7 @@ a wait, a wait beside `start`, or a date that has passed is refused with
 nothing written, and `wait_until: null` ends the wait. A `start` moved or
 cleared without a reason takes the old reason off, since it said why the item
 waited until the old date. The item's page shows the reason under its start
-date, as **Waits for**.
+date, as **Waits for** until the date comes and **Waited for** after.
 
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the

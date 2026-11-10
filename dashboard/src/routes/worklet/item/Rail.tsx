@@ -331,8 +331,16 @@ function useItemFields(props: RailProps): Property[] {
           },
         ]
       : []),
-    // WHY IT WAITS, as whoever set the wait said it: plain text, one line.
-    ...(item.wait_reason ? [{ label: "Waits for", value: <span>{item.wait_reason}</span> }] : []),
+    // WHY IT WAITS, as whoever set the wait said it: plain text, one line. Once
+    // its start has come the reason is what it waited for.
+    ...(item.wait_reason
+      ? [
+          {
+            label: item.start_at && Date.parse(item.start_at) > now ? "Waits for" : "Waited for",
+            value: <span>{item.wait_reason}</span>,
+          },
+        ]
+      : []),
     {
       label: "Estimate",
       value: (
