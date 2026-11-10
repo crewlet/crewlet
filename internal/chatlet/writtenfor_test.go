@@ -329,3 +329,71 @@ func TestWhomAMessageWasWrittenForStaysOffItsReads(t *testing.T) {
 		t.Errorf("msg-1's document keeps written for %+v (%v), want ada", stored.WorkingFor, err)
 	}
 }
+
+// A WRITE'S ANSWER HANDS ITS MESSAGE OVER WITHOUT WHOM IT WAS WRITTEN FOR, as
+// every read does (ADR-0109), while the stored document keeps it all along:
+// the answer of a post, of a repeat the ledger answers by reading the document
+// back, of an edit and of a removal, the last three of which read the stored
+// message itself.
+//
+// Mutation: answer a collapsed repeat with the document as it is stored
+// (Store.answer), or drop the strip from an edit's or a removal's answer, and
+// that answer carries ada.
+func TestAWritesAnswerHandsItsMessageOverWithoutWhomItWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := seat("pm", "run-1")
+	forAda.WrittenFor = types.ForTurn(ada)
+	room := r.room(forAda, "launch", "pm", "eng", "jane")
+	kept := func(step, id string) {
+		t.Helper()
+		var document []byte
+		if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), `SELECT document FROM chat_messages WHERE id = ?`,
+				id).Scan(&document)
+		}); err != nil {
+			t.Fatalf("%s: read %s's document: %v", step, id, err)
+		}
+		if stored, err := chatlet.DecodeMessage(document); err != nil || !reflect.DeepEqual(stored.WorkingFor, ada) {
+			t.Errorf("after %s, %s's document keeps written for %+v (%v), want ada", step, id,
+				stored.WorkingFor, err)
+		}
+	}
+	handed := func(step string, w chatlet.Written, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if w.Message.WorkingFor != nil {
+			t.Errorf("%s answered its message written for %+v, want nobody", step, w.Message.WorkingFor)
+		}
+	}
+
+	ask := chatlet.NewMessage{Body: "@eng is the deploy done?", Mentions: []string{"eng"}, Asks: true}
+	posted, err := r.store.Post(t.Context(), keyed(forAda, requested("k-ask")), room.Channel.ID, ask)
+	handed("the post", posted, err)
+	r.drain()
+	id := posted.Message.ID
+	kept("the post", id)
+
+	again, err := r.store.Post(t.Context(), keyed(forAda, requested("k-ask")), room.Channel.ID, ask)
+	handed("the repeat", again, err)
+	if !again.Outcome.Collapsed {
+		t.Fatalf("the repeat under the same key answered %+v, want the ledger's collapsed answer",
+			again.Outcome)
+	}
+	kept("the repeat", id)
+
+	edited, err := r.store.Edit(t.Context(), keyed(forAda, requested("k-edit")), room.Channel.ID, id,
+		chatlet.EditMessage{Body: "@eng is the deploy done yet?", Mentions: []string{"eng"}})
+	handed("the edit", edited, err)
+	r.drain()
+	kept("the edit", id)
+
+	removed, err := r.store.Delete(t.Context(), keyed(forAda, requested("k-remove")), room.Channel.ID, id,
+		chatlet.MessageAuthority{})
+	handed("the removal", removed, err)
+	r.drain()
+	kept("the removal", id)
+}

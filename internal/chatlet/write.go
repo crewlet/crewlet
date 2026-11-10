@@ -2376,7 +2376,11 @@ func (s *Store) answer(ctx context.Context, channelID, messageID string,
 			case err != nil:
 				return err
 			default:
-				said = got
+				// THE STORED DOCUMENT AS ITS READERS ARE HANDED IT: the
+				// one place an answer reads a message back whole, so a
+				// repeat the ledger answers, a re-ask or an ambiguous
+				// publish hands over no requester either ([Message.forReaders]).
+				said = got.forReaders()
 			}
 		}
 		// ASSIGNED ONLY ONCE BOTH READS ARE IN: the store re-runs this
