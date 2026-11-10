@@ -146,6 +146,14 @@ type brandReads struct {
 	h *harness
 }
 
+// CarriedVersion is the version a publish carries on, read from the domain's
+// own reader: in process no wire stands between the copy and the publish, so
+// the version read whole is the version.
+func (r brandReads) CarriedVersion(ctx context.Context, id artifacts.ID, number int) (
+	artifactsdomain.Version, error) {
+	return r.Version(ctx, id, number)
+}
+
 func (r brandReads) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
 	r.h.mu.Lock()
 	defer r.h.mu.Unlock()

@@ -1,0 +1,18 @@
+{
+  "name": "agent_handoffs",
+  "pattern": "agent_handoffs",
+  "seats": [
+    {"handle": "owner", "kind": "person"},
+    {"handle": "pm", "kind": "agent"},
+    {"handle": "backend", "kind": "agent"}
+  ],
+  "steps": [
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "backend", "expect": {"woken": ["backend"]}},
+    {"at": 40, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["pm"], "asks": true, "expect": {"woken": ["pm"]}},
+    {"at": 85, "actor": "pm", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["backend"], "asks": true, "expect": {"woken": ["backend"]}},
+    {"at": 130, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["pm"], "asks": true, "expect": {"woken": ["pm"]}},
+    {"at": 172, "actor": "pm", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["backend"], "asks": true, "expect": {"woken": ["backend"]}},
+    {"at": 220, "actor": "backend", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["pm"], "asks": true, "expect": {"woken": ["pm"]}},
+    {"at": 263, "actor": "pm", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["backend"], "asks": true, "expect": {"woken": ["backend"]}}
+  ]
+}

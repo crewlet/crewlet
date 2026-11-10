@@ -69,9 +69,17 @@ type toldTurn struct {
 	// lines are the change lines the turn tells, for the activity event.
 	lines []string
 
+	// review is whether a told change owes the seat's open work a review
+	// (ADR-0111): a box change alone does not.
+	review bool
+
 	// memory is every change told in the memory window, this turn's
 	// included, which marks the notes written before it.
 	memory []prefetch.ToldChange
+
+	// accessAt is when the seat was last told its access: its newest told
+	// record however old, or now where this turn tells a change.
+	accessAt time.Time
 
 	// once writes pending at most once in this process.
 	once sync.Once
@@ -95,7 +103,7 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 		return &toldTurn{access: capability.YourAccess(snap)}
 	}
 	now := time.Now().UTC()
-	recent, err := reads.Recent(ctx, handle, now.Add(-toldMemoryWindow), accessdomain.DispatchRead())
+	recent, err := seatTold(ctx, reads, handle, now)
 	if err != nil {
 		log.WarnContext(ctx, "capability_baseline_unread", "agent", handle, "error", err.Error(),
 			"detail", "what the seat was last told could not be read, so this turn tells no change; "+
@@ -104,7 +112,8 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	}
 	out := decideTold(snap, recent, handle, turn, now, accessdomain.SnapshotMaxBytes)
 	out.memory = append(e.toldMemory(ctx, recent.Since), out.memory...)
-	if out.changes != "" {
+	out.accessAt = toldAt(recent, now, out.changes != "")
+	if out.changes != "" && out.review {
 		// THE TURN THAT TELLS A CHANGE ASKS FOR THE REVIEW, whatever woke
 		// it (ADR-0111): its told record keeps every later turn from being
 		// told the change again, the review's included.
@@ -117,6 +126,45 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 		}
 	}
 	return out
+}
+
+// seatTold is what seat handle was told of its access: its newest told record,
+// however old, and every one in the told memory window. The one read a turn's
+// dispatch and a memory refresh make of it.
+func seatTold(ctx context.Context, reads estate.AccessReader, handle string, now time.Time) (
+	accessdomain.Recent, error) {
+
+	return reads.Recent(ctx, handle, now.Add(-toldMemoryWindow), accessdomain.DispatchRead())
+}
+
+// toldAt is when the seat was last told its access: now where this turn tells
+// a change, else its newest told record's instant, zero for none.
+func toldAt(recent accessdomain.Recent, now time.Time, telling bool) time.Time {
+	switch {
+	case telling:
+		return now
+	case recent.Baseline != nil:
+		return recent.Baseline.At
+	}
+	return time.Time{}
+}
+
+// accessToldAt is when seat handle was last told its access, zero where the
+// access log cannot be read: nothing is held back for a reason the node cannot
+// read.
+func (e *Engine) accessToldAt(ctx context.Context, handle string) time.Time {
+	reads, ok := e.accessReads()
+	if !ok {
+		return time.Time{}
+	}
+	now := time.Now().UTC()
+	recent, err := seatTold(ctx, reads, handle, now)
+	if err != nil {
+		log.WarnContext(ctx, "capability_told_unread", "agent", handle, "error", err.Error(),
+			"detail", "this memory refresh holds back no note for an access change")
+		return time.Time{}
+	}
+	return toldAt(recent, now, false)
 }
 
 // toldWithheld is the snapshot a told record keeps where the seat's own is
@@ -186,6 +234,7 @@ func decideTold(snap capability.Snapshot, recent accessdomain.Recent, handle, tu
 		record.RevisionFrom = base.RevisionTo
 	}
 	out.changes = capability.ChangesBlock(changes)
+	out.review = slices.ContainsFunc(changes, capability.Change.OwesReview)
 	out.pending = &record
 	for _, c := range changes {
 		out.lines = append(out.lines, c.Line)
@@ -266,6 +315,9 @@ func (e *Engine) capabilityInputOf(ctx context.Context, cfg *config.Company, o *
 		}
 	}
 	in.Tools = toolServersOf(cfg, o, handle)
+	if o != nil {
+		in.Boxes = e.seatBoxes(ctx, cfg, o, handle)
+	}
 	return in, nil
 }
 

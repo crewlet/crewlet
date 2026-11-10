@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -53,6 +54,10 @@ type Dispatcher struct {
 	// the whole mutual exclusion and there is nothing for a completion
 	// ledger to add.
 	Completions ledgerstore.Completions
+
+	// SeenThrough is how far each seat's completed turns read each
+	// conversation (ADR-0120); nil absorbs nothing.
+	SeenThrough *ledgerstore.SeenThrough
 
 	// Turn runs the seat's turn once the guards have passed.
 	Turn func(ctx context.Context, req Request) (turn.Result, error)
@@ -122,6 +127,17 @@ type Dispatcher struct {
 	// Nil parks nothing: a limited turn is then NAKed like any other
 	// failure, and its redelivery meets the backend's own sit-out.
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
+
+	// Failure pauses the seat on the second failure in a row a retry cannot
+	// cure (failurehold.go). An error is a pause that could not be taken,
+	// deferred as Budget's is.
+	Failure func(ctx context.Context, handle string, failed error) (reason string, parked bool, err error)
+	// FailureCleared ends the seat's run of failures: its turn worked.
+	FailureCleared func(handle string)
+
+	// Held reports whether the delivery's conversation is held because its
+	// context did not fit (conversationhold.go): its wakes are settled unrun.
+	Held func(ctx context.Context, handle, conversation string, evs []*events.Event) bool
 
 	// Answer offers a delivery to a parked executor as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
@@ -557,7 +573,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return result
 	}
 
-	surviving, answeredInThread := d.dropWorked(ctx, handle, screening.Events)
+	surviving, skipped := d.dropWorked(ctx, handle, screening.Events)
 	// WHAT THE LEDGER DROPPED, on the record.
 	//
 	// [types.TurnTriggerSkipped] was registered, categorised, documented as
@@ -571,7 +587,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// because here is the only frame that holds both lists.
 	// The dropped constituents were settled by the turn that worked them.
 	held.events = surviving
-	d.noteSkipped(ctx, handle, screening.Events, surviving, answeredInThread)
+	d.noteSkipped(ctx, handle, screening.Events, surviving, skipped)
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
@@ -656,6 +672,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			}
 			return queue.Defer(queue.DeferAnswerOwed, refusedReplyReason(handle))
 		}
+	}
+
+	// A HELD CONVERSATION starts no turn: its wakes are settled unrun and
+	// counted, and a person writing on it is what lifts the hold.
+	if d.Held != nil && d.Held(ctx, handle, conversationIdentityOf(surviving), surviving) {
+		return d.settleHeld(ctx, handle, surviving)
 	}
 
 	routing := inbox.Route(surviving, d.ledgered)
@@ -862,6 +884,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					return result
 				}
 			}
+			// AND A FAILURE A RETRY CANNOT CURE, the second time in a row:
+			// its seat is paused until its settings change or a person
+			// resumes it, rather than spending its deliveries on the refusal.
+			if d.Failure != nil {
+				result, held := d.parkOn(ctx, handle, "failure pause", func(ctx context.Context) (string, bool, error) {
+					return d.Failure(ctx, handle, err)
+				})
+				if held {
+					log.InfoContext(ctx, "turn_failure_paused", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
@@ -880,6 +915,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return d.abandon(ctx, handle, req, err, reason)
 	}
 	d.recordWorked(ctx, handle, req, result)
+	if d.FailureCleared != nil {
+		d.FailureCleared(handle)
+	}
 	return queue.Ack()
 }
 
@@ -974,21 +1012,38 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 	// its artifact is whichever round closed last, and nothing here files it
 	// as this turn's answer. What its conversation's next turn is told of it
 	// is whatever end the turn left on the executor log.
-	if d.Completions != nil {
-		for _, ev := range req.Events {
-			if ev == nil || !d.ledgered(ev.Type) {
-				continue
-			}
-			key := workkey.Derive([]string{ev.ID.String()})
-			if err := d.Completions.Record(ctx, handle, key, "",
-				d.now()); err != nil {
-				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
-					"error", err, "detail", "the trigger may be redelivered and "+
-						"repeat this turn's work")
-			}
+	d.recordUnrun(ctx, handle, req.Events)
+	d.noteAbandoned(ctx, handle, req.Events, cause, reason, "")
+	return queue.Ack()
+}
+
+// recordUnrun records evs worked without a turn, so a redelivery is dropped.
+func (d *Dispatcher) recordUnrun(ctx context.Context, handle string, evs []*events.Event) {
+	if d.Completions == nil {
+		return
+	}
+	for _, ev := range evs {
+		if ev == nil || !d.ledgered(ev.Type) {
+			continue
+		}
+		key := workkey.Derive([]string{ev.ID.String()})
+		if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
+			log.WarnContext(ctx, "unrun_trigger_not_recorded", "seat", handle,
+				"error", err, "detail", "the trigger may be redelivered and run")
 		}
 	}
-	d.noteAbandoned(ctx, handle, req.Events, cause, reason)
+}
+
+// errConversationHeld is why a held conversation's wake was settled unrun.
+var errConversationHeld = errors.New("its context did not fit its models twice in a row")
+
+// settleHeld settles a held conversation's delivery without a turn.
+func (d *Dispatcher) settleHeld(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+	log.InfoContext(ctx, "turn_conversation_held", "seat", handle, "events", len(evs),
+		"detail", "the conversation is held until a person writes on it or the seat's models change")
+	d.recordUnrun(ctx, handle, evs)
+	d.noteAbandoned(ctx, handle, evs, errConversationHeld, "its conversation is held",
+		types.DispositionBreakerHeld)
 	return queue.Ack()
 }
 
@@ -1145,7 +1200,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 // the turn's own completion or by the guard breach, and a second failure event
 // for one turn would double-count it in every projection that reads them.
 func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*events.Event,
-	cause error, reason string,
+	cause error, reason string, disposition types.WakeDisposition,
 ) {
 	if d.Observe == nil {
 		return
@@ -1154,15 +1209,11 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 		if ev == nil {
 			continue
 		}
-		rec := events.New(types.TurnTriggerSkipped{
-			AgentHandle: handle,
-			TriggerID:   ev.ID.String(),
-			TriggerType: ev.Type,
-			// THE CAUSE WHOLE, held only to the event's delivery bound:
-			// it was cut at 200 bytes, which a wrapped error spends on
-			// its outer operations before it reaches what failed.
-			Reason: events.ClipDiagnostic(reason + ", so it was not redelivered: " + cause.Error()),
-		}, triggerTrace([]*events.Event{ev}))
+		// THE CAUSE WHOLE, held only to the event's delivery bound:
+		// it was cut at 200 bytes, which a wrapped error spends on
+		// its outer operations before it reaches what failed.
+		rec := d.skippedRecord(handle, ev, disposition,
+			events.ClipDiagnostic(reason+", so it was not redelivered: "+cause.Error()))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
@@ -1468,47 +1519,53 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 // It reports the dropped events that were covered ONLY by the second key, so
 // the record of the skip can say a later turn answered them in their thread
 // rather than that a turn was woken for them.
-func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) ([]*events.Event, map[uuid.UUID]bool) {
-	if d.Completions == nil {
-		return evs, nil
-	}
-	keys := make([]string, 0, len(evs))
-	for _, ev := range evs {
-		if !d.ledgered(ev.Type) {
-			continue
+func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) ([]*events.Event, map[uuid.UUID]skipCause) {
+	var worked map[string]bool
+	if d.Completions != nil {
+		keys := make([]string, 0, len(evs))
+		for _, ev := range evs {
+			if !d.ledgered(ev.Type) {
+				continue
+			}
+			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
+			if chat, ok := chatKeyOf(ev); ok {
+				keys = append(keys, chat)
+			}
 		}
-		keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-		if chat, ok := chatKeyOf(ev); ok {
-			keys = append(keys, chat)
+		if len(keys) > 0 {
+			worked = d.Completions.Worked(ctx, handle, keys)
 		}
 	}
-	if len(keys) == 0 {
-		return evs, nil
-	}
-	worked := d.Completions.Worked(ctx, handle, keys)
-	if len(worked) == 0 {
+	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
 	out := make([]*events.Event, 0, len(evs))
-	var inThread map[uuid.UUID]bool
+	var skipped map[uuid.UUID]skipCause
+	skip := func(id uuid.UUID, cause skipCause) {
+		if skipped == nil {
+			skipped = map[uuid.UUID]skipCause{}
+		}
+		skipped[id] = cause
+	}
+	marks := map[string]statelog.Position{}
 	for _, ev := range evs {
 		if !d.ledgered(ev.Type) {
 			out = append(out, ev)
 			continue
 		}
-		if worked[workkey.Derive([]string{ev.ID.String()})] {
-			continue
+		chat, isChat := chatKeyOf(ev)
+		switch {
+		case worked[workkey.Derive([]string{ev.ID.String()})]:
+			skip(ev.ID, skipWorked)
+		case isChat && worked[chat]:
+			skip(ev.ID, skipInThread)
+		case d.absorbed(ctx, handle, ev, marks):
+			skip(ev.ID, skipAbsorbed)
+		default:
+			out = append(out, ev)
 		}
-		if chat, ok := chatKeyOf(ev); ok && worked[chat] {
-			if inThread == nil {
-				inThread = map[uuid.UUID]bool{}
-			}
-			inThread[ev.ID] = true
-			continue
-		}
-		out = append(out, ev)
 	}
-	return out, inThread
+	return out, skipped
 }
 
 // recordWorked writes the completion ledger after a turn.
@@ -1545,6 +1602,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
+	d.advanceSeen(ctx, handle, req.Events)
 }
 
 func (d *Dispatcher) conditions(handle string) inbox.Conditions {
@@ -1829,7 +1887,7 @@ func (d *Dispatcher) noteSuperseded(ctx context.Context, handle string, evs, tri
 // queue refused the row has still skipped correctly, and failing the dispatch
 // over an observability event would trade real work for a feed entry.
 func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviving []*events.Event,
-	answeredInThread map[uuid.UUID]bool,
+	skipped map[uuid.UUID]skipCause,
 ) {
 	if d.Observe == nil || len(all) == len(surviving) {
 		return
@@ -1848,20 +1906,18 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		// a turn woken for this very trigger, or a later turn that was
 		// shown it waiting in its thread and answered the thread as it
 		// stood (see workedthrough.go).
-		reason := "a previous turn already worked this trigger"
-		if answeredInThread[ev.ID] {
+		reason, disposition := "a previous turn already worked this trigger", types.WakeDisposition("")
+		switch skipped[ev.ID] {
+		case skipInThread:
 			reason = "a later turn was shown this message waiting in its thread and answered it there"
+		case skipAbsorbed:
+			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
 		// and the answer belongs under the webhook rather than under a
 		// dispatch that went on to do something else.
-		rec := events.New(types.TurnTriggerSkipped{
-			AgentHandle: handle,
-			TriggerID:   ev.ID.String(),
-			TriggerType: ev.Type,
-			Reason:      reason,
-		}, triggerTrace([]*events.Event{ev}))
+		rec := d.skippedRecord(handle, ev, disposition, reason)
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}

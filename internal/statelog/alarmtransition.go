@@ -24,21 +24,11 @@ const (
 	// TransitionCleared is an instance the tracker had up that its latest
 	// evaluation does not.
 	TransitionCleared TransitionChange = "cleared"
-
-	// TransitionFiringAtBoot is an instance the tracker's FIRST evaluation
-	// found up.
-	//
-	// NOT "fired": the tracker began watching with it already up, so
-	// whether it started at that instant or long before the node restarted
-	// is not something the tracker can say — and whoever is told reads the
-	// two differently. It is also how a clear the node did not live to hand
-	// on is answered: whatever is still up is said again, under this.
-	TransitionFiringAtBoot TransitionChange = "firing_at_boot"
 )
 
 // TransitionChanges is the closed set, in the order an instance meets them.
 func TransitionChanges() []TransitionChange {
-	return []TransitionChange{TransitionFiringAtBoot, TransitionFired, TransitionCleared}
+	return []TransitionChange{TransitionFired, TransitionCleared}
 }
 
 // Valid reports whether c is a change this build makes.

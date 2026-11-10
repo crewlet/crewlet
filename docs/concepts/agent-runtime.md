@@ -282,10 +282,11 @@ What lands in the prompt:
 
 A seat's harness continues its session from turn to turn, and what an earlier turn said about the seat's access ("agents cannot touch production") stays in that session after the access changes. So the engine tells the seat the truth on every turn and the difference once ([ADR-0104](../../adr/0104-a-seat-is-told-its-access-every-turn-and-what-changed-once.md)):
 
-- **`## Your access`**, in every turn's system prompt after the policies: one line per integration the company connects (the level in the vendor's own words, GitHub's permissions, the scope), and the integrations not granted to the seat. Current on every turn, it says so, and it is byte-stable while the seat's access is. Absent where the company connects no integration.
+- **`## Your access`**, in every turn's system prompt after the policies: one line per integration the company connects (the level in the vendor's own words, GitHub's permissions, the scope), one line per box the seat's runs use, and the integrations not granted to the seat. Current on every turn, it says so, and it is byte-stable while the seat's access is. Absent where the company connects no integration and runs no box.
+- **The box line** says where the box runs (a container on the engine host, a remote machine of its own, or a directory on the engine host run as the engine's own user), the memory it is held to, and whether its image has a browser and a container runtime. The memory comes from `--memory` or `-m` in `providers.sandbox.local.run_args` until a run reads the box, and a size there the container runtime would refuse is refused by validation at its argument. A fresh box is read once, after its setup and before its job, and only where no reading is kept for the box as it is made now, with no credential in its environment, and only into closed values (a browser from a fixed list, `docker` or `podman` where its `info` answers, the smaller of the cgroup's memory limit and the machine's). The reading is kept per seat and cell in the coordination store under a fingerprint of what made the box: its cell, image or template, run arguments and setup steps (names, commands, file paths and environment keys, never a value). A changed image, size or recipe is therefore told as not read yet until its first run, never with an older box's reading. A box a run never read says so.
 - **`## What changed since your last turn`**, in the user message of the first turn after a change, after how the conversation's earlier turns ended and before the task: at most 20 change lines, each up to 300 characters, saying they replace anything the seat remembers or was told earlier, and asking it to keep the corrected fact.
 
-The change is measured against what the seat was **last told**, never against the previous revision of the company document: any number of revisions between two turns are told as one difference, a revert is told as a change back, and re-applying an unchanged revision (how a credential is rotated) is no change. What counts is a closed list: an integration on or off, a level, a GitHub permission, a scope entry, a permission waiting on an organization owner, a tool server's state, a tool server added or removed, a tool's level, a policy added or removed, and a setup step added, removed or changed. A credential, a sealed value, the model, the roster, the mission and vision, the seat's profile, schedules and budgets are not.
+The change is measured against what the seat was **last told**, never against the previous revision of the company document: any number of revisions between two turns are told as one difference, a revert is told as a change back, and re-applying an unchanged revision (how a credential is rotated) is no change. What counts is a closed list: an integration on or off, a level, a GitHub permission, a scope entry, a permission waiting on an organization owner, a tool server's state, a tool server added or removed, a tool's level, a policy added or removed, a setup step added, removed or changed, and a box added or removed, its memory, its browser or its container runtime (each only between two facts both sides know). A credential, a sealed value, the model, the roster, the mission and vision, the seat's profile, schedules and budgets are not.
 
 Both sections are rendered at the turn's dispatch and frozen on the turn, so every launch of it carries the same bytes. The turn's first launch to reach a run records what the seat was told on the [access log](../../adr/0103-a-seats-access-and-its-ssh-sessions-are-records-on-a-log-of-their-own.md), once per turn, which is the baseline the seat's next turn is measured against on any node; a turn that never launched told nothing, and a seat's first turn records its snapshot as a baseline and is told no change. Each told record is an `agent_capability_told` event on the activity trail. A change by itself wakes no seat; a seat with open work is asked for one review turn, below. A turn told nothing it cannot vouch for: where the node holds a record of the seat it cannot decode, the turn gets "Your access" alone and records nothing. A snapshot is bounded for any company: names, notes and labels to their own bounds, a scope to 16 entries, a server's tools to 16 a level, 32 servers, policies (kept as a digest and the 300 bytes a change line shows) and setup steps, the rest counted and digested so a change past a cap is still told in general words.
 
@@ -301,7 +302,7 @@ A seat whose open work waits on a person has no next turn until the person acts,
 
 The Inbox notes a question or held call raised before a pending review's change ("Asked before this agent's access changed") until the turn first told the change ends (or, where its end could not drop the record, the next check sees it ended), the person answers, or the change is undone untold. The change itself, worded about the agent, is shown only to a reader who may read the company's setup. The [Agents tab's save](../reference/api-endpoints.md#each-agents-access-to-an-integration) names each agent it will ask to review, with its open items ("at least" where the tracker stopped counting at its ceiling).
 
-A note in the seat's memory written before a told change, whose text names what changed (the vendor, the lane, a host, a level or a GitHub permission, a tool server) as a whole word, is shown with "(written before your *vendor* access changed on *date*; check Your access)" for 90 days. The note itself is never edited or deleted.
+A note in the seat's memory written before a told change, whose text names what changed (the vendor, the lane, a host, a level or a GitHub permission, a tool server, or for a box `sandbox` and what moved in it) as a whole word, is shown with "(written before your *vendor* access changed on *date*; check Your access)" for 90 days. The note itself is never edited or deleted.
 
 ---
 
@@ -314,6 +315,7 @@ The engine ships these tools (`internal/agent/builtin`, registered in the epoch'
 | `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches. A seat whose holder the identity directory withholds (suspended, retired or removed) is found by name and handle but shows no accounts, and an id copied from one of them names nobody — see [Humans in the Org Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change) |
 | `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent; the engine replies on the channel with that turn's answer when the turn ends, which for a turn that parks on its executor's run is the segment that ends it, or the run's ending where the run was lost under the turn, saying so ([Turn Engine](turn-engine.md#who-is-waiting-and-how-they-get-an-answer)) |
 | `withdraw_ask` | the company runs Worklet, or the node holds a coordination store and a queue | Withdraw a question the seat asked that is still open (`item` and `ask`: the reason posted in its thread, the question resolved as its author, held to whoever woke the turn as `comment_on_work_item` is, or to the person the question asks) or what its own executor waits on a person for (`run`: answered by the seat itself, a held call as Deny, so the call is never made; held to whoever may answer the run, as `answer_executor` is). `reason` is required and is what the person reads. Only the seat's own; see [An agent whose access changed reviews its open work](#an-agent-whose-access-changed-reviews-its-open-work) |
+| `request_access` | the company runs Worklet | Ask a person for one more kind of access, named from a closed list (`access`: `grant-health`, or a write permission of the seat's own GitHub App), on the work item that needs it (`item`), of a person (`ask`), saying `why`. Posted as a decision with the grant and declining as its options; the person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
 | `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
 | `query_episodes` | a learning store | Recall the seat's own past turns: by meaning (`query`), by conversation, or most recent first |
@@ -526,6 +528,41 @@ on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round and an executor run it has out ends
 **at once** (see *Stop now* below).
+
+**The engine pauses a seat too, for a failure a retry cannot cure.** When a
+seat's turn fails the same way twice in a row for a reason that will not go
+away on its own (the sandbox runtime refuses the box as configured, the sandbox
+provider refuses the engine's credential or its billing, or every model the
+seat can use refuses its credential), the engine pauses the seat as `engine`
+(`paused_by_kind: system`) with the reason in words, instead of redelivering
+the turn into the same refusal. The delivery that failed waits at the head of
+the inbox. The pause records the failure and a fingerprint of the settings it
+depends on: a person resuming the seat ends it, and so does an apply that
+changes those settings (the seat's sandbox and the company's, or its models
+and the company's), which lifts it as the engine. If the failure still holds,
+the seat pauses again on its second time
+([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)).
+A person who pauses a seat the engine paused makes the pause theirs: it loses
+its failure, takes their stop if they ask for one, and ends only when somebody
+resumes it.
+A conversation whose context does not fit is held rather than the seat: when a
+run runs out of context after the conversation's previous run did, the second
+time on a fresh session, the engine stops starting turns on that conversation
+(`conversation_hold` in the coordination store) while the seat's other
+conversations go on. Its wakes are recorded as skipped. A person writing on the
+conversation lifts the hold and runs, and so does a change of the seat's models.
+A conversation whose work does not fit its box's memory is held the same way:
+when the kernel kills a run's harness for memory in a box held to memory of its
+own (a container or a remote machine) after it killed the conversation's
+previous run's, on whatever session, since a fresh session does
+not shrink the work. A person writing on it lifts that hold too, and so does a
+change of the seat's sandbox settings (its size among them), never of its models.
+While it holds, every administrator sees it in **Needs you** as a notice of the
+engine's cause, which says how it failed, and the item it is about says "Held by
+the engine" on its page; nothing releases it on a timer, since that would run
+the same brief again.
+Any other failure is retried on a backoff that doubles from one second to
+thirty, each wait spread by a fifth either way.
 
 **Who may pause a seat** is the seat's holder — the person the identity
 directory binds to it — whoever leads it, or an administrator (`admin`);

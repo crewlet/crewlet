@@ -1,6 +1,7 @@
 package worklet_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -156,6 +157,66 @@ func TestAPersonsOpenAskMakesACoAsker(t *testing.T) {
 		}
 		if !slices.Equal(got.Awaiting, want) {
 			t.Errorf("a reply by %s has %v awaiting, want %v", author, got.Awaiting, want)
+		}
+	}
+}
+
+// AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE, through the record it
+// writes (ADR-0113): the measured loop, an agent's "nothing for @qa" stating
+// it asks nothing, wakes no agent, at the version that says so, while asking,
+// a person's mention, and an older build's comment with no statement wake qa,
+// and the person it names is addressed either way.
+func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("release checklist")
+	for i, c := range []struct {
+		author  string
+		kind    worklet.AuthorKind
+		asks    *bool
+		agents  []string
+		woken   bool
+		version int
+	}{
+		// STATED, so its notice rows keep the statement: the version that says so,
+		// and one that tells qa without waking it keeps that too.
+		{"pm", worklet.AuthorAgent, ptr(false), []string{"qa"}, false, worklet.NoticeWokeVersion},
+		{"pm", worklet.AuthorAgent, ptr(true), []string{"qa"}, true, worklet.NoticeAsksVersion},
+		// AN OLDER BUILD'S, with no statement, and one naming its agents
+		// without a statement: the statement alone makes a reference.
+		{"pm", worklet.AuthorAgent, nil, nil, true, 1},
+		{"pm", worklet.AuthorAgent, nil, []string{"qa"}, true, 5},
+		{"jane", worklet.AuthorHuman, nil, nil, true, 1},
+	} {
+		comment := worklet.Comment{ID: fmt.Sprintf("c-%d", i), Task: created.ID, Author: c.author,
+			AuthorKind: c.kind, Body: "My approval still stands, nothing for @qa or @sara.",
+			Mentions: []string{"qa", "sara"}, CreatedAt: wednesday}
+		agents := c.agents
+		wake := worklet.Wake{Kind: worklet.ChangeComment, Before: created, After: created,
+			Comment: &comment, Mentions: comment.Mentions, Asks: c.asks,
+			MentionedAgents: agents}.Notify(nil)
+		if _, err := r.writer.As(c.author, c.kind, worklet.Provenance{}).UpdateTask(t.Context(),
+			"op-"+comment.ID, created.ID, "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &comment}, worklet.ChangeComment, wake); err != nil {
+			t.Fatalf("%s's comment: %v", c.author, err)
+		}
+		r.drain()
+		record, err := worklet.Decode(r.lastRecord(t))
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if record.V != c.version {
+			t.Errorf("case %d is stamped version %d, want %d", i, record.V, c.version)
+		}
+		woken := handles(worklet.Route(worklet.Candidates(record.Notify), everyone, c.author))
+		if got := slices.Contains(woken, "qa"); got != c.woken {
+			t.Errorf("case %d: a %s comment woke %v, want qa woken %v", i, c.kind, woken, c.woken)
+		}
+		if heard, told := worklet.CandidateFor(record.Notify, "qa"); !told || heard.Reason != worklet.ReasonMention {
+			t.Errorf("case %d did not tell qa of the mention", i)
+		}
+		if heard, _ := worklet.CandidateFor(record.Notify, "sara"); !heard.Addressed {
+			t.Errorf("case %d: the person it names is not addressed", i)
 		}
 	}
 }

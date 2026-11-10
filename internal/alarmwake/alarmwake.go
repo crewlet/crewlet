@@ -38,8 +38,8 @@
 // # What starts the turn
 //
 // Each wake names its alarm instance as its turn's origin
-// (types.OriginAlarm, [InstanceID]) under what the instance did — fired,
-// cleared or firing_at_boot — so the turns an alarm started are found from it
+// (types.OriginAlarm, [InstanceID]) under what the instance did, fired or
+// cleared, so the turns an alarm started are found from it
 // as a chat message's are from the message.
 //
 // # A wake is a pointer
@@ -48,8 +48,8 @@
 // `fleet_health`'s to say, from every node's own heartbeat. So the prompt sends
 // its seat to look before it acts: a later transition may already have
 // cleared the alarm, and a clear lost with its node (the outbox is the node's
-// memory) is read there too — the restarted node's first evaluation reports
-// what is still firing, as `firing_at_boot`.
+// memory) is read there too. A restarted node keeps the instances it had up,
+// so its first evaluation says only what changed while it was down.
 package alarmwake
 
 import (
@@ -324,8 +324,6 @@ func subject(t statelog.AlarmTransition) string {
 		return fmt.Sprintf("%s fired (%s)", t.Kind, where)
 	case statelog.TransitionCleared:
 		return fmt.Sprintf("%s cleared (%s)", t.Kind, where)
-	case statelog.TransitionFiringAtBoot:
-		return fmt.Sprintf("%s firing at start (%s)", t.Kind, where)
 	default:
 		return fmt.Sprintf("%s %s (%s)", t.Kind, t.Change, where)
 	}

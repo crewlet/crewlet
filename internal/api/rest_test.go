@@ -359,6 +359,23 @@ func (stubWorkReader) Project(context.Context, worklet.ProjectDetailQuery) (
 	return worklet.ProjectDetail{}, nil
 }
 
+// CarriedViews, CarriedCatalogue and CarriedProject are three reads above as
+// the tools a model sends their answers back from ask them
+// (builtin.WorkReader, builtin.ProjectReader), answering the same.
+func (stubWorkReader) CarriedViews(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
+}
+
+func (stubWorkReader) CarriedCatalogue(context.Context, worklet.CatalogueQuery) (
+	worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
+}
+
+func (stubWorkReader) CarriedProject(context.Context, worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
+	return worklet.ProjectDetail{}, nil
+}
+
 func (stubWorkReader) Workload(_ context.Context, q worklet.WorkloadQuery, _ time.Time,
 	_ *time.Location) (worklet.WorkloadAnswer, error) {
 	return worklet.WorkloadAnswer{
@@ -403,6 +420,10 @@ func (stubWorkReader) AnsweredAsks(context.Context, worklet.DecisionsQuery, time
 func (stubWorkReader) TurnPlaces(context.Context, []string,
 	statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 	return map[string]worklet.TurnPlace{}, nil
+}
+
+func (stubWorkReader) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return worklet.WorkPatterns{}, nil
 }
 
 func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/e2e.TestASeatOnAStatelessNodeWritesThroughADataNode`
+- **Enforced-by:** `internal/e2e.TestASeatOnAStatelessNodeWritesThroughADataNode`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`, `internal/estate.TestARequestOneBuildCannotReadIsServedByAnother`, `internal/estate.TestARequestNoDataNodeCanReadWholeSaysWhatWouldServeIt`, `internal/estate.TestARefusalNeverHidesAWriteThatMayHaveLanded`, `internal/estate.TestEveryFieldAnOperationTakesLeavesTheWireAtItsZero`, `internal/estate.TestEveryZeroAMethodDecidesDropsNothingAReaderMisses`, `internal/estate.TestNoTypeAnOperationTakesDecodesAKeyAwayByItself`, `internal/estate.TestNoPointerAtAZeroCrossesWhereAReaderWouldMissIt`, `internal/estate.TestADateClearedThroughTheRouterReachesTheDataNodeAsAClear`, `internal/estate.TestAWriteHoldingTheZeroInstantIsRefusedBeforeItIsAskedFromEveryNode`, `internal/estate.TestAHomeThatCannotReadARequestWholePassesTheFill`, `internal/estate.TestARefusalMovesOnlyTheRequestsCarryingWhatItRefused`, `internal/estate.TestAnAnswerACallerWritesBackIsReadWholeOrRefused`, `internal/estate.TestACarriedReadIsReadWholeAndTheShownOneIsNot`, `internal/estate.TestAViewSavedAgainIsListedWholeAndTheStripShownIsNot`, `internal/estate.TestEveryAnswerReadWholeIsOneACallerCarriesIntoAnotherRequest`, `internal/engine.TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -128,3 +128,86 @@ cache's sync level. The decision above holds through it unchanged — a
 per-node subject (the git reads on a lane of their own beside the shared one
 and the proposals'), the asker's choice of node, the failover rule stated for
 the operation, and every request and reply signed.
+
+## Amendment — a data node runs what it is asked whole, or none of it
+
+The failover rule above assumed every data node reads a request alike. A rolling
+upgrade breaks that: a node of a newer build asks a data node of an older one,
+whose types declare less than the request holds. Decoded with a plain
+`json.Unmarshal`, a key the older build did not declare vanished and the write
+ran as something its writer never asked for — recorded by the older rule, under
+the lowest version that reads what was left, on every node, the newer ones
+included, with nothing said. The rest of the upgrade path keeps what a build
+cannot read rather than drop it (a state-log record is deferred, a parked run's
+unknown keys ride its row's `Extra`), and so does the service now. An
+operation's INPUTS — its arguments and the actor it runs as — cross under one
+rule whose two halves are the standard library's own (`internal/estate`'s
+`wirerule.go`):
+
+- **The router leaves every input field at its zero off the request**, at every
+  depth (`omitzero` on every field), so a field a later build adds reaches a
+  data node only in a request that sets it. A field's zero must mean what a
+  build without the field does: a request that does not use it is then served
+  by a data node of either build exactly as before, and only one that would
+  lose something is refused. A type's own `IsZero` decides that zero, and the
+  encoder asks it THROUGH a pointer, so a pointer at a value its type calls
+  zero crosses as nil: no field's meaning may rest on one. A field whose
+  readers would tell the two apart is reshaped — a cleared date is a flag of
+  its own, a query's bound a value whose zero means unset — or the value no
+  write may hold is refused where the request is asked, in process as routed
+  (`op.refusedBeforeAsking`); the wire gate lists every such pointer with why
+  (`zeroThroughPointer`).
+- **A data node decodes the inputs refusing every member its build does not
+  declare** (the rule `DisallowUnknownFields` sets), at every depth — a map's
+  keys and a raw JSON document are data — before it waits for a floor or runs
+  anything, and answers the refusal as its own typed error,
+  `estate.ErrUnknownKeys`, naming the operation, each key and itself. A read
+  carrying a newer argument is refused the same way, never answered with the
+  argument ignored.
+- **The router reads that answer as one from a node that ran nothing**, whatever
+  the operation's class, and asks the next data node: the failover rule above,
+  applied to a node whose build cannot serve the request. A keyed operation
+  asks the refusing node last for requests carrying what it refused, and for
+  those alone — it serves every other — and a repository's home that refused
+  passes the copy it would fill to its runner-up. Where no node serves it, the
+  caller is handed the refusal over the walk's account — an estate nobody
+  served, which tells an operator what would serve it: a data node of the
+  asking node's build. A write some node may have run is still an unknown
+  outcome. A caller that keeps a write owed keeps it owed on the refusal: the
+  engine's record of how a turn ended stays on the run's record until a data
+  node of its writer's build records it.
+
+**The other direction**: a newer data node's ANSWER holds a key an older
+caller's build does not declare. Most answers are only shown, and dropping a
+field a reader cannot show loses nothing; an answer a caller CARRIES INTO
+ANOTHER REQUEST through the router would lose it the same way — a version's
+files a publish carries into the next version, a view's prior a save hands
+back, a container's views a tool hands a model to save one of again, the
+catalogue, a project's field declarations or a datastore's schema a tool hands
+a model to send back whole, a list's query its read asks, a repository
+snapshot's page cursor the next page asks by. Such a read is
+declared (`op.answeredWhole`) and its answer crosses under the same rule: the
+serving node leaves its fields at their zero off it, and the asking router
+reads it whole or refuses it. Where the same answer is also only shown, the
+carried read is an operation of its own (`artifacts.version_carried` beside
+`artifacts.version`), so a reader that only shows it is not blinded to it.
+The write such a read feeds stays a whole replacement, never a merge with what
+it replaces: a field it leaves at its zero crosses exactly as one an older
+build never sent, so a merge could not tell a field cleared from one unknown,
+and it is the read that keeps an older caller from writing back what it never
+saw. Neither a write that replaces a whole list nor a view's save is decided
+against the version its caller read (a save's prior is the view's owner and
+container, not its fields), which is the lost update any two writers meet, not
+this amendment's (issue #893).
+
+**What stays outside the rule** is the rest of the envelope — the floors, the
+deadline, what a node asked before already paid for — which is the routers' own
+protocol: every build reads it as it always has, and a later build adds there
+only what an earlier one may ignore. And a data node answering its own seats
+from its own copy, in process, reads nothing off the wire. Nor is a value a
+caller hands back as it took it: a `code.CheckKey` a check runner reports
+under, a `statelog.Position` a later read floors at, a credential's actor. A
+write's answer, which carries a position, is never refused once the write has
+run, and a member a later build adds to one of these changes what it names,
+which no reading of an answer makes safe: such a member comes with its own
+plan for a fleet of two builds.

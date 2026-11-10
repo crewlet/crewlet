@@ -286,16 +286,18 @@ var catalogue = []Entry{{
 	Title: "An executor run was stranded by the engine",
 	Summary: "An executor's run ended with no turn able to resume it, for a reason the engine documents as an " +
 		"invariant of its own and not as its environment or a person's act: the run's record held none of its " +
-		"turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a " +
-		"finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+		"turn's parked state, its turn suspended with no conversation recorded, every attempt to resume a " +
+		"finished job failed on an error the engine could not attribute elsewhere, or its parked state was " +
+		"saved in a format an upgrade retired. The `reason` says which.",
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.(*Coordinator).settleFailed",
 	Facts: []Fact{
 		{Key: FactReason, Type: FactEnum, Enum: []string{
 			types.ExecutorFailureNoExecuteState, types.ExecutorFailureSuspensionUnrecorded, types.ExecutorFailureResumeFailing,
+			types.ExecutorFailureStateRetired,
 		}, example: enumFact(types.ExecutorFailureNoExecuteState)},
 	},
-	// EACH REASON IS ITS OWN DEFECT: three invariants, three issues.
+	// EACH REASON IS ITS OWN DEFECT: four invariants, four issues.
 	Identity: []FactKey{FactReason},
 	// ONE: a stranded run is the broken invariant itself, with nothing to wait out.
 	Threshold: Threshold{Count: 1, WindowHours: 24},

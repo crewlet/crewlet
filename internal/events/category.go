@@ -268,6 +268,9 @@ var categories = map[string]placement{
 	"notification_skipped":    {"notification", RateAuthenticated},
 	"notifications_coalesced": {"notification", RateAuthenticated},
 	"turn_trigger_skipped":    {"notification", RateAuthenticated},
+	// A wake the quiet rule held: an agent seat a change told and did not
+	// wake. Stored for the turn ledger's held count, and never fed.
+	"wake_held": {"notification", RateAuthenticated},
 
 	// Webhook: one inbound delivery presented to one seat, from either edge
 	// — a webhook route or a chat socket. Its own category rather than
@@ -599,6 +602,14 @@ var unfed = map[string]string{
 		"hundred events. Who read a repository is answered where it is asked: " +
 		"Gitlet's readers route and `" + toolname.CodeRepoReaders + "`, summed across " +
 		"the fleet from the usage domain these rows are derived into",
+	"wake_held": "COUNTED, NOT WATCHED: one record per agent seat a change " +
+		"told and did not wake, and every comment, chat post and page edit " +
+		"that names or reaches a seat without asking it anything holds one, " +
+		"faster than a person reads a feed, pushing the turns, failures and " +
+		"deliveries a reader watches out of a ring that holds the whole " +
+		"company's last few hundred events. A seat's held wakes are read " +
+		"where they are asked, from the turn ledger these rows are counted " +
+		"into",
 	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
 		"check that ended (a second only as the correction of an ending its " +
 		"row replaced, naming that ending), and every push of every change " +

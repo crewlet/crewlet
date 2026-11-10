@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -677,6 +678,7 @@ func (t *editMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
 	}
+	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	return stated(name, written, look,
 		map[string]any{"channel": id, "message_id": messageID, "edited": true})

@@ -618,26 +618,37 @@ the last word anybody said about that item.
 
 - **Idle** is decided by the node that holds the seat, once a minute: no turn
   of the seat dispatching, no executor run holding it or waiting on a person's
-  answer, nothing waiting in its inbox, not paused, not parked on a token
+  answer with its box still paused (within the role's `pause_ttl_seconds`; a
+  run past its pause still takes its answer when it comes, but no longer keeps
+  the seat from its ready work), nothing waiting in its inbox, not paused, not parked on a token
   budget or a provider limit, no budget window or provider limit that would
   refuse its next launch, and the node neither shedding nor draining. All of
   that must hold on two passes in a row, so the writes of the turn that just
   ended are on the node's copy first: a seat is handed its next item within
-  about two minutes of going idle.
+  about two minutes of going idle. The same pass ends a parked run nobody can
+  continue any more: one whose Worklet item was finished or removed while it
+  waited (`executor_failed`, reason `item_finished`) and one whose saved state
+  no live build reads (`state_retired`); its question is withdrawn and a reply
+  on it goes back to the seat.
 - **Ready** is Worklet's: assigned to the seat, `in_progress` or `todo`,
   waiting on no open blocker, past its start date, and not held on a question
   the seat itself asked on the item that nobody has answered. Work in review
-  is not ready.
-- **Next** is work the seat already started first, then its priority list in
-  the order its lead set, then the rest by priority and due date, the order
-  `my_work` lists them in.
+  is ready on the same terms for the seat that holds it when somebody else
+  moved it into review (or filed it there): a seat handed a review takes it up,
+  and never reviews what it submitted itself.
+- **Next** is work the seat already started first, then the reviews it holds,
+  then its priority list in the order its lead set, then the rest by priority
+  and due date, the order `my_work` lists them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
-  somebody else made to the item, status and, for started work, the seat's own
-  last progress on it other than a comment. The fleet's completion ledger
+  to the item that would have woken the seat, status and, for started work, the
+  seat's own last progress on it other than a comment. That change is the
+  newest notice the seat was told of the item that started a turn, so the
+  pickup and the wake decide by one rule: another agent's comment that asks
+  nothing, or a watcher added, tells the seat and hands it nothing again. The fleet's completion ledger
   remembers it for seven days whichever node holds the seat, and a fleet claim
   keeps two nodes from both sending it during a move. A seat that declines an
   item, comments on it or records a blocker on it is not handed it again until
-  somebody else changes it or its status moves. Started work the seat makes
+  a change that would wake it lands. Started work the seat makes
   progress on (a field it changes, never a write of the value already there)
   is handed back when it is idle again, at most once per cooldown (the next
   ready item is handed over meanwhile), and a turn that changed nothing does
@@ -661,9 +672,13 @@ the last word anybody said about that item.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under
-the item's own conversation so the turn continues the item's session. Its brief names the four honest answers: start or continue
-the work, record the blocker, hand the item back, or say on the item why it
-should wait. A company on a vendor tracker, or with no model, gets no pickups.
+the item's own conversation so the turn continues the item's session. Its brief names the honest answers, each a change to the
+item: start or continue the work, ask whoever must answer first, record the
+item that blocks it (`waiting_on`), set it aside until a date with why
+(`wait_until` and `wait_reason`), or hand it back. A wait said only in a
+comment is not offered: it changes nothing, so nothing hands the item back
+when it ends. An item set aside until a date is handed once when the date
+comes. A company on a vendor tracker, or with no model, gets no pickups.
 
 `crewlet.work.pickups{outcome}` counts what each pickup decided for an idle
 seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,

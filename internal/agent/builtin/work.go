@@ -66,10 +66,19 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error)
 	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
 		fresh statelog.Freshness) (worklet.TaskDetail, error)
-	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
+	// CarriedViews is a container's strip as list_work_views hands it to a
+	// model, which save_work_view replaces a view of whole, by its id, with
+	// what the model re-sends of it: read whole or refused where this node's
+	// build would drop part of it (estate's tracker.views_carried), never
+	// shown short and saved back.
+	CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
-	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
+	// CarriedCatalogue is the catalogue as get_work_catalogue hands it to a
+	// model, which write_work_catalogue tells to send it back whole: read
+	// whole or refused where this node's build would drop part of it
+	// (estate's tracker.catalogue_carried), never shown short and written back.
+	CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
 	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
@@ -134,6 +143,11 @@ type WorkMover interface {
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
+
+	// ChangeRef is a pull request's tracker name, where raw is one under the
+	// company's GitHub owners, or why one on its host is refused; both empty,
+	// or nil, and raw names an item.
+	ChangeRef func(raw string) (ref, refused string)
 
 	// Authorize decides the checks a tool can only take AFTER a read.
 	//
@@ -260,6 +274,11 @@ type WorkDeps struct {
 	// would validate against an org that has since moved — refusing a
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
+
+	// FleetSeat is an agent seat as the fleet's active revision holds it,
+	// which an answer choosing a grant is checked against (ADR-0118). Nil
+	// refuses every grant choice: the grant cannot be confirmed.
+	FleetSeat func(ctx context.Context, handle string) (*org.Role, error)
 
 	// Holders says whose record somebody else's LOGIN names — the identity
 	// directory's half of [iam.OwnerOf], which every person verb resolves
@@ -1841,7 +1860,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// nothing was written.
 	var blockers []string
 	for _, ref := range argStrings(args, "waiting_on") {
-		id, refused := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		id, refused := t.deps.resolveBlocker(ctx, CreateWorkItemTool, "waiting_on", ref)
 		if refused != nil {
 			return *refused, nil
 		}
@@ -2597,7 +2616,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"to set — filing your own work into your own team is " +
 					"what `unit` on " + worklet.CreateWorkItemTool + " does.",
 			},
-			"waiting_on":   setArgSchema("The items this one is blocked BY. " + itemRefs),
+			"waiting_on": setArgSchema("The items this one is blocked BY. " + itemRefs +
+				" A pull request under the company's GitHub owners, by its URL, blocks it " +
+				"until it merges or closes, when you are told to update the item."),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
@@ -3190,6 +3211,9 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if refusal != "" {
 		return patch, kind, refusal
 	}
+	if refusal = readWait(args, now, loc, &plan, UpdateWorkItemTool); refusal != "" {
+		return patch, kind, refusal
+	}
 	// THE DATES AND THE SIZING ARE `fields`, which is what they are.
 	plan.applyToPatch(&patch)
 
@@ -3367,11 +3391,13 @@ func (t *commentOnWorkItem) Description() string {
 // constant so a test can hold the words.
 const commentToolDescription = "Post a comment on a work item. Everyone " +
 	"following the item finds it in their inbox, but your comment wakes a " +
-	"colleague to act on it only when you @-mention them by handle, put a " +
-	"question to them with `ask`, or reply (`reply_to`) in a thread they wrote " +
-	"in. A comment that does none of these wakes nobody, not even the item's " +
-	"assignee or its reporter: it waits until they next open the item. So " +
-	"name whoever you need to act, and say what you need from them. Post ONE " +
+	"colleague to act on it only when it asks them: an @-mention with " +
+	"`asks: true`, a question put to them with `ask`, or a reply (`reply_to`) " +
+	"in a thread where they asked or were asked something still open. An " +
+	"@-mention with `asks: false` is a reference and wakes nobody, and a " +
+	"comment that asks nothing wakes nobody, not even the item's assignee or " +
+	"its reporter: it waits until they next open the item. So name whoever " +
+	"you need to act, and say what you need from them. Post ONE " +
 	"substantive comment when you have something to say: running commentary " +
 	"is noise on a surface other people read, and an acknowledgement that " +
 	"asks nothing needs no comment at all. `ask` puts a question to somebody, " +
@@ -3390,8 +3416,9 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 			"body": map[string]any{
 				"type": "string",
 				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle to wake them to act on it.",
+					"colleague by handle, with `asks: true`, to wake them to act on it.",
 			},
+			"asks": asksParam(workAsks),
 			"ask": map[string]any{
 				"type": "string",
 				"description": "A colleague's handle: this comment is a " +
@@ -3449,7 +3476,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	body := strings.TrimSpace(argString(args, "body"))
 	choice := strings.TrimSpace(argString(args, "choice"))
 	rawDecision, decided := args["decision"]
+	agent := actor.Kind == worklet.AuthorAgent
+	asks, refused := asksOf(CommentOnWorkTool, args, agent)
 	switch {
+	case refused != nil:
+		return *refused, nil
 	case ref == "":
 		return failed(worklet.CommentOnWorkTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	case body == "" && choice == "":
@@ -3548,6 +3579,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
+	if refused := t.deps.checkAsksOfNamed(CommentOnWorkTool, actor, asks, ask, comment.Mentions); refused != nil {
+		return *refused, nil
+	}
 	query := worklet.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
@@ -3594,6 +3628,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"in `body` without a choice.", clip(comment.Choice),
 			before.Named())), caveat.NoQuestionForChoice()), nil
 	}
+	if refused := t.deps.grantChosen(ctx, comment.Choice, thread); refused != nil {
+		return *refused, nil
+	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a
 	// mutation of the task and shares its arbitration: two people
@@ -3634,6 +3671,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// there rather than refused.
 		After:   patched(before.Task, patch),
 		Comment: comment, Mentions: comment.Mentions,
+		Asks:            t.deps.statedAsks(agent, asks || comment.Ask != ""),
+		MentionedAgents: t.deps.agentsAmong(agent, comment.Mentions),
 		Thread:          thread.ThreadParties,
 		AnswersDecision: thread.AnswersDecision,
 	}.Notify(t.deps.Leads)
@@ -3743,7 +3782,7 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment,
 	// themselves.
 	case task.Assignee == "" || task.Assignee == actor.Handle:
 		return caveat.Caveat{}
-	case comment.Ask != "" || len(comment.Mentions) > 0:
+	case comment.Ask != "" || (len(comment.Mentions) > 0 && notify.MentionsWake()):
 		return caveat.Caveat{}
 	// AN ANSWER EXPECTS NO REPLY: it closes a question, and the asker is
 	// woken to act on it, which is what the person answering wants. Warning

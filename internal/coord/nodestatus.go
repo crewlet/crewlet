@@ -146,6 +146,11 @@ type NodeStatus struct {
 	// is read off it: a fleet mid-upgrade hands work between builds by design.
 	Build string
 
+	// ParkedStateVersion is the version of a parked run's state this node's build
+	// reads, zero where a node says none: a run parked at a lower version is
+	// settled only once no live node reads it, or says nothing.
+	ParkedStateVersion int
+
 	// AppliersReady and AppliersTotal are how many of this node's
 	// state-log appliers — one per registered domain, run from boot on
 	// every data node whatever its company runs — have caught up with
@@ -653,6 +658,9 @@ func (s NodeStatus) Meta() map[string]any {
 	if s.Build != "" {
 		out["build"] = s.Build
 	}
+	if s.ParkedStateVersion > 0 {
+		out["parked_state_version"] = s.ParkedStateVersion
+	}
 	if s.AdminPosture != "" {
 		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
 		// that serves no API has no posture to state, and an empty
@@ -885,6 +893,8 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		AppliersTotal: intFromMeta(raw["appliers_total"]),
 		AdminPosture:  iam.AdminPosture(stringFromMeta(raw["admin"])),
 		Build:         stringFromMeta(raw["build"]),
+
+		ParkedStateVersion: max(intFromMeta(raw["parked_state_version"]), 0),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

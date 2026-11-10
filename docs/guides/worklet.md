@@ -728,7 +728,8 @@ question it asks:
   **Recent** scope. It is the third way to say which finished work is in an
   answer, beside `show_closed=true` and `show_closed=recent:<duration>`, so
   naming it beside `show_closed` is refused, and an `any=` branch may not
-  carry it.
+  carry it. A date that resolves to the zero instant (`0001-01-01T00:00:00Z`)
+  bounds nothing and is refused: every finished task is `show_closed=true`.
 - **`around=<task>`** asks where one task — its key, a former key or its id —
   sits in this answer, and the answer carries `around: {position, prev, next,
   total_hint}`: its 1-based place, the keys of the tasks drawn before and after
@@ -1089,7 +1090,7 @@ new task will be filed at, so the two can never share a place.
 
 ## What a seat can do
 
-Eighteen tools, and they are deliberately few — nine that act on a task,
+Nineteen tools, and they are deliberately few: ten that act on a task,
 three that read the container it is filed into, one that writes the one part of
 that container a seat owns, one about CHANGE rather than about state, and four
 over the project's [files](#a-projects-files):
@@ -1102,6 +1103,7 @@ over the project's [files](#a-projects-files):
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the one field that is not every caller's to set: it belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
+| `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or a write permission of the seat's own GitHub App), as a decision on the item that needs it: the grant or declining. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. `mode` picks the ranking: `hybrid` (the default) fuses the words and, where the company has an embeddings provider, the meaning; `keyword` ranks by the words alone, for an exact name or error text; `semantic` by meaning alone (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. The answer says the `mode` it **served**, and carries a `degraded` sentence whenever that is not the one asked for — a hybrid search with nothing to rank by meaning ranks by the words and says so, while a `semantic` one runs nothing at all and says that this tells the seat nothing about whether the work exists. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Across two projects the subtasks cannot follow — a subtask lives in its parent's project, and one under an item in another project is drawn under it on neither board — so a merge whose duplicate **has subtasks to carry** into an item in another project is refused before it writes anything unless `move_subtasks` is false: move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false`. A duplicate with no subtasks merges across projects either way, since nothing moves. So is one moving the subtasks onto one of them refused, since a subtask would end up under itself, and one moving them while a **cross-project move has not yet carried** the duplicate or the survivor answers **unavailable** — the walk is about to change which project that end is in, and the same call a moment later is decided on where it went. Both items must be live: a merge of an item in the **trash**, or into one, is refused whichever way the subtasks go (restore it first), and a subtask in the trash is frozen, so it stays under the duplicate, where a restore finds it. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running. One only a person can unblock waits, named on every tick with what releases it, without holding up the rest: a survivor that went to the trash since (`tracker_merges_waiting_on_the_trash`) until it is restored, a duplicate that did (`tracker_merges_of_items_in_the_trash`) until it is restored — the trash takes no write, so nothing moves on its behalf meanwhile — and a survivor filed under one of the duplicate's subtasks since (`tracker_merges_waiting_on_a_cycle`) until it is filed elsewhere. One whose survivor was purged has nothing left to merge into, so its mark is cleared and the duplicate stays open |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. It takes the authority `routing_unit` does — the **lead** of the item's project, or an administrator. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
@@ -1155,6 +1157,17 @@ input to something the tracker already reports:
 | `estimate_minutes` | how long it is expected to take. |
 | `points` | how big it is on the team's own scale. |
 
+`update_work_item` also takes a **wait until a date**: `wait_until`, in the
+same spellings, sets the item's `start` with a required `wait_reason`, one line
+of at most 200 bytes saying what it waits for, which the item reads as
+`wait_reason`. The seat holding it is not handed it before the date and is
+handed it once when the date comes. A wait without a reason, a reason without
+a wait, a wait beside `start`, or a date that has passed is refused with
+nothing written, and `wait_until: null` ends the wait. A `start` moved or
+cleared without a reason takes the old reason off, since it said why the item
+waited until the old date. The item's page shows the reason under its start
+date, as **Waits for**.
+
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
 totals (`totals=points:sum`, `totals=estimate_min:sum`) and the workload
@@ -1168,28 +1181,46 @@ a **create** there is nothing to clear, so `null` is ignored.
 A value this grammar cannot read is **refused naming the argument**, never
 dropped. Silently ignoring a due date is the worst of the three outcomes: the
 write succeeds, the answer says `applied`, and the task simply has no due date
-— which a model reads as having set one.
+— which a model reads as having set one. So is the zero instant
+(`0001-01-01T00:00:00Z`), which is no date: stored, it would be the most
+overdue task the company ever had. The tracker refuses it too, on a create, on
+an update and on a comment's resolved time, whichever node the write is asked
+from, and a cleared date is said by its own flag (`clear_start`, `clear_due`),
+never by a date.
 
-`my_work` is the call a turn opens with, and it answers **seven lists** rather
+`my_work` is the call a turn opens with, and it answers **eight lists** rather
 than one: the seat's priorities in the order somebody put them, the work it
 holds, the questions waiting on its answer (each with the literal call that
 answers it), the checklist items it claimed on **other people's** tasks, the
-work it was brought onto without owning, what moved on what it follows, and
-what just became workable. Each is a different claim on the reader's
-attention, and a seat that saw only its assignments would miss six of them.
-One call rather than seven because assembled separately a seat could see a
+work it was brought onto without owning, what moved on what it follows, what
+just became workable, and **what it is holding up**: the open work it holds
+that other open work waits on, the most waited on first. Each is a different
+claim on the reader's attention, and a seat that saw only its assignments would
+miss seven of them. One call rather than eight because assembled separately a seat could see a
 task in `assigned` that had already moved out of it by the time `priorities`
 was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
 
-Each list is a **page of at most 20**, and beside the seven lists the answer
+Each list is a **page of at most 20**, and beside the eight lists the answer
 carries `totals` — one `{total, capped}` per list, counted by the same
 predicate in the same read. The page is twenty; the claim is not, and a count
 taken from a list's length says 20 for the seat holding two hundred. `capped`
 means the count stopped at 10,000, so the number is a floor. `priorities` is
 cut **after** finished and removed entries are dropped, so a list whose head is
 done work still shows its first twenty open entries in the order they were put.
+
+A `holding_up` row is the task plus `blocks` (how many open items wait on it,
+directly or through another waiting item, each counted once; `blocks_capped`
+says the count is a floor, past 512 waiting items or past the 2,048 items one
+read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
+left out, at most eight) and `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over). It is
+the one list about who waits on the reader rather than what waits for them, and
+it is the same for a person, whose dashboard shows it under My work. The list
+ranks the first 100 such items in the queue's own order: a person
+holding a review or a decision as a work item can stall a team that nothing
+else tells them about. What to do with a row is the tracker's own actions, taken
+by the reader.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like
@@ -1859,6 +1890,30 @@ and those it stamped permanently one-sided (`final`);
 `tracker_one_sided_repair_failed` (a warning) for an edge whose repair failed
 and is retried on the next pass.
 
+**A task can wait on a pull request** on the company's GitHub: give its URL in
+`waiting_on` (any tab of its page reads as the page itself). It must be under
+an owner the company's GitHub configuration names, its organization or the
+owner of a repository a seat works in; one under any other owner is refused
+naming them. The task reads
+blocked until the pull request merges or closes, and that is recorded on the
+task by the engine, with no agent's turn: a `change_settled` record that keeps
+the pull request among the task's `changes` (its state, when, and whether the
+webhook or the poll learned it), unblocks the task, and tells whoever holds it
+to update it, addressed. The task's status is never moved. The engine learns it
+from GitHub's webhook as it arrives, or else from a fleet poll that asks GitHub
+about at most fifty open pull requests every 15 minutes, through the agents'
+apps' cached tokens, once the pull request settled more than ten minutes ago.
+A rate limit ends a pass where it stood, and the next resumes there. A pull
+request GitHub will not show the apps (deleted, moved, or out of their reach)
+is logged once as `change_poll_unreadable` and asked again after a wait that
+grows from an hour to a day; its tasks stay blocked until a person removes the
+wait.
+Each settle is written once however many deliveries and polls saw it. A wait on
+a pull request has no mirror, is never one-sided, and a pull request cannot be
+made to wait on a task. When the poll keeps settling what no delivery did, the
+advisor says so to the owner as `integration.inbound_silent`
+([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)).
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is
@@ -1889,7 +1944,11 @@ A comment can carry an `ask`: a colleague's handle, meaning this comment is a
 question that person owes an answer to. They are woken **asking for one**,
 rather than told about activity, and they start following the item. An ask does
 **not** hand the item over and does **not** block a close — a question nobody
-has answered is not a reason to hold delivered work open.
+has answered is not a reason to hold delivered work open. They follow the item only while a question here is theirs to answer: once
+their last open question on it is answered or resolved, or the item finishes,
+the watch the question added ends. A watch they chose stays: watching or
+unwatching the item themselves makes it theirs, and somebody already following
+it was never added by the question.
 
 The answer closes it. `answers` names the question's comment id, and is
 **inferred** when exactly one open question on the item is addressed to the
@@ -1925,6 +1984,17 @@ is waiting on, and `asked_by=` is whose question it is — one name, since the
 asks you put through your own assistant are written as your seat. Each row
 carries `answer_with`, the literal call that answers it, and `open`.
 
+An open question the facts overtook stops waiting. When its asker asks the
+same person again on the same item, the older question is `superseded`; when
+the item reaches a finished status, its open questions are `moot`, and
+reopening the item makes them wait again. An overtaken question leaves
+`asked_of_me`, the person's decisions, `has_open_asks`, `asked_of=` and
+`asked_by=`, and an answer without `answers` is inferred among the questions
+still waiting. Its card carries `overtaken` with the reason, and an answer that
+names it is still recorded. A question somebody answered is never overtaken.
+The Inbox says so on a notice about it: the question no longer needs an answer,
+because it was asked again since or its item is finished.
+
 ### Asking for a decision
 
 A question that needs somebody to **choose** carries a **decision** on the ask:
@@ -1936,7 +2006,12 @@ may say why in its body.
 **Every question an agent seat puts to a person carries one.** An `ask` from
 an agent seat that names a person (any seat the org chart does not hold as an
 agent) is refused without a `decision`, on both asking tools, and nothing is
-posted. A request an agent would make in words ("the merge is yours", "please
+posted. So is an agent's comment that asks (`asks` true) and names a person's
+seat in its words without making them its `ask`: the question would reach them
+as a mention, never among the decisions waiting on them. Naming a team, or a
+person in a comment that asks nothing, is a reference and is posted. A page
+comment that asks a person it names is refused the same way, pointing at the
+work item the question concerns, since a page comment carries no decision. A request an agent would make in words ("the merge is yours", "please
 run the script") is a choice between the answers it expects, with the one it
 recommends: the person answers with one press, and can still answer in their
 own words through **Something else**. A question between two agent seats may
@@ -2093,6 +2168,11 @@ it.
 first reason in the precedence order wins and the rest are dropped. Somebody
 mentioned on a task they are watching hears that they were mentioned.
 
+**An assignment to whoever already holds the task wakes nobody** when nothing
+else changed with it: there is no change to tell, and a wake would oblige its
+holder to answer a notice that the assignee changed when it did not. A real
+reassignment wakes the new holder once.
+
 **And nothing wakes you for your own write.** The person who made a change is
 dropped from its own wake: being told what you just did is a turn spent on
 nothing. There is one name to compare against: a person the identity directory
@@ -2202,7 +2282,8 @@ something of the seat that holds it
 
 | Reason | Starts a turn |
 |---|---|
-| `mention`, `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
+| `mention` | always, but for an agent named in another agent's comment that states it asks nothing (`asks: false`): that @-mention is a reference, while a person it names is addressed as ever |
+| `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
 | `watcher` | for a person's comment that names nobody |
@@ -2213,8 +2294,9 @@ So **a person's comment that names nobody wakes everyone on the task**: a
 person writing on a task speaks to whoever follows it. **A comment that names
 somebody is addressed to them**: an @-mention, an `ask` or an answer wakes the
 seats it names, and everyone else on the task reads it in their inbox.
-**Another agent's comment wakes only the seats it names**: by @-mention, with
-`ask`, or by answering their question; a reply in a thread wakes only the
+**Another agent's comment wakes only the seats it asks**: by @-mention with
+`asks: true`, with `ask`, or by answering their question; an @-mention in a
+comment with `asks: false` is a reference, read in the inbox, and wakes nobody; a reply in a thread wakes only the
 seats with a stake there, the asker of an open ask and the seat that owes it,
 so two agents' thanks to each other end at the first one. An agent that needs
 the assignee or the reporter to act names them, and the comment tool says so
@@ -2432,6 +2514,14 @@ binding it to a seat would add rather than guessing whose queue to show. A
 person signed in as themselves always has a seat. See [Humans
 in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
 for the binding.
+
+**No notice names a credential.** A token or a service account bound to no seat
+files and watches items like anybody, and the item lists it as its reporter or
+a watcher, but no notice is written for it under any reason. It holds no turn,
+and its inbox is nobody's to read, so a notice to it would be read by nobody.
+The writer leaves every credential out of the recipients a change offers, and
+everybody else the change concerns hears as before. A token bound to a seat
+writes as that seat and hears as it.
 
 **Asked of me is answered where it stands.** Each question put to the person
 is drawn as the landing screen's "Needs your decision" draws it: grouped

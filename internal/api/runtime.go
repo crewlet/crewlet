@@ -260,6 +260,8 @@ type NodeRuntime interface {
 	// the MCP kinds, from the evaluation the health count, the gauge and the
 	// log lines were told, so the page cannot disagree with them.
 	LatestAlarms() []statelog.Alarm
+	// AlarmsEvaluated reports whether that evaluation has run at all.
+	AlarmsEvaluated() bool
 
 	// MCPChecker tests an MCP server where it runs and checks an address
 	// before one is added (`POST /mcp-servers/{name}/check`,
@@ -268,6 +270,14 @@ type NodeRuntime interface {
 	// which its detail answers.
 	MCPChecker() mcpapi.Checker
 	MCPChecks() queries.MCPCheckReader
+
+	// SeatPauses lists every seat's pause from the coordination store, nil on
+	// a node with no fleet store.
+	SeatPauses() queries.SeatPauseLister
+
+	// AgentAccess reads what each agent may do and where it runs, as its next
+	// turn is told; nil on a node that runs no engine.
+	AgentAccess() queries.AgentAccess
 
 	// IssueReports reads the company's issue reports and what one would say,
 	// nil on a node with no reporter.

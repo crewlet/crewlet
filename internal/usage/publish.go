@@ -1173,6 +1173,22 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 				TotalMS: t.TotalMS, LastAt: t.LastAt})
 		}
 		rec.Tools, rec.ToolsElided = capTools(tools)
+		ledger := make([]LedgerRow, 0, len(s.Turns.Ledger))
+		for _, l := range s.Turns.Ledger {
+			t := l.Tokens
+			ledger = append(ledger, LedgerRow{Wake: l.Wake, Disposition: l.Disposition,
+				Outcome: l.Outcome, Turns: l.Turns,
+				Input: int64(t.Input), Output: int64(t.Output), CacheRead: int64(t.CacheRead),
+				CacheWrite: int64(t.CacheWrite), AuxInput: int64(t.AuxInput), AuxOutput: int64(t.AuxOutput)})
+		}
+		rec.Ledger, rec.LedgerElided = capLedger(ledger)
+		rec.LedgerUntallied = s.Turns.Untallied
+		refusals := make([]RefusalRow, 0, len(s.Turns.Refusals))
+		for _, f := range s.Turns.Refusals {
+			refusals = append(refusals, RefusalRow{Server: f.Server, Tool: f.Tool, Class: f.Class,
+				Calls: int64(f.Calls)})
+		}
+		rec.Refusals, rec.RefusalsElided = capRefusals(refusals)
 		out = append(out, rec)
 	}
 	for _, person := range d.People {
@@ -1346,6 +1362,42 @@ func capTools(tools []ToolCalls) ([]ToolCalls, int) {
 	}
 	slices.SortFunc(tools, compareToolKey)
 	return tools, elided
+}
+
+// capLedger keeps the [LedgerPerSeatDay] rows with the most turns and counts the
+// rest, in key order.
+func capLedger(rows []LedgerRow) ([]LedgerRow, int) {
+	if len(rows) == 0 {
+		return nil, 0
+	}
+	elided := 0
+	if len(rows) > LedgerPerSeatDay {
+		slices.SortStableFunc(rows, func(a, b LedgerRow) int {
+			return cmp.Or(cmp.Compare(b.Turns, a.Turns), compareLedgerKey(a, b))
+		})
+		elided = len(rows) - LedgerPerSeatDay
+		rows = rows[:LedgerPerSeatDay]
+	}
+	slices.SortFunc(rows, compareLedgerKey)
+	return rows, elided
+}
+
+// capRefusals keeps the [RefusalsPerSeatDay] most-refused rows and counts the
+// rest, in key order.
+func capRefusals(rows []RefusalRow) ([]RefusalRow, int) {
+	if len(rows) == 0 {
+		return nil, 0
+	}
+	elided := 0
+	if len(rows) > RefusalsPerSeatDay {
+		slices.SortStableFunc(rows, func(a, b RefusalRow) int {
+			return cmp.Or(cmp.Compare(b.Calls, a.Calls), compareRefusalKey(a, b))
+		})
+		elided = len(rows) - RefusalsPerSeatDay
+		rows = rows[:RefusalsPerSeatDay]
+	}
+	slices.SortFunc(rows, compareRefusalKey)
+	return rows, elided
 }
 
 func compareReadKey(a, b Read) int {

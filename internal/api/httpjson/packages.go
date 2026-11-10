@@ -12,7 +12,7 @@ package httpjson
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
 	"a2a": true, "a2atest": true, "accessdomain": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-	"api":    true,
+	"advisor": true, "api": true,
 	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
@@ -35,7 +35,7 @@ var goPackages = map[string]bool{
 	"extension": true, "externaltest": true, "fixedwait": true, "fleetsecrets": true, "flock": true,
 	"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "googlecloud": true, "home": true, "host": true, "hostbox": true,
 	"httpjson": true, "httprelay": true, "httpx": true, "httpxtest": true, "iam": true,
-	"iamapi": true, "iamdomain": true, "inbox": true, "integration": true, "issuereport": true,
+	"iamapi": true, "iamdomain": true, "inbox": true, "insights": true, "integration": true, "notice": true, "issuereport": true,
 	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
 	"jira": true, "jsapi": true, "jsapitest": true, "jsinflight": true, "jsoncarry": true, "jsonform": true,
 	"jsprovision": true, "jwks": true, "kept": true, "keyset": true,
@@ -56,7 +56,7 @@ var goPackages = map[string]bool{
 	"presence": true, "provenance": true,
 	"provision": true, "queries": true, "queue": true, "queuetest": true, "readaudit": true, "recordseal": true,
 	"redact": true, "references": true, "regexlit": true, "regexlittest": true, "rendezvous": true, "replicated": true, "routing": true, "runner": true, "runtoken": true,
-	"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true,
+	"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true, "scenario": true,
 	"schedule": true, "scheduletest": true, "search": true, "seat": true,
 	"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 	"setupapi": true, "setuptest": true, "signedask": true, "sigv4": true, "skills": true,

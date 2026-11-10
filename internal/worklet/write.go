@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -663,6 +664,9 @@ type Provenance struct {
 // this writer wrote".
 type WriteLog interface {
 	Add(types.WorkItem)
+	// Commit records the kind of change a committed write was, which the
+	// turn's outcome is read from.
+	Commit(types.CommittedChange)
 }
 
 // NewWriter builds the tracker's write authority.
@@ -763,6 +767,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"a patch: a remark is resolved through ResolveComment, which forms "+
 			"the resolve from the stored row and refuses anybody but its author",
 			patch.Comment.ID, id)
+	}
+	if err := patch.CheckDates(); err != nil {
+		return WriteResult{}, err
 	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
@@ -1163,6 +1170,14 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if asks != "" {
 				charged = settleAskWatch(current, charged, asks)
 			}
+			charged, err = endAskWatch(ctx, tx, id, current, charged, kind)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			charged, err = settleWaitReason(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			charged, err = w.settleRelations(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -1358,6 +1373,31 @@ func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment
 	return checkChoice(task, ask.id, ask.decision, comment.Choice)
 }
 
+// settleWaitReason holds a wait's reason to its start: a reason needs a start
+// set in the same patch, and a start set or cleared without one clears the
+// reason it had, which said why the item waited until the old instant.
+func settleWaitReason(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.WaitReason != nil && *patch.WaitReason != "" {
+		reason := *patch.WaitReason
+		switch {
+		case patch.StartAt == nil || patch.StartAt.IsZero():
+			return patch, invalid("a wait reason on task %s needs the start it waits until, "+
+				"set in the same change", current.ID)
+		case len(reason) > MaxWaitReason || strings.ContainsAny(reason, "\r\n"):
+			return patch, invalid("a wait reason on task %s is one line of at most %d bytes",
+				current.ID, MaxWaitReason)
+		}
+		return patch, nil
+	}
+	// A CLEARED START IS ITS FLAG ([TaskPatch.ClearStart]), with no StartAt:
+	// the reason of a wait whose start is taken off goes with it.
+	if (patch.StartAt != nil || patch.ClearStart) && patch.WaitReason == nil && current.WaitReason != "" {
+		cleared := ""
+		patch.WaitReason = &cleared
+	}
+	return patch, nil
+}
+
 // settleAskWatch puts the person a new question asks on the task's watchers.
 //
 // AN ASK IS AN OBLIGATION, and the person holding one has to hear what happens
@@ -1379,8 +1419,74 @@ func settleAskWatch(current Task, patch TaskPatch, asked string) TaskPatch {
 	}
 	if next, ok := followAuto(watchers, muted, asked); ok {
 		patch.Watchers = &next
+		held := append(slices.Clone(askWatchOf(current, patch)), asked)
+		patch.AskWatch = &held
 	}
 	return patch
+}
+
+// askWatchOf is the task's ask-added watchers as the patch leaves them.
+func askWatchOf(current Task, patch TaskPatch) []string {
+	if patch.AskWatch != nil {
+		return *patch.AskWatch
+	}
+	return current.AskWatch
+}
+
+// openAskToStatement is whether a task still holds an open question to a
+// person other than one comment, named for the plan test.
+const openAskToStatement = `SELECT 1 FROM tracker_comments
+	WHERE task_id = ? AND ask = ? AND id <> ? AND resolved = 0 AND answered_by IS NULL AND removed = 0
+	  AND overtaken = ''
+	LIMIT 1`
+
+// endAskWatch ends the watch a question added once it has nothing left to
+// follow (ADR-0023): the person an answered or resolved question was put to,
+// when no other open question here is theirs, and everybody a question added
+// when the task finishes. A watch somebody chose is never ended.
+func endAskWatch(ctx context.Context, tx *sql.Tx, task string, current Task, patch TaskPatch,
+	kind ChangeKind) (TaskPatch, error) {
+
+	held := askWatchOf(current, patch)
+	if len(held) == 0 {
+		return patch, nil
+	}
+	var ends []string
+	switch {
+	case patch.Status != nil && patch.Status.Group().Finished():
+		ends = held
+	case patch.Comment != nil && (kind == ChangeCommentResolved || patch.Comment.Answers != nil):
+		closed := patch.Comment.ID
+		if kind != ChangeCommentResolved {
+			closed = *patch.Comment.Answers
+		}
+		ask, err := readAsk(ctx, tx, task, closed)
+		if err != nil {
+			return patch, err
+		}
+		if ask.asked == "" || !slices.Contains(held, ask.asked) {
+			return patch, nil
+		}
+		var open int
+		err = tx.QueryRowContext(ctx, openAskToStatement, task, ask.asked, closed).Scan(&open)
+		switch {
+		case err == nil:
+			return patch, nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return patch, fmt.Errorf("worklet: read whether %s still owes an answer on %s: %w",
+				ask.asked, task, err)
+		}
+		ends = []string{ask.asked}
+	default:
+		return patch, nil
+	}
+	watchers := current.Watchers
+	if patch.Watchers != nil {
+		watchers = *patch.Watchers
+	}
+	watchers, rest := without(watchers, ends), without(held, ends)
+	patch.Watchers, patch.AskWatch = &watchers, &rest
+	return patch, nil
 }
 
 // followAuto is a watcher set with somebody the write made a party to the
@@ -1454,6 +1560,11 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 	handle := patch.Watch.Handle
 	if handle == "" {
 		return patch, invalid("a watch gesture names no handle")
+	}
+	// A GESTURE IS A CHOICE, so a watch a question added stops being one.
+	if held := askWatchOf(current, patch); slices.Contains(held, handle) {
+		rest := without(held, []string{handle})
+		patch.AskWatch = &rest
 	}
 	watchers := without(current.Watchers, []string{handle})
 	muted := without(current.Muted, []string{handle})
@@ -2047,6 +2158,8 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
+	// A CREDENTIAL IS NOBODY'S INBOX: the record offers none as a recipient.
+	notify = notify.withoutCredentials()
 	if err = notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
@@ -2078,10 +2191,15 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		ActorApps: w.recordedApps(notify),
 		// THE HISTORY ROW KEEPS THEM from this version on (ADR-0112).
 		ActorAppsKept: len(w.recordedApps(notify)) > 0,
-		OperatorID:    w.OperatorID,
-		TurnID:        w.TurnID,
-		Chain:         w.Chain,
-		Notify:        notify,
+		// THE NOTICE ROWS KEEP THE STATEMENT from this version on.
+		NoticeAsksKept: notify != nil && notify.Snapshot.CommentAsks != nil,
+		// AND WHETHER IT WOKE EACH RECIPIENT, from this version on, where it
+		// tells somebody it does not wake.
+		NoticeWokeKept: tellsWithoutWaking(notify, w.Actor),
+		OperatorID:     w.OperatorID,
+		TurnID:         w.TurnID,
+		Chain:          w.Chain,
+		Notify:         notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {
@@ -2213,7 +2331,7 @@ func (w *Writer) recording(ctx context.Context, req *statelog.Request) *committi
 			return decision, err
 		}
 		named := writtenItem(ctx, tx, id, decision.Payload)
-		wrote.item = &named
+		wrote.item, wrote.change = &named, committedChange(decision.Payload)
 		return decision, nil
 	}
 	return wrote
@@ -2221,7 +2339,10 @@ func (w *Writer) recording(ctx context.Context, req *statelog.Request) *committi
 
 // committing is the item one write will report once it commits, set by the
 // last round of its decide.
-type committing struct{ item *types.WorkItem }
+type committing struct {
+	item   *types.WorkItem
+	change types.CommittedChange
+}
 
 // report hands the turn's [WriteLog] the item a write named, once the write is
 // known to have committed.
@@ -2241,8 +2362,33 @@ func (w *Writer) report(wrote *committing, result statelog.Result) {
 	switch result.Outcome {
 	case statelog.OutcomeApplied, statelog.OutcomePending:
 		w.written.Add(*wrote.item)
+		if wrote.change != "" {
+			w.written.Commit(wrote.change)
+		}
 	case statelog.OutcomeUnknown:
 	}
+}
+
+// committedChange is the kind of change one record is, for its turn's outcome:
+// a comment, an answer to an ask, or a move of the item; "" for a change that
+// moves no work (who watches it).
+func committedChange(payload []byte) types.CommittedChange {
+	record, err := Decode(payload)
+	if err != nil {
+		return types.CommittedItem
+	}
+	switch {
+	case record.Kind == ChangeWatchers:
+		return ""
+	case record.Kind.Conversation():
+		var patch TaskPatch
+		if json.Unmarshal(record.Mutation, &patch) == nil && patch.Comment != nil &&
+			patch.Comment.Answers != nil {
+			return types.CommittedAnswer
+		}
+		return types.CommittedComment
+	}
+	return types.CommittedItem
 }
 
 // writtenItem is the task one record commits to, named as a work item.
@@ -2270,4 +2416,36 @@ func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) typ
 		}
 	}
 	return named
+}
+
+// SettleChange records a change (a pull request) task waits on as merged or
+// closed, as the engine learned it, and tells whoever holds the task to update
+// it. The task's own status is never moved: what follows is the holder's call.
+// Keyed by the caller on (task, change, state), so a webhook and a poll that
+// both saw it write once.
+func (w *Writer) SettleChange(ctx context.Context, opID string, task Task, s ChangeSettlement) (WriteResult, error) {
+	switch {
+	case s.Ref == "" || s.At.IsZero():
+		return WriteResult{}, invalid("a settled change on task %s names no change or no instant", task.ID)
+	case s.State != ChangeMerged && s.State != ChangeClosed:
+		return WriteResult{}, invalid("a change on task %s settles merged or closed, not %q", task.ID, s.State)
+	case !waitsOn(task, s.Ref):
+		return WriteResult{}, invalid("task %s does not wait on %s", task.ID, s.Ref)
+	}
+	after := task
+	after.Changes = maps.Clone(task.Changes)
+	if after.Changes == nil {
+		after.Changes = map[string]ChangeSettlement{}
+	}
+	after.Changes[s.Ref] = s
+	notify := Wake{Kind: ChangeLinkSettled, Before: task, After: after}.Notify(w.Leads)
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		TaskPatch{ChangeSettled: &s}, ChangeLinkSettled, notify)
+}
+
+// waitsOn reports whether task waits on ref.
+func waitsOn(task Task, ref string) bool {
+	return slices.ContainsFunc(task.Relations, func(r Relation) bool {
+		return r.Kind == RelationWaitingOn && r.Other == ref
+	})
 }

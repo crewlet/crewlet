@@ -1,0 +1,13 @@
+-- A person's notice load in the advisor's window is read from an index that
+-- covers it.
+--
+-- The advisor's patterns read counts each person's notices in the last 7 days
+-- and how many of them asked something of the person
+-- (worklet.patternNoticesStatement). Over tracker_notifications_inbox_idx
+-- (recipient, log_seq DESC) it visited every notice the person still kept,
+-- across the inbox's whole retention, on every read; this index holds the
+-- week's rows alone, and the two columns the count reads.
+--
+-- WHO HAS TO AGREE ON IT: nobody. tracker_notifications is divergent (outside
+-- the identity claim), and an index moves no row.
+CREATE INDEX tracker_notifications_load_idx ON tracker_notifications (recipient, created_at, addressed); -- read by Reader.WorkPatterns (patterns.go), covering a person's notices in a window

@@ -142,14 +142,34 @@ func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried"
 // with it, and by the clear before every run ([Runner.ClearArtifacts]).
 func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
 
-// SessionPackStaging is the DIRECTORY a pack made on demand ([Runner.PackCapture])
-// packs a capture in before it moves it over [Paths.SessionCapture]: its own,
-// never [Paths.SessionStaging], because the run's script may still be working
-// in that one — a job a box would not end is packed while it runs, and its
-// script packs into the staging directory the moment its harness exits, which
-// would clear a pack made there under the other's feet. Removed whole by the
-// pack when it is done, and by the clear before every run.
-func (p Paths) SessionPackStaging() string { return p.WorkDir() + "/session-pack-staging" }
+// SessionPackStaging is the DIRECTORY one pack made on demand
+// ([Runner.PackCapture]) packs a capture in before it moves it over
+// [Paths.SessionCapture], named by pack, a name the runner mints for that pack
+// alone: its own, never [Paths.SessionStaging], because the run's script may
+// still be working in that one — a job a box would not end is packed while it
+// runs, and its script packs into the staging directory the moment its harness
+// exits, which would clear a pack made there under the other's feet.
+//
+// AND NEVER ANOTHER PACK'S, for the same reason: two reads of one job at once
+// — a stop's and a collection's — each take its session, and where the job
+// left no archive, or its box would not end it, each packs it now. Sharing one
+// directory, each pack's start would clear the other's files: one would move
+// over the job's capture an archive the other had half made, as its own, and
+// the other's move would find nothing to move. Each in its own, the two
+// archives are each whole, each moved over the capture in one rename.
+//
+// Removed whole by the pack when it is done, and by the clear before every
+// run, which removes every pack's, whichever read made it ([packStagingFiles],
+// [Runner.ClearArtifacts]).
+func (p Paths) SessionPackStaging(pack string) string {
+	return p.WorkDir() + "/session-pack-staging." + pack
+}
+
+// packStagingFiles is the pattern every pack on demand's staging directory
+// matches ([Paths.SessionPackStaging]), whichever pack made it — what the clear
+// before every run removes; relative to the work directory, which the clear
+// quotes.
+const packStagingFiles = "session-pack-staging.*"
 
 // SessionDigests is where a box keeps the digest of every archive of a session
 // its own copy holds — one line, `<session> <cksum of the archive>`, for each
@@ -233,6 +253,14 @@ func (p Paths) Done() string { return p.WorkDir() + "/done" }
 
 // ExitCode is the wrapper's status, surfaced on collect to explain a crash.
 func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
+
+// MemoryBefore and MemoryAfter are the job's memory domain as its script read
+// it before its harness started and after it exited ([sandbox.MemoryDomainScript]):
+// a kill the kernel counted between them is one for memory during the job.
+func (p Paths) MemoryBefore() string { return p.WorkDir() + "/memory_before" }
+
+// MemoryAfter is the job's memory domain after its harness exited.
+func (p Paths) MemoryAfter() string { return p.WorkDir() + "/memory_after" }
 
 // JobScript is where a run's script records, before it does anything else, the
 // end protocol it speaks and its own pid — `1 <pid>` — once it has set the

@@ -1,6 +1,7 @@
 package estate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -209,8 +210,23 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	if spec.git {
 		// THE GIT ARM, after the envelope's admission and the lane check
 		// and before the copy's verdict and the readiness gates, none of
-		// which applies to a git operation ([GitCopy]).
+		// which applies to a git operation ([GitCopy]). It reads the
+		// request's inputs itself, past the writes it holds.
 		return s.answerGit(ctx, spec, req, out)
+	}
+	// WHAT THE REQUEST ASKS, READ WHOLE OR NOT RUN, before anything is
+	// waited for or run ([decodeInput]): a request carrying a key this
+	// build does not declare is a newer build's, and run without it, it
+	// would land as something its writer never asked for. Ahead of the
+	// floors, so a node that would refuse it anyway does not first wait
+	// out a read budget behind one.
+	args, actor, refused, err := inputs(spec, req)
+	switch {
+	case err != nil:
+		out.Err = encodeError(err)
+		return s.encodeReply(out)
+	case refused != nil:
+		return s.refuseUnknown(ctx, out, req, refused)
 	}
 	// AN ADMITTED REQUEST ALWAYS CARRIES ITS DEADLINE, under the signature
 	// ([signedask.Channel.Admit] refuses one without), so it is the bound
@@ -252,15 +268,15 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	b.verifiers = s.env.verifiers
 	b.pageBytes = usagePageBytes
 	var written *writtenItems
-	if req.Actor != nil && req.Actor.Records {
+	if actor != nil && actor.Records {
 		// THE ASKER'S TURN WANTS TO HEAR what this write committed to,
 		// and its set is in another process: collect here, and answer it
 		// beside whatever the operation answers.
 		written = &writtenItems{}
-		req.Actor.Provenance.Written = written
+		actor.Provenance.Written = written
 	}
-	result, err := spec.serve(readSpent(ctx, spec, spent), b, req.Actor, req.Args)
-	out.Written = written.list()
+	result, err := spec.run(readSpent(ctx, spec, spent), b, actor, args)
+	out.Written, out.Committed = written.list(), written.committed()
 	switch {
 	case errors.Is(err, errNoHalf):
 		out.Unserved, out.Detail = unservedNoBackend, ranNothingDetail(s.self, req.Op, err)
@@ -276,20 +292,68 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		out.Unserved, out.Detail = unservedBehindConfig, decidesNoGrant(s.self)
 		return s.encodeReply(out)
 	}
-	return s.answered(out, req.Op, result, err)
+	return s.answered(out, spec, result, err)
+}
+
+// inputs decodes what req asks this node to run — the actor it runs as, and
+// its arguments in the operation's own type — under the wire's rule for an
+// operation's inputs ([decodeInput]). refused names every key either holds
+// that this build does not declare, and nothing is to run; err is either of
+// them failing to decode for any other reason.
+func inputs(spec *opSpec, req request) (args any, actor *Actor, refused *ErrUnknownKeys, err error) {
+	var unknown []string
+	if len(req.Actor) > 0 && !bytes.Equal(req.Actor, []byte("null")) {
+		actor = &Actor{}
+		held, decodeErr := decodeInput(req.Actor, actor)
+		if decodeErr != nil {
+			return nil, nil, nil, fmt.Errorf("estate: %s: decode the actor: %w", spec.name, decodeErr)
+		}
+		unknown = prefixed("actor", held)
+	}
+	args, held, err := spec.decode(req.Args)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if unknown = append(unknown, prefixed("args", held)...); len(unknown) > 0 {
+		return nil, nil, &ErrUnknownKeys{Op: spec.name, Keys: unknown}, nil
+	}
+	return args, actor, nil, nil
+}
+
+// refuseUnknown answers a request whose inputs hold keys this node's build does
+// not declare ([inputs]) — refused, naming them, with nothing of it run, so the
+// asking router asks a data node of the writer's build ([Router.settle]).
+//
+// LOGGED HERE, at WARN, once per request it refuses — as this server logs a
+// request signed under a key it does not hold and one past its window, the
+// other refusals that are facts about this node an operator changes — because
+// the node an operator looks at during an upgrade is the one still on the
+// older build: the asker's walk names what every node said, but only where
+// none served the request.
+func (s server) refuseUnknown(ctx context.Context, out reply, req request, refused *ErrUnknownKeys) []byte {
+	refused.Nodes = []string{s.self}
+	log.WarnContext(ctx, "estate_request_refused", "node", s.self, "disposition", "unknown_keys",
+		"from", req.From, "op", req.Op, "keys", words.And(asSaid(refused.Keys)),
+		"detail", "a node of a build that declares those keys asked for it and this build does not, so "+
+			"nothing of it ran rather than run without them; a data node of the asker's build serves "+
+			"it — finish the upgrade")
+	out.Err = encodeError(refused)
+	return s.encodeReply(out)
 }
 
 // answered is out carrying what an operation answered: its failure, crossing
-// as itself ([encodeError]), or its result encoded.
-func (s server) answered(out reply, op string, result any, err error) []byte {
+// as itself ([encodeError]), or its result encoded — under the rule an
+// operation's inputs cross by where a caller carries it into another request
+// ([op.answeredWhole]).
+func (s server) answered(out reply, spec *opSpec, result any, err error) []byte {
 	if err != nil {
 		out.Err = encodeError(err)
 		return s.encodeReply(out)
 	}
-	encoded, err := encodeResult(result)
+	encoded, err := encodeResult(spec, result)
 	if err != nil {
 		out.Err = encodeError(fmt.Errorf("estate: %s could not encode the answer to %s: %w",
-			s.self, op, err))
+			s.self, spec.name, err))
 		return s.encodeReply(out)
 	}
 	out.Result = encoded
@@ -305,10 +369,16 @@ type jsonAppender interface {
 
 // encodeResult is an operation's answer as the reply carries it: its own
 // encoding where it holds one, so a usage page's rows — encoded once already,
-// to cut the page at its budget — are not encoded a second time to send it.
-func encodeResult(result any) ([]byte, error) {
+// to cut the page at its budget — are not encoded a second time to send it;
+// under the inputs' rule where a caller carries it into another request
+// ([op.answeredWhole]), so a key a newer build adds is on it only with a
+// value; and json.Marshal's otherwise.
+func encodeResult(spec *opSpec, result any) ([]byte, error) {
 	if a, ok := result.(jsonAppender); ok {
 		return a.AppendJSON(nil)
+	}
+	if spec.whole {
+		return encodeInput(result)
 	}
 	return json.Marshal(result)
 }
@@ -500,8 +570,28 @@ func deadlineOf(ctx context.Context) time.Time {
 // may report one item more than once; the set keeps it once, in the order it
 // was first reported.
 type writtenItems struct {
-	mu    sync.Mutex
-	items []types.WorkItem
+	mu      sync.Mutex
+	items   []types.WorkItem
+	changes []types.CommittedChange
+}
+
+// Commit implements [worklet.WriteLog].
+func (w *writtenItems) Commit(c types.CommittedChange) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !slices.Contains(w.changes, c) {
+		w.changes = append(w.changes, c)
+	}
+}
+
+// committed is the changes reported, or nil where nothing asked for them.
+func (w *writtenItems) committed() []types.CommittedChange {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.changes)
 }
 
 // Add implements [worklet.WriteLog].

@@ -1352,7 +1352,12 @@ const (
 	// (+735, the entry -471), the one sheet +8 (the mark's colour rule) and the
 	// shell's chunks +29. The SSH drawing itself is in a lazy chunk, and no
 	// screen's module is in the entry. So it moved to 400 KiB, 2.18 seconds.
-	initialBudget = 400 << 10
+	// The administrators' platform notices and the advisor's unread sources in
+	// Needs you took it from 399.6 KiB to 400.1 KiB: the entry +523 bytes gzipped
+	// (the attention queue's notice rows and each unread source's sentence), the
+	// alarm words already in the shell's engine panel and no screen's module in
+	// the entry. So it moved to 401 KiB, 2.19 seconds.
+	initialBudget = 401 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2151,8 +2156,36 @@ const (
 	// size's next KiB: 5681 KiB. The access change review's Inbox note and the
 	// access save's review callout, merged on top of it, took it to 5681.3 KiB
 	// (5,817,698 bytes, +1,104, all script). The measured size's next KiB:
-	// 5682 KiB.
-	treeBudget = 5<<20 + 562<<10
+	// 5682 KiB. My work's Holding up section (a person's open work that other
+	// work waits on, how much and on whom), on top of it, took it to 5683.5 KiB
+	// (5,819,942 bytes, +1,703 over the tree it was built on, all script). The
+	// measured size's next KiB: 5684 KiB. Settings › Advisor (the setup
+	// findings, a change's preview from the entity route's dry run and what the
+	// integrations need from a person), merged on top of it, took it to 5689.4
+	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
+	// 5690 KiB. The advisor's go-live check and its blockers in Needs you,
+	// merged on top of it, took it to 5691.1 KiB (5,827,714 bytes, +1,793, all
+	// script). The measured size's next KiB: 5692 KiB. The administrators'
+	// platform notices in Needs you, the rubber-stamp finding's draft with Ask
+	// Crewlet and the advisor's every unread source, merged on top of it, took it
+	// to 5692.9 KiB (5,829,572 bytes, +1,858, all script). The measured size's
+	// next KiB: 5693 KiB. A conversation the engine holds, as a row in Needs
+	// you and a note on its item, on top of it, took it to 5694.2 KiB
+	// (5,830,844 bytes, +1,272, all script). The measured size's next KiB:
+	// 5695 KiB. An agent's access request (its grant drawn in the engine's
+	// words, previewed and applied before the answer), merged on top of it,
+	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
+	// measured size's next KiB: 5697 KiB. Spend's turns that changed nothing
+	// took it to 5699.4 KiB (5,836,141 bytes, +2,713, all script): 5700 KiB.
+	// Usage insights in Settings › Diagnostics and the held conversation's
+	// out-of-memory reason, merged on top of it, took it to 5708.4 KiB
+	// (5,845,450 bytes, +9,309, all script): 5709 KiB. The go-live review of
+	// what each agent can do took it to 5711.6 KiB (5,848,639 bytes, +3,189,
+	// all script): 5712 KiB. A pull request settling the work that waits on it,
+	// and why an item waits (its Waits for line, an overtaken question in the
+	// Inbox), merged on top of it, took it to 5712.1 KiB (5,849,155 bytes, +516,
+	// all script): 5713 KiB.
+	treeBudget = 5<<20 + 593<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

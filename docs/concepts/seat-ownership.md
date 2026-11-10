@@ -279,6 +279,20 @@ carrying: their rows are the replicated estate's, the same on every data node,
 and their bytes the fleet's object store's
 ([Conversation Sessions](conversation-sessions.md#where-a-session-lives)).
 
+A row of a table this build does not carry is skipped, never refused, and the
+hydration says so in one line (`memory_rows_not_carried`), with the rows it
+skipped counted per table. A table a newer build carries is left on the
+changelog for that build. A table this build has **retired** (one it carried
+before, such as `conversation_sessions`, whose sessions now live in the
+executor log) has nobody left to republish or replace its rows. So the first
+hydration that meets them purges the seat's subjects of that table from the
+changelog, once and for every node. The next hydration, on any node, meets none
+and says nothing. A purge that fails is said (`memory_retired_rows_not_purged`)
+and is tried again by the next hydration. During a rolling upgrade, a node
+still on a build that carried the table may publish its rows again, and the
+next hydration on an upgraded node purges them again. That is harmless, since
+the table's content lives elsewhere now, and it ends with the upgrade.
+
 A row that arrives for one this node already has is resolved by what kind of
 row it is. An append-only row — a diary entry, an episode, a skill version —
 is immutable once written, so the carried copy is discarded and

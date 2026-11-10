@@ -321,6 +321,10 @@ type DiaryStore interface {
 	// TrimLong drops a seat's least-useful durable entries once it holds
 	// more than cap of them. Zero takes the shipped cap.
 	TrimLong(ctx context.Context, cap int) (int64, error)
+
+	// RetireHeld deletes entries held back for longer than a held note's
+	// life, reporting how many went.
+	RetireHeld(ctx context.Context, now time.Time) (int64, error)
 }
 
 // LearningJobs is the sweep for the learning subsystem's diary.
@@ -361,6 +365,15 @@ func LearningJobs(d DiaryStore) []Job {
 			Name: "agent_diary_long", Scope: NodeLocal,
 			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
 				return d.TrimLong(ctx, 0)
+			},
+		},
+		{
+			// THE HELD HALF: a note an upgrade or an access change held back,
+			// and nobody kept again within a held note's life
+			// (learning.HeldNoteLife).
+			Name: "agent_diary_held", Scope: NodeLocal,
+			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+				return d.RetireHeld(ctx, now)
 			},
 		},
 	}

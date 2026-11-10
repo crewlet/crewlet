@@ -26,7 +26,7 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 
 	// THE FIRST FAILURE IS STILL FAST. A blip must not cost a seat ten
 	// minutes of silence, which is the other half of this decision.
-	if got := q.nakBackoff(1); got != time.Second {
+	if got := q.nakSpacing(1); got != time.Second {
 		t.Errorf("first redelivery waits %v, want the base delay", got)
 	}
 	for n, want := range map[uint64]time.Duration{
@@ -35,7 +35,7 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 		4: 8 * time.Second,
 		5: 8 * time.Second,
 	} {
-		if got := q.nakBackoff(n); got != want {
+		if got := q.nakSpacing(n); got != want {
 			t.Errorf("delivery %d waits %v, want %v", n, got, want)
 		}
 	}
@@ -46,14 +46,14 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 	// immediate redelivery, which is the failure this whole change is
 	// about.
 	for _, n := range []uint64{0, 64, 1 << 40} {
-		if got := q.nakBackoff(n); got <= 0 || got > 8*time.Second {
+		if got := q.nakSpacing(n); got <= 0 || got > 8*time.Second {
 			t.Errorf("delivery %d waits %v, want a bounded positive wait", n, got)
 		}
 	}
 
 	// A CEILING UNDER THE BASE IS THE CEILING, not a delay that ignores it.
 	tight := &Queue{cfg: Config{NakDelay: time.Minute, NakCeiling: time.Second}}
-	if got := tight.nakBackoff(1); got != time.Second {
+	if got := tight.nakSpacing(1); got != time.Second {
 		t.Errorf("a ceiling below the base gives %v, want the ceiling", got)
 	}
 
@@ -65,11 +65,30 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 	var total time.Duration
 	shipped := &Queue{}
 	for n := uint64(1); n <= uint64(maxDeliver); n++ {
-		total += shipped.nakBackoff(n)
+		total += shipped.nakSpacing(n)
 	}
 	if total < 5*time.Minute {
 		t.Errorf("the default budget spans %v, which does not outlast an LLM "+
 			"entry's one-minute sit-out several times over", total)
+	}
+}
+
+// A REDELIVERY IS SPREAD AROUND ITS SPACING, never past a fifth either way, so
+// seats whose turns failed together do not all come back on one second.
+func TestARedeliveryIsSpreadAroundItsSpacing(t *testing.T) {
+	t.Parallel()
+	q := &Queue{cfg: Config{NakDelay: time.Second, NakCeiling: 8 * time.Second}}
+	spacing := q.nakSpacing(3)
+	seen := map[time.Duration]bool{}
+	for range 200 {
+		got := q.nakBackoff(3)
+		seen[got] = true
+		if low, high := spacing-spacing/5, spacing+spacing/5; got < low || got > high {
+			t.Fatalf("a redelivery spaced %v waits %v, outside [%v, %v]", spacing, got, low, high)
+		}
+	}
+	if len(seen) < 2 {
+		t.Errorf("200 redeliveries spaced %v all waited the same", spacing)
 	}
 }
 

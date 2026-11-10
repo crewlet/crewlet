@@ -67,6 +67,9 @@ function queue(agents: AgentRow[]) {
     now: Date.parse("2026-01-01T12:00:00Z"),
     nameOf: (key) => key,
     mcpAlarms: [],
+    notices: [],
+    findings: [],
+    setupUnread: [],
   };
   return attentionQueue(input);
 }

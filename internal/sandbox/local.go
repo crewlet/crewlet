@@ -1192,12 +1192,10 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		// it has no other copy. A 400-byte cut removed the second half of
 		// exactly the messages worth reading.
 		//
-		// CLASSED AS CONFIGURATION, which every one of those is — the image,
-		// the runtime, its daemon, the flags — and which a pull failing on a
-		// network blip is not quite: telling which from the runtime's words
-		// is the reading of text this package does not do, and a person
-		// looking at the host is what both need when it does not clear.
-		return nil, localRefusedf(WhyConfiguration,
+		// CLASSED BY WHETHER THE IMAGE IS HERE, asked of the runtime rather
+		// than read from its words: present and refused is the configuration's,
+		// absent is a pull that failed, which a retry may outlast.
+		return nil, localRefusedf(startFailure(ctx, l.cli, l.opts.Image),
 			"could not start sandbox container from image %q: %s", l.opts.Image, detail)
 	}
 	box := &containerBox{
@@ -1683,4 +1681,15 @@ func logSignal(what string, pid int, err error) {
 		return
 	}
 	localLog.Warn("local_sandbox_signal_failed", "signal", what, "pgid", pid, "error", err.Error())
+}
+
+// startFailure classes a container that would not start from image: the
+// configuration's when the runtime holds the image and refused to run it, the
+// image source's when the image is not here, so the failure was fetching it.
+func startFailure(ctx context.Context, cli containerCLI, image string) Why {
+	result, err := runHost(ctx, cli.command(0, "image", "inspect", image))
+	if err == nil && result.ExitCode == 0 {
+		return WhyConfiguration
+	}
+	return WhyProviderUnavailable
 }

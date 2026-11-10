@@ -761,6 +761,7 @@ const CHANGE_DONE: Readonly<Record<string, string>> = {
   prioritised: "Prioritised it",
   file_written: "Wrote a file",
   file_removed: "Removed a file",
+  change_settled: "A pull request it waited on merged or closed",
 };
 
 /**

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -559,20 +561,22 @@ func sweepArgs(artifact string) map[string]map[string]any {
 		builtin.ReadChannelTool:          {"channel": chatRoomID},
 		worklet.ReadProjectFileTool:      {"project": "ENG", "path": "notes.md"},
 		builtin.RefineSkillTool:          {"skill_name": "deploys", "content": "plain"},
-		builtin.ReflectAndPersistTool:    {"content": "a plain fact"},
-		worklet.RemoveProjectFileTool:    {"project": "ENG", "path": "notes.md"},
-		builtin.ResumeSeatTool:           {"handle": "agent-ceo"},
-		builtin.SearchKnowledgeTool:      {"query": "deploy"},
-		builtin.SearchMessagesTool:       {"text": "backoff"},
-		builtin.SearchWorkItemsTool:      {"text": "checkout"},
-		builtin.SetArtifactSchemaTool:    {"artifact": artifact, "collections": []any{map[string]any{"name": "notes"}}},
-		builtin.ShareArtifactTool:        {"artifact": artifact, "to": "agent-ceo", "role": "viewer"},
-		builtin.SteerTurnTool:            {"turn_id": "turn-1", "note": "plain"},
-		builtin.UnshareArtifactTool:      {"artifact": artifact, "from": "founder"},
-		builtin.UpdateArtifactTool:       {"artifact": artifact, "icon": "chart"},
-		builtin.UploadArtifactAssetTool:  {"artifact": artifact, "name": "logo.png", "content": "iVBORw0KGgo=", "encoding": "base64"},
-		builtin.UseSkillTool:             {"skill_name": "deploys"},
-		worklet.WorkInboxTool:            {"handle": "agent-ceo"},
+		builtin.RequestAccessTool: {"item": "ENG-1", "ask": "founder", "access": string(advisor.AccessHealth),
+			"why": "plain"},
+		builtin.ReflectAndPersistTool:   {"content": "a plain fact"},
+		worklet.RemoveProjectFileTool:   {"project": "ENG", "path": "notes.md"},
+		builtin.ResumeSeatTool:          {"handle": "agent-ceo"},
+		builtin.SearchKnowledgeTool:     {"query": "deploy"},
+		builtin.SearchMessagesTool:      {"text": "backoff"},
+		builtin.SearchWorkItemsTool:     {"text": "checkout"},
+		builtin.SetArtifactSchemaTool:   {"artifact": artifact, "collections": []any{map[string]any{"name": "notes"}}},
+		builtin.ShareArtifactTool:       {"artifact": artifact, "to": "agent-ceo", "role": "viewer"},
+		builtin.SteerTurnTool:           {"turn_id": "turn-1", "note": "plain"},
+		builtin.UnshareArtifactTool:     {"artifact": artifact, "from": "founder"},
+		builtin.UpdateArtifactTool:      {"artifact": artifact, "icon": "chart"},
+		builtin.UploadArtifactAssetTool: {"artifact": artifact, "name": "logo.png", "content": "iVBORw0KGgo=", "encoding": "base64"},
+		builtin.UseSkillTool:            {"skill_name": "deploys"},
+		worklet.WorkInboxTool:           {"handle": "agent-ceo"},
 		builtin.WriteArtifactDataTool: {"artifact": artifact, "ops": []any{map[string]any{"op": "insert",
 			"collection": "notes", "fields": map[string]any{"note": "plain"}}}},
 		worklet.WriteProjectFileTool: {"project": "ENG", "path": "plain.md", "content": "plain"},

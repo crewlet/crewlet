@@ -62,9 +62,15 @@ func (w Work) File(ctx context.Context, project, path string,
 	return call(ctx, w.r, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
 }
 
-// Views answers the saved views.
+// Views answers one container's strip of views, to show.
 func (w Work) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
+}
+
+// CarriedViews answers one container's strip of views as a caller saves a view
+// of it again from, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
+	return call(ctx, w.r, opViewsCarried, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
@@ -74,9 +80,15 @@ func (w Work) ExpandedQuery(ctx context.Context, params map[string]any,
 		expandArgs{Params: params, Viewer: viewer, Now: now, Zone: zoneArg(loc)})
 }
 
-// Catalogue answers the workspace catalogue.
+// Catalogue answers the workspace catalogue, to show.
 func (w Work) Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return call(ctx, w.r, opCatalogue, nil, q)
+}
+
+// CarriedCatalogue answers the workspace catalogue a caller sends back whole,
+// read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedCatalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return call(ctx, w.r, opCatalogueCarried, nil, q)
 }
 
 // Person answers one person's own record.
@@ -88,6 +100,11 @@ func (w Work) Person(ctx context.Context, q worklet.PersonQuery, now time.Time) 
 func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
 	fresh statelog.Freshness) (worklet.ResolvedThread, error) {
 	return call(ctx, w.r, opThread, nil, threadArgs{Query: q, Fresh: fresh})
+}
+
+// WorkPatterns answers what the company's comments and answers did in a window.
+func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return call(ctx, w.r, opWorkPatterns, nil, q)
 }
 
 // Activity answers what happened to a task or a project.
@@ -114,9 +131,15 @@ func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.Pro
 	return call(ctx, w.r, opProjects, nil, q)
 }
 
-// Project describes one project.
+// Project describes one project, to show.
 func (w Work) Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
 	return call(ctx, w.r, opProject, nil, q)
+}
+
+// CarriedProject describes one project whose declarations a caller sends back
+// whole, read whole or refused ([ErrUnknownKeys]).
+func (w Work) CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
+	return call(ctx, w.r, opProjectCarried, nil, q)
 }
 
 // Search is the tracker's ranked search, answered by a data node's index. A
@@ -1084,6 +1107,11 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 func (u Usage) ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) (
 	[]usage.ServerToolCallsRow, error) {
 	return call(ctx, u.r, opUsageServerToolCalls, nil, q)
+}
+
+// TurnLedger answers every seat's turns by what woke them and what they did.
+func (u Usage) TurnLedger(ctx context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
+	return call(ctx, u.r, opUsageTurnLedger, nil, q)
 }
 
 // ToolsElided answers how many (server, tool) entries the per-seat-day cap

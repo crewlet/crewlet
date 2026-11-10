@@ -29,8 +29,8 @@ import (
 // costs the OLDEST transitions, counted, never the node's memory. A
 // transition still queued when the node stops is not recovered: the current
 // state is every node's heartbeat's (`fleet_health`), which a wake only
-// prompts a seat to read, and the next start's first evaluation hands on what
-// is still firing as `firing_at_boot`.
+// prompts a seat to read. A raise is kept across a restart only once the
+// broker took it (taken), so one still queued is raised again by the next start.
 
 // alarmOutboxCap is how many transitions a node holds unpublished before it
 // drops the oldest.
@@ -83,6 +83,9 @@ type alarmOutbox struct {
 	// retry. Nil is [alarmRetryBase] doubling to [alarmRetryCeiling],
 	// jittered; a case sets one that does not wait.
 	retry func(attempt int) time.Duration
+
+	// taken is told the id of every transition the broker took, nil for none.
+	taken func(ctx context.Context, id string)
 
 	// ready holds one token while a transition may be waiting: Add never
 	// blocks on it, and the loop drains the queue whole on each.
@@ -153,6 +156,9 @@ func (o *alarmOutbox) run(ctx context.Context) {
 		switch {
 		case err == nil:
 			o.done(true)
+			if o.taken != nil {
+				o.taken(ctx, t.ID)
+			}
 			if failing > 0 {
 				log.InfoContext(ctx, "alarm_transitions_publishing", "after", failing,
 					"detail", "the broker takes the alarm transitions again")

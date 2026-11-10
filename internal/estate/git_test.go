@@ -482,7 +482,7 @@ func TestHomeIsTheReadsFirstGitletNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.client.markSuspect(home)
-	if order := f.client.keyedOrder(opCodeGitRead.spec, repo, holders, false); order[0] == home {
+	if order := f.client.keyedOrder(opCodeGitRead.spec, repo, holders, false, nil); order[0] == home {
 		t.Fatalf("the premise: the walk still asks the suspect home %s first: %v", home, order)
 	}
 	if again, err := f.client.Home(repo); err != nil || again != home {

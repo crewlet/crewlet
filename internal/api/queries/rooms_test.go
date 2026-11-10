@@ -141,6 +141,8 @@ func everySeam(t *testing.T) queries.Sources {
 		FleetBroker: emptyBroker{},
 
 		IssueReports: issuereport.New(issuereport.Config{Store: coordmemory.NewFleet()}),
+		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
+		Insights:     coordmemory.NewFleet(),
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
@@ -350,6 +352,10 @@ func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 
 func (emptyWork) Search(context.Context, worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	return worklet.SearchAnswer{}, nil
+}
+
+func (emptyWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
+	return worklet.WorkPatterns{}, nil
 }
 
 func (emptyWork) Thread(context.Context, worklet.ThreadQuery, statelog.Freshness) (

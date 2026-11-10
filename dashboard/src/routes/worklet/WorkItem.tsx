@@ -66,9 +66,12 @@ import {
   ActivityGlyph,
   EllipsisGlyph,
   PackageGlyph,
+  PauseGlyph,
   SquareKanbanGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
+import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
+import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
@@ -90,6 +93,7 @@ import {
   seatResolvers,
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
+import type { AdvisorNotice } from "~/protocol/advisor.ts";
 import { relTime } from "~/lib/format.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -159,6 +163,21 @@ export function itemFlags(detail: WorkItemDetail) {
       )}
       {item.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
+  );
+}
+
+/**
+ * The engine's hold on the item's conversation (ADR-0117), said where a reader
+ * would expect the agent to be working on it, with what releases it.
+ */
+export function HeldNote({ hold }: { hold: AdvisorNotice }) {
+  return (
+    <Callout variant="info" icon={<PauseGlyph size="md" />}>
+      <span>
+        <strong>Held by the engine:</strong> {heldReason(hold)}. Writing on it, or changing the
+        agent's {heldSetting(hold)}, releases it.
+      </span>
+    </Callout>
   );
 }
 
@@ -325,6 +344,10 @@ export function WorkItem({ id }: { id: string }) {
   const agents = useAgents();
   const now = useNow();
   const { state, item, project, children, worklet } = useTask(id);
+  // THE ENGINE'S HOLD ON ITS CONVERSATION, from the notices an administrator reads.
+  const admin = useViewer().admin;
+  const advisor = useQuery("advisor", undefined, { pollMs: ADVISOR_POLL_MS, enabled: admin });
+  const held = item ? itemHold(admin ? advisor.data?.notices : undefined, item.id) : undefined;
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();
   const nav = useNavigator();
@@ -495,6 +518,7 @@ export function WorkItem({ id }: { id: string }) {
                     <>
                       {itemFlags(state.data)}
                       {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+                      {held && <HeldNote hold={held} />}
                       <Coverage answer={state.data} />
                       <ItemEditNote readOnly={READ_ONLY} />
                       <ItemTitle item={item} />

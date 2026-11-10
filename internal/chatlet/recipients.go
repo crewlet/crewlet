@@ -116,9 +116,9 @@ type Routing struct {
 	loud bool
 }
 
-// silent is an agent's message that asks nothing: it wakes the seats it names,
-// the seats whose questions it answers and the seats that still owe an answer
-// in its thread, and no seat for a standing arrangement (ADR-0113).
+// silent is an agent's message that asks nothing: it wakes the seats whose
+// questions it answers and the seats with a stake in its thread, and no seat
+// it names or holds a standing arrangement with (ADR-0113).
 func (r Routing) silent() bool {
 	return !r.loud && r.AuthorKind == AuthorAgent && !r.Asks
 }
@@ -201,7 +201,6 @@ func ResolveMentions(r Routing) ([]Candidate, bool) {
 	r.loud = false
 	c := &collector{}
 	c.add(ReasonMention, limitFor(ReasonMention), r.arm(ReasonMention))
-	c.add(ReasonNamed, limitFor(ReasonNamed), r.arm(ReasonNamed))
 	return c.out, c.truncated
 }
 
@@ -365,13 +364,10 @@ func (r Routing) arm(reason Reason) []string {
 		return r.mentioned()
 
 	case ReasonNamed:
-		// THE MENTION, WOKEN AND NOT OBLIGED, of an agent that asks
-		// nothing: the mention arm above is silent for exactly this
-		// message, so a handle is named under one of the two.
-		if !r.silent() {
-			return nil
-		}
-		return r.mentioned()
+		// AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE, never a
+		// wake: an earlier build woke it here, and two agents naming each
+		// other in status notes woke each other back and forth.
+		return nil
 
 	case ReasonReplyToOwnRoot:
 		if r.ThreadRoot == "" || r.silent() || r.addressed() {

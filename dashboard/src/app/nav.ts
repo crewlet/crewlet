@@ -492,6 +492,15 @@ export const WORKSPACES: WorkspaceRow[] = [
         service: "tracker",
       },
       {
+        key: "holding-up",
+        label: "Holding up",
+        icon: "clock",
+        path: ["me", "holding-up"],
+        hint: "Their open work that other work waits on",
+        grants: ["worklet"],
+        service: "tracker",
+      },
+      {
         key: "collaborating",
         label: "Collaborating",
         icon: "users",
@@ -1184,6 +1193,18 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["admin"],
       },
       {
+        // WHAT THE SETUP COSTS AND THE CHANGE THAT FIXES IT: read off the
+        // company document, so an admin's as the document is.
+        key: "advisor",
+        label: "Advisor",
+        icon: "list-checks",
+        path: ["settings", "advisor"],
+        hint: "What the company's setup costs it, and the change that fixes each",
+        keywords: ["setup", "findings", "recommendations", "go-live", "health"],
+        group: "Runtime",
+        grants: ["admin"],
+      },
+      {
         key: "spend",
         // NOT "SPEND" UNDER SPEND: where the company runs no Worklet the
         // group holds this row alone, and it read "Spend › Spend". The
@@ -1425,6 +1446,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "asked-of-me",
   "asked-by-me",
   "unblocked",
+  "holding-up",
   "collaborating",
   "watching",
   "checklist",

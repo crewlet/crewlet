@@ -45,11 +45,33 @@ import (
 // awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
 // Version 4 is a history row that keeps its writer's apps
 // ([MutationRecord.ActorAppsKept]).
-const RecordVersion = 4
+// Version 5 is an agent's comment stating whether it asks
+// ([Snapshot.CommentAsks]) and which seats it names are agents
+// ([Snapshot.MentionedAgents]).
+// Version 6 is a notice row that keeps that statement
+// ([MutationRecord.NoticeAsksKept]).
+// Version 7 is a notice row that keeps whether the change woke its recipient
+// ([MutationRecord.NoticeWokeKept]).
+// Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
+// Version 9 is why a task waits until its start ([TaskPatch.WaitReason]).
+// Version 10 is a task patch taking a date off by its flag
+// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 9 decodes
+// neither, and would apply the patch as one that names no date — keeping a
+// date every newer node cleared.
+// Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
+const RecordVersion = 11
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
 const AppsKeptVersion = 4
+
+// NoticeAsksVersion is the version from which the applier keeps a comment
+// author's statement on its notice rows; every older record leaves it NULL.
+const NoticeAsksVersion = 6
+
+// NoticeWokeVersion is the version from which the applier keeps on a notice row
+// whether the change woke its recipient; every older record reads it as woken.
+const NoticeWokeVersion = 7
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -97,6 +119,15 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
 	{Name: "Snapshot.ThreadAwaiting", Since: 3, Path: []string{"notify", "snapshot", "thread_awaiting"}},
 	{Name: "MutationRecord.ActorAppsKept", Since: AppsKeptVersion, Path: []string{"actor_apps_kept"}},
+	{Name: "Snapshot.CommentAsks", Since: 5, Path: []string{"notify", "snapshot", "comment_asks"}},
+	{Name: "Snapshot.MentionedAgents", Since: 5, Path: []string{"notify", "snapshot", "mentioned_agents"}},
+	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
+	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
+	{Name: "TaskPatch.AskWatch", Since: 8, Path: []string{"mutation", "ask_watch"}},
+	{Name: "TaskPatch.WaitReason", Since: 9, Path: []string{"mutation", "wait_reason"}},
+	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
+	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
+	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -797,6 +828,17 @@ type MutationRecord struct {
 	// so a record older than the rule keeps an empty column on every node.
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
 
+	// NoticeAsksKept marks a record whose comment author's statement its notice
+	// rows keep (`tracker_notifications.asks`). Version 6, so a record older than
+	// the rule leaves the column NULL on every node.
+	NoticeAsksKept bool `json:"notice_asks_kept,omitempty"`
+
+	// NoticeWokeKept marks a record that tells somebody it does not wake, whose
+	// notice rows keep whether each recipient was woken
+	// (`tracker_notifications.starts_turn`). Version 7, so a record older than
+	// the rule reads as waking every recipient on every node.
+	NoticeWokeKept bool `json:"notice_woke_kept,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -927,8 +969,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept", "operator_id",
-	"turn_id", "chain", "kind", "notify",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
+	"notice_asks_kept", "notice_woke_kept", "operator_id", "turn_id", "chain", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -1132,6 +1174,10 @@ const (
 	// account of itself.
 	ChangeFileWritten ChangeKind = "file_written"
 	ChangeFileRemoved ChangeKind = "file_removed"
+
+	// ChangeLinkSettled is a change (a pull request) the task waits on
+	// merged or closed, written by the engine, never by an agent's turn.
+	ChangeLinkSettled ChangeKind = "change_settled"
 )
 
 // ChangeKinds are every change kind this build writes.
@@ -1149,6 +1195,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
+	ChangeLinkSettled,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.
@@ -1281,6 +1328,15 @@ type Snapshot struct {
 
 	// CommentAsk is the handle a comment asked, set only at creation.
 	CommentAsk string `json:"comment_ask,omitempty"`
+
+	// CommentAsks is an agent's statement, on every comment it writes, of
+	// whether the comment asks the seats it names; false makes a mention of
+	// an agent a reference (ADR-0113). Nil on a person's and an older build's.
+	CommentAsks *bool `json:"comment_asks,omitempty"`
+
+	// MentionedAgents are the seats an agent's comment names that are
+	// agents; a person it names is addressed whether or not it asks.
+	MentionedAgents []string `json:"mentioned_agents,omitempty"`
 
 	// AnsweredAuthor is the author of the ASKED comment.
 	//

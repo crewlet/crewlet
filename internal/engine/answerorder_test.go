@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 // THE R1/R2 RACE, end to end through a seat's inbox, on BOTH backends.
@@ -463,6 +464,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		Completions: ledgerstore.NewMemoryCompletions(),
 		Answer:      coordinator.TryResumeFromAnswer,
 		Parties:     func() notify.Parties { return parties },
+		Prompts:     func() notify.Prompts { return notify.NewPrompts(slack.Prompt()) },
 		Conditions: func(handle string) inbox.Conditions {
 			held, awaits := coordinator.SeatRuns(handle)
 			return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
@@ -562,7 +564,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	// above: R1 was posted before the second question was asked.
 	if d, err := coordinator.TryResumeFromAnswer(ctx, "swe", sandbox.Reply{
 		Conv: sandbox.ConversationRef{Identity: "slack:C1:1.0", Partition: "slack:C1:1.0"},
-		Text: "use the release branch", Events: []*events.Event{r1},
+		Text: "use the release branch", Events: []*events.Event{r1}, Says: true,
 	}); err != nil || d != sandbox.AnswerNotMine {
 		t.Fatalf("R1 offered to the second question = %q, %v, want %q", d, err, sandbox.AnswerNotMine)
 	}

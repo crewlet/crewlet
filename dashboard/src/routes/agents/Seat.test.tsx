@@ -1608,6 +1608,7 @@ const JANE_QUEUE = {
   collaborating: [],
   watching_recent: [],
   unblocked_recent: [],
+  holding_up: [],
   totals: {
     priorities: { total: 2 },
     assigned: { total: 0 },
@@ -1616,6 +1617,7 @@ const JANE_QUEUE = {
     collaborating: { total: 0 },
     watching_recent: { total: 0 },
     unblocked_recent: { total: 0 },
+    holding_up: { total: 0 },
   },
   complete: true,
 };

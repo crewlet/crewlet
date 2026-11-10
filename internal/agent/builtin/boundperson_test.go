@@ -188,7 +188,7 @@ func TestABoundPersonsGesturesLandOnTheirSeat(t *testing.T) {
 		trk.tasks["ENG-1"] = item
 		got := asJane(t, boundSurface(t, trk, janesChart()),
 			builtin.CommentOnWorkTool,
-			map[string]any{"item": "ENG-1", "body": "shipping this today"})
+			map[string]any{"asks": false, "item": "ENG-1", "body": "shipping this today"})
 		if got.Failed {
 			t.Fatalf("the comment failed: %s", got.Output)
 		}

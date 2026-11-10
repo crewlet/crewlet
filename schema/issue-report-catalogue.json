@@ -292,7 +292,7 @@
     {
       "id": "executor.run_stranded",
       "title": "An executor run was stranded by the engine",
-      "summary": "An executor's run ended with no turn able to resume it, for a reason the engine documents as an invariant of its own and not as its environment or a person's act: the run's record held none of its turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+      "summary": "An executor's run ended with no turn able to resume it, for a reason the engine documents as an invariant of its own and not as its environment or a person's act: the run's record held none of its turn's parked state, its turn suspended with no conversation recorded, every attempt to resume a finished job failed on an error the engine could not attribute elsewhere, or its parked state was saved in a format an upgrade retired. The `reason` says which.",
       "component": "internal/sandbox",
       "site": "internal/sandbox.(*Coordinator).settleFailed",
       "facts": [
@@ -302,7 +302,8 @@
           "enum": [
             "no_execute_state",
             "suspension_unrecorded",
-            "resume_failing"
+            "resume_failing",
+            "state_retired"
           ]
         }
       ],

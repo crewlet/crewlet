@@ -23,6 +23,10 @@ const (
 	// only reason a mute does not suppress.
 	ViaMention = "mention"
 
+	// ViaThread: an agent that asked something in the thread a reply is in,
+	// woken by any reply there by somebody else (ADR-0113).
+	ViaThread = "thread"
+
 	// ViaWatcher: following the page.
 	ViaWatcher = "watcher"
 
@@ -118,6 +122,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// named, and hears it once.
 	var b routing.Builder[string]
 	b.AddAll(record.Notify.Mentions, ViaMention, true)
+	b.AddAll(record.Notify.Awaiting, ViaThread, false)
 	// THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted once at
 	// write time — so this can never forget to, and a handle that unwatched
 	// is not woken by a set that still remembers them.
@@ -148,12 +153,17 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// in their own container, like anybody saving a page they watch, has
 	// nothing to learn from the change they just made.
 	refused := 0
-	routed := routing.Route(b.Candidates(), employs(reg, &refused), actor, nil)
+	heard := routing.Heard(b.Candidates(), employs(reg, &refused), actor, nil)
+	routed := routing.Waking(heard)
+	if agentReference(record) {
+		routed = peopleAndAskers(routed, reg, record.Notify.Awaiting)
+	}
+	held := routing.Held(heard, routed)
 	if refused > 0 {
 		log.Debug("pages_unknown_recipients_dropped", "count", refused,
 			"page", base.Metadata[MetaTitle])
 	}
-	if len(routed) == 0 {
+	if len(routed) == 0 && len(held) == 0 {
 		if offered {
 			// A CHANGE ITS LEAD HAD A REASON TO KNOW ABOUT reached nobody:
 			// the container has no lead (an empty `lead`), or its lead is
@@ -167,7 +177,13 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// THE RECORD'S OWN INSTANT stamps every wake it produces — see
 	// [notify.Routed.WakeAt].
 	at := record.CreatedAt
-	out := make([]notify.Routed, 0, len(routed))
+	out := make([]notify.Routed, 0, len(routed)+len(held))
+	for _, c := range held {
+		// TOLD AND NOT WOKEN: the held wake's record, never a delivery.
+		out = append(out, notify.Routed{Inbound: notify.Inbound{Source: base.Source},
+			To: notify.Recipient{Handle: c.Handle}, Held: true,
+			WakeID: changefeed.WakeID(base.Metadata[MetaChangeID], c.Handle), WakeAt: at})
+	}
 	for _, c := range routed {
 		out = append(out, notify.Routed{
 			Inbound: withVia(base, c.Reason),
@@ -201,6 +217,34 @@ func employs(reg *notify.Registry, refused *int) func(string) bool {
 		*refused++
 		return false
 	}
+}
+
+// agentReference reports an agent's comment that states it asks nothing: it
+// wakes only the agents that asked in its thread, while the people it reaches
+// are told as before (ADR-0113). An unstated one routes as it always did.
+func agentReference(record MutationRecord) bool {
+	n := record.Notify
+	return record.ActorKind == AuthorAgent && n.Asks != nil && !*n.Asks &&
+		(n.Kind == ChangeComment || n.Kind == ChangeCommentEdited)
+}
+
+// peopleAndAskers keeps the routed people and the agents that asked in the
+// thread. A nil registry tells nobody apart and keeps everybody, as [employs]
+// admits them.
+func peopleAndAskers(routed []routing.Candidate[string], reg *notify.Registry,
+	askers []string) []routing.Candidate[string] {
+
+	if reg == nil {
+		return routed
+	}
+	out := routed[:0:0]
+	for _, c := range routed {
+		party, ok := reg.ByHandle(c.Handle)
+		if (ok && party.Human) || slices.Contains(askers, c.Handle) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // LeadWorthy reports whether a change reaches the container's lead when

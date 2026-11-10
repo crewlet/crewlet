@@ -451,6 +451,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       ref,
+		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
 		Setup:      runEnv.setup,
 		MCPServers: servers,
@@ -577,6 +578,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
 		}
 		return failed, err
+	}
+	if result.Read != nil {
+		e.keepBoxReading(ctx, company, handle, cell, *result.Read)
 	}
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }

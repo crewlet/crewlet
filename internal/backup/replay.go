@@ -447,9 +447,9 @@ func (p *objectPass) readLog(ctx context.Context, js jetstream.JetStream, l decl
 			created.UTC().Format(time.RFC3339Nano), statelog.ErrStreamRecreated)
 	}
 	if !statelog.Replayable(from, first) {
-		// THE ASSERTION REFUSES THIS for a log the copy holds a cursor on;
-		// this is the one it cannot see, a copy with none on a log already
-		// trimmed.
+		// THE ASSERTION REFUSES THIS for every log the manifest names; held
+		// again here because the window is read from this position whatever
+		// declared the log.
 		return fmt.Errorf("%w: %s starts at %d and the copy stands at %d, so what the "+
 			"records a restore replays from the copy name cannot be read", ErrLogGap,
 			l.stream, first, from)

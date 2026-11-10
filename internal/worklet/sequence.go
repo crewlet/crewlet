@@ -377,10 +377,18 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	if err := checkTextCaps(&task.Title, &task.Body, nil); err != nil {
 		return WriteResult{}, err
 	}
+	// AND THE INSTANTS, for the caps' reason: the zero instant is no
+	// instant, whichever node is asked ([Task.CheckInstants]).
+	if err := task.CheckInstants(); err != nil {
+		return WriteResult{}, err
+	}
 	if ask != nil {
 		// A VALUE CHECK TOO, and before the mint for the reason the caps
 		// are: a malformed question refused after the counter moved is a
 		// numbering gap nobody asked for.
+		if err := ask.CheckInstants(); err != nil {
+			return WriteResult{}, err
+		}
 		if err := checkCreateAsk(&task, ask); err != nil {
 			return WriteResult{}, err
 		}

@@ -13,6 +13,7 @@
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
+import type { AdvisorNotice } from "~/protocol/advisor.ts";
 import {
   attentionQueue,
   conditionsToDecide,
@@ -29,6 +30,34 @@ import { fmtAt } from "./format.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
+/** A setup finding that blocks the company and is the owner's to fix. */
+const SETUP_BLOCKER = {
+  class: "integration.credential_rejected",
+  severity: "blocks" as const,
+  actor: "owner" as const,
+  source: "reconcile" as const,
+  area: "integrations",
+  subject: { kind: "integration", name: "Datadog" },
+  title: "Datadog refused the credential.",
+  why: "The agents' Datadog tools are off.",
+  path: "integrations.datadog",
+  evidence: [],
+  fix: { kind: "external_step", sentence: "Replace the credential.", options: [] },
+};
+
+/** The notice the engine sends for SETUP_BLOCKER. */
+const SETUP_NOTICE = { class: SETUP_BLOCKER.class, subject: SETUP_BLOCKER.subject };
+
+/** An alarm's notice, as the engine sends one that has stood past its threshold. */
+function alarmNotice(kind: string, nodes = ["node-a"]): AdvisorNotice {
+  return {
+    class: "alarm",
+    subject: { kind: "alarm", name: kind },
+    since: "2026-01-01T10:00:00Z",
+    nodes,
+  };
+}
+
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
@@ -40,6 +69,9 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     now,
     nameOf: (key) => key,
     mcpAlarms: [],
+    notices: [],
+    findings: [],
+    setupUnread: [],
     ...over,
   };
 }
@@ -375,6 +407,12 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         mcpAlarms: [mcpAlarm("mcp_server_failing", "github")],
+        notices: [
+          SETUP_NOTICE,
+          alarmNotice("backup_age"),
+          { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "task:t-1" } },
+        ],
+        findings: [SETUP_BLOCKER],
         engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
@@ -793,4 +831,122 @@ describe("an MCP server's alarms", () => {
     expect(row?.title).toBe("docs is not running on every node");
     expect(row?.who).toBeUndefined();
   });
+});
+
+// THE SETUP'S BLOCKERS ARE A PERSON'S, in the Inbox and on Home: each opens the
+// advisor, says what to do, and clears when the setup no longer raises it.
+test("a finding that blocks the company is a condition a person decides", () => {
+  const queue = attentionQueue(input({ notices: [SETUP_NOTICE], findings: [SETUP_BLOCKER] }));
+  const row = queue.find((a) => a.subject === "setup");
+  expect(row?.title).toBe("Datadog refused the credential.");
+  expect(row?.detail).toBe("Replace the credential.");
+  expect(row?.path).toEqual(["settings", "advisor"]);
+  expect(conditionsToDecide(queue)).toContainEqual(row);
+});
+
+// AN ALARM'S FINDING THE ANSWER COULD NOT RAISE (its node has not evaluated
+// yet) is still said, in the alarm's words, never dropped without a word.
+test("a notice an alarm raised is drawn as that alarm when its finding is missing", () => {
+  const queue = attentionQueue(
+    input({
+      notices: [
+        {
+          class: "durability.no_verified_backup",
+          subject: { kind: "company" },
+          since: "2026-01-01T10:00:00Z",
+          nodes: ["node-a"],
+          alarm: "backup_age",
+        },
+      ],
+    }),
+  );
+  const row = queue.find((a) => a.id === "alarm-backup_age");
+  expect(row?.title).toBe("Backup age has not cleared");
+  expect(row?.technical).toBe("Standing on node-a.");
+  expect(row?.at).toBe("2026-01-01T10:00:00Z");
+  expect(conditionsToDecide(queue)).toContainEqual(row);
+});
+
+// ONLY WHAT THE ENGINE NOTICED REACHES THE QUEUE: a blocking finding with no
+// notice is the advisor's to show, and a notice whose finding is gone draws nothing.
+test("a finding is a condition only through its notice", () => {
+  expect(
+    attentionQueue(input({ findings: [SETUP_BLOCKER] })).filter((a) => a.subject === "setup"),
+  ).toEqual([]);
+  expect(
+    attentionQueue(input({ notices: [SETUP_NOTICE] })).filter((a) => a.subject === "setup"),
+  ).toEqual([]);
+});
+
+// AN ALARM THAT HAS STOOD REACHES THE ADMINISTRATORS: one row a kind, opening
+// the section that draws it, with the nodes it stands on and since when; an MCP
+// alarm is its server's row and is not drawn twice.
+test("an alarm that has stood is a condition a person decides", () => {
+  const queue = attentionQueue(
+    input({
+      notices: [
+        alarmNotice("backup_age", ["node-a", "node-b"]),
+        alarmNotice("llm_sign_in_refused"),
+        alarmNotice("mcp_server_failing"),
+      ],
+    }),
+  );
+  const backup = queue.find((a) => a.id === "alarm-backup_age");
+  expect(backup?.title).toBe("Backup age has not cleared");
+  expect(backup?.path).toEqual(["settings", "backups"]);
+  expect(backup?.query).toEqual({ at: "alarms" });
+  expect(backup?.technical).toBe("Standing on node-a, node-b.");
+  expect(backup?.at).toBe("2026-01-01T10:00:00Z");
+  expect(queue.find((a) => a.id === "alarm-llm_sign_in_refused")?.path).toEqual([
+    "settings",
+    "models",
+  ]);
+  expect(queue.find((a) => a.id === "alarm-mcp_server_failing")).toBeUndefined();
+  expect(conditionsToDecide(queue)).toContainEqual(backup);
+});
+
+// A SOURCE THE ADVISOR COULD NOT READ IS ONE ROW, saying what it leaves out, so
+// a blocker it would have raised never drops out of the queue unsaid.
+test("an advisor that could not read everything says so, once", () => {
+  expect(attentionQueue(input()).filter((a) => a.subject === "setup")).toEqual([]);
+  const queue = attentionQueue(input({ setupUnread: ["alarms", "work"] }));
+  const rows = queue.filter((a) => a.id === "setup-unread");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.title).toBe("The advisor couldn't read everything");
+  expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
+  expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
+  const paused = attentionQueue(input({ setupUnread: ["pauses"] })).find(
+    (a) => a.id === "setup-unread",
+  );
+  expect(paused?.detail).toMatch(/an agent the engine paused for a failure may be missing/);
+  expect(rows[0]?.path).toEqual(["settings", "advisor"]);
+});
+
+// A CONVERSATION THE ENGINE HOLDS REACHES THE ADMINISTRATORS: one row a hold,
+// saying there is nothing to decide and what releases it, opening its item.
+test("a held conversation is a row that opens its item", () => {
+  const queue = attentionQueue(
+    input({
+      notices: [
+        {
+          class: "conversation.held",
+          subject: { kind: "seat", seat: "dev", name: "task:t-1" },
+          since: "2026-01-01T10:00:00Z",
+        },
+        { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "chat:room/1" } },
+      ],
+    }),
+  );
+  const item = queue.find((a) => a.id === "held-dev-task:t-1");
+  expect(item?.title).toBe("Held by the engine: its context did not fit its models");
+  expect(item?.path).toEqual(["worklet", "t-1"]);
+  expect(item?.who).toBe("dev");
+  expect(item?.detail).toContain("There is nothing for you to decide.");
+  expect(queue.find((a) => a.id === "held-dev-chat:room/1")?.path).toEqual([
+    "company",
+    "org",
+    "seats",
+    "dev",
+  ]);
+  expect(conditionsToDecide(queue)).toContainEqual(item);
 });

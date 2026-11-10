@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -151,6 +153,27 @@ func (f *listingsHeld) MaintenanceAcks(ctx context.Context, stream string) ([]co
 		return nil, err
 	}
 	return f.wrappedFleet.MaintenanceAcks(ctx, stream)
+}
+
+func (f *listingsHeld) ConversationHolds(ctx context.Context, seat uuid.UUID) ([]coord.ConversationHold, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.ConversationHolds(ctx, seat)
+}
+
+func (f *listingsHeld) ListConversationHolds(ctx context.Context) ([]coord.ConversationHold, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.ListConversationHolds(ctx)
+}
+
+func (f *listingsHeld) ListBoxReadings(ctx context.Context) ([]coord.BoxReading, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.ListBoxReadings(ctx)
 }
 
 func (f *listingsHeld) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {

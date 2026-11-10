@@ -60,6 +60,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// anywhere called it — expired short-term memories stayed rows
 		// every recall scanned, forever.
 		"agent_diary",
+		// AND THE NOTES AN UPGRADE OR AN ACCESS CHANGE HELD BACK, retired a
+		// held note's life after they were first held (learning.HeldNoteLife).
+		"agent_diary_held",
 		"agent_diary_long",
 		// THE DATASTORE LOG'S operation ledger, the per-node table every
 		// strict state log keeps, swept for the pages log's reason below.
@@ -214,6 +217,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_abandoned_merges",
 		"tracker_abandoned_moves",
 		"tracker_duplicate_ranks",
+		// AND THE POLL OF THE PULL REQUESTS TASKS WAIT ON, for what no
+		// webhook delivered (ADR-0121).
+		"tracker_linked_changes",
 		// AND A TASK FILED BEHIND A MOVE THAT HAS FINISHED: a create a
 		// lagging node decided before it heard of the move, accepted after
 		// the walk's last append, lands in the old project under a root in

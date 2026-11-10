@@ -190,6 +190,58 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE WHOSE HISTORY ROW KEEPS ITS APPS.
 		record.Actor, record.ActorKind, record.OperatorID = "token:ci", worklet.AuthorOperator, "token:ci"
 		record.ActorApps, record.ActorAppsKept = []iam.Grant{iam.GrantWorklet}, true
+	case "MutationRecord.NoticeAsksKept":
+		// AN AGENT'S COMMENT WHOSE NOTICE ROWS KEEP ITS STATEMENT.
+		asks := false
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks}}
+		record.NoticeAsksKept = true
+	case "MutationRecord.NoticeWokeKept":
+		// AN AGENT'S COMMENT THAT TELLS AN AGENT IT DOES NOT WAKE, whose notice
+		// rows keep that it did not.
+		asks := false
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks,
+				MentionedAgents: []string{"ada"}}}
+		record.NoticeWokeKept = true
+	case "TaskPatch.ChangeSettled":
+		// A PATCH THAT SAYS A PULL REQUEST THE TASK WAITS ON MERGED.
+		patch, err := json.Marshal(worklet.TaskPatch{ChangeSettled: &worklet.ChangeSettlement{
+			Ref: "https://github.com/acme/web/pull/12", State: worklet.ChangeMerged,
+			At: time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), Source: worklet.SettledByWebhook}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
+	case "TaskPatch.WaitReason":
+		// A PATCH THAT SAYS WHY THE TASK WAITS UNTIL ITS START.
+		start, reason := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "the vendor's window opens then"
+		patch, err := json.Marshal(worklet.TaskPatch{StartAt: &start, WaitReason: &reason})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
+	case "TaskPatch.AskWatch":
+		// A PATCH THAT CARRIES THE WATCHERS A QUESTION ADDED.
+		askWatch := []string{"ada"}
+		patch, err := json.Marshal(worklet.TaskPatch{AskWatch: &askWatch})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
+	case "Snapshot.CommentAsks":
+		// AN AGENT'S COMMENT STATING IT ASKS NOTHING, which every build must
+		// carry: the statement is what makes its mentions references.
+		asks := false
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks}}
+	case "Snapshot.MentionedAgents":
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"ada"},
+			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent,
+				MentionedAgents: []string{"ada"}}}
 	case "Snapshot.ThreadAwaiting":
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadAwaiting: []string{"ada"}}}
@@ -198,6 +250,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// from, which only a reply reads and every build must carry.
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
+	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
+		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
+		// decodes no flag would apply as a patch naming no date.
+		patch, err := json.Marshal(worklet.TaskPatch{ClearStart: field.Name == "TaskPatch.ClearStart",
+			ClearDue: field.Name == "TaskPatch.ClearDue"})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Expect, record.Mutation = worklet.OpPatch, 1, patch
+		record.Subject = worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

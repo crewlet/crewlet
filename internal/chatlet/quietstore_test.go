@@ -286,3 +286,34 @@ func TestATopLevelPostAnswersEveryAskersNewestAsk(t *testing.T) {
 			got, len(r.lastRecord().Notify.Answering))
 	}
 }
+
+// AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE (ADR-0113): the measured
+// loop, an agent's "nothing for @b" in a room, wakes no agent, while the same
+// words saying they ask, or a person's mention, wake b.
+func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("sara"))
+	room := r.room(seat("a", "run-0"), "release", "a", "b", "sara")
+	post := func(actor chatlet.Actor, key string, asks bool) map[string]chatlet.Reason {
+		t.Helper()
+		if _, err := r.store.Post(t.Context(), keyed(actor, requested(key)), room.Channel.ID,
+			chatlet.NewMessage{Body: "My approval still stands, nothing for @b.",
+				Mentions: []string{"b"}, Asks: asks}); err != nil {
+			t.Fatalf("post %s: %v", key, err)
+		}
+		r.drain()
+		return wokenBy(r)
+	}
+	if got := post(seat("a", "run-1"), "k-ref", false); len(got) != 0 {
+		t.Fatalf("an agent's mention that asks nothing woke %v, want nobody", got)
+	}
+	if held := r.lastRecord().Notify.Held; len(held) == 0 {
+		t.Error("the reference reported nobody held back, so an operator cannot see the rule work")
+	}
+	if got := post(seat("a", "run-2"), "k-ask", true); got["b"] != chatlet.ReasonMention {
+		t.Fatalf("an agent's mention that asks woke %v, want b, obliged", got)
+	}
+	if got := post(person("sara"), "k-sara", false); got["b"] != chatlet.ReasonMention {
+		t.Fatalf("a person's mention woke %v, want b", got)
+	}
+}

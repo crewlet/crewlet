@@ -185,6 +185,10 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// since moved.
 				Leads: liveLeads{engine: e},
 			})...)
+			// AND THE POLL OF THE CHANGES TASKS WAIT ON, for what no
+			// webhook delivered (ADR-0121).
+			jobs = append(jobs, maintenance.Job{Name: "tracker_linked_changes", Scope: maintenance.Fleet,
+				Gate: e.openChangesPending, Run: e.pollChanges})
 			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
 			// than a repair and is therefore PER NODE —
 			// `tracker_notifications` is Divergent, so each data node

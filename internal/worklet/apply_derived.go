@@ -14,7 +14,7 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Five today, and the rule all follow is [statelog.Deriver]'s: maintained
+// Six today, and the rule all follow is [statelog.Deriver]'s: maintained
 // INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] whenever the
 // checkpoint's rule set differs from this build's — a cursor a reanchor created
 // (derivation 0), or rows adopted from a build whose rules differ — in this Go,
@@ -36,6 +36,9 @@ import (
 //   - A question's `answered_by`, the first answer the log carries after it,
 //     stamped by the answering remark's apply ([writeComment]) and walked
 //     again by [rederiveAnswers] — see apply_answers.go.
+//   - An open question's `overtaken`, restamped for its task at the end of
+//     every task apply and for every task by [Applier.Rederive]: see
+//     apply_overtaken.go.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
@@ -43,7 +46,7 @@ import (
 // adds included: the bump is what re-derives every data node's rows in this
 // Go, so a node holding rows derived under another rule set converges on this
 // one.
-const DerivationVersion = 1
+const DerivationVersion = 2
 
 var _ statelog.Deriver = (*Applier)(nil)
 
@@ -121,7 +124,11 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + active + handOffs + updated + answers, nil
+	overtaken, err := stampOvertaken(ctx, tx, "")
+	if err != nil {
+		return 0, err
+	}
+	return reopens + active + handOffs + updated + answers + overtaken, nil
 }
 
 // restampStatement is [restampUpdated]'s read for one task, or for every task

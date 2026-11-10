@@ -279,7 +279,9 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.UpdateWorkItemTool: true,
 		builtin.CommentOnWorkTool:  true,
 		// A withdrawal posts its reason where the person asked reads it.
-		builtin.WithdrawAskTool:   true,
+		builtin.WithdrawAskTool: true,
+		// An access request posts a question the person it asks reads.
+		builtin.RequestAccessTool: true,
 		builtin.WritePageTool:     true,
 		builtin.SavePageTool:      true,
 		builtin.CommentOnPageTool: true,
@@ -925,6 +927,34 @@ func TestANoteIsKeptAgainstTheDerivedAgentID(t *testing.T) {
 	// what the agent CHOSE to keep from what a worker decided for it.
 	if !strings.Contains(d.wrote[0].Source, builtin.ReflectAndPersistTool) {
 		t.Errorf("source = %q", d.wrote[0].Source)
+	}
+}
+
+// A NOTE SAYS WHAT IT IS ABOUT, AS THE SEAT NAMES IT. The class is stored with
+// the note, company where the seat names none, and one outside the closed set
+// is refused naming the set, never kept as something else.
+//
+// Mutation: drop the class, default it to anything but company, or keep an
+// unknown one, and this goes red.
+func TestANoteSaysWhatItIsAboutAsTheSeatNamesIt(t *testing.T) {
+	t.Parallel()
+	d := &diaryStore{}
+	tool := registered(t, builtin.Deps{Diary: d}, builtin.ReflectAndPersistTool)
+	turn := turnFor(t, "agent-ceo")
+	for _, args := range []map[string]any{
+		{"content": "My box has no browser.", "about": "capability"},
+		{"content": "Deploys go out on Thursdays."},
+	} {
+		if res := callFor(t, tool, turn, args); res.Failed {
+			t.Fatalf("%v failed: %s", args, res.Output)
+		}
+	}
+	if len(d.wrote) != 2 || d.wrote[0].About != learning.AboutCapability || d.wrote[1].About != learning.AboutCompany {
+		t.Fatalf("kept %+v, want a capability note and a company note", d.wrote)
+	}
+	res := callFor(t, tool, turn, map[string]any{"content": "A guess.", "about": "rumour"})
+	if !res.Failed || len(d.wrote) != 2 || !strings.Contains(res.Output, "platform") {
+		t.Errorf("an unknown class answered %+v and kept %d notes, want a refusal naming the set", res, len(d.wrote))
 	}
 }
 

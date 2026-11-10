@@ -1,0 +1,29 @@
+{
+  "name": "healthy_company",
+  "pattern": "healthy_company",
+  "seats": [
+    {"handle": "owner", "kind": "person"},
+    {"handle": "pm", "kind": "agent"},
+    {"handle": "app", "kind": "agent"},
+    {"handle": "qa", "kind": "agent"}
+  ],
+  "steps": [
+    {"at": 0, "actor": "owner", "verb": "file", "item": "W-1", "assignee": "pm", "expect": {"woken": ["pm"]}},
+    {"at": 60, "actor": "pm", "verb": "comment", "item": "W-1", "say": "question", "ask": "app", "asks": true, "expect": {"woken": ["app"]}},
+    {"at": 120, "actor": "app", "verb": "comment", "item": "W-1", "say": "answer", "answers": 1, "asks": false, "expect": {"woken": ["pm"]}},
+    {"at": 180, "actor": "pm", "verb": "assign", "item": "W-1", "assignee": "app", "expect": {"woken": ["app"]}},
+    {"at": 240, "actor": "app", "verb": "status", "item": "W-1", "status": "in_progress", "expect": {"woken": []}},
+    {"at": 300, "actor": "app", "verb": "comment", "item": "W-1", "say": "question", "ask": "qa", "asks": true, "expect": {"woken": ["qa"]}},
+    {"at": 360, "actor": "qa", "verb": "comment", "item": "W-1", "say": "answer", "answers": 5, "asks": false, "expect": {"woken": ["app"]}},
+    {"at": 420, "actor": "app", "verb": "status", "item": "W-1", "status": "in_review", "expect": {"woken": []}},
+    {"at": 430, "actor": "app", "verb": "assign", "item": "W-1", "assignee": "qa", "expect": {"woken": ["qa"]}},
+    {"at": 500, "actor": "qa", "verb": "status", "item": "W-1", "status": "done", "expect": {"woken": []}},
+    {"at": 560, "actor": "owner", "verb": "comment", "item": "W-1", "say": "substantive", "expect": {"woken": ["app", "pm", "qa"]}},
+    {"at": 620, "actor": "owner", "verb": "comment", "item": "W-1", "say": "request", "mentions": ["pm"], "expect": {"woken": ["pm"]}},
+    {"at": 680, "actor": "owner", "verb": "file", "item": "W-2", "assignee": "app", "expect": {"woken": ["app"]}},
+    {"at": 700, "actor": "pm", "verb": "watch", "item": "W-2", "watcher": "pm", "expect": {"woken": []}},
+    {"at": 760, "actor": "owner", "verb": "comment", "item": "W-2", "say": "request", "expect": {"woken": ["app", "pm"]}},
+    {"at": 800, "actor": "pm", "verb": "comment", "item": "W-2", "say": "request", "mentions": ["app"], "asks": true, "expect": {"woken": ["app"]}},
+    {"at": 820, "actor": "app", "verb": "comment", "item": "W-2", "say": "substantive", "mentions": ["pm"], "asks": false, "expect": {"woken": []}}
+  ]
+}

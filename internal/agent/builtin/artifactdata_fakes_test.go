@@ -136,6 +136,12 @@ func (f *fakeData) Schema(context.Context, artifacts.ID) ([]artifacts.Collection
 	return slices.Clone(f.schema), nil
 }
 
+// CarriedSchema is the schema as read_artifact_data hands it to a model to send
+// back: the same collections, which in this fake no wire stands between.
+func (f *fakeData) CarriedSchema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error) {
+	return f.Schema(ctx, id)
+}
+
 func (f *fakeData) result() artifactdata.WriteResult {
 	if f.unknown {
 		return artifactdata.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown,

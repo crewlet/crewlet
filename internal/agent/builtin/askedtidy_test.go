@@ -293,7 +293,7 @@ func TestAMissingItemAndAnItemYouWereNotAskedOnAreOneRefusal(t *testing.T) {
 	surface, trk := askedRig(t)
 	legal := boundTo("legal")
 	for tool, extra := range map[string]map[string]any{
-		worklet.GetWorkItemTool: {}, worklet.CommentOnWorkTool: {"body": "x"},
+		worklet.GetWorkItemTool: {}, worklet.CommentOnWorkTool: {"asks": false, "body": "x"},
 	} {
 		args := func(item string) map[string]any {
 			out := map[string]any{"item": item}
@@ -338,7 +338,7 @@ func TestAProbeThatCannotReadHasFoundNothingEitherWay(t *testing.T) {
 	surface, trk := askedRigDown(t, down)
 	for tool, args := range map[string]map[string]any{
 		worklet.GetWorkItemTool:   {"item": "ENG-1"},
-		worklet.CommentOnWorkTool: {"item": "ENG-1", "body": "Yes, the clause stands."},
+		worklet.CommentOnWorkTool: {"asks": false, "item": "ENG-1", "body": "Yes, the clause stands."},
 	} {
 		got := callAs(t, surface[tool], boundTo("legal"), args)
 		if !got.Failed || refusedForTracker(got) ||

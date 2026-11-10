@@ -23,6 +23,7 @@ const (
 	KindQueueUnavailable        = "queue_unavailable"
 	KindExecutorUnanswered      = "executor_unanswered"
 	KindFleetKeysDiffer         = "fleet_keys_differ"
+	KindFleetBuildsDiffer       = "fleet_builds_differ"
 	KindDiskFull                = "disk_full"
 	KindDiskReadOnly            = "disk_read_only"
 	KindDiskFailed              = "disk_failed"

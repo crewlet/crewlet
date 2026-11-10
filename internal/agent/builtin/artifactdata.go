@@ -75,6 +75,11 @@ type ArtifactDataStore interface {
 	Query(ctx context.Context, id artifacts.ID, rd artifactdata.Reading, collection string,
 		q query.Query) (artifactdata.DocPage, error)
 	Schema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error)
+	// CarriedSchema is the schema read_artifact_data hands a model, which
+	// set_artifact_schema tells to send it back with its change: read whole
+	// or refused where this node's build would drop part of it (estate's
+	// artifactdata.schema_carried), never shown short and written back.
+	CarriedSchema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error)
 	Write(ctx context.Context, c artifactdata.Call, id artifacts.ID,
 		in artifacts.DataWrite) (artifactdata.WriteResult, error)
 	Configure(ctx context.Context, c artifactdata.Call, id artifacts.ID,

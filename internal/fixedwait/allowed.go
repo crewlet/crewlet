@@ -313,7 +313,6 @@ var allowed = []Entry{
 	{File: "internal/code/cache/install_test.go", Func: "TestARoundGrantsItsGetsInItsOrder", NegativeWindow: 1, Piece: 5},
 	{File: "internal/code/cache/install_test.go", Func: "TestARoundsGetsNeverWaitOnItsDisk", NegativeWindow: 1, Piece: 5},
 	{File: "internal/code/cache/install_test.go", Func: "TestTheNodeHoldsTwoSharesOfPacksInHand", NegativeWindow: 1, Piece: 5},
-	{File: "internal/code/cache/install_test.go", Func: "failFrom.Hit", ExemptWait: 1, Piece: 5},
 	{File: "internal/code/cache/installer_test.go", Func: "TestAKickWhileATaskRunsTheRepositoryHoldsItOnceMore", ExemptWait: 1, Piece: 5},
 	{File: "internal/code/cache/installer_test.go", Func: "TestAnInstallersCanaryWaitsBehindNoCheck", ExemptWait: 1, Piece: 5},
 	{File: "internal/code/cache/installer_test.go", Func: "TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries", NegativeWindow: 1, Piece: 5},

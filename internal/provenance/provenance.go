@@ -197,6 +197,15 @@ var Sources = []Source{
 // Valid reports whether s is one of [Sources].
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
 
+// saidSources are the surfaces whose words a writer addressed to a conversation.
+var saidSources = []Source{
+	SourceChatThread, SourceWorkComment, SourcePageComment, SourceChangeComment, SourceChangeReview,
+}
+
+// Said reports words a writer addressed to a conversation: a chat message, a
+// comment or a review. A document, a change note or a system's report is not.
+func (s Source) Said() bool { return slices.Contains(saidSources, s) }
+
 // Author is one writer of fenced text.
 //
 // Kind is the actor vocabulary every store already records. Seat is the

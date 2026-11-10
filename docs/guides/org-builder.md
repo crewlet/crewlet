@@ -192,7 +192,7 @@ company is never applied to one that exists, and never replayed onto it.
 **Keep my draft** leaves it on screen to read, read-only, with the same offer
 beside it.
 
-After a successful create, three steps remain. **Open Principles** opens
+After a successful create, four steps remain. **Open Principles** opens
 Company › Principles in edit, to write the mission, the vision and the standing
 policies every agent reads. The builder cannot take the other two: connecting
 chat and trackers in Company › Integrations, and adding a model provider. The
@@ -204,7 +204,9 @@ on its wizard, which adds the model, signs it in and tests it; the panel also
 gives the terminal steps for it, folded, which
 [Giving the company a model](#giving-the-company-a-model) explains. On a company
 another system [manages](../concepts/configuration.md#managed-configuration),
-it says the model is added there instead.
+it says the model is added there instead. **Open the advisor** opens
+[Settings › Advisor](advisor.md) and its go-live check: what would
+block the company or cost it, each with a fix you preview before it is made.
 
 ### Giving the company a model
 

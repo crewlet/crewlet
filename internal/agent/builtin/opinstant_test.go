@@ -103,7 +103,7 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 	turn.WorkSince = began
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 	for name, args := range map[string]map[string]any{
-		builtin.CommentOnPageTool: {"page": "p1", "body": "noted"},
+		builtin.CommentOnPageTool: {"asks": false, "page": "p1", "body": "noted"},
 		builtin.WritePageTool:     {"title": "New Page", "body": "text", "container": "ENG"},
 		builtin.SavePageTool: {"page": "p1", "base_version": 4, "body": "text",
 			"title": "Deploy Guide"},
@@ -111,7 +111,7 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 		call(t, reg, turn, name, args)
 	}
 	call(t, reg, turn, builtin.CommentOnPageTool,
-		map[string]any{"page": "p1", "body": "noted, again", "edit": "m1"})
+		map[string]any{"asks": false, "page": "p1", "body": "noted, again", "edit": "m1"})
 	// A comment, a create, a save and its rename, and an edit.
 	if len(kb.keys) != 5 {
 		t.Fatalf("the page writes reached the knowledge base with %d keys, want 5",
@@ -174,7 +174,7 @@ func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
 
 			kb := newFakeKB()
 			call(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}), rebased(),
-				builtin.CommentOnPageTool, map[string]any{"page": "p1", "body": "noted"})
+				builtin.CommentOnPageTool, map[string]any{"asks": false, "page": "p1", "body": "noted"})
 			if len(kb.comments) != 1 || len(kb.keys) != 1 {
 				t.Fatalf("the comment reached the knowledge base %d time(s) under %v",
 					len(kb.comments), kb.keys)

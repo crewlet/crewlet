@@ -474,3 +474,31 @@ func rotatedCipher(t *testing.T) secrets.Cipher {
 	}
 	return cipher
 }
+
+// A TOLD RECORD'S READ POSITION THAT NAMES NOTHING IS JUDGED ON NO STREAM. A
+// position at generation and sequence zero names nothing whatever stream it
+// says, so a told record carrying one is taken as one carrying none — as a node
+// without data's told record is, routed to a data node by the estate router,
+// whose wire leaves a position its type calls zero off. Judged by its stream,
+// the same record was refused where it ran in process and taken where it was
+// routed. A position that names something on another log is refused either way.
+//
+// Mutation: judge the read position's stream without asking whether it names
+// anything, as the check did, and the record naming nothing on the tracker's
+// log is refused.
+func TestAToldRecordsReadPositionThatNamesNothingIsJudgedOnNoStream(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	named := told(t, "sre", uuid.NewString(), "operate", true)
+	named.ReadThrough = statelog.Position{Stream: "CREWLET_TRACKER_LOG"}
+	if _, err := node.writer.Tell(t.Context(), engineCall(), named); err != nil {
+		t.Errorf("a told record whose read position names nothing on another log was refused: %v — "+
+			"routed, the same record arrives with no position and is taken", err)
+	}
+	foreign := told(t, "sre", uuid.NewString(), "operate", true)
+	foreign.ReadThrough = statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4}
+	if _, err := node.writer.Tell(t.Context(), engineCall(), foreign); !errors.Is(err, accessdomain.ErrInvalid) {
+		t.Errorf("a told record read at a position on another log was answered %v, want it refused", err)
+	}
+}

@@ -698,6 +698,8 @@ function CommentRow({
             label={answer.label}
             comment={comment.id}
             asker={name}
+            askedBy={comment.author}
+            question={comment.decision?.question}
             options={comment.decision?.options ?? []}
             {...(comment.decision?.recommended
               ? { recommended: comment.decision.recommended }

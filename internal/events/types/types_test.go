@@ -33,7 +33,7 @@ func catalogue() []events.Payload {
 		ScheduledFireSuperseded{},
 		// notification.go
 		ExternalNotification{}, TurnTriggerSkipped{},
-		NotificationsCoalesced{}, NotificationSkipped{},
+		NotificationsCoalesced{}, NotificationSkipped{}, WakeHeld{},
 		// a2a.go
 		A2ARequest{}, A2AMessage{},
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
@@ -207,6 +207,7 @@ var wireTypes = []string{
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",
+	"wake_held",
 	"work_pickup",
 }
 
@@ -374,9 +375,10 @@ var wireTags = map[string][]string{
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
-	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
+	"turn_trigger_skipped":          {"agent_handle", "agent_id", "disposition", "reason", "trigger_id", "trigger_type", "wake"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
+	"wake_held":                     {"agent_handle", "agent_id", "notification_source", "origin"},
 	"a2a_request":                   {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis", "working_for"},
 	"a2a_message":                   {"channel_id", "content", "question", "sender", "sender_role", "working_for"},
 	"a2a_channel_opened":            {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},
@@ -429,7 +431,7 @@ var wireTags = map[string][]string{
 	"reflection_completed":          {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
 	"executor_launched":             {"agent_handle", "agent_id", "harness", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
 	"executor_finished":             {"agent_handle", "agent_id", "harness", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
-	"executor_collected":            {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "cache_read_tokens", "cache_write_tokens", "harness_turns", "harness", "conversation_key", "cost_usd", "delivered_refs", "delivered_refs_elided", "duration_ms", "error", "error_kind", "failed", "harness_session", "harness_version", "input_tokens", "iteration", "launch_id", "model", "notes", "output_tokens", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "response", "role", "sandbox_id", "session_not_kept", "session_taken_bytes", "started_at", "total_tokens", "turn_id", "work_item", "work_key", "brief", "harness_session_continued", "harness_session_fell_back", "context_window_tokens"},
+	"executor_collected":            {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "cache_read_tokens", "cache_write_tokens", "harness_turns", "harness", "conversation_key", "cost_usd", "delivered_refs", "delivered_refs_elided", "duration_ms", "error", "error_kind", "failed", "harness_session", "harness_version", "input_tokens", "iteration", "launch_id", "model", "notes", "output_tokens", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "response", "role", "sandbox_id", "session_not_kept", "session_taken_bytes", "started_at", "total_tokens", "turn_id", "work_item", "work_key", "brief", "harness_session_continued", "harness_session_fell_back", "context_window_tokens", "memory_kills", "memory_bytes"},
 	"executor_failed":               {"agent_handle", "agent_id", "error_kind", "harness", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
 	"executor_stopped":              {"agent_handle", "agent_id", "harness", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"executor_asked":                {"agent_handle", "agent_id", "audience", "conversation_key", "decision", "held_call", "launch_id", "question", "question_context", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
