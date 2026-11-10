@@ -532,6 +532,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	}
 	setSlice(&task.Collaborators, patch.Collaborators)
 	setSlice(&task.Watchers, patch.Watchers)
+	setSlice(&task.AskWatch, patch.AskWatch)
 	setSlice(&task.Muted, patch.Muted)
 	setSlice(&task.Tags, patch.Tags)
 	setSlice(&task.Relations, patch.Relations)

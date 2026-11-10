@@ -434,6 +434,9 @@ type Task struct {
 	// re-add every unwatched person on the next mention.
 	Watchers []string `json:"watchers,omitempty"`
 	Muted    []string `json:"muted,omitempty"`
+	// AskWatch is the watchers a question put to them added, who chose
+	// nothing: their watch ends with their last open question here.
+	AskWatch []string `json:"ask_watch,omitempty"`
 
 	Tags []string `json:"tags,omitempty"`
 
@@ -826,6 +829,7 @@ type TaskPatch struct {
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
 	Muted         *[]string                   `json:"muted,omitempty"`
+	AskWatch      *[]string                   `json:"ask_watch,omitempty"`
 	Tags          *[]string                   `json:"tags,omitempty"`
 	Fields        *map[string]json.RawMessage `json:"fields,omitempty"`
 	Relations     *[]Relation                 `json:"relations,omitempty"`
