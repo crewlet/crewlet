@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"strings"
@@ -166,6 +167,102 @@ func TestAContinuedClaudeRunIsChargedOnlyWhatItAddedToTheSession(t *testing.T) {
 				t.Fatalf("the continued run was charged %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A CONTINUED RUN WHOSE RESULT STATES NO TOTALS OF THE BASE'S SESSION IS
+// CHARGED WHAT IT STATED, never less the base: a relaunch whose harness stopped
+// before its result (it states nothing), and a result of another session than
+// the one the base was left by.
+//
+// Mutation: take the base off whatever the run's result, and the stopped run is
+// charged below nothing (the coordinator's sandbox_usage_negative).
+func TestAContinuedRunWithoutItsSessionsTotalsIsNotChargedBelowNothing(t *testing.T) {
+	t.Parallel()
+	other := strings.Replace(claudeResultLine(30, 5, 200, 10, 0.20, ""),
+		"5e55f1d0-0000-4000-8000-00000000c1a0", "0be7a11e-0000-4000-8000-00000000c1a0", 1)
+	for name, tc := range map[string]struct {
+		stream string
+		want   spend
+	}{
+		"a harness that stopped before its result": {
+			stream: `{"type":"system","subtype":"init","session_id":"5e55f1d0-0000-4000-8000-00000000c1a0"}`,
+			want:   spend{}},
+		"a result of another session": {stream: other,
+			want: spend{input: 30 + 200 + 10, output: 5, cacheRead: 200, cacheWrite: 10, cost: 0.20}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.NewClaudeCode()
+			b := box(t, runner)
+			p := paths(b)
+			b.Put(p.Result(), claudeResultLine(100, 10, 1000, 50, 1.00, ""))
+			if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{
+				Brief: "go on", Resume: "5e55f1d0-0000-4000-8000-00000000c1a0"}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			b.Put(p.Stream(), tc.stream+"\n")
+			b.Put(p.Result(), tc.stream)
+			b.Put(p.SessionRecord(), "id 5e55f1d0-0000-4000-8000-00000000c1a0\ncontinued yes"+
+				"\nrelease 2.1.290 (Claude Code)\n")
+			b.Put(p.ExitCode(), "1")
+
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if got := spendOf(res); !got.near(tc.want) {
+				t.Fatalf("the run was charged %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A RELAUNCH THAT STOPPED BEFORE ITS RESULT PASSES ITS BASE ON: the launch after
+// it is charged what the session gained since the last result that was charged,
+// the stopped launch's calls with its own, never the whole session again.
+//
+// Mutation: keep whatever the job before left as the base, and the third launch
+// is charged the first launch's spend a second time.
+func TestALaunchAfterAStoppedRelaunchIsChargedOnlyItsOwnDelta(t *testing.T) {
+	t.Parallel()
+	const session = "5e55f1d0-0000-4000-8000-00000000c1a0"
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	// THE CLEAR REMOVES THE KEPT BASE, as a real box's does: what the next
+	// launch is charged from is only what its Start kept again.
+	b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		if strings.HasPrefix(cmd, "rm -f ") && strings.Contains(cmd, p.BaseResult()) {
+			b.Put(p.BaseResult(), "")
+		}
+		return sandbox.ExecResult{}, nil
+	}
+	launch := func(t *testing.T, stream string) spend {
+		t.Helper()
+		if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "go on", Resume: session}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		b.Put(p.Stream(), stream+"\n")
+		b.Put(p.Result(), stream)
+		b.Put(p.SessionRecord(), "id "+session+"\ncontinued yes\nrelease 2.1.290 (Claude Code)\n")
+		b.Put(p.ExitCode(), "0")
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		return spendOf(res)
+	}
+	// The job before the turn: its result left in the box.
+	b.Put(p.Result(), claudeResultLine(100, 10, 1000, 50, 1.00, ""))
+
+	if got := launch(t, `{"type":"system","subtype":"init","session_id":"`+session+`"}`); !got.near(spend{}) {
+		t.Fatalf("the stopped relaunch was charged %+v, want nothing", got)
+	}
+	got := launch(t, claudeResultLine(150, 15, 1500, 70, 1.50, ""))
+	want := spend{input: (150 + 1500 + 70) - (100 + 1000 + 50), output: 5, cacheRead: 500, cacheWrite: 20, cost: 0.50}
+	if !got.near(want) {
+		t.Fatalf("the launch after the stopped one was charged %+v, want its own delta %+v", got, want)
 	}
 }
 

@@ -55,6 +55,12 @@ type listenSub struct {
 type broadcastMsg struct {
 	subject string
 	payload []byte
+
+	// passed, when set, makes this a BARRIER rather than a message: run
+	// closes it in place of calling the handler, which it reaches only once
+	// every message ahead of it in the inbox has been handled. See
+	// [Queue.ListenBarrier].
+	passed chan struct{}
 }
 
 // listenerBacklog is how many messages one listener may hold unhandled before
@@ -175,6 +181,53 @@ func (b *Broker) removeListenerLocked(l *listenSub) bool {
 	return before != len(b.listeners)
 }
 
+// ListenBarrier returns once every broadcast already handed to THIS client's
+// listeners has been handled — each listener's handler called on it and
+// returned — or answers ctx's error when ctx ends first.
+//
+// THE TWIN OF THE NATS CLIENT'S OWN BARRIER (nats.Conn.Barrier), which runs a
+// function once every callback subscription of a connection has delivered
+// what it held when it was asked: the one view a test of the backend that
+// ships has of a listener having caught up. Here a broadcast is handed to its
+// listeners inside the Broadcast that sends it, so whatever this client has
+// broadcast is in their inboxes by the time this is called, and a marker put
+// behind it in each inbox is reached only once that listener's handler has
+// run on everything ahead of it. A listener whose loop has ended holds nothing
+// more and is passed.
+//
+// Reported so the conformance suite can see it. That a WITHDRAWN listener hears
+// nothing more is an absence no later broadcast can fence — the withdrawn
+// registration hears the fence no more than the broadcast — so the suite reads
+// it behind this, which a registration the withdrawal left standing would have
+// carried the broadcast past.
+func (q *Queue) ListenBarrier(ctx context.Context) error {
+	q.broker.mu.Lock()
+	var mine []*listenSub
+	for _, l := range q.broker.listeners {
+		if l.owner == q {
+			mine = append(mine, l)
+		}
+	}
+	q.broker.mu.Unlock()
+	for _, l := range mine {
+		passed := make(chan struct{})
+		select {
+		case l.inbox <- broadcastMsg{passed: passed}:
+		case <-l.done:
+			continue
+		case <-ctx.Done():
+			return fmt.Errorf("memory: listen barrier on %s: %w", l.pattern, ctx.Err())
+		}
+		select {
+		case <-passed:
+		case <-l.done:
+		case <-ctx.Done():
+			return fmt.Errorf("memory: listen barrier on %s: %w", l.pattern, ctx.Err())
+		}
+	}
+	return nil
+}
+
 // run delivers l's messages one at a time until its registration ends.
 func (l *listenSub) run() {
 	defer close(l.done)
@@ -183,6 +236,10 @@ func (l *listenSub) run() {
 		case <-l.serving.Done():
 			return
 		case msg := <-l.inbox:
+			if msg.passed != nil {
+				close(msg.passed)
+				continue
+			}
 			if !l.gate.Enter(l.serving) {
 				return
 			}

@@ -31,7 +31,7 @@ import { handoffOf, rotateHandoffOf, type Handoff, type HandoffStep, type Lane }
 afterEach(cleanup);
 
 const PM = seat("pm", "PM", {});
-const TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+const TOKENS_PAGE = "https://expo.dev/accounts/acme/settings/access-tokens";
 
 /** PM's handoff as the tab reads it off the engine's wait. */
 function handoff(step: HandoffStep, over?: Parameters<typeof expoWaitingAnswer>[1]): Handoff {
@@ -97,7 +97,7 @@ test("a new agent's sheet walks the robot, its token and the paste, in order", (
 
   const robot = within(sheet()).getByRole("region", { name: "Create the robot on Expo" });
   expect(within(robot).getByText(/choose Add robot/)).toBeTruthy();
-  expect(within(robot).getByText("crewlet-gophrase-pm")).toBeTruthy();
+  expect(within(robot).getByText("crewlet-acme-pm")).toBeTruthy();
   expect(within(robot).getByRole("button", { name: "Copy the robot's name" })).toBeTruthy();
   expect(within(robot).getByText("Runner")).toBeTruthy();
   expect(
@@ -110,7 +110,7 @@ test("a new agent's sheet walks the robot, its token and the paste, in order", (
 
   press("Continue");
   const token = within(sheet()).getByRole("region", { name: "Create its token" });
-  expect(token.textContent).toContain("On the row of crewlet-gophrase-pm, choose Create token.");
+  expect(token.textContent).toContain("On the row of crewlet-acme-pm, choose Create token.");
   expect(token.textContent).toContain("Expo shows the token's value once");
 
   press("Continue");
@@ -156,7 +156,7 @@ test("Check and save is held until a token is pasted", () => {
 // Mutation: drop the FormField's error and the sentence is nowhere.
 test("a refusal stands beside the field and keeps the value", async () => {
   const refusal =
-    "This robot is a Developer on gophrase, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here.";
+    "This robot is a Developer on acme, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here.";
   const { paste } = draw(handoff("mint"), async () => {
     throw new Error(refusal);
   });
@@ -258,7 +258,7 @@ test("a robot the engine did not name is asked for in the engine's words", () =>
   draw(handoff("create", { named: false }));
   const robot = within(sheet()).getByRole("region", { name: "Create the robot on Expo" });
   expect(
-    within(robot).getByText("Add a robot named crewlet-gophrase-pm with the Runner role at Expo"),
+    within(robot).getByText("Add a robot named crewlet-acme-pm with the Runner role at Expo"),
   ).toBeTruthy();
   expect(within(robot).queryByRole("button", { name: /^Copy/ })).toBeNull();
 });
@@ -273,7 +273,7 @@ test("a rotate starts at the paste, with how to make the token one step back", (
   expect(within(sheet()).getByLabelText("Token")).toBeTruthy();
   press("Back");
   const token = within(sheet()).getByRole("region", { name: "Create a new token" });
-  expect(token.textContent).toContain("On the row of crewlet-gophrase-qa, choose Create token.");
+  expect(token.textContent).toContain("On the row of crewlet-acme-qa, choose Create token.");
   expect(
     within(token)
       .getByRole("link", { name: /Open Expo/ })
@@ -305,9 +305,9 @@ test("a new DigitalOcean agent makes its token on the form, with the level's sco
 
   const token = within(sheet()).getByRole("region", { name: "Generate its token" });
   expect(token.textContent).toContain(
-    "In the team menu at the top of the control panel, switch to gophrase. Then choose Generate New Token and fill it in.",
+    "In the team menu at the top of the control panel, switch to acme. Then choose Generate New Token and fill it in.",
   );
-  expect(within(token).getByText("crewlet-gophrase-pm-operate")).toBeTruthy();
+  expect(within(token).getByText("crewlet-acme-pm-operate")).toBeTruthy();
   expect(within(token).getByRole("button", { name: "Copy the token's name" })).toBeTruthy();
   expect(within(token).getByText("Custom Scopes")).toBeTruthy();
   expect(
@@ -329,7 +329,7 @@ test("a new DigitalOcean agent makes its token on the form, with the level's sco
     "Never use Select all Creates, Updates or Deletes: they select scopes Crewlet refuses.",
   );
   expect(token.textContent).toContain("choose Add scopes and continue");
-  expect(token.textContent).not.toContain("Miles on gophrase");
+  expect(token.textContent).not.toContain("Alex on acme");
   expect(
     within(token)
       .getByRole("link", { name: /Open DigitalOcean/ })
@@ -348,20 +348,20 @@ test("a DigitalOcean rotate regenerates the token on its row", () => {
   press("Back");
   const token = within(sheet()).getByRole("region", { name: "Regenerate its token" });
   expect(token.textContent).toContain(
-    "open the menu on the row of crewlet-gophrase-sre-operate and choose Regenerate Token. The token keeps its name and scopes.",
+    "open the menu on the row of crewlet-acme-sre-operate and choose Regenerate Token. The token keeps its name and scopes.",
   );
   expect(within(token).queryByText("Custom Scopes")).toBeNull();
 });
 
 // WITHOUT THE ENGINE'S NAME, NO NAME: the token's owner is never offered as
 // the name to type, and nothing is there to copy. Mutation: fall back to the
-// observed account and "Miles on gophrase" becomes the token's name.
+// observed account and "Alex on acme" becomes the token's name.
 test("a DigitalOcean token the engine did not name is offered no name", () => {
   draw(doHandoff("mint", { named: false }), undefined, DIGITALOCEAN_LANE);
   expect(screen.getByText("New token for PM")).toBeTruthy();
   const token = within(sheet()).getByRole("region", { name: "Generate a new token" });
   expect(within(token).queryByRole("button", { name: /^Copy/ })).toBeNull();
-  expect(token.textContent).not.toContain("Miles on gophrase");
+  expect(token.textContent).not.toContain("Alex on acme");
 });
 
 // THE TEAM IS NAMED WHERE THE ENGINE SENT IT, and said plainly where not.

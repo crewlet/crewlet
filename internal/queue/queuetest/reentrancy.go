@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -30,10 +29,30 @@ import (
 // no such guard exists in this codebase.
 //
 // So this group is not testing a feature. It is pinning the reason a guard was
-// not written, in the one place a backend change would break it.
+// not written: here, the halves every backend can show, and beside each
+// backend the half only it can decide exactly — the twin's in a bubble
+// (memory's TestAHandlerNeverRunsBesideItself), JetStream's by where its code
+// sits (jetstream's TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery).
 func (s *suite) runReentrancy(t *testing.T) {
 	ctx := t.Context()
 
+	// NOT RE-ENTERED, of which this case decides the half no window has to.
+	// A backend that dispatched the published event INSIDE the publish, on
+	// the handler's own stack as an inline dispatch with no guard does, has
+	// run the handler a second time before the publish returns, so the depth
+	// below reads 2 however the runner schedules it. One that dispatched it
+	// BESIDE the running handler, on another goroutine, leaves an absence a
+	// case here could read only behind a quiet window: this one held the
+	// first handler 50 ms for a concurrent dispatch to show, and a dispatch
+	// the runner made later passed it with the bug present. That half is
+	// decided where it can be exact, in the two tests the group's doc names.
+	// The rest is a positive: the publish from inside the handler succeeds and
+	// both events are handled, read once they are, a wait for deliveries that
+	// must happen, so it needs await's liveness bound and no other.
+	//
+	// Mutation: let the twin's publish from inside a handler start a drain of
+	// its own rather than ask the running one to go round again, and the
+	// depth reads 2.
 	t.Run("a_handler_that_publishes_to_its_own_subscription_is_not_re_entered", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -61,11 +80,6 @@ func (s *suite) runReentrancy(t *testing.T) {
 					mu.Lock()
 					publishErr = err
 					mu.Unlock()
-					// Widen the window. A backend that dispatches
-					// concurrently needs somewhere to do it, and
-					// without this the assertion could pass on
-					// timing rather than on structure.
-					time.Sleep(reentryWindow)
 				}
 
 				batches.record(evs)
@@ -93,7 +107,7 @@ func (s *suite) runReentrancy(t *testing.T) {
 			t.Fatalf("publish from inside a handler failed: %v", gotErr)
 		}
 		if gotDepth != 1 {
-			t.Errorf("max concurrent handlers on one subscription = %d, want 1: "+
+			t.Errorf("max handlers running at once on one subscription = %d, want 1: "+
 				"a seat can be woken while its own turn is still running",
 				gotDepth)
 		}
@@ -149,11 +163,3 @@ func (s *suite) runReentrancy(t *testing.T) {
 		}
 	})
 }
-
-// reentryWindow is how long the first handler stays on the stack after
-// publishing, so a backend that would dispatch concurrently has room to.
-//
-// Small: it is paid once per backend and only has to outlast a dispatch
-// handoff, not a fetch cycle — a backend that polls will simply deliver after
-// the handler returns, which is the passing case either way.
-const reentryWindow = 50 * time.Millisecond

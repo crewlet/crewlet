@@ -89,7 +89,9 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 	// which is the contract's ordering: an async subscription delivers on
 	// one goroutine per subscription. Unlike Serve's answers there is
 	// nothing to reply to, so nothing here is worth a goroutine per
-	// message.
+	// message. The package doc says what that rests on, and
+	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery holds the
+	// call below to it.
 	sub, err := q.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		if stopped.Load() || !gate.Enter(serving) {
 			return

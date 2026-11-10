@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -41,6 +42,21 @@ func TestConformance(t *testing.T) {
 			return memory.New(memory.Contract(opts...))
 		},
 		queuetest.Capabilities{
+			// THE BROKER GOING IDLE, which is exact here: dispatch is
+			// inline, so a handler runs only inside a drain, and once the
+			// case's verbs have returned the drains left are the ones a
+			// linger window's flush starts. Idle waits for both, broker-
+			// wide, because a drain one client's verb starts runs every
+			// member's handler.
+			Settle: func(ctx context.Context, _ *testing.T, q queue.EventQueue) error {
+				select {
+				case <-q.(*memory.Queue).Broker().Idle():
+					return nil
+				case <-ctx.Done():
+					return fmt.Errorf("the broker still had a drain running or a linger "+
+						"window open: %w", ctx.Err())
+				}
+			},
 			Peer: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
 				return q.(*memory.Queue).Client()
 			},
@@ -69,6 +85,47 @@ func TestConformance(t *testing.T) {
 			},
 			Quiescing: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Quiescing(topic, group)
+			},
+			Lingering: func(q queue.EventQueue, topic, group string) bool {
+				return q.(*memory.Queue).Lingering(topic, group)
+			},
+			InWindow: func(q queue.EventQueue, topic, group string) int {
+				return q.(*memory.Queue).InWindow(topic, group)
+			},
+			// The window's timer, the twin's one timer, on the case's clock.
+			LingerClock: func(_ *testing.T, clock *queuetest.Clock) queue.EventQueue {
+				return memory.New(memory.WithLingerClock(clock))
+			},
+			// THE VERB ITSELF, and any handler it found running: the twin
+			// reads its gates under the broker's lock at every dispatch and
+			// every linger window's flush, so a gate the case's verb shut is
+			// read by whatever comes next, and only a handler a drain had
+			// already started is still to finish. What is checked first is
+			// that there is a consumer to park, so a case naming a pair
+			// nothing of q's is attached to fails rather than passing on
+			// nothing.
+			Parked: func(ctx context.Context, _ *testing.T, eq queue.EventQueue, topic, group string) error {
+				q := eq.(*memory.Queue)
+				if !slices.Contains(q.Attachments(), [2]string{topic, group}) {
+					return fmt.Errorf("nothing of this client is attached to (%s, %s), so "+
+						"there is no consumer to park", topic, group)
+				}
+				if running, err := q.WaitForHandlers(ctx, 0); err != nil {
+					return fmt.Errorf("%d handler(s) still running: %w", running, err)
+				}
+				return nil
+			},
+			StreamSubscriptions: func(q queue.EventQueue) int {
+				return q.(*memory.Queue).StreamSubscriptions()
+			},
+			ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
+				t.Helper()
+				if err := q.(*memory.Queue).ListenBarrier(ctx); err != nil {
+					t.Fatalf("ListenBarrier: %v", err)
+				}
+			},
+			Answering: func(q queue.EventQueue, subject string) (running, waiting int) {
+				return q.(*memory.Queue).Answering(subject)
 			},
 			// Declared although a create here is a map insert rather than
 			// a replicated write: what the case asserts is that the

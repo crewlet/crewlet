@@ -123,12 +123,29 @@ var ErrNoStream = errors.New("jsapi: no such stream")
 // leader is still gathering it until then.
 const consumerListWait = 4 * time.Second
 
+// requester is the one call a leader read or a listing's page makes of a
+// connection: one request, answered by the first reply to it or ended with
+// ctx. A *nats.Conn is one.
+type requester interface {
+	RequestWithContext(ctx context.Context, subject string, data []byte) (*nats.Msg, error)
+}
+
+// requesterOf is what the pages of a listing built over js are put on: js
+// ITSELF where it answers requests ([Meta]'s seam), and otherwise js's
+// connection.
+func requesterOf(js jetstream.JetStream) requester {
+	if own, ok := js.(requester); ok {
+		return own
+	}
+	return js.Conn()
+}
+
 // ask puts one request on subject — presumed lost after term and asked again
 // with every earlier request still outstanding, held where its caller set no
 // deadline to bound, the client's own DefaultTimeout, and never past the
 // lookup ceiling ([jsprovision.ReadBoundedWith]) — and answers the first
 // reply.
-func ask(ctx context.Context, conn *nats.Conn, subject string, req []byte,
+func ask(ctx context.Context, conn requester, subject string, req []byte,
 	term, bound time.Duration) (*nats.Msg, error) {
 
 	reply, _, err := askTimed(ctx, conn, subject, req, term, bound)
@@ -139,7 +156,7 @@ func ask(ctx context.Context, conn *nats.Conn, subject string, req []byte,
 // be answered: that request's own round trip, never the time the requests
 // before it were asked for — a page whose first request a member dropped and
 // whose second was answered at once is a page the leader answers at once.
-func askTimed(ctx context.Context, conn *nats.Conn, subject string, req []byte,
+func askTimed(ctx context.Context, conn requester, subject string, req []byte,
 	term, bound time.Duration) (*nats.Msg, time.Duration, error) {
 
 	type answer struct {
@@ -160,7 +177,7 @@ func askTimed(ctx context.Context, conn *nats.Conn, subject string, req []byte,
 // reporting whether anybody answered it and how long it took: the round trip
 // of the request that was answered, or — where none was — how long the page
 // was asked for.
-func page(ctx context.Context, conn *nats.Conn, subject string, req any, term, bound time.Duration,
+func page(ctx context.Context, conn requester, subject string, req any, term, bound time.Duration,
 	resp any) (took time.Duration, heard bool, err error) {
 
 	body, err := json.Marshal(req)
@@ -360,8 +377,30 @@ func (l *Leader) SubjectsSince(ctx context.Context, filter string,
 // Meta reads the listings only the METADATA leader answers — the stream
 // names, a stream's consumers — each page its own read (see this file's
 // head).
+//
+// # A client that answers its own pages
+//
+// The pages go on the connection of the client a Meta is built over, unless
+// that client answers requests itself — RequestWithContext, the one call a
+// page makes of a connection — when they go on the client. No client the
+// engine builds does: each is the vendored library's, made by [API.Client],
+// which answers none, and a test holds that. A TEST'S FAKE does, so that a
+// case can be the metadata leader inside a synctest bubble. A claim about the
+// clock — the bound a page was armed with, the instant a listing ended — is
+// exact only in a bubble, and no broker's reply can reach a request made in
+// one: the connection's reader hands each reply to a channel the request
+// made, from outside the bubble, which synctest refuses.
+//
+// The seam is BELOW the hedge: a page's term, its bound, its re-asks and the
+// paging are this package's own under a fake as in production. So a case that
+// answers through it holds that the pages it asked about were asked there —
+// a listing that put them anywhere else would otherwise pass it unheard —
+// and whether a caller's reads are asked again at all is still proved at the
+// broker ([jsapitest]).
 type Meta struct {
-	conn  *nats.Conn
+	// conn is what the pages are put on: the client's connection, or the
+	// client itself where it answers requests ([requesterOf]).
+	conn  requester
 	names string
 	api   API
 	// timeout bounds a page whose context has no deadline — the client's
@@ -369,7 +408,8 @@ type Meta struct {
 	timeout time.Duration
 }
 
-// NewMeta addresses the metadata leader's listings in the API js speaks.
+// NewMeta addresses the metadata leader's listings in the API js speaks, on
+// js's connection — or on js, where js answers requests itself ([Meta]).
 func NewMeta(js jetstream.JetStream) (*Meta, error) {
 	api, err := Of(js)
 	if err != nil {
@@ -379,7 +419,7 @@ func NewMeta(js jetstream.JetStream) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Meta{conn: js.Conn(), names: names, api: api, timeout: js.Options().DefaultTimeout}, nil
+	return &Meta{conn: requesterOf(js), names: names, api: api, timeout: js.Options().DefaultTimeout}, nil
 }
 
 // StreamNames calls visit with every stream's name, in the leader's order,

@@ -2,6 +2,10 @@ package jetstream
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -207,10 +211,10 @@ func takeBrokerDown(t *testing.T, q queue.EventQueue) {
 	stop()
 	deadline := time.Now().Add(10 * time.Second)
 	for jq.nc.Status() == nats.CONNECTED {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the connection still reads CONNECTED 10s after its server stopped")
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -229,6 +233,218 @@ func inspector(q queue.EventQueue) *Queue {
 	return jq
 }
 
+// settlePoll is how often settleQueue reads the loops again while one has not
+// settled: a fifth of the harness's poll (testTimings' FetchWait), so a loop
+// that has come round is seen within a fifth of its cycle. It decides nothing:
+// each read does, and the suite's settleFor bounds them all.
+const settlePoll = 5 * time.Millisecond
+
+// settleQueue is this backend's Settle: it returns once q will dispatch nothing
+// more until the next verb is sent to it.
+//
+// A consume loop is the one goroutine that dispatches for its attachment, and
+// it dispatches only between a fetch and its next loop top ([Queue.Loops]). So
+// once, after a snapshot of every loop, each has
+//
+//   - ended (it is gone from Loops);
+//   - stood at a loop top after the snapshot with its gate shut, so that it
+//     fetches nothing until a verb opens it;
+//   - stood at a loop top after the snapshot with its connection down, when it
+//     was down at the snapshot already: what it fetched before is dispatched,
+//     and every fetch after it is asked of a broker that cannot answer, since
+//     the outage BrokerDown takes is one-way;
+//   - or a mailbox that reads empty ([Queue.Backlog]), sized from the stream,
+//     whose ack floor can only lag backwards — so an empty read is never a
+//     message still owed, and a message not yet acked is never read as gone —
+//
+// nothing is left that it could hand a handler. The broker's own counts cannot
+// say this: they are snapshots, which cannot tell a loop parked at its gate
+// from one between two pulls, and a consumer's pending counts lag a publish.
+// The mailbox is not read with the connection down, where the broker that holds
+// it may be the one that stopped.
+func settleQueue(ctx context.Context, t *testing.T, eq queue.EventQueue) error {
+	t.Helper()
+	q, ok := eq.(*Queue)
+	if !ok {
+		return fmt.Errorf("the Settle capability was handed a %T", eq)
+	}
+	before := q.Loops()
+	down := q.nc.Status() != nats.CONNECTED
+	// A PAIR THIS CLIENT IS ATTACHED TO WITH NO LOOP IN THE SNAPSHOT is a
+	// Loops that stopped reporting — a field renamed, a map it no longer
+	// reads — and settling over it would check nothing. The pairs are read
+	// after the loops, so a pair let go of between the two reads drops out
+	// of the second rather than reading as missing from the first.
+	for _, pair := range q.Attachments() {
+		if !slices.ContainsFunc(before, func(l Loop) bool { return l.Topic == pair[0] && l.Group == pair[1] }) {
+			return fmt.Errorf("no consume loop in Loops for the attached pair (%s, %s), "+
+				"so settling would check nothing", pair[0], pair[1])
+		}
+	}
+	since := make(map[uint64]uint64, len(before))
+	for _, l := range before {
+		since[l.ID] = l.Cycles
+	}
+	return untilLoops(ctx, "consume loops still able to dispatch", func() ([]string, error) {
+		return unsettledLoops(ctx, q, since, down)
+	})
+}
+
+// untilLoops reads q's consume loops through waiting every settlePoll until it
+// names none still to wait for, failing with what it named last, as what,
+// when ctx ends first.
+func untilLoops(ctx context.Context, what string, waiting func() ([]string, error)) error {
+	poll := time.NewTicker(settlePoll) //fixedwait:liveness
+	defer poll.Stop()
+	for {
+		names, err := waiting()
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %s: %w", what, strings.Join(names, "; "), ctx.Err())
+		case <-poll.C:
+		}
+	}
+}
+
+// parkedLoops is this backend's Parked: it returns once every consume loop of
+// (topic, group) has come round to the top of its cycle since the call and
+// found its gate shut there ([Queue.Loops]). A loop is the one goroutine that
+// dispatches for its attachment, and it reaches its top only once what it
+// fetched before is dispatched or handed back; with the gate shut there, it
+// fetches nothing more until a verb opens it. A loop that returns instead
+// never comes round again, so it is named when ctx ends — or at once, when it
+// was let go of and has left Loops.
+func parkedLoops(ctx context.Context, _ *testing.T, eq queue.EventQueue, topic, group string) error {
+	q, ok := eq.(*Queue)
+	if !ok {
+		return fmt.Errorf("the Parked capability was handed a %T", eq)
+	}
+	since := map[uint64]uint64{}
+	for _, l := range q.Loops() {
+		if l.Topic == topic && l.Group == group {
+			since[l.ID] = l.Cycles
+		}
+	}
+	if len(since) == 0 {
+		return fmt.Errorf("no consume loop of (%s, %s) in Loops, so there is nothing to park",
+			topic, group)
+	}
+	return untilLoops(ctx, "consume loops not yet parked", func() ([]string, error) {
+		now := q.Loops()
+		var unparked []string
+		for id, cycles := range since {
+			i := slices.IndexFunc(now, func(l Loop) bool { return l.ID == id })
+			switch {
+			case i < 0:
+				return nil, fmt.Errorf("the loop of (%s, %s) at cycle %d ended rather than "+
+					"parking at its gate", topic, group, cycles)
+			case now[i].Cycles > cycles && now[i].Parked:
+			default:
+				unparked = append(unparked, fmt.Sprintf("the loop of (%s, %s) at cycle %d, "+
+					"not yet round to a shut gate", topic, group, now[i].Cycles))
+			}
+		}
+		return unparked, nil
+	})
+}
+
+// unsettledLoops names each loop of q that has not settled since the snapshot
+// since, which holds each loop's cycles then. A loop the snapshot did not hold
+// was attached after it, so every top it has reached is after it.
+func unsettledLoops(ctx context.Context, q *Queue, since map[uint64]uint64, down bool) ([]string, error) {
+	var busy []string
+	empty := map[[2]string]bool{}
+	for _, l := range q.Loops() {
+		if l.Cycles > since[l.ID] && (l.Parked || down) {
+			continue
+		}
+		name := fmt.Sprintf("the loop of (%s, %s) at cycle %d", l.Topic, l.Group, l.Cycles)
+		if down {
+			busy = append(busy, name+", not yet round with its connection down")
+			continue
+		}
+		pair := [2]string{l.Topic, l.Group}
+		isEmpty, read := empty[pair]
+		if !read {
+			held, err := inspector(q).Backlog(ctx, l.Topic, l.Group)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				// The bound ended inside the read: the loop is still
+				// unsettled, and the caller names it with the rest.
+				busy = append(busy, name+", its mailbox still being read when the bound ended")
+				continue
+			case err != nil:
+				return nil, fmt.Errorf("read the mailbox of (%s, %s): %w", l.Topic, l.Group, err)
+			}
+			isEmpty = len(held) == 0
+			empty[pair] = isEmpty
+		}
+		if !isEmpty {
+			busy = append(busy, name+", neither parked nor with an empty mailbox")
+		}
+	}
+	return busy, nil
+}
+
+// SETTLE WAITS OUT A DELIVERY THE BROKER STILL OWES, which is what makes a read
+// behind it hold everything the backend was going to hand over: here a failure
+// whose redelivery is spaced well past the loop's poll, so the loop comes round
+// many times, its gate open, before the message it owes comes back.
+//
+// Mutation: report every loop top as parked, or every mailbox as empty, and
+// Settle returns before the redelivery.
+func TestSettleWaitsOutARedeliveryTheBrokerStillOwes(t *testing.T) {
+	t.Parallel()
+	// The spacing is what puts loop tops between the failure and its
+	// redelivery: twenty of the harness's polls.
+	const spacing = 500 * time.Millisecond
+	q := openForTest(t, Config{NakDelay: spacing, NakCeiling: spacing})
+	failed := make(chan struct{})
+	var mu sync.Mutex
+	var deliveries int
+	if err := q.Subscribe(t.Context(), "settle.owed", "grp",
+		func(context.Context, *events.Event) queue.Result {
+			mu.Lock()
+			defer mu.Unlock()
+			deliveries++
+			if deliveries == 1 {
+				close(failed)
+				return queue.Nak(errors.New("the first delivery fails"))
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if err := q.Publish(t.Context(), "settle.owed", &events.Event{Type: "owed"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-failed:
+	case <-time.After(10 * time.Second): //fixedwait:liveness
+		t.Fatal("the published event was never delivered")
+	}
+
+	// LIVENESS: a Settle that never returns fails here, and the redelivery
+	// it waits for comes after the spacing.
+	settling, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := settleQueue(settling, t, q); err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if deliveries != 2 {
+		t.Fatalf("Settle returned with %d deliveries made, before the redelivery the broker "+
+			"still owed", deliveries)
+	}
+}
+
 func capabilities() queuetest.Capabilities {
 	return capabilitiesFor(func(t *testing.T, cfg Config) *Queue { return openForTest(t, cfg) })
 }
@@ -238,6 +454,8 @@ func capabilities() queuetest.Capabilities {
 // cases.
 func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilities {
 	return queuetest.Capabilities{
+		Settle: settleQueue,
+
 		Peer: func(t *testing.T, q queue.EventQueue) queue.EventQueue {
 			t.Helper()
 			owner, ok := q.(*Queue)
@@ -293,6 +511,57 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 
 		Quiescing: func(q queue.EventQueue, topic, group string) bool {
 			return q.(*Queue).Quiescing(topic, group)
+		},
+
+		Lingering: func(q queue.EventQueue, topic, group string) bool {
+			return q.(*Queue).Lingering(topic, group)
+		},
+
+		InWindow: func(q queue.EventQueue, topic, group string) int {
+			return q.(*Queue).InWindow(topic, group)
+		},
+
+		// The drain's own reading of where its window ends and whether it
+		// has; each fetch inside the window keeps its expiry on the broker's
+		// clock, so the drain reads this again within the harness's poll.
+		LingerClock: func(t *testing.T, clock *queuetest.Clock) queue.EventQueue {
+			t.Helper()
+			return open(t, Config{clock: clock})
+		},
+
+		Parked: parkedLoops,
+
+		StreamSubscriptions: func(q queue.EventQueue) int {
+			return q.(*Queue).StreamSubscriptions()
+		},
+
+		// THE CLIENT'S OWN BARRIER, BEHIND A FLUSH. A broadcast this
+		// client sent reaches its own listeners from its own server, which
+		// delivers it to the connection ahead of the PONG the flush waits
+		// for, so once the flush returns the client has queued it to every
+		// subscription it matched; nats.Conn.Barrier then runs once each of
+		// the connection's callback subscriptions has delivered what it held
+		// — the listeners' handlers called and returned.
+		ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
+			t.Helper()
+			nc := q.(*Queue).Conn()
+			if err := nc.FlushWithContext(ctx); err != nil {
+				t.Fatalf("flush ahead of the listen barrier: %v", err)
+			}
+			passed := make(chan struct{})
+			if err := nc.Barrier(func() { close(passed) }); err != nil {
+				t.Fatalf("Barrier: %v", err)
+			}
+			select {
+			case <-passed:
+			case <-ctx.Done():
+				t.Fatalf("the client's barrier had not passed its listeners when the case's "+
+					"bound ended: %v", ctx.Err())
+			}
+		},
+
+		Answering: func(q queue.EventQueue, subject string) (running, waiting int) {
+			return q.(*Queue).Answering(subject)
 		},
 
 		// THE QUEUE UNDER TEST, never the inspector: this counts what the

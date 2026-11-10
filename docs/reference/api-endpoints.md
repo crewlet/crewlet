@@ -8237,6 +8237,10 @@ is three per-node facts attributed to a fleet.
 }
 ```
 
+`domains`, `nodes`, `snapshots`, `alarms` and each domain's `terms` are always
+lists: one that holds nothing is `[]`, never `null`, so a node with no alarm
+standing answers `"alarms": []`.
+
 **`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `detail` (the
 measurement, in the units of the thing measured) and `remedy`. A condition that
 is a property of a log names every log it stands on in **`domains`**: each entry

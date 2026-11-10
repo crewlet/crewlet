@@ -27,6 +27,8 @@ import {
   ButtonLink,
   Callout,
   DescriptionList,
+  IconButton,
+  Inline,
   InlineCode,
   Link,
   Select,
@@ -34,13 +36,13 @@ import {
   Spinner,
   Switch,
   Tag,
-  TagsInput,
+  Text,
   VisuallyHidden,
   type DataGridColumn,
   type DataGridRowTone,
   type SelectOption,
 } from "@crewlethq/ui";
-import { KeyGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
@@ -51,7 +53,7 @@ import type {
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { asSentence, fmtDate, plural, relTime } from "~/lib/format.ts";
+import { asSentence, fmtDate, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Clocked } from "../Clocked.tsx";
@@ -63,7 +65,13 @@ import {
   type AccessDraft,
   type PlacedRefusal,
 } from "./api.ts";
-import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
+import {
+  PermissionsDialog,
+  RemoveDialog,
+  ReviewDialog,
+  RotateDialog,
+  ScopeDialog,
+} from "./Dialogs.tsx";
 import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
   accessWords,
@@ -94,7 +102,7 @@ import {
   rotateHandoffOf,
   sameDesired,
   scopeApplies,
-  scopeChoices,
+  scopeLabel,
   scopeUnavailable,
   scopeWords,
   statusOf,
@@ -201,6 +209,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   const [review, setReview] = useState(false);
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  const [scoping, setScoping] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   // THE HANDOFF IS HELD AS IT WAS OPENED, so the sheet keeps its robot and
   // role while the answer behind it moves on to In sync.
@@ -470,18 +479,23 @@ export const AgentsAccess = memo(function AgentsAccess({
                 }}
               />
             ) : lane.permissions ? (
-              <Button
-                size="small"
-                variant="ghost"
-                disabled={off || locked || seat.departed}
-                title={permissionWords(lane, want.permissions)}
-                aria-describedby={
-                  refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
-                }
-                onClick={() => setEditing({ seat, lane })}
-              >
-                {permissionCount(lane, want.permissions)}
-              </Button>
+              <Inline gap={1}>
+                <span title={permissionWords(lane, want.permissions)}>
+                  {permissionCount(lane, want.permissions)}
+                </span>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  icon={<PencilGlyph size="sm" />}
+                  label={`Edit ${seat.name}'s ${lane.name} permissions`}
+                  title={permissionWords(lane, want.permissions)}
+                  disabled={off || locked || seat.departed}
+                  aria-describedby={
+                    refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
+                  }
+                  onClick={() => setEditing({ seat, lane })}
+                />
+              </Inline>
             ) : laneWords(lane.key).fixed ? (
               <span className="agent-access-quiet">{laneWords(lane.key).fixed}</span>
             ) : null}
@@ -493,14 +507,43 @@ export const AgentsAccess = memo(function AgentsAccess({
       key: "scope",
       header: scopeWord,
       label: scopeWord,
-      // ROOM FOR THE FIELD AND ITS PLACEHOLDER ("All installed repositories").
+      // ROOM FOR THE LONGEST EMPTY WORDS ("All installed repositories") AND
+      // THE CONTROL BESIDE THEM, on one line.
       floor: "14rem",
       drop: 1,
       cell: ({ seat, lane, want }) => {
         const words = laneWords(lane.key).scope;
         if (!scopeApplies(lane, want) || !words) return null;
-        if (readOnly)
-          return <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>;
+        const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
+        const held = want.scope ?? [];
+        // THE CHOICE, READ-ONLY, ON ONE LINE: the first entry as a chip and
+        // the rest as a count that names them, or the lane's words for none.
+        const names = held.map((id) => scopeLabel(lane, id));
+        const rest = names.slice(1);
+        const shown =
+          names.length === 0 ? (
+            <span className="agent-access-quiet">{words.empty}</span>
+          ) : (
+            <>
+              {/* AN INLINE OF ITS OWN, whose minimum width is none where a
+                  flex item's is its content, so a long name ends in an
+                  ellipsis and the count and the control keep their line. */}
+              <Inline>
+                <Tag appearance="outline" size="xs" title={names[0]}>
+                  {names[0]}
+                </Tag>
+              </Inline>
+              {rest.length > 0 && (
+                <Text as="span" variant="caption" tone="secondary" title={rest.join(", ")}>
+                  <span aria-hidden="true">+{rest.length}</span>
+                  <VisuallyHidden>
+                    {`${rest.length.toLocaleString()} more ${rest.length === 1 ? words.singular : words.noun.toLowerCase()}`}
+                  </VisuallyHidden>
+                </Text>
+              )}
+            </>
+          );
+        if (readOnly) return <Inline gap={1}>{shown}</Inline>;
         const unavailable = scopeUnavailable(lane, want.scope);
         if (unavailable)
           return (
@@ -516,47 +559,21 @@ export const AgentsAccess = memo(function AgentsAccess({
               )}
             </span>
           );
-        const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
-        const disabled = !want.enabled || locked || seat.departed;
-        const choices = scopeChoices(lane, want.scope);
-        const pick = (next: string[]) => change(seat, lane, { scope: next });
-        const refused = refusalAt(seat, lane, "scope");
-        // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation
-        // on every repository), so an entry it does not list may be typed.
-        return lane.scope_open ? (
-          <TagsInput
-            aria-label={label}
-            value={want.scope ?? []}
-            options={choices}
-            allowCustom
-            disabled={disabled}
-            placeholder={words.empty}
-            aria-invalid={refused ? true : undefined}
-            aria-describedby={refused ? refusalId(seat, lane) : undefined}
-            onChange={pick}
-          />
-        ) : (
-          <Select
-            size="sm"
-            width="full"
-            menuClassName="agent-access-menu"
-            multiple
-            searchable
-            ariaLabel={label}
-            {...refusedProps(seat, lane, "scope")}
-            value={want.scope ?? []}
-            options={choices}
-            disabled={disabled}
-            placeholder={words.empty}
-            onChange={(v) => pick((Array.isArray(v) ? v : [v]).map(String))}
-            renderMultiLabel={(sel) =>
-              sel.length === 0
-                ? words.empty
-                : sel.length <= 2
-                  ? sel.map((x) => x.label).join(", ")
-                  : plural(sel.length, words.singular, words.noun.toLowerCase())
-            }
-          />
+        // CHANGED IN A DIALOG, as permissions are: a pencil where entries are
+        // chosen, a plus where none is yet.
+        return (
+          <Inline gap={1}>
+            {shown}
+            <IconButton
+              size="sm"
+              variant="ghost"
+              icon={held.length > 0 ? <PencilGlyph size="sm" /> : <PlusGlyph size="sm" />}
+              label={`${held.length > 0 ? "Edit" : "Choose"} ${label}`}
+              disabled={!want.enabled || locked || seat.departed}
+              aria-describedby={refusalAt(seat, lane, "scope") ? refusalId(seat, lane) : undefined}
+              onClick={() => setScoping({ seat, lane })}
+            />
+          </Inline>
         );
       },
     },
@@ -795,6 +812,16 @@ export const AgentsAccess = memo(function AgentsAccess({
             change(editing.seat, editing.lane, { permissions: next });
           }}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {scoping && (
+        <ScopeDialog
+          seat={scoping.seat}
+          lane={scoping.lane}
+          want={desiredOf(scoping.seat, scoping.lane.key)}
+          refused={refusalAt(scoping.seat, scoping.lane, "scope")?.words}
+          onChange={(scope) => change(scoping.seat, scoping.lane, { scope })}
+          onClose={() => setScoping(null)}
         />
       )}
       {removing && (

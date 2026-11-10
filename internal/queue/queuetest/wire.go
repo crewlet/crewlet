@@ -275,7 +275,7 @@ func (s *suite) runWire(t *testing.T) {
 				if got != node {
 					t.Errorf("the %s saw the event from node %q, want %q", name, got, node)
 				}
-			case <-time.After(settleFor):
+			case <-time.After(settleFor): //fixedwait:liveness
 				t.Errorf("the %s never saw the event", name)
 			}
 		}
@@ -300,7 +300,7 @@ func (s *suite) runWire(t *testing.T) {
 			if got != "" {
 				t.Errorf("a client built with no node stamped %q", got)
 			}
-		case <-time.After(settleFor):
+		case <-time.After(settleFor): //fixedwait:liveness
 			t.Fatal("no delivery from the client built with no node")
 		}
 	})
@@ -331,7 +331,7 @@ func (s *suite) runWire(t *testing.T) {
 		var handed *events.Event
 		select {
 		case handed = <-received:
-		case <-time.After(settleFor):
+		case <-time.After(settleFor): //fixedwait:liveness
 			t.Fatal("no delivery on the origin node")
 		}
 		if handed.Node != "node-a" {
@@ -359,7 +359,7 @@ func (s *suite) runWire(t *testing.T) {
 					t.Errorf("after node-b handed it on, the %s saw origin %q, want node-a",
 						name, got)
 				}
-			case <-time.After(settleFor):
+			case <-time.After(settleFor): //fixedwait:liveness
 				t.Errorf("the %s never saw the relayed event", name)
 			}
 		}

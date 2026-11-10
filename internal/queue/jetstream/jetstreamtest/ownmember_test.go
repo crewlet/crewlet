@@ -2,6 +2,7 @@ package jetstreamtest
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,10 +31,21 @@ import (
 // nats tool on the member's host: it reads every peer the member advertises,
 // and before this change any client there read all of them.
 //
+// AND ONCE ITS MEMBER STOPS, it lands nowhere, decided by what the client will
+// reconnect to rather than by watching it for a while. Every attempt goes to a
+// server in the pool — over an in-process dial, to the member in this process
+// whatever the pool names — and the pool grows only by an INFO, which only a
+// connected reader takes. So the pool is read once the client has said it is
+// down, which it does on its way into its reconnects with its reader already
+// returned: nothing can add to the pool from there, and this member alone,
+// with nothing discovered, is a reconnect that cannot land on a peer. Five
+// seconds of watching for a peer's URL was a bet that a reconnect which could
+// land would have landed by then.
+//
 // Mutations: Cluster.NoAdvertise off → the control discovers the peers, red;
 // dial a clustered member over its client listener again → the in-process row,
-// red; drop IgnoreDiscoveredServers and NoAdvertise together → the node's pool
-// row, red.
+// red; drop IgnoreDiscoveredServers and NoAdvertise together → the node's pool,
+// read once it is down, red; reconnect for ever → the budget row, red.
 func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
@@ -43,14 +55,6 @@ func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 	if q.Conn().Opts.InProcessServer == nil {
 		t.Fatalf("the node's connection to its own member dials %s over TCP, where "+
 			"every connection to a member in this process is a pipe", own)
-	}
-	if pool := q.Conn().Servers(); len(pool) != 1 || pool[0] != own {
-		t.Errorf("the node's connection would reconnect to %v, want its own "+
-			"member %s alone", pool, own)
-	}
-	if found := q.Conn().DiscoveredServers(); len(found) != 0 {
-		t.Errorf("the node's connection was told of %v, where a member "+
-			"advertises no peer", found)
 	}
 
 	listener := c.Servers[0].ClientListener()
@@ -75,27 +79,63 @@ func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 			"maps the fleet's listeners for whoever connects", found)
 	}
 
-	c.Servers[0].Shutdown()
-	// LONGER THAN THE NODE'S OWN RECONNECT WAIT, several times over: a dial
-	// that could reach a peer would be up there within one wait, and one that
-	// cannot stays down for its member's whole reconnect span.
-	//
-	// ON ANOTHER MEMBER is the failure, never "connected": the client learns
-	// its connection closed on its own reader goroutine, so for a moment after
-	// the shutdown it still reports itself connected to its own member's URL.
-	// ConnectedUrl is empty while the connection is down, so this fails
-	// exactly when the connection is up somewhere it must not be.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if at := q.Conn().ConnectedUrl(); at != "" && at != own {
-			t.Fatalf("the node's connection is on %s, a peer, with its own "+
-				"member %s stopped: it would never run its reconnects out",
-				at, own)
-		}
-		time.Sleep(50 * time.Millisecond)
+	// A BUDGET AT ALL: a connection that reconnects for ever is never closed,
+	// so the node runs on dark after its member has stopped instead of
+	// stopping for its supervisor to start the two again.
+	if attempts := q.Conn().Opts.MaxReconnect; attempts < 0 {
+		t.Fatalf("the node's connection to its own member reconnects for ever, so "+
+			"with that member stopped it is never closed and the node runs on "+
+			"with no broker (MaxReconnects %d)", attempts)
 	}
-	if q.Conn().IsConnected() {
-		t.Fatalf("the node's connection is still up on %s, %v after its own "+
-			"member stopped", q.Conn().ConnectedUrl(), 5*time.Second)
+	// THE CLIENT'S OWN WORD THAT IT IS DOWN, and any reconnect after it. The
+	// handlers the dial installed still run; the case hears of each first.
+	down := make(chan struct{})
+	var downOnce sync.Once
+	dialledDown := q.Conn().DisconnectErrHandler()
+	q.Conn().SetDisconnectErrHandler(func(nc *nats.Conn, err error) {
+		if dialledDown != nil {
+			dialledDown(nc, err)
+		}
+		downOnce.Do(func() { close(down) })
+	})
+	landed := make(chan string, 1)
+	dialled := q.Conn().ReconnectHandler()
+	q.Conn().SetReconnectHandler(func(nc *nats.Conn) {
+		select {
+		case landed <- nc.ConnectedUrl():
+		default:
+		}
+		if dialled != nil {
+			dialled(nc)
+		}
+	})
+
+	c.Servers[0].Shutdown()
+	select {
+	case <-down:
+	case <-time.After(30 * time.Second): //fixedwait:liveness
+		t.Fatalf("the node's connection did not say it was down within 30 s of its "+
+			"own member %s stopping: it is %v", own, q.Conn().Status())
+	}
+	// ITS POOL WHERE NOTHING CAN ADD TO IT: what every reconnect from here is
+	// to, so a peer it does not name is one no reconnect reaches.
+	if pool := q.Conn().Servers(); len(pool) != 1 || pool[0] != own {
+		t.Errorf("the node's connection would reconnect to %v, want its own "+
+			"member %s alone", pool, own)
+	}
+	if found := q.Conn().DiscoveredServers(); len(found) != 0 {
+		t.Errorf("the node's connection was told of %v, where a member "+
+			"advertises no peer", found)
+	}
+	// AND DOWN, landed nowhere.
+	if status := q.Conn().Status(); status == nats.CONNECTED {
+		t.Fatalf("the node's connection is up on %s with its own member %s stopped",
+			q.Conn().ConnectedUrl(), own)
+	}
+	select {
+	case at := <-landed:
+		t.Fatalf("the node's connection reconnected on %s with its own member %s "+
+			"stopped", at, own)
+	default:
 	}
 }

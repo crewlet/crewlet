@@ -566,14 +566,35 @@ func TestAStragglerHoldingStdoutDoesNotHoldRun(t *testing.T) {
 	}
 }
 
-// slowWriter sleeps in every Write and counts what it was given.
+// slowWriter is a client that keeps up while the process runs and falls
+// behind once it has exited: from the moment the case closes exited, each
+// Write takes delay before it returns and is counted slow. The Write that
+// brings what it was given to hold first writes the file holding, which the
+// stand-in waits for before it writes the rest of its output, and then holds
+// until exited is closed — so the process exits with that rest still in the
+// pipe, behind a Write the drain watch then has to leave alone.
 type slowWriter struct {
-	delay time.Duration
-	n     int64
+	delay   time.Duration
+	hold    int64
+	holding string
+	exited  chan struct{}
+	n       int64 // the bytes it was given
+	slow    int   // the Writes that took delay
 }
 
 func (w *slowWriter) Write(p []byte) (int, error) {
-	time.Sleep(w.delay)
+	if w.n < w.hold && w.n+int64(len(p)) >= w.hold {
+		if err := os.WriteFile(w.holding, nil, 0o600); err != nil {
+			return 0, err
+		}
+		<-w.exited
+	}
+	select {
+	case <-w.exited:
+		time.Sleep(w.delay) //fixedwait:simulated a client whose Write outlasts KillGrace
+		w.slow++
+	default:
+	}
 	w.n += int64(len(p))
 	return len(p), nil
 }
@@ -581,14 +602,49 @@ func (w *slowWriter) Write(p []byte) (int, error) {
 // A SLOW READER RECEIVES EVERY BYTE, though the process exited long before the
 // last Write — a Write slower than KillGrace, so a watch that ignored where
 // the copier was blocked would cut it.
+//
+// The stand-in writes the last page of its mebibyte only once its reader
+// holds a Write, and the case releases that Write only once the pool counts
+// the process gone, which it does just before it drains: so the drain watch
+// finds the copier inside a Write slower than KillGrace with that page still
+// in the pipe behind it, whatever the pipe holds, and two such Writes are all
+// the case waits for. A reader slow in every Write cost a half second a read,
+// past the hang detector wherever the pipe held less than its default
+// (#949); one slow only once the process had exited found the pipe empty, its
+// bytes read as fast as git wrote them, and never had a Write judged. A page
+// is what any pipe holds with nobody reading.
+//
+// Mutation: judge a copier by the time since its last read whatever it is
+// doing (heldFor without its state), and the drain closes the pipe under the
+// held Write: the last page never arrives.
 func TestASlowReaderReceivesEveryByte(t *testing.T) {
 	t.Parallel()
-	p := fakePool(t, "head -c 1048576 /dev/zero; exit 0", gitproc.Options{})
+	const size, last = 1 << 20, 4 << 10
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holding := filepath.Join(t.TempDir(), "holding")
+	var logs logBuffer
+	p := fakePool(t, fmt.Sprintf("head -c %d /dev/zero; while [ ! -e %s ]; do sleep 0.01; done; head -c %d /dev/zero; exit 0",
+		size-last, quote(holding), last), gitproc.Options{Metrics: rec, Logger: logs.logger()})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
-	w := &slowWriter{delay: 500 * time.Millisecond}
-	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: w, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute}), "a run with a slow reader")
-	if o.err != nil || w.n != 1<<20 {
-		t.Fatalf("a slow reader got %d of %d bytes: %v", w.n, 1<<20, o.err)
+	exited := make(chan struct{})
+	release := sync.OnceFunc(func() { close(exited) })
+	t.Cleanup(release) // a case that fails before the release leaves no Write holding
+	w := &slowWriter{delay: 500 * time.Millisecond, hold: size - last, holding: holding, exited: exited}
+	done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: w, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute})
+	awaitGauge(t, rec, metrics.CodeGitProcesses, "transfer", 0) // reaped, its group swept: Run drains next
+	release()
+	o := await(t, done, "a run with a slow reader")
+	if o.err != nil || w.n != size {
+		t.Errorf("a slow reader got %d of %d bytes: %v", w.n, size, o.err)
+	}
+	if w.slow == 0 {
+		t.Error("no Write took longer than KillGrace once the process had exited: the drain watch judged none")
+	}
+	if n := logs.lines("code_git_pipe_held"); n != 0 {
+		t.Errorf("the drain watch released %d pipes under a reader's Write:\n%s", n, logs.String())
 	}
 }
 
