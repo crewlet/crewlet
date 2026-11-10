@@ -202,7 +202,7 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // write rows nobody would ever be woken for, and an inbox would fill with
 // changes the company deliberately did not announce.
 func Candidates(n *Notify) []routing.Candidate[Reason] {
-	if n == nil {
+	if n == nil || n.reassertsHolder() {
 		return nil
 	}
 	task := n.Kind.TaskCommit()
@@ -404,6 +404,13 @@ func (n *Notify) ownerAsked() bool {
 		return n.personComment() && !n.addressedToSomebody()
 	}
 	return n.Kind != ChangeWatchers
+}
+
+// reassertsHolder reports an assignment to the seat that already holds the
+// task with nothing else changed or named: no change, so it concerns nobody.
+func (n *Notify) reassertsHolder() bool {
+	return n.Kind == ChangeAssignee && n.Snapshot.Assignee == n.Snapshot.PrevAssignee &&
+		len(n.Fields) == 0 && len(n.Mentions) == 0
 }
 
 // threadAsked decides whether a reply wakes one thread participant: one with

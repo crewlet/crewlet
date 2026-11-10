@@ -557,7 +557,7 @@ func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			patch := reflect.New(v.Type()).Elem()
-			patch.Field(i).Set(nonZero(t, v.Type().Field(i).Type))
+			patch.Field(i).Set(nonZero(t, v.Type().Field(i)))
 			if patch.Interface().(worklet.TaskPatch).Empty() {
 				t.Errorf("a patch whose only set field is %s reports empty, so "+
 					"the write is skipped and the caller is told it succeeded",
@@ -567,22 +567,29 @@ func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
 	}
 }
 
-// nonZero is a set value of one of the patch's field types. Every field is a
+// nonZero is a set value of one of the patch's fields. Every field is a
 // pointer, a slice or a map — which is the type's own rule, so that the zero
-// value can mean "not set" — and an allocated one of any of those is not zero.
-func nonZero(t *testing.T, ft reflect.Type) reflect.Value {
+// value can mean "not set" — and an allocated one of any of those is not zero;
+// or a CLEAR FLAG (ClearStart, ClearDue), the rule's one exception, a bool that
+// takes a date off and whose false clears nothing, which is "not set" too
+// (TaskPatch's doc says why a date is cleared by a flag). Any other plain
+// value is refused: its zero may be a setting.
+func nonZero(t *testing.T, field reflect.StructField) reflect.Value {
 	t.Helper()
-	switch ft.Kind() {
-	case reflect.Pointer:
+	ft := field.Type
+	switch {
+	case ft.Kind() == reflect.Pointer:
 		return reflect.New(ft.Elem())
-	case reflect.Slice:
+	case ft.Kind() == reflect.Slice:
 		return reflect.MakeSlice(ft, 0, 0)
-	case reflect.Map:
+	case ft.Kind() == reflect.Map:
 		return reflect.MakeMap(ft)
+	case ft.Kind() == reflect.Bool && strings.HasPrefix(field.Name, "Clear"):
+		return reflect.ValueOf(true).Convert(ft)
 	default:
 		t.Fatalf("TaskPatch.%s is a %s — the patch's whole grammar is that a "+
 			"zero value means \"not set\", which a plain value cannot express",
-			ft.Name(), ft.Kind())
+			field.Name, ft.Kind())
 		return reflect.Value{}
 	}
 }

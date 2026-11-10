@@ -48,6 +48,10 @@ type RecallQuery struct {
 	// task they were fetched for.
 	Limit int
 
+	// Held is what a diary recall holds its notes to: a note it holds back is
+	// never a hit ([DiaryEntry.HeldBack]). Zero holds none back.
+	Held Currency
+
 	// MinSimilarity floors what counts as a memory. Cosine similarity over
 	// unrelated text still lands well above zero, so with no floor the
 	// nearest N rows always come back — a seat with three episodes recalls

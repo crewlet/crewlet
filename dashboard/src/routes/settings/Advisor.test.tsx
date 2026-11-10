@@ -96,12 +96,42 @@ const ENGINE: AdvisorFinding = {
 const SRE = { name: "SRE", handle: "sre", llm: "default" };
 const VALID = { kind: "valid", baseRevisionId: "r1", warnings: [], derived: null };
 
+/** The go-live review: one agent, connected to GitHub, whose box a run has read. */
+const REVIEW = {
+  agents: [
+    {
+      seat: "sre",
+      name: "SRE",
+      access: {
+        integrations: [
+          {
+            kind: "github",
+            lane: "github",
+            on: true,
+            permissions: { pull_requests: "write", contents: "read" },
+            permission_names: { pull_requests: "Pull requests" },
+          },
+        ],
+        mcp: [],
+        boxes: [
+          {
+            cell: "container",
+            memory_bytes: 4 * 2 ** 30,
+            observed: true,
+            browser: "chromium",
+          },
+        ],
+      },
+    },
+  ],
+};
+
 async function mount(answer: AdvisorAnswer, assistant: AssistantControl = NO_ASSISTANT) {
   location.hash = "#/settings/advisor";
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : answer);
+    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : what === "go_live_review" ? REVIEW : answer);
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -362,4 +392,16 @@ test("a reader who may not ask is told why, and offered no draft", async () => {
   await mount({ revision: "r1", findings: [RUBBER_STAMP], unread: [] });
   expect(screen.queryByRole("button", { name: "Draft with Ask Crewlet" })).toBeNull();
   expect(screen.getByText("Checking whether you can ask.")).toBeTruthy();
+});
+
+// THE GO-LIVE REVIEW SAYS WHAT EACH AGENT CAN DO, as its turns are told: the
+// vendors it acts at and what it may write there, and the box its runs use.
+test("the go-live review says what each agent can do and where it runs", async () => {
+  await mount({ revision: "r1", findings: [], unread: [] });
+  const sre = await screen.findByRole("region", { name: "What SRE can do" });
+  expect(sre.textContent).toContain("github (Pull requests: write)");
+  expect(sre.textContent).toContain(
+    "A container on the engine host, 4 GB of memory, with a browser (chromium) and no container runtime.",
+  );
+  expect(sre.textContent).toContain("No tool servers");
 });

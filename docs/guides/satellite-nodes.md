@@ -534,6 +534,12 @@ key is rejected, since the company schema forbids unknown fields.)
 - A rolling upgrade across a lease-protocol bump makes new nodes wait
   for old ones. Upgrade the satellite in the same rollout as the core —
   see [mixed-version fleets](../concepts/seat-ownership.md#mixed-version-fleets).
+- A satellite upgraded before the core's data nodes has every request that
+  sets a field they do not declare refused there rather than run short, and
+  its turns' ends wait for a data node of its build: upgrade the data nodes
+  first. A satellite still on the older build is then refused the answers it
+  would carry into another request once a newer field is set in them, until it
+  is upgraded too — see [A build reads what it is asked whole](../concepts/scaling.md#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it).
 
 ---
 

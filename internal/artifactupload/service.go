@@ -39,6 +39,11 @@ type Writes interface {
 type Reads interface {
 	Artifact(ctx context.Context, id artifacts.ID, fresh statelog.Freshness) (artifactsdomain.Head, statelog.Position, error)
 	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
+	// CarriedVersion is a version whose entries a publish carries on — a
+	// patch's base, a version a file is carried from: read whole or refused
+	// where this node's build would drop part of an entry (estate's
+	// artifacts.version_carried), never carried on short.
+	CarriedVersion(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
 	HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (map[objstore.Hash]objstore.Object, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
 

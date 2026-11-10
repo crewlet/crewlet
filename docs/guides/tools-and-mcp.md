@@ -11,7 +11,7 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | Tool | Description |
 |------|-------------|
 | `lookup_colleague` | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; ambiguous queries return the candidate list so the LLM picks rather than guessing. A person the identity directory withholds shows no accounts, and their ids name nobody |
-| `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`) |
+| `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`; `about`: `company`, the default, `preference`, `capability` or `platform`, any other refused) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
 | `query_episodes` | Recall the agent's own past turns: by meaning, by conversation, or most recent first |
 | `list_sessions` | List the agent's own [executor sessions](../concepts/code-sandbox.md#a-seat-reads-its-own), the latest begun first, or search them by the words of what each turn was asked, its conversation and how it ended. Registered where the company keeps executor sessions, on a node with an object store |

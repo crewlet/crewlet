@@ -767,6 +767,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"the resolve from the stored row and refuses anybody but its author",
 			patch.Comment.ID, id)
 	}
+	if err := patch.CheckDates(); err != nil {
+		return WriteResult{}, err
+	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
 
@@ -1385,7 +1388,9 @@ func settleWaitReason(current Task, patch TaskPatch) (TaskPatch, error) {
 		}
 		return patch, nil
 	}
-	if patch.StartAt != nil && patch.WaitReason == nil && current.WaitReason != "" {
+	// A CLEARED START IS ITS FLAG ([TaskPatch.ClearStart]), with no StartAt:
+	// the reason of a wait whose start is taken off goes with it.
+	if (patch.StartAt != nil || patch.ClearStart) && patch.WaitReason == nil && current.WaitReason != "" {
 		cleared := ""
 		patch.WaitReason = &cleared
 	}

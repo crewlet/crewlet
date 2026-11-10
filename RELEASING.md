@@ -114,8 +114,18 @@ checksummed.
    peer of one joins a fleet beside a newer one. From that tag on, the next
    release must read what the tag wrote and run beside it in one fleet, so a
    change that breaks either is a break in a shipped surface and is treated
-   as one above. What is owed is owed to a TAG: an unreleased build between
-   two tags is still owed nothing.
+   as one above. The forward mechanisms that let it are listed in
+   [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it),
+   and one of them is an operator's to plan for: a data node of the older
+   build refuses, rather than runs short, a newer node's request — a write,
+   or a read — that sets a field its build does not declare, so a release
+   that adds a field to a routed request is rolled out to the data nodes
+   first. That order has a cost of its own, which its notes say: once a newer
+   data node holds a newer field set, a node not yet upgraded is refused the
+   answers it would carry into another request — a publish keeping a
+   version's files, a view save and the views listed to make one, a catalogue
+   sent back whole — until it is upgraded too. What is owed is owed to a TAG:
+   an unreleased build between two tags is still owed nothing.
 
 2. **Skim the merged pull requests** since the previous tag — they *are* the
    release notes. GitHub builds the body from their titles, so a title that

@@ -227,7 +227,8 @@ func (s Sources) pausedSeats(ctx context.Context, company *config.Company) ([]ad
 }
 
 // fleetAlarms is every live node's alarm marks as its last heartbeat carried
-// them, from the node whose table has run; false where the fleet cannot be read.
+// them, from the nodes whose table has run; false where the fleet cannot be
+// read, or a live node has not evaluated yet and may hold one unsaid.
 func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
 	if s.Coord == nil {
 		return nil, false
@@ -238,14 +239,18 @@ func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
 		return nil, false
 	}
 	var out []notice.NodeAlarms
+	complete := true
 	for _, lease := range leases {
 		status, ok := coord.StatusFromMeta(lease.Meta)
+		// A NODE SAYING NOTHING YET (no status, or none evaluated) may hold an
+		// alarm unsaid, as a node just started does.
 		if !ok || !status.AlarmsEvaluated {
+			complete = false
 			continue
 		}
 		out = append(out, notice.NodeAlarms{Node: nameIn(coord.ClassNode, lease.Resource), Marks: status.Alarms})
 	}
-	return out, true
+	return out, complete
 }
 
 // backupEvidence is whether the latest evaluation holds the backup alarm, and

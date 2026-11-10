@@ -107,9 +107,9 @@ func TestTheAdvisorNamesASourceItCouldNotRead(t *testing.T) {
 }
 
 // THE ADVISOR NOTICES WHAT STANDS ON THE FLEET: every node's heartbeat marks are
-// read, a node that has not evaluated its table says nothing, two nodes holding
-// one alarm past its threshold give one notice, and the answer carries the
-// notices beside the findings.
+// read, a node that has not evaluated its table says nothing and leaves the
+// fleet's alarms unread, two nodes holding one alarm past its threshold give one
+// notice, and the answer carries the notices beside the findings.
 func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
@@ -129,8 +129,8 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 		t.Error("a node with no coordination store says it read the fleet's alarms")
 	}
 	fleet, known := Sources{Coord: backend}.fleetAlarms(t.Context())
-	if !known {
-		t.Fatal("the fleet's alarms read as unknown")
+	if known {
+		t.Error("node-c has not evaluated its alarms, and the fleet's read as known")
 	}
 	got := notice.Read(nil, fleet, nil, since.Add(notice.AlarmAfter))
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
@@ -149,6 +149,25 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	}
 	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"findings", "notices", "revision", "unread"}) {
 		t.Errorf("the advisor answers %v", keys)
+	}
+	// ONCE EVERY LIVE NODE HAS EVALUATED, the fleet's alarms are known.
+	settled := coordmemory.New()
+	if _, _, err := settled.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+		Meta: map[string]any{coord.StatusKey: coord.NodeStatus{AlarmsEvaluated: true}.Meta()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := (Sources{Coord: settled}).fleetAlarms(t.Context()); !known {
+		t.Error("every live node has evaluated, and the fleet's alarms read as unknown")
+	}
+	// A NODE SAYING NOTHING YET, its heartbeat carrying no status, may hold one.
+	if _, _, err := settled.TryAcquire(t.Context(), coord.NodeResource("node-d"), coord.AcquireOptions{
+		Owner: "node-d:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := (Sources{Coord: settled}).fleetAlarms(t.Context()); known {
+		t.Error("a live node with no status left the fleet's alarms known")
 	}
 }
 

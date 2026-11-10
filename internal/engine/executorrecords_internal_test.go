@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -106,16 +107,27 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 // THE LOG'S ANSWER IS READ AS WHAT THE SANDBOX DOES NEXT: a capture its row
 // names is landed, one the log applied and the row does not name is passed
 // over, a definite refusal is refused with its error, and everything else —
-// pending, unknown, a node that did not answer — is unsettled, to be asked
-// again under the same operation. An end refused as already made is landed:
-// the paths that end one turn derive one operation, and the first was taken.
+// pending, unknown, a node that did not answer, no data node of a build that
+// reads the record whole — is unsettled, to be asked again under the same
+// operation. An end refused as already made is landed: the paths that end one
+// turn derive one operation, and the first was taken.
+//
+// AN END NO DATA NODE CAN READ WHOLE STAYS OWED, mid-upgrade: a seats-only node
+// of a newer build writes a field of the ending its older data nodes do not
+// declare, they refuse it rather than record it short, and refused-and-dropped
+// here the turn's end would never reach the log at all — so it is unsettled,
+// as an estate nobody serves is, and the run's row keeps owing it until a data
+// node of the writer's build records it.
 //
 // Mutation: read a pending capture as landed, a turn already ended as an end
-// still owed, or a node that did not answer as a refusal, and a row fails.
+// still owed, a node that did not answer as a refusal, or a record no data
+// node's build reads whole as a malformed one, and a row fails.
 func TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext(t *testing.T) {
 	t.Parallel()
 	applied := statelog.Result{Outcome: statelog.OutcomeApplied}
 	unanswered := errors.New("estate: the write was sent to a data node that did not answer")
+	unread := &estate.ErrUnknownKeys{Op: "executor.end", Keys: []string{"args.Ending.went_on"},
+		Nodes: []string{"data-a"}, Unserved: &estate.ErrUnserved{Detail: "data-a: its build does not declare it"}}
 	for _, tc := range []struct {
 		name     string
 		end      bool
@@ -145,6 +157,9 @@ func TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext(t *testing.T) {
 			err: executordomain.ErrStaleCapture, want: sandbox.LogUnsettled},
 		{name: "an end no node answered", end: true, result: statelog.Result{Outcome: statelog.OutcomeUnknown},
 			err: unanswered, want: sandbox.LogUnsettled},
+		{name: "an end no data node of the writer's build serves stays owed", end: true, err: unread,
+			want: sandbox.LogUnsettled},
+		{name: "a capture no data node of the writer's build serves", err: unread, want: sandbox.LogUnsettled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

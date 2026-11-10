@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
@@ -238,15 +239,7 @@ func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decid
 // person it does not put the question to as an ask (ADR-0100): what an agent asks
 // a person reaches their decisions only as an ask carrying a decision.
 func (d WorkDeps) checkAsksOfNamed(tool string, actor Actor, asks bool, ask string, named []string) *tools.Result {
-	if !asks || actor.Kind != worklet.AuthorAgent {
-		return nil
-	}
-	var persons []string
-	for _, handle := range named {
-		if handle != ask && d.personSeat(handle) && !slices.Contains(persons, handle) {
-			persons = append(persons, handle)
-		}
-	}
+	persons := askedInWords(actor.Kind == worklet.AuthorAgent, asks, ask, named, d.Seats)
 	if len(persons) == 0 {
 		return nil
 	}
@@ -258,17 +251,23 @@ func (d WorkDeps) checkAsksOfNamed(tool string, actor Actor, asks bool, ask stri
 		tool, words.And(persons), decision.MinOptions, decision.MaxOptions)))
 }
 
-// personSeat is whether the roster names handle as a person's seat.
-func (d WorkDeps) personSeat(handle string) bool {
-	if d.Seats == nil {
-		return false
+// askedInWords is the persons' seats an agent's words that ask (`asks`) name
+// other than ask, the one they put the question to (ADR-0100).
+func askedInWords(agent, asks bool, ask string, named []string, roster func() []colleague.Seat) []string {
+	if !asks || !agent || roster == nil {
+		return nil
 	}
-	for _, seat := range d.Seats() {
-		if seat.Handle == handle {
-			return seat.Kind == string(org.KindHuman)
+	humans := map[string]bool{}
+	for _, seat := range roster() {
+		humans[seat.Handle] = seat.Kind == string(org.KindHuman)
+	}
+	var persons []string
+	for _, handle := range named {
+		if handle != ask && humans[handle] && !slices.Contains(persons, handle) {
+			persons = append(persons, handle)
 		}
 	}
-	return false
+	return persons
 }
 
 // statedAsks is an agent's statement of whether its comment asks, which every

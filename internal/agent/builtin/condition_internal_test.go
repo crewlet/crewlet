@@ -91,6 +91,18 @@ func TestEveryToolTellsAModelWhatAConditionNoWaitClearsLeavesIt(t *testing.T) {
 			return nodeFailure(ctx, "remember", err, "Could not save your note",
 				"Nothing was changed.")
 		}, stuckWrite, false, true},
+		// THE CODE TOOLS', whose own words offer the retry in lower case
+		// ("try again shortly", "make the same call again"), so the
+		// capitalised retry this table looks for is never theirs.
+		{"code read", func(err error) tools.Result {
+			return codeFailure(ctx, CodeReadTool, "app", err)
+		}, stuckRead, true, false},
+		{"code write", func(err error) tools.Result {
+			return codeWriteFailure(ctx, CodeCommitFilesTool, Actor{}, "app", err)
+		}, stuckWrite, false, false},
+		{"code status", func(err error) tools.Result {
+			return unjudged(ctx, CodeStatusTool, err)
+		}, stuckRead, true, false},
 	} {
 		full, behind := writeFull, writeBehind
 		if h.read {

@@ -243,7 +243,7 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want worklet.Detai
 	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
+func (f *fakeTracker) CarriedViews(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.viewQuery = q
 	return f.viewListing, nil
 }
@@ -273,7 +273,7 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	return worklet.ParseQuery(merged, now, loc)
 }
 
-func (f *fakeTracker) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+func (f *fakeTracker) CarriedCatalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return worklet.CatalogueAnswer{}, nil
 }
 
@@ -323,7 +323,7 @@ func (f *fakeTracker) Projects(_ context.Context, q worklet.ProjectQuery) (
 	return f.projects, f.readErr
 }
 
-func (f *fakeTracker) Project(_ context.Context, q worklet.ProjectDetailQuery) (
+func (f *fakeTracker) CarriedProject(_ context.Context, q worklet.ProjectDetailQuery) (
 	worklet.ProjectDetail, error) {
 
 	f.detailQuery = q
@@ -2025,6 +2025,9 @@ func TestADueDateTakesTheRelativeWordsTheFilterTakes(t *testing.T) {
 // AN UPDATE MOVES THEM, AND `null` TAKES ONE BACK OFF. "Leave the due date
 // alone" and "this has no due date any more" are different edits, and a tool
 // that could only say the first makes a date impossible to remove.
+//
+// Mutation: clear the due date with a pointer at the zero instant, as
+// applyToPatch did, and the patch carries no flag.
 func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2049,17 +2052,24 @@ func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 		t.Fatalf("clearing failed: %s", got.Output)
 	}
 	cleared := trk.patched[len(trk.patched)-1]
-	// A CLEAR IS A VALUE, not an absent field: nil on a patch means "not
-	// named". The applier reads the zero instant as empty.
-	if cleared.DueAt == nil || !cleared.DueAt.IsZero() {
-		t.Errorf("a cleared due date is %v, want the zero instant the applier "+
-			"reads as empty", cleared.DueAt)
+	// A CLEAR IS ITS FLAG, not an absent field — nil on a patch means "not
+	// named" — and never the zero instant, which is no date (the patch
+	// type's doc says why it is no longer one).
+	if !cleared.ClearDue || cleared.DueAt != nil || cleared.ClearStart {
+		t.Errorf("a cleared due date is (clear_due %v, due_at %v, clear_start %v), want the "+
+			"due date's flag alone", cleared.ClearDue, cleared.DueAt, cleared.ClearStart)
+	}
+	if err := cleared.CheckDates(); err != nil {
+		t.Errorf("the tracker refuses the clear the tool formed: %v", err)
 	}
 }
 
 // A SIZE IS NOT NEGATIVE, and one is refused naming the rule rather than
 // stored — a negative estimate would be subtracted from its own board's
-// total.
+// total. Nor is a date the zero instant, which is no date at all.
+//
+// Mutation: drop readSchedule's refusal of the zero instant and the create due
+// in year one is accepted.
 func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2068,6 +2078,10 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"title": "x", "project": "ENG", "points": -3},
 		{"title": "x", "project": "ENG", "estimate_minutes": -60},
+		// THE ZERO INSTANT IS NO DATE: stored, it is the most overdue task
+		// the company ever had, and the tracker refuses it in words about
+		// its own fields rather than this tool's.
+		{"title": "x", "project": "ENG", "due": "0001-01-01T00:00:00Z"},
 	} {
 		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); !got.Failed {
 			t.Errorf("create(%v) was accepted, want a refusal naming the rule", args)

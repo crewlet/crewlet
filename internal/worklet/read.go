@@ -1277,7 +1277,7 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 	case branch:
 		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see above.
 	case q.ShowClosed.All:
-	case q.ShowClosed.Recent > 0 || q.ShowClosed.Since != nil:
+	case q.ShowClosed.Recent > 0 || !q.ShowClosed.Since.IsZero():
 		// THE WINDOW APPLIES TO THE WHOLE FINISHED SET, so a task
 		// cancelled inside it is in the answer exactly as one done
 		// inside it is — which is what the finish stamp being by GROUP
@@ -1288,8 +1288,8 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 		// company's clock — because they are one question with two ways
 		// to name where the window starts.
 		since := now.Add(-q.ShowClosed.Recent)
-		if q.ShowClosed.Since != nil {
-			since = *q.ShowClosed.Since
+		if !q.ShowClosed.Since.IsZero() {
+			since = q.ShowClosed.Since
 		}
 		add("("+on.col("status_group")+" IN ("+openGroupsSQL+") OR "+
 			"("+on.col("finished_at")+" IS NOT NULL AND "+on.col("finished_at")+

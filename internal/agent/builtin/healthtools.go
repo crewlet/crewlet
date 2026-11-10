@@ -1271,17 +1271,21 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 		unready  *code.ErrGitUnready
 		unserved *estate.ErrUnserved
 	)
-	why, transient := Condition(err)
+	why, isCondition := Condition(err)
 	switch {
+	case errors.As(err, new(*estate.ErrUnknownKeys)):
+		// THE FLEET RUNS TWO BUILDS: the condition's own words, AHEAD of the
+		// walk nobody served that it wraps, which would call it a wait.
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
-		why, transient = "no node holding Gitlet's rows could answer in time", true
+		why, isCondition = "no node holding Gitlet's rows could answer in time", true
 	case errors.As(err, &unserved) && unserved.Git:
-		why, transient = "none of the Gitlet nodes could answer in time", true
+		why, isCondition = "none of the Gitlet nodes could answer in time", true
 	}
-	if transient {
+	if isCondition {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not check which of the "+
 			"repositories the Gitlet nodes named you may read (%s), so it answers nothing rather than name "+
-			"one you may not. This is NOT an answer about the fleet: try again shortly.", tool, why))
+			"one you may not. This is NOT an answer about the fleet%s", tool, why,
+			conditionNext(err, ": try again shortly.", ". "+stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not check which of the repositories the Gitlet "+
 		"nodes named you may read: %s. This is NOT an answer about the fleet: say you could not read it.",
