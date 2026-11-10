@@ -45,6 +45,12 @@ type applyHarness struct {
 	live         *applyRecorder
 	seq          uint64
 	maxVariables int
+
+	// unstamped hands the applier each record as its bytes stand, never
+	// through this build's encoder, which stamps a record carrying a
+	// versioned field at that field's version: for a case about a record
+	// some other writer stamped lower.
+	unstamped bool
 }
 
 // applyRecorder is the live seam, captured.
@@ -122,7 +128,16 @@ func (h *applyHarness) applyIn(tx *sql.Tx, rec chatlet.MutationRecord, seq uint6
 	storedAt time.Time) (rows int, gate statelog.Reason, gated bool, err error) {
 
 	h.t.Helper()
-	record := applyStatelogRecord(h.t, rec, seq, storedAt)
+	var record statelog.Record
+	if h.unstamped {
+		body, err := json.Marshal(rec)
+		if err != nil {
+			return 0, "", false, fmt.Errorf("encode the record as it stands: %w", err)
+		}
+		record = statelogRecordOf(rec, body, seq, storedAt)
+	} else {
+		record = applyStatelogRecord(h.t, rec, seq, storedAt)
+	}
 	reason, dropped, err := h.applier.Gated(h.t.Context(), tx, record)
 	if err != nil {
 		return 0, "", false, err
@@ -145,6 +160,13 @@ func applyStatelogRecord(t *testing.T, rec chatlet.MutationRecord, seq uint64,
 	if err != nil {
 		t.Fatalf("encode the record: %v", err)
 	}
+	return statelogRecordOf(rec, body, seq, storedAt)
+}
+
+// statelogRecordOf is rec, encoded as body, as the framework hands it over.
+func statelogRecordOf(rec chatlet.MutationRecord, body []byte, seq uint64,
+	storedAt time.Time) statelog.Record {
+
 	return statelog.Record{
 		Envelope: statelog.Envelope{
 			V: rec.V, Kind: string(rec.Subject.Kind),

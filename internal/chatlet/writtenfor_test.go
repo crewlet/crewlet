@@ -167,19 +167,29 @@ func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 
 // A POST KEEPS WHOM AN AGENT'S MESSAGE WAS WRITTEN FOR (ADR-0109), on its
 // document and the same on every node: the carrier a version-3 record rode,
-// and nobody for a record that carries none. Kept from the carrier's first
-// build on, before anything reads it, because the applier writes a message's
-// document once, at its post's position: a field a later build began to fill
-// would differ between a node that applied the post before it upgraded and
-// one that applied it after.
+// and nobody for a record that carries none or one below the carrier's
+// version, whatever it holds, since an older build's applier wrote that
+// post's document with no such field. Kept from the carrier's first build on,
+// before anything reads it, because the applier writes a message's document
+// once, at its post's position: a field a later build began to fill would
+// differ between a node that applied the post before it upgraded and one that
+// applied it after.
 //
 // Mutation: drop the fill, and the post made for ada keeps nobody on both
 // nodes; fill a carrier into a post whose record carries none, and that post
-// keeps one.
+// keeps one; drop the fill's version arm, and the post below the carrier's
+// version keeps ada.
 func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
-	for name, writtenFor := range map[string]*types.WorkingFor{"made for ada": ada, "made for nobody": nil} {
+	for name, c := range map[string]struct {
+		v                int
+		carried, applied *types.WorkingFor
+	}{
+		"made for ada":                        {chatlet.WorkingForVersion, ada, ada},
+		"made for nobody":                     {chatlet.WorkingForVersion, nil, nil},
+		"below the carrier's version for ada": {chatlet.WorkingForVersion - 1, ada, nil},
+	} {
 		documents := map[string]string{}
 		for _, node := range []string{"node-a", "node-b"} {
 			h := newApplyHarness(t)
@@ -189,8 +199,11 @@ func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 			post := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpPost, "op-post-m-1",
 				chatlet.MessagePost{V: chatlet.DocumentVersion, MessageID: "m-1", Body: "is this current?",
 					Author: "dev", AuthorKind: chatlet.AuthorAgent}, chatlet.ScopeSet{Subject: true})
-			post.V, post.Actor, post.ActorKind = chatlet.WorkingForVersion, "dev", chatlet.AuthorAgent
-			post.WorkingFor = writtenFor
+			post.V, post.Actor, post.ActorKind = c.v, "dev", chatlet.AuthorAgent
+			post.WorkingFor = c.carried
+			// A RECORD BELOW THE CARRIER'S VERSION THAT HOLDS ONE is one this
+			// build's encoder would never stamp so low: as another writer sent it.
+			h.unstamped = c.v < chatlet.WorkingForVersion
 			if _, _, err := h.apply(post); err != nil {
 				t.Fatalf("%s on %s: apply the post: %v", name, node, err)
 			}
@@ -199,9 +212,9 @@ func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s on %s: decode the message: %v", name, node, err)
 			}
-			if !reflect.DeepEqual(message.WorkingFor, writtenFor) {
+			if !reflect.DeepEqual(message.WorkingFor, c.applied) {
 				t.Errorf("the post %s keeps written for %+v on %s, want %+v", name, message.WorkingFor, node,
-					writtenFor)
+					c.applied)
 			}
 			documents[node] = document
 		}
