@@ -113,6 +113,10 @@ type TurnRef struct {
 	// trigger to resolve it from — see [PendingRun.WorkItem].
 	WorkItem *types.WorkItem
 
+	// Answered are the answers whose deliveries woke the turn, for the row
+	// ([PendingRun.Answered]).
+	Answered []string
+
 	// Requester is the seat whose wake started the turn, by its handle,
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
@@ -611,7 +615,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
-		WorkItem: req.Turn.WorkItem,
+		WorkItem: req.Turn.WorkItem, Answered: slices.Clone(req.Turn.Answered),
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester, WorkingFor: req.Turn.WorkingFor,

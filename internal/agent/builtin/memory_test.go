@@ -207,7 +207,7 @@ func (r *recordingSkills) List(context.Context, string, learning.ListOptions) ([
 	return []learning.Skill{r.skill}, nil
 }
 
-func (r *recordingSkills) MarkUsed(context.Context, string, time.Time) learning.Use {
+func (r *recordingSkills) MarkLoaded(context.Context, string, time.Time) learning.Use {
 	return learning.Use{}
 }
 

@@ -755,8 +755,9 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 }
 
 // A HELD RECIPIENT IS RECORDED, NEVER WOKEN: an agent seat the change told and
-// did not wake leaves one held-wake record under the id its wake would have
-// had, and a person told and not woken leaves none.
+// did not wake leaves one held-wake record under an id derived from its wake's
+// (never that id, which another build may wake under), and a person told and
+// not woken leaves none.
 func TestAHeldRecipientIsRecordedAndNotWoken(t *testing.T) {
 	h := newService(t, nil)
 	id := uuid.New()
@@ -772,8 +773,8 @@ func TestAHeldRecipientIsRecordedAndNotWoken(t *testing.T) {
 	}
 	h.quiet(t, inbox("engineering-lead"))
 	held := h.settled(t, heldTopic)
-	if len(held) != 1 || held[0].ID != id {
-		t.Fatalf("recorded %d held wakes, want one under the wake's own id", len(held))
+	if len(held) != 1 || held[0].ID != notify.HeldID(id) || held[0].ID == id {
+		t.Fatalf("recorded %d held wakes, want one under the id derived from the wake's", len(held))
 	}
 	rec, ok := events.DataAs[*types.WakeHeld](held[0])
 	if !ok || rec.AgentHandle != "engineering-lead" || rec.Origin != origin ||

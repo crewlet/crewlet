@@ -366,8 +366,9 @@ const learningDutyName = "learning"
 // A PROJECTION rather than the config type itself, so the learning package
 // keeps importing nothing but the store — the same rule its Summarizer seam
 // follows.
-func lifecycleOptions(c *config.EpisodeLifecycle) learning.Options {
+func lifecycleOptions(c *config.EpisodeLifecycle, synthesis *config.SkillSynthesis) learning.Options {
 	return learning.Options{
+		CapAge:            time.Duration(synthesis.ClusterWindowHours) * time.Hour,
 		Threshold:         c.MaxRawEpisodesPerAgent,
 		NonTerminalMaxAge: days(c.NonTerminalMaxAgeDays),
 		ToolFreeMaxAge:    days(c.ToolFreeMaxAgeDays),
@@ -497,7 +498,7 @@ func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.Backgr
 	// rows stay raw and readable rather than being dropped unfolded.
 	if summarize := e.auxSummarizer(c); summarize != nil {
 		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)),
-			lifecycleOptions(&cfg.EpisodeLifecycle))
+			lifecycleOptions(&cfg.EpisodeLifecycle, &cfg.SkillSynthesis))
 	} else {
 		log.WarnContext(ctx, "episode_compaction_unavailable",
 			"reason", "no auxiliary model is configured for any seat",

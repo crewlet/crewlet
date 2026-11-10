@@ -186,6 +186,11 @@ type Options struct {
 
 	// Now is the clock.
 	Now func() time.Time
+
+	// Observe is told each delivery of a source a parser reads, before it
+	// is routed: an effect it has beyond its wakes. It never holds a
+	// delivery back, so a failure there is its own to recover from.
+	Observe func(ctx context.Context, source string, w types.RawWebhook)
 }
 
 // Service routes verified deliveries to the seats they concern.
@@ -198,6 +203,7 @@ type Service struct {
 	limit    func() int
 	admits   Admitter
 	now      func() time.Time
+	observe  func(ctx context.Context, source string, w types.RawWebhook)
 
 	// retired is every source whose parser this process once had and
 	// [Service.Unregister] took away, which is the only way to tell a
@@ -241,6 +247,7 @@ func New(opts Options) (*Service, error) {
 		limit:    opts.RateLimit,
 		admits:   opts.Admits,
 		now:      opts.Now,
+		observe:  opts.Observe,
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -450,6 +457,9 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	}
 
 	reg := s.registry()
+	if s.observe != nil {
+		s.observe(ctx, ev.Source, *w)
+	}
 	routed, err := parser.Parse(ctx, *w, reg)
 	if err != nil {
 		log.ErrorContext(ctx, "inbound_parse_failed", "source", ev.Source,
@@ -667,9 +677,14 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	return nil
 }
 
-// held records an agent seat's held wake, once per change and seat: under the
-// id its wake would have had, so a redelivery collapses onto the same record. A
-// person, or a seat with no id, has no turn to hold and records nothing.
+// HeldID is the id a held wake is recorded under: name-based on the id its
+// wake would have had, the same on every node and redelivery, never that id.
+func HeldID(wake uuid.UUID) uuid.UUID { return uuid.NewSHA1(wake, []byte("held")) }
+
+// held records an agent seat's held wake, once per change and seat: under an id
+// derived from the one its wake would have had, so a redelivery collapses onto
+// it and a wake another build makes of the same change is never taken for it.
+// A person, or a seat with no id, has no turn to hold and records nothing.
 func (s *Service) held(ctx context.Context, ev *events.Event, r Routed, party Party) error {
 	if party.AgentID == uuid.Nil || party.Human {
 		return nil
@@ -678,7 +693,7 @@ func (s *Service) held(ctx context.Context, ev *events.Event, r Routed, party Pa
 		NotificationSource: r.Source, Origin: r.Origin},
 		events.TraceContext{TraceID: ev.TraceID, ParentSpanID: ev.SpanID})
 	if r.WakeID != uuid.Nil {
-		rec.ID = r.WakeID
+		rec.ID = HeldID(r.WakeID)
 		if !r.WakeAt.IsZero() {
 			rec.Timestamp = r.WakeAt.UTC()
 		}

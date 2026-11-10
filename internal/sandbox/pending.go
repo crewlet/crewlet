@@ -1419,6 +1419,12 @@ type PendingRun struct {
 	// [types.BasisResume] — the same turn, still on the same work.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 
+	// Answered are the comments answering the seat's questions whose
+	// deliveries woke the launching turn, ON THE ROW for the reason WorkItem
+	// is: a resumed turn reads them back, so a call a later job of the same
+	// turn holds still names the decision it carries out.
+	Answered []string `json:"answered,omitempty"`
+
 	// AudienceHandles are the seats a parked question may be answered by,
 	// and AudienceFallback whether that set fell back to a default rather
 	// than being what the run named.

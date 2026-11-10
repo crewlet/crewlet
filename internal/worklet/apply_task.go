@@ -421,14 +421,6 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	return Task{}, fmt.Errorf("worklet: %s is not an operation on a task", c.record.Op)
 }
 
-// clearableInstant is a patched date, with the zero value read as a clear.
-func clearableInstant(at *time.Time) *time.Time {
-	if at == nil || at.IsZero() {
-		return nil
-	}
-	return at
-}
-
 // Patched is [applyPatch] under an exported name, for the ONE caller outside
 // this package that has to answer the same question: a tool composing the
 // WAKE that announces a write it is about to make.
@@ -483,19 +475,31 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Parent = &parent
 		}
 	}
-	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT": an absent field
-	// means "leave it alone", so a clear has to be a VALUE. Stored
-	// verbatim, a zero would be a due date in January of year one — which
-	// every overdue predicate in the tracker reads as the most overdue
-	// task the company has ever had.
-	if patch.StartAt != nil {
-		task.StartAt = clearableInstant(patch.StartAt)
+	// A CLEARED DATE IS ITS FLAG, never a value: an absent date means
+	// "leave it alone", and the zero instant is no date a patch carries —
+	// the writer refuses one, and one that both sets and clears a date
+	// ([TaskPatch.CheckDates]) — so a date set here is always a real one.
+	switch {
+	case patch.ClearStart:
+		task.StartAt = nil
+	case patch.StartAt != nil:
+		task.StartAt = patch.StartAt
 	}
 	if patch.WaitReason != nil {
 		task.WaitReason = *patch.WaitReason
 	}
-	if patch.DueAt != nil {
-		task.DueAt = clearableInstant(patch.DueAt)
+	if s := patch.ChangeSettled; s != nil && s.Ref != "" {
+		task.Changes = maps.Clone(task.Changes)
+		if task.Changes == nil {
+			task.Changes = map[string]ChangeSettlement{}
+		}
+		task.Changes[s.Ref] = *s
+	}
+	switch {
+	case patch.ClearDue:
+		task.DueAt = nil
+	case patch.DueAt != nil:
+		task.DueAt = patch.DueAt
 	}
 	if patch.DueAllDay != nil {
 		task.DueAllDay = *patch.DueAllDay
@@ -727,8 +731,13 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			return insertMany(ctx, tx, c.maxVariables, relationsInsertPrefix,
 				relationsInsertRow, relationsInsertConflict,
 				task.Relations, func(r Relation) []any {
+					// A CHANGE HAS NO MIRROR, so its edge is never one-sided.
+					mirrored := string(r.Kind)
+					if IsChangeRef(r.Other) {
+						mirrored = ""
+					}
 					return []any{task.ID, r.Other, string(r.Kind),
-						string(r.Kind), r.Other, task.ID,
+						mirrored, r.Other, task.ID,
 						boolInt(r.OneSidedFinal), r.Note,
 						// THE AUTHORED INSTANT, and NOT re-stamped on
 						// conflict: this is what the repair ages on, and
@@ -813,8 +822,8 @@ const (
 	depsInsertRow = `(?, ?,
 		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
 		                        THEN 0 ELSE 1 END
-		            FROM tracker_tasks b WHERE b.id = ?), 1),
-		  (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?))`
+		            FROM tracker_tasks b WHERE b.id = ?), ?),
+		  COALESCE((SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?), ?))`
 	depsInsertConflict = `ON CONFLICT (blocker_id, task_id) DO UPDATE SET
 			blocker_open = excluded.blocker_open,
 			cleared_at = excluded.cleared_at`
@@ -854,7 +863,12 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// tracker_task_deps, so batching cannot change what any of them sees.
 	written, err := insertMany(ctx, tx, c.maxVariables, depsInsertPrefix,
 		depsInsertRow, depsInsertConflict, blockers, func(r Relation) []any {
-			return []any{r.Other, task.ID, r.Other, r.Other}
+			// A CHANGE IS NO TASK: open until the task records it settled.
+			open, cleared := 1, any(nil)
+			if s, settled := task.Changes[r.Other]; settled {
+				open, cleared = 0, nullableTime(&s.At)
+			}
+			return []any{r.Other, task.ID, r.Other, open, r.Other, cleared}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the dependencies of %s: %w",

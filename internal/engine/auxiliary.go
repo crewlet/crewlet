@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -105,7 +106,9 @@ type auxiliarySeam struct {
 	// charge is the counter one call is recorded in, or nil where there is
 	// none — no coordination store.
 	charge func(role *org.Role, stage types.AuxStage) spendRecorder
-	now    func() time.Time
+	// share is the seat's learning share, or nil where none holds it.
+	share func(role *org.Role) *learningShare
+	now   func() time.Time
 }
 
 // Auxiliary resolves the seat's auxiliary chain head, wrapped so every
@@ -155,9 +158,13 @@ func (s auxiliarySeam) recorded(role *org.Role, member chain.Member, use auxspen
 	case s.charge != nil:
 		meter = s.charge(role, use.Stage)
 	}
+	var share *learningShare
+	if s.share != nil && use.Purpose.Learning() {
+		share = s.share(role)
+	}
 	member.Provider = recordedProvider{
 		inner: member.Provider, key: member.Key, use: use, seat: s.seatOf(role, use.Stage),
-		meter: meter, ledger: s.ledger, zone: s.zone, now: s.now,
+		meter: meter, ledger: s.ledger, zone: s.zone, now: s.now, share: share,
 	}
 	return member
 }
@@ -213,6 +220,7 @@ type recordedProvider struct {
 	ledger *auxspend.Ledger
 	zone   *time.Location
 	now    func() time.Time
+	share  *learningShare
 }
 
 func (p recordedProvider) Model() string { return p.inner.Model() }
@@ -224,6 +232,9 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 		}
 	}
 	started := p.now()
+	if p.use.Purpose.HeldByShare() && !p.share.room(ctx, started) {
+		return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, learning.ErrLearningShare)
+	}
 	completion, err := p.inner.Complete(ctx, req)
 	ended := p.now()
 
@@ -239,6 +250,7 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 			model = completion.Model
 		}
 	}
+	p.share.record(context.WithoutCancel(ctx), spent.Tokens(), ended)
 	if tokens := spent.Tokens(); tokens > 0 && p.meter != nil {
 		// context.WithoutCancel: the tokens are already spent at the
 		// vendor. A record skipped because the caller's deadline expired
@@ -367,7 +379,7 @@ func (e *Engine) seamFor(c *Company) (auxiliarySeam, bool) {
 	}
 	return auxiliarySeam{
 		heads: c.Models, org: c.Org, zone: basisOf(c, nil).zone, ledger: e.auxSpend,
-		charge: e.auxiliaryCharge(c), now: e.now,
+		charge: e.auxiliaryCharge(c), share: e.learningShareFor(c), now: e.now,
 	}, true
 }
 

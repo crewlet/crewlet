@@ -233,14 +233,17 @@ func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
 // AN OUTAGE IS NOT THE ENGINE'S OWN DEFECT, ON THE RECORD. A failed phase or
 // turn records the condition that failed it under the condition's own kind,
 // the classification every tool and API answer reads: a coordination store
-// that did not answer, no data node serving, a busy store, a queue down, and a
-// disk that is full, read-only or failing or a process out of descriptors,
-// read by the error number its system call returned. Each was `error`, the
-// word an issue report reads as a defect of the engine. A driver message that
-// merely reads like one stays a fault.
+// that did not answer, no data node serving, no data node of a build that
+// reads the call whole, a busy store, a queue down, and a disk that is full,
+// read-only or failing or a process out of descriptors, read by the error
+// number its system call returned. Each was `error`, the word an issue report
+// reads as a defect of the engine. A driver message that merely reads like one
+// stays a fault.
 //
 // Mutation: drop the condition arm from ErrorKind and every row reads `error`;
-// drop an errno from the host conditions and its row does.
+// drop an errno from the host conditions and its row does; read an estate
+// nobody served before a build that cannot read the call, and the refusal,
+// which wraps one, reads `no_data_node`.
 func TestAnOutageIsRecordedUnderItsOwnKind(t *testing.T) {
 	t.Parallel()
 	transport := errors.New("nats: dial tcp 10.0.0.7:4222: connection refused")
@@ -256,6 +259,9 @@ func TestAnOutageIsRecordedUnderItsOwnKind(t *testing.T) {
 			builtin.KindCoordinationUnavailable},
 		{fmt.Errorf("estate: %w", &estate.ErrUnserved{Detail: "every node"}),
 			builtin.KindNoDataNode},
+		{fmt.Errorf("record the end: %w", &estate.ErrUnknownKeys{Op: "executor.end",
+			Keys: []string{"args.Ending.went_on"}, Nodes: []string{"data-a"},
+			Unserved: &estate.ErrUnserved{Detail: "data-a refused it"}}), builtin.KindFleetBuildsDiffer},
 		{fmt.Errorf("worklet: %w", store.ErrNoEstate), builtin.KindEstateClosed},
 		{fmt.Errorf("worklet: %w: %w", store.ErrBusy, errors.New("database is locked")),
 			builtin.KindStoreBusy},

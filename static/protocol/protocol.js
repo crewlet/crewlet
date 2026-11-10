@@ -4551,6 +4551,7 @@ var ACT_ERRORS = {
 	invalid: null,
 	not_found: "It is not there any more. Somebody may have removed or moved it.",
 	forbidden: null,
+	vendor_forbidden: null,
 	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
 	conflict: null,
 	not_ready: null,

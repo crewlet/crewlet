@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -767,6 +768,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"the resolve from the stored row and refuses anybody but its author",
 			patch.Comment.ID, id)
 	}
+	if err := patch.CheckDates(); err != nil {
+		return WriteResult{}, err
+	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
 
@@ -1385,7 +1389,9 @@ func settleWaitReason(current Task, patch TaskPatch) (TaskPatch, error) {
 		}
 		return patch, nil
 	}
-	if patch.StartAt != nil && patch.WaitReason == nil && current.WaitReason != "" {
+	// A CLEARED START IS ITS FLAG ([TaskPatch.ClearStart]), with no StartAt:
+	// the reason of a wait whose start is taken off goes with it.
+	if (patch.StartAt != nil || patch.ClearStart) && patch.WaitReason == nil && current.WaitReason != "" {
 		cleared := ""
 		patch.WaitReason = &cleared
 	}
@@ -2410,4 +2416,36 @@ func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) typ
 		}
 	}
 	return named
+}
+
+// SettleChange records a change (a pull request) task waits on as merged or
+// closed, as the engine learned it, and tells whoever holds the task to update
+// it. The task's own status is never moved: what follows is the holder's call.
+// Keyed by the caller on (task, change, state), so a webhook and a poll that
+// both saw it write once.
+func (w *Writer) SettleChange(ctx context.Context, opID string, task Task, s ChangeSettlement) (WriteResult, error) {
+	switch {
+	case s.Ref == "" || s.At.IsZero():
+		return WriteResult{}, invalid("a settled change on task %s names no change or no instant", task.ID)
+	case s.State != ChangeMerged && s.State != ChangeClosed:
+		return WriteResult{}, invalid("a change on task %s settles merged or closed, not %q", task.ID, s.State)
+	case !waitsOn(task, s.Ref):
+		return WriteResult{}, invalid("task %s does not wait on %s", task.ID, s.Ref)
+	}
+	after := task
+	after.Changes = maps.Clone(task.Changes)
+	if after.Changes == nil {
+		after.Changes = map[string]ChangeSettlement{}
+	}
+	after.Changes[s.Ref] = s
+	notify := Wake{Kind: ChangeLinkSettled, Before: task, After: after}.Notify(w.Leads)
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		TaskPatch{ChangeSettled: &s}, ChangeLinkSettled, notify)
+}
+
+// waitsOn reports whether task waits on ref.
+func waitsOn(task Task, ref string) bool {
+	return slices.ContainsFunc(task.Relations, func(r Relation) bool {
+		return r.Kind == RelationWaitingOn && r.Other == ref
+	})
 }

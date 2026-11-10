@@ -202,7 +202,7 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // write rows nobody would ever be woken for, and an inbox would fill with
 // changes the company deliberately did not announce.
 func Candidates(n *Notify) []routing.Candidate[Reason] {
-	if n == nil {
+	if n == nil || n.reassertsHolder() {
 		return nil
 	}
 	task := n.Kind.TaskCommit()
@@ -373,6 +373,9 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 	switch n.Kind {
 	case ChangeCreated, ChangeAssignee:
 		return true
+	// A CHANGE THE TASK WAITS ON SETTLED: whoever holds it is to update it.
+	case ChangeLinkSettled:
+		return true
 	case ChangeStatus:
 		return finishedEdge
 	case ChangeComment:
@@ -404,6 +407,13 @@ func (n *Notify) ownerAsked() bool {
 		return n.personComment() && !n.addressedToSomebody()
 	}
 	return n.Kind != ChangeWatchers
+}
+
+// reassertsHolder reports an assignment to the seat that already holds the
+// task with nothing else changed or named: no change, so it concerns nobody.
+func (n *Notify) reassertsHolder() bool {
+	return n.Kind == ChangeAssignee && n.Snapshot.Assignee == n.Snapshot.PrevAssignee &&
+		len(n.Fields) == 0 && len(n.Mentions) == 0
 }
 
 // threadAsked decides whether a reply wakes one thread participant: one with
@@ -476,7 +486,7 @@ func (k ChangeKind) TaskCommit() bool {
 		ChangeRouted, ChangeMoved, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
-		ChangeRestored, ChangePurged:
+		ChangeRestored, ChangePurged, ChangeLinkSettled:
 		return true
 	}
 	return false

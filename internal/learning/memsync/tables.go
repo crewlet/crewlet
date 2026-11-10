@@ -137,7 +137,7 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "embedding_model", "created_at",
+			"embedding", "embedding_model", "created_at", "provenance", "engine_build",
 		},
 		blobs:       []string{"embedding"},
 		watermark:   "change_seq",
@@ -183,7 +183,7 @@ var tables = []table{
 			"id", "agent_handle", "name", "description", "content",
 			"frontmatter", "tool_sequence", "source_episode_ids", "version",
 			"created_at", "updated_at", "use_count", "last_used_at", "state",
-			"pinned", "stale_at", "archived_at",
+			"pinned", "stale_at", "archived_at", "load_count",
 		},
 		wholeEachCycle: true,
 	},

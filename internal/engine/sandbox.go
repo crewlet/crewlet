@@ -2416,7 +2416,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		Reply: t.Reply,
 		// AND THE ITEM, for the same reason: the resumed turn is charged
 		// to what this one was on, and has no trigger to resolve it from.
-		WorkItem: t.WorkItem,
+		WorkItem: t.WorkItem, Answered: slices.Clone(t.Answered),
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
 		Requester: t.Requester, WorkingFor: t.WorkingFor,

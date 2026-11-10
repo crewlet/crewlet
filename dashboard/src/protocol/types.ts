@@ -23,6 +23,7 @@
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { IssueReportsAnswer } from "./issueReports.ts";
+import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
@@ -3596,6 +3597,8 @@ export interface WorkItem {
   muted?: string[];
   tags?: string[];
   start_at?: string;
+  /** Why the item waits until `start_at`, in one line, as whoever set the wait said it. */
+  wait_reason?: string;
   due_at?: string;
   due_all_day?: boolean;
   estimate_minutes?: number;
@@ -5737,6 +5740,9 @@ export interface WorkAskView {
   comment: string;
   asked_of: string;
   open: boolean;
+  /** An open ask the facts settled: asked again since (`superseded`), or its
+   *  item finished (`moot`). It waits on nobody; an answer is still recorded. */
+  overtaken?: "superseded" | "moot";
   /** Who closed it and when: the answer's author, or with `resolved` whoever
    *  resolved it without an answer. Absent while open. */
   answered_by?: string;
@@ -7863,6 +7869,7 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   issue_reports: IssueReportsAnswer;
+  go_live_review: GoLiveReviewAnswer;
   turn_outcomes: TurnOutcomesAnswer;
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;

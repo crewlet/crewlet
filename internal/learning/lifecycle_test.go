@@ -1895,3 +1895,36 @@ func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
 		})
 	}
 }
+
+// THE RAW CAP BINDS WHATEVER THE COMPACTION AGE: a seat holding its cap of raw
+// rows folds rows younger than the age compaction otherwise waits for, sparing
+// only the synthesizer's window, and a seat under its cap folds none of them.
+func TestTheRawCapBindsWhateverTheCompactionAge(t *testing.T) {
+	t.Parallel()
+	young := func(e *Episodes, t *testing.T, from int) {
+		t.Helper()
+		for i := range 6 {
+			write(t, e, rawEp(fmt.Sprintf("y%d-%d", from, i), daysAgo(from+i), "slack_post", "jira_get"))
+		}
+	}
+	for _, c := range []struct {
+		name      string
+		threshold int
+		from      int
+		folded    bool
+	}{
+		{"under the cap, rows ten days old wait for the compaction age", 100, 10, false},
+		{"over the cap, rows ten days old fold", 6, 10, true},
+		{"over the cap, rows inside the synthesizer's window stay raw", 6, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			l, e, _ := newLife(t, Options{Threshold: c.threshold})
+			young(e, t, c.from)
+			res := mustPass(t, l)
+			if got := res.ClustersCompacted == 1; got != c.folded {
+				t.Errorf("the pass folded %+v, want a fold %v", res, c.folded)
+			}
+		})
+	}
+}

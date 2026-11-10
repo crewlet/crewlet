@@ -108,3 +108,34 @@ func TestNoCarriedTableIsRetired(t *testing.T) {
 		}
 	}
 }
+
+// A NOTE'S CLASS AND ITS BUILD TRAVEL WITH IT, so the node that takes the seat
+// holds back what the node that wrote it would have.
+//
+// Mutation: leave either column out of the carried row, and this goes red.
+func TestANotesClassAndBuildTravelWithIt(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+	owner := openStore(t)
+	if _, err := owner.SQL().ExecContext(ctx, `INSERT INTO agent_diary (id, agent_id, kind, content,
+		created_at, provenance, engine_build) VALUES ('d9', ?, 'diary_long', 'my box has no browser', 1,
+		'capability', 'v1')`, seat.AgentID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	taker := openStore(t)
+	if _, err := syncerOn(t, taker, conn).Hydrate(ctx, seat.Handle); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	var about, build string
+	if err := taker.SQL().QueryRowContext(ctx,
+		`SELECT provenance, engine_build FROM agent_diary WHERE id = 'd9'`).Scan(&about, &build); err != nil {
+		t.Fatalf("read the carried note: %v", err)
+	}
+	if about != "capability" || build != "v1" {
+		t.Errorf("the carried note is about %q by build %q, want capability by v1", about, build)
+	}
+}

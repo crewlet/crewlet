@@ -118,7 +118,10 @@ interface SynthesizedSkill {
   summary: string;
   version: number;
   updated_at: string;
+  /** The times it was offered to the seat at a turn's start. */
   uses: number;
+  /** The times the seat loaded it (`use_skill`); over `uses`, its load rate. */
+  loads: number;
 }
 
 /** Who a counterparty IS, which is two identities and not one string.

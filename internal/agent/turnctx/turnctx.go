@@ -188,6 +188,11 @@ type Turn struct {
 	WorkItem      *types.WorkItem
 	WorkItemBasis types.WorkItemBasis
 
+	// Answered are the comments answering a question of the seat's whose
+	// deliveries woke the turn, by id: what a call the turn holds for approval
+	// may say it carries out. Empty for a turn no answer woke.
+	Answered []string
+
 	// Written records the work items this turn's own writes committed to,
 	// shared by every tool call and every delegate worker of the turn — see
 	// [Written] for why it is the one mutable thing a Turn points at.

@@ -85,8 +85,16 @@ func (h Halves) servesFileReads() bool {
 // removal write through: the tracker's file rows, the project read an upload
 // is refused on before a byte is read, the file writer and the object store.
 func (h Halves) servesFileWrites() bool {
-	_, projects := h.Work.Reader.(builtin.ProjectReader)
+	_, projects := h.Work.Reader.(projectReader)
 	return projects && h.servesFileReads() && h.Work.FileWriter != nil
+}
+
+// projectReader is the one tracker read an upload is refused on before a byte
+// is read ([served.acceptsFiles]): a project, to show whether it takes files —
+// never the read a tool hands a model to send back (builtin.ProjectReader's
+// CarriedProject), which an older node is refused while a newer field is set.
+type projectReader interface {
+	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 }
 
 // fileRoutes mounts the byte routes.
@@ -330,7 +338,7 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 // AT THE LEVEL EVERY DECISION HERE READS AT ([decisionRead]), and only an
 // early refusal: the write's own decide is what actually judges the project.
 func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project string) bool {
-	projects, _ := s.Work.Reader.(builtin.ProjectReader)
+	projects, _ := s.Work.Reader.(projectReader)
 	detail, err := projects.Project(r.Context(), worklet.ProjectDetailQuery{
 		Project: project, Level: decisionRead.Level,
 	})

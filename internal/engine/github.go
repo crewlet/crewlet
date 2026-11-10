@@ -232,7 +232,9 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	}
 	log.InfoContext(ctx, "github_wired", "api", api,
 		"seat_identities", registered, "participants_lookup", len(lookup.Opts.Seats) > 0)
-	e.githubPulls.wire(lookup)
+	e.githubPulls.wire(lookup, c.Config.GitHubOwners(func(v string) string {
+		return strings.TrimSpace(env.Value(v))
+	}))
 	return github.NewParser(github.ParserOptions{Participants: lookup}), nil
 }
 
@@ -261,7 +263,7 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	// deliveries under the credential being revoked, while RoutedSources
 	// went on listing it as reachable.
 	if cfg == nil || !cfg.Enabled {
-		e.githubPulls.wire(nil)
+		e.githubPulls.wire(nil, nil)
 		if svc.Unregister(github.Backend) {
 			log.InfoContext(ctx, "github_retired",
 				"detail", "the revision no longer enables github; its deliveries "+

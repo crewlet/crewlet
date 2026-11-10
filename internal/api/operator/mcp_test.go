@@ -520,7 +520,7 @@ func (stubWorkReader) Task(context.Context, string, worklet.DetailWants,
 	return worklet.TaskDetail{}, worklet.ErrNoTask
 }
 
-func (stubWorkReader) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+func (stubWorkReader) CarriedViews(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
 	return worklet.ViewListing{}, nil
 }
 
@@ -530,7 +530,7 @@ func (stubWorkReader) ExpandedQuery(_ context.Context, params map[string]any,
 	return worklet.ParseQuery(worklet.MapParams(params), now, loc)
 }
 
-func (stubWorkReader) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+func (stubWorkReader) CarriedCatalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return worklet.CatalogueAnswer{}, nil
 }
 

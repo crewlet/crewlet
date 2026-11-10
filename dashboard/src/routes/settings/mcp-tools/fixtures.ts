@@ -467,6 +467,7 @@ export const LINEAR_APPROVAL: McpApproval = {
   turn_id: "turn-1",
   launch_id: "launch-1",
   item: "ENG-12",
+  acting: null,
   args: { issue: "ENG-9" },
   status: "waiting",
   answer: "",

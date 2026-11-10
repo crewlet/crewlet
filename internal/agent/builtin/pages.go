@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Doclet's tool names, which the domain owns
@@ -75,6 +77,10 @@ type PageDeps struct {
 	Authorize Authorizer
 
 	Mentions MentionResolver
+
+	// Seats is the roster, read per call: an agent's comment that asks a
+	// person it names is refused here (ADR-0100). Nil refuses nobody.
+	Seats func() []colleague.Seat
 
 	// DefaultContainer is where a write that names no container lands — the
 	// writer's own unit's space — asked of the handle the write is recorded
@@ -878,9 +884,11 @@ func (t *commentOnPage) Name() string { return CommentOnPageTool }
 
 func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
-		"that it has gone stale. With `asks: true`, anyone you @-mention by " +
-		"handle is woken, and so are you by every later reply in its thread " +
-		"until a seat you named answers it; with `asks: false` an @-mention is " +
+		"that it has gone stale. With `asks: true`, the agents you @-mention by " +
+		"handle are woken, and so are you by every later reply in its thread " +
+		"until a seat you named answers it. A person is not asked here: put a " +
+		"question to a person on the work item it concerns with " + CommentOnWorkTool +
+		", `ask` set to their handle and a `decision`. With `asks: false` an @-mention is " +
 		"a reference, and the comment wakes only agents with an open ask in " +
 		"its thread, and answers those asks. People watching the page are " +
 		"told. If the answer is a change to the " +
@@ -899,8 +907,9 @@ func (t *commentOnPage) Parameters() map[string]any {
 			},
 			"body": map[string]any{
 				"type": "string",
-				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle, with `asks: true`, to reach them specifically.",
+				"description": "The comment, in markdown. @-mention an agent by " +
+					"handle, with `asks: true`, to reach it specifically; a person is " +
+					"asked on a work item with " + CommentOnWorkTool + ", never here.",
 			},
 			"asks": asksParam(pageAsks),
 			"reply_to": map[string]any{
@@ -991,6 +1000,14 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
+	}
+	// A PERSON IS ASKED ON A WORK ITEM, where the question carries a decision.
+	if persons := askedInWords(actor.Kind == doclet.AuthorAgent, asks, "", in.Mentions, t.deps.Seats); len(persons) > 0 {
+		return *refusalOf(failed(fmt.Sprintf("%s: `asks` is true and this names a person (%s). "+
+			"An agent's question to a person reaches their decisions only as an ask on a work "+
+			"item: put it with %s, `ask` set to their handle and a `decision`, on the item it "+
+			"concerns. If you only mention them here, set `asks` to false. Nothing was posted.",
+			CommentOnPageTool, words.And(persons), CommentOnWorkTool))), nil
 	}
 	// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is derived
 	// from its turn, so the same call again is the same comment: under a

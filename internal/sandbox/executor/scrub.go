@@ -50,8 +50,10 @@ import (
 //     those it takes out.
 //   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
 //     string as it streams, the same way, a token at a time. A `.json` file
-//     the rewrite cannot read as one JSON value — a task file a pack of a
-//     working job tore — is redacted as text, as a transcript's torn line is,
+//     the rewrite cannot read as one JSON value — a task file its harness was
+//     killed while it wrote, which the run's own end packs as it finds it
+//     (a pack beside a harness still working refuses one it sees written,
+//     claudeHeldTar) — is redacted as text, as a transcript's torn line is,
 //     rather than costing the session.
 //   - ANYTHING ELSE, as text: each whole line scrubbed, and redacted as
 //     redact settles it (redact.Settled, as a live tail is), so a rule that

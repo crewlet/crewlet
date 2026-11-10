@@ -66,6 +66,9 @@ type WorkPatterns struct {
 	IdleReviews []IdleReview `json:"idle_reviews"`
 	// Notices are the people's notice loads, in the order they were asked for.
 	Notices []NoticeLoad `json:"notices"`
+	// Settled are the changes tasks waited on that settled in the window,
+	// by where the engine learned it ([ChangeSettlement.Source]).
+	Settled []ChangeSettles `json:"settled"`
 }
 
 // DecisionTally is one person's choices on one agent's decisions.
@@ -111,6 +114,9 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 			return err
 		}
 		if err := readIdleReviews(ctx, tx, q.Reviewers, q.QuietSince, &out); err != nil {
+			return err
+		}
+		if err := readChangeSettles(ctx, tx, since, until, &out); err != nil {
 			return err
 		}
 		return readNoticeLoads(ctx, tx, q.People, since, until, &out)
@@ -338,4 +344,41 @@ func readNoticeLoads(ctx context.Context, tx *sql.Tx, people []string, since, un
 		out.Notices = append(out.Notices, load)
 	}
 	return nil
+}
+
+// ChangeSettles is how many changes one source settled in the window, and
+// when the newest settled.
+type ChangeSettles struct {
+	Source string    `json:"source"`
+	Count  int       `json:"count"`
+	Newest time.Time `json:"newest"`
+}
+
+// changeSettlesStatement counts the window's settled changes by source: a
+// range of the dependency key, which a change's URL begins, each row's source
+// read off its task's record of the settle.
+const changeSettlesStatement = `
+	SELECT COALESCE(json_extract(t.document, '$.changes."' || d.blocker_id || '".source'), ''),
+	       COUNT(*), MAX(d.cleared_at)
+	  FROM tracker_task_deps d JOIN tracker_tasks t ON t.id = d.task_id
+	 WHERE d.blocker_id > 'http' AND d.blocker_id < 'httq'
+	   AND d.cleared_at >= ? AND d.cleared_at < ?
+	 GROUP BY 1 ORDER BY 1`
+
+func readChangeSettles(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkPatterns) error {
+	rows, err := tx.QueryContext(ctx, changeSettlesStatement, since, until)
+	if err != nil {
+		return fmt.Errorf("worklet: read the settled changes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var s ChangeSettles
+		var newest int64
+		if err := rows.Scan(&s.Source, &s.Count, &newest); err != nil {
+			return fmt.Errorf("worklet: read the settled changes: %w", err)
+		}
+		s.Newest = store.DecodeTime(newest)
+		out.Settled = append(out.Settled, s)
+	}
+	return rows.Err()
 }
