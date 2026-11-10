@@ -217,7 +217,11 @@ func (t *Tracker) transition(key instance, change TransitionChange, detail strin
 // series per log would be a label a collector keeps for every log a
 // deployment ever ran, for a question the log line and the screen already
 // answer by name.
-func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
+//
+// AN INSTANCE THE EVALUATION COULD NOT JUDGE IS KEPT AS IT STANDS (unjudged,
+// [Unjudged]): neither cleared nor raised, its start unmoved, so a source a
+// boot or a stop has not read yet does not clear a condition that still holds.
+func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...AlarmRef) []Alarm {
 	now := t.now()
 	type raised struct {
 		key    instance
@@ -278,6 +282,13 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		if live[key] {
 			continue
 		}
+		if judgedNot(key, unjudged) {
+			kinds[key.kind] = true
+			if !slices.Contains(t.order, key.kind) {
+				t.order = append(t.order, key.kind)
+			}
+			continue
+		}
 		was := t.firing[key]
 		delete(t.firing, key)
 		moved = true
@@ -304,6 +315,14 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		}
 	}
 	return alarms
+}
+
+// judgedNot reports whether key is among the instances an evaluation could not
+// judge.
+func judgedNot(key instance, unjudged []AlarmRef) bool {
+	return slices.ContainsFunc(unjudged, func(r AlarmRef) bool {
+		return r.Kind == key.kind && (r.Entry == "" || r.Entry == key.entry)
+	})
 }
 
 // recall reads back the instances that stood when this node last kept them.

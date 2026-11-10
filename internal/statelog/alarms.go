@@ -1191,7 +1191,12 @@ type MCPServerCondition struct {
 	Changes     int
 	Loosened    int
 	ChangeSince time.Time
-	Change      MCPChangeNote
+
+	// ChangesUnread is a server whose tool changes the gathering node could
+	// not judge: it has not read the live listings or what was accepted, or
+	// no live node lists the server. Not the same fact as no change.
+	ChangesUnread bool
+	Change        MCPChangeNote
 }
 
 // MCPChangeNote is the one change to a server's tools its condition names: the
@@ -1407,6 +1412,10 @@ type rule struct {
 	// key left for [rule.evaluateEntries] to fill.
 	model  func(m ModelCondition, now time.Time) (AlarmEntry, bool)
 	server func(s MCPServerCondition, now time.Time) (AlarmEntry, bool)
+
+	// unread reports a server row whose condition this rule cannot judge from
+	// this reading: its instance is neither raised nor cleared ([Unjudged]).
+	unread func(s MCPServerCondition) bool
 }
 
 // perEntry reports whether the rule is about one configured entry
@@ -2686,9 +2695,10 @@ var table = []rule{
 		// until a call is held. No span, as a refused name has none: a
 		// definition is changed or it is not, and a node restarting does
 		// not make it so.
-		kind: KindMCPToolsChanged,
+		kind:   KindMCPToolsChanged,
+		unread: func(s MCPServerCondition) bool { return s.ChangesUnread },
 		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
-			if s.Changes == 0 {
+			if s.ChangesUnread || s.Changes == 0 {
 				return AlarmEntry{}, false
 			}
 			what := "changed since its level was decided"
@@ -2957,6 +2967,36 @@ func (rule rule) evaluateEntries(r Reading) (Alarm, bool) {
 		}
 	}
 	return Alarm{Kind: rule.kind, Detail: lead.Detail, Remedy: rule.remedy, Entries: entries}, true
+}
+
+// AlarmRef names the instances of a per-entry kind an evaluation could not
+// judge: one entry's, or every entry's where Entry is empty.
+type AlarmRef struct {
+	Kind  Kind
+	Entry string
+}
+
+// Unjudged is every per-entry instance r cannot judge, which [Tracker.Observe]
+// keeps as it stands rather than clearing: a kind whose rows r did not gather
+// at all (a zero instant), and a server row a rule cannot read
+// ([MCPServerCondition.ChangesUnread]). A source unread at a boot or a stop is
+// not a condition cleared, so a standing alarm is not raised again after it.
+func Unjudged(r Reading) []AlarmRef {
+	var out []AlarmRef
+	for _, rule := range table {
+		switch {
+		case rule.model != nil && r.ModelsAt.IsZero(),
+			rule.server != nil && r.MCPServersAt.IsZero():
+			out = append(out, AlarmRef{Kind: rule.kind})
+		case rule.server != nil && rule.unread != nil:
+			for _, s := range r.MCPServers {
+				if rule.unread(s) {
+					out = append(out, AlarmRef{Kind: rule.kind, Entry: s.Server})
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Frac is a measured fraction, for the two Reading fields whose zero value is

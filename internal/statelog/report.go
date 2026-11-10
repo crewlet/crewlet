@@ -103,6 +103,10 @@ type Report struct {
 	// once here. The CLI's exit code is derived from THIS field.
 	Alarms []Alarm `json:"alarms"`
 
+	// Unjudged is the per-entry instances this evaluation could not judge
+	// ([Unjudged]), which the node's tracker keeps standing.
+	Unjudged []AlarmRef `json:"-"`
+
 	// Maintenance is every capacity operation currently holding the
 	// fleet, the oldest first, and absent when there is none.
 	//
@@ -866,6 +870,7 @@ func NewReport(in ReportInputs) Report {
 	rep.Nodes = in.nodes()
 	rep.Snapshots = in.snapshots()
 	rep.Alarms = in.alarms(rep.Domains)
+	rep.Unjudged = Unjudged(in.Reading)
 	rep.Maintenance = in.Maintenance
 	rep.MaintenanceUnread = in.MaintenanceUnread
 	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the

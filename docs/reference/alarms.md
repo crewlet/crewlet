@@ -14,7 +14,9 @@ it was raised, and `GET /fleet` lists them per node (`alarms`), so
 one read covers every node. And it wakes the agents that may read the
 deployment's health: each time an alarm fires or clears on a node (a restart
 is neither: a node keeps the alarms it had up and says only what changed while
-it was down), every agent seat whose role carries `health_tools` is notified once and pointed at `fleet_health` for
+it was down, and a model or MCP server alarm whose source a stopping or booting
+node has not read, such as the live tool listings, stands until it is read),
+every agent seat whose role carries `health_tools` is notified once and pointed at `fleet_health` for
 what is firing now (see [Alarm wakes](../concepts/event-system.md#alarm-wakes)).
 Nothing has to be polled for any of them: every node running a state log,
 which is every data node, evaluates the whole table on its own position

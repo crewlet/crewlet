@@ -43,9 +43,9 @@ func TestARestartDoesNotReRaiseAStandingAlarm(t *testing.T) {
 		b.tracker.OnTransition("node-a", func(tr statelog.AlarmTransition) { b.said = append(b.said, tr) })
 		return b
 	}
-	observe := func(t *testing.T, b *boot, alarms []statelog.Alarm) {
+	observe := func(t *testing.T, b *boot, alarms []statelog.Alarm, unjudged ...statelog.AlarmRef) {
 		before := len(b.said)
-		b.tracker.Observe(t.Context(), alarms)
+		b.tracker.Observe(t.Context(), alarms, unjudged...)
 		if !b.lost {
 			for _, tr := range b.said[before:] {
 				b.tracker.Told(t.Context(), tr.ID)
@@ -119,6 +119,48 @@ func TestARestartDoesNotReRaiseAStandingAlarm(t *testing.T) {
 		observe(t, again, []statelog.Alarm{trim("tracker", "pages")})
 		if got := names(again.said); !slices.Equal(got, []string{"fired trim_blocked/pages"}) {
 			t.Fatalf("handed on %v, want a fire for the new log alone", got)
+		}
+	})
+
+	// A SOURCE UNREAD AT A STOP OR A BOOT IS NOT A CLEAR: a tool change on a
+	// server stands through the stop that withdraws its listing and the boot
+	// that has not read the listings yet, with its first instant (the one the
+	// administrator notice is timed from). A server the evaluation did judge
+	// still clears.
+	t.Run("an unjudged instance through a restart", func(t *testing.T) {
+		t.Parallel()
+		changed := func(servers ...string) statelog.Alarm {
+			a := statelog.Alarm{Kind: statelog.KindMCPToolsChanged, Detail: "a tool changed"}
+			for _, s := range servers {
+				a.Entries = append(a.Entries, statelog.AlarmEntry{Key: s, Detail: "a tool changed on " + s})
+			}
+			return a
+		}
+		db := nodeFile(t)
+		first := start(t, db, t0, false)
+		observe(t, first, []statelog.Alarm{changed("datadog", "docs")})
+		first.said = nil
+		observe(t, first, nil, statelog.AlarmRef{Kind: statelog.KindMCPToolsChanged, Entry: "datadog"})
+		if got := names(first.said); !slices.Equal(got, []string{"cleared mcp_tools_changed"}) {
+			t.Fatalf("the stop handed on %v, want the judged server's clear alone", got)
+		}
+		again := start(t, db, t0.Add(time.Hour), false)
+		observe(t, again, nil, statelog.AlarmRef{Kind: statelog.KindMCPToolsChanged})
+		if len(again.said) != 0 {
+			t.Fatalf("the boot handed on %v before reading the listings, want nothing", names(again.said))
+		}
+		marks, _ := again.tracker.Marks()
+		if len(marks) != 1 || marks[0].Kind != string(statelog.KindMCPToolsChanged) || !marks[0].Since.Equal(t0) {
+			t.Fatalf("the marks are %+v, want the change standing since %v", marks, t0)
+		}
+		observe(t, again, []statelog.Alarm{changed("datadog")})
+		if len(again.said) != 0 {
+			t.Fatalf("reading the listings handed on %v, want nothing: the change stood", names(again.said))
+		}
+		observe(t, again, nil)
+		if len(again.said) != 1 || again.said[0].Change != statelog.TransitionCleared ||
+			!again.said[0].Since.Equal(t0) {
+			t.Fatalf("the review handed on %v, want one clear raised at %v", names(again.said), t0)
 		}
 	})
 

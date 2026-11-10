@@ -357,3 +357,45 @@ mcp_servers:
 		t.Fatalf("the condition is %+v, want new_tool alone, added, seen at %s", got, seen)
 	}
 }
+
+// A SERVER THIS NODE CANNOT JUDGE IS MARKED UNREAD, not counted clear: every
+// server before the listings are read, and a configured server no live node
+// lists (stopped, or not started yet), so a stop or a boot does not clear a
+// change that still stands.
+func TestAServerThisNodeCannotJudgeIsUnread(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	company := specCompany(t, `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp}
+  - {name: docs, command: docs-mcp}
+`)
+	e, _ := reviewingEngine(t, company)
+	conds := []statelog.MCPServerCondition{{Server: "tracker"}, {Server: "docs"}}
+	e.changedConditions(ctx, company, conds)
+	if !conds[0].ChangesUnread || !conds[1].ChangesUnread {
+		t.Fatalf("before the listings are read the conditions are %+v, want both unread", conds)
+	}
+
+	e.baselineMCPTools(ctx, map[string]nodeListing{
+		"tracker": fakeListing("tracker", "node-a", 1, "close_items")}, time.Now())
+	waitFor(t, "the first listing to be accepted", func() bool {
+		index, _ := e.reviewIndex()
+		return index.Baselined("tracker")
+	})
+	e.listings.mu.Lock()
+	e.listings.answered, e.listings.presenceRead = true, true
+	e.listings.presence = []coord.Lease{{Resource: coord.NodeResource("node-a"), Epoch: 1}}
+	e.listings.fleet = map[string]coord.MCPListing{
+		coord.MCPListingKey("tracker", "node-a"): fakeListing("tracker", "node-a", 1, "close_items").listing}
+	e.listings.mu.Unlock()
+	conds = []statelog.MCPServerCondition{{Server: "tracker"}, {Server: "docs"}}
+	e.changedConditions(ctx, company, conds)
+	if conds[0].ChangesUnread || conds[0].Changes != 0 {
+		t.Errorf("a listed server as accepted is %+v, want judged with no change", conds[0])
+	}
+	if !conds[1].ChangesUnread {
+		t.Errorf("a server no live node lists is %+v, want unread", conds[1])
+	}
+}
