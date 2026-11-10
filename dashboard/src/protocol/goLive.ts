@@ -15,6 +15,13 @@ export interface ToldIntegration {
   /** Each permission the agent's app holds, by its name, and the vendor's words for it. */
   permissions?: Record<string, string>;
   permission_names?: Record<string, string>;
+  /** Where it acts (repositories, projects, hosts), each by its label where it has one,
+   *  and how many past the shown ones. */
+  scope?: string[];
+  scope_labels?: Record<string, string>;
+  scope_more?: number;
+  /** For SSH, the read commands each host admits. */
+  commands?: { host: string; run: string[]; more?: number }[];
 }
 
 /** One MCP server the agent may call, with its tools at each level. */
@@ -23,6 +30,10 @@ export interface ToldToolServer {
   allow: string[];
   approve: string[];
   blocked: string[];
+  /** The level of every tool the lists do not name; absent where each runs at its server's hints. */
+  default?: "allow" | "approve" | "blocked";
+  /** How many named tools past the shown ones the lists hold. */
+  more?: number;
 }
 
 /** One box the agent's runs use. */
