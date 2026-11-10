@@ -157,6 +157,9 @@ type Skill struct {
 	// distinct value from "used long ago" — every guard here keeps them apart.
 	UseCount   int
 	LastUsedAt time.Time
+	// LoadCount is how many times an agent loaded the skill itself
+	// (use_skill), beside UseCount, the times it was offered.
+	LoadCount int
 
 	State SkillState
 	// Pinned exempts the row from EVERY automatic transition. Operators set
@@ -371,7 +374,7 @@ func NewSkills(db *store.DB) *Skills { return &Skills{db: db} }
 
 const skillColumns = `id, agent_handle, name, description, content, frontmatter,
 	tool_sequence, source_episode_ids, version, created_at, updated_at,
-	use_count, last_used_at, state, pinned, stale_at, archived_at`
+	use_count, last_used_at, state, pinned, stale_at, archived_at, load_count`
 
 const versionColumns = `id, skill_id, agent_handle, name, description, content,
 	frontmatter, tool_sequence, source_episode_ids, version, refinement_kind,
@@ -409,14 +412,14 @@ func (s *Skills) Insert(ctx context.Context, sk Skill) error {
 
 	res, err := s.db.SQL().ExecContext(ctx, `
 		INSERT INTO synthesized_skills (`+skillColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, name) DO NOTHING`,
 		sk.ID, sk.AgentHandle, sk.Name, sk.Description, sk.Content,
 		jsonObject(sk.Frontmatter), jsonList(sk.ToolSequence),
 		jsonList(sk.SourceEpisodeIDs), sk.Version,
 		store.EncodeTime(sk.CreatedAt), store.EncodeTime(sk.UpdatedAt),
 		sk.UseCount, store.NullTime(sk.LastUsedAt), string(sk.State),
-		sk.Pinned, store.NullTime(sk.StaleAt), store.NullTime(sk.ArchivedAt),
+		sk.Pinned, store.NullTime(sk.StaleAt), store.NullTime(sk.ArchivedAt), sk.LoadCount,
 	)
 	if err != nil {
 		return fmt.Errorf("learning: insert skill %q: %w", sk.Name, err)
@@ -749,7 +752,7 @@ type Use struct {
 	Revived bool
 }
 
-// MarkUsed records that a skill was loaded, and revives it if it was stale.
+// MarkUsed records that a skill was offered to a turn, and revives it if it was stale.
 //
 // IT CANNOT FAIL A LOAD, and the signature is how that is guaranteed rather
 // than promised: there is no error to propagate, so no caller can turn a
@@ -767,6 +770,22 @@ type Use struct {
 // and silently resurrecting a row the curator aged out, on a path whose whole
 // contract is that it cannot fail anything, is not the place to decide that.
 func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use {
+	return s.mark(ctx, skillID, at, false)
+}
+
+// MarkLoaded records one load of the skill by an agent (use_skill), on the
+// same terms as [Skills.MarkUsed]: its last use is stamped and a stale skill
+// revives, and the load is counted beside the offers, never as one.
+func (s *Skills) MarkLoaded(ctx context.Context, skillID string, at time.Time) Use {
+	return s.mark(ctx, skillID, at, true)
+}
+
+// mark is [Skills.MarkUsed] or, loaded, [Skills.MarkLoaded].
+func (s *Skills) mark(ctx context.Context, skillID string, at time.Time, loaded bool) Use {
+	counter := "use_count = use_count + 1"
+	if loaded {
+		counter = "load_count = load_count + 1"
+	}
 	if skillID == "" || at.IsZero() {
 		return Use{}
 	}
@@ -788,7 +807,7 @@ func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use
 		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE synthesized_skills
-			SET use_count = use_count + 1,
+			SET `+counter+`,
 				last_used_at = ?,
 				state = CASE WHEN state = 'stale' THEN 'active' ELSE state END,
 				stale_at = CASE WHEN state = 'stale' THEN NULL ELSE stale_at END
@@ -1186,7 +1205,7 @@ func scanSkill(row interface{ Scan(...any) error }) (Skill, error) {
 	if err := row.Scan(&sk.ID, &sk.AgentHandle, &sk.Name, &sk.Description,
 		&sk.Content, &frontmatter, &tools, &sourceIDs, &sk.Version,
 		&created, &updated, &sk.UseCount, &lastUsed, &state, &pinned,
-		&staleAt, &archivedAt); err != nil {
+		&staleAt, &archivedAt, &sk.LoadCount); err != nil {
 		return Skill{}, err
 	}
 	sk.Frontmatter = parseObject(frontmatter)

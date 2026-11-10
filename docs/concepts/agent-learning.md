@@ -465,13 +465,13 @@ The harness lives in:
 
 | Surface | What's tracked | Where it lands |
 |---|---|---|
-| `synthesized_skills.use_count` / `last_used_at` | Per-skill use count + most-recent-use timestamp | Bumped by `learning.Skills.MarkUsed`, called from the `use_skill` builtin after a successful resolution and from the `SkillUse` reflection worker for every skill a turn was offered. |
+| `synthesized_skills.use_count` / `load_count` / `last_used_at` | Per-skill offer count, load count and most-recent-use timestamp | `use_count` is bumped by `learning.Skills.MarkUsed`, called from the `SkillUse` reflection worker for every skill a turn was offered. `load_count` is bumped by `learning.Skills.MarkLoaded`, called from the `use_skill` builtin after a successful resolution. Both revive a stale skill. The seat's Memory tab and Doclet's learned skills show each skill's offers, loads and load rate (loads over offers; no rate for a skill never offered). |
 | `skill_used` event | One per `use_skill(name)` resolution (`source_kind: synthesized`) and one per `load_tool_skill(key)` (`source_kind: registry`, naming the tool skill's page in `source_page_id` / `source_container`) | Published on `crewlet.events.skill_used`; correlated to the host turn via `trace_id` / `span_id`. |
 | `knowledge_read` event | One per read of the knowledge base — a `get_page`, a `search_knowledge`, the turn-start knowledge block, a tool-skill load, a phase's tool-skill catalogue — naming the pages it reached. See [Knowledge System § What agents read](knowledge-system.md#what-agents-read). | Published on `crewlet.events.knowledge_read`. |
 | `skill_synthesized` / `skill_refined` / `skill_promoted` events | Lifecycle markers: induction, refinement, cross-agent promotion | Published on `crewlet.events.skill_*`; the dashboard groups them by trace. |
 | `prefetch_summary` event | One per turn after the six context prefetches resolve, recording per-block `hit` (bool) + `bytes` (rendered size), the knowledge `selection_count`, the chat thread's `thread_context_posts` / `_read` / `_stopped_short`, the `trigger_requires_recon` gate decision, and `turn_embedding` — what became of the one vector the memory and episode searches rank by: `embedded`, `failed` (the embedder refused or did not answer inside the two-second budget, so those searches did not run — an empty `## Similar prior work` is then not "nothing similar"), `unconfigured`, or absent where no search asked for one. Every block but the knowledge and chat-thread ones — which say in words when their source could not be read — degrades silently rather than failing, so this is the only signal that tells an unreachable store from one with nothing to say. | Published on `crewlet.events.prefetch_summary` once per turn. |
 | `persist_decider_completed` `classification` / `ttl_until` | Tier label (`LONG` / `SHORT` / `DOC` / `NOOP`) + TTL on `SHORT` writes | Existing event extended so dashboards can plot the per-agent tier distribution. |
-| `learning_health` SQL view | Per-agent rollup: `total_skills`, `skills_used_at_least_once`, `total_skill_uses`, `most_recent_skill_use`, `avg_uses_per_skill`, `avg_skill_age_days` | Created by the store's `0002_learning.sql` migration; query it directly from the store. |
+| `learning_health` SQL view | Per-agent rollup: `total_skills`, `skills_used_at_least_once`, `total_skill_uses` (offers), `total_skill_loads`, `skill_load_rate` (loads over offers, `NULL` when nothing was offered), `most_recent_skill_use`, `avg_uses_per_skill`, `avg_skill_age_days` | Created by the store's `0002_learning.sql` migration and rebuilt with the loads by `0065_a_skill_counts_its_loads.sql`; query it directly from the store. |
 
 ### Berlot-Attwell threshold
 
@@ -488,7 +488,7 @@ A new agent will sit at zero until it has been alive long enough to retrieve. Co
 
 ### Best-effort rule
 
-Every telemetry write (`Skills.MarkUsed`, the `skill_used` and `knowledge_read` publishes, the `prefetch_summary` publish) is best-effort: a failure is logged once and swallowed so the host path (skill load, turn) is never broken by measurement. Test mode (no event queue / no DB) is a silent no-op.
+Every telemetry write (`Skills.MarkUsed` and `Skills.MarkLoaded`, the `skill_used` and `knowledge_read` publishes, the `prefetch_summary` publish) is best-effort: a failure is logged once and swallowed so the host path (skill load, turn) is never broken by measurement. Test mode (no event queue / no DB) is a silent no-op.
 
 ---
 

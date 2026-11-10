@@ -14,9 +14,9 @@
  * `kind=learned` is what one seat DREW from its own repeated work, answered by
  * the node holding that seat (`agent_memory`), with "n of total" — the page is
  * cut at the answer's limit and the total is the seat's own. The HOLDER orders
- * the seat's whole set before it cuts that page — most used first, or most
+ * the seat's whole set before it cuts that page: most offered first, or most
  * recently changed (`skills_order`, from `LEARNED_SKILL_ORDERS`), asked by the
- * Uses and Updated heads and kept in `sort=` as the grid's own key, for the
+ * Offered and Updated heads and kept in `sort=` as the grid's own key, for the
  * reason the tool skills' order is the engine's: sorted here, "most used" was
  * the most used of the newest fifty. A seat's memory
  * is its TRAIL, which the engine answers to an admin and to whoever leads the
