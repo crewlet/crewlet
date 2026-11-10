@@ -843,9 +843,11 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 // ONLY A RUN THAT DID CONTINUE ITS SESSION took up its totals, as its script
 // recorded ([sessionRecord]): one asked to continue a session that its box
 // neither held nor could restore started a new one, whose totals begin at the
-// run, and less the base it kept it would be charged below nothing.
+// run, and less the base it kept it would be charged below nothing. So would a
+// run whose harness stopped before its result (a stalled or killed relaunch),
+// which states no totals at all.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	result sandbox.Result, streamed *runSpend, rec sessionRecord) (sandbox.Result, error) {
+	result sandbox.Result, streamed *runSpend, rec sessionRecord, stated string) (sandbox.Result, error) {
 
 	if streamed != nil {
 		return streamed.on(result), nil
@@ -866,7 +868,14 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	if !totals.TotalsRestored(rec.release) {
 		return result, nil
 	}
-	return less(result, r.harness.Parse(raw)), nil
+	// ONLY A RESULT STATING THE BASE'S OWN SESSION'S TOTALS (stated, the
+	// session its harness's result names) has them taken off: a run that
+	// stopped before its result states none, and would be charged below nothing.
+	base := r.harness.Parse(raw)
+	if !sandbox.ValidSessionID(stated) || stated != base.SessionID {
+		return result, nil
+	}
+	return less(result, base), nil
 }
 
 // wrapperScript is the shell line a job runs under: the harness with its stdout
@@ -1144,6 +1153,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// the launch's record and is handed to a later run's script (the
 	// assistant's deep work resumes its run by it), so one that is no id is
 	// none, as the record's is.
+	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
@@ -1156,7 +1166,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
-	result, err = r.ownSpend(ctx, box, paths, result, spent, rec)
+	result, err = r.ownSpend(ctx, box, paths, result, spent, rec, stated)
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}

@@ -169,6 +169,54 @@ func TestAContinuedClaudeRunIsChargedOnlyWhatItAddedToTheSession(t *testing.T) {
 	}
 }
 
+// A CONTINUED RUN WHOSE RESULT STATES NO TOTALS OF THE BASE'S SESSION IS
+// CHARGED WHAT IT STATED, never less the base: a relaunch whose harness stopped
+// before its result (it states nothing), and a result of another session than
+// the one the base was left by.
+//
+// Mutation: take the base off whatever the run's result, and the stopped run is
+// charged below nothing (the coordinator's sandbox_usage_negative).
+func TestAContinuedRunWithoutItsSessionsTotalsIsNotChargedBelowNothing(t *testing.T) {
+	t.Parallel()
+	other := strings.Replace(claudeResultLine(30, 5, 200, 10, 0.20, ""),
+		"5e55f1d0-0000-4000-8000-00000000c1a0", "0be7a11e-0000-4000-8000-00000000c1a0", 1)
+	for name, tc := range map[string]struct {
+		stream string
+		want   spend
+	}{
+		"a harness that stopped before its result": {
+			stream: `{"type":"system","subtype":"init","session_id":"5e55f1d0-0000-4000-8000-00000000c1a0"}`,
+			want:   spend{}},
+		"a result of another session": {stream: other,
+			want: spend{input: 30 + 200 + 10, output: 5, cacheRead: 200, cacheWrite: 10, cost: 0.20}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.NewClaudeCode()
+			b := box(t, runner)
+			p := paths(b)
+			b.Put(p.Result(), claudeResultLine(100, 10, 1000, 50, 1.00, ""))
+			if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{
+				Brief: "go on", Resume: "5e55f1d0-0000-4000-8000-00000000c1a0"}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			b.Put(p.Stream(), tc.stream+"\n")
+			b.Put(p.Result(), tc.stream)
+			b.Put(p.SessionRecord(), "id 5e55f1d0-0000-4000-8000-00000000c1a0\ncontinued yes"+
+				"\nrelease 2.1.290 (Claude Code)\n")
+			b.Put(p.ExitCode(), "1")
+
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if got := spendOf(res); !got.near(tc.want) {
+				t.Fatalf("the run was charged %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // A RUN THAT STARTS A SESSION OF ITS OWN KEEPS NO BASE: there is nothing it
 // took up, and a base left from an earlier job would take that job's spend off
 // a run that never continued it.
