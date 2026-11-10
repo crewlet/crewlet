@@ -1144,6 +1144,8 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a late record raises its successors": seek(subject, raiseHistoryStatement,
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
+		"the decision an answer gave a seat": seek("sqlite_autoindex_tracker_comments_1",
+			answeredDecisionStatement, "c-1", "ana"),
 		"which of a task's asks the facts overtook": func() indexedRead {
 			query, args := overtakenStatement(task)
 			return seek("tracker_comments_thread_idx", query, args...)

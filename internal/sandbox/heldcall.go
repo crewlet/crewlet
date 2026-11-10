@@ -106,6 +106,20 @@ const (
 	HeldDeny = "deny"
 )
 
+// HeldAct is the decision a held call carries out, as its approver reads it:
+// the work item, the question its seat asked there, and the answer a person
+// gave it.
+type HeldAct struct {
+	Item     string `json:"item"`
+	Key      string `json:"key,omitempty"`
+	Ask      string `json:"ask"`
+	Question string `json:"question" untrusted:"name"`
+	// Choice is the chosen option's label, empty for an answer in words.
+	Choice     string    `json:"choice,omitempty" untrusted:"name"`
+	AnsweredBy string    `json:"answered_by"`
+	AnsweredAt time.Time `json:"answered_at"`
+}
+
 // HeldChoices is every answer, in the order a person is offered them.
 var HeldChoices = []string{HeldOnce, HeldAlways, HeldDeny}
 
@@ -283,6 +297,10 @@ type HeldCall struct {
 	// its arguments, as the person was shown it (an SSH host's address,
 	// port, operate user and keys): the call is made only while it holds.
 	Binding string `json:"binding,omitempty"`
+
+	// Acting is the decision the call carries out: the newest question its
+	// seat asked on the turn's work item that a person answered; nil for none.
+	Acting *HeldAct `json:"acting,omitempty"`
 
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`

@@ -401,6 +401,9 @@ export interface McpApproval {
   launch_id: string;
   /** The key of the work item the run was on, or null. */
   item: string | null;
+  /** The decision the call carries out: the newest question the seat asked on
+   *  that item which a person answered; null for none. */
+  acting: McpApprovalActing | null;
   /** What the call would send; null where its seal does not open on this node. */
   args: Record<string, unknown> | null;
   status: McpApprovalStatus;
@@ -408,6 +411,20 @@ export interface McpApproval {
   answer: string;
   answered_by: string;
   answered_at: string | null;
+}
+
+/** The decision a held call carries out, as its approver reads it. */
+export interface McpApprovalActing {
+  /** The work item, by id and by key. */
+  item: string;
+  key?: string;
+  /** The question's comment id, and what it asked. */
+  ask: string;
+  question: string;
+  /** The chosen option's label; absent for an answer in words. */
+  choice?: string;
+  answered_by: string;
+  answered_at: string;
 }
 
 /** One agent seat's MCP tools, counted against `tool_budget`. */
