@@ -134,7 +134,7 @@ const (
 	// on somebody else's behalf, into a reserved container.
 	RefusalForbidden Refusal = "forbidden"
 
-	// RefusalVendorForbidden: the vendor a built-in reaches refused the
+	// RefusalVendorForbidden is the vendor a built-in reaches refusing the
 	// credential the engine minted for the seat, which lacks the permission
 	// the tool declares it needs (its [builtin.VendorNeed]). Said from that
 	// declaration, never from the vendor's words.

@@ -2,7 +2,7 @@ package builtin
 
 import "github.com/crewlet/crewlet/internal/seataccess"
 
-// VendorNeed is the vendor permission a built-in needs to do its work (E21):
+// VendorNeed is the vendor permission a built-in needs to do its work:
 // the grant the engine minted for the seat, which explains a vendor's refusal
 // from the engine's own knowledge, never from the vendor's words. Every filed
 // built-in declares one, the engine's own estates' tools as reaching none.

@@ -267,7 +267,7 @@ func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) 
 	}
 }
 
-// EVERY BUILT-IN DECLARES THE VENDOR PERMISSION IT NEEDS (E21): a closed table,
+// EVERY BUILT-IN DECLARES THE VENDOR PERMISSION IT NEEDS: a closed table,
 // one declaration per filed tool, and one that reaches a vendor says which,
 // on which backend, at which level. A row cannot omit it and compile.
 func TestEveryBuiltInDeclaresTheVendorPermissionItNeeds(t *testing.T) {

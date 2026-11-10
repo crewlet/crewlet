@@ -228,7 +228,7 @@ func TestASiteThatFailsTheSearchServesNoMode(t *testing.T) {
 	}
 }
 
-// A SITE THAT REFUSES THE SEAT'S CREDENTIAL SAYS SO (E21): a 401 or 403 is the
+// A SITE THAT REFUSES THE SEAT'S CREDENTIAL SAYS SO: a 401 or 403 is the
 // credential's to fix, so the answer marks the vendor's refusal rather than a
 // site that could not be searched, and a 503 still is the latter.
 func TestASiteThatRefusesTheCredentialMarksTheVendorsRefusal(t *testing.T) {

@@ -308,26 +308,27 @@ func partialNote(c knowledge.Coverage) string {
 }
 
 // vendorRefused is a vendor's refusal of the searching credential, said only
-// from what the engine knows (E21): the company's connection's refusal is the
+// from what the engine knows: the company's connection's refusal is the
 // company's; on the agent's own credential a 401 is that credential, a 403 its
-// grant does not hold is vendor_forbidden, and any other 403 is a plain failure.
+// grant does not hold is vendor_forbidden, and any other 403 is forbidden.
 func (t *searchKnowledge) vendorRefused(ctx context.Context, turn *turnctx.Turn, result knowledge.Result) tools.Result {
 	filing, _ := FilingOf(SearchKnowledgeTool)
 	need := filing.Vendor
-	failed := func(words string) tools.Result {
-		return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor + " " + words +
-			" Nothing was searched, so this says nothing about whether a page exists."}
+	// A revoked credential waits on an administrator, never on time; a 403 is forbidden.
+	refusal := func(class tools.Refusal, cause error, words string) tools.Result {
+		return refusedBy(class, cause, SearchKnowledgeTool+": "+need.Vendor+" "+words+
+			" Nothing was searched, so this says nothing about whether a page exists.")
 	}
 	switch {
 	case !result.VendorSelf && result.VendorStatus == http.StatusUnauthorized:
-		return failed("refused the company's connection itself: it is expired or revoked, and an " +
-			"administrator renews it in the " + need.Vendor + " integration.")
+		return refusal(tools.RefusalUnavailable, waitless(), "refused the company's connection itself: it "+
+			"is expired or revoked, and an administrator renews it in the "+need.Vendor+" integration.")
 	case !result.VendorSelf:
-		return failed("refused the company's connection for this search: the spaces its account may " +
-			"read may not include these.")
+		return refusal(tools.RefusalForbidden, nil, "refused the company's connection for this search: "+
+			"the spaces its account may read may not include these.")
 	case result.VendorStatus == http.StatusUnauthorized:
-		return failed("refused this agent's credential itself: it is expired or revoked, and an " +
-			"administrator renews it in the agent's " + need.Vendor + " access.")
+		return refusal(tools.RefusalUnavailable, waitless(), "refused this agent's credential itself: it "+
+			"is expired or revoked, and an administrator renews it in the agent's "+need.Vendor+" access.")
 	}
 	held, known := false, false
 	if seat := seatOf(turn); seat != nil && t.granted != nil {
@@ -337,10 +338,11 @@ func (t *searchKnowledge) vendorRefused(ctx context.Context, turn *turnctx.Turn,
 	case known && !held:
 		return refusedBy(tools.RefusalVendorForbidden, nil, need.Refusal(SearchKnowledgeTool))
 	case held:
-		return failed("refused the search although this agent's grant includes reading it; a space's " +
-			"own permissions may withhold it.")
+		return refusal(tools.RefusalForbidden, nil, "refused the search although this agent's grant "+
+			"includes reading it; a space's own permissions may withhold it.")
 	}
-	return failed("refused this agent's credential, and whether its grant is in place could not be read.")
+	return refusal(tools.RefusalForbidden, nil, "refused this agent's credential, and whether its grant "+
+		"is in place could not be read.")
 }
 
 // seatOf is the turn's seat, nil outside a turn.
