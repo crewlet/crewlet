@@ -1633,7 +1633,8 @@ type ReactionCount struct {
 
 // MessageView is one message as a reader renders it.
 //
-// THE DOCUMENT PLUS THE TWO VALUES THE APPLIER MINTED, which the document
+// THE DOCUMENT AS A READER IS HANDED IT ([Message.forReaders], without whom
+// it was written for) PLUS THE TWO VALUES THE APPLIER MINTED, which the document
 // deliberately does not carry: the per-channel sequence, and the position of
 // the record that last changed the row. Both are read rather than derived,
 // because they are the applier's arithmetic and a second copy in the blob

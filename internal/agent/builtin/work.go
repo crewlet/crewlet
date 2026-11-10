@@ -423,9 +423,12 @@ type Actor struct {
 
 	// Apps are the apps an OPERATOR — a credential acting as no seat — used
 	// when this node resolved it (iam.ActorApps), and nil for every other
-	// author: carried on the records it writes that wake somebody, so a turn
-	// one of them wakes is worked for the credential no wider than this node
-	// resolved it (ADR-0109). Set by [ActorOf] alone.
+	// author: carried on every record it writes that a later turn reads (an
+	// item's creation and every move of its assignee, whatever they wake, and
+	// any other record only where an agent other than the writer may wake:
+	// worklet's Writer.carries), so a turn one of them wakes or hands work to
+	// is worked for the credential no wider than this node resolved it
+	// (ADR-0109, ADR-0112). Set by [ActorOf] alone.
 	Apps []iam.Grant
 
 	// WrittenFor is whom an AGENT'S writes are made for: whoever its turn

@@ -46,10 +46,10 @@ type applyHarness struct {
 	seq          uint64
 	maxVariables int
 
-	// unstamped hands the applier each record as its bytes stand, never
-	// through this build's encoder, which stamps a record carrying a
-	// versioned field at that field's version: for a case about a record
-	// some other writer stamped lower.
+	// unstamped hands the applier each record as encoding/json renders it,
+	// never through this build's encoder, which refuses a record whose set
+	// version is below a versioned field it carries (chatlet.Encode): for a
+	// case about a record some other writer stamped lower.
 	unstamped bool
 }
 

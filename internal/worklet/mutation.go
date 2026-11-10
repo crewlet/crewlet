@@ -842,9 +842,10 @@ type MutationRecord struct {
 
 	// WorkingFor is whom an [AuthorAgent] record a later turn reads was
 	// written for (ADR-0109): whoever the turn that wrote it worked for,
-	// composed from that turn's own bound ceiling, on every creation and
-	// every assignment and on any other record whose wake may start an
-	// agent's turn ([Writer.carries]), and absent on every other record: an
+	// composed from that turn's own bound ceiling, on an item's creation and
+	// every move of its assignee, whatever they wake, and on any other record
+	// whose wake may start an agent's turn ([Writer.carries]), and absent on
+	// every other record: an
 	// agent's write made for nobody else, every other author's, and one no
 	// later turn reads (a gate always among them). The change feed reads
 	// it, and the turn the record wakes works for them

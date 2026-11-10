@@ -36,7 +36,7 @@ import (
 //   - 3: an agent's comment stating whether it asks ([Notify.Asks],
 //     [CommentPatch.Asks]), the open asks it answers ([CommentPatch.Closes])
 //     and the agents it wakes for their open asks ([Notify.Awaiting]).
-//   - 4: whom an agent's record that wakes somebody was written for
+//   - 4: whom an agent's record that may wake another agent was written for
 //     ([MutationRecord.WorkingFor], ADR-0109).
 const RecordVersion = 4
 

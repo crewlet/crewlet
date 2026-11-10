@@ -609,7 +609,9 @@ work item reads both, and any other write where it may wake another agent.
 The agent it wakes works for them, composed again on its own node, and so does
 every agent a chain of writes reaches; two writes one agent makes for two
 different people wake its colleague in two turns wherever the wake asks
-something of the colleague. A wake that asks nothing of it, arriving after a
+something of the colleague, except, until crewlet#798's piece 4b-ii, where a
+turn reads a chat thread's waiting messages or a parked run's answer, which
+it matches by their writer alone. A wake that asks nothing of it, arriving after a
 turn of its already read past the change, is dropped whoever it was written
 for, and runs nothing for anybody
 ([ADR-0120](../../adr/0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md)).
