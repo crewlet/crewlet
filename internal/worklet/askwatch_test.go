@@ -28,9 +28,14 @@ func TestAWatchAQuestionAddedEndsWithTheQuestion(t *testing.T) {
 	comment := func(r *roundTrip, id, author, ask string, answers *string) {
 		t.Helper()
 		n++
-		c := worklet.Comment{ID: "c-" + itoa(n), Task: id, Author: author, AuthorKind: worklet.AuthorHuman,
+		// AN AGENT ASKS, as the product's questions to a person are, and ana answers.
+		kind := worklet.AuthorAgent
+		if author == "ana" {
+			kind = worklet.AuthorHuman
+		}
+		c := worklet.Comment{ID: "c-" + itoa(n), Task: id, Author: author, AuthorKind: kind,
 			Body: "which way?", Ask: ask, Answers: answers, CreatedAt: at.Add(time.Duration(n) * time.Minute)}
-		if _, err := r.writer.As(author, worklet.AuthorHuman, worklet.Provenance{}).UpdateTask(t.Context(),
+		if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(t.Context(),
 			"op-"+c.ID, id, "ENG", worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment,
 			nil); err != nil {
 			t.Fatalf("comment %s: %v", c.ID, err)
@@ -82,7 +87,7 @@ func TestAWatchAQuestionAddedEndsWithTheQuestion(t *testing.T) {
 		filedTask(t, r, "w")
 		comment(r, "w", "pm", "ana", nil)
 		asked := "c-" + itoa(n)
-		if _, err := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{}).ResolveComment(t.Context(),
+		if _, err := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{}).ResolveComment(t.Context(),
 			"op-resolve", "w", "ENG", asked, nil); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
