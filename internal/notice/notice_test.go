@@ -138,18 +138,23 @@ func TestAPlatformNoticeOffersNoAnswer(t *testing.T) {
 }
 
 // A CONVERSATION THE ENGINE HOLDS IS ONE NOTICE, under its seat and the
-// conversation, from when it was held; one whose seat the company no longer has
-// is left to its removal.
+// conversation, from when it was held, saying how it failed; one whose seat the
+// company no longer has is left to its removal.
 func TestAHeldConversationIsANotice(t *testing.T) {
 	t.Parallel()
 	dev, gone := uuid.New(), uuid.New()
 	holds := []coord.ConversationHold{
-		{Seat: dev, Conversation: "task:t-1", Kind: "context_exhausted", Basis: "b", At: t0},
-		{Seat: gone, Conversation: "task:t-2", Kind: "context_exhausted", Basis: "b", At: t0},
+		{Seat: dev, Conversation: "task:t-1", Kind: notice.CauseContextExhausted, Basis: "b", At: t0},
+		{Seat: dev, Conversation: "task:t-3", Kind: notice.CauseOutOfMemory, Basis: "b", At: t0},
+		{Seat: gone, Conversation: "task:t-2", Kind: notice.CauseContextExhausted, Basis: "b", At: t0},
 	}
 	got := notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) { return "dev", seat == dev })
-	want := []notice.Notice{{Class: notice.ClassConversationHeld, Since: t0,
-		Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "task:t-1"}}}
+	want := []notice.Notice{
+		{Class: notice.ClassConversationHeld, Since: t0, Cause: notice.CauseContextExhausted,
+			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "task:t-1"}},
+		{Class: notice.ClassConversationHeld, Since: t0, Cause: notice.CauseOutOfMemory,
+			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "task:t-3"}},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the held conversations' notices are %+v, want %+v", got, want)
 	}
