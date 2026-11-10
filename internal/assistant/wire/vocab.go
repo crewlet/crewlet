@@ -51,7 +51,7 @@ const (
 	// PageDraftLabelMaxRunes is the longest label a draft field carries, in
 	// Unicode code points: a page title's bound, since a label names a field
 	// as a title names a page.
-	PageDraftLabelMaxRunes = pageTitleMaxRunes
+	PageDraftLabelMaxRunes = PageTitleMaxRunes
 
 	// PageDraftHintMaxRunes is the longest hint a draft field carries: what
 	// a value must be, in a few words, or the values a choice takes.

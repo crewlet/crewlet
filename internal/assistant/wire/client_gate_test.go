@@ -108,6 +108,14 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
 		"ASSISTANT_DIGEST_PREFIX":              wire.DigestPrefix,
+		// --- a page context's grammars and its strings' bounds ---
+		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
+		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,
+		"ASSISTANT_PAGE_TITLE_MAX_RUNES":           strconv.Itoa(wire.PageTitleMaxRunes),
+		"ASSISTANT_PAGE_VALUE_MAX_BYTES":           strconv.Itoa(wire.PageValueMaxBytes),
+		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
+		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
+		"ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES": strconv.Itoa(wire.PageDraftFileNameMaxBytes),
 		// --- a schema's bounds, which draft.set's arguments are declared within ---
 		"ASSISTANT_ACTION_ARGS_MAX_BYTES":             strconv.Itoa(wire.ActionArgsMaxBytes),
 		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),

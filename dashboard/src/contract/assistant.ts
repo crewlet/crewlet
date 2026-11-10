@@ -30,6 +30,21 @@ export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 16384;
 export const ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES = 50;
 /** The most page actions a page context offers. */
 export const ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS = 32;
+/** A screen's name, as the page context names it: `worklet-tasks`. */
+export const ASSISTANT_PAGE_SCREEN_PATTERN = "^[a-z][a-z0-9-]{0,63}$";
+/**
+ * A name the page context keys a value by: a route parameter, a query key, a
+ * draft's step, a draft field's path (`colors.primary`).
+ */
+export const ASSISTANT_PAGE_KEY_PATTERN = "^[a-z][a-z0-9_.]{0,63}$";
+/** The longest page title, in characters. */
+export const ASSISTANT_PAGE_TITLE_MAX_RUNES = 120;
+/** The longest route parameter or query value, in bytes, and an action's enumerated or constant value. */
+export const ASSISTANT_PAGE_VALUE_MAX_BYTES = 512;
+/** The longest id the page context names (a resource, its version, a revision, a draft's id), in bytes. */
+export const ASSISTANT_PAGE_ID_MAX_BYTES = 200;
+/** The most keys the route parameters, or the query, carry. */
+export const ASSISTANT_PAGE_MAP_MAX_KEYS = 32;
 /** The most fields an open draft's snapshot lists; the rest are counted in its `more`. */
 export const ASSISTANT_PAGE_DRAFT_MAX_FIELDS = 40;
 /** The longest value a draft field carries, in characters; a longer one is cut and marked `truncated`. */
@@ -40,6 +55,8 @@ export const ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES = 600;
 export const ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES = 120;
 /** The longest hint a draft field carries, in characters. */
 export const ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES = 200;
+/** The longest name a proposed file of a draft's file field carries, in bytes. */
+export const ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES = 200;
 /**
  * A draft field path that names a credential, read by segment: such a field is
  * sent redacted whatever the screen said (`wire.PageDraftSecretPath`).

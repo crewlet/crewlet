@@ -234,11 +234,11 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 		}
 	}
 	for _, v := range s.Enum {
-		if !plain(v, pageValueMaxBytes) {
+		if !plain(v, PageValueMaxBytes) {
 			return fmt.Errorf("%w: %s lists a value that is not plain text", ErrInvalid, path)
 		}
 	}
-	if s.Const != nil && !plain(*s.Const, pageValueMaxBytes) {
+	if s.Const != nil && !plain(*s.Const, PageValueMaxBytes) {
 		return fmt.Errorf("%w: %s const is not plain text", ErrInvalid, path)
 	}
 	for _, bound := range []*int{s.MinLength, s.MaxLength, s.MinItems, s.MaxItems} {

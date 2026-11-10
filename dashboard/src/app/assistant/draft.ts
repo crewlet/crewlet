@@ -36,12 +36,15 @@ import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
   ASSISTANT_ACTION_ARGS_MAX_BYTES,
   ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
+  ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_SECRET_PATH,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
+  ASSISTANT_PAGE_ID_MAX_BYTES,
+  ASSISTANT_PAGE_KEY_PATTERN,
   type AssistantActionArgs,
   type AssistantDraftField,
   type AssistantDraftFieldKind,
@@ -158,9 +161,8 @@ export interface DraftChange<D> {
   readonly rows: readonly PageActionRow[];
 }
 
-const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
+const KEY = new RegExp(ASSISTANT_PAGE_KEY_PATTERN);
 const SECRET_PATH = new RegExp(ASSISTANT_PAGE_DRAFT_SECRET_PATH);
-const ID_MAX_BYTES = 200;
 /** The longest text one proposed value may be: well past any field a draft screen draws. */
 const PROPOSED_MAX_RUNES = 16 * 1024;
 /** Every control character but a line break and a tab. */
@@ -218,7 +220,7 @@ function plainId(value: string | number | null | undefined): string | undefined 
   if (value === null || value === undefined) return undefined;
   const text = String(value);
   return text !== "" &&
-    encoder.encode(text).length <= ID_MAX_BYTES &&
+    encoder.encode(text).length <= ASSISTANT_PAGE_ID_MAX_BYTES &&
     !/[\u0000-\u001f\u007f-\u009f]/.test(text)
     ? text
     : undefined;
@@ -302,7 +304,7 @@ function fileRef(raw: unknown, accepts: readonly string[]): AssistantDraftFileRe
   if (typeof name !== "string" || name === "" || /[/\\\u0000-\u001f\u007f-\u009f]/.test(name)) {
     return null;
   }
-  if (encoder.encode(name).length > ID_MAX_BYTES) return null;
+  if (encoder.encode(name).length > ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES) return null;
   if (typeof media_type !== "string" || !accepts.includes(media_type)) return null;
   return { kind: "file", file_id, conversation_id, name, media_type };
 }

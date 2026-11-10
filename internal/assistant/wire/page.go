@@ -152,9 +152,10 @@ var mediaTypePattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$`)
 })
 
-// draftFileNameMaxBytes bounds a file reference's name: a file name, never a
-// path.
-const draftFileNameMaxBytes = 200
+// PageDraftFileNameMaxBytes bounds a file reference's name: a file name, never
+// a path. The dashboard holds a proposed file to it before a card is drawn
+// (`ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES`, held equal by the client gate).
+const PageDraftFileNameMaxBytes = 200
 
 // Validate reports what is wrong with a file reference: its kind, its ids,
 // a name that is a plain file name, and a media type in its grammar.
@@ -165,9 +166,9 @@ func (r DraftFileRef) Validate() error {
 			DraftFieldFile)
 	case r.FileID == uuid.Nil || r.ConversationID == uuid.Nil:
 		return fmt.Errorf("%w: a file reference names no file or no conversation", ErrInvalid)
-	case r.Name == "" || !plain(r.Name, draftFileNameMaxBytes) || strings.ContainsAny(r.Name, "/\\"):
+	case r.Name == "" || !plain(r.Name, PageDraftFileNameMaxBytes) || strings.ContainsAny(r.Name, "/\\"):
 		return fmt.Errorf("%w: a file reference's name is not a file name of at most %d bytes",
-			ErrInvalid, draftFileNameMaxBytes)
+			ErrInvalid, PageDraftFileNameMaxBytes)
 	case !mediaTypePattern().MatchString(r.MediaType):
 		return fmt.Errorf("%w: a file reference's media type %q is not one", ErrInvalid, r.MediaType)
 	}
@@ -210,17 +211,30 @@ type ResourceRef struct {
 	Noun RecordNoun `json:"noun,omitempty"`
 }
 
-// The grammars a page context's names are held to.
+// The grammars a page context's names are held to, written with no flag and
+// no escape so the dashboard compiles the same text
+// (`ASSISTANT_PAGE_SCREEN_PATTERN` and `ASSISTANT_PAGE_KEY_PATTERN`, held
+// equal by the client gate).
+const (
+	// PageScreenPattern is a screen's name: `worklet-tasks`.
+	PageScreenPattern = `^[a-z][a-z0-9-]{0,63}$`
+	// PageKeyPattern is a name a page context keys a value by: a route
+	// parameter, a query key, a draft's step or a draft field's path
+	// (`colors.primary`).
+	PageKeyPattern = `^[a-z][a-z0-9_.]{0,63}$`
+)
+
+// The grammars, compiled.
 var (
 	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	screenPattern = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+		return regexp.MustCompile(PageScreenPattern)
 	})
 	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	keyPattern = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)
+		return regexp.MustCompile(PageKeyPattern)
 	})
 	// actionPattern is a page action id: dotted lowercase segments,
 	// `work.filter.apply`.
@@ -232,12 +246,24 @@ var (
 )
 
 // The bounds on a page context's strings, in bytes unless named in runes.
+// The exported ones are the dashboard's too: the frame holds what it builds
+// to them before a question is sent (`contract/assistant.ts`, held equal by
+// the client gate).
 const (
-	pageTitleMaxRunes = 120
-	pageValueMaxBytes = 512
-	pageIDMaxBytes    = 200
-	pageMapMaxKeys    = 32
-	actionIDMaxBytes  = 64
+	// PageTitleMaxRunes is the longest page title, and a draft field's
+	// label ([PageDraftLabelMaxRunes]).
+	PageTitleMaxRunes = 120
+	// PageValueMaxBytes is the longest value a route parameter or a query
+	// key carries, and an enumerated or constant value of an action's
+	// arguments.
+	PageValueMaxBytes = 512
+	// PageIDMaxBytes is the longest id: a resource's and its version, the
+	// selection's, a revision, a draft's id and revision.
+	PageIDMaxBytes = 200
+	// PageMapMaxKeys is the most keys the route parameters, or the query,
+	// carry.
+	PageMapMaxKeys   = 32
+	actionIDMaxBytes = 64
 )
 
 // ValidActionID reports whether s is a page action id a screen may declare:
@@ -261,28 +287,28 @@ func (p PageContext) Validate() error {
 			PageContextMaxBytes)
 	case !screenPattern().MatchString(p.Screen):
 		return fmt.Errorf("%w: page context screen %q is not a screen name", ErrInvalid, p.Screen)
-	case !plain(p.Title, 4*pageTitleMaxRunes) || utf8.RuneCountInString(p.Title) > pageTitleMaxRunes:
+	case !plain(p.Title, 4*PageTitleMaxRunes) || utf8.RuneCountInString(p.Title) > PageTitleMaxRunes:
 		return fmt.Errorf("%w: page context title is not plain text of at most %d characters",
-			ErrInvalid, pageTitleMaxRunes)
+			ErrInvalid, PageTitleMaxRunes)
 	case len(p.Resources) > PageContextMaxResources:
 		return fmt.Errorf("%w: page context names %d resources, over %d", ErrInvalid,
 			len(p.Resources), PageContextMaxResources)
 	case len(p.Accepts) > PageContextMaxAccepts:
 		return fmt.Errorf("%w: page context offers %d actions, over %d", ErrInvalid,
 			len(p.Accepts), PageContextMaxAccepts)
-	case !plain(p.SourceRevision, pageIDMaxBytes):
+	case !plain(p.SourceRevision, PageIDMaxBytes):
 		return fmt.Errorf("%w: page context source_revision is not plain text of at most %d "+
-			"bytes", ErrInvalid, pageIDMaxBytes)
+			"bytes", ErrInvalid, PageIDMaxBytes)
 	}
 	for field, m := range map[string]map[string]string{"params": p.Params, "query": p.Query} {
-		if len(m) > pageMapMaxKeys {
+		if len(m) > PageMapMaxKeys {
 			return fmt.Errorf("%w: page context %s has %d keys, over %d", ErrInvalid, field,
-				len(m), pageMapMaxKeys)
+				len(m), PageMapMaxKeys)
 		}
 		for k, v := range m {
-			if !keyPattern().MatchString(k) || !plain(v, pageValueMaxBytes) {
+			if !keyPattern().MatchString(k) || !plain(v, PageValueMaxBytes) {
 				return fmt.Errorf("%w: page context %s key %q is not a name with a plain "+
-					"value of at most %d bytes", ErrInvalid, field, k, pageValueMaxBytes)
+					"value of at most %d bytes", ErrInvalid, field, k, PageValueMaxBytes)
 			}
 		}
 	}
@@ -290,7 +316,7 @@ func (p PageContext) Validate() error {
 		if err := (ResourceRef{Kind: r.Kind, ID: r.ID}).validate(); err != nil {
 			return err
 		}
-		if !plain(r.Version, pageIDMaxBytes) {
+		if !plain(r.Version, PageIDMaxBytes) {
 			return fmt.Errorf("%w: resource %s version is not plain text", ErrInvalid, r.ID)
 		}
 	}
@@ -322,9 +348,9 @@ func (p PageContext) Validate() error {
 		case !slices.Contains(p.Accepts, id):
 			return fmt.Errorf("%w: page context states a revision for %q, which it does not "+
 				"accept", ErrInvalid, id)
-		case p.ActionRevisions[id] == "" || !plain(p.ActionRevisions[id], pageIDMaxBytes):
+		case p.ActionRevisions[id] == "" || !plain(p.ActionRevisions[id], PageIDMaxBytes):
 			return fmt.Errorf("%w: page context revision for %q is not plain text of at most "+
-				"%d bytes", ErrInvalid, id, pageIDMaxBytes)
+				"%d bytes", ErrInvalid, id, PageIDMaxBytes)
 		}
 	}
 	if p.Draft != nil {
@@ -334,7 +360,7 @@ func (p PageContext) Validate() error {
 }
 
 // The bound on a draft's id and revision, a page id's.
-const draftIDMaxBytes = pageIDMaxBytes
+const draftIDMaxBytes = PageIDMaxBytes
 
 // validate holds a draft to its bounds: a known kind, an id for a saved
 // draft, names in the key grammar, each value text of bounded length, and
@@ -418,9 +444,9 @@ func (r ResourceRef) validate() error {
 		return fmt.Errorf("%w: resource kind %q is not one of %s", ErrInvalid, r.Kind,
 			words.Or(ResourceKinds))
 	}
-	if r.ID == "" || !plain(r.ID, pageIDMaxBytes) {
+	if r.ID == "" || !plain(r.ID, PageIDMaxBytes) {
 		return fmt.Errorf("%w: a %s resource id is empty or not plain text of at most %d bytes",
-			ErrInvalid, r.Kind, pageIDMaxBytes)
+			ErrInvalid, r.Kind, PageIDMaxBytes)
 	}
 	if r.Noun != "" && !r.Noun.Valid() {
 		return fmt.Errorf("%w: resource noun %q is not one of %s", ErrInvalid, r.Noun,
