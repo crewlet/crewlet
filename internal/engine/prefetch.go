@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
@@ -87,27 +86,10 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedText
-	// WHAT A SEAT'S NOTES ARE HELD TO: this build, and what the seat was last
-	// told of its access, read for a memory refresh as a turn's start reads it.
-	src.Build, src.Told = version.String(), e.toldOf
+	// WHAT A SEAT'S NOTES ARE HELD TO: this build, and when the seat was last
+	// told its access, read for a memory refresh as a turn's start reads it.
+	src.Build, src.AccessTold = version.String(), e.accessToldAt
 	return src
-}
-
-// toldOf is the access changes seat handle was told in the told memory window,
-// nil where the access log cannot be read: nothing is held back for a reason
-// the node cannot read.
-func (e *Engine) toldOf(ctx context.Context, handle string) []prefetch.ToldChange {
-	reads, ok := e.accessReads()
-	if !ok {
-		return nil
-	}
-	recent, err := reads.Recent(ctx, handle, time.Now().UTC().Add(-toldMemoryWindow), accessdomain.DispatchRead())
-	if err != nil {
-		log.WarnContext(ctx, "capability_told_unread", "agent", handle, "error", err.Error(),
-			"detail", "this memory read holds back no note for an access change")
-		return nil
-	}
-	return e.toldMemory(ctx, recent.Since)
 }
 
 // prefetchFor renders one turn's context blocks.
@@ -117,7 +99,7 @@ func (e *Engine) toldOf(ctx context.Context, handle string) []prefetch.ToldChang
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
-	told []prefetch.ToldChange,
+	told *toldTurn,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -141,8 +123,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// asked carry one answer about who wrote it.
 		Ask: ask,
 		// THE ACCESS CHANGES THE SEAT WAS TOLD, which mark its notes written
-		// before them (capability.go).
-		Told: told,
+		// before them, and when it was last told its access, which holds a
+		// capability note written before it back (capability.go).
+		Told: told.memory, AccessChangedAt: told.accessAt,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's

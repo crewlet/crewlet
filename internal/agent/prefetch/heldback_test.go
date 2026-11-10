@@ -35,7 +35,7 @@ func TestANoteThatMayHaveBecomeFalseIsHeldBack(t *testing.T) {
 	}
 	model := &aux{answers: []string{"[0, 1, 2]"}}
 	r := request(t)
-	r.Told = []prefetch.ToldChange{{At: changed, Vendor: "sandbox", Terms: []string{"sandbox"}}}
+	r.AccessChangedAt = changed
 	got := fetch(t, prefetch.Sources{
 		Build:  "v2",
 		Diary:  diary{recent: notes},

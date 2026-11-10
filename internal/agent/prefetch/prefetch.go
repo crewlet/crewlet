@@ -280,6 +280,11 @@ type Request struct {
 	// nothing.
 	Told []ToldChange
 
+	// AccessChangedAt is when the seat was last told its access, the turn
+	// itself where it tells a change: a capability note written before it is
+	// held back. Zero holds none back for it.
+	AccessChangedAt time.Time
+
 	// Boundary is the turn's fence token ([turnctx.Turn.Boundary]): the
 	// thread block is other people's words handed over in the prompt, so it
 	// is fenced with the token the turn's tools fence their reads with. An
@@ -494,7 +499,9 @@ type Models interface {
 // exactly what the cap exists not to do.
 type Diary interface {
 	Recall(ctx context.Context, agentID string, q learning.RecallQuery, now time.Time) ([]learning.DiaryHit, error)
-	Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]learning.DiaryEntry, error)
+	RecentHeldTo(ctx context.Context, agentID string, c learning.Currency, now time.Time,
+		limit int) ([]learning.DiaryEntry, error)
+	Hold(ctx context.Context, agentID string, c learning.Currency, now time.Time) (int, error)
 	MarkRetrieved(ctx context.Context, ids []string, at time.Time)
 }
 
@@ -545,11 +552,11 @@ type Parties interface {
 // a company with reflection off or no knowledge backend actually has, and each
 // of those is a supported configuration rather than a degraded one.
 type Sources struct {
-	// Build is the engine build running the turn, and Told what a seat was
-	// told of its access recently (nil reads nothing): together they decide
-	// which notes are held back ([learning.DiaryEntry.HeldBack]).
-	Build string
-	Told  func(ctx context.Context, handle string) []ToldChange
+	// Build is the engine build running the turn, and AccessTold when a seat
+	// was last told its access (zero where unread): together they decide which
+	// notes a memory refresh holds back ([learning.DiaryEntry.HeldBack]).
+	Build      string
+	AccessTold func(ctx context.Context, handle string) time.Time
 
 	Diary          Diary
 	Knowledge      knowledge.Searcher

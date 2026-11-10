@@ -3,6 +3,8 @@ package learning
 import (
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // About is what a memory note is about, a closed class the writer names. It is
@@ -29,8 +31,8 @@ var Abouts = []About{AboutCompany, AboutPreference, AboutCapability, AboutPlatfo
 func (a About) Valid() bool { return slices.Contains(Abouts, a) }
 
 // Currency is what a note is held to at a turn: the engine build running it,
-// and when the seat was last told its access changed (zero for never, or
-// longer ago than the told memory window).
+// and when the seat was last told its access (its newest told record, however
+// old, or the turn itself where it tells a change); zero for never told.
 type Currency struct {
 	Build           string
 	AccessChangedAt time.Time
@@ -48,3 +50,23 @@ func (e DiaryEntry) HeldBack(c Currency) bool {
 	}
 	return false
 }
+
+// heldWhere is [DiaryEntry.HeldBack] as a predicate over agent_diary's columns,
+// with its arguments: what a read leaves out, so a held note never takes the
+// place of one it would offer. TestTheHeldPredicateIsHeldBack holds the two to
+// each other.
+func heldWhere(c Currency) (string, []any) {
+	var changed int64
+	if !c.AccessChangedAt.IsZero() {
+		changed = store.EncodeTime(c.AccessChangedAt)
+	}
+	return `((provenance = 'platform' AND ? <> '' AND engine_build <> ?)
+		OR (provenance = 'capability' AND ? > 0 AND created_at < ?))`,
+		[]any{c.Build, c.Build, changed, changed}
+}
+
+// HeldNoteLife is how long a note stays held back before the retention sweep
+// retires it: thirty days of turns, each told how many notes it held back and
+// how to keep one again. A fact not kept again in that time is one the seat
+// does not need, and a held note no read offers is only a row every scan pays.
+const HeldNoteLife = 30 * 24 * time.Hour

@@ -116,11 +116,11 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	// and the vector are judged against here.
 	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: PlainAsk(hint),
 		Senders: senders, Aux: aux}
-	if f.src.Told != nil {
-		// THE SAME HOLD AS THE TURN'S START: what the seat was told of its access.
-		request.Told = f.src.Told(ctx, seat.Handle())
+	if f.src.AccessTold != nil {
+		// THE SAME HOLD AS THE TURN'S START: when the seat was last told its access.
+		request.AccessChangedAt = f.src.AccessTold(ctx, seat.Handle())
 	}
-	candidates, _ := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
+	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
 	if len(candidates) == 0 {
 		return nil, nil
 	}

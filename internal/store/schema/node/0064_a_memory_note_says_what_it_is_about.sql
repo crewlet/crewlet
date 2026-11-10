@@ -8,7 +8,13 @@
 -- latest told access change, until a turn keeps the fact again. A note written
 -- before this migration reads as `company`, which nothing holds back.
 --
+-- `held_since` is when the prefetch first held the note back, NULL while it is
+-- offered: the retention sweep retires a note held for longer than a held
+-- note's life, since a fact the seat has not kept again in that time is one it
+-- does not need. This node's own bookkeeping, never carried.
+--
 -- WHO HAS TO AGREE ON IT: whichever node holds the seat, as every diary column;
 -- memsync carries both columns with the row.
 ALTER TABLE agent_diary ADD COLUMN provenance TEXT NOT NULL DEFAULT 'company';
 ALTER TABLE agent_diary ADD COLUMN engine_build TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_diary ADD COLUMN held_since INTEGER;

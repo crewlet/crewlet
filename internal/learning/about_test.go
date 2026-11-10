@@ -2,6 +2,8 @@ package learning_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -114,4 +116,128 @@ func TestTheDeciderSaysWhatAFactIsAbout(t *testing.T) {
 			t.Errorf("%s kept %+v, want one note about %q", tc.answer, store.writes, tc.want)
 		}
 	}
+}
+
+// heldFixture is one seat's notes of every class, build and age around one
+// access change, each with the same vector, and the instant of the change.
+func heldFixture(t *testing.T, d *learning.Diary) time.Time {
+	t.Helper()
+	changed := time.Unix(1_700_000_000, 0).UTC()
+	for i, n := range []struct {
+		about learning.About
+		build string
+		at    time.Time
+	}{
+		{learning.AboutPlatform, "v1", changed.Add(time.Hour)},
+		{learning.AboutPlatform, "v2", changed.Add(-time.Hour)},
+		{learning.AboutCapability, "v2", changed.Add(-time.Hour)},
+		{learning.AboutCapability, "v2", changed.Add(time.Hour)},
+		{learning.AboutCompany, "v1", changed.Add(-time.Hour)},
+		{learning.AboutPreference, "v1", changed.Add(-time.Hour)},
+	} {
+		e := longEntry(fmt.Sprintf("n%d", i), "a1", "a note", n.at)
+		e.About, e.EngineBuild, e.Embedding = n.about, n.build, []float32{1, 0, 0, 0}
+		if err := d.Write(context.Background(), e); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	return changed
+}
+
+// THE READS LEAVE OUT EXACTLY WHAT HELDBACK HOLDS, in their query, so a held
+// note never takes a current one's place under a read's limit: the recency
+// read, the similarity read and the count agree with the rule for every
+// currency, and a limit of the current notes' number returns all of them.
+//
+// Mutation: let the SQL predicate drift from HeldBack, or hold after the
+// limit, and a row goes red.
+func TestTheHeldPredicateIsHeldBack(t *testing.T) {
+	t.Parallel()
+	d := diary(t)
+	ctx := context.Background()
+	changed := heldFixture(t, d)
+	now := changed.Add(24 * time.Hour)
+	all, err := d.Recent(ctx, "a1", now, 50)
+	if err != nil || len(all) != 6 {
+		t.Fatalf("Recent = %d notes (%v), want all six", len(all), err)
+	}
+	for _, c := range []learning.Currency{{}, {Build: "v2"}, {AccessChangedAt: changed},
+		{Build: "v2", AccessChangedAt: changed}, {Build: "v1", AccessChangedAt: changed.Add(-2 * time.Hour)}} {
+		var want []string
+		held := 0
+		for _, e := range all {
+			if e.HeldBack(c) {
+				held++
+			} else {
+				want = append(want, e.ID)
+			}
+		}
+		recent, err := d.RecentHeldTo(ctx, "a1", c, now, len(want))
+		if err != nil || !sameIDs(diaryIDs(recent), want) {
+			t.Errorf("%+v: RecentHeldTo = %v (%v), want %v", c, diaryIDs(recent), err, want)
+		}
+		hits, err := d.Recall(ctx, "a1", learning.RecallQuery{Embedding: []float32{1, 0, 0, 0},
+			Model: testModel, Limit: len(want), Held: c}, now)
+		var recalled []string
+		for _, h := range hits {
+			recalled = append(recalled, h.Entry.ID)
+		}
+		if err != nil || !sameIDs(recalled, want) {
+			t.Errorf("%+v: Recall = %v (%v), want %v", c, recalled, err, want)
+		}
+		if n, err := d.Hold(ctx, "a1", c, now); err != nil || n != held {
+			t.Errorf("%+v: Hold = %d (%v), want %d", c, n, err, held)
+		}
+	}
+}
+
+// A HELD NOTE IS RETIRED A HELD NOTE'S LIFE AFTER IT WAS FIRST HELD: the first
+// read that holds it marks the instant, a later one does not move it, and the
+// sweep deletes it once the life has passed; a current note is never retired.
+//
+// Mutation: retire on the note's age, re-mark on every read, or retire a
+// current note, and this goes red.
+func TestAHeldNoteIsRetiredAfterItsLife(t *testing.T) {
+	t.Parallel()
+	d := diary(t)
+	ctx := context.Background()
+	changed := heldFixture(t, d)
+	c := learning.Currency{Build: "v2", AccessChangedAt: changed}
+	first := changed.Add(24 * time.Hour)
+	if n, err := d.Hold(ctx, "a1", c, first); err != nil || n != 2 {
+		t.Fatalf("Hold = %d (%v), want the two held notes", n, err)
+	}
+	if _, err := d.Hold(ctx, "a1", c, first.Add(20*24*time.Hour)); err != nil {
+		t.Fatalf("Hold again: %v", err)
+	}
+	if n, err := d.RetireHeld(ctx, first.Add(learning.HeldNoteLife-time.Minute)); err != nil || n != 0 {
+		t.Fatalf("before the life passed the sweep retired %d (%v)", n, err)
+	}
+	if n, err := d.RetireHeld(ctx, first.Add(learning.HeldNoteLife)); err != nil || n != 2 {
+		t.Fatalf("after the life passed the sweep retired %d (%v), want the two held notes", n, err)
+	}
+	left, err := d.Recent(ctx, "a1", first.Add(learning.HeldNoteLife), 50)
+	if err != nil || len(left) != 4 {
+		t.Fatalf("after the sweep the diary holds %v (%v), want the four current notes", diaryIDs(left), err)
+	}
+	for _, e := range left {
+		if e.HeldBack(c) {
+			t.Errorf("the sweep left the held note %s", e.ID)
+		}
+	}
+}
+
+func diaryIDs(entries []learning.DiaryEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.ID)
+	}
+	return out
+}
+
+func sameIDs(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }

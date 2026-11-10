@@ -125,7 +125,7 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 		}
 		return EmptyMemoryHint
 	}
-	candidates, held := f.memoryCandidates(ctx, r, vector)
+	candidates, held := f.memoryCandidates(ctx, r, vector), f.heldBack(ctx, r)
 	if len(candidates) == 0 {
 		// Nothing offered. The hint would be a lie: there is no filter to
 		// re-run and nothing for it to find.
@@ -171,12 +171,10 @@ func joinLines(parts ...string) string {
 //
 // The similarity half ranks against the turn's ONE vector, the embedding of
 // what it was asked — shared with episode recall rather than computed again.
-func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVector) ([]learning.DiaryEntry, int) {
+func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVector) []learning.DiaryEntry {
 	now := f.now()
-	currency := currencyOf(f.src.Build, r.Told)
 	var (
 		out  []learning.DiaryEntry
-		held int
 		seen = map[string]bool{}
 	)
 	add := func(entry learning.DiaryEntry) {
@@ -184,19 +182,15 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 			return
 		}
 		seen[entry.ID] = true
-		// HELD BACK, NOT OFFERED: a note an upgrade or an access change may
-		// have made false is never put in front of the filter or the seat.
-		if entry.HeldBack(currency) {
-			held++
-			return
-		}
 		out = append(out, entry)
 	}
 
 	if v, ok := vector(); ok {
+		// HELD BACK IN THE READ: a note an upgrade or an access change may
+		// have made false is never offered, nor takes a current note's place.
 		hits, err := f.src.Diary.Recall(ctx, r.AgentID, learning.RecallQuery{
 			Handle: r.AgentID, Embedding: v.Values, Model: v.Model,
-			Limit: memoryVectorLimit,
+			Limit: memoryVectorLimit, Held: f.currency(r),
 		}, now)
 		if err != nil {
 			log.WarnContext(ctx, "memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
@@ -208,13 +202,28 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVe
 	for _, entry := range f.recentMemories(ctx, r) {
 		add(entry)
 	}
-	return out, held
+	return out
+}
+
+// currency is what r's notes are held to.
+func (f *Fetcher) currency(r Request) learning.Currency {
+	return learning.Currency{Build: f.src.Build, AccessChangedAt: r.AccessChangedAt}
+}
+
+// heldBack marks the notes r holds back and counts them, 0 where the store
+// cannot say: the line it renders is the seat's only word of them.
+func (f *Fetcher) heldBack(ctx context.Context, r Request) int {
+	n, err := f.src.Diary.Hold(ctx, r.AgentID, f.currency(r), f.now())
+	if err != nil {
+		log.WarnContext(ctx, "memory_held_uncounted", "agent_id", r.AgentID, "error", err.Error())
+	}
+	return n
 }
 
 // recentMemories is the recency half of the pool: the seat's newest live
 // notes, a database read with no embedding and no model call.
 func (f *Fetcher) recentMemories(ctx context.Context, r Request) []learning.DiaryEntry {
-	recent, err := f.src.Diary.Recent(ctx, r.AgentID, f.now(), memoryRecencyLimit)
+	recent, err := f.src.Diary.RecentHeldTo(ctx, r.AgentID, f.currency(r), f.now(), memoryRecencyLimit)
 	if err != nil {
 		log.WarnContext(ctx, "memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
 	}

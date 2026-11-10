@@ -3845,7 +3845,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// once here and frozen on the turn like the endings below; its notes
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
-	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told.memory)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.

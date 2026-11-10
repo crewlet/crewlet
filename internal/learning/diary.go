@@ -254,18 +254,59 @@ const defaultDiaryListing = 10
 // has just passed its deadline is exactly as wrong as one that passed it a
 // week ago.
 func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]DiaryEntry, error) {
+	return d.RecentHeldTo(ctx, agentID, Currency{}, now, limit)
+}
+
+// RecentHeldTo is [Diary.Recent] leaving out every note c holds back, in the
+// query, so a held note never takes the place of a current one.
+func (d *Diary) RecentHeldTo(ctx context.Context, agentID string, c Currency, now time.Time,
+	limit int) ([]DiaryEntry, error) {
+
 	if limit <= 0 {
 		limit = defaultDiaryListing
 	}
+	held, heldArgs := heldWhere(c)
+	args := append([]any{agentID, store.EncodeTime(now)}, heldArgs...)
 	rows, err := d.db.SQL().QueryContext(ctx,
 		`SELECT `+diaryColumns+` FROM agent_diary
-		 WHERE agent_id = ? AND (ttl_until IS NULL OR ttl_until > ?)
+		 WHERE agent_id = ? AND (ttl_until IS NULL OR ttl_until > ?) AND NOT `+held+`
 		 ORDER BY created_at DESC, id DESC LIMIT ?`,
-		agentID, store.EncodeTime(now), limit)
+		append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recent diary for %s: %w", agentID, err)
 	}
 	return collectDiary(rows)
+}
+
+// Hold marks the seat's live notes c holds back that no read marked before,
+// from now, and answers how many it holds: what a turn says it held back.
+func (d *Diary) Hold(ctx context.Context, agentID string, c Currency, now time.Time) (int, error) {
+	held, heldArgs := heldWhere(c)
+	live := `agent_id = ? AND (ttl_until IS NULL OR ttl_until > ?) AND ` + held
+	args := append([]any{agentID, store.EncodeTime(now)}, heldArgs...)
+	if _, err := d.db.SQL().ExecContext(ctx,
+		`UPDATE agent_diary SET held_since = ? WHERE held_since IS NULL AND `+live,
+		append([]any{store.EncodeTime(now)}, args...)...); err != nil {
+		return 0, fmt.Errorf("learning: mark %s's held notes: %w", agentID, err)
+	}
+	var n int
+	if err := d.db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_diary WHERE `+live,
+		args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("learning: count %s's held notes: %w", agentID, err)
+	}
+	return n, nil
+}
+
+// RetireHeld deletes every note held back for longer than [HeldNoteLife] at
+// now, reporting how many went.
+func (d *Diary) RetireHeld(ctx context.Context, now time.Time) (int64, error) {
+	res, err := d.db.SQL().ExecContext(ctx,
+		`DELETE FROM agent_diary WHERE held_since IS NOT NULL AND held_since <= ?`,
+		store.EncodeTime(now.Add(-HeldNoteLife)))
+	if err != nil {
+		return 0, fmt.Errorf("learning: retire held notes: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // Count is how many LIVE entries a seat's diary holds — the set [Diary.Recent]
@@ -316,6 +357,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}
+	held, heldArgs := heldWhere(q.Held)
 	rows, err := d.db.SQL().QueryContext(ctx,
 		`SELECT `+diaryColumns+` FROM agent_diary WHERE id IN (
 		    SELECT id FROM (
@@ -327,12 +369,14 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		          AND embedding_model = ?
 		          AND length(embedding) = ?
 		          AND (ttl_until IS NULL OR ttl_until > ?)
+		          AND NOT `+held+`
 		    )
 		    WHERE distance <= ?
 		    ORDER BY distance ASC, created_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, agentID, q.Model, width, store.EncodeTime(now), 1-floor, limit)
+		append(append([]any{probe, agentID, q.Model, width, store.EncodeTime(now)}, heldArgs...),
+			1-floor, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}
