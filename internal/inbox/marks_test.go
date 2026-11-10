@@ -302,3 +302,44 @@ func TestAGestureNoRecordCouldHonourIsRefusedForWhatItSays(t *testing.T) {
 		t.Errorf("a gesture every record can take was refused: %v", err)
 	}
 }
+
+// A POSITION THAT NAMES NOTHING IS NO POSITION TO READ THROUGH, WHATEVER STREAM
+// IT SAYS. A pointer at a zero position — generation and sequence zero — has
+// nothing at or below it to read, so every reader of a gesture takes it for no
+// position at all: the gesture marks nothing by it, the check judges no stream
+// of it, and the marks move by none of it. A gesture is decided on whichever
+// data node the estate router reaches, and the router's wire leaves a pointer at
+// a position its type calls zero off, so the data node meets nil; read any other
+// way, the same gesture asked in process and routed would be decided two ways.
+//
+// Mutation: drop the IsZero from Gesture.readThrough and the gesture holding
+// only the zero position is not empty, the check refuses the one naming another
+// stream, and the marks take the zero position's stream.
+func TestAPositionThatNamesNothingIsNoPositionToReadThrough(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2031, 4, 16, 9, 0, 0, 0, time.UTC)
+	routed := []reason{"mention"}
+	nothing := &statelog.Position{Stream: "CREWLET_SOMETHING_ELSE"}
+	if g := (inbox.Gesture[reason]{ReadThrough: nothing}); !g.Empty() {
+		t.Error("a gesture whose only part is a position naming nothing is not empty, so it would be " +
+			"decided where nil, which is what crosses, is refused as marking nothing")
+	}
+	with := inbox.Gesture[reason]{Read: []string{"r-1"}, ReadThrough: nothing}
+	if err := inbox.CheckGesture(with, stream, routed, now); err != nil {
+		t.Errorf("a gesture reading through a position that names nothing was refused: %v — the "+
+			"same gesture routed, which arrives with none, is taken", err)
+	}
+	positions := map[string]uint64{"r-1": inbox.Position{Stream: stream, Seq: 9}.Packed()}
+	for name, g := range map[string]inbox.Gesture[reason]{
+		"through a position naming nothing": with,
+		"through no position":               {Read: []string{"r-1"}},
+	} {
+		m := &inbox.Marks[reason]{}
+		if err := inbox.Apply(m, g, positions, now); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if m.SeenThrough != (inbox.Position{}) || m.Generation != "" || len(m.Read) != 1 {
+			t.Errorf("a gesture %s left the marks at %+v, want the read mark alone", name, *m)
+		}
+	}
+}

@@ -1458,8 +1458,9 @@ func (d CodeDeps) failedWrite(ctx context.Context, turn *turnctx.Turn, tool stri
 // same call again is the same write — with anything else this node's fault.
 func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string, err error) tools.Result {
 	var (
-		unready  *code.ErrGitUnready
-		unserved *estate.ErrUnserved
+		unready     *code.ErrGitUnready
+		unserved    *estate.ErrUnserved
+		unknownKeys *estate.ErrUnknownKeys
 	)
 	again := sameCall(actor, tool)
 	if again == "" {
@@ -1479,12 +1480,31 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 			"asking, so the same call is refused again.", tool, writeWords(err)))
 	case errors.Is(err, code.ErrRepoNotFound):
 		return codeFailure(ctx, tool, repo, err)
+	case errors.As(err, &unknownKeys):
+		// THE FLEET RUNS TWO BUILDS, which no retry clears: in the
+		// condition's own words, AHEAD of the walk nobody served that it
+		// wraps — read there, the model was told to make the same call
+		// again, which is refused the same way for as long as the fleet
+		// stays mixed.
+		why, _ := Condition(err)
+		ran := "; nothing was written"
+		if unknownKeys.Answer {
+			ran = ""
+		}
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not write to %s (%s)%s. %s",
+			tool, repo, why, ran, stuckWrite))
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing), errors.As(err, &unserved):
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: Gitlet could not be reached "+
 			"right now (no node that builds or decides it could take it in time); nothing was written — %s, "+
 			"which is the same write.", tool, again))
 	}
 	if why, ok := Condition(err); ok {
+		if said, _ := condition(err); said.stuck {
+			// A CONDITION NO WAIT CLEARS: the same write again is refused
+			// the same way ([conditionNext]).
+			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not write to %s (%s); "+
+				"nothing is known to have been written. %s", tool, repo, why, stuckWrite))
+		}
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not write to %s right now (%s); "+
 			"nothing is known to have been written — %s, which is the same write.", tool, repo, why, again))
 	}

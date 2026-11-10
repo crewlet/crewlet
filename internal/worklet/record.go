@@ -714,6 +714,20 @@ type Generation struct {
 // plain string cannot — and every collection here is a POINTER TO A SLICE for
 // the same reason: an absent tag list means the write did not touch tags, and
 // an empty one means it cleared them.
+//
+// # The pointer idiom's one exception: the two dates
+//
+// A date has no empty VALUE to point at — the zero instant is January of year
+// one, which every overdue predicate in the tracker reads as the most overdue
+// task the company ever had — so a cleared date is said by its own flag,
+// [TaskPatch.ClearStart] and [TaskPatch.ClearDue], and a date set is always a
+// real instant. It was once a pointer at the zero instant, and a pointer at a
+// value its type's own IsZero calls zero is one an encoder leaving every field
+// at its zero off drops (encoding/json's omitzero asks IsZero through the
+// pointer) — which is how internal/estate's router sends a request to a data
+// node: spelled so, a clear sent through it arrives as no date named at all,
+// and the task keeps the date the tool said it had cleared. A flag's false
+// clears nothing, which is what a patch that does not name the date means.
 type TaskPatch struct {
 	Title *string `json:"title,omitempty"`
 	Body  *string `json:"body,omitempty"`
@@ -752,8 +766,15 @@ type TaskPatch struct {
 	// arbitration gave it.
 	Mint *KeyMint `json:"mint,omitempty"`
 
+	// StartAt and DueAt set a date, always a real instant: the writer
+	// refuses the zero instant ([TaskPatch.CheckDates]). ClearStart and
+	// ClearDue take one off — see the type's doc for why a clear is a flag
+	// and not a value — and the writer refuses a patch that both sets and
+	// clears one date, which names two edits of it at once.
 	StartAt    *time.Time `json:"start_at,omitempty"`
 	DueAt      *time.Time `json:"due_at,omitempty"`
+	ClearStart bool       `json:"clear_start,omitempty"`
+	ClearDue   bool       `json:"clear_due,omitempty"`
 	DueAllDay  *bool      `json:"due_all_day,omitempty"`
 	WaitReason *string    `json:"wait_reason,omitempty"`
 
@@ -872,13 +893,82 @@ type TaskPatch struct {
 // a custom-field value as its only argument reported success and wrote
 // nothing.
 //
-// Every field here is a pointer, a slice or a map, precisely so that the zero
-// value means "not set" (see the type's own doc), which makes "no field is
-// set" a property of the VALUE rather than of a list somebody maintains. A
-// field added tomorrow is covered the day it is added.
+// Every field here is a pointer, a slice, a map or a clear flag, precisely so
+// that the zero value means "not set" (see the type's own doc) — a flag's
+// false clears nothing — which makes "no field is set" a property of the VALUE
+// rather than of a list somebody maintains. A field added tomorrow is covered
+// the day it is added.
 //
 // It is called once per write, against a broker round trip.
 func (p TaskPatch) Empty() bool { return reflect.ValueOf(p).IsZero() }
+
+// CheckDates refuses a patch whose dates say what no task can hold: a date set
+// to the zero instant, which is no date (see the type's doc), and a date both
+// set and cleared, which is two edits of one date at once — naming the field
+// to send instead. A comment it posts is held to [Comment.CheckInstants].
+//
+// THE WRITER'S CHECK ([Writer.UpdateTask]), AND THE ESTATE'S BEFORE IT ASKS
+// ANY NODE (internal/estate's tracker.update_task, refused before it is asked):
+// a pointer at the zero instant does not cross to a data node as itself — the
+// estate's wire leaves a field at its zero off, and the data node reads a patch
+// that names no date — so refused only where it ran, the same patch was refused
+// on a data node's own seat and changed nothing, or changed the rest of what it
+// named, from every other node. Refused on the node that asks, before it is
+// sent, it is refused alike wherever it is asked from.
+func (p TaskPatch) CheckDates() error {
+	for _, date := range []struct {
+		name, clear string
+		set         *time.Time
+		cleared     bool
+	}{{"start_at", "clear_start", p.StartAt, p.ClearStart}, {"due_at", "clear_due", p.DueAt, p.ClearDue}} {
+		switch {
+		case date.set != nil && date.cleared:
+			return invalid("the patch both sets %s and clears it with %s — send one of the two",
+				date.name, date.clear)
+		case date.set != nil && date.set.IsZero():
+			return invalid("the patch sets %s to the zero instant, which is no date — take the date "+
+				"off with %s", date.name, date.clear)
+		}
+	}
+	if p.Comment != nil {
+		return p.Comment.CheckInstants()
+	}
+	return nil
+}
+
+// CheckInstants refuses a task a create carries holding the zero instant as one
+// of its instants — its start, its due date, a finish or an archive stamp —
+// which is no instant: stored, a zero due date is January of year one, the
+// most overdue task the company ever had. An instant a create does not set is
+// left out (nil).
+//
+// [Writer.CreateTask]'s check, and the estate's before it asks any node to
+// create one (tracker.create_task and tracker.create_task_asking), for
+// [TaskPatch.CheckDates]'s reason.
+func (t Task) CheckInstants() error {
+	for _, at := range []struct {
+		name string
+		at   *time.Time
+	}{{"start_at", t.StartAt}, {"due_at", t.DueAt}, {"done_at", t.DoneAt}, {"closed_at", t.ClosedAt},
+		{"archived_at", t.ArchivedAt}} {
+		if at.at != nil && at.at.IsZero() {
+			return invalid("task %s holds the zero instant as its %s, which is no instant — leave "+
+				"it out", t.ID, at.name)
+		}
+	}
+	return nil
+}
+
+// CheckInstants refuses a comment a write posts holding the zero instant as the
+// instant it was resolved, which is no instant — for [TaskPatch.CheckDates]'s
+// reason, on the create that asks it and the patch that posts it.
+func (c Comment) CheckInstants() error {
+	if c.ResolvedAt != nil && c.ResolvedAt.IsZero() {
+		return invalid("comment %s holds the zero instant as its resolved_at, which is no instant — "+
+			"leave it out", c.ID)
+	}
+	return nil
+}
 
 // WatchIntent is one person's membership gesture on a task's watcher set.
 //

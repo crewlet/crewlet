@@ -745,6 +745,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		kb = builtin.PageDeps{
 			Reader: pageReader, Writer: pageWriter,
 			Mentions: engine.LiveMentions(e),
+			// THE ROSTER a seat's page tools read, so the page tools decide
+			// on one roster wherever they are built.
+			Seats: engine.LiveSeatCorpus(e),
 			// A PERSON'S PAGE THAT NAMES NO CONTAINER lands in their own
 			// team's space, on the rule a seat's own writes follow
 			// ([engine.LiveSeatSpace]), keyed on the actor's handle as

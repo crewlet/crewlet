@@ -421,14 +421,6 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	return Task{}, fmt.Errorf("worklet: %s is not an operation on a task", c.record.Op)
 }
 
-// clearableInstant is a patched date, with the zero value read as a clear.
-func clearableInstant(at *time.Time) *time.Time {
-	if at == nil || at.IsZero() {
-		return nil
-	}
-	return at
-}
-
 // Patched is [applyPatch] under an exported name, for the ONE caller outside
 // this package that has to answer the same question: a tool composing the
 // WAKE that announces a write it is about to make.
@@ -483,13 +475,15 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Parent = &parent
 		}
 	}
-	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT": an absent field
-	// means "leave it alone", so a clear has to be a VALUE. Stored
-	// verbatim, a zero would be a due date in January of year one — which
-	// every overdue predicate in the tracker reads as the most overdue
-	// task the company has ever had.
-	if patch.StartAt != nil {
-		task.StartAt = clearableInstant(patch.StartAt)
+	// A CLEARED DATE IS ITS FLAG, never a value: an absent date means
+	// "leave it alone", and the zero instant is no date a patch carries —
+	// the writer refuses one, and one that both sets and clears a date
+	// ([TaskPatch.CheckDates]) — so a date set here is always a real one.
+	switch {
+	case patch.ClearStart:
+		task.StartAt = nil
+	case patch.StartAt != nil:
+		task.StartAt = patch.StartAt
 	}
 	if patch.WaitReason != nil {
 		task.WaitReason = *patch.WaitReason
@@ -501,8 +495,11 @@ func applyPatch(task Task, patch TaskPatch) Task {
 		}
 		task.Changes[s.Ref] = *s
 	}
-	if patch.DueAt != nil {
-		task.DueAt = clearableInstant(patch.DueAt)
+	switch {
+	case patch.ClearDue:
+		task.DueAt = nil
+	case patch.DueAt != nil:
+		task.DueAt = patch.DueAt
 	}
 	if patch.DueAllDay != nil {
 		task.DueAllDay = *patch.DueAllDay

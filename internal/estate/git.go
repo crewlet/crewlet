@@ -286,11 +286,19 @@ func unreadyReason(err error) code.UnreadyReason {
 // no copy serving the read is coming on that node, so a walk that let it fill
 // lets the next node fill in its place: a node that ran nothing for the
 // operation at all (Gitlet not built, a key it does not hold, a request it
-// would not take), and one whose git half said why in a reason that passes —
+// would not take — its build not declaring what the request holds,
+// [ErrUnknownKeys]), and one whose git half said why in a reason that passes —
 // behind its configuration, a failure of its own. A node that may be bringing
 // a copy up keeps the fill — syncing, its chart moments away, a reason this
 // build does not know, a reply that says nothing of why — and so does one at
 // its share, which holds its copy and is only busy.
+//
+// THE REFUSAL OF A REQUEST UNREAD PASSES IT TOO: refused before its git half
+// was asked anything ([server.answerGit]), the home brings no copy up for the
+// request, and kept on it the walk asked every runner-up unstamped, each holding
+// no copy answered `not_held`, and a read or a write a node of the asker's
+// build could fill and serve failed with the refusal — until a later walk's
+// demotion of the home ([Router.markUnread]) stamped the runner-up instead.
 func passesFill(rep reply) bool {
 	switch rep.Unserved {
 	case unservedNoBackend, unservedUnauthenticated, unservedStale:
@@ -298,7 +306,7 @@ func passesFill(rep reply) bool {
 	case unservedBehind, unservedBehindConfig:
 		return rep.Unready.PassesFill()
 	}
-	return false
+	return errors.As(decodeError(rep.Err), new(*ErrUnknownKeys))
 }
 
 // routeGit runs one GIT operation ([op.keyedOnGit]) — a read by object id or
@@ -369,7 +377,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 		}
 		return nil, fmt.Errorf("estate: %s: read who serves git: %w", spec.name, err)
 	}
-	order := r.keyedOrder(spec, x.key, nodes, ownHalf)
+	order := r.keyedOrder(spec, x.key, nodes, ownHalf, x.carrying(actor))
 	if len(order) == 0 {
 		w.note("no node with the gitlet role is live")
 	}
@@ -420,7 +428,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 	}
 	detail := strings.Join(w.reasons, "; ")
 	log.WarnContext(ctx, "estate_unserved", "op", spec.name, "detail", detail)
-	return nil, &ErrUnserved{Detail: detail, NodeSilent: w.silent, Git: true}
+	return nil, w.refusedOr(&ErrUnserved{Detail: detail, NodeSilent: w.silent, Git: true})
 }
 
 // ownGit is this node's git half for one walk ([Router.gitHalf]), noted on the
@@ -864,7 +872,18 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 			return s.encodeReply(out)
 		}
 	}
-	result, err := spec.serve(ctx, Backend{Git: g, ServerSeams: s.seams}, req.Actor, req.Args)
+	// READ WHOLE OR NOT RUN, as a data node reads what it is asked
+	// ([inputs]) — past the writes this node holds, so a write answered at
+	// once is answered before its arguments are decoded.
+	args, actor, refused, err := inputs(spec, req)
+	switch {
+	case err != nil:
+		out.Err = encodeError(err)
+		return s.encodeReply(out)
+	case refused != nil:
+		return s.refuseUnknown(ctx, out, req, refused)
+	}
+	result, err := spec.run(ctx, Backend{Git: g, ServerSeams: s.seams}, actor, args)
 	switch {
 	case errors.Is(err, errNoHalf):
 		out.Unserved, out.Detail = unservedNoBackend, ranNothingDetail(s.self, req.Op, err)
@@ -880,5 +899,5 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 		}
 		return s.encodeReply(out)
 	}
-	return s.answered(out, req.Op, result, err)
+	return s.answered(out, spec, result, err)
 }

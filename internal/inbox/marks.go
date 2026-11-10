@@ -221,7 +221,13 @@ type Gesture[R ~string] struct {
 	// or below it reads as read. ADVANCE ONLY, and generation-aware — a
 	// position at or behind the stored one changes nothing, so a stale
 	// tab's "mark all read" cannot un-read what a newer one read. Nil
-	// leaves the position alone.
+	// leaves the position alone, and so does a position that names nothing
+	// ([statelog.Position.IsZero]) whatever stream it says: there is
+	// nothing at or below it to read, and every reader here asks IsZero
+	// before it reads the stream, as [statelog.Position.On] does — so a
+	// gesture reads the same wherever it is decided, including on a data
+	// node it reached through the estate router, whose wire leaves a
+	// pointer at a position its type calls zero off and delivers nil.
 	ReadThrough *statelog.Position
 
 	// PrimaryReasons declares which reasons are the person's to act on.
@@ -233,7 +239,16 @@ type Gesture[R ~string] struct {
 // Empty reports a gesture that would move nothing.
 func (g Gesture[R]) Empty() bool {
 	return len(g.Read) == 0 && len(g.Unread) == 0 && len(g.Snooze) == 0 &&
-		len(g.Unsnooze) == 0 && g.ReadThrough == nil && g.PrimaryReasons == nil
+		len(g.Unsnooze) == 0 && g.readThrough() == nil && g.PrimaryReasons == nil
+}
+
+// readThrough is the position the gesture reads through, or nil where it names
+// none: no position, or one that names nothing ([Gesture.ReadThrough]).
+func (g Gesture[R]) readThrough() *statelog.Position {
+	if g.ReadThrough == nil || g.ReadThrough.IsZero() {
+		return nil
+	}
+	return g.ReadThrough
 }
 
 // Records is every notice the gesture names, in the order it names them: what
@@ -314,7 +329,7 @@ func CheckGesture[R ~string](g Gesture[R], stream string, reasons []R,
 			"most %d — mark everything you have seen with `read_through` "+
 			"instead", len(seen), MaxEntries)
 	}
-	if at := g.ReadThrough; at != nil {
+	if at := g.readThrough(); at != nil {
 		if err := at.Valid(); err != nil {
 			return invalid("%s is not a position to read through: %v", at, err)
 		}
@@ -365,9 +380,8 @@ func Apply[R ~string](m *Marks[R], g Gesture[R], positions map[string]uint64,
 	unread := slices.Clone(m.Unread)
 	snoozed := slices.Clone(m.Snoozed)
 
-	if g.ReadThrough != nil {
-		next := Position{Stream: g.ReadThrough.Stream,
-			Generation: g.ReadThrough.Generation, Seq: g.ReadThrough.Seq}
+	if at := g.readThrough(); at != nil {
+		next := Position{Stream: at.Stream, Generation: at.Generation, Seq: at.Seq}
 		if advances(m.SeenThrough, next) {
 			m.SeenThrough = next
 			// THE STREAM'S OWN IDENTITY rides beside the position — the

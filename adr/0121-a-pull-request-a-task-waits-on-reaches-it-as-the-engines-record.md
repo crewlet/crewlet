@@ -19,7 +19,7 @@ agent's turn, telling whoever holds the task to update it.**
    any other owner is refused naming the owners, and neither the webhook nor
    the poll settles one: the company's credentials are for its own code. The edge has no mirror and is never one-sided; the task
    reads blocked until the pull request settles.
-2. **The record.** A merge or close is a task patch at record version 10
+2. **The record.** A merge or close is a task patch at record version 11
    (`TaskPatch.ChangeSettled`): the task keeps it among its `changes`, its
    dependency row reads it, and its holder is told under `assignee`,
    addressed. The task's status is never moved: what follows is the holder's
