@@ -36,6 +36,9 @@ const (
 	ChangeSetupStepAdded    ChangeKind = "setup_step_added"
 	ChangeSetupStepRemoved  ChangeKind = "setup_step_removed"
 	ChangeSetupStepModified ChangeKind = "setup_step_changed"
+	ChangeBoxAdded          ChangeKind = "box_added"
+	ChangeBoxRemoved        ChangeKind = "box_removed"
+	ChangeBoxChanged        ChangeKind = "box_changed"
 )
 
 // ChangeKinds is the closed list, in the order a turn is told them.
@@ -45,6 +48,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeToolState, ChangeServerAdded, ChangeServerRemoved, ChangeToolLevel,
 	ChangePolicyAdded, ChangePolicyRemoved,
 	ChangeSetupStepAdded, ChangeSetupStepRemoved, ChangeSetupStepModified,
+	ChangeBoxAdded, ChangeBoxRemoved, ChangeBoxChanged,
 }
 
 // Valid reports whether k is one of [ChangeKinds].
@@ -78,9 +82,10 @@ type Change struct {
 	Line string `json:"line"`
 }
 
-// Access reports a change to what the seat reaches with its own credentials:
-// an integration's or an MCP server's, which a note it kept may contradict.
-func (c Change) Access() bool { return c.Lane != "" || c.serverChange() }
+// Access reports a change to what the seat reaches with its own credentials or
+// runs in: an integration's, an MCP server's or a box's, which a note it kept
+// may contradict.
+func (c Change) Access() bool { return c.Lane != "" || c.serverChange() || c.boxChange() }
 
 func (c Change) serverChange() bool {
 	return c.Kind == ChangeServerAdded || c.Kind == ChangeServerRemoved || c.Kind == ChangeToolLevel
@@ -88,12 +93,16 @@ func (c Change) serverChange() bool {
 
 // Terms is what a note naming this change contains: the vendor's name, the
 // lane, the scope entries, GitHub permission names, the level names before and
-// after, and an MCP server's name. Nil for a change that is not [Change.Access].
+// after, an MCP server's name, and what a box change names. Nil for a change
+// that is not [Change.Access].
 func (c Change) Terms() []string {
 	if !c.Access() {
 		return nil
 	}
 	terms := []string{c.Vendor}
+	if c.boxChange() {
+		terms = append(terms, c.boxTerms()...)
+	}
 	if c.Lane != "" {
 		terms = append(terms, c.Lane)
 		switch c.Kind {
@@ -115,7 +124,7 @@ func (c Change) Terms() []string {
 }
 
 // Diff is every change from old to now, in the order a turn is told them:
-// integrations by lane, then MCP servers, policies and box setup.
+// integrations by lane, then MCP servers, policies, box setup and the boxes.
 //
 // AGAINST WHAT THE SEAT WAS LAST TOLD, never the previous revision: a revert
 // is a change back, and an unchanged revision applied again is nothing.
@@ -143,6 +152,7 @@ func DiffFor(old, now Snapshot, audience Audience) []Change {
 	out = append(out, foldedChange(ChangeSetupStepModified, ChangeSetupStepModified, "Box setup",
 		old.Setup, now.Setup, old.SetupMore, now.SetupMore, old.SetupDigest, now.SetupDigest,
 		"steps changed past the ones "+v.told+" by name.")...)
+	out = append(out, boxChanges(old, now, v)...)
 	for i := range out {
 		out[i].Line = textcut.Within(out[i].Line, MaxLineBytes)
 	}

@@ -94,6 +94,7 @@ var contract = []Entry{
 	{"BANDS", ReadLiteral, "internal/api/queries.TestTheSpendChartDrawsExactlyTheEnginesPhaseBands"},
 	{"PHASE_BANDS", ReadLiteral, "internal/api/queries.TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto"},
 	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
+	{"WakeKind", ReadUnion, "internal/api/queries.TestTheDashboardSaysEveryWakeKind"},
 
 	// work.ts
 	{"WorkViewShape", ReadUnion, "internal/worklet.TestEveryViewShapeTheEngineMintsHasARenderer"},

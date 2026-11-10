@@ -231,6 +231,10 @@ type Sources struct {
 	// nil on a build with no reporter, whose question is not registered.
 	IssueReports IssueReportReader
 
+	// Insights is the fleet's record of the operating insights the company
+	// shares (ADR-0119); nil leaves `diagnostics_insights` unregistered.
+	Insights coord.InsightRecords
+
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
 	MCPChecks MCPCheckReader
@@ -752,6 +756,9 @@ func Register(r *Registry, s Sources) {
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
+		// AND WHAT THOSE TURNS DID, by what woke them: how many changed
+		// nothing and what they spent, from the turn ledger's same rows.
+		r.Register("turn_outcomes", Everybody(), s.turnOutcomes)
 		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
@@ -787,6 +794,10 @@ func Register(r *Registry, s Sources) {
 	if s.IssueReports != nil {
 		// THE COMPANY'S CHOICE, and an administrator's as the setting is.
 		r.Register("issue_reports", Requires(iam.GrantAdmin), s.issueReports)
+	}
+	if s.Insights != nil {
+		// THE COMPANY'S CONSENT and what it shares, an administrator's as the setting is.
+		r.Register("diagnostics_insights", Requires(iam.GrantAdmin), s.insightsReading)
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row

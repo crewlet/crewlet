@@ -375,7 +375,7 @@ const openAsksStatement = `
 		SELECT id, author, body, document
 		FROM tracker_comments
 		WHERE task_id = ? AND ask = ? AND ask <> '' AND resolved = 0
-		  AND answered_by IS NULL AND removed = 0
+		  AND answered_by IS NULL AND removed = 0 AND overtaken = ''
 		ORDER BY created_at, id
 		LIMIT ?`
 

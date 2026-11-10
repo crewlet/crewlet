@@ -655,6 +655,39 @@ func TestACancelledTransactionDoesNotCrashTheHandBack(t *testing.T) {
 	}
 }
 
+// A PINNED WRITER NEVER REUSES A CONNECTION WHOSE TRANSACTION'S CONTEXT ENDED:
+// database/sql's rollback for that cancellation closes the connection on its
+// own time, and a next transaction begun on it raced that close into a nil one.
+func TestAPinnedWriterReplacesAConnectionACancellationEnded(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	node, db := openReplicated(t, filepath.Join(t.TempDir(), "cancelled.db"), store.Options{}, 1)
+	defer func() { _ = node.Close() }()
+	if err := db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE retire_probe (id INTEGER PRIMARY KEY)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create the probe table: %v", err)
+	}
+	w, err := db.Writer(ctx)
+	if err != nil {
+		t.Fatalf("pin a writer: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	before := w.Conn()
+	cancelled, cancel := context.WithCancel(ctx)
+	_ = w.Tx(cancelled, func(tx *sql.Tx) error {
+		cancel()
+		return insert(cancelled, 1)(tx)
+	})
+	if w.Conn() == before {
+		t.Fatal("the writer kept the connection a cancelled transaction left to database/sql's rollback")
+	}
+	if err := w.Tx(ctx, insert(ctx, 2)); err != nil {
+		t.Fatalf("a transaction on the replacement: %v", err)
+	}
+}
+
 // THE RETIRE SWITCH IS TAKEN OUT BEFORE ANY TRANSACTION EXISTS ON THE
 // CONNECTION, which is the whole of why the crash above cannot come back.
 //

@@ -1625,8 +1625,10 @@ func TestNoSettingReachesTheOrigin(t *testing.T) {
 		t.Errorf("config.IssueReports has %d fields; an address or an override in the document "+
 			"would let whoever writes it send anywhere, or from a development build", got)
 	}
-	if got := reflect.TypeFor[config.Diagnostics]().NumField(); got != 1 {
-		t.Errorf("config.Diagnostics has %d fields, want the one block", got)
+	// TWO BLOCKS, each its own consent: the defect reports and the operating
+	// insights (ADR-0119), whose own gate is internal/insights'.
+	if got := reflect.TypeFor[config.Diagnostics]().NumField(); got != 2 {
+		t.Errorf("config.Diagnostics has %d fields, want the issue reports and the insights blocks", got)
 	}
 	wiring, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "engine", "issuereports.go"))
 	if err != nil {

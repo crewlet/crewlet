@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -247,6 +249,9 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// rows; asked for one more row, it hands that row over as soon as it
 	// applies it, which is what the fetch of one below waits for.
 	carried := 0
+	// The rows this build does not carry, by table: a retired table's are
+	// purged after the replay, a newer build's are left for it.
+	notCarried := map[string]int{}
 	var reached uint64
 	for reached < end {
 		want := 1
@@ -276,14 +281,9 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 					return decodeErr
 				}
 				if !known {
-					// A table a newer peer replicates and this
-					// build does not carry. Skipped rather than
-					// fatal: a rolling upgrade puts both builds
-					// on one stream, and refusing to hydrate at
-					// all would be worse than hydrating what
-					// this build understands.
-					log.WarnContext(ctx, "memory_row_unknown_table",
-						"seat", handle, "table", row.Table)
+					// Skipped rather than fatal: a rolling upgrade
+					// puts a newer build's tables on this stream.
+					notCarried[row.Table]++
 					continue
 				}
 				if err := upsert(ctx, tx, spec, row); err != nil {
@@ -308,8 +308,50 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 				"this seat before the hydration's budget ran out", handle, reached, end)
 		}
 	}
+	s.settleNotCarried(ctx, handle, ref.AgentID, notCarried)
 	log.InfoContext(ctx, "memory_hydrated", "seat", handle, "rows", carried)
 	return carried, nil
+}
+
+// settleNotCarried purges the seat's rows of each retired table a hydration
+// met and says, in one line, what it did not carry: a retired table's rows
+// once, a newer build's on every hydration that meets them. A purge that fails
+// is said and tried again by the next hydration.
+func (s *Syncer) settleNotCarried(ctx context.Context, handle, agentID string, notCarried map[string]int) {
+	if len(notCarried) == 0 {
+		return
+	}
+	var retired, newer []string
+	purged := true
+	for _, name := range slices.Sorted(maps.Keys(notCarried)) {
+		entry := fmt.Sprintf("%s:%d", name, notCarried[name])
+		if !slices.Contains(retiredTables, name) {
+			newer = append(newer, entry)
+			continue
+		}
+		retired = append(retired, entry)
+		if err := s.purge(ctx, agentID, name); err != nil {
+			purged = false
+			log.WarnContext(ctx, "memory_retired_rows_not_purged", "seat", handle, "table", name,
+				"error", err.Error(), "detail", "the next hydration of the seat purges them")
+		}
+	}
+	log.InfoContext(ctx, "memory_rows_not_carried", "seat", handle,
+		"retired", strings.Join(retired, ","), "purged", purged && len(retired) > 0,
+		"newer", strings.Join(newer, ","))
+}
+
+// purge removes the seat's rows of table from the changelog, for every node.
+func (s *Syncer) purge(ctx context.Context, agentID, table string) error {
+	stream, err := s.js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		return fmt.Errorf("memsync: reach the changelog: %w", err)
+	}
+	subject := topics.MemoryPrefix + agentID + "." + table + ".>"
+	if err := stream.Purge(ctx, jetstream.WithPurgeSubject(subject)); err != nil {
+		return fmt.Errorf("memsync: purge %s: %w", subject, err)
+	}
+	return nil
 }
 
 // mark reads a watermark.

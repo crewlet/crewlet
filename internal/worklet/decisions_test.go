@@ -27,10 +27,11 @@ func TestDecisionsCountsEveryAskPutToThePerson(t *testing.T) {
 	r := newRoundTrip(t)
 	assign(t, r, "a", "bo")
 	older := wednesday.Add(-3 * time.Hour)
-	// TWO PUT TO JANE, one to somebody else.
+	// TWO PUT TO JANE BY TWO ASKERS, one to somebody else: one asker asking
+	// her twice on one item would supersede the first.
 	askOn(t, r, "op-1", "a", worklet.Comment{ID: "c-1", Task: "a", Author: "bo",
 		AuthorKind: worklet.AuthorAgent, Body: "ship?", Ask: "jane", CreatedAt: wednesday})
-	askOn(t, r, "op-2", "a", worklet.Comment{ID: "c-2", Task: "a", Author: "bo",
+	askOn(t, r, "op-2", "a", worklet.Comment{ID: "c-2", Task: "a", Author: "cy",
 		AuthorKind: worklet.AuthorAgent, Body: "hold?", Ask: "jane", CreatedAt: older})
 	askOn(t, r, "op-3", "a", worklet.Comment{ID: "c-3", Task: "a", Author: "bo",
 		AuthorKind: worklet.AuthorAgent, Body: "yours?", Ask: "ana", CreatedAt: older})
@@ -62,7 +63,7 @@ func TestDecisionsTotalExceedsThePage(t *testing.T) {
 	const asks = worklet.MaxDecisions + 3
 	for i := range asks {
 		askOn(t, r, fmt.Sprintf("op-%02d", i), "a", worklet.Comment{
-			ID: fmt.Sprintf("c-%02d", i), Task: "a", Author: "bo",
+			ID: fmt.Sprintf("c-%02d", i), Task: "a", Author: fmt.Sprintf("bot-%02d", i),
 			AuthorKind: worklet.AuthorAgent, Body: "?", Ask: "jane", CreatedAt: wednesday,
 		})
 	}

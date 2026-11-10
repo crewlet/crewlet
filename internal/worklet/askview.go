@@ -48,6 +48,11 @@ type AskView struct {
 	// been removed.
 	Open bool `json:"open"`
 
+	// Overtaken says the facts settled an open ask before anybody answered
+	// it ([OvertakenSuperseded], [OvertakenMoot]): it no longer waits on its
+	// person, and an answer is still recorded if one comes.
+	Overtaken string `json:"overtaken,omitempty"`
+
 	// AnsweredBy and AnsweredAt are who closed it and when: the answering
 	// comment's author and instant, or — with Resolved — who resolved it
 	// without an answer. Both empty while it is open.
@@ -79,7 +84,7 @@ type AskView struct {
 const askViewsStatement = `
 	SELECT c.id, a.id, a.ask, a.resolved, a.removed,
 	       a.answered_by IS NOT NULL, a.resolved_by, a.resolved_at,
-	       a.document, ans.author, ans.created_at, ans.document
+	       a.document, ans.author, ans.created_at, ans.document, a.overtaken
 	  FROM tracker_comments c
 	  JOIN tracker_comments a
 	    ON a.id = CASE WHEN c.ask <> '' THEN c.id ELSE c.answers END
@@ -119,7 +124,7 @@ func readAskViews(ctx context.Context, tx *sql.Tx, comments []string) (
 		var askDocument, answerDocument []byte
 		if err := rows.Scan(&comment, &view.Comment, &view.AskedOf, &resolved,
 			&removed, &answered, &resolvedBy, &resolvedAt, &askDocument,
-			&answerAuthor, &answeredAt, &answerDocument); err != nil {
+			&answerAuthor, &answeredAt, &answerDocument, &view.Overtaken); err != nil {
 
 			return nil, fmt.Errorf("worklet: scan an ask: %w", err)
 		}

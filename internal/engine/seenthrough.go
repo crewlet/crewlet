@@ -39,33 +39,33 @@ func (d *Dispatcher) absorbed(ctx context.Context, handle string, ev *events.Eve
 	if at.IsZero() || conversation == "" {
 		return false
 	}
-	mark, read := marks[conversation]
+	key := conversation + "|" + at.Stream
+	mark, read := marks[key]
 	if !read {
-		mark = d.SeenThrough.Mark(ctx, handle, conversation)
-		marks[conversation] = mark
+		mark = d.SeenThrough.Mark(ctx, handle, conversation, at.Stream)
+		marks[key] = mark
 	}
 	return !mark.IsZero() && !ledgerstore.Past(at, mark)
 }
 
-// advanceSeen moves the seat's mark for a completed turn's conversation to the
-// newest record it was woken for.
+// advanceSeen moves the seat's marks for a completed turn's conversation to the
+// newest record it was woken for on each log.
 func (d *Dispatcher) advanceSeen(ctx context.Context, handle string, evs []*events.Event) {
-	if d.SeenThrough == nil {
+	conversation := notify.KeyOfAll(evs)
+	if d.SeenThrough == nil || conversation == "" {
 		return
 	}
-	conversation := notify.KeyOfAll(evs)
-	var newest statelog.Position
+	newest := map[string]statelog.Position{}
 	for _, ev := range evs {
-		if at, _ := seenAt(ev); !at.IsZero() && ledgerstore.Past(at, newest) {
-			newest = at
+		if at, _ := seenAt(ev); !at.IsZero() && ledgerstore.Past(at, newest[at.Stream]) {
+			newest[at.Stream] = at
 		}
 	}
-	if conversation == "" || newest.IsZero() {
-		return
-	}
-	if err := d.SeenThrough.Advance(ctx, handle, conversation, newest); err != nil {
-		log.WarnContext(ctx, "seen_through_not_recorded", "seat", handle, "error", err,
-			"detail", "a redelivery this turn already read may run as a turn of its own")
+	for _, at := range newest {
+		if err := d.SeenThrough.Advance(ctx, handle, conversation, at); err != nil {
+			log.WarnContext(ctx, "seen_through_not_recorded", "seat", handle, "error", err,
+				"detail", "a redelivery this turn already read may run as a turn of its own")
+		}
 	}
 }
 

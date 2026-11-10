@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestAWakeACompletedTurnReadPastIsAbsorbed`, `internal/agent/ledger/ledgerstore.TestASeenThroughMarkMovesForwardOnly`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
+- **Enforced-by:** `internal/engine.TestAWakeACompletedTurnReadPastIsAbsorbed`, `internal/agent/ledger/ledgerstore.TestASeenThroughMarkMovesForwardOnly`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
 - **Cost-when-tried:** not tried here. Before this record a wake was dropped only when a turn had been woken for that very event, or (in a chat thread) when a later turn's thread block showed the same writer's message waiting. A tracker notice that came round after a newer turn on the same item had run, a redelivery or a slow drain, started a turn of its own over a change the item's newer turn had already read, and the turn ledger counted it as started work.
 - **Tag-status:** unreleased
 
@@ -16,12 +16,14 @@ that asks the seat for nothing starts no turn.**
    log position of the record it was derived from (`trigger_position`, the
    same token the woken turn raises its read floor to). A vendor's wake
    carries none and is never absorbed.
-2. **The mark is per seat and conversation, forward only.** Keyed on the
+2. **The mark is per seat, conversation and log, forward only.** Keyed on the
    conversation's stamped partition key, the thread and never the thread
-   split by writer, so a colleague's later turn and a person's both move it.
+   split by writer, so a colleague's later turn and a person's both move it;
+   and on the log a position belongs to, since positions on two logs do not
+   compare and one must never stand in for the other.
    It is written when a turn completes, by compare-and-set: a mark another
    node moved further is kept, a later position or generation of the log
-   moves it, and a position on another log replaces it. It lives in the
+   moves it. It lives in the
    completion ledger's bucket and ages with it, since a mark matters only to
    a redelivery the ledger itself would outlive.
 3. **An obligation is never absorbed.** A wake addressed to the seat, owing a

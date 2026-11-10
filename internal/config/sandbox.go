@@ -621,6 +621,13 @@ func (l *LocalSandbox) validate(path Path) error {
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, words.Or(ContainerRuntimes))
 	}
+	// A MEMORY SIZE THE RUNTIME WOULD REFUSE fails every box at its create;
+	// refused here, at the argument, it is said before any seat runs.
+	if i, value := memoryArg(l.RunArgs); i >= 0 {
+		if _, ok := ramInBytes(value); !ok {
+			p.add(idx(at(path, "run_args"), i), ErrShape, "%s", memorySizeRefused(value))
+		}
+	}
 	// A NAME OUTSIDE THE ENVIRONMENT'S OWN GRAMMAR is refused rather than
 	// handed on: `A=B` as a key would set a variable called A to `B=…`, and
 	// a name with a space in it is one no process can read back.
