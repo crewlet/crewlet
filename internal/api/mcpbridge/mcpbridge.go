@@ -50,7 +50,10 @@
 //     launching turn has suspended), and never under the HTTP request's,
 //     which the session does not even hand over: a box that disconnects
 //     mid-call abandons only the answer, never a tool half-way through a
-//     write.
+//     write. And the record says so ([Call.Abandoned]): a call whose
+//     harness had given up on it, or whose opening had ended, by the time it
+//     returned is one its job's session holds with no outcome or a failed
+//     one, though it ran.
 //   - A PANIC IS CONTAINED. A tool that panics is answered as failed, said in
 //     the log with its stack, and the run's tools are closed to it: the
 //     process stays up, and a defect does not run again on the next call.
@@ -471,6 +474,15 @@ type Call struct {
 	// call of the run's record is one of them and a later segment's log must
 	// count them all the same.
 	Absorbed []toolloop.Called
+
+	// Abandoned marks a call NOBODY WAITED FOR BY THE TIME IT RETURNED: its
+	// harness had given up on it and cancelled its request
+	// ([toolsession.Call.Abandoned]), or the opening it was made on had
+	// ended. The call ran and its effect happened, but the session of the job
+	// that made it holds it with no outcome or a failed one, so no save point
+	// may hold it (sandbox.BridgeCall.Abandoned). False for every call
+	// answered without running, which returns at once.
+	Abandoned bool
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -1777,6 +1789,11 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}
+	// WHETHER ANYBODY STILL WAITS FOR THE ANSWER, read as the tool returns and
+	// before the record: a harness that gave up on the call cancelled its
+	// request, and one whose opening ended has its session closed behind it
+	// ([Call.Abandoned]).
+	abandoned := gone(in.Abandoned) || o.over()
 	recorded := args
 	if res.Held {
 		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
@@ -1796,7 +1813,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
-		Digest: digest, Absorbed: res.Absorbed,
+		Digest: digest, Absorbed: res.Absorbed, Abandoned: abandoned,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }
@@ -1935,4 +1952,16 @@ func (o *binding) record(call Call) {
 // refused is a call answered without the tool's own output.
 func refused(msg string) toolsession.Result {
 	return toolsession.Result{Output: msg, Failed: true}
+}
+
+// gone reports whether abandoned is closed now: the harness has stopped
+// waiting for the call ([toolsession.Call.Abandoned]). A nil channel, a call no
+// request carries, is never gone.
+func gone(abandoned <-chan struct{}) bool {
+	select {
+	case <-abandoned:
+		return true
+	default:
+		return false
+	}
 }

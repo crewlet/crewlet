@@ -272,11 +272,13 @@ const (
 	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare
 	// with both its places at their widest — the place it was admitted at and
 	// the one its round's log took it at, [BridgeCall.Appended], whose 31
-	// bytes at their widest the 600 held room for — and its late mark set,
-	// [BridgeCall.Late], whose 12 bytes it held room for too: 576 measured
-	// with every one of them), and what is left — 1,958
-	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
-	// ([BridgeCall.Extra]), which this build carries unread.
+	// bytes at their widest the 600 held room for — its late mark set,
+	// [BridgeCall.Late], whose 12 bytes it held room for too, and the mark
+	// that nobody waited for it, [BridgeCall.Abandoned], whose 17 it holds
+	// room for as well: 593 measured with every one of them, 576 before that
+	// last mark), and what is left — 1,958 bytes — the room for keys a LATER
+	// BUILD ADDS TO A CALL ([BridgeCall.Extra]), which this build carries
+	// unread.
 	MaxBridgeCallBytes = 16 << 10
 
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
@@ -437,6 +439,14 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	return call
 }
 
+// unheld reports whether no save point holds call, whatever its number: a call
+// the log took late ([BridgeCall.Late]), or one its harness stopped waiting for
+// before it returned ([BridgeCall.Abandoned]). Each is told to every
+// continuation of its round by its mark, so the log's dropped middle keeps it
+// while an ordinary call is left there ([appendBounded]) and counts one it gives
+// up ([BridgeLog.LateElided]), since a dropped call keeps no mark.
+func (c BridgeCall) unheld() bool { return c.Late || c.Abandoned }
+
 // submitted reports whether call is a submission the collection could replay:
 // a `submit_work` the surface did not refuse, and the log did not take late
 // ([BridgeCall.Late]) — which the collection never takes for the round's
@@ -493,9 +503,9 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.Calls, l.Elided, elided = appendBounded(l.Calls, l.Elided, next)
 	for _, call := range elided {
 		dropped = fold(dropped, identity(call), elidedTally)
-		// AND A LATE ONE COUNTED AS LATE, its mark gone with the call
-		// ([BridgeLog.LateElided]).
-		if call.Late {
+		// AND ONE NO SAVE POINT HOLDS COUNTED AS SUCH, its mark gone with
+		// the call ([BridgeLog.LateElided]).
+		if call.unheld() {
 			l.LateElided++
 		}
 	}

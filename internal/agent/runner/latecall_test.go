@@ -158,7 +158,7 @@ func TestALateSubmissionIsNeverTheRounds(t *testing.T) {
 // under words that say the session lacks it.
 func TestALateCallIsToldApartUnderWordsOfItsOwn(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them was replaced"
+	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
 	late := numbered("jira_create", map[string]any{"summary": "the late one"}, 2, 2)
 	late.Late = true
 	bridged := []runner.BridgedCall{
@@ -242,7 +242,7 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 // build an own run's telling where its box is gone, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them was replaced"
+	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
 	own := numbered("slack_post", map[string]any{"text": "the job's own post"}, 2, 2)
 	late := numbered("jira_create", map[string]any{"summary": "an earlier job's late issue"}, 1, 3)
 	late.Late = true

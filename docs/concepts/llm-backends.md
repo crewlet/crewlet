@@ -1506,7 +1506,12 @@ the next run's resume would pay for it as its own. The call itself is listed in
 its round's log, marked late, where the next run carries the round on — a loss's
 relaunch, a person's answer's, a replaced sign-in's — and dropped where the next
 run starts a new round ([A call that ends after its job's
-relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). A call that
+relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). One its
+harness gave up on — Claude Code cancels a call at its tool timeout, and its
+model reads the call as timed out — is listed as its run's own and marked as
+one nobody waited for, which every continuation of its round is told whatever
+its save point ([A call its harness gave up
+on](code-sandbox.md#a-relaunch-continues-the-turns-session)). A call that
 finishes after its run was collected but before any next run is recorded on its
 own run and is not paid: the resume paid what the run's record held when it was
 collected, so the task can fall short of the turn's cost and never exceed it.

@@ -503,6 +503,18 @@ type BridgedCall struct {
 	// ([sinceAnswer]).
 	Late bool
 
+	// Abandoned is a call nobody waited for by the time it returned
+	// (sandbox.BridgeCall.Abandoned): its harness had given up on it — Claude
+	// Code cancels a call at its tool timeout and discards a late answer — or
+	// its job's session on the bridge had ended. It ran and its effect
+	// happened, while the session of the job that made it shows it with no
+	// outcome or a failed one. HELD BY NO SAVE POINT, as a late call is
+	// ([heldAt]): every continuation of the round built after it landed is
+	// told it, under the late calls' words, and no rebuilt guard counts a load
+	// it made. Unlike a late call it may be the round's submission
+	// ([sinceAnswer]): its job, which was never replaced, made it.
+	Abandoned bool
+
 	// StartedAt is when the call was handed to the seat's surface, and
 	// Duration how long the surface took to answer — measured at the bridge,
 	// since the call ran inside the harness's own loop. Both zero on a call

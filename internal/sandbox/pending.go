@@ -681,8 +681,9 @@ type BridgeCall struct {
 	// bound dropped below it, which a reading by place could not tell from a
 	// call still in flight. And the calls after a save point that the log
 	// dropped from its middle are counted exactly: every ordinal past the
-	// point the log does not list is one of them. A LATE CALL is the one
-	// exception ([BridgeCall.Late]): no save point holds it, whatever its
+	// point the log does not list is one of them. A LATE CALL and one ITS
+	// HARNESS STOPPED WAITING FOR are the exceptions ([BridgeCall.Late],
+	// [BridgeCall.Abandoned]): no save point holds either, whatever its
 	// number, and a dropped one is counted apart ([BridgeLog.LateElided]).
 	//
 	// ZERO ON A CALL AN OLDER BUILD APPENDED, which numbered none, in a fleet
@@ -734,6 +735,36 @@ type BridgeCall struct {
 	// call by its number alone, as it read every call — so it reads a listed
 	// late call as its job's own, in a fleet mid-upgrade.
 	Late bool `json:"late,omitempty"`
+
+	// Abandoned marks a call NOBODY WAITED FOR BY THE TIME IT RETURNED: its
+	// harness had given up on it and cancelled its request — Claude Code does
+	// at its tool timeout, and discards a late answer — or the job's session on
+	// the bridge had ended (internal/api/mcpbridge's Call.Abandoned). The
+	// bridge's to give, as it records the call, and kept as handed through
+	// every write of the round: a call of its job like any other, listed,
+	// numbered and paid for as its job's own, but one whose outcome the
+	// session of the job that made it does not hold — it shows the call with
+	// no outcome or a failed one, the harness having been told it timed out,
+	// while the call ran on and its effect happened.
+	//
+	// HELD BY NO SAVE POINT, as a late call is, for the reason a late call is
+	// ([BridgeCall.Late]): a capture placed by its own read counts it, since a
+	// save point is a prefix of the log, and so does the copy a job's own box
+	// holds where its harness ended its own run — a harness ends its run once
+	// every call it made is answered or given up on (savepoint.go) — while
+	// neither holds what it returned. So every continuation of the round built
+	// after it landed is told it, whatever its save point, under the words
+	// late calls are told by, and no rebuilt skill guard counts a load it made
+	// (internal/agent/runner's heldAt); and the log's dropped middle keeps it
+	// as it keeps a late one, counting one it gives up
+	// ([BridgeLog.LateElided]). Unlike a late call it may be the round's
+	// submission: its job made it and was not replaced, and a run told of it
+	// is told to make its own, which the collection replays over it.
+	//
+	// ADDITIVE ON THE WIRE: a build that does not know it carries it in Extra
+	// (wirekeys.go), and holds the call at a save point as any call, in a
+	// fleet mid-upgrade.
+	Abandoned bool `json:"abandoned,omitempty"`
 
 	// StartedAt is when the bridge handed the call to the seat's surface,
 	// UTC, and DurationMS how long the surface took to answer — the
@@ -1972,13 +2003,14 @@ type BridgeLog struct {
 	Elided int `json:"elided,omitempty"`
 
 	// LateElided is how many of those dropped calls were LATE
-	// ([BridgeCall.Late]): a dropped call keeps its identity and nothing else
-	// ([BridgeLog.ElidedCalls]), so not its mark, and no save point may hold a
-	// late call — so every continuation of the round is told this count under
-	// the late calls' own words, whatever its save point, never as calls its
-	// session's own run made after it was saved (internal/agent/runner's
+	// ([BridgeCall.Late]) or ones their harness stopped waiting for
+	// ([BridgeCall.Abandoned]): a dropped call keeps its identity and nothing
+	// else ([BridgeLog.ElidedCalls]), so not its mark, and no save point may
+	// hold such a call — so every continuation of the round is told this count
+	// under the late calls' own words, whatever its save point, never as calls
+	// its session's own run made after it was saved (internal/agent/runner's
 	// calledAfter, internal/agent/prompts' AfterSave.LateDropped). The middle
-	// gives up a late call only once no ordinary call is left there
+	// gives up such a call only once no ordinary call is left there
 	// ([appendBounded]), so it is zero but for a log whose middle holds
 	// nothing else. THE ROUND'S, AS
 	// THE LOG IS: kept by every opening that carries the round on, and a new

@@ -41,7 +41,8 @@ type Dispatcher interface {
 	// gives up on a call, or dies, cancels its request, and a tool half-way
 	// through a write would stop there. So a call runs under the context of
 	// the run the dispatcher serves, which it holds, and the request's is not
-	// even on offer to be used by mistake.
+	// even on offer to be used by mistake: all it is handed of the request is
+	// whether anybody still waits for the answer ([Call.Abandoned]).
 	Call(call Call) Result
 }
 
@@ -72,6 +73,18 @@ type Call struct {
 	// the call there (Claude Code's `claudecode/toolUseId`), which is how a call
 	// is joined to the model request that asked for it.
 	Meta map[string]any
+
+	// Abandoned is closed once the harness has STOPPED WAITING FOR THE
+	// ANSWER: it cancelled the request (`notifications/cancelled` — Claude
+	// Code sends one at its tool timeout, and discards a late answer), or the
+	// connection the request came on failed. Nil, never closed, for a call no
+	// request carries.
+	//
+	// A SIGNAL, NEVER A CONTEXT, for the reason [Dispatcher.Call] takes none:
+	// the call runs under its run's context whatever becomes of the request,
+	// and this says only, once it has run, whether its answer still had a
+	// reader — which a dispatcher that records the call records beside it.
+	Abandoned <-chan struct{}
 }
 
 // Result is what the harness is handed back for one call.
@@ -256,7 +269,9 @@ func (s *Server) awaitRelist(ctx context.Context, after uint64) {
 // handler hands one call to the dispatcher.
 func (s *Server) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		call := Call{Name: name, Meta: req.Params.Meta}
+		// WHETHER THE HARNESS STILL WAITS, the request's context's Done and
+		// nothing else of it ([Call.Abandoned]).
+		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done()}
 		args, err := toolargs.Decode(req.Params.Arguments)
 		if err != nil {
 			// HANDED ON, NOT ANSWERED HERE: a call whose arguments did not

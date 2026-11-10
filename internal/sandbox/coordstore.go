@@ -1278,11 +1278,13 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // call and on to the reset that owes it to the log ([OwedCall]). With no place
 // in either order either, and no mark: each is the log's to give it as it
 // takes it ([BridgeLog.withApproved]), and a call the store appends for its
-// own round is never late ([BridgeCall.Late]).
+// own round is never late ([BridgeCall.Late]) — nor one nobody waited for
+// ([BridgeCall.Abandoned]), which the bridge alone marks: the resume made this
+// one on the engine host, and no harness gave it up.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
 	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
-	made.Late = false
+	made.Late, made.Abandoned = false, false
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 
@@ -2176,10 +2178,11 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 // ([EndsRun]: a submission, an ask) is what the round's record and its
 // reviewer read the run's outcome by, and dropped from the middle, a long
 // run's record lost the question it parked on or the submission it was
-// corrected by. A LATE CALL ([BridgeCall.Late]) is told to every continuation
-// of its round by its mark, which a dropped call keeps none of: dropped, it is
-// only counted ([BridgeLog.LateElided]) and told as a count, past every save
-// point, beside the calls that tally names. So the call dropped is the oldest
+// corrected by. A call NO SAVE POINT HOLDS ([BridgeCall.unheld]: a late one,
+// or one its harness stopped waiting for) is told to every continuation of its
+// round by its mark, which a dropped call keeps none of: dropped, it is only
+// counted ([BridgeLog.LateElided]) and told as a count, past every save point,
+// beside the calls that tally names. So the call dropped is the oldest
 // ordinary one after the head, never the one just made; and only a log with no
 // ordinary call left there gives up the oldest of the others, so the log stays
 // at its cap whatever the run calls.
@@ -2193,8 +2196,8 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	// The candidates: everything after the head but the call just made.
 	candidates := calls[head : len(calls)-1]
 	// outlasts is a candidate the middle gives up only once no ordinary one
-	// is left: a call that ended its job, or a late one.
-	outlasts := func(call BridgeCall) bool { return call.Ends() || call.Late }
+	// is left: a call that ended its job, or one no save point holds.
+	outlasts := func(call BridgeCall) bool { return call.Ends() || call.unheld() }
 	ordinary := 0
 	for _, call := range candidates {
 		if !outlasts(call) {

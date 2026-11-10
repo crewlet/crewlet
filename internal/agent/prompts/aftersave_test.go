@@ -98,15 +98,16 @@ func TestACutOffSessionIsToldItsCallsAsOnesItMayAlreadyShow(t *testing.T) {
 }
 
 // A LATE CALL IS TOLD UNDER WORDS OF ITS OWN, WHATEVER THE SESSION'S END. A call
-// the record took only after the run that made it was replaced is told by no
-// point, so neither heading of the calls after a save is true of it: the
-// session may show it with no outcome or as interrupted — where it ends, or
-// cut off — and an earlier brief may have told it already. So it is said to be
-// one call, made once, whose outcome here stands, in a section of its own after
-// the calls since the save, under the same words for a session saved where it
-// ends and for one cut off; alone where nothing came after the save; and a
-// successful submission among such calls is said to be no submission of the
-// work, so the run makes its own.
+// the record took only after the run that made it was replaced, or one its run
+// gave up on before it returned, is told by no point, so neither heading of the
+// calls after a save is true of it: the session may show it with no outcome, as
+// interrupted or as failed — where it ends, or cut off — and an earlier brief
+// may have told it already. So it is said to be one call, made once, whose
+// outcome here stands, in a section of its own after the calls since the save,
+// under the same words for a session saved where it ends and for one cut off,
+// which say its run gave up on it or was cut off or replaced; alone where
+// nothing came after the save; and a successful submission among such calls is
+// said to be no submission of the work, so the run makes its own.
 //
 // Mutation: tell the late calls under the after-save heading, drop their
 // section where nothing else came after the save, or leave the submission
@@ -131,7 +132,8 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	if got := CalledAfter(AfterSave{Late: late}); got != lateCallsHeader+"\n"+late {
 		t.Errorf("a session whose only untold call is late is told:\n%s\nwant its section alone", got)
 	}
-	for _, said := range []string{"ONE call, made once", "outcome told here stands", "no outcome or as interrupted"} {
+	for _, said := range []string{"ONE call, made once", "outcome told here stands", "gave up on them",
+		"no outcome, as interrupted or as failed"} {
 		if !strings.Contains(lateCallsHeader, said) {
 			t.Errorf("a late call's heading does not say %q:\n%s", said, lateCallsHeader)
 		}

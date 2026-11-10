@@ -52,9 +52,9 @@ func worstCall(t *testing.T, name string) BridgeCall {
 	server := strings.Repeat("s", 32)
 	return BridgeCall{
 		Name: name, Args: string(args), Output: strings.Repeat("<", 64<<10),
-		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, Late: true, StartedAt: worstAt,
-		DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server, Source: "mcp:" + server,
-		Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
+		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, Late: true, Abandoned: true,
+		StartedAt: worstAt, DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server,
+		Source: "mcp:" + server, Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
 		HeldID: uuid.NewString(),
 	}
 }

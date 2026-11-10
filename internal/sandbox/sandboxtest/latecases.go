@@ -28,6 +28,7 @@ var lateCases = []struct {
 	{"ALateSubmissionNeverTakesTheRoundsWholeShare", testALateSubmissionNeverTakesTheRoundsWholeShare},
 	{"OfTwoSubmissionsAtOnePlaceTheOneTakenLastIsKeptWhole", testOfTwoSubmissionsAtOnePlaceTheOneTakenLastIsKeptWhole},
 	{"TheCallAPersonApprovedIsNeverLate", testTheCallAPersonApprovedIsNeverLate},
+	{"ACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob", testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob},
 }
 
 // lateStagedCases are the late-call cases whose subject is what the store asks
@@ -470,5 +471,56 @@ func testTheCallAPersonApprovedIsNeverLate(t *testing.T, s sandbox.PendingStore)
 	}
 	if approved != 1 {
 		t.Fatalf("the round's log lists the approved call %d times, want once", approved)
+	}
+}
+
+// A CALL NOBODY WAITED FOR KEEPS ITS MARK, AND IS PAID BY ITS JOB. The bridge
+// marks a call whose harness had stopped waiting for it by the time it returned
+// — given up on, or still running as its opening ended
+// ([sandbox.BridgeCall.Abandoned]) — whose effect happened while the session of
+// the job that made it holds no outcome of it, so no save point may hold it.
+// The mark is the bridge's, and the log keeps it as handed: on a call of the
+// log's own job, whose spend is written to the job's record as any of its
+// calls' is; on one its session owed and a later append carried; and on a call
+// of the job that lands after a relaunch carried the round on, which the log
+// marks late beside it. A call the bridge did not mark is listed unmarked.
+//
+// Mutation: drop the mark as the log takes a call, and this goes red.
+func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-abandoned-kept"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	gaveUp, owed, outlived := madeAt("delegate", 1, 1), madeAt("slack_post", 2, 2), madeAt("delegate", 4, 4)
+	gaveUp.Abandoned, owed.Abandoned, outlived.Abandoned = true, true, true
+	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: gaveUp,
+		Spent: bridged(1)}) {
+		t.Fatal("the job's call nobody waited for was not recorded")
+	}
+	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+		Owed: []sandbox.OwedAppend{{Call: sandbox.CarriedCall(owed)}}, Call: madeAt("read_file", 3, 3),
+		Spent: bridged(2)}) {
+		t.Fatal("the job's call carrying what its session owed was not recorded")
+	}
+	if got := mustGet(t, s, turn).Launch.Bridged; got != bridged(2) {
+		t.Errorf("the job's bridged spend = %+v, want its newest total %+v: a call nobody waited for is "+
+			"its job's", got, bridged(2))
+	}
+	carryRoundOn(t, s, turn)
+	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: outlived}) {
+		t.Fatal("the job's call that outlived its opening was not recorded")
+	}
+
+	got := mustLogged(t, s, turn)
+	listsExactly(t, got.Log.Calls, []wantCall{
+		{"delegate", 1, 1, false},
+		{"slack_post", 2, 2, false},
+		{"read_file", 3, 3, false},
+		{"delegate", 4, 4, true},
+	})
+	for i, want := range []bool{true, true, false, true} {
+		if c := got.Log.Calls[i]; c.Abandoned != want {
+			t.Errorf("call %d, %s, is listed abandoned %v, want %v, as its bridge handed it", i+1, c.Name,
+				c.Abandoned, want)
+		}
 	}
 }

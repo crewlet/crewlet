@@ -165,7 +165,7 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 				BridgedRead: next.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
 					SessionID: "sess-carried", BoxKept: true}}, nil, nil))
-			const lateHeading = "## Calls that finished after the run that made them was replaced"
+			const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
 			at := strings.Index(brief, lateHeading)
 			if at < 0 || !strings.Contains(brief[at:], "- delegate(") || strings.Count(brief, "- delegate(") != 1 {
 				t.Errorf("the next continuation is not told the worker's call once, under the late calls' "+

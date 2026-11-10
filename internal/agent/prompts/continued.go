@@ -14,7 +14,8 @@ import (
 // (internal/sandbox, restore.go), so its brief is the session's NEXT MESSAGE,
 // not a whole brief: the session holds the task as it read it, where it holds
 // the message that brief was in, and, where its harness ended its own run,
-// every call it made and every note it read. What it is told is what it lacks
+// every call it made — one it gave up on with no outcome or a failed one — and
+// every note it read. What it is told is what it lacks
 // — what changed since its last message, and of a session cut off, that it was
 // or may have been and what it may not show ([InterruptedSession],
 // [InterruptedCopy], [MayBeInterruptedCopy]), with the calls and the notes it
@@ -153,32 +154,36 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
-// lateCallsHeader introduces the calls of the round its record took only after
-// the run that made them was replaced ([AfterSave.Late]): calls an earlier run
-// of the work made that were still running when a relaunch carried the work on,
-// and that finished after. TOLD UNDER WORDS OF THEIR OWN, WHATEVER THE SESSION'S
-// END, since no point tells them and each of the other headings is untrue of
-// them: the session above may show such a call with no outcome, or with an
-// interrupted one, its harness having died, given up on it or been replaced
-// before the call returned; and an earlier brief may have told it, since every
+// lateCallsHeader introduces the calls of the round that finished only after
+// the run that made them stopped waiting for them ([AfterSave.Late]): calls an
+// earlier run of the work made that were still running when a relaunch carried
+// the work on, which its record took only after that run was replaced; and
+// calls a run gave up on, or whose session ended under them, before they
+// returned. TOLD UNDER WORDS OF THEIR OWN, WHATEVER THE SESSION'S END, since no
+// point tells them and each of the other headings is untrue of them: the
+// session above may show such a call with no outcome, as interrupted or as
+// failed, its harness having died, given up on it or been replaced before the
+// call returned; and an earlier brief may have told it, since every
 // continuation of the work tells it again. So it is said to be ONE call, made
 // once, whose outcome as told here stands — never one the session lacks.
-const lateCallsHeader = "## Calls that finished after the run that made them was replaced" +
-	"\nAn earlier run of this work made these calls through your tools, and they finished only after that run was" +
-	" cut off or replaced, so the session above may show one with no outcome or as interrupted, and an earlier" +
-	" message may have told it. Each is ONE call, made once, not two, and the outcome told here stands: a call" +
-	" marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked `→ error` did not take" +
-	" effect."
+const lateCallsHeader = "## Calls that finished after the run that made them stopped waiting for them" +
+	"\nA run of this work made these calls through your tools, and they finished only after that run had stopped" +
+	" waiting for them — it gave up on them, or it was cut off or replaced — so the session above may show one" +
+	" with no outcome, as interrupted or as failed, and an earlier message may have told it. Each is ONE call," +
+	" made once, not two, and the outcome told here stands: a call marked `→ success` ALREADY RAN, so do NOT" +
+	" issue a write among them again; one marked `→ error` did not take effect."
 
 // lateSubmission tells a run that a successful `submit_work` among the calls
 // under [lateCallsHeader] is no submission of the work it carries on: the run
-// that made it was replaced before the call returned, the run carrying the work
-// on was never told it, and the work's submission is the one a run carrying it
-// on makes (internal/agent/runner's sinceAnswer). Read as the work's, it would
-// leave a run that took it for done ending without its own, and the work
-// collected as one that submitted nothing.
+// that made it had stopped waiting for it before it returned — replaced, and the
+// run carrying the work on never told it, or told it failed where it gave up on
+// it — and the work's submission is the one a run carrying it on makes
+// (internal/agent/runner's sinceAnswer, which never takes a late one, and
+// replays the newest). Read as the work's, a late one would leave a run that
+// took it for done ending without its own, and the work collected as one that
+// submitted nothing.
 const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's submission:" +
-	" the run that made it was replaced before it returned. When your work is done, call `" +
+	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
 
 // AfterSave is what a session's run did through the seat's tools after the
@@ -218,26 +223,30 @@ type AfterSave struct {
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
 
-	// Late are the calls of the round its record took only after the run that
-	// made them was replaced by a relaunch that carried the work on
-	// (sandbox.BridgeCall.Late), as the prior-work ledger renders them within
-	// its budgets, "" for none: none of them is among Calls. Told in a section
-	// of their own, under [lateCallsHeader], whatever Interrupted says.
+	// Late are the calls of the round that finished only after the run that
+	// made them stopped waiting for them — its record took them after that run
+	// was replaced by a relaunch that carried the work on
+	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
+	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
+	// prior-work ledger renders them within its budgets, "" for none: none of
+	// them is among Calls. Told in a section of their own, under
+	// [lateCallsHeader], whatever Interrupted says.
 	Late string
 
 	// LateSubmission says a successful `submit_work` is among Late, which is
 	// told as no submission of the work ([lateSubmission]).
 	LateSubmission bool
 
-	// LateDropped is how many calls the record took late and then dropped
-	// from the middle of a long run's record (sandbox.BridgeLog.LateElided),
-	// counted in Late's section ([droppedLate]) whatever the session's save
-	// point, beside Tally where no count of calls after the save carries it:
-	// a dropped call keeps no mark and no number, so no point can be read
-	// against it. Said under the words of calls after a save, they would be
-	// calls the session's own run made after it was saved, which no late call
-	// is. One past the save point is counted among Dropped as well, by its
-	// number: an over-count, never an under-count.
+	// LateDropped is how many such calls the record dropped from the middle of
+	// a long run's record (sandbox.BridgeLog.LateElided), counted in Late's
+	// section ([droppedLate]) whatever the session's save point, beside Tally
+	// where no count of calls after the save carries it: a dropped call keeps
+	// no mark and no number, so no point can be read against it. Said under
+	// the words of calls after a save, they would be calls the session lacks,
+	// made by its own run after it was saved, which a late call is not, and
+	// one its run gave up on may be shown in it. One past the save point is
+	// counted among Dropped as well, by its number: an over-count, never an
+	// under-count.
 	LateDropped int
 }
 
@@ -247,9 +256,9 @@ type AfterSave struct {
 // way every other reader of a long run's calls is told what was dropped — of a
 // session cut off, as calls it may already show ([AfterSave.Interrupted]) —
 // and then, in a section of its own, the calls that finished only after the run
-// that made them was replaced ([AfterSave.Late]), and how many more such calls
-// the record dropped ([AfterSave.LateDropped]). "" where there is none of
-// either.
+// that made them stopped waiting for them ([AfterSave.Late]), and how many more
+// such calls the record dropped ([AfterSave.LateDropped]). "" where there is
+// none of either.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if since := calledSince(after); since != "" {

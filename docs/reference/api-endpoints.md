@@ -12685,7 +12685,12 @@ round's log took only after the job that made it was replaced by a relaunch
 that carried the round on — one still running as the relaunch was readied,
 which no brief of the round told: a continued session is told it whatever its
 save, it is never the round's submission, and what it cost is charged to no
-job. The call a person approved is never marked.
+job. The call a person approved is never marked. `abandoned: true` marks a
+call nobody waited for by the time it returned — its harness had given up on
+it and cancelled the request, or the job's session on the bridge had ended: it
+ran and its effect happened, while the session that made it holds no outcome
+of it, so a continued session is told it whatever its save. Both are absent on
+every other call.
 `bridge_calls_elided` counts the calls of the round the log does not list —
 dropped from the middle of a long run's log; a call whose own append reached
 the log only with a later one is listed, once, as the call it is — and

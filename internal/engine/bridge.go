@@ -61,7 +61,9 @@ import (
 // ([sandbox.BridgeCall.Appended]), which a relaunch that continues a kept
 // session tells the calls after its save point by (runner.SessionBasis.Through),
 // and WHETHER THE LOG TOOK IT LATE, after its job was replaced
-// ([sandbox.BridgeCall.Late]), which no save point holds.
+// ([sandbox.BridgeCall.Late]), or ITS HARNESS STOPPED WAITING FOR IT before it
+// returned ([sandbox.BridgeCall.Abandoned]), neither of which a save point
+// holds.
 //
 // AND THE HELD CALL AN APPROVED ONE WAS MADE FOR ([sandbox.BridgeCall.HeldID]):
 // a later attempt at an answer reads the call that answer approved in the
@@ -86,6 +88,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Seq:         call.Seq,
 			Appended:    call.Appended,
 			Late:        call.Late,
+			Abandoned:   call.Abandoned,
 			StartedAt:   call.StartedAt,
 			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:      call.Origin,
@@ -355,6 +358,10 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// store holds them to the call's share of the log, so this is
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
+			// WHETHER ANYBODY WAITED FOR ITS ANSWER as it returned: a call
+			// its harness gave up on, or that outlived its opening, is held by
+			// no save point ([sandbox.BridgeCall.Abandoned]).
+			Abandoned: call.Abandoned,
 		},
 		// WHAT THIS CALL'S OWN WORK ADDED to the run's call log, and the
 		// session's earlier appends the log has not heard of, whole.

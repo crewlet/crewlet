@@ -9,13 +9,15 @@ import "slices"
 // cleanly by itself and its script packing it. That read is made once the job
 // is over, so after its harness exited and its script packed the archive,
 // never before the pack: a harness ends its own run only once every call it
-// made has been answered, and writes every message it made before it exits,
-// so every call the log had taken by the read is one its session holds — but
-// a late call ([BridgeCall.Late]), an earlier job's that the log took only
-// after the read the briefs of the job now working were built from: no brief
-// of the round told it, and the session of the job that made it may not hold
-// it, so no save point holds it, whatever its number (internal/agent/runner's
-// heldAt). Every
+// made has been answered or given up on, and writes every message it made
+// before it exits, so every call the log had taken by the read is one its
+// session holds — but a call its harness gave up on ([BridgeCall.Abandoned]),
+// which it holds as timed out though the call ran on, and a late call
+// ([BridgeCall.Late]), an earlier job's that the log took only after the read
+// the briefs of the job now working were built from: no brief of the round
+// told it, and the session of the job that made it may not hold it. So no save
+// point holds either, whatever its number (internal/agent/runner's heldAt).
+// Every
 // other capture is packed where its harness may not have written every call
 // it made, and a harness writes a call to its record only once the model's
 // whole message has streamed: measured on Claude Code 2.1.310 against a
