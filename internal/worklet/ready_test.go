@@ -110,14 +110,22 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 
 // READY WORK LEAVES OUT WHAT CANNOT START NOW: work waiting on an open
 // blocker, work whose start date is ahead, work held on a question the seat
-// asked and nobody answered, work in review, and work in the trash or done.
+// asked and nobody answered, work in review the seat submitted itself, and work
+// in the trash or done.
 func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	fileFor(t, r, "ready", "ana", worklet.StatusTodo, worklet.PriorityNormal)
 	fileFor(t, r, "blocker", "bob", worklet.StatusTodo, worklet.PriorityNormal)
 	fileFor(t, r, "blocked", "ana", worklet.StatusTodo, worklet.PriorityNormal)
-	fileFor(t, r, "review", "ana", worklet.StatusInReview, worklet.PriorityNormal)
+	submitted := newTask("review")
+	submitted.Assignee, submitted.Status = "ana", worklet.StatusInReview
+	submitted.StatusGroup = worklet.StatusInReview.Group()
+	if _, err := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}).CreateTask(t.Context(),
+		"op-review", submitted, nil); err != nil {
+		t.Fatalf("CreateTask review: %v", err)
+	}
+	r.drain()
 	fileFor(t, r, "done", "ana", worklet.StatusDone, worklet.PriorityNormal)
 	fileFor(t, r, "asked", "ana", worklet.StatusTodo, worklet.PriorityNormal)
 
@@ -285,5 +293,45 @@ func TestReadyWorkIsPaged(t *testing.T) {
 	if err != nil || len(second.Items) != 3 || second.More || second.Fingerprint != first.Fingerprint {
 		t.Fatalf("page 1 = %d items, more %v (%v), want the last 3 under one fingerprint",
 			len(second.Items), second.More, err)
+	}
+}
+
+// A REVIEW IS READY FOR THE SEAT THAT HOLDS IT WHEN SOMEBODY ELSE ASKED FOR IT:
+// it comes after started work and before work not started, and a seat never
+// reviews what it moved into review itself, whoever holds it after.
+func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
+	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
+	fileFor(t, r, "asked", "ana", worklet.StatusInReview, worklet.PriorityLow)
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	mine := newTask("mine")
+	mine.Assignee, mine.Status, mine.StatusGroup = "ana", worklet.StatusTodo, worklet.StatusTodo.Group()
+	if _, err := ana.CreateTask(t.Context(), "op-mine", mine, nil); err != nil {
+		t.Fatalf("CreateTask mine: %v", err)
+	}
+	r.drain()
+	review, bob := worklet.StatusInReview, "bob"
+	if _, err := ana.UpdateTask(t.Context(), "op-submit", "mine", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Status: &review}, worklet.ChangeStatus, nil); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	r.drain()
+
+	got := r.readyWork("ana")
+	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "asked", "queued"}) {
+		t.Fatalf("ana's ready work = %v, want started, then the review she was asked for, then the queue", ids)
+	}
+	if got.Items[1].Why != types.PickupReview {
+		t.Errorf("the review sits there because %q, want %q", got.Items[1].Why, types.PickupReview)
+	}
+	if _, err := ana.UpdateTask(t.Context(), "op-hand", "mine", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Assignee: &bob}, worklet.ChangeAssignee, nil); err != nil {
+		t.Fatalf("hand to bob: %v", err)
+	}
+	r.drain()
+	if ids := readyIDs(r.readyWork("bob")); !slices.Equal(ids, []string{"mine"}) {
+		t.Errorf("bob's ready work = %v, want the review ana handed him", ids)
 	}
 }

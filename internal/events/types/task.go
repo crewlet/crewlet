@@ -139,6 +139,9 @@ const (
 	// PickupInProgress is an item the seat already started, which comes
 	// before any it has not.
 	PickupInProgress PickupWhy = "in_progress"
+	// PickupReview is an item in review that somebody else moved there and
+	// the seat holds: its review, which comes before work it has not started.
+	PickupReview PickupWhy = "review"
 	// PickupPriorityList is the first item of the seat's priority list,
 	// the order somebody arranged for it.
 	PickupPriorityList PickupWhy = "priority_list"
@@ -149,7 +152,7 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupPriorityList, PickupQueue:
+	case PickupInProgress, PickupReview, PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -160,6 +163,8 @@ func (w PickupWhy) sentence() string {
 	switch w {
 	case PickupInProgress:
 		return "It is in progress and nothing is working on it now, so it comes before work you have not started."
+	case PickupReview:
+		return "It is in review and yours to review: somebody else asked for it, so it comes before work you have not started."
 	case PickupPriorityList:
 		return "It is the first ready item on your priority list, the order your lead set for you."
 	case PickupQueue:
