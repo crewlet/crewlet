@@ -181,10 +181,9 @@ func (s Sources) fleetAlarms(ctx context.Context) ([]notice.NodeAlarms, bool) {
 	complete := true
 	for _, lease := range leases {
 		status, ok := coord.StatusFromMeta(lease.Meta)
-		switch {
-		case !ok:
-			continue
-		case !status.AlarmsEvaluated:
+		// A NODE SAYING NOTHING YET (no status, or none evaluated) may hold an
+		// alarm unsaid, as a node just started does.
+		if !ok || !status.AlarmsEvaluated {
 			complete = false
 			continue
 		}

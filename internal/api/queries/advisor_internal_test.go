@@ -161,6 +161,14 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if _, known := (Sources{Coord: settled}).fleetAlarms(t.Context()); !known {
 		t.Error("every live node has evaluated, and the fleet's alarms read as unknown")
 	}
+	// A NODE SAYING NOTHING YET, its heartbeat carrying no status, may hold one.
+	if _, _, err := settled.TryAcquire(t.Context(), coord.NodeResource("node-d"), coord.AcquireOptions{
+		Owner: "node-d:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := (Sources{Coord: settled}).fleetAlarms(t.Context()); known {
+		t.Error("a live node with no status left the fleet's alarms known")
+	}
 }
 
 // `alarms` IS NAMED UNREAD ONCE, whether this node's evaluation has not run,

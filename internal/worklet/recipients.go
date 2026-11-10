@@ -202,7 +202,7 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // write rows nobody would ever be woken for, and an inbox would fill with
 // changes the company deliberately did not announce.
 func Candidates(n *Notify) []routing.Candidate[Reason] {
-	if n == nil {
+	if n == nil || n.reassertsHolder() {
 		return nil
 	}
 	task := n.Kind.TaskCommit()
@@ -371,10 +371,8 @@ func (n *Notify) asks(reason Reason) bool {
 // move on your task asks you to look at it without obliging you to post.
 func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 	switch n.Kind {
-	case ChangeCreated:
+	case ChangeCreated, ChangeAssignee:
 		return true
-	case ChangeAssignee:
-		return !n.reassertsHolder()
 	case ChangeStatus:
 		return finishedEdge
 	case ChangeComment:
@@ -402,9 +400,6 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 // ask or an answer makes the comment somebody's in particular, and the owner
 // hears it in its inbox unless it is the one named (ADR-0113).
 func (n *Notify) ownerAsked() bool {
-	if n.reassertsHolder() {
-		return false
-	}
 	if n.Kind.Conversation() {
 		return n.personComment() && !n.addressedToSomebody()
 	}
@@ -412,9 +407,10 @@ func (n *Notify) ownerAsked() bool {
 }
 
 // reassertsHolder reports an assignment to the seat that already holds the
-// task with nothing else changed: no change, so it wakes and obliges nobody.
+// task with nothing else changed or named: no change, so it concerns nobody.
 func (n *Notify) reassertsHolder() bool {
-	return n.Kind == ChangeAssignee && n.Snapshot.Assignee == n.Snapshot.PrevAssignee && len(n.Fields) == 0
+	return n.Kind == ChangeAssignee && n.Snapshot.Assignee == n.Snapshot.PrevAssignee &&
+		len(n.Fields) == 0 && len(n.Mentions) == 0
 }
 
 // threadAsked decides whether a reply wakes one thread participant: one with
