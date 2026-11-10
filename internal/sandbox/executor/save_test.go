@@ -649,10 +649,10 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 			find:  func(t *testing.T, _ string) string { return faultyFind(t, `*" -type f "`) },
 			check: "the files of the session could not be listed"},
 		{name: "a find that could not walk the whole session as it listed their inodes",
-			find:  func(t *testing.T, _ string) string { return faultyFind(t, `*" -exec ls -i "*`) },
+			find:  func(t *testing.T, home string) string { return faultyFindFirst(t, home, `*" -exec ls -i "*`) },
 			check: "the files of the session could not be listed"},
 		{name: "a find that could not walk the whole session as it listed their sizes",
-			find:  func(t *testing.T, _ string) string { return faultyFind(t, `*" -exec wc -c "*`) },
+			find:  func(t *testing.T, home string) string { return faultyFindFirst(t, home, `*" -exec wc -c "*`) },
 			check: "the files of the session could not be listed"},
 		{name: "a find that could not walk the whole session as it listed their inodes again after the tar",
 			find:  func(t *testing.T, home string) string { return faultyFindAgain(t, home, `*" -exec ls -i "*`) },
@@ -753,6 +753,21 @@ func faultyFind(t *testing.T, pattern string) string {
 	find := shQuote(hostTool(t, "find"))
 	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") " + find + ` "$@"; exit 1;; esac` + "\nexec " + find +
 		` "$@"` + "\n"
+}
+
+// faultyFindFirst is [faultyFind] on the FIRST call alone whose words match
+// pattern: that call walks as this machine's find does and exits 1, saying so
+// in a file under home, the box's own, and every later call walks as it does —
+// so a pack that makes one find before its tar and again after it meets the
+// failure before, and only there. (Failing both, the refusal after the tar,
+// "could not be listed again", holds the words of the one before it, and a pack
+// that took the first find's exit on its word would still be refused.)
+func faultyFindFirst(t *testing.T, home, pattern string) string {
+	t.Helper()
+	find := shQuote(hostTool(t, "find"))
+	failed := shQuote(filepath.Join(home, "find-failed-once"))
+	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") if mkdir " + failed + " 2> /dev/null; then " + find +
+		` "$@"; exit 1; fi;; esac` + "\nexec " + find + ` "$@"` + "\n"
 }
 
 // faultyFindAgain is [faultyFind] on the SECOND call whose words match pattern:
