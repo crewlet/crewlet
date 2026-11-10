@@ -9,6 +9,8 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
   work: "The last 7 days of work couldn't be read, so the patterns the engine finds in it are missing.",
   ledger:
     "The agents' turns couldn't be read, so the patterns the engine finds in them are missing.",
+  pauses:
+    "The agents' pauses couldn't be read, so an agent the engine paused for a failure may be missing.",
   alarms:
     "The engine's alarms couldn't be read, as right after a start, so whether a backup is missing can't be said yet.",
 };

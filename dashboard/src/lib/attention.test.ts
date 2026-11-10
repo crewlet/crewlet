@@ -844,6 +844,29 @@ test("a finding that blocks the company is a condition a person decides", () => 
   expect(conditionsToDecide(queue)).toContainEqual(row);
 });
 
+// AN ALARM'S FINDING THE ANSWER COULD NOT RAISE (its node has not evaluated
+// yet) is still said, in the alarm's words, never dropped without a word.
+test("a notice an alarm raised is drawn as that alarm when its finding is missing", () => {
+  const queue = attentionQueue(
+    input({
+      notices: [
+        {
+          class: "durability.no_verified_backup",
+          subject: { kind: "company" },
+          since: "2026-01-01T10:00:00Z",
+          nodes: ["node-a"],
+          alarm: "backup_age",
+        },
+      ],
+    }),
+  );
+  const row = queue.find((a) => a.id === "alarm-backup_age");
+  expect(row?.title).toBe("Backup age has not cleared");
+  expect(row?.technical).toBe("Standing on node-a.");
+  expect(row?.at).toBe("2026-01-01T10:00:00Z");
+  expect(conditionsToDecide(queue)).toContainEqual(row);
+});
+
 // ONLY WHAT THE ENGINE NOTICED REACHES THE QUEUE: a blocking finding with no
 // notice is the advisor's to show, and a notice whose finding is gone draws nothing.
 test("a finding is a condition only through its notice", () => {
@@ -892,6 +915,10 @@ test("an advisor that could not read everything says so, once", () => {
   expect(rows[0]?.title).toBe("The advisor couldn't read everything");
   expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
   expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
+  const paused = attentionQueue(input({ setupUnread: ["pauses"] })).find(
+    (a) => a.id === "setup-unread",
+  );
+  expect(paused?.detail).toMatch(/an agent the engine paused for a failure may be missing/);
   expect(rows[0]?.path).toEqual(["settings", "advisor"]);
 });
 
