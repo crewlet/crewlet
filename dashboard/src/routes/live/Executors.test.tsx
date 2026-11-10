@@ -339,6 +339,30 @@ test("a call a person approved is marked so, its sealed records never drawn as e
   expect(result?.textContent).toContain("(handed to the run sealed, not kept on the record)");
 });
 
+// A CALL THAT FINISHED AFTER A RELAUNCH is a call of its round that the round's
+// record took only once a relaunch had carried the round on: its effect
+// happened, but it is charged to no launch, is never the round's submission
+// and is told to every later continuation. Drawn as any other call, it read as
+// one its own launch made and paid for.
+//
+// Mutation: drop the late tag, or draw it on every call, and this goes red.
+test("a call that finished after a relaunch is marked so", () => {
+  overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            { name: "delegate", late: true, origin: "builtin", at: "2026-06-15T12:03:00Z" },
+            { name: "read_file", origin: "builtin", at: "2026-06-15T12:04:00Z" },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+  );
+  expect(screen.getAllByText("finished after a relaunch")).toHaveLength(1);
+});
+
 // THE CALL THE RUN HELD FOR A PERSON'S APPROVAL is recorded failed, since nothing
 // it asked for happened, and without its arguments, which ride the run's row
 // sealed beside its question: counted as a failure and drawn with "(none)", a
