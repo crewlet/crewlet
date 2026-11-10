@@ -70,7 +70,7 @@ func foldTurnOutcomes(rows []usage.TurnLedgerRow, chart map[string]chartSeat, ag
 			at[k], i = len(out), len(out)
 			out = append(out, TurnOutcomeRow{Seat: cmp.Or(seat, r.AgentID), AgentID: r.AgentID, Wake: r.Wake})
 		}
-		spent := r.Input + r.Output + r.CacheRead + r.CacheWrite + r.AuxInput + r.AuxOutput
+		spent := r.Tokens()
 		o := &out[i]
 		o.Turns += r.Turns
 		o.Tokens += spent

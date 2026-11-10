@@ -81,3 +81,10 @@ export const PHASE_BANDS = {
  * and the kit's), so one window read as healthy, near and full at once.
  */
 export type BudgetState = "ok" | "near" | "refusing";
+
+/**
+ * What woke a turn, by its kind: the engine's `types.Origin*` constants, held
+ * equal by `internal/api/queries.TestTheDashboardSaysEveryWakeKind`.
+ */
+export type WakeKind =
+  "chat_message" | "work_item" | "schedule" | "colleague_ask" | "code_change" | "alarm";

@@ -135,3 +135,14 @@ func TestASeatDaysRefusedCallsAreSummedAcrossNodes(t *testing.T) {
 		t.Fatalf("the fleet holds %+v (untallied %d), want node-a's record", applied.Refusals, applied.LedgerUntallied)
 	}
 }
+
+// A LEDGER ROW'S SPEND COUNTS THE CACHE ONCE: the cache columns are a breakdown
+// of the input the engine recorded, so they are inside Input and never added.
+func TestALedgerRowsTokensCountTheCacheOnce(t *testing.T) {
+	t.Parallel()
+	r := usage.TurnLedgerRow{Input: 1_000, Output: 200, CacheRead: 700, CacheWrite: 100,
+		AuxInput: 50, AuxOutput: 5}
+	if got := r.Tokens(); got != 1_255 {
+		t.Errorf("Tokens() = %d, want 1255: input, output and the auxiliary calls', the cache inside the input", got)
+	}
+}

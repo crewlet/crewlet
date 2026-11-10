@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { wakeWords } from "./wakes.ts";
 
 // EVERY WAKE KIND THE LEDGER KEYS HAS WORDS and says who can act; one this
-// build does not know is said as written, with nowhere to send anybody.
+// build does not know is said as written, says so, and sends nobody anywhere.
 test("a wake reason is said with who can act on it", () => {
   expect(wakeWords("schedule:standup", "ceo")).toEqual({
     label: "Schedule standup",
@@ -17,7 +17,7 @@ test("a wake reason is said with who can act on it", () => {
   expect(wakeWords("alarm:fired", "sre").label).toBe("Engine alarms");
   expect(wakeWords("task_assigned", "swe")).toEqual({
     label: "task assigned",
-    who: "The engine",
+    who: "Not described in this version",
     path: [],
   });
 });
