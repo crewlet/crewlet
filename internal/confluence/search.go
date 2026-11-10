@@ -135,7 +135,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 	if errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized ||
 		refused.Status == http.StatusForbidden) {
 		// THE CREDENTIAL, not the site: the tool says which from the grant.
-		out.VendorStatus = refused.Status
+		out.VendorStatus, out.VendorSelf = refused.Status, self
 		return out
 	}
 	if err != nil {

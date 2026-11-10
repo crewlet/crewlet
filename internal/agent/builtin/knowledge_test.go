@@ -24,8 +24,10 @@ type stubSearcher struct {
 	// in as a complete hybrid answer, which is what every case that is
 	// not about the outcome wants.
 	outcome *knowledge.Outcome
-	// refused is the vendor's status refusing the searching credential.
+	// refused is the vendor's status refusing the searching credential, and
+	// self whether that credential was the seat's own.
 	refused int
+	self    bool
 }
 
 func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.can }
@@ -33,7 +35,7 @@ func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.c
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.queries = append(s.queries, q)
 	if s.refused != 0 {
-		return knowledge.Result{VendorStatus: s.refused}
+		return knowledge.Result{VendorStatus: s.refused, VendorSelf: s.self}
 	}
 	if s.outcome != nil {
 		return knowledge.Result{Hits: s.hits, Outcome: *s.outcome}
@@ -284,32 +286,38 @@ func TestSearchKnowledgeFencesWhatAPageSays(t *testing.T) {
 	}
 }
 
-// A VENDOR'S REFUSAL IS SAID FROM THE ENGINE'S OWN KNOWLEDGE OF THE GRANT (E21):
-// a 403 to a seat off the Confluence lane is vendor_forbidden naming the
-// permission the tool declares; a 403 to a seat on it, and a 401 (the
-// credential itself), stay plain failures that name no permission.
-func TestSearchKnowledgeSaysTheVendorRefusedFromTheGrant(t *testing.T) {
+// A VENDOR'S REFUSAL IS SAID ONLY FROM WHAT THE ENGINE KNOWS (E21): a refusal
+// of the company's connection is the company's; on the agent's own credential a
+// 401 is that credential, a 403 the engine's grant does not hold (as the seat
+// access ledger observed it) is vendor_forbidden naming the declared permission,
+// and a 403 the grant holds, or one whose grant cannot be read, is a plain failure.
+func TestSearchKnowledgeSaysTheVendorRefusedFromWhatTheEngineKnows(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name     string
-		status   int
-		lanes    []string
-		refusal  tools.Refusal
-		says     string
-		namesUse bool
+		name         string
+		status       int
+		self         bool
+		held, known  bool
+		refusal      tools.Refusal
+		says         string
+		namesPermits bool
 	}{
-		{"a 403 the grant does not cover", 403, nil, tools.RefusalVendorForbidden, "read access", true},
-		{"a 403 the grant covers", 403, []string{"confluence"}, "", "includes reading it", false},
-		{"a 401", 401, []string{"confluence"}, "", "expired or revoked", false},
+		{"the company's connection refused", 403, false, false, true, "", "company's connection for this search", false},
+		{"the company's connection expired", 401, false, false, true, "", "company's connection itself", false},
+		{"the agent's credential expired", 401, true, true, true, "", "this agent's credential itself", false},
+		{"a 403 the grant does not hold", 403, true, false, true, tools.RefusalVendorForbidden, "not in place", true},
+		{"a 403 the grant holds", 403, true, true, true, "", "grant includes reading it", false},
+		{"a 403 whose grant cannot be read", 403, true, false, false, "", "could not be read", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			turn := searchTurn()
-			seat := *turn.Seat
-			seat.AccessLanes = c.lanes
-			turn.Seat = &seat
-			res, err := (&searchKnowledge{search: &stubSearcher{can: true, refused: c.status}}).CallForTurn(
-				context.Background(), turn, map[string]any{"query": "staging"})
+			var asked []string
+			tool := &searchKnowledge{search: &stubSearcher{can: true, refused: c.status, self: c.self},
+				granted: func(_ context.Context, handle, lane string) (bool, bool) {
+					asked = append(asked, handle+"@"+lane)
+					return c.held, c.known
+				}}
+			res, err := tool.CallForTurn(context.Background(), searchTurn(), map[string]any{"query": "staging"})
 			if err != nil {
 				t.Fatalf("CallForTurn: %v", err)
 			}
@@ -317,8 +325,11 @@ func TestSearchKnowledgeSaysTheVendorRefusedFromTheGrant(t *testing.T) {
 				t.Fatalf("answered %+v (class %q), want failed as %q saying %q", res, tools.RefusalOf(res),
 					c.refusal, c.says)
 			}
-			if names := strings.Contains(res.Output, "the spaces it searches"); names != c.namesUse {
-				t.Errorf("naming the declared permission: %v, want %v (%q)", names, c.namesUse, res.Output)
+			if names := strings.Contains(res.Output, "the spaces it searches"); names != c.namesPermits {
+				t.Errorf("naming the declared permission: %v, want %v (%q)", names, c.namesPermits, res.Output)
+			}
+			if c.self && c.status == 403 && (len(asked) != 1 || asked[0] != "eng@confluence") {
+				t.Errorf("the grant was read as %v, want the seat on the confluence lane", asked)
 			}
 			if strings.Contains(res.Output, "No team documents match") {
 				t.Errorf("a refused search reads as an empty knowledge base: %q", res.Output)

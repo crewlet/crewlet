@@ -1,11 +1,6 @@
 package builtin
 
-import (
-	"slices"
-
-	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/seataccess"
-)
+import "github.com/crewlet/crewlet/internal/seataccess"
 
 // VendorNeed is the vendor permission a built-in needs to do its work (E21):
 // the grant the engine minted for the seat, which explains a vendor's refusal
@@ -27,16 +22,10 @@ type VendorNeed struct {
 // Reaches reports whether the tool reaches a vendor at all.
 func (n VendorNeed) Reaches() bool { return n.Vendor != "" }
 
-// HeldBy reports whether seat's minted grant holds the permission, as the
-// engine itself granted it: the seat is on the need's access lane.
-func (n VendorNeed) HeldBy(seat *org.Role) bool {
-	return seat != nil && slices.Contains(seat.AccessLanes, n.Lane)
-}
-
 // Refusal is what a vendor's refusal of this tool says, from the declaration.
 func (n VendorNeed) Refusal(tool string) string {
 	return tool + ": " + n.Vendor + " refused this agent's credential. It needs " + n.Level +
-		" access to " + n.Permission + ", which the access the engine holds for it does not include. " +
+		" access to " + n.Permission + ", and the engine's grant of it to this agent is not in place. " +
 		"An administrator grants it in the agent's " + n.Vendor + " access; asking again changes nothing until then."
 }
 

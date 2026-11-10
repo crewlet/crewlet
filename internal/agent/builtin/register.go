@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -106,6 +107,11 @@ type Deps struct {
 	// has — and it is the same seam the turn-start prefetch reads, so the
 	// two can never disagree about scope, exclusions or credentials.
 	Knowledge KnowledgeSearcher
+
+	// GrantHeld reads whether the engine's grant to a seat on an access lane
+	// is in place, as the seat access ledger observed it; known is false where
+	// the ledger cannot be read. Nil knows nothing.
+	GrantHeld func(ctx context.Context, handle, lane string) (held, known bool)
 
 	// Pages is Doclet. Both halves nil omits all five
 	// tools, which is what a company running Confluence has.
@@ -250,7 +256,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&readSession{deps: deps.Sessions, within: SessionReadWithin}, deps.Sessions.serves()},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
-		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
+		{&searchKnowledge{search: deps.Knowledge, events: deps.Events, granted: deps.GrantHeld},
+			deps.Knowledge != nil},
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
 		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
 		{&createWorkItem{deps: deps.Work, pages: deps.Pages.Reader}, deps.Work.Writer != nil},

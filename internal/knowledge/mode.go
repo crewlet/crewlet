@@ -198,4 +198,7 @@ type Result struct {
 	// VendorStatus is a vendor's knowledge base refusing the searching
 	// credential (401 or 403): nothing was searched. Zero otherwise.
 	VendorStatus int `json:"-"`
+	// VendorSelf says the refused credential was the seat's own, not the
+	// company's connection the search falls back on.
+	VendorSelf bool `json:"-"`
 }

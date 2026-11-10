@@ -55,6 +55,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		// environment of its own does not read anywhere else.
 		Env:               e.LookupSecret,
 		Knowledge:         knowledgeSearch(e, c),
+		GrantHeld:         e.grantHeld,
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
 		Compact:           e.compactorFor(c),

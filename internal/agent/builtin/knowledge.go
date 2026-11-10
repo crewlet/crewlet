@@ -55,6 +55,10 @@ type KnowledgeSearcher interface {
 type searchKnowledge struct {
 	search KnowledgeSearcher
 
+	// granted reads whether the engine's grant to a seat on a lane is in
+	// place ([Deps.GrantHeld]); nil knows nothing.
+	granted func(ctx context.Context, handle, lane string) (held, known bool)
+
 	// org answers which company is in scope when there is no turn to ask.
 	//
 	// A SEAT'S SEARCH IS ITS SEAT'S, and the turn carries both halves. An
@@ -187,7 +191,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	if result.VendorStatus != 0 {
-		return vendorRefused(turn, result.VendorStatus), nil
+		return t.vendorRefused(ctx, turn, result), nil
 	}
 	hits := result.Hits
 	degraded := degradedNote(mode, result.Outcome)
@@ -303,24 +307,40 @@ func partialNote(c knowledge.Coverage) string {
 		"fleet did not answer in time — so a page not listed here may still exist."
 }
 
-// vendorRefused is a vendor's refusal of the searching credential, said from
-// the engine's own knowledge of the seat's grant (E21): a 403 the grant does
-// not cover is vendor_forbidden, naming the permission the tool declares; a 403
-// the grant covers, or a 401 (the credential itself), stays a plain failure.
-func vendorRefused(turn *turnctx.Turn, status int) tools.Result {
+// vendorRefused is a vendor's refusal of the searching credential, said only
+// from what the engine knows (E21): the company's connection's refusal is the
+// company's; on the agent's own credential a 401 is that credential, a 403 its
+// grant does not hold is vendor_forbidden, and any other 403 is a plain failure.
+func (t *searchKnowledge) vendorRefused(ctx context.Context, turn *turnctx.Turn, result knowledge.Result) tools.Result {
 	filing, _ := FilingOf(SearchKnowledgeTool)
 	need := filing.Vendor
-	switch {
-	case status == http.StatusUnauthorized:
-		return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor +
-			" refused this agent's credential itself: it is expired or revoked. An administrator " +
-			"renews it in the agent's " + need.Vendor + " access. Nothing was searched."}
-	case status == http.StatusForbidden && !need.HeldBy(seatOf(turn)):
-		return refusedBy(tools.RefusalVendorForbidden, nil, need.Refusal(SearchKnowledgeTool))
+	failed := func(words string) tools.Result {
+		return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor + " " + words +
+			" Nothing was searched, so this says nothing about whether a page exists."}
 	}
-	return tools.Result{Failed: true, Output: SearchKnowledgeTool + ": " + need.Vendor +
-		" refused the search although this agent's access includes reading it; a space's own " +
-		"permissions may withhold it. Nothing was searched, so this says nothing about whether a page exists."}
+	switch {
+	case !result.VendorSelf && result.VendorStatus == http.StatusUnauthorized:
+		return failed("refused the company's connection itself: it is expired or revoked, and an " +
+			"administrator renews it in the " + need.Vendor + " integration.")
+	case !result.VendorSelf:
+		return failed("refused the company's connection for this search: the spaces its account may " +
+			"read may not include these.")
+	case result.VendorStatus == http.StatusUnauthorized:
+		return failed("refused this agent's credential itself: it is expired or revoked, and an " +
+			"administrator renews it in the agent's " + need.Vendor + " access.")
+	}
+	held, known := false, false
+	if seat := seatOf(turn); seat != nil && t.granted != nil {
+		held, known = t.granted(ctx, seat.Handle(), need.Lane)
+	}
+	switch {
+	case known && !held:
+		return refusedBy(tools.RefusalVendorForbidden, nil, need.Refusal(SearchKnowledgeTool))
+	case held:
+		return failed("refused the search although this agent's grant includes reading it; a space's " +
+			"own permissions may withhold it.")
+	}
+	return failed("refused this agent's credential, and whether its grant is in place could not be read.")
 }
 
 // seatOf is the turn's seat, nil outside a turn.
