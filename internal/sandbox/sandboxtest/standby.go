@@ -1,6 +1,8 @@
 package sandboxtest
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +32,7 @@ var standbyCases = []struct {
 	{"AStandbyTakesTheNextPlaceOnlyAfterACaptureThatDidNotLand",
 		testAStandbyTakesTheNextPlaceOnlyAfterACaptureThatDidNotLand},
 	{"AStandbyStandsDownOnlyItself", testAStandbyStandsDownOnlyItself},
+	{"AStandbysWritesAreHeldToACapturesPlaceAndBounds", testAStandbysWritesAreHeldToACapturesPlaceAndBounds},
 }
 
 // placeHolder is the first read's begun capture of r's job at (1, 1), stamped
@@ -291,5 +294,62 @@ func testAStandbyStandsDownOnlyItself(t *testing.T, s sandbox.PendingStore) {
 	}
 	if down, err := s.StandDown(ctx, r.TurnID, standby); err != nil || down {
 		t.Fatalf("the withdrawal asked again = %v, %v; want nothing left to withdraw", down, err)
+	}
+}
+
+// A STANDBY'S WRITES ARE HELD TO A CAPTURE'S PLACE AND BOUNDS, BEFORE ANYTHING IS
+// WRITTEN. Standing by, taking the next place and standing down each carry a
+// take's stamp to the row, and each refuses one placed nowhere, and one past
+// the bounds the row holds a capture to — a taker of a kilobyte, which standing
+// by writes onto the capture it stands by for — leaving the row's capture as it
+// was; and a stamp that carries a standby is held to the same bound on its
+// standby's taker.
+//
+// Mutation: drop the place or the bounds from any of the three writes, or the
+// standby's taker from a capture's bounds, and a write refused here is made.
+func testAStandbysWritesAreHeldToACapturesPlaceAndBounds(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-standby-bounds")
+	placed := placeHolder(t, s, r)
+	standby := otherRead(placed, "node-b", time.Second)
+	unplaced := standby
+	unplaced.CaptureSeq = 0
+	kilobyte := standby
+	kilobyte.Taker = strings.Repeat("n", 1<<10) + ":1"
+	over := standby
+	over.CaptureSeq, over.At = 2, standby.At.Add(time.Minute)
+	overUnplaced, overKilobyte := over, over
+	overUnplaced.LaunchSeq = 0
+	overKilobyte.Taker = kilobyte.Taker
+	for _, refused := range []struct {
+		why   string
+		write func() (bool, error)
+	}{
+		{"standing by placed nowhere", func() (bool, error) { return s.StandBy(ctx, r.TurnID, unplaced) }},
+		{"standing by under a kilobyte taker", func() (bool, error) { return s.StandBy(ctx, r.TurnID, kilobyte) }},
+		{"standing down placed nowhere", func() (bool, error) { return s.StandDown(ctx, r.TurnID, unplaced) }},
+		{"taking over placed nowhere", func() (bool, error) {
+			return s.TakeOver(ctx, r.TurnID, standby, overUnplaced)
+		}},
+		{"taking over under a kilobyte taker", func() (bool, error) {
+			return s.TakeOver(ctx, r.TurnID, standby, overKilobyte)
+		}},
+	} {
+		if took, err := refused.write(); err == nil || took {
+			t.Errorf("%s = %v, %v; want it refused", refused.why, took, err)
+		}
+	}
+	got, found, err := s.Get(ctx, r.TurnID)
+	if err != nil || !found {
+		t.Fatalf("Get %s = %v, %v", r.TurnID, found, err)
+	}
+	if c := got.Capture; c == nil || c.CaptureSeq != 1 || c.State != sandbox.CaptureBegun || !c.StandbyAt.IsZero() {
+		t.Fatalf("the refused writes left the row's capture %+v, want the first read's begun with no standby", c)
+	}
+	carrying := placed
+	carrying.State, carrying.Reason = sandbox.CaptureRefused, "the session could not be uploaded"
+	carrying.StandbyTaker, carrying.StandbyTakerEpoch, carrying.StandbyAt = kilobyte.Taker, 7, standby.At
+	if took, err := s.StampCapture(ctx, r.TurnID, carrying); !errors.Is(err, sandbox.ErrCaptureUnbounded) || took {
+		t.Errorf("a stamp carrying a kilobyte standby taker = %v, %v; want ErrCaptureUnbounded", took, err)
 	}
 }
