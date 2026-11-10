@@ -608,10 +608,10 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 func claudeCapture(paths Paths) string { return claudePack(paths, paths.SessionStaging()) }
 
 // claudePack is [claudeCapture] packing in the staging directory staged: the
-// run's script's own, or the one a pack made on demand works in
-// ([Paths.SessionPackStaging]). ONE PACK for both, so a session packed by the
-// run's script and one packed while the run could not are the same archive of
-// the same files, and each keeps its digest.
+// run's script's own, or the one a pack made on demand works in, that pack's
+// own ([Paths.SessionPackStaging]). ONE PACK for both, so a session packed by
+// the run's script and one packed while the run could not are the same archive
+// of the same files, and each keeps its digest.
 func claudePack(paths Paths, staged string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -984,14 +984,15 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 
 // Pack packs session now, as a run's script packs the session its harness ran
 // in once the harness exits ([carrier], [claudeCapture]): the same members,
-// into its own staging directory, its digest kept — ending [packNothing] where
-// the harness wrote no transcript, and [packFailed] where it did and no archive
-// was made, its error stream saying why ([Runner.PackCapture]).
-func (ClaudeCode) Pack(paths Paths, session string) string {
+// into staged, this pack's own staging directory, and over the job's capture,
+// its digest kept — ending [packNothing] where the harness wrote no transcript,
+// and [packFailed] where it did and no archive was made, its error stream
+// saying why ([Runner.PackCapture]).
+func (ClaudeCode) Pack(paths Paths, session, staged string) string {
 	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
 	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
 		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(transcript), packNothing) +
-		claudePack(paths, paths.SessionPackStaging()) +
+		claudePack(paths, staged) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
