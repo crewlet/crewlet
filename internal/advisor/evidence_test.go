@@ -90,6 +90,12 @@ func started(seat, wake, outcome string, turns int64) usage.TurnLedgerRow {
 }
 
 // spent is a seat's started turns that spent tokens of their own and auxiliary.
+// absorbed is a seat's wakes a completed turn had already read past.
+func absorbed(seat string, wakes int64) usage.TurnLedgerRow {
+	return usage.TurnLedgerRow{AgentID: "id-" + seat, Handle: seat, Wake: "work_item:comment",
+		Disposition: "absorbed", Turns: wakes}
+}
+
 func spent(seat string, own, aux int64) usage.TurnLedgerRow {
 	r := started(seat, "chat:message", "moved", 1)
 	r.Input, r.AuxInput = own, aux
@@ -122,6 +128,11 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			[]advisor.Class{advisor.ClassAuxiliaryShare}},
 		"15% auxiliary of a million":      {[]usage.TurnLedgerRow{spent("sre", 850_000, 150_000)}, nil},
 		"half auxiliary, under a million": {[]usage.TurnLedgerRow{spent("sre", 499_999, 499_999)}, nil},
+		"10 of 50 wakes already read": {[]usage.TurnLedgerRow{started("qa", "chat:message", "moved", 40),
+			absorbed("qa", 10)}, []advisor.Class{advisor.ClassRedeliveredSeen}},
+		"10 of 51 wakes already read": {[]usage.TurnLedgerRow{started("qa", "chat:message", "moved", 41),
+			absorbed("qa", 10)}, nil},
+		"9 wakes already read, all of them": {[]usage.TurnLedgerRow{absorbed("qa", 9)}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -148,6 +159,7 @@ func TestAHealthyLedgerRaisesNothing(t *testing.T) {
 		started("app", pickup, "moved", 25), started("app", pickup, "words", 4),
 		started("app", pickup, "nothing", 1),
 		started("sre", "schedule:health-check", "nothing", 336), started("sre", "chat:message", "moved", 6),
+		absorbed("pm", 3),
 		spent("backend", 2_000_000, 200_000),
 	}
 	if got := advisor.Detect(advisor.Evidence{Ledger: healthy}, kindOf); len(got) != 0 {
@@ -208,7 +220,7 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}},
 		Notices:     []worklet.NoticeLoad{{Handle: "owner", Notices: 400}}}
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
-		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000)}
+		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000), absorbed("app", 10)}
 	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
 	// Every class but approval.rubber_stamp, the owner's, held on its own below.
 	if len(found) != len(advisor.WorkClasses())-1+len(advisor.LedgerClasses()) {
