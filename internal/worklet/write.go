@@ -694,9 +694,10 @@ type Provenance struct {
 
 	// Apps are the apps the credential behind a writer acting as no seat
 	// ([AuthorOperator]) used when this node resolved it (iam.ActorApps),
-	// carried on every record the writer appends that wakes somebody
-	// ([MutationRecord.ActorApps]) so a turn the record wakes uses no app the
-	// credential did not use here (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
+	// carried on every record the writer appends that a later turn reads
+	// ([MutationRecord.ActorApps], [Writer.carries]) so a turn the record
+	// wakes or hands work to uses no app the credential did not use here
+	// (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
 	// person's record names the seat, whose holder the turn's node reads.
 	//
 	// SENT ONLY WHERE SET: a provenance crosses to a data node inside the
@@ -707,9 +708,9 @@ type Provenance struct {
 
 	// WrittenFor is whom the writer's records are written for (ADR-0109):
 	// for an [AuthorAgent] writer, whoever the turn behind it works for,
-	// carried on every record it appends that wakes somebody
-	// ([MutationRecord.WorkingFor]) so the turn the record wakes works for
-	// them, and never for the writing seat. AN AGENT'S WRITER THAT STATES
+	// carried on every record it appends that a later turn reads
+	// ([MutationRecord.WorkingFor], [Writer.carries]) so the turn the record
+	// wakes or hands work to works for them, and never for the writing seat. AN AGENT'S WRITER THAT STATES
 	// NOTHING WRITES NOTHING ([Writer.recordedFor]), and every other author
 	// carries nobody: see [types.WrittenFor].
 	//

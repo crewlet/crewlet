@@ -60,7 +60,7 @@ import (
 // neither, and would apply the patch as one that names no date — keeping a
 // date every newer node cleared.
 // Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
-// Version 12 is whom an agent's record that wakes somebody was written for
+// Version 12 is whom an agent's record a later turn reads was written for
 // ([MutationRecord.WorkingFor], ADR-0109).
 const RecordVersion = 12
 
@@ -823,10 +823,13 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 
 	// ActorApps are the apps the credential behind an [AuthorOperator]
-	// record that wakes somebody used when the node that took the write
-	// resolved it (iam.ActorApps), and absent on every other record — one
-	// that wakes nobody included, a gate among them. The change feed reads
-	// it, and a turn the record wakes uses no app outside it (ADR-0109,
+	// record a later turn reads used when the node that took the write
+	// resolved it (iam.ActorApps): an item's creation and every move of its
+	// assignee, whatever they wake, and any other record whose wake may start
+	// an agent's turn ([Writer.carries]); absent on every other record, a
+	// gate always among them. The change feed reads it, and so does the work
+	// pickup off the history row, and a turn the record wakes or hands work
+	// to uses no app outside it (ADR-0109, ADR-0112,
 	// notify.FirstPartyWriter). Version 2: an older build retains a record
 	// carrying it rather than waking a seat for a credential it would read as
 	// a stranger.

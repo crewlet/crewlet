@@ -430,9 +430,11 @@ type Actor struct {
 
 	// WrittenFor is whom an AGENT'S writes are made for: whoever its turn
 	// works for, composed from the call's own bound ceiling where the actor
-	// is built ([actorFor], [writtenForTurn]), carried on every record that
-	// wakes somebody, so the turn that record wakes works for them too
-	// (ADR-0109). The tracker refuses an agent's write that states nothing
+	// is built ([actorFor], [writtenForTurn]), carried on every record a later
+	// turn reads (an item's creation and every move of its assignee, whatever
+	// they wake, and any other record only where its domain proves an agent
+	// may wake for it), so the turn that record wakes or hands work to works
+	// for them too (ADR-0109). The tracker refuses an agent's write that states nothing
 	// ([types.WrittenFor.For]): a site that builds an agent's actor without
 	// its turn says why ([types.ForNobody]), and a person's or a credential's
 	// actor carries nobody.
@@ -662,8 +664,9 @@ type MentionResolver interface {
 // to the item's own reassignment counter and not to the delegation depth.
 //
 // AND WHOM THE TURN WORKS FOR, from the call's own bound ceiling
-// ([writtenForTurn]), so every record the seat writes that wakes somebody
-// carries them and the turn it wakes works for them too (ADR-0109). r is the
+// ([writtenForTurn]), so every record the seat writes that a later turn reads
+// carries them and the turn it wakes or hands work to works for them too
+// (ADR-0109). r is the
 // composer a family asking outside its gate composes with, nil for one whose
 // every call passes the gate.
 func actorFor(ctx context.Context, turn *turnctx.Turn, r Requesters) (Actor, error) {

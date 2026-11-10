@@ -20,7 +20,7 @@
 - **An agent seat** holds every app and never admin (ADR-0033).
 - **A person** holds the apps their grants name, through `iam.Expand`. Admin is never part of a ceiling, a grant this build does not know grants nothing, and a person whose stage may not act holds none.
 - **A credential acting as no seat** (a Tier A token, or a service account bound to no seat) that woke the turn with a change on a work item or a page holds the apps its own grants name, never admin, narrowed twice:
-  - by what the node that took its write resolved for it, which a record that wakes somebody carries beside the credential's login (`iam.ActorApps`, Worklet's and Doclet's `MutationRecord.ActorApps` at record version 2, `NotificationWriter.Login` and `Apps` on the wake). A login, never the token's value. A record that wakes nobody carries none and stays at the base version, so a gate stays readable by every build.
+  - by what the node that took its write resolved for it, which a record a later turn reads carries beside the credential's login (`iam.ActorApps`, Worklet's and Doclet's `MutationRecord.ActorApps` at record version 2, `NotificationWriter.Login` and `Apps` on the wake): in Worklet an item's creation and every move of its assignee, whatever they wake, since the work pickup reads both, and any other record only where its wake proves an agent other than the writer may start a turn (the rule the carrier rides by, below); in Doclet a record that wakes somebody. A login, never the token's value. A record that carries none stays at the base version, and a gate never carries any, so a gate stays readable by every build.
   - and by what the node running the call resolves the login to now (`builtin.Requesters.Credential`), per call as a person is read.
   - A `token:` login resolves from that node's own Tier A and nothing else, and any other login from the identity directory and nothing else. A login it cannot place holds none, as a stranger does: one its Tier A does not declare, a service account removed, suspended or bound to a seat. So does a write that carries no apps, which an older build wrote. A credential acting as a person is that person.
   - Nobody is asked anything for a credential: a question its turn's executor puts to "the requester" goes to the seat's lead chain, as one in a turn nobody woke does.
@@ -204,7 +204,11 @@ a roll:
 
 **The edges.** A vendor's surface (Slack, Mattermost, Jira, GitHub, GitLab, Confluence) carries no
 requester: the agent writes through the vendor's MCP server and the wake comes back by webhook with
-no field of the engine's, so the turn it wakes works for the writing seat. A company that wants the
+no field of the engine's, so the turn it wakes works for the writing seat. So does a GitHub pull
+request a task waits on reach the task (ADR-0121): internal/engine's `settleChange`, crewlet#921,
+settles it in a turnless write the node makes as the engine, which carries nobody because the
+vendor's event carries no requester, so the turn it wakes in the item's holder works for the
+holder's own seat. A company that wants the
 bound to hold keeps agent-to-agent work on the engine's own surfaces: Worklet, Doclet, Chatlet and
 `a2a_ask`, and Gitlet once crewlet#798's piece 4c lands. Until then Gitlet's change, review and
 comment records carry no carrier, so a turn one wakes works for the seat that wrote it, and so does

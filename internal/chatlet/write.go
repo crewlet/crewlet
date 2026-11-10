@@ -417,7 +417,7 @@ type Actor struct {
 
 	// WrittenFor is whom this actor's writes are made for (ADR-0109): for an
 	// [AuthorAgent], whoever the turn behind it works for, carried on every
-	// record it writes that wakes somebody ([MutationRecord.WorkingFor]) so
+	// record it writes that routes to somebody ([MutationRecord.WorkingFor]) so
 	// the turn the record wakes works for them, and never for the writing
 	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([decide]), and every
 	// other kind carries nobody: see [types.WrittenFor]. A read ignores it.

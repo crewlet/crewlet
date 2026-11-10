@@ -12,9 +12,11 @@ import (
 
 // WrittenFor is whom a write was made for, as the actor that makes it states
 // it (ADR-0109): whoever the turn that wrote it works for ([WorkingFor]), which
-// the record the write leaves carries where that record wakes somebody, so the
-// turn it wakes works for them too and never for the writing seat, which holds
-// every app. A colleague's ask carries the same carrier ([A2ARequest]); this
+// the record the write leaves carries where a later turn reads it — an item's
+// creation and every move of its assignee, whatever they wake, and any other
+// record only where its domain proves an agent may wake for it — so the turn
+// it wakes or hands work to works for them too and never for the writing
+// seat, which holds every app. A colleague's ask carries the same carrier ([A2ARequest]); this
 // is the same hop through what a seat writes on the engine's own surfaces:
 // Worklet, Doclet and Chatlet.
 //

@@ -603,11 +603,18 @@ the asking agent in a turn worked for them too, through every ask of a chain.
 comment on one, a page or a comment on it, and a Chatlet message, each written
 in a turn somebody woke, carries that somebody: the engine composes them from
 the writing turn's own ceiling, never from the tool's arguments, and records
-them on the write where it wakes another agent. The agent it wakes works for
-them, composed again on its own node, and so does every agent a chain of
-writes reaches; two writes one agent makes for two different people wake its
-colleague in two turns. An agent writing in a turn nobody woke writes for
-itself, and the agent it wakes works for it, as before.
+them on every write a later turn reads: a work item's creation and every move
+of its assignee, whatever they wake, since an idle agent's pickup of its next
+work item reads both, and any other write where it may wake another agent.
+The agent it wakes works for them, composed again on its own node, and so does
+every agent a chain of writes reaches; two writes one agent makes for two
+different people wake its colleague in two turns wherever the wake asks
+something of the colleague. A wake that asks nothing of it, arriving after a
+turn of its already read past the change, is dropped whoever it was written
+for, and runs nothing for anybody
+([ADR-0120](../../adr/0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md)).
+An agent writing in a turn nobody woke writes for itself, and the agent it
+wakes works for it, as before.
 
 **Where the bound ends.** What an agent writes on a vendor's surface (Slack,
 Mattermost, Jira, GitHub, GitLab, Confluence) comes back as that vendor's
