@@ -293,6 +293,12 @@ type Query struct {
 	// far side attach ITS OWN chart — see internal/estate.
 	Units Units `json:"-"`
 
+	// Roster is the chart `sort=assignee` reads a seat's name from ([Roster]).
+	// Nil orders by the handle, the name a surface holding no chart renders.
+	// Not part of the grammar and not serialised: the node that serves the
+	// read attaches its own (internal/estate), as it does [Units].
+	Roster Roster `json:"-"`
+
 	Tags TagFilter
 
 	Types      []string
@@ -1189,9 +1195,13 @@ func (q *Query) parseGrouping(p Params) error {
 // spend_tokens:sum`). It was `spend`, which stopped naming one number the day
 // a row could carry `fields=spend` — an object of five — and a sort on "spend"
 // would have had to pick which of them it meant without saying so.
+//
+// The last four order by what a value means rather than how it is spelled, so
+// each compiles to an expression ([derivedOrders]) rather than a column.
 var sortKeys = []string{
 	"rank", "updated", "due", "start", "priority", "created", "title",
 	"estimate", "points", "spend_tokens", "reopens", "status_entered", "removed",
+	"key", "status", "assignee", "type",
 }
 
 func (q *Query) parseSort(p Params) error {
