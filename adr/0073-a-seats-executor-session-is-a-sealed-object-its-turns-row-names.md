@@ -1611,12 +1611,13 @@ otherwise.
 
 **What it committed counts.** Its effect happened, so the turn's outcome counts
 what it committed as it counts any call's: the bridge records on every call the
-kinds of change it committed to the turn (`mcpbridge.Call.Committed`,
-`committed` on the wire), and the log takes a late call through the one append
-every call goes through (`sandbox.BridgeLog.appendCall`), which folds its kinds
-into the round's own union of them (`sandbox.BridgeLog.Committed`) before the
-log's bound can drop the call. The round's collection settles the turn's
-outcome by that union and the listed calls' own (`sandbox.BridgeLog.Changes`),
+kinds of change it committed to the turn (`mcpbridge.Call.Committed`, which the
+ledger hands the log as `sandbox.BridgeCall.Committed`, `committed` on the
+wire), and the log takes a late call through the one append every call goes
+through (`sandbox.BridgeLog.appendCall`), which folds its kinds into the
+round's own union of them (`sandbox.BridgeLog.Committed`) before the log's
+bound can drop the call. The round's collection settles the turn's outcome by
+that union and the listed calls' own (`sandbox.BridgeLog.Changes`),
 so a late call's kinds count whether the log still lists it or has dropped it
 from its middle, which keeps no field of a dropped call; and so do those of a
 call nobody waited for (the amendment on such a call), which is its job's own.
@@ -1798,7 +1799,8 @@ successful `submit_work` among such calls can be the round's submission, though
 a continuation told one is told, as of a late one, to make its own, which the
 collection replays over it. What it committed counts in the turn's outcome as
 a late call's does, whether the log lists it or has dropped it from its middle
-(`sandbox.BridgeLog.Changes`).
+(`sandbox.BridgeLog.Changes`), and on the same condition: only where the log
+takes it before its round's last collection reads the log (below).
 
 **What it costs.** Each such call is told to every continuation of its round,
 in its brief and so in the continued launch's floor where a capture measured
@@ -1817,4 +1819,9 @@ change.
 cancelling its request, while its job's session on the bridge is still open as
 the call returns: the bridge cannot tell it from one still waiting. And a
 harness that gives up on a call in the moment between the tool's answer and
-that answer's delivery, while the bridge records the call.
+that answer's delivery, while the bridge records the call. And what such a call
+committed counts in the turn's outcome only where the log takes it before its
+round's last collection reads the log, as a late call's does: a call still
+running as its run settles lands after that read, and so does one still running
+as a send-back's new round opens the log afresh, so what either committed is in
+no outcome.

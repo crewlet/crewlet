@@ -2105,15 +2105,17 @@ type BridgeLog struct {
 	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
 
 	// Committed is every kind of change the ROUND'S calls committed, each
-	// once, in the order first committed: its jobs' own calls', a late
-	// call's ([BridgeCall.Late]) and one nobody waited for's
-	// ([BridgeCall.Abandoned]) alike, each folded in by the one append that
-	// takes every call ([BridgeLog.appendCall]) before the bound can drop it —
-	// and kept whole when the calls themselves are condensed, so the
-	// collection settles the turn's outcome by all of them
-	// ([BridgeLog.Changes]). The round's, as the log is: kept by every opening
-	// of the round, and a new round's log starts without it, the collection
-	// between the two having folded it into the turn. Additive on the wire.
+	// once, in the order the log took the calls that committed them: its
+	// jobs' own calls', a late call's ([BridgeCall.Late]) and one nobody
+	// waited for's ([BridgeCall.Abandoned]) alike, each folded in by the one
+	// append that takes every call ([BridgeLog.appendCall]) before the bound
+	// can drop it — and kept whole when the calls themselves are condensed,
+	// so the collection settles the turn's outcome by every one the log holds
+	// as it reads it ([BridgeLog.Changes]); a kind folded in after the
+	// round's last collection read the log is in no outcome. The round's, as
+	// the log is: kept by every opening of the round, and a new round's log
+	// starts without it, the collection between the two having folded it into
+	// the turn. Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
 
 	// Extra is every key of the log this build does not know, kept verbatim
