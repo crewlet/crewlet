@@ -808,6 +808,11 @@ func (r *Runner) refuseCarried(req sandbox.RunRequest) error {
 // on a release that states each run's own spend ([claudeCarryFloor]), which no
 // base is taken off. Logged as an overcharge, every carried session's first run
 // in a new box would be one that was never charged twice.
+//
+// A JOB BEFORE THAT STOPPED BEFORE ITS RESULT states no totals and was charged
+// nothing, so the base it kept is still what the session had been charged for:
+// carried forward, the next result is charged the stopped job's calls with its
+// own. A stopped last job's calls are charged by no later result.
 func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
 	if _, totals := r.harness.(sessionTotals); !totals || req.Resume == "" {
 		return "", nil
@@ -820,17 +825,39 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 	if err != nil {
 		return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
 	}
+	if refusal == "" && r.statesTotalsOf(raw, req.Resume) {
+		return raw, nil
+	}
 	if refusal == "" && strings.TrimSpace(raw) == "" && req.Carried != nil {
 		return "", nil
 	}
-	if refusal != "" || strings.TrimSpace(raw) == "" {
-		log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
-			"detail", "this run continues a session, and the result the job before it left "+
-				"could not be read, so the run is charged the spend its harness states, which counts "+
-				"the session's earlier jobs again", "refusal", refusal)
-		return "", nil
+	if req.Carried == nil {
+		kept, keptRefusal, err := readWhole(ctx, box, paths.BaseResult(), "the base the job before it kept")
+		if err != nil {
+			return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
+		}
+		if keptRefusal == "" && r.statesTotalsOf(kept, req.Resume) {
+			return kept, nil
+		}
 	}
-	return raw, nil
+	if refusal == "" && strings.TrimSpace(raw) != "" {
+		refusal = "it is no result of the session this run continues"
+	}
+	log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
+		"detail", "this run continues a session, and the result the job before it left "+
+			"could not be read, so the run is charged the spend its harness states, which counts "+
+			"the session's earlier jobs again", "refusal", refusal)
+	return "", nil
+}
+
+// statesTotalsOf reports whether raw is a harness result naming session, so
+// what it states is that session's totals.
+func (r *Runner) statesTotalsOf(raw, session string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	got := r.harness.Parse(raw).SessionID
+	return sandbox.ValidSessionID(got) && got == session
 }
 
 // ownSpend is result charged what THIS run spent ([sessionTotals],
@@ -843,9 +870,11 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 // ONLY A RUN THAT DID CONTINUE ITS SESSION took up its totals, as its script
 // recorded ([sessionRecord]): one asked to continue a session that its box
 // neither held nor could restore started a new one, whose totals begin at the
-// run, and less the base it kept it would be charged below nothing.
+// run, and less the base it kept it would be charged below nothing. So would a
+// run whose harness stopped before its result (a stalled or killed relaunch),
+// which states no totals at all.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	result sandbox.Result, streamed *runSpend, rec sessionRecord) (sandbox.Result, error) {
+	result sandbox.Result, streamed *runSpend, rec sessionRecord, stated string) (sandbox.Result, error) {
 
 	if streamed != nil {
 		return streamed.on(result), nil
@@ -866,7 +895,14 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	if !totals.TotalsRestored(rec.release) {
 		return result, nil
 	}
-	return less(result, r.harness.Parse(raw)), nil
+	// ONLY A RESULT STATING THE BASE'S OWN SESSION'S TOTALS (stated, the
+	// session its harness's result names) has them taken off: a run that
+	// stopped before its result states none, and would be charged below nothing.
+	base := r.harness.Parse(raw)
+	if !sandbox.ValidSessionID(stated) || stated != base.SessionID {
+		return result, nil
+	}
+	return less(result, base), nil
 }
 
 // wrapperScript is the shell line a job runs under: the harness with its stdout
@@ -1144,6 +1180,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// the launch's record and is handed to a later run's script (the
 	// assistant's deep work resumes its run by it), so one that is no id is
 	// none, as the record's is.
+	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
@@ -1156,7 +1193,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
-	result, err = r.ownSpend(ctx, box, paths, result, spent, rec)
+	result, err = r.ownSpend(ctx, box, paths, result, spent, rec, stated)
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}
