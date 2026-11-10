@@ -488,6 +488,13 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.WaitReason != nil {
 		task.WaitReason = *patch.WaitReason
 	}
+	if s := patch.ChangeSettled; s != nil && s.Ref != "" {
+		task.Changes = maps.Clone(task.Changes)
+		if task.Changes == nil {
+			task.Changes = map[string]ChangeSettlement{}
+		}
+		task.Changes[s.Ref] = *s
+	}
 	switch {
 	case patch.ClearDue:
 		task.DueAt = nil
@@ -724,8 +731,13 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			return insertMany(ctx, tx, c.maxVariables, relationsInsertPrefix,
 				relationsInsertRow, relationsInsertConflict,
 				task.Relations, func(r Relation) []any {
+					// A CHANGE HAS NO MIRROR, so its edge is never one-sided.
+					mirrored := string(r.Kind)
+					if IsChangeRef(r.Other) {
+						mirrored = ""
+					}
 					return []any{task.ID, r.Other, string(r.Kind),
-						string(r.Kind), r.Other, task.ID,
+						mirrored, r.Other, task.ID,
 						boolInt(r.OneSidedFinal), r.Note,
 						// THE AUTHORED INSTANT, and NOT re-stamped on
 						// conflict: this is what the repair ages on, and
@@ -810,8 +822,8 @@ const (
 	depsInsertRow = `(?, ?,
 		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
 		                        THEN 0 ELSE 1 END
-		            FROM tracker_tasks b WHERE b.id = ?), 1),
-		  (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?))`
+		            FROM tracker_tasks b WHERE b.id = ?), ?),
+		  COALESCE((SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?), ?))`
 	depsInsertConflict = `ON CONFLICT (blocker_id, task_id) DO UPDATE SET
 			blocker_open = excluded.blocker_open,
 			cleared_at = excluded.cleared_at`
@@ -851,7 +863,12 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// tracker_task_deps, so batching cannot change what any of them sees.
 	written, err := insertMany(ctx, tx, c.maxVariables, depsInsertPrefix,
 		depsInsertRow, depsInsertConflict, blockers, func(r Relation) []any {
-			return []any{r.Other, task.ID, r.Other, r.Other}
+			// A CHANGE IS NO TASK: open until the task records it settled.
+			open, cleared := 1, any(nil)
+			if s, settled := task.Changes[r.Other]; settled {
+				open, cleared = 0, nullableTime(&s.At)
+			}
+			return []any{r.Other, task.ID, r.Other, open, r.Other, cleared}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the dependencies of %s: %w",

@@ -204,6 +204,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks,
 				MentionedAgents: []string{"ada"}}}
 		record.NoticeWokeKept = true
+	case "TaskPatch.ChangeSettled":
+		// A PATCH THAT SAYS A PULL REQUEST THE TASK WAITS ON MERGED.
+		patch, err := json.Marshal(worklet.TaskPatch{ChangeSettled: &worklet.ChangeSettlement{
+			Ref: "https://github.com/acme/web/pull/12", State: worklet.ChangeMerged,
+			At: time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), Source: worklet.SettledByWebhook}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
 	case "TaskPatch.WaitReason":
 		// A PATCH THAT SAYS WHY THE TASK WAITS UNTIL ITS START.
 		start, reason := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "the vendor's window opens then"

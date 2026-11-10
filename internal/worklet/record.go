@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
@@ -325,6 +326,27 @@ var RelationKinds = []RelationKind{
 // may be is this list rather than a switch somewhere that forgot a case.
 func (k RelationKind) Valid() bool { return slices.Contains(RelationKinds, k) }
 
+// ChangeSettlement is a change (a pull request) a task waits on, merged or
+// closed as its host reported it, by webhook or by the poll.
+type ChangeSettlement struct {
+	Ref    string    `json:"ref"`
+	State  string    `json:"state"`
+	At     time.Time `json:"at"`
+	Source string    `json:"source,omitempty"`
+}
+
+// IsChangeRef reports whether a relation names a change by its URL rather
+// than a task, which a task id or key never spells.
+func IsChangeRef(other string) bool { return strings.Contains(other, "://") }
+
+// The states a change settles in, and where the engine learned it.
+const (
+	ChangeMerged     = "merged"
+	ChangeClosed     = "closed"
+	SettledByWebhook = "webhook"
+	SettledByPoll    = "poll"
+)
+
 // Relation is one edge, authored on ONE end.
 type Relation struct {
 	Kind      RelationKind `json:"kind"`
@@ -458,6 +480,10 @@ type Task struct {
 	// WaitReason is why the item waits until StartAt, said by whoever set the
 	// wait; a start set without one clears it.
 	WaitReason string `json:"wait_reason,omitempty" untrusted:"name"`
+
+	// Changes are the changes (pull requests) the task waits on that their
+	// host reported merged or closed, by canonical URL.
+	Changes map[string]ChangeSettlement `json:"changes,omitempty"`
 
 	EstimateMinutes int     `json:"estimate_minutes,omitempty"`
 	Points          float64 `json:"points,omitempty"`
@@ -751,6 +777,9 @@ type TaskPatch struct {
 	ClearDue   bool       `json:"clear_due,omitempty"`
 	DueAllDay  *bool      `json:"due_all_day,omitempty"`
 	WaitReason *string    `json:"wait_reason,omitempty"`
+
+	// ChangeSettled is a change the task waits on merging or closing.
+	ChangeSettled *ChangeSettlement `json:"change_settled,omitempty"`
 
 	EstimateMinutes *int     `json:"estimate_minutes,omitempty"`
 	Points          *float64 `json:"points,omitempty"`

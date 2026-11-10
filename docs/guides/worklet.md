@@ -1165,7 +1165,8 @@ handed it once when the date comes. A wait without a reason, a reason without
 a wait, a wait beside `start`, or a date that has passed is refused with
 nothing written, and `wait_until: null` ends the wait. A `start` moved or
 cleared without a reason takes the old reason off, since it said why the item
-waited until the old date.
+waited until the old date. The item's page shows the reason under its start
+date, as **Waits for**.
 
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
@@ -1889,6 +1890,30 @@ and those it stamped permanently one-sided (`final`);
 `tracker_one_sided_repair_failed` (a warning) for an edge whose repair failed
 and is retried on the next pass.
 
+**A task can wait on a pull request** on the company's GitHub: give its URL in
+`waiting_on` (any tab of its page reads as the page itself). It must be under
+an owner the company's GitHub configuration names, its organization or the
+owner of a repository a seat works in; one under any other owner is refused
+naming them. The task reads
+blocked until the pull request merges or closes, and that is recorded on the
+task by the engine, with no agent's turn: a `change_settled` record that keeps
+the pull request among the task's `changes` (its state, when, and whether the
+webhook or the poll learned it), unblocks the task, and tells whoever holds it
+to update it, addressed. The task's status is never moved. The engine learns it
+from GitHub's webhook as it arrives, or else from a fleet poll that asks GitHub
+about at most fifty open pull requests every 15 minutes, through the agents'
+apps' cached tokens, once the pull request settled more than ten minutes ago.
+A rate limit ends a pass where it stood, and the next resumes there. A pull
+request GitHub will not show the apps (deleted, moved, or out of their reach)
+is logged once as `change_poll_unreadable` and asked again after a wait that
+grows from an hour to a day; its tasks stay blocked until a person removes the
+wait.
+Each settle is written once however many deliveries and polls saw it. A wait on
+a pull request has no mirror, is never one-sided, and a pull request cannot be
+made to wait on a task. When the poll keeps settling what no delivery did, the
+advisor says so to the owner as `integration.inbound_silent`
+([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)).
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is
@@ -1967,6 +1992,8 @@ reopening the item makes them wait again. An overtaken question leaves
 `asked_by=`, and an answer without `answers` is inferred among the questions
 still waiting. Its card carries `overtaken` with the reason, and an answer that
 names it is still recorded. A question somebody answered is never overtaken.
+The Inbox says so on a notice about it: the question no longer needs an answer,
+because it was asked again since or its item is finished.
 
 ### Asking for a decision
 

@@ -186,6 +186,11 @@ type Options struct {
 
 	// Now is the clock.
 	Now func() time.Time
+
+	// Observe is told each delivery of a source a parser reads, before it
+	// is routed: an effect it has beyond its wakes. It never holds a
+	// delivery back, so a failure there is its own to recover from.
+	Observe func(ctx context.Context, source string, w types.RawWebhook)
 }
 
 // Service routes verified deliveries to the seats they concern.
@@ -198,6 +203,7 @@ type Service struct {
 	limit    func() int
 	admits   Admitter
 	now      func() time.Time
+	observe  func(ctx context.Context, source string, w types.RawWebhook)
 
 	// retired is every source whose parser this process once had and
 	// [Service.Unregister] took away, which is the only way to tell a
@@ -241,6 +247,7 @@ func New(opts Options) (*Service, error) {
 		limit:    opts.RateLimit,
 		admits:   opts.Admits,
 		now:      opts.Now,
+		observe:  opts.Observe,
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -450,6 +457,9 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	}
 
 	reg := s.registry()
+	if s.observe != nil {
+		s.observe(ctx, ev.Source, *w)
+	}
 	routed, err := parser.Parse(ctx, *w, reg)
 	if err != nil {
 		log.ErrorContext(ctx, "inbound_parse_failed", "source", ev.Source,
