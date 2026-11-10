@@ -45,7 +45,9 @@ seat the company removes takes its holds with it.
 **A conversation whose work does not fit its box's memory is held the same
 way.** A run whose harness the kernel killed for memory (`out_of_memory`: a kill
 counted in the job's memory domain between the job script's reads of it before
-and after the harness, and the harness ended by SIGKILL) after the
+and after the harness, the harness ended by SIGKILL, and the box held to a
+domain of its own, a container or a remote machine, never a direct box, which
+shares the engine host's) after the
 conversation's previous run's was, on whatever session, holds that
 conversation. A fresh session does not shrink the work, so nothing about the
 session is asked. The hold is judged against the seat's sandbox settings

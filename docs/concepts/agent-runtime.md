@@ -552,8 +552,9 @@ time on a fresh session, the engine stops starting turns on that conversation
 conversations go on. Its wakes are recorded as skipped. A person writing on the
 conversation lifts the hold and runs, and so does a change of the seat's models.
 A conversation whose work does not fit its box's memory is held the same way:
-when the kernel kills a run's harness for memory after it killed the
-conversation's previous run's, on whatever session, since a fresh session does
+when the kernel kills a run's harness for memory in a box held to memory of its
+own (a container or a remote machine) after it killed the conversation's
+previous run's, on whatever session, since a fresh session does
 not shrink the work. A person writing on it lifts that hold too, and so does a
 change of the seat's sandbox settings (its size among them), never of its models.
 While it holds, every administrator sees it in **Needs you** as a notice of the

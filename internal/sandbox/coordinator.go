@@ -2621,7 +2621,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		switch {
 		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
-		case result.OutOfMemory:
+		case result.OutOfMemory && Placement(run.Placement).OwnsMemory():
+			// A direct box's kills are the engine host's domain's, recorded
+			// below and never the run's ending.
 			rec.ErrorKind = types.ExecutorErrorOutOfMemory
 		}
 	}
