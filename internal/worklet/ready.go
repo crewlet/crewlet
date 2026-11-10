@@ -23,12 +23,15 @@ import (
 // Assigned to the seat, `in_progress` or `todo`, not archived, not mid-merge,
 // not in the trash, past its start date if it has one, waiting on no open
 // blocker, and not held on a question the seat itself asked on it and nobody
-// has answered yet. `in_review` is not ready: a colleague holds the next move.
+// has answered yet. `in_review` is ready on the same terms for the seat that
+// holds it when somebody else moved it into review: a seat never reviews what
+// it submitted itself.
 //
 // # The order
 //
-// Started work first, then the seat's priority list in its lead's order, then
-// the queue: priority, then due date, the order `my_work` lists `assigned` in.
+// Started work first, then the reviews the seat holds, then its priority list
+// in its lead's order, then the queue: priority, then due date, the order
+// `my_work` lists `assigned` in.
 //
 // # What a pickup keys on, and whom its turn works for
 //
