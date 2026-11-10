@@ -919,6 +919,10 @@ test("an advisor that could not read everything says so, once", () => {
     (a) => a.id === "setup-unread",
   );
   expect(paused?.detail).toMatch(/an agent the engine paused for a failure may be missing/);
+  const runs = attentionQueue(input({ setupUnread: ["runs"] })).find(
+    (a) => a.id === "setup-unread",
+  );
+  expect(runs?.detail).toMatch(/a sandbox that ran out of memory may be missing/);
   expect(rows[0]?.path).toEqual(["settings", "advisor"]);
 });
 

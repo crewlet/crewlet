@@ -183,7 +183,7 @@ var tables = []table{
 			"id", "agent_handle", "name", "description", "content",
 			"frontmatter", "tool_sequence", "source_episode_ids", "version",
 			"created_at", "updated_at", "use_count", "last_used_at", "state",
-			"pinned", "stale_at", "archived_at",
+			"pinned", "stale_at", "archived_at", "load_count",
 		},
 		wholeEachCycle: true,
 	},

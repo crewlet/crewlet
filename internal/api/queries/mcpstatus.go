@@ -154,6 +154,9 @@ type MCPApproval struct {
 	// Item is the key of the work item the run was on, null where it was on
 	// none.
 	Item *string `json:"item"`
+	// Acting is the decision the call carries out: the newest question the
+	// seat asked on that item which a person answered; null for none.
+	Acting *sandbox.HeldAct `json:"acting"`
 	// Args are what the call would send, opened from their seal: null where
 	// the seal does not open on this node.
 	Args map[string]any `json:"args"`
@@ -400,7 +403,8 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 		}
 		row := MCPApproval{ID: held.ID, At: held.HeldAt, Server: held.Server, Tool: held.Tool,
 			Raw: held.Raw, Digest: held.Digest, Seat: run.AgentHandle, TurnID: run.TurnID,
-			LaunchID: run.LaunchID, Args: s.heldArguments(run), Status: MCPApprovalWaiting}
+			LaunchID: run.LaunchID, Args: s.heldArguments(run), Status: MCPApprovalWaiting,
+			Acting: held.Acting}
 		if item := run.WorkItem; item != nil {
 			key := cmp.Or(item.Key, item.ID)
 			row.Item = &key

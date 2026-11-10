@@ -166,6 +166,7 @@ var contract = []Entry{
 	{"McpAlarmKind", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpFixKind", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpApproval", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpApprovalActing", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpApprovalStatus", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpAgentTools", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpAgentServer", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},

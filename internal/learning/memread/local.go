@@ -239,7 +239,9 @@ type SkillRow struct {
 	Summary   string `json:"summary"`
 	Version   int    `json:"version"`
 	UpdatedAt string `json:"updated_at"`
-	Uses      int    `json:"uses"`
+	// Uses is the times it was offered, Loads the times an agent loaded it.
+	Uses  int `json:"uses"`
+	Loads int `json:"loads"`
 }
 
 // ProfileRow is what one seat learned about one colleague.
@@ -449,7 +451,7 @@ func episodeRow(listed learning.ListedEpisode) EpisodeRow {
 func skillRow(sk learning.Skill) SkillRow {
 	return SkillRow{
 		ID: sk.ID, Key: sk.Name, Title: sk.Name, Summary: sk.Description,
-		Version: sk.Version, UpdatedAt: iso(sk.UpdatedAt), Uses: sk.UseCount,
+		Version: sk.Version, UpdatedAt: iso(sk.UpdatedAt), Uses: sk.UseCount, Loads: sk.LoadCount,
 	}
 }
 

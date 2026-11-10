@@ -208,7 +208,9 @@ function Consent({
       (saved) => saved && onWanted(share),
     );
   };
-  const stale = shareOf(answer.share) !== "off" && answer.accepted < answer.schema;
+  // THE ENGINE SHARES ONLY ON THE LIST ACCEPTED, so an older one, or a newer
+  // one accepted on another build, shares nothing.
+  const stale = shareOf(answer.share) !== "off" && answer.accepted !== answer.schema;
   return (
     <Card padding="none">
       <Card.Header icon={<ListChecksGlyph size="sm" />}>
@@ -236,8 +238,8 @@ function Consent({
           </Text>
         )}
         {stale && (
-          <Callout variant="warning" title="Nothing is shared until you accept the new list">
-            This engine&rsquo;s list of patterns is newer than the one you accepted, so it shares
+          <Callout variant="warning" title="Nothing is shared until you accept this list">
+            This engine&rsquo;s list of patterns differs from the one you accepted, so it shares
             nothing until you accept it.{" "}
             <Button
               size="small"
@@ -246,7 +248,7 @@ function Consent({
                 void write({ accepted: answer.schema }, "Accepted the usage insights list")
               }
             >
-              Accept the new list
+              Accept this list
             </Button>
           </Callout>
         )}

@@ -55,6 +55,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		// environment of its own does not read anywhere else.
 		Env:               e.LookupSecret,
 		Knowledge:         knowledgeSearch(e, c),
+		GrantHeld:         e.grantHeld,
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
 		Compact:           e.compactorFor(c),
@@ -156,7 +157,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}
 	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
 	// sealed under the fleet keyring.
-	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher)); hold != nil {
+	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher), heldActs{engine: e}); hold != nil {
 		c.HoldTool = hold
 	}
 	// THE EXECUTOR RUN'S CHECKOUT, where the code tools serve on this

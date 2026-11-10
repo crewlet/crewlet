@@ -394,7 +394,7 @@ func TestAReturningNodeTakesThePeersUpdatesOverItsOwnStaleRow(t *testing.T) {
 	exec(`UPDATE counterparty_profiles SET interaction_count = 90,
 		traits = '{"prefers":"a call"}' WHERE observer_handle = ?`, seat.Handle)
 	exec(`UPDATE synthesized_skills SET state = 'archived', use_count = 12,
-		version = 3 WHERE id = 's1'`)
+		load_count = 5, version = 3 WHERE id = 's1'`)
 	exec(`UPDATE agent_onboarding_markers SET summary = 'read the runbook too'
 		WHERE agent_id = ?`, seat.AgentID)
 
@@ -415,15 +415,15 @@ func TestAReturningNodeTakesThePeersUpdatesOverItsOwnStaleRow(t *testing.T) {
 	}
 
 	var state string
-	var uses, version int
+	var uses, loads, version int
 	if err := returning.SQL().QueryRowContext(ctx,
-		`SELECT state, use_count, version FROM synthesized_skills WHERE id = 's1'`,
-	).Scan(&state, &uses, &version); err != nil {
+		`SELECT state, use_count, load_count, version FROM synthesized_skills WHERE id = 's1'`,
+	).Scan(&state, &uses, &loads, &version); err != nil {
 		t.Fatalf("read the carried skill: %v", err)
 	}
-	if state != "archived" || uses != 12 || version != 3 {
-		t.Errorf("the skill did not take the peer's state: state=%q uses=%d version=%d",
-			state, uses, version)
+	if state != "archived" || uses != 12 || loads != 5 || version != 3 {
+		t.Errorf("the skill did not take the peer's state: state=%q uses=%d loads=%d version=%d",
+			state, uses, loads, version)
 	}
 
 	var summary string

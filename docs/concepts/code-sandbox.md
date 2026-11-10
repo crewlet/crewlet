@@ -1489,6 +1489,14 @@ not made and to commit, push and end its turn, and records the call as the one
 that ended the job, so the waiter collects the run at once. The collection parks
 the run on the question exactly as on `ask_and_wait`, its seat freed, and the job
 takes no submission after it.
+Where the run's turn was woken by a person's answer to a question its seat
+asked, the held call names that decision: the question and the option chosen
+ride the held call (`acting`) and its question's context ("It carries out a
+decision on ENG-9: jane answered ... with ..."), and the approvals list says
+it, so whoever approves the call reads a step of an answer already given. The
+answers that woke the turn ride the run's row, so a later job of the same turn
+names them too. A turn woken by anything else, or by an agent's answer, names
+no decision.
 
 Only `POST /mcp-approvals/{id}` answers it, never a chat reply on the run's
 conversation and never `answer_executor`. The resume the answer drives makes the
