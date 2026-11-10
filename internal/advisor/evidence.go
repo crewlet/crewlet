@@ -74,9 +74,11 @@ type Evidence struct {
 	Backup Backup
 	// Paused is every agent seat the engine paused for a failure (ADR-0117).
 	Paused []PausedSeat
-	// WorkUnread, LedgerUnread, AlarmsUnread and PausesUnread say the caller
-	// could not read that source, so its classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread bool
+	// MemoryKills is every run in the window the kernel stopped for memory.
+	MemoryKills []MemoryKill
+	// WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread and RunsUnread say the
+	// caller could not read that source, so its classes raise nothing and the answer names it.
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread bool
 }
 
 // source is the record a detector reads.
@@ -91,6 +93,8 @@ const (
 	sourceAlarms
 	// sourcePauses is the seats' pauses, [Evidence.Paused].
 	sourcePauses
+	// sourceRuns is the executor runs' records, [Evidence.MemoryKills].
+	sourceRuns
 )
 
 // unread reports whether ev could not read src.
@@ -104,6 +108,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.AlarmsUnread
 	case sourcePauses:
 		return ev.PausesUnread
+	case sourceRuns:
+		return ev.RunsUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -145,6 +151,7 @@ var detectors = []detector{
 	{ClassRedeliveredSeen, sourceLedger, redeliveredSeen},
 	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
 	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
+	{ClassSandboxOutOfMemory, sourceRuns, sandboxOutOfMemory},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -260,6 +267,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.PausesUnread {
 		answer.Unread = append(answer.Unread, UnreadPauses)
+	}
+	if ev.RunsUnread {
+		answer.Unread = append(answer.Unread, UnreadRuns)
 	}
 	return answer
 }

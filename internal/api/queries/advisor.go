@@ -3,6 +3,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -16,10 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -130,7 +133,47 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_seat_pauses_unreadable", "error", err.Error())
 		ev.PausesUnread = true
 	}
+	if ev.MemoryKills, err = s.memoryKills(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_runs_unreadable", "error", err.Error())
+		ev.RunsUnread = true
+	}
 	return ev
+}
+
+// maxFailedRuns bounds the failed runs the advisor reads over its window, the
+// newest first: enough to see an agent's box run out of memory twice.
+const maxFailedRuns = 200
+
+// memoryKills is every executor run in the window before now the kernel stopped
+// for memory, by its agent's handle. A fleet that did not answer whole is
+// unread, never no runs.
+func (s Sources) memoryKills(ctx context.Context, now time.Time) ([]advisor.MemoryKill, error) {
+	if s.Events == nil {
+		return nil, errors.New("queries: this node reads no event log")
+	}
+	failed := true
+	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
+		Type: types.ExecutorCollected{}.EventType(), Failed: &failed,
+		Since: now.Add(-advisor.Window), Until: now, Limit: maxFailedRuns, At: now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("queries: list the week's failed runs: %w", err)
+	}
+	if !coverage.Complete {
+		return nil, errors.New("queries: not every node answered for its runs")
+	}
+	chart := s.chartHandles()
+	var out []advisor.MemoryKill
+	for _, rec := range listing.Rows {
+		var run types.ExecutorCollected
+		seat, charted := chart[rec.AgentID]
+		if !charted || json.Unmarshal(rec.Payload, &run) != nil ||
+			run.ErrorKind != types.ExecutorErrorOutOfMemory {
+			continue
+		}
+		out = append(out, advisor.MemoryKill{Seat: seat.handle, MemoryBytes: run.MemoryBytes})
+	}
+	return out, nil
 }
 
 // SeatPauseLister is the read of every seat's pause ([coord.SeatPauses]').

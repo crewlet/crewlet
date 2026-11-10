@@ -445,3 +445,28 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 		t.Errorf("an unread pause store raised %+v", found)
 	}
 }
+
+// A BOX THAT RAN OUT OF MEMORY TWICE IN A WEEK IS THE OWNER'S TO SIZE: one
+// finding per agent naming its ceiling, opening the sandbox settings; once is
+// a spike, and an unread source raises nothing.
+func TestARunStoppedForMemoryTwiceIsTheOwnersToSize(t *testing.T) {
+	t.Parallel()
+	ev := advisor.Evidence{MemoryKills: []advisor.MemoryKill{
+		{Seat: "app", MemoryBytes: 2 << 30}, {Seat: "app", MemoryBytes: 2 << 30}, {Seat: "ops"},
+	}}
+	found := advisor.Detect(ev, kindOf)
+	if len(found) != 1 {
+		t.Fatalf("raised %+v, want app's alone", found)
+	}
+	f := found[0]
+	if f.Class != advisor.ClassSandboxOutOfMemory || f.Actor != advisor.ActorOwner ||
+		f.Subject.Seat != "app" || f.Fix.Kind != advisor.FixOpenSetting ||
+		f.Fix.Setting != "providers.sandbox" || !strings.Contains(f.Title, "2 times") ||
+		!strings.Contains(f.Why, "at its 2 GB ceiling") {
+		t.Errorf("finding = %+v, want the owner's, about app's 2 GB box, opening the sandbox", f)
+	}
+	ev.RunsUnread = true
+	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
+		t.Errorf("an unread source raised %+v", found)
+	}
+}
