@@ -2373,6 +2373,10 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 // [builtin.PageDeps.SkillPage].
 func LiveSkillsContainer(e *Engine) func() string { return e.skillsContainer }
 
+// LiveSeatCorpus is the roster a seat's tools read per call, for the page
+// tools a surface outside this package builds ([builtin.PageDeps.Seats]).
+func LiveSeatCorpus(e *Engine) func() []colleague.Seat { return e.seatCorpus }
+
 // pageHalves is this node's knowledge-base seams, on the terms
 // [Engine.trackerHalves] gives: the router's on every node.
 func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
