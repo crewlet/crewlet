@@ -55,6 +55,18 @@ func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 // accounting cases.
 func ReadLane(p *Pool) (held, lent int64) { return p.read.counts() }
 
+// Waiting is how many runs wait in p's lane of class c: queued for a slot
+// and granted none yet. It is the parked state a case waits a run into
+// before it lets a slot go or ends the run's caller, so the release or the
+// cancel meets the waiter the case names rather than a run still on its way
+// to the lane.
+func Waiting(p *Pool, c Class) int64 {
+	l := p.lane(c)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.waiting
+}
+
 // ShareForget is the decayed charge below which an idle account is forgotten.
 const ShareForget = shareForget
 

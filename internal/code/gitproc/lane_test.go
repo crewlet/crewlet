@@ -446,12 +446,17 @@ func receivePackReadOn(t *testing.T, git string) {
 // a loan WAS made (the gauge reached three on an idle four-core node), so a
 // run refused before its admission, which lends nothing and so leaves nothing
 // to repay, can never pass for one that repaid.
+//
+// Mutation: repay nothing to a run whose caller went away — "its caller"
+// reads three cores still lent after the run returned.
 func TestEveryLoanIsRepaid(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		body string
 		cmd  func(ctx context.Context) gitproc.Cmd
-		ends func(ctx context.Context, cancel context.CancelFunc)
+		// ends ends the run from outside, for a case whose run ends on what
+		// its caller does; it is handed the run under way.
+		ends func(t *testing.T, rec *metrics.Recorder, cancel context.CancelFunc)
 		want func(error) bool
 	}{
 		"its exit": {
@@ -471,7 +476,16 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		},
 		"its caller": {
 			body: "sleep 600",
-			ends: func(_ context.Context, cancel context.CancelFunc) { time.AfterFunc(200*time.Millisecond, cancel) },
+			// Once the processes gauge counts its process, and so once it
+			// holds its loan, which is made before the process starts — never
+			// on a timer, which a loaded runner can fire before the run is
+			// admitted at all: a run its caller left before its admission is
+			// lent nothing, and the case fails a healthy build.
+			ends: func(t *testing.T, rec *metrics.Recorder, cancel context.CancelFunc) {
+				t.Helper()
+				awaitGauge(t, rec, metrics.CodeGitProcesses, string(gitproc.ClassTransfer), 1)
+				cancel()
+			},
 			want: func(err error) bool { return errors.Is(err, context.Canceled) },
 		},
 		"its input": {
@@ -499,10 +513,11 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 			if tc.cmd != nil {
 				c = tc.cmd(ctx)
 			}
+			done := start(ctx, p, c)
 			if tc.ends != nil {
-				tc.ends(ctx, cancel)
+				tc.ends(t, rec, cancel)
 			}
-			o := await(t, start(ctx, p, c), "a receive-pack")
+			o := await(t, done, "a receive-pack")
 			if !tc.want(o.err) {
 				t.Fatalf("the receive-pack answered %v", o.err)
 			}
@@ -571,9 +586,14 @@ func lentAndRepaid(t *testing.T, p *gitproc.Pool, rec *metrics.Recorder) {
 // hash of a pack a hint names — runs on a core the read lane counts, never
 // beside every read on cores it counts already.
 //
+// Each ordering is waited into the lane's queue (awaitWaiting) before the
+// case lets the slot go or ends a caller, so the release meets the waiters it
+// names and the cancel a hold that is waiting.
+//
 // Mutations: HoldRead takes no slot — the run is admitted at once; a hold
 // jumps the queue (a waiter queued at the front) — the run queued before it
-// is refused busy.
+// is refused busy; a waiter whose caller went away is answered as a busy node
+// — the hold that gave up is ErrBusy.
 func TestHoldReadIsAReadSlot(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder(t)
@@ -610,7 +630,7 @@ func TestHoldReadIsAReadSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued := start(t.Context(), p, quick(gitproc.ClassRead))
-	time.Sleep(100 * time.Millisecond) // long enough to be queued; a run admitted early fails above
+	awaitWaiting(t, p, gitproc.ClassRead, 1) // a run admitted early fails above
 	second := make(chan func(), 1)
 	go func() {
 		r, err := p.HoldRead(t.Context())
@@ -620,7 +640,7 @@ func TestHoldReadIsAReadSlot(t *testing.T) {
 		}
 		second <- r
 	}()
-	time.Sleep(100 * time.Millisecond)
+	awaitWaiting(t, p, gitproc.ClassRead, 2) // the hold queued behind the run
 	first()
 	if o := await(t, queued, "the run queued ahead of a hold"); o.err != nil {
 		t.Fatalf("the queued run, handed the slot: %v", o.err)
@@ -628,7 +648,7 @@ func TestHoldReadIsAReadSlot(t *testing.T) {
 	select {
 	case r := <-second:
 		r()
-	case <-time.After(hang):
+	case <-time.After(hang): //fixedwait:liveness
 		t.Fatalf("the hold asked after the run was never given the slot")
 	}
 
@@ -639,11 +659,17 @@ func TestHoldReadIsAReadSlot(t *testing.T) {
 	}
 	defer held()
 	ctx, cancel := context.WithCancel(t.Context())
+	gaveUp := make(chan outcome, 1)
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
+		release, err := p.HoldRead(ctx)
+		if err == nil {
+			release()
+		}
+		gaveUp <- outcome{err: err}
 	}()
-	if _, err := p.HoldRead(ctx); !errors.Is(err, context.Canceled) || errors.Is(err, gitproc.ErrBusy) {
-		t.Fatalf("a hold whose caller went away: %v, want context.Canceled and not ErrBusy", err)
+	awaitWaiting(t, p, gitproc.ClassRead, 1) // waiting, so the cancel ends a wait
+	cancel()
+	if o := await(t, gaveUp, "a hold whose caller went away"); !errors.Is(o.err, context.Canceled) || errors.Is(o.err, gitproc.ErrBusy) {
+		t.Fatalf("a hold whose caller went away: %v, want context.Canceled and not ErrBusy", o.err)
 	}
 }

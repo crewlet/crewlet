@@ -98,7 +98,13 @@ func shareOf(c gitproc.Class) gitproc.Share {
 // SLOTS BOUND CONCURRENT GIT, in each waiting lane: a run past the lane waits,
 // is refused ErrBusy after SlotWait naming the lane, takes a slot handed to it
 // in arrival order, and answers its CALLER's cancellation as that rather than
-// as a busy node.
+// as a busy node. Each waiter is waited into the lane's queue (awaitWaiting)
+// before the case lets a slot go or ends its caller: one still on its way
+// would take the slot free, or meet its caller's end before it queued.
+//
+// Mutation: free a released slot to the lane while a run waits — the queued
+// run is never handed it and is refused busy; answer a waiter whose caller
+// went away as a busy node — red.
 func TestSlotsBoundConcurrentGit(t *testing.T) {
 	t.Parallel()
 	body := `case "$1" in hold) ` + holdBody + `;; esac`
@@ -134,7 +140,7 @@ func TestSlotsBoundConcurrentGit(t *testing.T) {
 				holders[i] = hold(t, p, tc.class)
 			}
 			queued := start(t.Context(), p, quick(tc.class))
-			time.Sleep(200 * time.Millisecond) // long enough to be queued; a run admitted early passes too
+			awaitWaiting(t, p, tc.class, 1)
 			if o := holders[0].end(t); o.err != nil {
 				t.Fatal(o.err)
 			}
@@ -145,7 +151,7 @@ func TestSlotsBoundConcurrentGit(t *testing.T) {
 			holders[0] = hold(t, p, tc.class) // the lane full again
 			ctx, cancel := context.WithCancel(t.Context())
 			waiting := start(ctx, p, quick(tc.class))
-			time.Sleep(100 * time.Millisecond)
+			awaitWaiting(t, p, tc.class, 1)
 			cancel()
 			if o := await(t, waiting, "the cancelled waiter"); !errors.Is(o.err, context.Canceled) || errors.Is(o.err, gitproc.ErrBusy) {
 				t.Fatalf("a waiter whose caller went away: %v, want context.Canceled and not ErrBusy", o.err)

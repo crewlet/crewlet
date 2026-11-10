@@ -250,6 +250,30 @@ func awaitGauge(t *testing.T, rec *metrics.Recorder, name, class string, want fl
 	}
 }
 
+// awaitWaiting waits, up to the hang detector, until want runs wait in p's
+// lane of class c (gitproc.Waiting): queued for a slot and granted none yet.
+//
+// A case that lets a slot go to a queued run, or ends a queued run's caller,
+// waits here first rather than for a fixed time. A run a loaded runner has
+// left on its way to the lane takes the slot free when it gets there, or
+// meets its caller's end before it ever queued, and the case passes without
+// the path it names; one that arrives behind a later arrival queues behind
+// it, and the case fails a healthy build.
+func awaitWaiting(t *testing.T, p *gitproc.Pool, c gitproc.Class, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(hang)
+	for {
+		got := gitproc.Waiting(p, c)
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
+			t.Fatalf("%d runs wait in the %s lane after %v, want %d", got, c, hang, want)
+		}
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
+	}
+}
+
 // logBuffer is a logger a case reads back.
 type logBuffer struct {
 	mu  sync.Mutex

@@ -27,7 +27,7 @@ func TestAResultSaysWhenItsProcessBegan(t *testing.T) {
 	called := time.Now()
 	h := hold(t, p, gitproc.ClassRead)
 	done := start(t.Context(), p, gitproc.Cmd{Args: []string{"sleepy"}, Class: gitproc.ClassRead, Deadline: time.Minute})
-	time.Sleep(100 * time.Millisecond)
+	awaitWaiting(t, p, gitproc.ClassRead, 1) // waiting behind the held lane before the release is stamped
 	released := time.Now()
 	h.end(t)
 	o := await(t, done, "a run behind a held lane")
