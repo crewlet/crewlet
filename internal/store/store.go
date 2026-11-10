@@ -1688,7 +1688,9 @@ func txOn(ctx context.Context,
 		}
 	}()
 	if err := fn(tx); err != nil {
-		return rollback(ctx, tx), err
+		// A CONTEXT THAT ENDED MID-TRANSACTION leaves database/sql's own rollback
+		// closing this connection on its own time, so it is never handed out again.
+		return rollback(ctx, tx) && ctx.Err() == nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		// A CONTEXT THAT ENDED is the cause: database/sql rolls the
