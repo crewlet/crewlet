@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -245,4 +246,36 @@ func servedAgainst(target coord.Activation, c *Company) string {
 	}
 	return fmt.Sprintf("this node serves the activation of %s and %s",
 		c.ActivatedAt.Format(time.RFC3339Nano), fleet)
+}
+
+// fleetSeatWait bounds how long [Engine.FleetSeat] waits for this node to run
+// the activation the fleet's pointer names: a write just saved is applied here
+// within moments.
+const fleetSeatWait = 10 * time.Second
+
+// FleetSeat is handle's agent seat as the revision the fleet's activation
+// pointer names holds it, once this node runs that revision, waiting for it
+// up to [fleetSeatWait]: what an answer is checked against right after a save.
+func (e *Engine) FleetSeat(ctx context.Context, handle string) (*org.Role, error) {
+	deadline := time.Now().Add(fleetSeatWait)
+	for {
+		company, err := e.servedFleetRevision(ctx)
+		var behind *errBehindFleet
+		switch {
+		case err == nil && (company == nil || company.Org == nil):
+			return nil, errors.New("engine: no company is active")
+		case err == nil:
+			if seat := company.Org.AgentSeatByHandle(handle); seat != nil {
+				return seat, nil
+			}
+			return nil, fmt.Errorf("engine: %q is no agent seat of the active revision", handle)
+		case !errors.As(err, &behind) || time.Now().After(deadline):
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }

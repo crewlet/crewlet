@@ -132,7 +132,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if !known {
 		t.Fatal("the fleet's alarms read as unknown")
 	}
-	got := notice.Read(nil, fleet, since.Add(notice.AlarmAfter))
+	got := notice.Read(nil, fleet, nil, since.Add(notice.AlarmAfter))
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
 		Since: since, Nodes: []string{"node-a", "node-b"}}}
 	if !reflect.DeepEqual(got, want) {
@@ -169,7 +169,8 @@ func TestTheAdvisorNamesItsAlarmsUnreadOnce(t *testing.T) {
 		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, false,
 			[]string{advisor.UnreadWork, advisor.UnreadAlarms}},
 	} {
-		got := noticed(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown, now)
+		got := noticedWith(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown,
+			nil, true, now)
 		if !slices.Equal(got.Unread, c.want) {
 			t.Errorf("%s: unread %v, want %v", c.name, got.Unread, c.want)
 		}
@@ -209,5 +210,43 @@ func TestTheAdvisorReadsTheLedgerOverTheWeekByTheChartsHandles(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Handle != "ceo" || got[1].Handle != "gone" {
 		t.Errorf("the ledger names %+v, want the chart's ceo and the recorded gone", got)
+	}
+}
+
+// pauseList is a pause store that lists what it holds, or fails.
+type pauseList struct {
+	pauses []coord.SeatPause
+	err    error
+}
+
+func (p pauseList) ListSeatPauses(context.Context) ([]coord.SeatPause, error) {
+	return p.pauses, p.err
+}
+
+// THE ADVISOR READS THE SEATS THE ENGINE PAUSED FOR A FAILURE, by the handle
+// their agent id derives from: a person's pause is not one, and a store that
+// fails is named unread rather than read as no pauses.
+func TestTheAdvisorReadsTheSeatsTheEnginePausedForAFailure(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte("name: Acme\nroles:\n" +
+		"  - name: Founder\n    kind: human\n    contact:\n      slack_user_id: U0FOUNDER\n" +
+		"  - name: App\n    handle: app\n  - name: Ops\n    handle: ops\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := org.DeriveAgentID("Acme", "app")
+	ops, _ := org.DeriveAgentID("Acme", "ops")
+	s := Sources{Work: patternsWork{}, Pauses: pauseList{pauses: []coord.SeatPause{
+		{Seat: app, Failure: &coord.SeatFailure{Kind: "sandbox_configuration", Basis: "b"}},
+		{Seat: ops},
+	}}}
+	got, err := s.pausedSeats(t.Context(), c)
+	want := []advisor.PausedSeat{{Handle: "app", Name: "App", Failure: "sandbox_configuration"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("paused = %+v, %v, want %+v", got, err, want)
+	}
+	s.Pauses = pauseList{err: errors.New("no fleet store answered")}
+	if ev := s.advisorEvidence(t.Context(), c, time.Now()); !ev.PausesUnread {
+		t.Error("a pause store that failed was read as no pauses")
 	}
 }

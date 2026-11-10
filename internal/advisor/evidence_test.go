@@ -136,6 +136,25 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 	}
 }
 
+// A HEALTHY WEEK'S LEDGER RAISES NOTHING: agents that mostly move work, pickups
+// that move what they pick up, modest auxiliary spend, and an SRE seat whose
+// schedules fire 48 times a day and find nothing, which is the schedule working.
+func TestAHealthyLedgerRaisesNothing(t *testing.T) {
+	t.Parallel()
+	const pickup = "work_item:pickup"
+	healthy := []usage.TurnLedgerRow{
+		started("pm", "chat:message", "moved", 40), started("pm", "chat:message", "words", 15),
+		started("pm", "chat:message", "nothing", 5),
+		started("app", pickup, "moved", 25), started("app", pickup, "words", 4),
+		started("app", pickup, "nothing", 1),
+		started("sre", "schedule:health-check", "nothing", 336), started("sre", "chat:message", "moved", 6),
+		spent("backend", 2_000_000, 200_000),
+	}
+	if got := advisor.Detect(advisor.Evidence{Ledger: healthy}, kindOf); len(got) != 0 {
+		t.Errorf("a healthy week raised %v", got)
+	}
+}
+
 // A LEDGER FINDING NAMES ITS SEAT by the handle the ledger carries, and by the
 // seat's id when the ledger carries none, so no finding is about nobody.
 func TestALedgerFindingNamesItsSeat(t *testing.T) {
@@ -208,7 +227,7 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 			t.Errorf("%s names %d records, want 1 to %d, or none for a count", f.Class, len(f.Records),
 				worklet.MaxPatternExamples)
 		}
-		if f.Title == "" || f.Why == "" || len(f.Evidence) == 0 {
+		if f.Title == "" || f.Why == "" || f.Fix.Sentence == "" || len(f.Evidence) == 0 {
 			t.Errorf("%s has no words or no evidence: %+v", f.Class, f)
 		}
 	}
@@ -314,6 +333,33 @@ func hasClass(a advisor.Answer, class advisor.Class) bool {
 // A PERSON WHO TAKES ONE AGENT'S RECOMMENDATION NEARLY EVERY TIME is told so,
 // as the owner's call: the fix is a draft Ask Crewlet writes for review, never
 // a change, and below the threshold nothing is said.
+// ONE FINDING PER AGENT, naming every person who takes its recommendation:
+// two people stamping one agent are one row, and one person stamping two
+// agents is a row for each, so no two findings share their row's key.
+func TestARubberStampIsOneFindingPerAgent(t *testing.T) {
+	t.Parallel()
+	work := worklet.WorkPatterns{Decisions: []worklet.DecisionTally{
+		{Person: "admin2", Asker: "pm", Decided: 22, Recommended: 21},
+		{Person: "owner", Asker: "cto", Decided: 20, Recommended: 20},
+		{Person: "owner", Asker: "pm", Decided: 20, Recommended: 18},
+	}}
+	found := advisor.Detect(advisor.Evidence{Work: work}, kindOf)
+	if len(found) != 2 {
+		t.Fatalf("raised %d findings, want one for cto and one for pm: %+v", len(found), found)
+	}
+	bySeat := map[string]advisor.Finding{}
+	for _, f := range found {
+		bySeat[f.Subject.Seat] = f
+	}
+	pm := bySeat["pm"]
+	if !strings.Contains(pm.Title, "admin2 and owner") || !strings.Contains(pm.Title, "39 of 42") {
+		t.Errorf("pm's finding says %q, want both people and their 39 of 42", pm.Title)
+	}
+	if bySeat["cto"].Title == "" || strings.Contains(bySeat["cto"].Title, "admin2") {
+		t.Errorf("cto's finding = %+v, want owner's alone", bySeat["cto"])
+	}
+}
+
 func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -349,5 +395,41 @@ func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A SEAT THE ENGINE PAUSED FOR A FAILURE IS THE OWNER'S TO FIX: one blocking
+// finding per failure kind, naming every agent it holds, with that kind's fix;
+// a kind this build does not know raises nothing, and an unread store nothing.
+func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
+	t.Parallel()
+	ev := advisor.Evidence{Paused: []advisor.PausedSeat{
+		{Handle: "ops", Name: "Ops", Failure: "sandbox_configuration"},
+		{Handle: "app", Name: "App", Failure: "sandbox_configuration"},
+		{Handle: "pm", Name: "PM", Failure: "models_refused"},
+		{Handle: "qa", Name: "QA", Failure: "a_later_kind"},
+	}}
+	found := advisor.Detect(ev, kindOf)
+	byClass := map[advisor.Class]advisor.Finding{}
+	for _, f := range found {
+		byClass[f.Class] = f
+	}
+	if len(found) != 2 {
+		t.Fatalf("raised %+v, want one finding for the sandbox and one for the models", found)
+	}
+	box := byClass[advisor.ClassSandboxUnstartable]
+	if box.Severity != advisor.SeverityBlocks || box.Actor != advisor.ActorOwner ||
+		box.Subject.Kind != advisor.SubjectCompany || !strings.Contains(box.Title, "App and Ops are paused") ||
+		box.Fix.Kind != advisor.FixOpenSetting || box.Fix.Setting != "providers.sandbox" {
+		t.Errorf("the sandbox finding = %+v, want the owner's block naming both, opening the sandbox", box)
+	}
+	models := byClass[advisor.ClassModelsCredential]
+	if models.Subject.Seat != "pm" || !strings.Contains(models.Title, "PM is paused") ||
+		models.Fix.Kind != advisor.FixExternalStep || !strings.Contains(models.Fix.Sentence, "Settings, Models") {
+		t.Errorf("the models finding = %+v, want PM's, its credentials replaced under Settings", models)
+	}
+	ev.PausesUnread = true
+	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
+		t.Errorf("an unread pause store raised %+v", found)
 	}
 }

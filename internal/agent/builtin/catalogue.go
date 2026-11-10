@@ -234,6 +234,7 @@ var filed = []struct {
 	{CommentOnWorkTool, GroupWork, GateWorkletAsked},
 	// A SEAT'S OWN QUESTION, withdrawn: its own as its sessions are.
 	{WithdrawAskTool, GroupWork, GateSelf},
+	{RequestAccessTool, GroupWork, GateSelf},
 	{MergeWorkItemTool, GroupWork, GateWorklet},
 	{worklet.MoveWorkItemTool, GroupWork, GateProjectLead},
 

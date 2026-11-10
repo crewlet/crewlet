@@ -3,7 +3,9 @@ package advisor
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -69,9 +71,11 @@ type Evidence struct {
 	Ledger []usage.TurnLedgerRow
 	// Backup is the node's backup alarm as its latest evaluation stands.
 	Backup Backup
-	// WorkUnread, LedgerUnread and AlarmsUnread say the caller could not read
-	// that source, so its classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread bool
+	// Paused is every agent seat the engine paused for a failure (ADR-0117).
+	Paused []PausedSeat
+	// WorkUnread, LedgerUnread, AlarmsUnread and PausesUnread say the caller
+	// could not read that source, so its classes raise nothing and the answer names it.
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread bool
 }
 
 // source is the record a detector reads.
@@ -84,6 +88,8 @@ const (
 	sourceLedger
 	// sourceAlarms is the node's alarms, [Evidence.Backup].
 	sourceAlarms
+	// sourcePauses is the seats' pauses, [Evidence.Paused].
+	sourcePauses
 )
 
 // unread reports whether ev could not read src.
@@ -95,6 +101,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.LedgerUnread
 	case sourceAlarms:
 		return ev.AlarmsUnread
+	case sourcePauses:
+		return ev.PausesUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -175,13 +183,13 @@ const (
 	auxiliaryPercent = 15
 )
 
-// EvidenceClasses is every class a detector raises.
+// EvidenceClasses is every class a detector or a paused seat raises.
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return out
+	return append(out, pausedClasses()...)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
@@ -208,6 +216,9 @@ func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, d.detect(ev, kind)...)
+	}
+	if !ev.unread(sourcePauses) {
+		out = append(out, pausedSeats(ev)...)
 	}
 	sortFindings(out)
 	return out
@@ -241,6 +252,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	if ev.AlarmsUnread {
 		answer.Unread = append(answer.Unread, UnreadAlarms)
 	}
+	if ev.PausesUnread {
+		answer.Unread = append(answer.Unread, UnreadPauses)
+	}
 	return answer
 }
 
@@ -258,9 +272,20 @@ func engineFinding(class Class, subject Subject, title, why string, facts []Fact
 		Class: class, Severity: SeverityNote, Actor: ActorEngine, Source: SourceEvidence,
 		Area: AreaWork, Subject: subject, Title: title, Why: why, Evidence: facts,
 		Records: slices.Clone(records),
-		Fix: Fix{Kind: FixNone, Options: []Option{},
-			Sentence: "The engine wakes an agent only for words that ask it something."},
+		Fix:     Fix{Kind: FixNone, Options: []Option{}, Sentence: engineSentences[class]},
 	}
+}
+
+// engineSentences is what each engine class's note says about the pattern.
+var engineSentences = map[Class]string{
+	ClassAgentMentionsWithoutAsk:  "The engine wakes an agent only for words that ask it something.",
+	ClassPersonRequestsWithoutAsk: "A comment reaches a person's Inbox as a decision only when it asks them a question.",
+	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",
+	ClassReviewIdle:               "An item in review waits on the agent holding it until its next turn on the item.",
+	ClassNoticeLoad:               "Notices that ask something of a person lead their Inbox; the rest are context.",
+	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
+	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
+	ClassAuxiliaryShare:           "Auxiliary calls run on the seat's auxiliary model, and a smaller one costs less.",
 }
 
 func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
@@ -317,27 +342,44 @@ func askOvertaken(ev Evidence, _ func(string) SeatKind) []Finding {
 			{Key: "moot", Value: int64(w.Moot)}}, w.Overtaken)}
 }
 
-// approvalRubberStamp is one finding per person and asking agent whose
-// decisions the person took as recommended almost every time: the decision
+// approvalRubberStamp is one finding per asking agent whose decisions a person
+// took as recommended almost every time, naming every such person: the decision
 // stays the person's, and a policy letting the agent act on such a class is
 // the owner's call, so the fix is a draft the owner reviews, never a change.
 func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
-	var out []Finding
+	type stamped struct {
+		people               []words.Said
+		decided, recommended int
+	}
+	byAsker := map[string]*stamped{}
 	for _, d := range ev.Work.Decisions {
 		if d.Decided < minDecided || d.Recommended*100 < recommendedPercent*d.Decided {
 			continue
 		}
+		s := byAsker[d.Asker]
+		if s == nil {
+			s = &stamped{}
+			byAsker[d.Asker] = s
+		}
+		s.people = append(s.people, words.Said(d.Person))
+		s.decided += d.Decided
+		s.recommended += d.Recommended
+	}
+	var out []Finding
+	for _, asker := range slices.Sorted(maps.Keys(byAsker)) {
+		s := byAsker[asker]
+		people := words.And(s.people)
 		out = append(out, Finding{
 			Class: ClassApprovalRubberStamp, Severity: SeverityNote, Actor: ActorOwner,
-			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: d.Asker},
+			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: asker},
 			Title: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions.",
-				d.Person, d.Asker, d.Recommended, d.Decided),
+				people, asker, s.recommended, s.decided),
 			Why: fmt.Sprintf("In the last 7 days %s asked %s %d decisions and the recommended "+
 				"option was taken %d times. Each one still costs a press and makes the agent "+
 				"wait. Whether %s may act on some kinds of them without asking is your call.",
-				d.Asker, d.Person, d.Decided, d.Recommended, d.Asker),
-			Evidence: []Fact{{Key: "decided", Value: int64(d.Decided)},
-				{Key: "recommended", Value: int64(d.Recommended)}},
+				asker, people, s.decided, s.recommended, asker),
+			Evidence: []Fact{{Key: "decided", Value: int64(s.decided)},
+				{Key: "recommended", Value: int64(s.recommended)}},
 			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
 				Sentence:  "Draft a policy with Ask Crewlet, and review it before it is saved.",
 				Unchanged: "Nothing changes until you approve the policy Ask Crewlet drafts.",
@@ -346,7 +388,7 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 					"always taken as recommended, and draft a change to the company's policies "+
 					"that lets %s act on those kinds without asking, keeping every other decision "+
 					"with the person. Show me the change before making it.",
-					d.Person, d.Asker, d.Recommended, d.Decided, d.Asker)},
+					people, asker, s.recommended, s.decided, asker)},
 		})
 	}
 	return out
@@ -436,12 +478,16 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 			byID[r.AgentID] = s
 			out = append(out, s)
 		}
-		s.turns += r.Turns
 		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
 		s.auxiliary += r.AuxInput + r.AuxOutput
 		outcome := types.TurnOutcome(r.Outcome)
-		if outcome == types.OutcomeNothing {
-			s.nothing += r.Turns
+		// A SCHEDULE'S TURNS ARE THE OWNER'S CHOICE, and a check that finds
+		// nothing commits nothing: the schedule classes read them, not this one.
+		if !strings.HasPrefix(r.Wake, scheduleWake) {
+			s.turns += r.Turns
+			if outcome == types.OutcomeNothing {
+				s.nothing += r.Turns
+			}
 		}
 		if r.Wake == pickupWake {
 			s.pickups += r.Turns
@@ -453,8 +499,12 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 	return out
 }
 
-// pickupWake is the ledger's wake for work handed to an idle seat.
-const pickupWake = types.OriginWorkItem + ":" + types.PickupReason
+// pickupWake is the ledger's wake for work handed to an idle seat, and
+// scheduleWake the prefix of every schedule's.
+const (
+	pickupWake   = types.OriginWorkItem + ":" + types.PickupReason
+	scheduleWake = types.OriginSchedule + ":"
+)
 
 // noopShare is one finding per agent whose started turns often committed nothing.
 func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
@@ -484,9 +534,10 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 		return nil
 	}
 	return []Finding{engineFinding(ClassPickupStillWaiting, Subject{Kind: SubjectCompany},
-		"Agents picked up work that could not move yet.",
-		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only, as when "+
-			"an agent says the item still waits on something.", words, pickups),
+		"Agents picked up work and moved none of it.",
+		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only (a comment, "+
+			"a question or a chat post) and no work moved, as when an agent says the item "+
+			"still waits on something.", words, pickups),
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
 }
 

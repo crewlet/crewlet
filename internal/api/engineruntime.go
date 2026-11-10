@@ -176,6 +176,15 @@ func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engi
 // MCPChecks is the engine's read of each MCP server's latest test.
 func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
 
+// SeatPauses is the fleet store's pauses, nil without one: a nil store in the
+// interface would read as a node that can list them.
+func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
+	if b := r.engine.Backends(); b != nil && b.Fleet != nil {
+		return b.Fleet
+	}
+	return nil
+}
+
 // IssueReports is the engine's reporter, nil where it has none: a nil pointer
 // in the interface would register a question that panics.
 func (r engineRuntime) IssueReports() queries.IssueReportReader {

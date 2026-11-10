@@ -504,6 +504,8 @@ function AskGroup({
                   label={ask.key}
                   comment={ask.comment}
                   asker={asker.name}
+                  askedBy={ask.asked_by}
+                  question={decision?.question}
                   options={decision?.options ?? []}
                   recommended={decision?.recommended}
                   open={open}

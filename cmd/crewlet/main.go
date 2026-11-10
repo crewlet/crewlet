@@ -2563,6 +2563,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			Holds:     e.Backends().Fleet,
 			// WHERE A THIRD-PARTY APP REACHES THIS DEPLOYMENT — the
 			// public listener's `api.public.external_url` where one is
 			// configured, `api.external_url` otherwise — which is what a

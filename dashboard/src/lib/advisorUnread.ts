@@ -1,7 +1,6 @@
 /**
- * What each source the advisor could not read leaves out (`unread` on
- * `GET /advisor`), in the words Settings › Advisor and the attention queue
- * both say it with, so a short list never reads as all clear in either.
+ * What each source the advisor could not read leaves out (`unread` on `GET /advisor`),
+ * in the words Settings › Advisor and the attention queue both use.
  */
 
 const UNREAD_WORDS: Readonly<Record<string, string>> = {

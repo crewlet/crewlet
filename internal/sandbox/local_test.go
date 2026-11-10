@@ -2044,3 +2044,24 @@ func TestAnEmptyCredentialMapIsNotAFailure(t *testing.T) {
 		t.Errorf("recordCredentialMap(nil): %v", err)
 	}
 }
+
+// A CONTAINER THAT WOULD NOT START IS THE CONFIGURATION'S ONLY WHEN ITS IMAGE IS
+// HERE: an image the runtime holds and refused to run is a setting to fix, and
+// one it does not hold failed to arrive, which a retry may outlast.
+func TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		inspect int
+		want    Why
+	}{
+		{"the image is here", 0, WhyConfiguration},
+		{"the image is not here", 1, WhyProviderUnavailable},
+	} {
+		runtime := filepath.Join(t.TempDir(), "docker")
+		writeExecutable(t, runtime, fmt.Sprintf("#!/bin/sh\n[ \"$1 $2\" = \"image inspect\" ] && exit %d\nexit 125\n", c.inspect))
+		if got := startFailure(t.Context(), containerCLI{path: runtime}, "img"); got != c.want {
+			t.Errorf("%s: a failed start is classed %q, want %q", c.name, got, c.want)
+		}
+	}
+}

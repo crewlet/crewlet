@@ -4,9 +4,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -14,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -36,11 +41,12 @@ type advisorAnswer struct {
 func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	now := s.clock()
 	fleet, fleetKnown := s.fleetAlarms(ctx)
+	held, heldKnown := s.heldConversations(ctx)
 	answer, err := s.advisorRead(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	return noticed(answer, fleet, fleetKnown, now), nil
+	return noticedWith(answer, fleet, fleetKnown, held, heldKnown, now), nil
 }
 
 // advisorRead is the advisor's findings at now, typed: what `advisor` answers
@@ -64,14 +70,38 @@ func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer
 	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), nil
 }
 
-// noticed is the answer with the notices its findings and the fleet's alarms
-// raise. `alarms` is named unread once, whether this node's evaluation or the
-// fleet's marks could not be read.
-func noticed(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, now time.Time) advisorAnswer {
+// noticedWith is the answer with the notices its findings, the fleet's alarms
+// and the held conversations raise. `alarms` is named unread once, whether this
+// node's evaluation or the fleet's marks could not be read; `holds` where the
+// held conversations could not be.
+func noticedWith(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, held []notice.Notice,
+	heldKnown bool, now time.Time) advisorAnswer {
+
 	if !fleetKnown && !slices.Contains(a.Unread, advisor.UnreadAlarms) {
 		a.Unread = append(a.Unread, advisor.UnreadAlarms)
 	}
-	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, now)}
+	if !heldKnown {
+		a.Unread = append(a.Unread, advisor.UnreadHolds)
+	}
+	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, held, now)}
+}
+
+// heldConversations is a notice per conversation the engine holds, named by
+// its seat's handle; false where the holds cannot be read.
+func (s Sources) heldConversations(ctx context.Context) ([]notice.Notice, bool) {
+	if s.Holds == nil {
+		return nil, true
+	}
+	holds, err := s.Holds.ListConversationHolds(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_conversation_holds_unread", "error", err.Error())
+		return nil, false
+	}
+	handles := s.seatHandles()
+	return notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) {
+		handle, known := handles[seat]
+		return handle, known
+	}), true
 }
 
 // advisorEvidence is what the company did in the week before now. A SOURCE THAT
@@ -96,7 +126,43 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 	} else {
 		ev.Backup = backupEvidence(s.latestAlarms())
 	}
+	if ev.Paused, err = s.pausedSeats(ctx, company); err != nil {
+		log.WarnContext(ctx, "advisor_seat_pauses_unreadable", "error", err.Error())
+		ev.PausesUnread = true
+	}
 	return ev
+}
+
+// SeatPauseLister is the read of every seat's pause ([coord.SeatPauses]').
+type SeatPauseLister interface {
+	ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error)
+}
+
+// pausedSeats is every agent seat of company the engine paused for a failure,
+// named by handle: the pause record is keyed by the seat's agent id. A node with
+// no pause store has none, since the engine pauses through that store alone.
+func (s Sources) pausedSeats(ctx context.Context, company *config.Company) ([]advisor.PausedSeat, error) {
+	var out []advisor.PausedSeat
+	if s.Pauses == nil {
+		return nil, nil
+	}
+	pauses, err := s.Pauses.ListSeatPauses(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("queries: list the seats' pauses: %w", err)
+	}
+	failed := map[uuid.UUID]string{}
+	for _, p := range pauses {
+		if p.Failure != nil {
+			failed[p.Seat] = p.Failure.Kind
+		}
+	}
+	for role := range company.EachRole() {
+		id, ok := org.DeriveAgentID(company.Name, role.Seat().Handle())
+		if kind, paused := failed[id]; ok && role.Kind != org.KindHuman && paused {
+			out = append(out, advisor.PausedSeat{Handle: role.Seat().Handle(), Name: role.Name, Failure: kind})
+		}
+	}
+	return out, nil
 }
 
 // fleetAlarms is every live node's alarm marks as its last heartbeat carried
@@ -135,6 +201,48 @@ func backupEvidence(alarms []statelog.Alarm) advisor.Backup {
 		return advisor.Backup{Standing: true, Logs: logs}
 	}
 	return advisor.Backup{}
+}
+
+// AccessFixAnswer is `advisor_access`: the change that grants an agent one
+// access it asked for, built from the fleet's company, never applied here.
+type AccessFixAnswer struct {
+	Seat     string            `json:"seat"`
+	Access   advisor.AccessKey `json:"access"`
+	Revision string            `json:"revision"`
+	Fix      advisor.Fix       `json:"fix"`
+}
+
+// advisorAccess answers `advisor_access`: the grant change for `seat` and
+// `access`, read off the redacted document. A key the catalogue does not
+// name, a seat that holds it or cannot take it, or no such agent is refused
+// in its own words.
+func (s Sources) advisorAccess(ctx context.Context, p Params) (any, error) {
+	seat, key := strings.TrimSpace(p.String("seat")), advisor.AccessKey(strings.TrimSpace(p.String("access")))
+	if !key.Valid() {
+		return nil, badParams("access", string(key), accessKeyNames())
+	}
+	company, revision, err := s.Config.FleetCompany(ctx)
+	if err != nil {
+		return nil, revisionRefusal("advisor_access", err)
+	}
+	fix, err := advisor.AccessFix(company.Redact(), seat, key)
+	switch {
+	case errors.Is(err, advisor.ErrAccessHeld):
+		return nil, fmt.Errorf("%w: %s can already %s", ErrBadParams, seat, key.Does())
+	case errors.Is(err, advisor.ErrAccessNotTakable):
+		return nil, fmt.Errorf("%w: %s has nothing this access could be added to", ErrBadParams, seat)
+	case err != nil:
+		return nil, fmt.Errorf("%w: %s is not an agent seat of this company", ErrBadParams, seat)
+	}
+	return AccessFixAnswer{Seat: seat, Access: key, Revision: revision, Fix: fix}, nil
+}
+
+func accessKeyNames() []string {
+	out := []string{}
+	for _, k := range advisor.AccessKeys() {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // advisorLedger is the turn ledger over [advisor.LedgerDays], each seat named

@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -183,9 +182,13 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 }
 
 // patternAnswersStatement is every person's answer in the window to an agent's
-// question, with whether the item had finished first and whether the asker had
-// asked the same person again on it, still open when this answer came.
-const patternAnswersStatement = `SELECT a.id, a.author, r.author, a.document, r.document,
+// question, with whether the question carried a decision, its recommendation,
+// the answer's choice, whether the item had finished first and whether the
+// asker had asked the same person again on it, still open when this answer came.
+const patternAnswersStatement = `SELECT a.id, a.author, r.author,
+	json_type(a.document, '$.decision') = 'object',
+	COALESCE(json_extract(a.document, '$.decision.recommended'), ''),
+	COALESCE(json_extract(r.document, '$.choice'), ''),
 	t.finished_at IS NOT NULL AND t.finished_at <= r.created_at,
 	EXISTS (SELECT 1 FROM tracker_comments b
 		WHERE b.task_id = a.task_id AND b.author = a.author AND b.ask = a.ask
@@ -207,16 +210,16 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 	out.Overtaken = []string{}
 	tallies := map[[2]string]*DecisionTally{}
 	for rows.Next() {
-		var ask, asker, person string
-		var asked, answered []byte
+		var ask, asker, person, recommended, choice string
+		var decided sql.NullBool
 		var moot, superseded bool
-		if err := rows.Scan(&ask, &asker, &person, &asked, &answered, &moot, &superseded); err != nil {
+		if err := rows.Scan(&ask, &asker, &person, &decided, &recommended, &choice,
+			&moot, &superseded); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("worklet: scan an answer: %w", err)
 		}
-		if err := tallyDecision(tallies, asker, person, asked, answered); err != nil {
-			_ = rows.Close()
-			return err
+		if decided.Bool && choice != "" {
+			tallyDecision(tallies, asker, person, choice == recommended)
 		}
 		out.Answers++
 		switch {
@@ -245,18 +248,7 @@ func readAnswers(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkP
 
 // tallyDecision counts one answer that chose an option of a decision, and
 // whether the choice was the asker's recommendation.
-func tallyDecision(tallies map[[2]string]*DecisionTally, asker, person string,
-	asked, answered []byte) error {
-	var ask, answer Comment
-	if err := json.Unmarshal(asked, &ask); err != nil {
-		return fmt.Errorf("worklet: decode a question in the window: %w", err)
-	}
-	if err := json.Unmarshal(answered, &answer); err != nil {
-		return fmt.Errorf("worklet: decode an answer in the window: %w", err)
-	}
-	if ask.Decision == nil || answer.Choice == "" {
-		return nil
-	}
+func tallyDecision(tallies map[[2]string]*DecisionTally, asker, person string, recommended bool) {
 	key := [2]string{person, asker}
 	t, ok := tallies[key]
 	if !ok {
@@ -264,10 +256,9 @@ func tallyDecision(tallies map[[2]string]*DecisionTally, asker, person string,
 		tallies[key] = t
 	}
 	t.Decided++
-	if answer.Choice == ask.Decision.Recommended {
+	if recommended {
 		t.Recommended++
 	}
-	return nil
 }
 
 // patternIdleReviewsStatement is every item in review one reviewer holds, in
@@ -330,8 +321,8 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet t
 	return nil
 }
 
-// patternNoticesStatement is one person's notices in the window, a seek of
-// their own rows, which the inbox horizon already bounds.
+// patternNoticesStatement is one person's notices in the window, a range of
+// tracker_notifications_load_idx that covers it (replicated 0157).
 const patternNoticesStatement = `SELECT COUNT(*), COALESCE(SUM(addressed), 0)
 FROM tracker_notifications
 WHERE recipient = ? AND created_at >= ? AND created_at < ?`
