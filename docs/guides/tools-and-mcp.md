@@ -1533,13 +1533,29 @@ and one it no longer lists *Removed*, counts the changes over the list with
 **Review**, and filters them with **Changed**; the tab itself is marked while
 any wait. The alarm's fix opens the same review. **Review** shows each change,
 one that now claims less risk first and flagged: a description or title as a
-text diff, the arguments a line each, and each hint that moved with its old
-word and its new. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
+text diff, the arguments a line each (or the schemas whole, where what moved
+is inside an argument or in the output), and each hint that moved with its old
+word and its new. A part the engine cannot show is said to have changed and
+not to be shown. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
 blocked** decide it by the digest of the definition shown, and a removal is
 accepted with **Accept that it went**. A definition the server swapped since it
 was shown is refused and read again. The **Servers** tab's **Waiting on you**
 counts the servers with changes to review beside the calls waiting for an
 answer.
+
+A server that rewords its tools often leaves several such changes at once, so
+when two or more of them only reword a read-only tool, **Accept N wording
+changes** accepts them together. A change qualifies when only its title or
+description moved, every part it moved is shown, it claims no less risk, and
+the tool is read-only both as the server declares it and as it runs here, your
+overrides applied. A rewording can still change what a tool says it does, so
+the action first lists each tool with the words it changed, one line each
+(hover a cut line for the whole of it), and nothing is decided until you press
+**Accept N changes** there; **Cancel** returns to the review. That press sends
+every tool's reviewed digest in one decision, so a definition the server
+swapped since is refused by name and nothing is decided. Every other change (new or changed arguments, changed hints, a claim
+of less risk, a tool that writes, a tool added or removed) is decided one by
+one.
 
 ### Each agent's tools, and the budget
 
