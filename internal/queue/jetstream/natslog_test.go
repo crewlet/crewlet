@@ -331,7 +331,7 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 	var got int
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if got = rec.matching(closed) - before; got >= listings || time.Now().After(deadline) {
+		if got = rec.matching(closed) - before; got >= listings || time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			break
 		}
 		time.Sleep(10 * time.Millisecond) //fixedwait:liveness

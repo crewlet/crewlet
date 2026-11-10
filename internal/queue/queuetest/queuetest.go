@@ -1386,7 +1386,7 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 		if cond() {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			// State the suite polls has no "saw something" half — the
 			// condition is simply still false — so this always reports the
 			// ambiguous case, which it genuinely is. Not verdictNothing,

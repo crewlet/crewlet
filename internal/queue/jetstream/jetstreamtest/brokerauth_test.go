@@ -79,7 +79,7 @@ func eventually(t testing.TB, budget time.Duration, what string, cond func() boo
 	t.Helper()
 	deadline := time.Now().Add(budget)
 	for !cond() {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("waited %s for %s", budget, what)
 		}
 		time.Sleep(20 * time.Millisecond) //fixedwait:liveness

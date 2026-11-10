@@ -106,7 +106,7 @@ func TestAMajoritySurvivesAPartition(t *testing.T) {
 	started := time.Now()
 	deadline := started.Add(60 * time.Second)
 	var last error
-	for time.Now().Before(deadline) {
+	for time.Until(deadline) > 0 { //fixedwait:measure a poll's own deadline
 		last = q.Publish(t.Context(), topic, events.New(probe{N: 2}, events.TraceContext{}))
 		if last == nil {
 			t.Logf("the majority accepted a publish %v after the partition",
@@ -133,7 +133,7 @@ func awaitRoutes(t *testing.T, c *Cluster, i, want int) {
 		if len(got) == want {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("member %d is routed to %v, want %d peers", i, got, want)
 		}
 		time.Sleep(25 * time.Millisecond) //fixedwait:liveness

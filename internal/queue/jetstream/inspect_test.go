@@ -210,7 +210,7 @@ func settledBacklog(t *testing.T, q *Queue, topic, group string, want int) []int
 				got = append(got, p.N)
 			}
 		}
-		if len(got) == want || time.Now().After(deadline) {
+		if len(got) == want || time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			return got
 		}
 		time.Sleep(20 * time.Millisecond) //fixedwait:liveness

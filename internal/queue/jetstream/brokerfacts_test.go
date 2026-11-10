@@ -380,7 +380,7 @@ func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 					nc.MaxPayload() == int64(tc.after)
 			}
 			deadline := time.Now().Add(10 * time.Second)
-			for !nc.IsClosed() && !reconnected() && time.Now().Before(deadline) {
+			for !nc.IsClosed() && !reconnected() && time.Until(deadline) > 0 { //fixedwait:measure a poll's own deadline
 				time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 			}
 			switch {

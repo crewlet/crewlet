@@ -211,7 +211,7 @@ func takeBrokerDown(t *testing.T, q queue.EventQueue) {
 	stop()
 	deadline := time.Now().Add(10 * time.Second)
 	for jq.nc.Status() == nats.CONNECTED {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the connection still reads CONNECTED 10s after its server stopped")
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness

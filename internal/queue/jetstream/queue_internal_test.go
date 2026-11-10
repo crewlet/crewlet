@@ -216,7 +216,7 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 
 	deadline := time.Now().Add(10 * time.Second)
 	for failureEntries(q, topic, group) != 0 {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the failure map still holds %d settled message(s) after the "+
 				"partition acked", failureEntries(q, topic, group))
 		}

@@ -118,7 +118,7 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 		if info.NumPending == 5 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the consumer counts %d of the five appended records pending", info.NumPending)
 		}
 		// LIVENESS: paces a poll of the broker's own count, which decides;
@@ -161,7 +161,7 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 		if got == 2 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("Pending = %d with two records delivered into the pull and "+
 				"not taken, want 2", got)
 		}

@@ -202,7 +202,7 @@ func awaitClientGone(t *testing.T, running func() int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(lostWithin)
 	for running() > 0 {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the NATS client's goroutines for %s were still running %s "+
 				"after its owner closed it", what, lostWithin)
 		}

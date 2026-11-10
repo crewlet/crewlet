@@ -587,7 +587,7 @@ func awaitAcknowledged(t *testing.T, c *DomainConsumer, through uint64) {
 		if info.AckFloor.Stream == through && info.NumAckPending == 0 {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the broker never applied the last run's acknowledgements: "+
 				"acknowledged through %d with %d in flight, want through %d with "+
 				"none — without them this case is not the state it claims to "+
@@ -1034,7 +1034,7 @@ func TestAStatusEndsOnlyTheRequestItNames(t *testing.T) {
 		if pending > 0 || delivered > statusesBefore {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			p.mu.Unlock()
 			t.Fatal("the server's 404 for a no-wait request never reached the inbox")
 		}
@@ -1206,7 +1206,7 @@ func waitWaiting(t *testing.T, cons *DomainConsumer, n int) {
 		if info.NumWaiting >= n {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the server holds %d request(s) on %s, want %d — a request "+
 				"did not reach it", info.NumWaiting, cons.name, n)
 		}
@@ -1382,7 +1382,7 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for !cond() {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("waited five seconds for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
@@ -1555,7 +1555,7 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 		if info.NumWaiting > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatal("the pull never reached the server")
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
@@ -1630,7 +1630,7 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 		if info.NumAckPending == 2 && info.NumWaiting > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the second record never reached the standing request: %d "+
 				"in flight, %d waiting", info.NumAckPending, info.NumWaiting)
 		}
@@ -1660,7 +1660,7 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 			}
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatal("the pull was never told its consumer went")
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness

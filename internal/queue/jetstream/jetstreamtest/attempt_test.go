@@ -33,7 +33,7 @@ func TestOneAttemptCannotSpendTheWholeBudget(t *testing.T) {
 	// assertion the defect fails: before it, the first attempt's deadline WAS
 	// the ceiling.
 	first := jetstreamtest.StartAttemptEnd(start, ceiling)
-	if !first.Before(ceiling) {
+	if ceiling.Sub(first) <= 0 { //fixedwait:stated the ceiling and the attempt's end computed from it, both on a fixed date
 		t.Errorf("the first attempt may run until %s and the whole budget "+
 			"ends at %s — one hung attempt then consumes every retry",
 			first.Sub(start), jetstreamtest.ClusterStartBudget) //fixedwait:stated start, a fixed date, and the attempt's end computed from it

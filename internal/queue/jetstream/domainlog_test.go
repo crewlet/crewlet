@@ -388,7 +388,7 @@ func awaitReplaced(t *testing.T, w *DomainWatch, lost string) string {
 		if name, serving := w.consumer(); name != lost && serving {
 			return name
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			name, serving := w.consumer()
 			t.Fatalf("the watch never replaced its lost consumer %s within %s "+
 				"(now %s, serving %v)", lost, watchAwait, name, serving)
@@ -853,7 +853,7 @@ func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	heard.await("said its connection was away", atLeast(2))
 	deadline := time.Now().Add(watchAwait)
 	for !q.Conn().IsConnected() || q.Conn().Stats().Reconnects == reconnects {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the queue's connection did not come back within %s", watchAwait)
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness

@@ -276,7 +276,7 @@ func (s *Server) Restart(maxPayload int32, nc *nats.Conn) {
 	}
 	deadline := time.Now().Add(readyWithin)
 	for !nc.IsConnected() || nc.MaxPayload() != want {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			s.t.Fatalf("the client did not reconnect to the restarted server "+
 				"within %s (connected=%v, reading a max_payload of %d, want %d)",
 				readyWithin, nc.IsConnected(), nc.MaxPayload(), want)

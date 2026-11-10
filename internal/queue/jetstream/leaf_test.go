@@ -305,7 +305,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	member.Shutdown()
 	deadline := time.Now().Add(10 * time.Second)
 	for q.Link() == nil {
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatal("a leaf whose only member shut down still reports its link up")
 		}
 		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
@@ -415,7 +415,7 @@ func TestALeafLinksOnlyWithAKeyItsMemberHolds(t *testing.T) {
 		if n > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the member counted %v, want the stranger's leaf/unknown", refused)
 		}
 		time.Sleep(20 * time.Millisecond) //fixedwait:liveness

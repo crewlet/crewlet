@@ -220,7 +220,7 @@ func refused(t *testing.T, srv *js.Server, member, stream, what string,
 			t.Fatalf("%s through %s, cut off from its cluster and not leading %s, answered "+
 				"%v from its own copy rather than saying it could not tell", what, member,
 				stream, answer)
-		case time.Now().After(deadline):
+		case time.Until(deadline) <= 0: //fixedwait:measure a poll's own deadline
 			t.Fatalf("%s through %s was still answered (%v) 45s after the cut: a leader "+
 				"that has lost its quorum must stop answering", what, member, answer)
 		}
@@ -264,7 +264,7 @@ func staleThrough(t *testing.T, kv jetstream.KeyValue, key string) []byte {
 		switch {
 		case err == nil:
 			return e.Value()
-		case time.Now().After(deadline):
+		case time.Until(deadline) <= 0: //fixedwait:measure a poll's own deadline
 			t.Fatalf("the client's own read of %s in %s through the cut member never "+
 				"answered (%v), so this case cannot tell a read the leader answers from "+
 				"one nobody does", key, kv.Bucket(), err)
@@ -278,7 +278,7 @@ func retry(t *testing.T, what string, op func() error) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	var last error
-	for time.Now().Before(deadline) {
+	for time.Until(deadline) > 0 { //fixedwait:measure a poll's own deadline
 		if last = op(); last == nil {
 			return
 		}

@@ -201,7 +201,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	}
 	a := atts[0]
 	deadline := time.Now().Add(5 * time.Second)
-	for !a.quiesced.Load() && time.Now().Before(deadline) {
+	for !a.quiesced.Load() && time.Until(deadline) > 0 { //fixedwait:measure a poll's own deadline
 		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if !a.quiesced.Load() {
