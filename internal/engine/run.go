@@ -2799,6 +2799,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
 	}
+	if d.SeenThrough == nil {
+		d.SeenThrough = ledgerstore.NewSeenThrough(backends.Fleet)
+	}
 	return d
 }
 
