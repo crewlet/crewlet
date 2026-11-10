@@ -2050,6 +2050,8 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
+	// A CREDENTIAL IS NOBODY'S INBOX: the record offers none as a recipient.
+	notify = notify.withoutCredentials()
 	if err = notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
