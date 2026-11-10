@@ -884,9 +884,11 @@ func (t *commentOnPage) Name() string { return CommentOnPageTool }
 
 func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
-		"that it has gone stale. With `asks: true`, anyone you @-mention by " +
-		"handle is woken, and so are you by every later reply in its thread " +
-		"until a seat you named answers it; with `asks: false` an @-mention is " +
+		"that it has gone stale. With `asks: true`, the agents you @-mention by " +
+		"handle are woken, and so are you by every later reply in its thread " +
+		"until a seat you named answers it. A person is not asked here: put a " +
+		"question to a person on the work item it concerns with " + CommentOnWorkTool +
+		", `ask` set to their handle and a `decision`. With `asks: false` an @-mention is " +
 		"a reference, and the comment wakes only agents with an open ask in " +
 		"its thread, and answers those asks. People watching the page are " +
 		"told. If the answer is a change to the " +
@@ -905,8 +907,9 @@ func (t *commentOnPage) Parameters() map[string]any {
 			},
 			"body": map[string]any{
 				"type": "string",
-				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle, with `asks: true`, to reach them specifically.",
+				"description": "The comment, in markdown. @-mention an agent by " +
+					"handle, with `asks: true`, to reach it specifically; a person is " +
+					"asked on a work item with " + CommentOnWorkTool + ", never here.",
 			},
 			"asks": asksParam(pageAsks),
 			"reply_to": map[string]any{
