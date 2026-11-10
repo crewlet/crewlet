@@ -232,7 +232,7 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 		}
 	}
 	started := p.now()
-	if !p.share.room(ctx, started) {
+	if p.use.Purpose.HeldByShare() && !p.share.room(ctx, started) {
 		return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, learning.ErrLearningShare)
 	}
 	completion, err := p.inner.Complete(ctx, req)

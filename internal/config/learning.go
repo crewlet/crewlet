@@ -66,7 +66,7 @@ func (l *Learning) On() bool { return l.Enabled.Or(true) }
 
 func (l *Learning) validate(path Path) error {
 	var p problems
-	if s := l.MaxShare; s != nil && (*s <= 0 || *s > 1) {
+	if s := l.MaxShare; s != nil && !(*s > 0 && *s <= 1) {
 		p.add(at(path, "max_share"), ErrOutOfRange,
 			"must be a fraction above 0 and at most 1 (1 leaves learning uncapped), not %v", *s)
 	}
