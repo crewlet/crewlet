@@ -239,6 +239,12 @@ func ChangeKinds() []ChangeKind {
 // Valid reports whether k is a kind this build serves.
 func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds(), k) }
 
+// Moves reports whether a change of kind k moved work: anything but a
+// comment, its edit, or who watches.
+func (k ChangeKind) Moves() bool {
+	return k != ChangeComment && k != ChangeCommentEdited && k != ChangeWatchers
+}
+
 // OnboardingTitle is the page every seat's reading chain starts at, in each
 // container it appears in.
 //

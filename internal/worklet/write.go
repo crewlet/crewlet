@@ -2378,6 +2378,8 @@ func committedChange(payload []byte) types.CommittedChange {
 		return types.CommittedItem
 	}
 	switch {
+	case record.Kind.Moves():
+		return types.CommittedItem
 	case record.Kind == ChangeWatchers:
 		return ""
 	case record.Kind.Conversation():
