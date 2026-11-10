@@ -52,6 +52,7 @@ const ADA: ViewerState = {
   chatVendors: [],
   assistant: "disabled",
   assistantModel: null,
+  assistantReadsImages: false,
 };
 
 /** What the engine says the company runs: Crewlet's own, all four. */

@@ -295,6 +295,14 @@ assistant:
     max_tokens: 3000000      # 10000..20000000 tokens a task may spend
 ```
 
+Deep work is also the only path that reads the images a person attaches to a
+question. Without it, the dashboard draws Attach image disabled with that
+reason and refuses a pasted or dropped image (`/viewer` answers
+`reads_images` only where deep work is configured), and a quick answer told of
+an attachment says it cannot see it and offers what works: pasting the text,
+or asking an administrator to turn on deep work, or asking again shortly where
+deep work is configured and cannot run on this node now.
+
 The entry must be Claude Code: a run on the engine host is confined around that
 harness's own install and temporary directories, which no other harness has been
 measured against, and a run parked on a proposal is continued in that harness's own

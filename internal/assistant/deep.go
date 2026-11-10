@@ -538,6 +538,13 @@ func (s *Service) deepConfig() (config.AssistantDeepWork, error) {
 	return *c.Assistant.DeepWork, nil
 }
 
+// ReadsImages reports whether a question's images can be read: the company
+// runs deep work, the one path that reads them, and this node can run it.
+func (s *Service) ReadsImages() bool {
+	_, err := s.deepConfig()
+	return err == nil
+}
+
 // withDeep is tools with the escalation tool, where this node can run deep work
 // for the company now.
 func (s *Service) withDeep(ctx context.Context, tools []catalog.Tool) []catalog.Tool {

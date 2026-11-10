@@ -142,10 +142,11 @@ type promptInput struct {
 	Boundary provenance.Boundary
 	Question string
 
-	// Deep says the turn offers deep work, and Attachments are the files
-	// the question carried.
-	Deep        bool
-	Attachments []wire.FileRef
+	// Deep says the turn offers deep work, DeepConfigured that the company
+	// runs it at all, and Attachments are the files the question carried.
+	Deep           bool
+	DeepConfigured bool
+	Attachments    []wire.FileRef
 }
 
 // historyEntry is one earlier message as a turn re-reads it.
@@ -294,7 +295,7 @@ func redactedPage(p *wire.PageContext) *wire.PageContext {
 // the question.
 func questionBlock(in promptInput) string {
 	question := in.Question
-	if block := attachmentsBlock(in.Attachments, in.Deep); block != "" {
+	if block := attachmentsBlock(in.Attachments, in.Deep, in.DeepConfigured); block != "" {
 		question = block + "\n\n" + question
 	}
 	fenced := pageFence(in.Boundary, in.Page)

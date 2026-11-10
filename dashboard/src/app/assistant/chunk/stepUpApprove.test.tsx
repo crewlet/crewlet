@@ -210,6 +210,7 @@ function mount() {
               <Drawer
                 unavailable={null}
                 model={null}
+                attach={null}
                 admin={false}
                 onClose={() => {}}
                 initialFocus="composer"
