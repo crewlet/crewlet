@@ -147,6 +147,11 @@ func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 		if !tc.Acted {
 			t.Errorf("the turn filed a work item and did not act (tally %+v)", tc.Turn)
 		}
+		// AND ITS OUTCOME IS SETTLED BY ITS RUN'S WRITES, which land after the
+		// turn parked on the launch.
+		if tc.Turn == nil || tc.Turn.Outcome != types.OutcomeMoved {
+			t.Errorf("the executor filed a work item and the tally is %+v, want moved", tc.Turn)
+		}
 		// FATAL, because the two claims after it read the first entry: an
 		// error here went on to index an empty list and panicked the case.
 		if len(tc.Interactions) == 0 {
