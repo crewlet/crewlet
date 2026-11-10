@@ -195,8 +195,13 @@ export interface PageActionSpec<P> {
    * `action_args`; the model reads it, and the engine holds every proposal to
    * it before a card is drawn, so a call the screen could only refuse never
    * reaches the person.
+   *
+   * Undefined only for `draft.set` on a draft whose fields are more than one
+   * schema may declare (`draftSetArgs`): the engine takes `draft.set` alone
+   * with no arguments, reading what it takes from the draft's editable
+   * fields, and never proposes any other action that declares none.
    */
-  args: AssistantActionArgs;
+  args: AssistantActionArgs | undefined;
   /**
    * What a change by this action depends on, beyond the screen and its path:
    * the address's query, the selection, the screen's data. All three where
@@ -449,7 +454,7 @@ export function buildPageContext(
   for (const id of accepts) {
     const spec = reg?.actions?.[id];
     if (!spec) continue;
-    actionArgs[id] = spec.args;
+    if (spec.args !== undefined) actionArgs[id] = spec.args;
     actionRevisions[id] = revisionOf(page, reg, spec.tracks ?? ALL_PARTS);
   }
   const context: AssistantPageContext = {
@@ -465,11 +470,18 @@ export function buildPageContext(
   };
   if (reg?.draft) context.draft = { ...reg.draft, fields: [...reg.draft.fields] };
   // OVER ITS BYTE BUDGET, it sheds what matters least first: the query (the
-  // screen's resources still say what is in view), then the resources from
-  // the end, then the open draft's fields from its end, each counted in its
-  // `more`, and last its help. The engine's `page_context` frame says
-  // `trimmed`.
+  // screen's resources still say what is in view), then what `draft.set`
+  // declares it takes (the open draft's editable fields say it again, and the
+  // engine reads them when it declares nothing), then the resources from the
+  // end, then the open draft's fields from its end, each counted in its
+  // `more`, and last its help. A field shed with its member still declared
+  // was one the model was offered and the engine refused as not in the draft.
+  // The engine's `page_context` frame says `trimmed`.
   if (!pageContextFits(context)) context.query = {};
+  if (!pageContextFits(context) && context.action_args?.["draft.set"]) {
+    const { "draft.set": _, ...rest } = context.action_args;
+    context.action_args = rest;
+  }
   while (!pageContextFits(context) && context.resources.length > 0) context.resources.pop();
   const draft = context.draft;
   while (draft && !pageContextFits(context) && draft.fields.length > 0) {

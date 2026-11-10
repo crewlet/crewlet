@@ -12,10 +12,15 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_BYTES,
+  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
+  ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
+  type AssistantPageDraft,
 } from "~/contract/assistant.ts";
-import { pageContextFits } from "~/protocol/assistantWire.ts";
+import { pageContextFits, wireBytes } from "~/protocol/assistantWire.ts";
 import {
   applyPageAction,
   buildPageContext,
@@ -29,6 +34,7 @@ import {
 } from "./context.ts";
 import {
   draftSetAction,
+  draftSetArgs,
   draftSnapshot,
   isSecretDraftPath,
   parseDraftChange,
@@ -148,6 +154,112 @@ describe("the draft a page sends", () => {
     expect(pageContextFits(context)).toBe(true);
     expect(context.draft!.fields.length).toBeLessThan(30);
     expect(context.draft!.more).toBe(30 - context.draft!.fields.length);
+  });
+});
+
+/** A snapshot of `n` editable text fields: labels of `label` characters, hints of `hint`, each holding `value`. */
+function editable(n: number, label: number, hint: number, value = "v"): AssistantPageDraft {
+  return {
+    kind: "client",
+    fields: Array.from({ length: n }, (_, i) => ({
+      path: `f${i}`,
+      label: `F${i}`.padEnd(label, "x"),
+      kind: "text" as const,
+      value,
+      ...(hint > 0 ? { hint: "h".repeat(hint) } : {}),
+      editable: true,
+    })),
+    more: 0,
+  };
+}
+
+/**
+ * WHAT draft.set DECLARES IT TAKES IS A SCHEMA THE ENGINE READS, or nothing.
+ *
+ * A member per editable field grows with the draft, and the engine refuses
+ * the whole page context, and the question asked with it, for an action
+ * declaring more members than one object may hold, encoding past its bytes,
+ * or carrying a description past its bound
+ * (`internal/assistant/wire.ActionArgs`). Past the members or the bytes,
+ * `draft.set` declares nothing, which the engine takes for it alone, reading
+ * the draft's editable fields instead.
+ */
+describe("what draft.set declares it takes", () => {
+  // Mutation: drop the members check, or the bytes check, and the 33-member
+  // or the twenty wide members are declared.
+  test("a member per editable field while one schema may hold them, and nothing past that", () => {
+    const most = draftSetArgs(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS, 10, 0));
+    expect(Object.keys(most?.properties?.values?.properties ?? {})).toHaveLength(
+      ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
+    );
+    expect(wireBytes(most)).toBeLessThanOrEqual(ASSISTANT_ACTION_ARGS_MAX_BYTES);
+    expect(draftSetArgs(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS + 1, 10, 0))).toBeUndefined();
+    // TWENTY MEMBERS at the longest label and hint a field carries: under the
+    // member bound, over the bytes.
+    expect(draftSetArgs(editable(20, 120, 200))).toBeUndefined();
+  });
+
+  // Mutation: send the label and hint whole, and the description runs past
+  // the engine's bound.
+  test("cuts a description at the engine's bound, keeping the words that say its kind", () => {
+    const args = draftSetArgs({
+      kind: "client",
+      fields: [
+        {
+          path: "tags",
+          label: "T".repeat(120),
+          hint: "h".repeat(200),
+          kind: "list",
+          value: "",
+          editable: true,
+        },
+      ],
+      more: 0,
+    });
+    const description = args?.properties?.values?.properties?.tags?.description ?? "";
+    expect([...description]).toHaveLength(ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES);
+    expect(description).toMatch(/h…\. A list of items, or one item per line\.$/);
+  });
+
+  // A VALUE RUNS TO A THOUSAND CHARACTERS, so the example it makes is left
+  // out where it would push the schema past its bytes, and the members stay.
+  // Mutation: always offer the example, and this one is declared.
+  test("offers a field's own value as the example only where it still fits", () => {
+    const long = draftSetArgs(
+      editable(16, 120, 200, "x".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES)),
+    );
+    expect(Object.keys(long?.properties?.values?.properties ?? {})).toHaveLength(16);
+    expect(long?.examples).toBeUndefined();
+    expect(draftSetArgs(editable(16, 120, 200))?.examples).toEqual([{ values: { f0: "v" } }]);
+  });
+
+  // WHAT draft.set DECLARES IS SHED BEFORE ANY FIELD OF THE DRAFT: the
+  // fields say it again, and a field shed with its member still declared was
+  // one the model was offered and the engine refused as not in the draft.
+  // Mutation: shed the fields first, and fields the context had room for go.
+  test("a page over its budget sheds what draft.set declares before a field of its draft", () => {
+    const page: FramePage = {
+      screen: "brand-setup",
+      title: "Brand › Set up",
+      path: ["company"],
+      params: {},
+      query: {},
+    };
+    const draft = editable(11, 100, 150, "y".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES));
+    const args = draftSetArgs(draft);
+    const action = { ...draftSetAction(() => null), args } as PageActionSpec<unknown>;
+    const declared = buildPageContext(page, { draft });
+    // THE CASE IT MEANS: the draft fits whole, and does not beside its arguments.
+    expect(pageContextFits(declared)).toBe(true);
+    expect(wireBytes({ ...declared, action_args: { "draft.set": args } })).toBeGreaterThan(
+      ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
+    );
+    const context = buildPageContext(page, { draft, actions: { "draft.set": action } });
+    expect(pageContextFits(context)).toBe(true);
+    expect(context.accepts).toEqual(["draft.set"]);
+    expect(context.action_args?.["draft.set"]).toBeUndefined();
+    expect(context.draft?.fields).toHaveLength(11);
+    expect(context.draft?.more).toBe(0);
   });
 });
 

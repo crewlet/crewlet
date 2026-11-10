@@ -9273,10 +9273,15 @@ Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
 (the address keys a view change writes, the seats and windows a screen draws,
 the org builder's operations), so the model is told the members to send rather
 than guessing them. Every accepted action declares it (`draft.set` may go
-without, since the draft's editable fields declare what it takes). The engine
+without, since the draft's editable fields declare what it takes: the dashboard
+sends it without on a draft whose editable fields are more than one schema
+holds, and drops it first from a page context over its 16 KiB). The engine
 reads it strictly: an unknown keyword, a pattern RE2 cannot compile, a schema
-past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
-`400 invalid_body`. Before a `propose_page_change` call is previewed or
+past 6 KiB, 8 levels or 160 parts, an object of more than 32 members (by name
+and by pattern), more than 64 values, 16 shapes or 4 examples, a pattern past
+128 bytes, a description past 300 characters, or an example its own schema
+refuses is `400 invalid_body`. Each size is the bytes the engine's own JSON encoding
+writes, which escapes `<`, `>` and `&` (six bytes each). Before a `propose_page_change` call is previewed or
 recorded, its `args` are held to that schema, and one that does not match is
 the model's refused step, naming the members the screen takes, never a card.
 An action the screen declares no arguments for is never proposed.

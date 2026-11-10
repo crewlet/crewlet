@@ -101,11 +101,17 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_DRAFT_MAX_FIELDS":      strconv.Itoa(wire.PageDraftMaxFields),
 		"ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES": strconv.Itoa(wire.PageDraftValueMaxRunes),
 		"ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES":  strconv.Itoa(wire.PageDraftHelpMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES": strconv.Itoa(wire.PageDraftLabelMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES":  strconv.Itoa(wire.PageDraftHintMaxRunes),
 		"ASSISTANT_PAGE_DRAFT_SECRET_PATH":     wire.PageDraftSecretPath,
 		"ASSISTANT_AUDIT_REASON_MAX_RUNES":     strconv.Itoa(wire.AuditReasonMaxRunes),
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
 		"ASSISTANT_DIGEST_PREFIX":              wire.DigestPrefix,
+		// --- a schema's bounds, which draft.set's arguments are declared within ---
+		"ASSISTANT_ACTION_ARGS_MAX_BYTES":             strconv.Itoa(wire.ActionArgsMaxBytes),
+		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),
+		"ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES": strconv.Itoa(wire.ActionArgsDescriptionMaxRunes),
 		// --- deep work (im-deep) ---
 		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),
 		"ASSISTANT_FILE_MAX_BYTES":          strconv.Itoa(wire.FileMaxBytes),

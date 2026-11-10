@@ -333,11 +333,8 @@ func (p PageContext) Validate() error {
 	return nil
 }
 
-// The bounds on a draft's own strings.
-const (
-	draftHintMaxRunes = 200
-	draftIDMaxBytes   = pageIDMaxBytes
-)
+// The bound on a draft's id and revision, a page id's.
+const draftIDMaxBytes = pageIDMaxBytes
 
 // validate holds a draft to its bounds: a known kind, an id for a saved
 // draft, names in the key grammar, each value text of bounded length, and
@@ -371,17 +368,17 @@ func (d PageDraft) validate() error {
 				f.Path)
 		case seen[f.Path]:
 			return fmt.Errorf("%w: page context draft lists field %q twice", ErrInvalid, f.Path)
-		case !plain(f.Label, 4*pageTitleMaxRunes) ||
-			utf8.RuneCountInString(f.Label) > pageTitleMaxRunes:
+		case !plain(f.Label, 4*PageDraftLabelMaxRunes) ||
+			utf8.RuneCountInString(f.Label) > PageDraftLabelMaxRunes:
 			return fmt.Errorf("%w: page context draft field %q label is not plain text of at "+
-				"most %d characters", ErrInvalid, f.Path, pageTitleMaxRunes)
+				"most %d characters", ErrInvalid, f.Path, PageDraftLabelMaxRunes)
 		case !text(f.Value, PageDraftValueMaxRunes):
 			return fmt.Errorf("%w: page context draft field %q value is not text of at most %d "+
 				"characters", ErrInvalid, f.Path, PageDraftValueMaxRunes)
-		case !plain(f.Hint, 4*draftHintMaxRunes) ||
-			utf8.RuneCountInString(f.Hint) > draftHintMaxRunes:
+		case !plain(f.Hint, 4*PageDraftHintMaxRunes) ||
+			utf8.RuneCountInString(f.Hint) > PageDraftHintMaxRunes:
 			return fmt.Errorf("%w: page context draft field %q hint is not plain text of at "+
-				"most %d characters", ErrInvalid, f.Path, draftHintMaxRunes)
+				"most %d characters", ErrInvalid, f.Path, PageDraftHintMaxRunes)
 		case !f.Kind.Valid():
 			return fmt.Errorf("%w: page context draft field %q kind %q is not one of %s",
 				ErrInvalid, f.Path, f.Kind, words.Or(DraftFieldKinds))

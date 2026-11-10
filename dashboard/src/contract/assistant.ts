@@ -36,12 +36,26 @@ export const ASSISTANT_PAGE_DRAFT_MAX_FIELDS = 40;
 export const ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES = 1000;
 /** The longest help a screen gives with its draft, in characters. */
 export const ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES = 600;
+/** The longest label a draft field carries, in characters: a page title's bound. */
+export const ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES = 120;
+/** The longest hint a draft field carries, in characters. */
+export const ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES = 200;
 /**
  * A draft field path that names a credential, read by segment: such a field is
  * sent redacted whatever the screen said (`wire.PageDraftSecretPath`).
  */
 export const ASSISTANT_PAGE_DRAFT_SECRET_PATH =
   "(^|[._])(password|passphrase|secret|secrets|token|tokens|credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)";
+/**
+ * The most one page action's arguments (its `action_args` schema) encode to,
+ * in bytes, as the engine encodes them: a page context declaring more is
+ * refused, and every question with it.
+ */
+export const ASSISTANT_ACTION_ARGS_MAX_BYTES = 6144;
+/** The most members one object of a page action's arguments declares, by name and by pattern together. */
+export const ASSISTANT_ACTION_ARGS_MAX_MEMBERS = 32;
+/** The longest description one part of a page action's arguments carries, in characters. */
+export const ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES = 300;
 /** The longest reason an administrator gives for a compliance read. */
 export const ASSISTANT_AUDIT_REASON_MAX_RUNES = 500;
 /** How often a quiet stream writes a keepalive comment, in seconds. */

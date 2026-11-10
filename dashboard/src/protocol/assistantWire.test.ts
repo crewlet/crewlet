@@ -26,6 +26,7 @@ import {
   narrowCard,
   pageContextFits,
   questionFits,
+  wireBytes,
   type AssistantNarrowFrame,
   type AssistantStreamFault,
 } from "./assistantWire.ts";
@@ -168,6 +169,27 @@ describe("the bounds a request is held to before it is sent", () => {
         query: { q: "x".repeat(ASSISTANT_PAGE_CONTEXT_MAX_BYTES + 1) },
       }),
     ).toBe(false);
+  });
+
+  // THE ENGINE MEASURES WHAT IT ENCODES: Go's `encoding/json` writes "<",
+  // ">" and "&" as \u003c, \u003e and \u0026, and U+2028 and U+2029 escaped,
+  // so a context inside the bound by the browser's bytes was over it there.
+  // Mutation: measure the browser's bytes alone, and the context at the
+  // bound with an "R&D" in its title fits.
+  test("a page context is measured in the bytes the engine encodes it to", () => {
+    const browser = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+    expect(wireBytes({ a: "<&>" })).toBe('{"a":"\\u003c\\u0026\\u003e"}'.length);
+    expect(wireBytes({ a: "\u2028\u2029" })).toBe('{"a":"\\u2028\\u2029"}'.length);
+    expect(wireBytes({ a: "é›" })).toBe(browser({ a: "é›" }));
+    const padded = (n: number): AssistantPageContext => ({
+      ...context,
+      title: "R&D",
+      query: { q: "x".repeat(n) },
+    });
+    const atBound = padded(ASSISTANT_PAGE_CONTEXT_MAX_BYTES - browser(padded(0)));
+    expect(browser(atBound)).toBe(ASSISTANT_PAGE_CONTEXT_MAX_BYTES);
+    expect(pageContextFits(atBound)).toBe(false);
+    expect(pageContextFits({ ...atBound, title: "R-D" })).toBe(true);
   });
 
   test("a viewer answer with no assistant member reads as disabled", () => {

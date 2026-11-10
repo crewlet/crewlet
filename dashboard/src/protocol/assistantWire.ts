@@ -306,6 +306,26 @@ export function auditReasonFits(reason: string): boolean {
   return reason.trim() !== "" && runes(reason) <= ASSISTANT_AUDIT_REASON_MAX_RUNES;
 }
 
+const encoder = new TextEncoder();
+
+/**
+ * The bytes a value encodes to as the ENGINE encodes it (Go's
+ * `encoding/json`), which is what it measures a page context and a page
+ * action's arguments by: what `JSON.stringify` writes, but for the five
+ * characters Go escapes and the browser does not. "<", ">" and "&" are written
+ * `\u003c`, `\u003e` and `\u0026`, six bytes where the browser counts one, and
+ * U+2028 and U+2029 six where it counts three. Counted by the browser's bytes
+ * alone, a context the frame trimmed to just inside its bound was over it at
+ * the engine wherever a label or a value held one of them ("R&D"), and the
+ * engine refused the question it came with.
+ */
+export function wireBytes(value: unknown): number {
+  const text = JSON.stringify(value);
+  const html = text.match(/[<>&]/g)?.length ?? 0;
+  const separators = text.match(/[\u2028\u2029]/g)?.length ?? 0;
+  return encoder.encode(text).length + 5 * html + 3 * separators;
+}
+
 /**
  * Whether a page context is within every bound the engine holds it to, so a
  * screen that registered too much is trimmed by the frame rather than refused
@@ -315,9 +335,7 @@ export function pageContextFits(context: AssistantPageContext): boolean {
   if (context.resources.length > ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES) return false;
   if (context.accepts.length > ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS) return false;
   if (context.accepts.includes(ASSISTANT_ACTION_CONTEXT_INVALIDATE)) return false;
-  return (
-    new TextEncoder().encode(JSON.stringify(context)).length <= ASSISTANT_PAGE_CONTEXT_MAX_BYTES
-  );
+  return wireBytes(context) <= ASSISTANT_PAGE_CONTEXT_MAX_BYTES;
 }
 
 /** Whether a string is a proposal digest in the wire's form. */

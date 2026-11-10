@@ -33,7 +33,12 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_BYTES,
+  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES,
+  ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
+  ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_SECRET_PATH,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
@@ -44,6 +49,7 @@ import {
   type AssistantDraftKind,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
+import { wireBytes } from "~/protocol/assistantWire.ts";
 import {
   hashOf,
   type PageActionParse,
@@ -154,8 +160,6 @@ export interface DraftChange<D> {
 
 const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
 const SECRET_PATH = new RegExp(ASSISTANT_PAGE_DRAFT_SECRET_PATH);
-const LABEL_MAX_RUNES = 120;
-const HINT_MAX_RUNES = 200;
 const ID_MAX_BYTES = 200;
 /** The longest text one proposed value may be: well past any field a draft screen draws. */
 const PROPOSED_MAX_RUNES = 16 * 1024;
@@ -238,12 +242,12 @@ export function draftSnapshot<D>(spec: AssistantDraftSpec<D>): AssistantPageDraf
     const value = f.read(spec.value);
     const field: AssistantDraftField = {
       path: f.path,
-      label: line(f.label, LABEL_MAX_RUNES),
+      label: line(f.label, ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES),
       kind: kindOf(f, value),
       value: "",
     };
     const hint = f.file ? (f.hint ?? `A file: ${f.file.accepts.join(", ")}`) : f.hint;
-    if (hint) field.hint = line(hint, HINT_MAX_RUNES);
+    if (hint) field.hint = line(hint, ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES);
     if (f.secret || isSecretDraftPath(f.path)) {
       // A CREDENTIAL NEVER LEAVES THE PAGE, and is never the assistant's to set.
       field.redacted = true;
@@ -409,23 +413,39 @@ export function parseDraftChange<D>(
   return { ok: true, value: { next, rows } };
 }
 
+/**
+ * A field's description, `what` it is and then `how` its kind is written,
+ * within the engine's bound for one description: `what` (a label and a hint
+ * the screen wrote, each long within its own bound) gives way, marked, so the
+ * kind's own words always arrive.
+ */
+function described(what: string, how: string): string {
+  const tail = how === "" ? "" : `. ${how}`;
+  const room = ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES - [...tail].length;
+  const fitted = cut(what, room);
+  return fitted.cut ? `${cut(what, room - 1).text}…${tail}` : `${what}${tail}`;
+}
+
 /** What one editable field takes, by its kind: text, a list, or a file of this conversation. */
 function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantActionArgs {
-  const description = field.hint ? `${field.label}. ${field.hint}` : field.label;
+  const what = field.hint ? `${field.label}. ${field.hint}` : field.label;
   switch (field.kind) {
     case "list":
       return {
         type: ["array", "string"],
-        description: `${description}. A list of items, or one item per line.`,
+        description: described(what, "A list of items, or one item per line."),
         items: { type: "string" },
       };
     case "file":
       return {
         type: ["string", "object"],
-        description: `${description}. The id of a file delivered or attached in this conversation.`,
+        description: described(
+          what,
+          "The id of a file delivered or attached in this conversation.",
+        ),
       };
     default:
-      return { type: "string", description };
+      return { type: "string", description: described(what, "") };
   }
 }
 
@@ -433,15 +453,24 @@ function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantAction
  * What `draft.set` takes on this draft: `values`, each an editable field by
  * its path, in its kind's shape. Built from the snapshot the page sends, so
  * the model reads the same fields the screen's parser sets.
+ *
+ * UNDEFINED PAST WHAT ONE SCHEMA MAY DECLARE. A member per editable field
+ * grows with the draft, and the engine refuses a page context whose action
+ * declares more members than [ASSISTANT_ACTION_ARGS_MAX_MEMBERS] in one object
+ * or encodes past [ASSISTANT_ACTION_ARGS_MAX_BYTES], and every question asked
+ * with it. Past either, `draft.set` declares nothing, which the engine takes
+ * for it alone, reading what it takes from the draft's editable fields
+ * (`catalog.PageActionFor`). Its other bounds hold by construction: three
+ * levels deep, at most two parts a member, one example, and each description
+ * cut to its bound ([described]).
  */
-export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
+export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs | undefined {
   const properties: Record<string, AssistantActionArgs> = {};
   for (const field of draft.fields) {
     if (field.editable === true) properties[field.path] = fieldArgs(field);
   }
-  // THE FIELD'S OWN VALUE is the one example every field takes as it stands.
-  const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);
-  return {
+  if (Object.keys(properties).length > ASSISTANT_ACTION_ARGS_MAX_MEMBERS) return undefined;
+  const args: AssistantActionArgs = {
     type: "object",
     description: "Values for the open draft's editable fields, by path.",
     additionalProperties: false,
@@ -449,8 +478,14 @@ export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
     properties: {
       values: { type: "object", additionalProperties: false, properties },
     },
-    ...(first ? { examples: [{ values: { [first.path]: first.value } }] } : {}),
   };
+  if (wireBytes(args) > ASSISTANT_ACTION_ARGS_MAX_BYTES) return undefined;
+  // THE FIELD'S OWN VALUE is the one example every field takes as it stands,
+  // offered where it still fits: a value runs to a thousand characters.
+  const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);
+  if (!first) return args;
+  const shown = { ...args, examples: [{ values: { [first.path]: first.value } }] };
+  return wireBytes(shown) <= ASSISTANT_ACTION_ARGS_MAX_BYTES ? shown : args;
 }
 
 /** What the draft's fields read now, as one comparable value. */

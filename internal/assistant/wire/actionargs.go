@@ -119,15 +119,25 @@ func (t *ArgTypes) UnmarshalJSON(raw []byte) error {
 // declares (the org builder's operations, the widest, use a depth of five and
 // about sixty nodes) and small enough that checking a value against one is
 // cheap and the schema reads in a few lines of the prompt.
+//
+// THE THREE EXPORTED ONES ARE THE DASHBOARD'S TOO: the arguments of
+// `draft.set` grow with the open draft (a member per editable field, each
+// described by its label and hint), so the dashboard declares them only while
+// they fit, and otherwise lets the draft's editable fields say what it takes.
+// `contract/assistant.ts` copies them, held here by the client gate.
 const (
 	actionArgsMaxDepth    = 8
 	actionArgsMaxNodes    = 160
 	actionArgsMaxEnum     = 64
-	actionArgsMaxMembers  = 32
 	actionArgsMaxVariants = 16
 	actionArgsMaxExamples = 4
 	actionArgsMaxPattern  = 128
-	actionArgsMaxDescribe = 300
+	// ActionArgsMaxMembers is the most members one object of a schema
+	// declares, by name and by pattern together.
+	ActionArgsMaxMembers = 32
+	// ActionArgsDescriptionMaxRunes is the longest description one part of a
+	// schema carries, in characters.
+	ActionArgsDescriptionMaxRunes = 300
 	// ActionArgsMaxBytes is the most one action's schema encodes to.
 	ActionArgsMaxBytes = 6 << 10
 )
@@ -205,17 +215,17 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 	case len(s.Enum) > actionArgsMaxEnum:
 		return fmt.Errorf("%w: %s lists %d values, over %d", ErrInvalid, path, len(s.Enum),
 			actionArgsMaxEnum)
-	case len(s.Properties)+len(s.PatternProperties) > actionArgsMaxMembers:
+	case len(s.Properties)+len(s.PatternProperties) > ActionArgsMaxMembers:
 		return fmt.Errorf("%w: %s declares more than %d members", ErrInvalid, path,
-			actionArgsMaxMembers)
+			ActionArgsMaxMembers)
 	case len(s.OneOf) > actionArgsMaxVariants:
 		return fmt.Errorf("%w: %s declares more than %d shapes", ErrInvalid, path,
 			actionArgsMaxVariants)
 	case depth > 0 && len(s.Examples) > 0:
 		return fmt.Errorf("%w: %s declares examples below the top", ErrInvalid, path)
-	case !text(s.Description, actionArgsMaxDescribe):
+	case !text(s.Description, ActionArgsDescriptionMaxRunes):
 		return fmt.Errorf("%w: %s description is not text of at most %d characters",
-			ErrInvalid, path, actionArgsMaxDescribe)
+			ErrInvalid, path, ActionArgsDescriptionMaxRunes)
 	}
 	for _, t := range s.Type {
 		if !t.Valid() {

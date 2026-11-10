@@ -218,8 +218,9 @@ const DRAFT: AssistantPageDraft = {
 describe("an open draft's arguments are its editable fields", () => {
   test("its example sets the draft's own field", () => {
     const args = draftSetArgs(DRAFT);
-    expect(Object.keys(args.properties?.values?.properties ?? {})).toEqual(["ceiling"]);
-    for (const raw of args.examples ?? []) {
+    expect(Object.keys(args?.properties?.values?.properties ?? {})).toEqual(["ceiling"]);
+    expect(args?.examples).toHaveLength(1);
+    for (const raw of args?.examples ?? []) {
       const parsed = parseDraftChange(SPEC, raw);
       expect(parsed.ok, parsed.ok ? "" : parsed.reason).toBe(true);
     }
@@ -250,7 +251,7 @@ test("the engine's fixture is every declaration as the dashboard emits it", () =
         revision: "rev-1",
       }).draft,
     ),
-    "draft.set": draftSetArgs(DRAFT),
+    "draft.set": draftSetArgs(DRAFT)!,
   };
   const text = `${JSON.stringify(emitted, null, 2)}\n`;
   if (process.env.CREWLET_REGENERATE_ASSISTANT_FIXTURES === "1") writeFileSync(FIXTURE, text);
