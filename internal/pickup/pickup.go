@@ -10,7 +10,8 @@
 // completion ledger refuses it again on any node and across restarts, and a
 // fleet claim on the key keeps two nodes from both sending it during a move.
 // A seat's own comment moves no part of the key, so declining with one is
-// final until somebody else changes the item.
+// final until somebody else changes the item. A wait until a date is part of
+// the key once it passes, so the item is handed once when its date comes.
 //
 // # When a seat is idle
 //
@@ -47,30 +48,41 @@ const Source = "pickup"
 const Tick = time.Minute
 
 // Key identifies one pickup: the seat, the item, the last change somebody
-// other than the seat made to it, its status, and the seat's own progress on
-// it when started.
+// other than the seat made to it, its status, the seat's own progress on it
+// when started, and the start it waited until.
 type Key struct {
 	Seat       uuid.UUID
 	Item       string
 	Moved      uint64
 	Status     string
 	Progressed uint64
+	Waited     int64
 }
 
 // KeyOf is the pickup an item would be for seat.
 func KeyOf(seat uuid.UUID, item worklet.ReadyItem) Key {
-	return Key{Seat: seat, Item: item.ID, Moved: item.Moved, Status: string(item.Status),
+	key := Key{Seat: seat, Item: item.ID, Moved: item.Moved, Status: string(item.Status),
 		Progressed: item.Progressed}
+	// Ready means the start has passed: the instant it waited until.
+	if item.Start != nil {
+		key.Waited = item.Start.Unix()
+	}
+	return key
 }
 
 // pickupNamespace scopes derived pickup ids. Fixed for the life of the
 // deployment: a new one would hand every seat every item again.
 var pickupNamespace = uuid.MustParse("7d0c6f2e-4b1a-5e39-8c27-91f3a6b2d4e8")
 
+// text keeps an item with no start under the key older builds derive.
 func (k Key) text() string {
-	return k.Seat.String() + "\x00" + k.Item + "\x00" +
+	text := k.Seat.String() + "\x00" + k.Item + "\x00" +
 		strconv.FormatUint(k.Moved, 10) + "\x00" + k.Status + "\x00" +
 		strconv.FormatUint(k.Progressed, 10)
+	if k.Waited != 0 {
+		text += "\x00" + strconv.FormatInt(k.Waited, 10)
+	}
+	return text
 }
 
 // WakeID is the pickup's event id: the same on every node and every attempt.

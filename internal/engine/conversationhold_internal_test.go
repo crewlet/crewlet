@@ -87,12 +87,18 @@ func TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt(t *testing.T) {
 		t.Fatalf("hold: %v (%v)", ok, err)
 	}
 	var turns atomic.Int32
+	var skipped []types.TurnTriggerSkipped
 	d := &Dispatcher{
 		Conditions: func(string) inbox.Conditions {
 			return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
 		},
 		Ledgered: inbox.Ledgered,
 		Held:     e.conversationHeld,
+		Observe: func(_ context.Context, ev *events.Event) {
+			if s, ok := events.DataAs[*types.TurnTriggerSkipped](ev); ok {
+				skipped = append(skipped, *s)
+			}
+		},
 		Turn: func(context.Context, Request) (turn.Result, error) {
 			turns.Add(1)
 			return turn.Result{}, nil
@@ -102,6 +108,10 @@ func TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt(t *testing.T) {
 	if got := dispatch(message(longRoom, iam.ActorAgent)); got.Outcome != queue.OutcomeAck || turns.Load() != 0 {
 		t.Fatalf("an agent's message on the held conversation answered %+v after %d turns, want settled unrun",
 			got, turns.Load())
+	}
+	// THE TURN LEDGER COUNTS IT AS HELD BY THE BREAKER, not as worked.
+	if len(skipped) != 1 || skipped[0].Disposition != types.DispositionBreakerHeld || skipped[0].Wake == "" {
+		t.Errorf("the held wake was recorded as %+v, want one skip counted breaker_held under its wake", skipped)
 	}
 	dispatch(message("chat:room/2", iam.ActorAgent))
 	if turns.Load() != 1 {

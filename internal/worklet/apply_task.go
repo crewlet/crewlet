@@ -485,6 +485,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	case patch.StartAt != nil:
 		task.StartAt = patch.StartAt
 	}
+	if patch.WaitReason != nil {
+		task.WaitReason = *patch.WaitReason
+	}
 	switch {
 	case patch.ClearDue:
 		task.DueAt = nil

@@ -1083,7 +1083,10 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 			s.Turns.Refusals = types.SumRefusals(s.Turns.Refusals, refused)
 		}
 	}
-	return d.usageHeld(ctx, w, seat, name)
+	if err := d.usageHeld(ctx, w, seat, name); err != nil {
+		return err
+	}
+	return d.usageSkipped(ctx, w, seat, name)
 }
 
 // usageHeldSQL counts the window's held wakes per seat and origin, off the
@@ -1124,6 +1127,46 @@ func (d *DB) usageHeld(ctx context.Context, w UsageWindow,
 		name(s, handle, "")
 		s.Turns.Ledger = addLedger(s.Turns.Ledger, types.WakeHeld{Origin: origin}.Wake(),
 			string(types.DispositionHeld), "", count, types.TurnTokens{})
+	}
+	return rows.Err()
+}
+
+// usageSkippedSQL counts the window's wakes settled unrun under a disposition
+// the turn ledger counts, per seat, wake and disposition, off the
+// `turn_trigger_skipped` records that name one.
+const usageSkippedSQL = `
+	SELECT e.agent_id, MAX(COALESCE(json_extract(e.payload, '$.agent_handle'), '')),
+	       COALESCE(json_extract(e.payload, '$.wake'), ''),
+	       json_extract(e.payload, '$.disposition'),
+	       COUNT(DISTINCT json_extract(e.payload, '$.trigger_id'))
+	  FROM crewlet_events AS e
+	 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+	   AND e.agent_id != '' AND json_extract(e.payload, '$.disposition') IN (?, ?)
+	   AND ` + keptRowSQL + `
+	 GROUP BY e.agent_id, 3, 4`
+
+// usageSkipped counts each seat's absorbed and breaker-held wakes into its ledger.
+func (d *DB) usageSkipped(ctx context.Context, w UsageWindow,
+	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
+
+	rows, err := d.sql.QueryContext(ctx, usageSkippedSQL, types.TurnTriggerSkipped{}.EventType(),
+		EncodeTime(w.Start), EncodeTime(w.End), string(types.DispositionAbsorbed),
+		string(types.DispositionBreakerHeld))
+	if err != nil {
+		return fmt.Errorf("store: read the usage day's skipped wakes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			agent, handle, wake, disposition string
+			count                            int64
+		)
+		if err := rows.Scan(&agent, &handle, &wake, &disposition, &count); err != nil {
+			return fmt.Errorf("store: scan the usage day's skipped wakes: %w", err)
+		}
+		s := seat(agent)
+		name(s, handle, "")
+		s.Turns.Ledger = addLedger(s.Turns.Ledger, wake, disposition, "", count, types.TurnTokens{})
 	}
 	return rows.Err()
 }

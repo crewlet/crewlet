@@ -204,6 +204,15 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Snapshot: worklet.Snapshot{CommentAuthorKind: worklet.AuthorAgent, CommentAsks: &asks,
 				MentionedAgents: []string{"ada"}}}
 		record.NoticeWokeKept = true
+	case "TaskPatch.WaitReason":
+		// A PATCH THAT SAYS WHY THE TASK WAITS UNTIL ITS START.
+		start, reason := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "the vendor's window opens then"
+		patch, err := json.Marshal(worklet.TaskPatch{StartAt: &start, WaitReason: &reason})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
 	case "TaskPatch.AskWatch":
 		// A PATCH THAT CARRIES THE WATCHERS A QUESTION ADDED.
 		askWatch := []string{"ada"}

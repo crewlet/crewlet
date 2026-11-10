@@ -3204,6 +3204,9 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if refusal != "" {
 		return patch, kind, refusal
 	}
+	if refusal = readWait(args, now, loc, &plan, UpdateWorkItemTool); refusal != "" {
+		return patch, kind, refusal
+	}
 	// THE DATES AND THE SIZING ARE `fields`, which is what they are.
 	plan.applyToPatch(&patch)
 

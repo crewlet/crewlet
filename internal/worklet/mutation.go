@@ -53,11 +53,12 @@ import (
 // Version 7 is a notice row that keeps whether the change woke its recipient
 // ([MutationRecord.NoticeWokeKept]).
 // Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
-// Version 9 is a task patch taking a date off by its flag
-// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 8 decodes
+// Version 9 is why a task waits until its start ([TaskPatch.WaitReason]).
+// Version 10 is a task patch taking a date off by its flag
+// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 9 decodes
 // neither, and would apply the patch as one that names no date — keeping a
 // date every newer node cleared.
-const RecordVersion = 9
+const RecordVersion = 10
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -122,8 +123,9 @@ var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.NoticeAsksKept", Since: NoticeAsksVersion, Path: []string{"notice_asks_kept"}},
 	{Name: "MutationRecord.NoticeWokeKept", Since: NoticeWokeVersion, Path: []string{"notice_woke_kept"}},
 	{Name: "TaskPatch.AskWatch", Since: 8, Path: []string{"mutation", "ask_watch"}},
-	{Name: "TaskPatch.ClearStart", Since: 9, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
-	{Name: "TaskPatch.ClearDue", Since: 9, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
+	{Name: "TaskPatch.WaitReason", Since: 9, Path: []string{"mutation", "wait_reason"}},
+	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
+	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
