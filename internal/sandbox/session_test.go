@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -155,8 +156,12 @@ type sessionKeep struct {
 	now    func() time.Time
 	putErr error
 	// sealErr, when set, fails every seal once its archive has streamed into
-	// the spool: a spool left half written.
-	sealErr error
+	// the spool: a spool left half written. refuseSealOf, when set, fails the
+	// seal of the one archive whose bytes it holds, the same way, and
+	// refusePutOf the upload of the one spool whose bytes it holds: a case's
+	// two reads of one job told apart by what each took.
+	sealErr                   error
+	refuseSealOf, refusePutOf []byte
 	// gate, when set, holds every upload until it is closed: a keep that
 	// takes its time. mintGate, when set, holds every keep at its first step,
 	// before its upload, the same way.
@@ -205,12 +210,16 @@ func (k *sessionKeep) MintedAt(ctx context.Context, _, _ string, _ time.Time) (t
 }
 
 func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error) {
-	n, err := io.Copy(dst, archive)
+	var read bytes.Buffer
+	n, err := io.Copy(dst, io.TeeReader(archive, &read))
 	if err != nil {
 		return executorkeep.SealedSpool{}, err
 	}
 	k.mu.Lock()
 	sealErr := k.sealErr
+	if k.refuseSealOf != nil && bytes.Equal(read.Bytes(), k.refuseSealOf) {
+		sealErr = errors.New("the keyring would not seal this archive")
+	}
 	k.mu.Unlock()
 	if sealErr != nil {
 		return executorkeep.SealedSpool{}, sealErr
@@ -239,6 +248,9 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	defer k.mu.Unlock()
 	if k.putErr != nil {
 		return executorkeep.SealedObject{}, k.putErr
+	}
+	if k.refusePutOf != nil && bytes.Equal(body, k.refusePutOf) {
+		return executorkeep.SealedObject{}, errors.New("the object store refused this upload")
 	}
 	k.uploaded = append(k.uploaded, body)
 	sum := sha256.Sum256(body)

@@ -187,20 +187,29 @@ type SessionTake struct {
 	// end, or at the end it was asked for, a stop's, a loss's or its turn's
 	// cap's — and one packed now where it left none (a crash before its pack,
 	// a job killed part way through it, a job lost with its engine). Every
-	// pack records the archive's digest in the box as the script's does, so
-	// the box never takes its own archive for another box's.
+	// pack made now, either way, is the take's own, streamed from a place of
+	// its own and never moved over the job's capture, which the job's script
+	// alone writes: so each read streams the archive its own pack made, and
+	// one that streams the job's capture streams an archive nothing moves
+	// over while it reads it. Every pack records the archive's digest in the
+	// box as the script's does — before it moves the archive where its read
+	// reads it, so a pack that could not record it fails — so the box never
+	// takes its own archive for another box's.
 	Pack bool
 
-	// Save names the TAKER whose save is taken — the holder of the taker
-	// lease the save is taken under, the taking process's incarnation
-	// (`<node>:<uuid>`, [SessionCapture.Taker]) — in place of the job's own
-	// session: the archive internal/sandbox/executor's Runner.PackSave last
-	// packed of the box's session for that taker, while its job still
-	// worked, at that taker's own path. Never the job's capture, which every
-	// read of a job that is over takes as its final archive, and never packed
-	// by the take: the save is packed first, so the scrub's values (Scrub)
-	// are read after the pack, and hold every value the box was handed by
-	// then. With Pack set it is refused. "" takes the job's own session.
+	// Save names the SAVE taken in place of the job's own session: the path
+	// internal/sandbox/executor's Runner.PackSave packed it to and described
+	// it at ([SessionArchive.Path]) — a save the taking process packed of the
+	// box's session while its job still worked, under its taker lease
+	// ([SessionCapture.Taker]), at a place of that save's own — streamed by
+	// this take alone and removed once it is done with it. Never the job's
+	// capture, which every read of a job that is over takes as its final
+	// archive; never a path another save moves over, which a take that reads
+	// its archive twice would find changed between its passes; and never
+	// packed by the take: the save is packed first, so the scrub's values
+	// (Scrub) are read after the pack, and hold every value the box was
+	// handed by then. A path that is no save of the box's is refused, and so
+	// is Pack set beside it. "" takes the job's own session.
 	Save string
 
 	// Scrub is every secret the engine itself put in the box, by value — its

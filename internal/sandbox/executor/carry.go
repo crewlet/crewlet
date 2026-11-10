@@ -159,7 +159,8 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 }
 
 // archiveAt describes the session archive the box holds at path — the run's
-// capture ([Paths.SessionCapture]), or a taker's save ([Paths.SessionSave]) —
+// capture ([Paths.SessionCapture]), a pack on demand's ([Paths.SessionPackHeld])
+// or a save ([Paths.SessionSave]) —
 // for the session rec names, or nil where there is none: a harness that
 // carries no session, no archive there, a record that names no session, or a
 // path that holds no regular file — the box's own doing, which costs the
@@ -203,6 +204,11 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 // whole by the run that packed it, so the stream is one whole archive; a box
 // whose own agent rewrote the file since is the box's doing, which the
 // restorer's checks meet.
+//
+// AND NOTHING MOVES OVER IT WHILE IT IS READ, so a take that opens it again
+// for a second pass ([scrubTar]) reads the archive its first pass read: the
+// run's script moves it into place once, as its harness exits, and no pack the
+// engine makes on demand moves anything there ([Runner.PackCapture]).
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
 	paths := PathsFor(box)
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths)

@@ -55,6 +55,19 @@ func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
 }
 
+// savesLeft is every save of taker's left in box: each is named for its save
+// alone (executor.Paths.SessionSave), after its taker, so it is found by its
+// pattern rather than named.
+func savesLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
+	t.Helper()
+	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSave(taker, ""))+"*; do "+
+		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
+	if err != nil {
+		t.Fatalf("asking the box for its saves: %v", err)
+	}
+	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
+}
+
 // hostTool is where this machine's own name is, for a stand-in that hands its
 // calls on to it.
 func hostTool(t *testing.T, name string) string {
@@ -144,19 +157,21 @@ func filesOf(s string) sessionFiles {
 // ARCHIVE. A box whose job's own exit pack never landed is saved by one taker
 // and then another: each save is packed in a staging directory of its own — a
 // pack on demand's, and another taker's save's, left as they were — and moved
-// into that taker's own place, named by a digest of the taker rather than the
-// taker itself, its staging directory gone and its digest kept in the box. A take of
-// a save reads that taker's alone and packs nothing: the job's capture is
-// still not there after it, nor any digest added, and a taker that saved none
-// is taken as nothing. Only then is the job's final archive read, and a
-// collection's read finds none, so the final take packs the job's own.
+// into a place of that save's own, named by a digest of its taker rather than
+// the taker itself, its staging directory gone and its digest kept in the box.
+// A take of a save reads that save alone, packs nothing and removes it once
+// read: the job's capture is still not there after it, nor any digest added; a
+// save no longer there is taken as nothing, and a path that is no save is
+// refused unread. Only then is the job's final archive read, and a
+// collection's read finds none, so the final take packs the job's own — at
+// that pack's own place, as every pack on demand keeps its archive.
 //
-// Mutation: move a save over the job's capture, as a pack on demand moves its
-// archive, and the collection's read finds it; name one path for every taker
-// and the second save replaces the first; stage a save where a pack on demand
-// or another taker stages, and that one's archive is gone; take a save by
-// packing one — over the job's capture or anywhere — or the job's final
-// archive from a save's path, and its check goes red.
+// Mutation: move a save over the job's capture, and the collection's read
+// finds it; name one path for every taker and the second save replaces the
+// first; stage a save where a pack on demand or another taker stages, and that
+// one's archive is gone; take a save by packing one — over the job's capture or
+// anywhere — or the job's final archive from a save's path, or any path a take
+// is handed, and its check goes red.
 func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -177,11 +192,11 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
-	if saved.Path != p.SessionSave(takerA) || saved.SessionID != ran.SessionID ||
+	if !strings.HasPrefix(saved.Path, p.SessionSave(takerA, "")) || saved.SessionID != ran.SessionID ||
 		saved.Harness != executor.ClaudeCodeName || saved.Format != executor.ClaudeArchiveFormat ||
 		saved.Version != "2.1.310" || saved.Size <= 0 {
-		t.Errorf("the save is described as %+v, want session %s of Claude Code 2.1.310 at %s", saved,
-			ran.SessionID, p.SessionSave(takerA))
+		t.Errorf("the save is described as %+v, want session %s of Claude Code 2.1.310 at a place of its own "+
+			"named after its taker, %s…", saved, ran.SessionID, p.SessionSave(takerA, ""))
 	}
 	if strings.Contains(saved.Path, "node-a") {
 		t.Errorf("the save's path names its taker's holder rather than a digest of it: %s", saved.Path)
@@ -197,7 +212,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 			t.Errorf("the save removed %s, which another pack was staging", staged)
 		}
 	}
-	first := []byte(boxFile(t, b, p.SessionSave(takerA)))
+	first := []byte(boxFile(t, b, saved.Path))
 	digests := boxFile(t, b, p.SessionDigests())
 	if !strings.Contains(digests, ran.SessionID+" "+digestOf(t, first)+"\n") {
 		t.Errorf("the box keeps no digest of the save it packed: %q", digests)
@@ -208,33 +223,46 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	if err != nil {
 		t.Fatalf("PackSave for the second taker: %v", err)
 	}
-	if other.Path == saved.Path || other.Path != p.SessionSave(takerB) {
-		t.Errorf("the second taker's save is at %s, want its own %s, apart from %s", other.Path,
-			p.SessionSave(takerB), saved.Path)
+	if other.Path == saved.Path || !strings.HasPrefix(other.Path, p.SessionSave(takerB, "")) {
+		t.Errorf("the second taker's save is at %s, want a place of its own after its taker, %s…, apart from %s",
+			other.Path, p.SessionSave(takerB, ""), saved.Path)
 	}
-	if again := []byte(boxFile(t, b, p.SessionSave(takerA))); !bytes.Equal(again, first) {
+	if again := []byte(boxFile(t, b, saved.Path)); !bytes.Equal(again, first) {
 		t.Error("the second taker's save changed the first taker's")
 	}
 
-	// A TAKE OF A SAVE reads its taker's alone, and packs nothing: no capture
-	// of the job's appears, and no digest is added.
+	// A TAKE OF A SAVE reads that save alone, packs nothing and removes it
+	// once read: no capture of the job's appears, and no digest is added.
 	digests = boxFile(t, b, p.SessionDigests())
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: takerA, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the first taker's save = %+v, %v", taken, err)
 	}
 	members := archiveMembers(t, taken.Body)
 	_ = taken.Body.Close()
-	if taken.Archive.Path != p.SessionSave(takerA) {
-		t.Errorf("the take of a save read %s, want the taker's own %s", taken.Archive.Path, p.SessionSave(takerA))
+	if taken.Archive.Path != saved.Path {
+		t.Errorf("the take of a save read %s, want that save's own %s", taken.Archive.Path, saved.Path)
 	}
 	if _, ok := members[filesOf(ran.SessionID).transcript]; !ok {
 		t.Errorf("the save holds no transcript: %v", members)
 	}
-	none, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{
-		Save: "node-c:0f1e2d3c-4b5a-4968-8776-655443322110", MaxBytes: takeBound})
+	if boxHas(t, b, saved.Path) {
+		t.Errorf("the take of a save left it at %s once read", saved.Path)
+	}
+	if !boxHas(t, b, other.Path) {
+		t.Errorf("the take of one save removed another, at %s", other.Path)
+	}
+	unsaved := p.SessionSave("node-c:0f1e2d3c-4b5a-4968-8776-655443322110", "0f1e2d3c-4b5a-4968-8776-655443322110")
+	none, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: unsaved, MaxBytes: takeBound})
 	if err != nil || none.Body != nil {
 		t.Errorf("the take of a save no taker made = %+v, %v; want nothing", none, err)
+	}
+	if notSave, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: p.SessionRecord(),
+		MaxBytes: takeBound}); err == nil {
+		if notSave.Body != nil {
+			_ = notSave.Body.Close()
+		}
+		t.Errorf("a take of a save named by a path that is no save's read %s", notSave.Archive.Path)
 	}
 	if boxHas(t, b, p.SessionCapture()) {
 		t.Error("a take of a save packed the job's capture")
@@ -242,7 +270,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	if got := boxFile(t, b, p.SessionDigests()); got != digests {
 		t.Errorf("a take of a save added a digest, so it packed: %q, was %q", got, digests)
 	}
-	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: takerA, Pack: true,
+	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: other.Path, Pack: true,
 		MaxBytes: takeBound}); err == nil {
 		t.Error("a take of a save that asks to pack was made")
 	}
@@ -263,8 +291,9 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		t.Fatalf("the final take = %+v, %v", final, err)
 	}
 	_ = final.Body.Close()
-	if final.Archive.Path != p.SessionCapture() {
-		t.Errorf("the final take read %s, want the job's own capture %s", final.Archive.Path, p.SessionCapture())
+	if !strings.HasPrefix(final.Archive.Path, p.WorkDir()+"/session-pack-staging.") || boxHas(t, b, p.SessionCapture()) {
+		t.Errorf("the final take read %s, want the job's own session packed at its pack's own place, and nothing "+
+			"over the job's capture", final.Archive.Path)
 	}
 }
 
@@ -469,8 +498,8 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 				if want := tc.check(files); err == nil || !strings.Contains(err.Error(), want) {
 					t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
 				}
-				if boxHas(t, b, pack.dest(p)) {
-					t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+				if left := pack.dest(t, b); len(left) > 0 {
+					t.Errorf("the refused pack left an archive at %s", strings.Join(left, ", "))
 				}
 				if left := pack.staged(t, b); len(left) > 0 {
 					t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
@@ -498,13 +527,13 @@ func madeAndRemoved(f sessionFiles) string {
 
 // heldPacks are the packs made beside a harness that may still work, each held
 // to the rule of such a pack: a save, and a take of a job its box would not
-// end, which packs it on demand (sandbox.SessionTake.Pack) — each with the
-// path it moves its archive over and what it left of the directory it stages
-// it in.
+// end, which packs it on demand (sandbox.SessionTake.Pack) — each with what it
+// left where a pack of its moves its archive, and what it left of the
+// directory it stages it in.
 var heldPacks = []struct {
 	name   string
 	make   func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
-	dest   func(p executor.Paths) string
+	dest   func(t *testing.T, b sandbox.Sandbox) []string
 	staged func(t *testing.T, b sandbox.Sandbox) []string
 }{
 	{name: "a save",
@@ -512,7 +541,7 @@ var heldPacks = []struct {
 			_, err := runner.PackSave(t.Context(), b, takerA)
 			return err
 		},
-		dest:   func(p executor.Paths) string { return p.SessionSave(takerA) },
+		dest:   func(t *testing.T, b sandbox.Sandbox) []string { return savesLeft(t, b, takerA) },
 		staged: func(t *testing.T, b sandbox.Sandbox) []string { return saveStagingLeft(t, b, takerA) }},
 	{name: "a take of a job still working",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
@@ -522,7 +551,12 @@ var heldPacks = []struct {
 			}
 			return err
 		},
-		dest:   func(p executor.Paths) string { return p.SessionCapture() },
+		dest: func(t *testing.T, b sandbox.Sandbox) []string {
+			if capture := paths(b).SessionCapture(); boxHas(t, b, capture) {
+				return []string{capture}
+			}
+			return nil
+		},
 		staged: packStagingLeft},
 }
 
@@ -568,8 +602,8 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 			if want := rewrittenInPlace(f); err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
 			}
-			if boxHas(t, b, pack.dest(p)) {
-				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+			if left := pack.dest(t, b); len(left) > 0 {
+				t.Errorf("the refused pack left an archive at %s", strings.Join(left, ", "))
 			}
 			if left := pack.staged(t, b); len(left) > 0 {
 				t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
@@ -729,8 +763,8 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tc.check) {
 					t.Fatalf("the pack answered %v, want it refused saying %q", err, tc.check)
 				}
-				if boxHas(t, b, pack.dest(p)) {
-					t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+				if left := pack.dest(t, b); len(left) > 0 {
+					t.Errorf("the refused pack left an archive at %s", strings.Join(left, ", "))
 				}
 				if left := pack.staged(t, b); len(left) > 0 {
 					t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
@@ -1035,8 +1069,8 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 				!strings.Contains(err.Error(), want) {
 				t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
 			}
-			if boxHas(t, b, pack.dest(p)) {
-				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+			if left := pack.dest(t, b); len(left) > 0 {
+				t.Errorf("the refused pack left an archive at %s", strings.Join(left, ", "))
 			}
 			if left := pack.staged(t, b); len(left) > 0 {
 				t.Errorf("the refused pack left its staging directory: %s", strings.Join(left, ", "))
@@ -1137,8 +1171,8 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 		t.Errorf("pack A, under whose tar the task file was rewritten, answered %v once pack B's walk had set "+
 			"it; want it refused saying %q", errA, want)
 	}
-	if boxHas(t, b, p.SessionSave(takerA)) {
-		t.Errorf("the refused pack A left a save at %s", p.SessionSave(takerA))
+	if left := savesLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the refused pack A left a save at %s", strings.Join(left, ", "))
 	}
 	if errB != nil {
 		t.Errorf("pack B, whose marker came after the task file was rewritten, was refused: %v", errB)
@@ -1320,10 +1354,11 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 				coarseClock(t, b)
 			}
 			before := boxFile(t, b, transcriptOf(b, ran.SessionID))
-			if _, err := runner.PackSave(t.Context(), b, takerA); err != nil {
+			saved, err := runner.PackSave(t.Context(), b, takerA)
+			if err != nil {
 				t.Fatalf("the save of a session that only grew as it was packed was refused: %v", err)
 			}
-			members := archiveMembers(t, strings.NewReader(boxFile(t, b, p.SessionSave(takerA))))
+			members := archiveMembers(t, strings.NewReader(boxFile(t, b, saved.Path)))
 			if got := members[f.transcript]; got != before {
 				t.Errorf("the save holds the transcript as %q, want it as tar first read it, %q", got, before)
 			}
@@ -1344,9 +1379,10 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 // take of a job that is over whose script left no archive waits on the box's
 // clock or refuses a file written as it packed — here the task file, touched
 // once tar has read the session, as a process the harness started and that
-// outlived it may touch it — and each lands where the job's final archive is
-// read. (The take packs such a job by tar run beside the configuration
-// directory, never in it, so the case's writer names the file whole.)
+// outlived it may touch it — and each lands where its read reads it: the
+// run's own end over the job's capture, the take's pack at a place of its own.
+// (The take packs such a job by tar run beside the configuration directory,
+// never in it, so the case's writer names the file whole.)
 //
 // Mutation: hold the run's own end to the rule of a pack beside a working
 // harness, or route a take of a job that is over to it, and that pack is
@@ -1380,8 +1416,9 @@ func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 				taken, err)
 		}
 		_ = taken.Body.Close()
-		if taken.Archive.Path != p.SessionCapture() {
-			t.Errorf("the take packed to %s, want the job's capture %s", taken.Archive.Path, p.SessionCapture())
+		if !strings.HasPrefix(taken.Archive.Path, p.WorkDir()+"/session-pack-staging.") || boxHas(t, b, p.SessionCapture()) {
+			t.Errorf("the take packed to %s, want a place of its own pack's, and nothing over the job's capture",
+				taken.Archive.Path)
 		}
 	})
 }
@@ -1416,8 +1453,8 @@ func TestAPackWhoseBoxClockNeverMovesIsRefused(t *testing.T) {
 	if boxHas(t, b, asked) {
 		t.Errorf("tar was asked to pack the session: %s", boxFile(t, b, asked))
 	}
-	if boxHas(t, b, p.SessionSave(takerA)) {
-		t.Error("the refused save left an archive")
+	if left := savesLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the refused save left an archive at %s", strings.Join(left, ", "))
 	}
 }
 
@@ -1449,8 +1486,8 @@ func TestAPackOnABoxWhoseSleepTakesNoTenthIsRefused(t *testing.T) {
 	if boxHas(t, b, asked) {
 		t.Errorf("tar was asked to pack the session: %s", boxFile(t, b, asked))
 	}
-	if boxHas(t, b, p.SessionSave(takerA)) {
-		t.Error("the refused save left an archive")
+	if left := savesLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the refused save left an archive at %s", strings.Join(left, ", "))
 	}
 }
 
@@ -1500,7 +1537,8 @@ func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			script := executor.ClaudeCode{}.PackSave(p, session, p.SessionSaveStaging(takerA, "a-save"), takerA)
+			script := executor.ClaudeCode{}.PackSave(p, session, p.SessionSaveStaging(takerA, "a-save"),
+				p.SessionSave(takerA, "a-save"))
 			cmd := exec.CommandContext(t.Context(), "sh", "-c", script) //nolint:gosec // the script under test
 			cmd.Env = []string{"PATH=" + bin}
 			var stderr strings.Builder
@@ -1510,31 +1548,35 @@ func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 				t.Fatalf("the pack in a box without %s ended %v, want it refused naming %s:\n%s", lacking, err,
 					lacking, stderr.String())
 			}
-			if _, err := os.Stat(p.SessionSave(takerA)); !os.IsNotExist(err) {
+			if _, err := os.Stat(p.SessionSave(takerA, "a-save")); !os.IsNotExist(err) {
 				t.Errorf("the pack in a box without %s left a save (%v)", lacking, err)
 			}
 		})
 	}
 }
 
-// A SAVE THAT FAILS LEAVES THE LAST ONE STANDING. A taker's save lands; the
-// harness goes on, and writes its task file as the taker's next save is
-// packed, which is refused — and the taker's place still holds the save before
-// it, byte for byte, with no digest added for an archive that never landed and
-// no staging directory left behind; a later save that holds replaces it.
+// A SAVE THAT FAILS LEAVES THE LAST ONE STANDING, AND NOTHING OF ITS OWN. A
+// taker's save lands; the harness goes on, and writes its task file as the
+// taker's next save is packed, which is refused — and the save before it is
+// still at its own place, byte for byte, with no archive of the refused one's
+// beside it, no digest added for an archive that never landed and no staging
+// directory left behind; a later save that holds lands at a place of its own,
+// the session as it went on.
 //
-// Mutation: move the staged archive over the taker's path before its checks,
-// or on a failure, and the last save is gone; remove the staging directory only
-// where the pack held, and the refused one stays.
+// Mutation: move the staged archive into place before its checks, or on a
+// failure, and the refused save leaves an archive; move a save over the
+// taker's last, and that one is gone; remove the staging directory only where
+// the pack held, and the refused one stays.
 func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
 	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	p := paths(b)
-	if _, err := runner.PackSave(t.Context(), b, takerA); err != nil {
+	saved, err := runner.PackSave(t.Context(), b, takerA)
+	if err != nil {
 		t.Fatalf("the first save: %v", err)
 	}
-	last := boxFile(t, b, p.SessionSave(takerA))
+	last := boxFile(t, b, saved.Path)
 	digests := boxFile(t, b, p.SessionDigests())
 
 	files := filesOf(ran.SessionID)
@@ -1547,8 +1589,11 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	if _, err := runner.PackSave(t.Context(), b, takerA); err == nil {
 		t.Fatal("a save of a task file written while it was packed was made")
 	}
-	if got := boxFile(t, b, p.SessionSave(takerA)); got != last {
-		t.Error("the refused save replaced the taker's last one")
+	if got := boxFile(t, b, saved.Path); got != last {
+		t.Error("the refused save changed the taker's last one")
+	}
+	if left := savesLeft(t, b, takerA); len(left) != 1 || left[0] != saved.Path {
+		t.Errorf("the taker's saves are %s, want the last one alone, %s", strings.Join(left, ", "), saved.Path)
 	}
 	if got := boxFile(t, b, p.SessionDigests()); got != digests {
 		t.Errorf("the refused save recorded a digest: %q, was %q", got, digests)
@@ -1560,13 +1605,17 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	if _, err := b.Exec(t.Context(), "rm -f "+shQuote(p.BinDir()+"/tar"), sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.PackSave(t.Context(), b, takerA); err != nil {
+	again, err := runner.PackSave(t.Context(), b, takerA)
+	if err != nil {
 		t.Fatalf("the save after it: %v", err)
 	}
-	next := boxFile(t, b, p.SessionSave(takerA))
-	members := archiveMembers(t, strings.NewReader(next))
-	if next == last || !strings.Contains(members[files.transcript], "after the first save") {
-		t.Errorf("the save that held did not replace the last one: %q", members[files.transcript])
+	members := archiveMembers(t, strings.NewReader(boxFile(t, b, again.Path)))
+	if again.Path == saved.Path || !strings.Contains(members[files.transcript], "after the first save") {
+		t.Errorf("the save that held is at %s, beside the last one at %s, holding %q: want a place of its own "+
+			"and the session as it went on", again.Path, saved.Path, members[files.transcript])
+	}
+	if got := boxFile(t, b, saved.Path); got != last {
+		t.Error("the save that held changed the one before it")
 	}
 }
 
@@ -1602,8 +1651,8 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 	if boxHas(t, b, asked) {
 		t.Errorf("tar was asked to pack the session: %s", boxFile(t, b, asked))
 	}
-	if boxHas(t, b, p.SessionSave(takerA)) {
-		t.Error("the refused save left an archive")
+	if left := savesLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the refused save left an archive at %s", strings.Join(left, ", "))
 	}
 
 	if _, err := b.Exec(t.Context(), "rm -f "+shQuote(big), sandbox.ExecOptions{}); err != nil {
@@ -1648,7 +1697,7 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 			}
 			// TWO TAKERS' SAVES, AND A SAVE CUT SHORT, its node stopped as it
 			// packed.
-			saved := []string{p.SessionSave(takerA), p.SessionSave(takerB),
+			saved := []string{p.SessionSave(takerA, "a-save"), p.SessionSave(takerB, "b-save"),
 				p.SessionSaveStaging(takerA, "a-save-cut-short") + "/capture"}
 			for _, file := range saved {
 				if err := b.WriteFile(t.Context(), file, []byte("an archive of the session")); err != nil {
@@ -1681,14 +1730,14 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 // own. One taker can save one box twice at once — the drain's save beside one
 // the waiter asked for — and each save keeps what it lists, its marker and its
 // archive in a staging directory named for that save alone, after its taker
-// (executor.Paths.SessionSaveStaging), and moves its archive over the taker's
-// own path whole. Here the first save's tar, once it has packed, holds until
-// the second save's tar has packed too, so the second save clears its staging
-// directory, lists the session, writes its marker and packs while the first
-// has yet to check what it packed: both hold, the taker's path holds a whole
-// archive of the session, and neither save leaves its staging directory
-// behind. The tars pass their words through a fifo the case holds open, so
-// nothing waits on a clock.
+// (executor.Paths.SessionSaveStaging), and moves its archive to a place of its
+// own whole (executor.Paths.SessionSave). Here the first save's tar, once it
+// has packed, holds until the second save's tar has packed too, so the second
+// save clears its staging directory, lists the session, writes its marker and
+// packs while the first has yet to check what it packed: both hold, each at a
+// place of its own holding a whole archive of the session, and neither save
+// leaves its staging directory behind. The tars pass their words through a
+// fifo the case holds open, so nothing waits on a clock.
 //
 // Mutation: stage every save of a taker in one directory, and the two saves
 // share one archive and one set of lists: the first to move takes the archive
@@ -1713,27 +1762,40 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 		`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
 		`"$tar" -czf "$@"; st=$?; : > `+at("second-packed")+`; printf 'packed\n' > `+at("second")+
 		`; exit "$st"`+"\n"))
-	saved := make(chan error, 2)
+	type savedAs struct {
+		archive sandbox.SessionArchive
+		err     error
+	}
+	saved := make(chan savedAs, 2)
 	for range 2 {
 		go func() {
-			_, err := runner.PackSave(t.Context(), b, takerA)
+			archive, err := runner.PackSave(t.Context(), b, takerA)
 			wordInFifo(flags, "second", "ended")
-			saved <- err
+			saved <- savedAs{archive: archive, err: err}
 		}()
 	}
-	for _, err := range []error{<-saved, <-saved} {
-		if err != nil {
-			t.Errorf("a save made beside another of the same taker was refused: %v", err)
+	var places []string
+	for range 2 {
+		got := <-saved
+		if got.err != nil {
+			t.Errorf("a save made beside another of the same taker was refused: %v", got.err)
+			continue
 		}
+		places = append(places, got.archive.Path)
 	}
 	for _, flag := range []string{"first-packed", "second-packed"} {
 		if _, err := os.Stat(filepath.Join(flags, flag)); err != nil {
 			t.Errorf("the saves never ran as the case has them: no %s", flag)
 		}
 	}
-	if _, ok := archiveMembers(t, strings.NewReader(boxFile(t, b, p.SessionSave(takerA))))[filesOf(
-		ran.SessionID).transcript]; !ok {
-		t.Error("the taker's save holds no transcript")
+	if len(places) == 2 && places[0] == places[1] {
+		t.Errorf("the two saves were moved to one place, %s", places[0])
+	}
+	for _, place := range places {
+		if _, ok := archiveMembers(t, strings.NewReader(boxFile(t, b, place)))[filesOf(
+			ran.SessionID).transcript]; !ok {
+			t.Errorf("the save at %s holds no transcript", place)
+		}
 	}
 	if left := saveStagingLeft(t, b, takerA); len(left) > 0 {
 		t.Errorf("the saves left their staging directories: %s", strings.Join(left, ", "))
@@ -1750,6 +1812,88 @@ func wordInFifo(dir, name, word string) {
 	}
 }
 
+// takeSave takes the save at path of b's job, as a take of a save does, and
+// reads it to its end.
+func takeSave(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox, path string) readBack {
+	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{Save: path, MaxBytes: takeBound})
+	switch {
+	case err != nil:
+		return readBack{err: err}
+	case taken.Body == nil:
+		return readBack{err: errors.New("the take handed back no archive")}
+	}
+	archive, err := io.ReadAll(taken.Body)
+	_ = taken.Body.Close()
+	return readBack{archive: archive, err: err}
+}
+
+// A TAKE OF A SAVE STREAMS THAT SAVE'S OWN ARCHIVE, WHATEVER ANOTHER SAVE OF ITS
+// TAKER LANDS AS IT READS. One taker can save one box twice at once — the
+// drain's save beside one the waiter asked for — and a Claude Code take reads
+// its archive twice, opening it again by its path for its second pass. Here a
+// save lands and its take holds before that second pass; the session is
+// written on, and a second save of the same taker lands; then the first take
+// goes on. It is not refused, and hands back the first save's archive, without
+// what was written after it; the second save's take hands back its own, with
+// it; and neither save is left in the box once taken. The take is held by its
+// own steps, through a box that holds it, and waits on no clock.
+//
+// Mutation: move every save of a taker to one path of the taker's, as saves
+// once were, and the second save lands over the archive the first take is
+// reading: its second pass finds a member changed under it, and the take is
+// refused.
+func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.T) {
+	t.Parallel()
+	runner, b := sessionBox(t, "2.1.310")
+	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+	forgetCapture(t, b)
+	first, err := runner.PackSave(t.Context(), b, takerA)
+	if err != nil {
+		t.Fatalf("the first save: %v", err)
+	}
+	held := newHeldTake(b, false, 2)
+	read := make(chan readBack, 1)
+	go func() { read <- takeSave(t.Context(), runner, held, first.Path) }()
+	select {
+	case <-held.held:
+	case got := <-read:
+		t.Fatalf("the first save's take ended before its second pass: %q, %v", got.archive, got.err)
+	}
+	line := shQuote(`{"type":"user","text":"` + wentOnMark + `"}`)
+	if _, err := b.Exec(t.Context(), "printf '%s\\n' "+line+" >> "+shQuote(transcriptOf(b, ran.SessionID)),
+		sandbox.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := runner.PackSave(t.Context(), b, takerA)
+	if err != nil {
+		t.Fatalf("the second save: %v", err)
+	}
+	close(held.resume)
+	firstGot := <-read
+	for _, r := range []struct {
+		which  string
+		got    readBack
+		wentOn bool
+	}{{"the first save's take", firstGot, false}, {"the second save's take", takeSave(t.Context(), runner, b,
+		second.Path), true}} {
+		if r.got.err != nil {
+			t.Errorf("%s was refused: %v", r.which, r.got.err)
+			continue
+		}
+		transcript, ok := archiveMembers(t, bytes.NewReader(r.got.archive))[filesOf(ran.SessionID).transcript]
+		switch {
+		case !ok:
+			t.Errorf("%s handed back an archive with no transcript", r.which)
+		case strings.Contains(transcript, wentOnMark) != r.wentOn:
+			t.Errorf("%s handed back an archive that holds what was written after the first save: %v, want %v "+
+				"— another save's archive, not its own", r.which, !r.wentOn, r.wentOn)
+		}
+	}
+	if left := savesLeft(t, b, takerA); len(left) > 0 {
+		t.Errorf("the takes left their saves in the box: %s", strings.Join(left, ", "))
+	}
+}
+
 // A TAKE OF A JOB STILL WORKING NEVER MOVES ITS ARCHIVE OVER THE JOB'S CAPTURE.
 // The capture is what every read of a job that is over takes as its last, and
 // the job's own end pack moves its final archive there the moment its harness
@@ -1763,11 +1907,11 @@ func wordInFifo(dir, name, word string) {
 // capture still holds the job's final archive after it; and once the take's
 // reader is closed, nothing of the pack is left in the box.
 //
-// Mutation: move the archive of a job still working over the capture, as a
-// pack of a job that is over moves its own, or have either harness's pack move
-// it there whatever it is handed, and the job's final archive is replaced by
-// the older one; leave the archive packed for the take behind once the take
-// is done, and it is found after.
+// Mutation: move the archive of a job still working over the capture, as the
+// run's own end pack moves its own, or have either harness's pack move it
+// there whatever it is handed, and the job's final archive is replaced by the
+// older one; leave the archive packed for the take behind once the take is
+// done, and it is found after.
 func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testing.T) {
 	t.Parallel()
 	const final = "the job's own final archive, moved over the capture as its harness exited"

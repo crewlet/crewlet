@@ -246,6 +246,10 @@ type scriptOpts struct {
 	// the session ([executor.Paths.SessionDigests]), as a box that packed
 	// or restored that export keeps it.
 	ownsCarried bool
+	// brokenDigests, where set, makes the box's list of those digests one
+	// that keeps no line, as the shell command it names makes it
+	// ([brokenDigestLists]), before the script starts.
+	brokenDigests string
 	// freshBrief, where set, is the brief a session of the run's own is
 	// handed, written where [executor.Paths.FreshBrief] names it as a run's
 	// start would have written it ([sandbox.RunRequest.FreshBrief]).
@@ -354,6 +358,9 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		if o.ownsCarried {
 			keepDigest(t, paths, session.ID, packed)
 		}
+	}
+	if o.brokenDigests != "" {
+		breakDigestList(t, paths.SessionDigests(), o.brokenDigests)
 	}
 	if o.freshBrief != "" {
 		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {

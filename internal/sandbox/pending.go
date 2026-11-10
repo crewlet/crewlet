@@ -2464,6 +2464,46 @@ type PendingStore interface {
 	// there.
 	SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
+	// StandBy records capture's take — a read whose place another read of
+	// the same job holds, begun at that place — as the read STANDING BY for
+	// the row's newest capture ([SessionCapture.StandbyAt]), answering
+	// whether it stands: written only where that capture is at capture's own
+	// place, of the same job ([SessionCapture.Launch]), another take's, NOT
+	// LANDED — begun, refused or unresolved — and no read stands by for it
+	// yet. Decided on the row as it stands, so of two reads that find one
+	// place taken one stands by, and no read stands by for a capture that
+	// landed, a newer capture or another job's: false, nothing written, and
+	// the read stands down, the session the other's to keep. A standby the
+	// row already holds — this one's, asked again — is answered as standing;
+	// a row that is gone takes nothing and is no error; and a stamp past its
+	// bounds is refused as [PendingStore.StampCapture] refuses one.
+	StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
+	// TakeOver is [PendingStore.StampCapture] of capture — the take of the
+	// read standing by as standby names it, begun, in a place after the
+	// capture it stood by for — held to one more condition, decided on the
+	// row as it stands: the row's newest capture is the one standby stands
+	// by for, and it did NOT LAND. Where it landed the standby has nothing to
+	// keep, and where the row has moved on — the standby withdrawn, a newer
+	// capture taken, another job's — it keeps nothing either: false, nothing
+	// written. So one read's upload of a job's session is ever the one kept,
+	// and a capture that landed is never followed by another of the same
+	// session. A stamp the row already holds is answered taken, as
+	// StampCapture answers it; a row that is gone takes nothing and is no
+	// error; and a stamp past its bounds is refused as there.
+	TakeOver(ctx context.Context, turnID string, standby, capture SessionCapture) (bool, error)
+
+	// StandDown withdraws standby — the read standing by for the row's
+	// newest capture, named as it stood by ([SessionCapture.standbyOf]) —
+	// answering whether it was there to withdraw: written only where the
+	// row's newest capture is at standby's place, of its job, with standby
+	// standing by for it, so no read withdraws another's, and a capture that
+	// has moved on is left as it stands. What a standby writes where it
+	// cannot keep what it took, and a wait where its taker is gone, so no
+	// turn's end waits for a read that keeps nothing. A row that is gone takes
+	// nothing and is no error.
+	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
+
 	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
 	// a fact about what the box did. Asking again changes nothing, and a row that is
 	// gone is no error.
