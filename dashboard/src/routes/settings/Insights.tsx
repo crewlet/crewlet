@@ -355,18 +355,23 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
           {
             key: "class",
             header: "Pattern",
-            cell: (r) => <span className="truncate">{titleOf(r.class)}</span>,
+            overflow: "truncate",
+            floor: "12rem",
+            cell: (r) => titleOf(r.class),
           },
           { key: "week", header: "Week", shrink: true, cell: (r) => r.week },
           {
+            // FOUR CONTROLS NEED THEIR WHOLE WIDTH: a shrink column is capped at a
+            // fifth of the grid and clipped the last two. Where they cannot fit, the
+            // grid stacks into cards and the controls wrap.
             key: "decide",
             header: "Your answer",
-            shrink: true,
+            width: "max-content",
             cell: (r) => {
               const pending = busy === `${r.class}/${r.week}`;
               const blocked = !access.can || busy !== "";
               return (
-                <div className="row gap-1">
+                <div className="row wrap gap-1">
                   <Button variant="ghost" size="small" onClick={() => setOpened(r)}>
                     View
                   </Button>

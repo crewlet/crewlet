@@ -2176,7 +2176,7 @@ const (
 	// words, previewed and applied before the answer), merged on top of it,
 	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
 	// measured size's next KiB: 5697 KiB. Usage insights in Settings ›
-	// Diagnostics took it to 5705.6 KiB (5,842,538 bytes, +9,110, all script): 5706 KiB.
+	// Diagnostics took it to 5705.6 KiB (5,842,537 bytes, +9,109, all script): 5706 KiB.
 	treeBudget = 5<<20 + 586<<10
 )
 
