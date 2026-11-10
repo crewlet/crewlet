@@ -107,6 +107,89 @@ func TestACutOffSessionIsSaidTrueOfASaveAndOfAStop(t *testing.T) {
 	}
 }
 
+// A COPY CUT OFF IN ITS BOX IS TOLD SO WITHOUT A SAVE, AND ONE NOTHING SAYS OF
+// IS NOT TOLD IT WAS. The copy of a session its job's own box holds is continued
+// in place with no capture behind it, so where its job's record says its
+// harness was cut off it is told what a cut-off session is — it may end in the
+// middle of a call, and may not show the last of what its run did — and nothing
+// of a save, which that copy never had: a kept capture's section says it was
+// saved while its harness worked or as it stopped. Where the record says nothing
+// of how its harness ended — an older build collected the job, or the record did
+// not land — it is told the same of what it may then lack, but only that it may
+// have been cut off: never that it was stopped, killed or ended on an error,
+// which nobody saw. And the header the calls follow under says why the session
+// may show only some of them in no words of its own, the section before it
+// saying it, so it asserts nothing of a copy nothing was recorded of.
+//
+// Mutation: tell the copy the kept capture's section, drop either clause, tell a
+// copy nothing was recorded of that it was cut off, or say in the calls' header
+// that the session was cut off, and a check goes red.
+func TestACopyCutOffInItsBoxIsToldSoWithoutASave(t *testing.T) {
+	t.Parallel()
+	for section, said := range map[string][]string{
+		InterruptedCopy: {"## The session above was cut off", "did not finish cleanly by itself",
+			"may end in the middle of a call", "may not show the last of what it did"},
+		MayBeInterruptedCopy: {"## The session above may have been cut off", "no record that the run",
+			"may end in the middle of a call", "may not show the last of what it did"},
+	} {
+		for _, want := range said {
+			if !strings.Contains(section, want) {
+				t.Errorf("the cut-off section of a copy in its box does not say %q:\n%s", want, section)
+			}
+		}
+		if strings.Contains(section, "saved") {
+			t.Errorf("the cut-off section of a copy in its box speaks of a save:\n%s", section)
+		}
+	}
+	for _, unseen := range []string{"was cut off", "did not finish cleanly", "stopped, killed"} {
+		if strings.Contains(MayBeInterruptedCopy, unseen) {
+			t.Errorf("a copy nothing was recorded of is told %q:\n%s", unseen, MayBeInterruptedCopy)
+		}
+	}
+	if strings.Contains(calledSinceHeader, "was cut off") {
+		t.Errorf("the header of the calls a copy may not show says it was cut off:\n%s", calledSinceHeader)
+	}
+}
+
+// THE NOTES A SESSION MAY HAVE BEEN CUT OFF FROM ARE TOLD AGAIN AS NOTES IT MAY
+// ALREADY SHOW, AND COUNTED. Each note says it stands for the rest of the turn,
+// so a session that holds one and reads it again could do twice what it asks:
+// the notes told again are headed as notes the session may not show, a note
+// shown both above and there being one note, sent once; and they are counted,
+// since the notes the brief is the first to read follow them in the same form.
+// Those are said to be ones the turn had not read before the message, never new
+// to the session: which notes the turn has read is its record's word, and a
+// harness can be handed a note before the record says so. None told again says
+// nothing.
+//
+// Mutation: drop the header, its one-note sentence or its count, call the notes
+// after them new, or say something where there is no note, and a check goes
+// red.
+func TestNotesToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
+	t.Parallel()
+	if got := NotesReadAgain(nil); got != "" {
+		t.Errorf("no note told again says %q, want nothing", got)
+	}
+	first, second := SteerMessage("founder", "use the staging database"), SteerMessage("", "and tag it")
+	for notes, count := range map[int]string{1: "the note below", 2: "the 2 notes below"} {
+		told := []string{first, second}[:notes]
+		got := NotesReadAgain(told)
+		if !strings.HasPrefix(got, notesAgainHeader+"\n") || !strings.Contains(got, count) ||
+			!strings.Contains(got, "ONE note, sent once") {
+			t.Errorf("%d notes told again are not headed as ones the session may already show, counted as "+
+				"%q:\n%s", notes, count, got)
+		}
+		if header := strings.TrimSuffix(got, strings.Join(told, "\n\n")); strings.Contains(header, " new") ||
+			!strings.Contains(header, "A note after them is one the turn had not read before this message.") {
+			t.Errorf("%d notes told again say the notes after them are new rather than ones the turn had not "+
+				"read:\n%s", notes, got)
+		}
+		if !strings.HasSuffix(got, "\n\n"+strings.Join(told, "\n\n")) {
+			t.Errorf("%d notes told again are not told after their header, in order:\n%s", notes, got)
+		}
+	}
+}
+
 // A LOST TURN'S ENDING NAMES NO BOX IT MAY STILL HAVE. A turn ends lost wherever
 // no frame of it saw it end — a job lost with its box, a resume that broke, a
 // seat removed, an end never recorded and ended by the retention duty a day

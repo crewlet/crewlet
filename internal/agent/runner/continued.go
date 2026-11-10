@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -45,8 +46,11 @@ import (
 //     shown both there and in the session one call;
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
-//     is never the session's, or taken at the last moment before a harness that
-//     was cut off could have it — and then the ones this brief is the first to
+//     is never the session's — or, of a session cut off, every note the turn
+//     has read, as notes it may already show ([prompts.NotesReadAgain]): its
+//     job's last take of them was recorded read before its harness had them,
+//     and it is not known to hold its job's brief, which told the notes the
+//     session it continued lacked; and then the ones this brief is the first to
 //     read.
 //
 // AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
@@ -56,20 +60,33 @@ import (
 // brief, for a run whose box cannot take the session up after all, rides
 // beside them.
 //
+// A ROUND CARRIED ON IN THE JOB'S OWN BOX — a person's answer, a replaced
+// sign-in, where the launch takes up no kept capture of the job
+// ([AgentRunRequest.Continue]) — continues the copy of the session that box
+// holds, which no capture describes: its brief is what carries it on and then
+// the notes it has not read. Where the job's harness is not known to have ended
+// its own run ([Resume.HarnessEnd]), that copy may lack calls the harness made
+// and had answered without writing them, and is not known to hold the job's
+// brief: so between the two it is told that it was cut off, or may have been,
+// every call of the round, as a session cut off is told its calls, and every
+// note the turn has read, as it is told its notes ([Runner.inPlaceAfter]).
+//
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
 // those the log took through the point its capture was saved at, by the same
 // test the calls after it are told by ([ownCalls]), where the launch restores
-// it — because the continued model has those bodies in front of it; none for a
-// run that starts a session of its own. A session cut off is saved at the
-// newest point its launch was known to hold, so a skill it loaded after that
-// point is not armed, and is loaded again before a call it covers: the safe
-// direction, since its body may never have reached the session. Armed once
-// the launch has decided, before the run starts, and put right where the
-// run's box finds as it starts that it cannot take the session up after all
-// and starts one of its own: its box says so before the run's first call
-// ([Runner.sessionStarted]), and its job's record keeps what it said for every
-// later rebuild of the guard ([Resume.Continued]).
+// it, and all of them for the job's own copy in its box only where its harness
+// ended its own run — because the continued model has those bodies in front of
+// it; none for a run that starts a session of its own. A session cut off is
+// saved at the newest point its launch was known to hold, so a skill it loaded
+// after that point is not armed, nor is one its job loaded where its own copy in
+// its box is continued after its harness was cut off: each is loaded again
+// before a call it covers, the safe direction, since its body may never have
+// reached the session. Armed once the launch has decided, before the run
+// starts, and put right where the run's box finds as it starts that it cannot
+// take the session up after all and starts one of its own: its box says so
+// before the run's first call ([Runner.sessionStarted]), and its job's record
+// keeps what it said for every later rebuild of the guard ([Resume.Continued]).
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left: its first
 // launch the head its dispatch read, and a relaunch of a turn that has kept no
@@ -99,11 +116,19 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // session — all of it but what carries the session on, which the caller leads
 // it with ([keptBrief.led]): what came after the session was saved of round,
 // the calls of the round its job worked in, as surface reads them
-// ([Runner.calledAfter]), then every note it has not read and the ones fresh
-// holds, in the box it was last worked in, and in another with what that
-// changes. The engine's own words and the seat's, every foreign word in them
-// fenced or defused under the relaunching segment's token; branch and the
+// ([Runner.calledAfter]), then every note it has not read — of a session cut
+// off, every note the turn has read, as notes it may already show — and the
+// ones fresh holds, in the box it was last worked in, and in another with what
+// that changes. The engine's own words and the seat's, every foreign word in
+// them fenced or defused under the relaunching segment's token; branch and the
 // basis's home are the engine's record of the session, defused too.
+//
+// NOT WHAT CARRIED ITS JOB ON: a session cut off is no more known to hold its
+// job's brief than the copy a job's own box holds ([Runner.inPlaceAfter]), and
+// one that lacks it lacks the lead it opened with too — the turn's task where
+// the job continued the session its conversation's last turn left, a review
+// that sent the round back, an earlier answer — which the engine keeps no copy
+// of to tell again.
 //
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
 // last time: telling the calls after the save rewrites a payload past its
@@ -130,10 +155,77 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	called := r.calledAfter(ctx, round, basis.Through, surface, b)
 	called.Interrupted = basis.Interrupted
 	after = append(after, prompts.CalledAfter(called))
-	after = append(after, r.unreadSince(basis.NoteCursor)...)
+	// THEN THE NOTES IT HAS NOT READ, past its cursor; of a session cut off,
+	// EVERY NOTE THE TURN HAS READ, as notes it may already show, as the copy a
+	// job's own box holds is told them ([Runner.inPlaceAfter]): its job's last
+	// take of them was recorded read before its harness had them, and it is not
+	// known to hold its job's brief, which told the notes the session it
+	// continued lacked, and no record says which those were (internal/sandbox's
+	// notesHeld states none it holds).
+	if basis.Interrupted {
+		after = append(after, prompts.NotesReadAgain(r.carriedSteers()))
+	} else {
+		after = append(after, r.unreadSince(basis.NoteCursor)...)
+	}
 	after = append(after, renderedNotes(fresh)...)
 	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
 		provenance.Neutralise(b, basis.Home), r.checkoutName())}
+}
+
+// inPlaceAfter is what a relaunch carrying the round on in its job's own box
+// tells the session there between what carries it on and the notes the brief
+// is the first to read ([Continuation.Brief]), where the job's harness is not
+// known to have ended its own run ([Resume.HarnessEnd]): that the session was
+// cut off ([prompts.InterruptedCopy]) — that it may have been, where the job's
+// record says nothing of how its harness ended ([prompts.MayBeInterruptedCopy])
+// — said whether or not a call is listed; every call of the round
+// ([Runner.calledInPlace]); and every note the turn has read
+// ([prompts.NotesReadAgain]). Nil where the harness ended its own run, whose
+// copy holds all of it — and where carry continues no copy in that box at all:
+// a lost job's, never continued in place; a round lost a second time, which
+// continues nothing; and one whose box is gone ([carried.boxKept]), which no
+// launch continues in, so its calls are neither rewritten nor charged for a
+// brief nothing would send.
+//
+// EVERY NOTE THE TURN HAS READ, never only the job's: a copy that lacks the
+// job's brief lacks the notes that brief told — an earlier job's, which a
+// continuation re-tells where its session may not hold them — as much as the
+// ones the job read, and no record says which those were, so it is told every
+// one a fresh brief would be, as notes it may already show, as a kept session
+// cut off is ([Runner.keptSession]).
+// NOT WHAT CARRIED THE JOB ON: a copy that lacks the job's brief lacks the
+// lead it opened with too — the turn's task where the job continued the
+// session its conversation's last turn left, a review that sent the round
+// back, an earlier answer — which the engine keeps no copy of to tell again,
+// as a kept session cut off may lack it ([Runner.keptSession]).
+//
+// BUILT BEFORE ITS LEAD, as the kept session's brief is ([Runner.keptSession]):
+// telling the calls rewrites a payload past its budget with the seat's
+// auxiliary model, charged to the same counters, which the relaunch asks the
+// seat's budget for once every brief's rewrites are spent. A launch that
+// continues the copy sends all of it, so where a capture measured the copy's
+// context the floor its launch is held to grows with it; a copy no capture
+// measured — every copy in a company that keeps no session — holds its launch
+// to the static floor whatever its brief (internal/engine's continuedFloor).
+func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls,
+	surface *tools.Surface) []string {
+
+	end := r.cfg.Resume.HarnessEnd
+	if carry.session() == "" || !carry.boxKept() || !carry.keeps() || end.EndedOwnRun() {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	after := []string{prompts.MayBeInterruptedCopy}
+	if end == sandbox.HarnessEndCutOff {
+		after[0] = prompts.InterruptedCopy
+	}
+	if called := prompts.CalledAfter(r.calledInPlace(ctx, round, surface, b)); called != "" {
+		after = append(after, called)
+	}
+	if again := prompts.NotesReadAgain(r.carriedSteers()); again != "" {
+		after = append(after, again)
+	}
+	return after
 }
 
 // keptBrief is a relaunch's continuation of a kept session but for its lead
@@ -254,6 +346,31 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through int,
 	return out
 }
 
+// calledInPlace is what the job's own copy of its session, in its box, may lack
+// of round where its harness is not known to have ended its own run
+// ([Resume.HarnessEnd]): EVERY CALL OF THE ROUND, and every call its log
+// dropped from its middle counted, told as calls the session may already show
+// ([prompts.AfterSave.Interrupted]) — what a capture cut off is told on a fleet
+// of this version, its save point the round's start (internal/sandbox's
+// savepoint.go), for a copy no capture describes.
+//
+// NEVER ONLY THE JOB'S OWN CALLS. The copy is not known to hold the job's
+// brief, which told the round's calls before the job's own — an earlier job's,
+// or the call a person approved, made before the job opened: no probe has
+// measured whether Claude Code 2.1.310 writes the message a continued session
+// is handed before it answers a call, and a copy whose job continued a session
+// and lacks it lacks those calls whatever the job made itself. (2.1.310 was
+// measured answering a fresh session's first two calls before its transcript
+// file existed, but a fresh session cut off then leaves its box nothing to
+// continue: the relaunch starts a session of its own.)
+func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, surface *tools.Surface,
+	b provenance.Boundary) prompts.AfterSave {
+
+	called := r.calledAfter(ctx, round, 0, surface, b)
+	called.Interrupted = true
+	return called
+}
+
 // afterSave reports whether call came after the save point through: the round's
 // log took it after the read that placed the save ([BridgedCall.Appended] past
 // it), whatever its place in the order the bridge admitted the calls — a call
@@ -332,6 +449,12 @@ type launchBriefs struct {
 	// rebuilt from. Zero for a launch that follows no job.
 	state   execstate.State
 	bridged []BridgedCall
+
+	// endedOwnRun says that job's harness ended its own run
+	// ([Resume.HarnessEnd]), so its own copy of its session in its box holds
+	// every load it made; false arms none of them where that copy is
+	// continued.
+	endedOwnRun bool
 }
 
 // sessionDecided is what a launch tells the runner once it has decided how its
@@ -341,16 +464,17 @@ type launchBriefs struct {
 // ([Runner.armSession]): the launch state of the job the relaunch follows and
 // that job's own loads — through the point the turn's kept capture of it was
 // saved at, where the launch restores that, and all of them where the job's own
-// copy in its box is continued — because the continued model has those bodies
-// in front of it; none for a session of the run's own, whose model has read no
-// skill. Never the turn's other jobs' loads: a session another job worked in is
-// not this one. AND NONE FOR THE SESSION THE CONVERSATION'S LAST TURN LEFT,
-// whatever the parked state holds: the skills that session loaded were another
-// turn's, which this turn's guard never armed and its lead says were set up
-// anew — the safe direction, a skill-covered call refused until it is loaded
-// again rather than admitted on a body nobody read this turn. Armed before the
-// run starts, so no call of the run is admitted against a guard that holds what
-// its model never read.
+// copy in its box is continued and its harness ended its own run, none where it
+// may have been cut off ([Resume.HarnessEnd]) — because the continued model
+// has those bodies in front of it; none for a session of the run's own, whose
+// model has read no skill. Never the turn's other jobs' loads: a session
+// another job worked in is not this one. AND NONE FOR THE SESSION THE
+// CONVERSATION'S LAST TURN LEFT, whatever the parked state holds: the skills
+// that session loaded were another turn's, which this turn's guard never armed
+// and its lead says were set up anew — the safe direction, a skill-covered call
+// refused until it is loaded again rather than admitted on a body nobody read
+// this turn. Armed before the run starts, so no call of the run is admitted
+// against a guard that holds what its model never read.
 //
 // AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED as the phase's opening frame
 // ([emitter.prompted]) — the continuation in the form its box takes, or the
@@ -359,34 +483,45 @@ type launchBriefs struct {
 // session never reads.
 //
 // What it decided is kept in decided, which the box's word on the session it
-// started is read against ([Runner.sessionStarted]).
+// started is read against ([Runner.sessionStarted]), BESIDE THE SKILLS IT ARMED,
+// read off the guard as it armed them: the skills the job's parked state records
+// as its launch's ([Runner.recordAgentSuspension]).
 func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, system prompts.Prompt,
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(SessionDecision) {
 
 	return func(d SessionDecision) {
-		decided.set(d)
-		handed := b.fresh
+		handed, publish := b.fresh, true
+		var (
+			loaded []string
+			calls  []ledger.Call
+		)
 		switch {
 		case d.Continues && d.Base && b.kept != nil:
-			r.armSession(surface, nil, nil)
 			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
-			r.armSession(surface, b.state.LoadedSkills,
-				ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through))
+			loaded, calls = b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through)
 			handed = prompts.Prompt{Text: b.kept.Brief}
 			if d.NewBox {
 				handed = prompts.Prompt{Text: b.kept.Replaced}
 			}
 		case d.Continues && !d.Kept && b.inPlace != "":
-			r.armSession(surface, b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, nil))
+			// THE JOB'S OWN COPY IN ITS BOX holds the skills its launch armed,
+			// and its own loads only where its harness ended its own run: one
+			// cut off may never have written a load it made, which is told as
+			// a call it may lack, and is loaded again before a call it covers.
+			loaded = b.state.LoadedSkills
+			if b.endedOwnRun {
+				calls = ownCalls(b.bridged, b.state.BridgeFrom, nil)
+			}
 			handed = prompts.Prompt{Text: b.inPlace}
 		default:
-			r.armSession(surface, nil, nil)
-			if b.freshReported {
-				return
-			}
+			publish = !b.freshReported
 		}
-		emit.prompted(ctx, phase.Execute, round, system, handed, caps)
+		r.armSession(surface, loaded, calls)
+		decided.set(d, r.loadedSkills())
+		if publish {
+			emit.prompted(ctx, phase.Execute, round, system, handed, caps)
+		}
 	}
 }
 
@@ -394,16 +529,32 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 // runner keeps it between the launch's word ([AgentRunRequest.Decided]) and the
 // word of the run's box on the session it started ([AgentRunRequest.Started]):
 // the first is told before the run starts and the second as its harness first
-// reaches the seat's tools, on another goroutine.
+// reaches the seat's tools, on another goroutine. And the skills the launch
+// armed the run's guard with as it decided, which the launch's parked state
+// records ([launchDecided.skills]).
 type launchDecided struct {
-	mu sync.Mutex
-	d  SessionDecision
+	mu    sync.Mutex
+	d     SessionDecision
+	armed []string
 }
 
-func (l *launchDecided) set(d SessionDecision) {
+// set keeps d, and armed, the skills the guard holds once armed for it.
+func (l *launchDecided) set(d SessionDecision, armed []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.d = d
+	l.d, l.armed = d, armed
+}
+
+// skills is the skills the launch armed the run's guard with as it decided
+// ([Runner.sessionDecided]), nil where it has not decided: the guard is empty
+// from the relaunch's last step before its launch until the launch decides.
+// NEVER THE GUARD AS IT STANDS ONCE THE LAUNCH RETURNS: the run starts inside the
+// launch, and a load its harness reported before the launch returned is a call
+// of the job's own, made on the same guard.
+func (l *launchDecided) skills() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.armed
 }
 
 func (l *launchDecided) get() SessionDecision {
@@ -490,8 +641,9 @@ func (r *Runner) armSession(surface *tools.Surface, loaded []string, calls []led
 // point of a capture of the job's session ([SessionBasis.Through]), none the
 // log took after it ([afterSave]): the calls the capture had been answered,
 // whose loads the restored session holds, whatever their place. nil through
-// bounds nothing, for the job's own copy of its session in its box, which
-// holds every call it made. A call with no place is no job's.
+// bounds nothing, for the job's own copy of its session in its box where its
+// harness ended its own run, which holds every call it made. A call with no
+// place is no job's.
 func ownCalls(bridged []BridgedCall, from int, through *int) []ledger.Call {
 	var out []ledger.Call
 	for _, call := range inAdmissionOrder(bridged) {

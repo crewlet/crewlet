@@ -3121,6 +3121,21 @@ type PendingStore interface {
 	// fact about the job, never an ownership decision.
 	MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error)
 
+	// MarkHarnessEnd records how the harness of the job named ended, as a
+	// read that collected the job found it ([LaunchRecord.HarnessEnd]),
+	// reporting whether this call changed the record. CUT OFF ONCE, CUT OFF
+	// FOR THE JOB ([HarnessEnd.after]): an end the job's harness was cut off
+	// in is recorded over one that says it ended its own run, never the
+	// reverse, nothing is recorded over a word this build does not know,
+	// which a later build may have written for an end of its own, and the
+	// next launch's job starts with nothing said. FALSE IS
+	// NOT AN ERROR: the record holds another job, says so already, is being
+	// ended, or is gone. NO FENCE, as MarkEndedAtDeadline takes none: the
+	// job's box's host makes it as it reads the box, and how the job's harness
+	// ended is a fact about the job, never an ownership decision. An end that
+	// is not [HarnessEnd.Valid] is an error.
+	MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error)
+
 	// MarkResumeBegun records on a claimed run what the turn resuming from the
 	// job named does with the job's round, as that turn begins
 	// ([LaunchRecord.ResumeCarry]), reporting whether this call recorded it.
@@ -3991,6 +4006,28 @@ type LaunchRecord struct {
 	// with nothing to say why, read it as one that ended by itself, and parked
 	// it on the question it asked on its way out.
 	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
+
+	// HarnessEnd is how the job's harness ended, as the read that collected
+	// the job found it ([Coordinator.readBox], [PendingStore.MarkHarnessEnd]):
+	// its own run — the job over, its harness gone cleanly by itself, its
+	// script packing it — or cut off, by the line its session's capture is
+	// placed by ([readCapture]), written whether or not that read takes or
+	// keeps a capture. What a relaunch that carries the job's round on IN ITS
+	// BOX reads (harnessend.go): a copy whose harness ended its own run holds
+	// every call the job made, and any other may lack calls its harness made
+	// and had answered without writing them, and is not known to hold the
+	// job's brief, so the session there is told every call of the round and
+	// every note the turn has read.
+	//
+	// EMPTY IS NEVER AN OWN RUN ([HarnessEnd.EndedOwnRun]): a job an older
+	// build collected, one no collection read, a record the coordination store
+	// did not take — the safe direction, a session told calls it may already
+	// hold rather than never told one it lacks, and told that it may have been
+	// cut off rather than that it was. Cut off once, cut off for the job
+	// ([HarnessEnd.after]). On the job's record for the reason every fact here
+	// is: the answer that carries the round on may come days later, on another
+	// node, and the next launch replaces the record whole after it has read it.
+	HarnessEnd HarnessEnd `json:"harness_end,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the

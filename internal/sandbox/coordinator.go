@@ -1813,6 +1813,12 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if run.Launch.CollectedAt.IsZero() {
 		run.Launch.CollectedAt = c.now().UTC()
 	}
+	// AND HOW ITS HARNESS ENDED, as the read just recorded it on the job's
+	// record ([LaunchRecord.HarnessEnd]), by the rule that record follows: the
+	// claim was read before the read wrote it, and the resume that follows on
+	// this claim — a round a replaced sign-in carries on in the job's box —
+	// reads it here.
+	run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(result.HarnessEnd)
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
@@ -2101,8 +2107,10 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // where its turn's cap has passed and ENDED where it still works, its result
 // read back and floored, its transcript and refs held to their bounds
 // ([boundBox]), the job's harness session taken ([Coordinator.takeCapture]),
-// and — for a completion's collection — the box paused and the pause
-// recorded. ENDED is the run its turn's cap ended: see [Coordinator.collect].
+// and — for a completion's collection — how the job's harness ended recorded
+// on the job's record ([LaunchRecord.HarnessEnd]), and the box paused and the
+// pause recorded. ENDED is the run its turn's cap ended: see
+// [Coordinator.collect].
 //
 // A STOPPED RUN'S READ ([BoxReadStop]) ENDS ITS JOB FIRST ([Coordinator.endJob]):
 // its script, asked, stops its harness and packs the session as its own exit
@@ -2213,9 +2221,19 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
+	// HOW THE JOB'S HARNESS ENDED, by the line the take was drawn by: carried
+	// back with the result for the claim it collects for, and recorded on the
+	// job's record by a collection's read whether or not the take took or kept
+	// a capture ([LaunchRecord.HarnessEnd], harnessend.go) — after the take,
+	// in the room the read leaves the take's own records, so a store slow to
+	// answer it costs neither the take nor the pause their time. A stop's read
+	// and a loss's record nothing: the run's ending is decided, and nothing
+	// carries its round on.
+	result.HarnessEnd = at.harnessEnd()
 	if read != BoxReadCollect {
 		return result, ended, nil
 	}
+	c.markHarnessEnd(ctx, run, result.HarnessEnd)
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {

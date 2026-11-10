@@ -58,8 +58,12 @@ func TestARoundAReplacedSignInCutOffIsCarriedOnInItsSession(t *testing.T) {
 		t.Fatalf("the relaunch continues %+v; want the refused job's session, marked as a "+
 			"follow-up of a replaced sign-in", again.Continue)
 	}
-	if again.Continue.Brief != runner.RotatedContinuation {
-		t.Errorf("the continued session is told %q, want %q", again.Continue.Brief, runner.RotatedContinuation)
+	// LED BY WHY, and then — its harness not known to have ended its own run —
+	// the calls the copy in its box may lack
+	// (TestARunCarriedOnInItsBoxIsToldTheCallsItsCopyMayLack).
+	if !strings.HasPrefix(again.Continue.Brief, runner.RotatedContinuation) {
+		t.Errorf("the continued session is told %q, want it led by %q", again.Continue.Brief,
+			runner.RotatedContinuation)
 	}
 	if !strings.Contains(again.Brief, "sign-in was replaced") {
 		t.Errorf("a fresh run's brief does not say the sign-in was replaced:\n%s", again.Brief)
