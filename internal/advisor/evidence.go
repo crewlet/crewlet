@@ -27,6 +27,7 @@ const (
 	ClassNoopShare                Class = "wake.noop_share"
 	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
 	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
+	ClassRedeliveredSeen          Class = "wake.redelivered_seen"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
@@ -141,6 +142,7 @@ var detectors = []detector{
 	{ClassNoopShare, sourceLedger, noopShare},
 	{ClassPickupStillWaiting, sourceLedger, pickupStillWaiting},
 	{ClassAuxiliaryShare, sourceLedger, auxiliaryShare},
+	{ClassRedeliveredSeen, sourceLedger, redeliveredSeen},
 	{ClassNoVerifiedBackup, sourceAlarms, noVerifiedBackup},
 	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
 }
@@ -173,6 +175,10 @@ const (
 	// committing nothing.
 	minStartedTurns = 20
 	noopPercent     = 25
+	// minAbsorbed and absorbedPercent: 10 wakes a week, a fifth of all that
+	// woke the seat, for changes a turn of it had already read.
+	minAbsorbed     = 10
+	absorbedPercent = 20
 	// minPickups and stillWaitingPercent: 10 pickups a week, a fifth of them
 	// ending in words only, which says the work handed out could not move.
 	minPickups          = 10
@@ -286,6 +292,7 @@ var engineSentences = map[Class]string{
 	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
 	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
 	ClassAuxiliaryShare:           "Auxiliary calls run on the seat's auxiliary model, and a smaller one costs less.",
+	ClassRedeliveredSeen:          "A wake for a change a completed turn already read starts no turn.",
 }
 
 func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
@@ -462,14 +469,19 @@ type seatTurns struct {
 	turns, nothing        int64
 	tokens, auxiliary     int64
 	pickups, pickupsWords int64
+	// started is every started turn, schedules' included, and absorbed the
+	// wakes a completed turn had already read past (ADR-0120).
+	started, absorbed int64
 }
 
-// seatsOf folds the ledger's started turns by seat, in the ledger's order.
+// seatsOf folds the ledger's started turns and absorbed wakes by seat, in the
+// ledger's order.
 func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 	var out []*seatTurns
 	byID := map[string]*seatTurns{}
 	for _, r := range ledger {
-		if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		disposition := types.WakeDisposition(r.Disposition)
+		if disposition != types.DispositionStarted && disposition != types.DispositionAbsorbed {
 			continue
 		}
 		s, ok := byID[r.AgentID]
@@ -478,6 +490,11 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 			byID[r.AgentID] = s
 			out = append(out, s)
 		}
+		if disposition == types.DispositionAbsorbed {
+			s.absorbed += r.Turns
+			continue
+		}
+		s.started += r.Turns
 		s.tokens += r.Input + r.Output + r.AuxInput + r.AuxOutput
 		s.auxiliary += r.AuxInput + r.AuxOutput
 		outcome := types.TurnOutcome(r.Outcome)
@@ -539,6 +556,25 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 			"a question or a chat post) and no work moved, as when an agent says the item "+
 			"still waits on something.", words, pickups),
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
+}
+
+// redeliveredSeen is one finding per agent whose wakes often came for changes
+// a turn of it had already read: the engine absorbed them, and says how many.
+func redeliveredSeen(ev Evidence, _ func(string) SeatKind) []Finding {
+	var out []Finding
+	for _, s := range seatsOf(ev.Ledger) {
+		woke := s.started + s.absorbed
+		if s.absorbed < minAbsorbed || s.absorbed*100 < absorbedPercent*woke {
+			continue
+		}
+		out = append(out, engineFinding(ClassRedeliveredSeen, Subject{Kind: SubjectSeat, Seat: s.handle},
+			"Wakes repeated changes an agent had already read.",
+			fmt.Sprintf("In the last 7 days, %d of the %d wakes for %s came for changes a turn "+
+				"of it had already read, so the engine absorbed them instead of starting turns.",
+				s.absorbed, woke, s.handle),
+			[]Fact{{Key: "woke", Value: woke}, {Key: "absorbed", Value: s.absorbed}}, nil))
+	}
+	return out
 }
 
 // auxiliaryShare is one finding per agent whose in-turn auxiliary calls took
