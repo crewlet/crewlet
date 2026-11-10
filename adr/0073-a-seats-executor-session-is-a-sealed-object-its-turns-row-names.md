@@ -1302,14 +1302,22 @@ catches the in-place rewrite grown back and a shrink grown back within the
 read — or, looked at last, a member of the
 archive is gone, so a file removed while the checks ran, which no check of a
 live file can read, is refused too. No check reads an empty file of patterns,
-which busybox's grep and GNU's read in opposite ways, and none that cannot be
-made passes: a list the pack could not write or read back, or a comparison its
-`grep` could not make — its exit 2, or an answer it could not write — refuses
-the pack as a difference would, where a check resting on grep's exit 0 alone,
-or on a list holding a line, held a pack whose checks compared nothing, its
-lists emptied by a disk filled under a harness still writing. The refusal
-names its check and its file, and the pack's error carries enough of that line
-to read both. A transcript or a thread that only grew is taken as tar first saw
+which busybox's grep and GNU's read in opposite ways. And none rests on a
+tool's word that what it wrote landed: a tool need not check a write it makes,
+and one that does not exits 0 having written nothing, or half, to a full disk
+— the disk a harness still writing can fill under the pack. So every list and
+every answer a check reads comes to the shell through a pipe, each `find`'s own
+exit held rather than that of a pipeline's last command, and the shell writes
+it to the pack's staging directory and reads it back, refusing the pack where
+the file's `cksum` is not that of what was written; a list that cannot be made
+or kept, and a comparison `grep` cannot make — its exit 2, or an exit 0 whose
+answer names no line — refuse the pack as a difference would. Writing each
+list straight from its tool, and taking the tool's exit, `grep`'s 0 or 1, or a
+list's holding a line, for the proof that it was written, was rejected: it held
+a pack whose checks compared nothing, its lists emptied by a disk filled under
+a harness still writing. The refusal names its check and its file, and the
+pack's error carries enough of that line to read both. A transcript or a
+thread that only grew is taken as tar first saw
 it, a whole prefix with at most its last line torn, which the resume cuts back
 (above). Reading tar's words was rejected, since busybox says nothing; so was
 keeping a torn task file by leaving out a `.json` that is not one value, which
@@ -1318,7 +1326,8 @@ needs a parser no box is known to have.
 **The session's own transcript is read back on every pack, and a subagent's
 thread only where it was written since the marker.** The decision that asked
 for the byte-prefix proof named every `.jsonl` member; the pack proves the
-session's own transcript always, and of the rest those its box's `find` reads
+session's own transcript always, whatever any of its lists says, so that proof
+rests on no list, and of the rest those its box's `find` reads
 as written since its marker, taking the others as they were when it began,
 since a file unwritten since is the file tar read. Each proof decompresses the
 whole archive once, and a long session holds a hundred subagents' threads, so
