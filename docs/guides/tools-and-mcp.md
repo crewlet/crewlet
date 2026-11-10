@@ -1495,6 +1495,18 @@ at the change.
   beside the one listed now, whether it is loosened, whether it holds the
   tool, and when the fleet first saw it. A held tool's row answers its level
   as `approve` with `held: true`.
+- **A change is shown whole.** A server's listing keeps the first KiB of each
+  description, enough for a list, while the definition's digest covers every
+  byte, so a server may change a sentence past that cut. Each definition is
+  therefore also kept whole, once under its digest: its title, the title its
+  hints carry, its description (up to 64 KiB of words) and its schemas (up to
+  64 KiB). A change is served from those, so its before and after differ
+  where the server changed them. A definition waiting for a review is kept
+  before any other within the 1 MiB a listing keeps of its definitions, and
+  the accepted one is kept for as long as its acceptance stands. A part the
+  engine can still not show (a definition past those bounds, or past that
+  budget) is named in the change's `unshown`, and the review says it changed
+  and is not shown, never that nothing changed.
 - **Accept it or keep it blocked** with
   [`POST /mcp-servers/{name}/changes`](../reference/api-endpoints.md#post-mcp-serversnamechanges),
   naming each change by the digest of the definition you reviewed, at a

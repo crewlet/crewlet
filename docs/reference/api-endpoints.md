@@ -11208,14 +11208,22 @@ it under, so a node that drained, died or restarted stops counting at once.
   `removed` alone, or the parts of the definition that moved: `title`,
   `description`, `schema`, `annotations`. `before` is the definition accepted
   (`null` for an added tool) and `after` the one listed now (`null` for a
-  removed tool), each `{digest, title, description, annotations, risk,
-  risk_declared, external, input_schema, output_schema}` read off the hints
-  the server declared, `before` with `accepted_by` (`null` for the server's
-  first listing), `accepted_at` and `first_listing`, `after` with
-  `instances`. `loosened` is a change whose hints claim less risk than the
+  removed tool), each `{digest, whole, title, hints_title, description,
+  annotations, risk, risk_declared, external, input_schema, output_schema}`
+  read off the hints the server declared, `before` with `accepted_by` (`null`
+  for the server's first listing), `accepted_at` and `first_listing`, `after`
+  with `instances`. `whole` is a definition read from the record the fleet
+  keeps of it under its digest, its words and schemas whole: `title` is the
+  tool's own title and `hints_title` the one its hints carry. Where `whole` is
+  `false` the fleet keeps no such record, `title` and `description` are the
+  words a listing keeps (a description's first KiB) and `hints_title` is `""`.
+  `unshown` names each part in `kinds` the answer cannot show the change of: a
+  part either side has no record for, or one whose two sides read alike; a
+  reader says it changed and is not shown, never that nothing changed. Always
+  a list. `loosened` is a change whose hints claim less risk than the
   accepted ones; `held` whether it holds the tool at Needs approval now;
   `seen_at` when the fleet first stored the definition listed now (`null` for
-  a removal, or a definition whose schemas are not kept). Empty for a server
+  a removal, or a definition whose record is not kept). Empty for a server
   whose first listing has not been accepted yet. The administrator's reading
   only.
 - `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
@@ -11903,7 +11911,9 @@ decided, from the server's Drift review
 
 Each key is the server's own name for a tool, and each value the digest of
 the definition reviewed, the change's `after.digest` in the
-[detail](#get-mcp-serversname)'s `changes`, or `null` for a removal. **Accept**
+[detail](#get-mcp-serversname)'s `changes`, or `null` for a removal. One body
+decides as many tools as it names, which is how the dashboard accepts several
+wording changes at once. **Accept**
 records the definition as the one the tool's level holds for, so an allowed
 tool runs unasked again; a removal accepted keeps a record of it, and the
 tool listed again after is one the server added. **Block** sets the tool's
