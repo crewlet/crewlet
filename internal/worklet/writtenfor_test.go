@@ -94,21 +94,25 @@ func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) 
 
 // A RECORD A LATER TURN READS CARRIES WHOM IT WAS WRITTEN FOR, AND NO OTHER DOES
 // (ADR-0109), whether the turn is one the record wakes now or a pickup later.
-// Every creation and every assignment carries it whatever it wakes — the pickup
-// reads an item's creation and its last assignment — an assignment being any
-// record that moves the assignee, a status move that takes the item included,
-// and a reassertion that moves nothing too. Any other record carries it only
-// where its own wake proves an agent other than the writer may start a turn,
-// the lead a status move falls back on included, which the parser reaches
-// when the one candidate it heard has left the company. The rest stay at the
-// version main reads: an agent's comment that asks nothing at 7 where it tells
-// somebody without waking them and 6 where nobody else hears it.
+// An item's creation and every move of its assignee carry it whatever they wake
+// — the pickup reads an item's creation and the rows that moved its assignee —
+// a move being any record whose patch changes the assignee, a status move that
+// takes the item included. A reassertion that moves nothing reads as no move,
+// and the alias a move claims for its old key as no creation: nothing reads
+// either for whom it was made. Any other record carries it only where its own
+// wake proves an agent other than the writer may start a turn, the lead a
+// status move falls back on included, which the parser reaches when the one
+// candidate it heard has left the company. The rest stay at the version main
+// reads: an agent's comment that asks nothing at 7 where it tells somebody
+// without waking them and 6 where nobody else hears it.
 //
-// Mutation: drop the creation and assignment arm, and the self-assigned
-// creation, the reassertion and the self-take carry nobody; decide an
-// assignment by its kind alone, and the self-take carries nobody; decide with
-// noticeWakes, and the status move that falls back on its lead carries nobody;
-// carry on every wake, and the quiet comments and the watch carry ada.
+// Mutation: drop the creation and move arm, and the self-assigned creation
+// and the self-take carry nobody; decide a move by its kind alone, and the
+// self-take carries nobody; carry on a record of kind assignee whatever it
+// moves, and the reassertion carries ada; carry on every OpCreate, and the
+// move's alias carries ada; decide with noticeWakes, and the status move that
+// falls back on its lead carries nobody; carry on every wake, and the quiet
+// comments and the watch carry ada.
 func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -194,7 +198,36 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 		{"a reassertion of the holder, which moves nothing", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-reassert", "w-ana", worklet.TaskPatch{Assignee: &anaHandle},
 				worklet.ChangeAssignee, nil, nil, nil)
-		}, ada, 12},
+		}, nil, 0},
+		{"the alias a move claims for the item's old key", func(t *testing.T) worklet.MutationRecord {
+			if _, err := r.writer.WriteDocument(t.Context(), "op-project-ops", worklet.ProjectSubject("OPS"), "",
+				worklet.Project{V: 1, Key: "OPS", Name: "Operations", CreatedAt: wednesday, UpdatedAt: wednesday},
+				worklet.ChangeProjectCreated, nil); err != nil {
+				t.Fatalf("seed OPS: %v", err)
+			}
+			r.drain()
+			fileFor(t, r, "w-moved", "ana", worklet.StatusTodo, worklet.PriorityNormal)
+			from, err := r.log.End(t.Context())
+			if err != nil {
+				t.Fatalf("read the log's end: %v", err)
+			}
+			if _, err := dev.MoveTaskToProject(t.Context(), "op-move", "w-moved", "OPS", nil); err != nil {
+				t.Fatalf("dev moves w-moved to OPS: %v", err)
+			}
+			r.drain()
+			to, err := r.log.End(t.Context())
+			if err != nil {
+				t.Fatalf("read the log's end: %v", err)
+			}
+			for seq := from + 1; seq <= to; seq++ {
+				if record := r.recordAt(t, seq); record.Op == worklet.OpCreate &&
+					record.Subject.Kind == worklet.AliasSubject("ENG-1", 1).Kind {
+					return record
+				}
+			}
+			t.Fatalf("the move of w-moved claimed no alias between %d and %d", from, to)
+			return worklet.MutationRecord{}
+		}, nil, 1},
 		{"a self-take recorded as a status move that wakes nobody", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-take", "w-free", worklet.TaskPatch{Status: &started, Assignee: &devHandle},
 				worklet.ChangeStatus, nil, func(w *worklet.Wake) {

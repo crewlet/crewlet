@@ -566,13 +566,15 @@ func (w *Writer) recordedFor(carries bool) (*types.WorkingFor, error) {
 // carries reports whether a record is one a later turn reads to learn whom it
 // works for (ADR-0109), so it carries the writer's carrier and apps:
 //
-//   - EVERY CREATION AND EVERY ASSIGNMENT, whatever it wakes now: the work
-//     pickup reads an item's creation row and its last assignment to learn
-//     whom the work it hands a seat is for (ADR-0112), long after the record
-//     woke anybody or nobody. An assignment is a record of kind
-//     [ChangeAssignee] (a reassertion that moves nothing included) or one
-//     whose patch moves the assignee, whatever kind it ends with
-//     (assigns, which only the decide that holds the current row can tell);
+//   - AN ITEM'S CREATION AND EVERY MOVE OF ITS ASSIGNEE, whatever they wake
+//     now: the work pickup reads an item's creation row and the rows that
+//     moved its assignee to learn whom the work it hands a seat is for
+//     (ADR-0112), long after the record woke anybody or nobody. A creation is
+//     the task's own ([ChangeCreated]), never the alias a move claims for its
+//     old key, which nothing reads for whom it was made. A move is a patch
+//     whose assignee differs from the current row, whatever kind it ends
+//     with (assigns, which only the decide that holds that row can tell); a
+//     reassertion that moves nothing is none, and no read takes its carrier;
 //   - ANY OTHER RECORD only where its own Notify proves an agent other than
 //     the actor may be woken by it ([mayWakeAnAgent]).
 //
@@ -584,7 +586,7 @@ func (w *Writer) carries(subject Subject, op OpKind, kind ChangeKind, assigns bo
 	switch {
 	case RecordEnvelope{Subject: subject, Op: op}.readByEveryBuild():
 		return false
-	case op == OpCreate, kind == ChangeAssignee, assigns:
+	case op == OpCreate && kind == ChangeCreated, assigns:
 		return true
 	}
 	return mayWakeAnAgent(notify, w.Actor)
