@@ -702,7 +702,8 @@ func (r *retention) beat(ctx context.Context) {
 	if r.alarms == nil {
 		return
 	}
-	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
+	rep := r.Report(ctx)
+	r.alarms.Observe(ctx, rep.Alarms, rep.Unjudged...)
 }
 
 // floorSubjects is every log this node runs, at the generation its applier is

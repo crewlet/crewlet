@@ -298,8 +298,9 @@ func (e *Engine) sweepMCPAccepted(ctx context.Context, accepted []coord.MCPAccep
 // (ADR-0078): how many changes hold a tool at Needs approval, how many of
 // those claim less risk than before, the change seen first and when. By the
 // live listings and this node's watched copy of what was accepted; a server
-// whose listings or copy this node has not read raises nothing, rather than
-// every allowed tool at once.
+// whose listings or copy this node has not read, or that no live node lists, is
+// marked unread ([statelog.MCPServerCondition.ChangesUnread]): it raises
+// nothing, rather than every allowed tool at once, and clears nothing either.
 //
 // A REMOVAL OR A CHANGE THAT HOLDS NOTHING (a tool that already asks, or is
 // blocked) is not counted: it waits on a person's review on the server's
@@ -308,6 +309,9 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 	live, ok := e.LiveMCPListings()
 	index, answered := e.reviewIndex()
 	if !ok || !answered {
+		for i := range conds {
+			conds[i].ChangesUnread = true
+		}
 		return
 	}
 	at := make(map[string]int, len(conds))
@@ -328,6 +332,12 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 		entry := &c.Config.MCPServers[i]
 		j, ok := at[entry.Name]
 		if !ok {
+			continue
+		}
+		if len(byServer[entry.Name]) == 0 {
+			// NO LIVE NODE LISTS IT: a server stopped or not yet started, not
+			// one whose changes were accepted.
+			conds[j].ChangesUnread = true
 			continue
 		}
 		for _, change := range mcpreview.Changes(byServer[entry.Name], index[entry.Name]) {

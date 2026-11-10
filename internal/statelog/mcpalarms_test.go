@@ -326,3 +326,34 @@ func TestAChangedToolsEntrySaysWhichToolAndWhetherItLoosened(t *testing.T) {
 		t.Errorf("the entry is dated %s, want when the fleet first saw the change (%s)", e.Since, seen)
 	}
 }
+
+// A SERVER WHOSE CHANGES WERE NOT READ IS UNJUDGED, NOT CLEAR. A reading that
+// gathered no server rows leaves every per-server kind unjudged, and one that
+// gathered them leaves unjudged only the change on a server marked unread,
+// which raises nothing however many changes it carries.
+//
+// Mutation: drop the unread rule, or let an unread server raise, and a case is
+// red.
+func TestAnUnreadServerIsUnjudgedNotClear(t *testing.T) {
+	t.Parallel()
+	has := func(refs []statelog.AlarmRef, want statelog.AlarmRef) bool { return slices.Contains(refs, want) }
+	changes := statelog.KindMCPToolsChanged
+
+	if refs := statelog.Unjudged(statelog.Reading{}); !has(refs, statelog.AlarmRef{Kind: changes}) ||
+		!has(refs, statelog.AlarmRef{Kind: statelog.KindMCPServerFailing}) {
+		t.Errorf("a reading with no server rows left %v unjudged, want every per-server kind", refs)
+	}
+
+	r := servers(
+		statelog.MCPServerCondition{Server: "datadog", Changes: 2, ChangesUnread: true},
+		statelog.MCPServerCondition{Server: "docs"},
+	)
+	r.ModelsAt = mcpAt
+	refs := statelog.Unjudged(r)
+	if !slices.Equal(refs, []statelog.AlarmRef{{Kind: changes, Entry: "datadog"}}) {
+		t.Errorf("unjudged = %v, want the unread server's change alone", refs)
+	}
+	if got := mcpKinds(r)[changes]; len(got) != 0 {
+		t.Errorf("an unread server raised %s on %v", changes, got)
+	}
+}
