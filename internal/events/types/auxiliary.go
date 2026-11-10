@@ -186,6 +186,17 @@ func AuxPurposes() []AuxPurpose {
 }
 
 // Valid reports whether this build knows the purpose.
+// Learning reports a purpose that is a seat's learning: remembering a turn and
+// curating what it learned, which learning.max_share holds to its share.
+func (p AuxPurpose) Learning() bool {
+	switch p {
+	case AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
+		AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion:
+		return true
+	}
+	return false
+}
+
 func (p AuxPurpose) Valid() bool {
 	if kind, ok := strings.CutPrefix(string(p), auxCondensePrefix); ok {
 		return slices.Contains(auxCondenseKinds, kind)

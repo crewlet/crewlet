@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -271,9 +272,16 @@ func (t Turn) SelfPersisted() bool {
 // FAILED turn that called nothing failed at something, and that is worth
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
+//
+// WHAT THE TURN COMMITTED decides where its tally states it: a turn that moved
+// work or said words engaged, and one that committed nothing did not, however
+// many tools it read with. An unstated outcome (a parked segment) falls back.
 func (t Turn) Engaged() bool {
 	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
+	}
+	if tally := t.Event.Turn; tally != nil && tally.Outcome != "" {
+		return tally.Outcome != types.OutcomeNothing
 	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
 }
@@ -540,7 +548,14 @@ type Reflection struct {
 // Skip reasons. Exported because they are what an operator reads back out of
 // a log line or a test asserts on, and a caller comparing against its own
 // copy of the string is how the two drift.
+// ErrLearningShare is a learning call held because the seat's learning has
+// reached learning.max_share of its company day's spend; it resumes next day.
+var ErrLearningShare = errors.New("learning: the seat's learning is at its share of the day's spend")
+
 const (
+	// SkipLearningShare is a worker whose model call [ErrLearningShare] held.
+	SkipLearningShare = "learning_share"
+
 	SkipNoWorkers    = "no_workers"
 	SkipNoRole       = "no_role"
 	SkipRoleDisabled = "role_disabled"
@@ -698,6 +713,15 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 			continue
 		}
 		payloads, err := r.dispatch(ctx, w, turn)
+		if errors.Is(err, ErrLearningShare) {
+			if out.Skipped == nil {
+				out.Skipped = map[string]string{}
+			}
+			out.Skipped[w.Name()] = SkipLearningShare
+			log.InfoContext(ctx, "reflection_worker_held_by_share", "turn_id", tc.TurnID,
+				"agent_handle", tc.AgentHandle, "worker", w.Name())
+			continue
+		}
 		if err != nil {
 			if out.Failed == nil {
 				out.Failed = map[string]error{}

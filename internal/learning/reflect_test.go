@@ -474,6 +474,18 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ReviewOutcome = "failed"
 		}, true},
 		{"it acted and finished done", func(*types.TurnCompleted) {}, true},
+		// WHAT IT COMMITTED DECIDES where its tally says: reading with tools
+		// and writing nothing taught the seat nothing worth remembering.
+		{"it read with tools and committed nothing", func(x *types.TurnCompleted) {
+			x.Turn = &types.TurnTally{Outcome: types.OutcomeNothing}
+		}, false},
+		{"it called nothing and said words", func(x *types.TurnCompleted) {
+			x.ToolSequence = nil
+			x.Turn = &types.TurnTally{Outcome: types.OutcomeWords}
+		}, true},
+		{"it moved work", func(x *types.TurnCompleted) {
+			x.Turn = &types.TurnTally{Outcome: types.OutcomeMoved}
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1132,5 +1144,21 @@ func TestAPassFlushesItsSpendBeforeItsSentinel(t *testing.T) {
 					probe.before[0], sentinel)
 			}
 		})
+	}
+}
+
+// A WORKER THE SEAT'S LEARNING SHARE HELD IS SKIPPED, NOT FAILED: the share is
+// the gate working, so it is said as a skip and the other workers still run.
+func TestAWorkerHeldByTheLearningShareIsSkipped(t *testing.T) {
+	t.Parallel()
+	held := &stubWorker{name: "held", err: fmt.Errorf("engine: auxiliary call not made: %w", learning.ErrLearningShare)}
+	other := &stubWorker{name: "other"}
+	out := reflectOnce(reflector(t, devOrg(), &recordingPub{}, held, other), settledTurn())
+	if out.Skipped["held"] != learning.SkipLearningShare || out.Failed["held"] != nil {
+		t.Errorf("the held worker reads skipped %q and failed %v, want skipped for the share", out.Skipped["held"],
+			out.Failed["held"])
+	}
+	if other.ran() != 1 {
+		t.Errorf("the other worker ran %d times, want once", other.ran())
 	}
 }
