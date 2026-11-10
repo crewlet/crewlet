@@ -49,7 +49,7 @@ func TestAWatchAQuestionAddedEndsWithTheQuestion(t *testing.T) {
 		filedTask(t, r, "w")
 		comment(r, "w", "pm", "ana", nil)
 		first := "c-" + itoa(n)
-		comment(r, "w", "pm", "ana", nil)
+		comment(r, "w", "qa", "ana", nil)
 		second := "c-" + itoa(n)
 		if w, asked := watching(r, "w", "ana"); !w || !asked {
 			t.Fatalf("asked twice, ana watches %v (by the question %v), want both", w, asked)
@@ -61,6 +61,19 @@ func TestAWatchAQuestionAddedEndsWithTheQuestion(t *testing.T) {
 		comment(r, "w", "ana", "", ref(second))
 		if w, asked := watching(r, "w", "ana"); w || asked {
 			t.Errorf("both answered, ana still watches %v (by the question %v)", w, asked)
+		}
+	})
+
+	// A QUESTION ITS ASKER ASKED AGAIN IS OVERTAKEN, and owes nothing: the
+	// answer to the newer one ends the watch.
+	t.Run("an overtaken question keeps no watch", func(t *testing.T) {
+		r := newRoundTrip(t)
+		filedTask(t, r, "w")
+		comment(r, "w", "pm", "ana", nil)
+		comment(r, "w", "pm", "ana", nil)
+		comment(r, "w", "ana", "", ref("c-"+itoa(n)))
+		if w, asked := watching(r, "w", "ana"); w || asked {
+			t.Errorf("the newer question answered, ana still watches %v (by the question %v)", w, asked)
 		}
 	})
 

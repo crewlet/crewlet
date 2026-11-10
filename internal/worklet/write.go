@@ -1404,6 +1404,7 @@ func askWatchOf(current Task, patch TaskPatch) []string {
 // person other than one comment, named for the plan test.
 const openAskToStatement = `SELECT 1 FROM tracker_comments
 	WHERE task_id = ? AND ask = ? AND id <> ? AND resolved = 0 AND answered_by IS NULL AND removed = 0
+	  AND overtaken = ''
 	LIMIT 1`
 
 // endAskWatch ends the watch a question added once it has nothing left to
