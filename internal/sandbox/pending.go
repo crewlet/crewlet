@@ -823,8 +823,12 @@ type BridgeCall struct {
 
 	// Committed is the kinds of change the call committed to its turn
 	// (types.CommittedChange), which the run's collection settles the
-	// turn's outcome by. At most every kind once, which the call's share of
-	// the log holds room for ([MaxBridgeCallBytes]). Additive on the wire.
+	// turn's outcome by. The bridge's to give, on every call it records as
+	// the call's tool returns (internal/api/mcpbridge's Call.Committed) — a
+	// late call's ([BridgeCall.Late]) and one nobody waited for's
+	// ([BridgeCall.Abandoned]) as much as any: each ran, and its effect
+	// happened. At most every kind once, which the call's share of the log
+	// holds room for ([MaxBridgeCallBytes]). Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim
@@ -2100,9 +2104,16 @@ type BridgeLog struct {
 	PriorCalls       []string `json:"prior_calls,omitempty"`
 	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
 
-	// Committed is every kind of change the job's calls committed, each once:
-	// kept whole when the calls themselves are condensed, so the collection
-	// settles the turn's outcome by all of them.
+	// Committed is every kind of change the ROUND'S calls committed, each
+	// once, in the order first committed: its jobs' own calls', a late
+	// call's ([BridgeCall.Late]) and one nobody waited for's
+	// ([BridgeCall.Abandoned]) alike, each folded in by the one append that
+	// takes every call ([BridgeLog.appendCall]) before the bound can drop it —
+	// and kept whole when the calls themselves are condensed, so the
+	// collection settles the turn's outcome by all of them
+	// ([BridgeLog.Changes]). The round's, as the log is: kept by every opening
+	// of the round, and a new round's log starts without it, the collection
+	// between the two having folded it into the turn. Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
 
 	// Extra is every key of the log this build does not know, kept verbatim
@@ -2238,9 +2249,11 @@ func (l BridgeLog) LastSeq() int {
 // build appended without numbering them.
 func (l BridgeLog) Appends() int { return len(l.Calls) + l.Elided }
 
-// Changes is every kind of change the job's calls committed, each once: the
-// log's own record of them, and any a listed call carries that it lacks (an
-// append an older build made).
+// Changes is every kind of change the round's calls committed, each once,
+// whether the log still lists the call that committed it or has dropped it
+// from its middle — a late call and one nobody waited for among them: the log's
+// own record of them ([BridgeLog.Committed]), and any a listed call carries
+// that it lacks (an append an older build made).
 func (l BridgeLog) Changes() []string {
 	out := slices.Clone(l.Committed)
 	for _, call := range l.Calls {

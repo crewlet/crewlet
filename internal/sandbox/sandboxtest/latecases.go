@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -29,6 +31,8 @@ var lateCases = []struct {
 	{"OfTwoSubmissionsAtOnePlaceTheOneTakenLastIsKeptWhole", testOfTwoSubmissionsAtOnePlaceTheOneTakenLastIsKeptWhole},
 	{"TheCallAPersonApprovedIsNeverLate", testTheCallAPersonApprovedIsNeverLate},
 	{"ACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob", testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob},
+	{"WhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds",
+		testWhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds},
 }
 
 // lateStagedCases are the late-call cases whose subject is what the store asks
@@ -522,5 +526,80 @@ func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandb
 			t.Errorf("call %d, %s, is listed abandoned %v, want %v, as its bridge handed it", i+1, c.Name,
 				c.Abandoned, want)
 		}
+	}
+}
+
+// WHAT A LATE CALL AND ONE NOBODY WAITED FOR COMMITTED IS THE ROUND'S, listed
+// or dropped. Each ran and its effect happened — a message posted, an item
+// filed — so the kinds of change it committed to its turn
+// ([sandbox.BridgeCall.Committed]) are what the round's collection settles the
+// turn's outcome by, as any call's are ([sandbox.BridgeLog.Changes]): a call
+// nobody waited for, which is its job's own, and a late one, which the log
+// takes after its job was replaced and answers beside [sandbox.ErrJobReplaced]
+// on its first try. Read while the log lists both, and again once the log's
+// bound has dropped both from its middle, which keeps no field of a dropped
+// call: their kinds are in the log's own union of the round's
+// ([sandbox.BridgeLog.Committed]), each once.
+//
+// Mutation: drop a late call's kinds where the log takes it, and they are
+// missing while it is listed; fold into the log's union only the kinds of a
+// call a save point holds, and both calls' are missing once the bound drops
+// them.
+func testWhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-late-committed"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	// THE HEAD the log's bound keeps whole ([sandbox.MaxBridgeCalls]), so the
+	// calls after it are ones its middle can drop.
+	head := sandbox.MaxBridgeCalls / 2
+	for seq := 1; seq <= head; seq++ {
+		if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+			Call: madeAt(fmt.Sprintf("read_%03d", seq), seq, seq)}) {
+			t.Fatalf("the job's call %d was not recorded", seq)
+		}
+	}
+	gaveUp := madeAt("slack_post", head+1, head+1)
+	gaveUp.Abandoned, gaveUp.Committed = true, []string{string(types.CommittedChat)}
+	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: gaveUp}) {
+		t.Fatal("the job's call nobody waited for was not recorded")
+	}
+	carryRoundOn(t, s, turn)
+	late := madeAt("create_work_item", head+2, head+2)
+	late.Committed = []string{string(types.CommittedItem), string(types.CommittedChat)}
+	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: late}) {
+		t.Fatal("the late call was not recorded")
+	}
+	// IN THE ORDER FIRST COMMITTED, each once: the chat post the call nobody
+	// waited for made, then the item the late call filed beside a post of its
+	// own.
+	want := []string{string(types.CommittedChat), string(types.CommittedItem)}
+	lists := func(log sandbox.BridgeLog, name string) bool {
+		return slices.ContainsFunc(log.Calls, func(c sandbox.BridgeCall) bool { return c.Name == name })
+	}
+	listed := mustLogged(t, s, turn).Log
+	if !lists(listed, gaveUp.Name) || !lists(listed, late.Name) {
+		t.Fatal("the log does not list both committing calls, so this case proves nothing about a listed one")
+	}
+	if got := listed.Changes(); !slices.Equal(got, want) {
+		t.Errorf("while both are listed, the round committed %q, want %q", strings.Join(got, ", "),
+			strings.Join(want, ", "))
+	}
+
+	// THEN DROPPED. Every later call of the replaced job is late too, so no
+	// ordinary call is left in the middle, and the bound gives up the oldest of
+	// the calls no save point holds: the two above first.
+	for seq := head + 3; seq <= sandbox.MaxBridgeCalls+2; seq++ {
+		if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+			Call: madeAt(fmt.Sprintf("read_%03d", seq), seq, seq)}) {
+			t.Fatalf("the late call %d was not recorded", seq)
+		}
+	}
+	dropped := mustLogged(t, s, turn).Log
+	if lists(dropped, gaveUp.Name) || lists(dropped, late.Name) {
+		t.Fatal("the bound kept a committing call, so this case proves nothing about a dropped one")
+	}
+	if got := dropped.Changes(); !slices.Equal(got, want) {
+		t.Errorf("once the bound dropped both, the round committed %q, want %q", strings.Join(got, ", "),
+			strings.Join(want, ", "))
 	}
 }
