@@ -737,11 +737,11 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 		}
 	}
-	work, surface, err := r.executeAsAgentRun(ctx, round, notes, history)
-	if err == nil && !work.Suspended && r.cfg.Reply.Item != "" {
+	work, surface, ran := r.executeAsAgentRun(ctx, round, notes, history)
+	if ran == nil && !work.Suspended && r.cfg.Reply.Item != "" {
 		work.Typed = r.typedAnswer(ctx)
 	}
-	return work, surface, err
+	return work, surface, ran
 }
 
 // typedAnswer reads whether the turn has put a typed answer on the item its

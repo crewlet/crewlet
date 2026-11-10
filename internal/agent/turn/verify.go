@@ -164,7 +164,7 @@ func ParseReply(s string) Reply {
 const PickupUntyped = "This turn answers a work pickup, and nothing typed is on the item " +
 	"you were handed yet: a comment alone, or words in your report, records nothing the " +
 	"engine can act on, so the item would sit with you unanswered. Answer it with one of " +
-	"these five, on the item itself:\n" + types.PickupAnswers + "\nThen report what you did."
+	"these five, on the item itself:\n" + types.PickupAnswers + "\nThen report what you did"
 
 // UntypedPickup reports a pickup's turn whose record shows no typed answer on
 // its item: the one condition the three delivery checks refuse a pickup on.
