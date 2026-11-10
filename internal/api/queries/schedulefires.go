@@ -122,8 +122,8 @@ func (s Sources) moveReads() ([]movesOf, bool, error) {
 	case err != nil:
 		return nil, false, err
 	case kept:
-		pages, ok := s.Pages.(pageMoves)
-		if !ok {
+		pages, served := s.Pages.(pageMoves)
+		if !served {
 			return nil, false, errors.New("queries: this node reads no pages for what the fires' turns wrote")
 		}
 		out = append(out, func(ctx context.Context, turns []string) (map[string]bool, error) {
