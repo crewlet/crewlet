@@ -4570,7 +4570,7 @@ and a pane of unmarked lines reads as one that failed to load.
 ### What prose names is drawn as what it is
 
 Operator-facing words are full of things a reader has to stop and decode:
-`gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
+`acme/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
 `~design-review` is a Mattermost channel, `#launch` is a chat room, `GP-66` is
 a task. Every surface `lib/markdown.ts` renders (a page, a description, a
 comment, the Inbox, an Ask Crewlet answer, a transcript) draws each with the
@@ -4581,7 +4581,7 @@ alone:
 | Written | Drawn |
 |---|---|
 | `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
-| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, `DES page 123`) in place of the whole address, which the link's title keeps |
+| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`acme/backend#14`, `Message in acme`, `~design-review`, `MOB-12`, `DES page 123`) in place of the whole address, which the link's title keeps |
 | `[label](address)` | Its label as written, after the mark of the app its address belongs to |
 | `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
 | `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
@@ -4657,8 +4657,8 @@ No mark is ever fetched from anywhere: every mark is the design system's.
 **A bare `#11` is placed by its message.** `#11` alone is a list's number, a
 rank or an issue in some repository, so it is a reference only where the
 message it is in says which: the same sentence binds it (`#7 in
-gophrase/frontend`, `gophrase/frontend PR #7`, read as one reference); the
-message names that number in full (`gophrase/backend#11`); or the message
+acme/frontend`, `acme/frontend PR #7`, read as one reference); the
+message names that number in full (`acme/backend#11`); or the message
 names exactly one repository. Anything else leaves it words. The trade-off
 is chosen: in a message that names one repository, a rank or a heading's
 number ("our #1 priority", a heading "#2 Rollout") is read as an issue in
@@ -4666,7 +4666,7 @@ it too, as GitHub's own autolinking reads one in that repository's
 comments, rather than guess at the words around a number. A message is
 one comment, one page or one answer, and an ask's question, context,
 reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
-body" is placed by the `gophrase/backend` its context names. A render is part
+body" is placed by the `acme/backend` its context names. A render is part
 of a scope only when it says so (`scoped`): a reply drawn under an ask is its
 own message, and its numbers are placed by its own words. A number with a
 leading zero, inside a word, a path or an entity, or in code is never one.
