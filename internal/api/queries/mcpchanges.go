@@ -203,7 +203,9 @@ func toolHintsOf(h mcp.Annotations) ToolHints {
 // changeDigests is every digest a review's changes name, before and after, for
 // the definitions shown beside them. A listed one is read whatever its listing
 // says it kept: a digest names one definition, which another node's listing
-// may have kept.
+// may have kept. A digest the store holds nothing under costs one read, which
+// the engine remembers until a listing says it was kept
+// (internal/engine's MCPToolDefinitions), not one on every read of the page.
 func changeDigests(changes []mcpreview.Change) []string {
 	var out []string
 	for _, c := range changes {

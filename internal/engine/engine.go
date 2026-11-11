@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -316,12 +317,12 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 				"pending run's row, because the submission check reads it",
 			in.Reply.Kind, handle, turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
 	}
-	// AND A PICKUP'S TURN CARRIES THE READ OF ITS TYPED ANSWER, for the same
+	// AND A PICKUP'S TURN CARRIES THE READ OF ITS ANSWER, for the same
 	// reason: without it the submission check and every later one would hold
 	// the turn to nothing on its item (ADR-0122).
-	if in.Reply.Item != "" && in.TypedAnswer == nil {
+	if in.Reply.Item != "" && in.PickupAnswer == nil {
 		return nil, fmt.Errorf("engine: RunnerInput.Reply names item %q for %q and no "+
-			"TypedAnswer reads it: build it with Engine.typedAnswerFor", in.Reply.Item, handle)
+			"PickupAnswer reads it: build it with Engine.pickupAnswerFor", in.Reply.Item, handle)
 	}
 	te := c.Config.TurnEngine
 	del := te.Delegation
@@ -385,11 +386,11 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
-		Task:        in.Task,
-		Context:     in.Context,
-		Reply:       in.Reply,
-		TypedAnswer: in.TypedAnswer,
-		Endings:     in.Endings,
+		Task:         in.Task,
+		Context:      in.Context,
+		Reply:        in.Reply,
+		PickupAnswer: in.PickupAnswer,
+		Endings:      in.Endings,
 		// THE SEAT'S ACCESS AND WHAT CHANGED IN IT, rendered at the dispatch
 		// beside the endings and frozen with them (capability.go).
 		Access:            in.Access,
@@ -478,10 +479,10 @@ type RunnerInput struct {
 	// before the turn starts. See [turn.Reply].
 	Reply turn.Reply
 
-	// TypedAnswer reads whether the turn has put a typed answer on the
-	// item a work pickup handed it ([Engine.typedAnswerFor]); required
-	// where Reply names an item, nil otherwise.
-	TypedAnswer func(ctx context.Context) (bool, error)
+	// PickupAnswer reads how the turn has left the item a work pickup
+	// handed it ([Engine.pickupAnswerFor]); required where Reply names an
+	// item, nil otherwise.
+	PickupAnswer func(ctx context.Context) (types.PickupAnswer, error)
 
 	// Budget is the shared token counter this turn charges. Nil is the
 	// embedded single-node case, where no counter is shared with anyone.

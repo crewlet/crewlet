@@ -29,11 +29,13 @@ closed catalogue, and the grant is made only by a person who previewed it.**
   too.
 - **An integration's levels are not in the catalogue.** A level at Jira,
   Datadog, AWS or any other vendor is a role that replaces the agent's role
-  there, not one more permission beside it, and some of those roles
-  administer the vendor, which only the Agents tab's save may grant, behind
-  its own step-up for an administration role. An agent that needs one asks
-  in words, and the tool tells it where an administrator sets it: Settings,
-  Integrations, then the integration's Agents tab.
+  there, not one more permission beside it. Administering is not the reason:
+  the catalogue holds two administration grants, Contents and Workflows at
+  Read and write, which the config entity write applies behind the same
+  step-up the Agents tab's save takes for an administration role. An agent
+  that needs a level asks in words, and the tool tells it where an
+  administrator sets it: Settings, Integrations, then the integration's Agents
+  tab.
 - **The request is a decision (ADR-0100).** The tool posts it through
   `comment_on_work_item` on the work item that needs the access, asked of a
   person, with two options: the grant, whose id is the key, and declining.

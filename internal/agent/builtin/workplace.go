@@ -203,7 +203,6 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		patch := worklet.TaskPatch{Status: place.Status}
 		notify = worklet.Wake{
 			Kind: worklet.ChangeStatus, Before: task, After: patched(task, patch),
-			Parent: t.deps.parentParty(ctx, task, patch),
 		}.Notify(t.deps.Leads)
 	}
 	// ONE OPERATION PER DISTINCT CALL, derived from what was sent — see

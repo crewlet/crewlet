@@ -171,7 +171,7 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 			Epoch: epochs(t, backend)["node-a"], At: down, Instances: 1,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Version: "1.4.0"},
 			Instructions: "instructions-sentinel: search before you create",
-			Tools:        []coord.MCPListedTool{listed("gh_get_issue", "Read one issue", readOnly, 1)}, ToolCount: 1}}},
+			Tools:        []coord.MCPListedTool{listed("gh_get_issue", "Read one issue", readOnly, 1)}}}},
 		MCPInstances: &fakeInstances{read: coord.MCPInstanceRead{
 			Instances: []coord.MCPInstance{
 				{Server: "github", Seat: swe, Node: "node-a", State: coord.MCPInstanceFailed, Since: down,
@@ -318,7 +318,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 	statusKeys := slices.Concat([]string{"reading", "servers", "nodes", "nodes[].id", "nodes[].reported",
 		"builtin"}, under("servers[]", row)[1:])
 	detailKeys := slices.Concat([]string{"reading", "nodes", "nodes[].id", "nodes[].reported",
-		"tool_count", "last_success"},
+		"last_success"},
 		under("server", row),
 		under("listed", nil), under("listed[]", []string{"node", "at", "instances", "tools"})[1:],
 		under("tools", nil), under("tools[]", []string{"name", "raw", "title", "description", "annotations",

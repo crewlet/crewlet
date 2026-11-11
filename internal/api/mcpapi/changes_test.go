@@ -1,9 +1,14 @@
 package mcpapi_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcpreview"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -41,6 +47,8 @@ type fakeReviews struct {
 	review  queries.MCPReview
 	written []coord.MCPAcceptedTool
 	moved   map[string]bool
+	// failing is the tools whose write the store fails.
+	failing map[string]bool
 }
 
 func trackerReview() *fakeReviews {
@@ -51,8 +59,7 @@ func trackerReview() *fakeReviews {
 		a.Version = uint64(10 + i)
 		accepted[a.Tool] = a
 	}
-	listings := []coord.MCPListing{{Server: "tracker", Node: "node-a", Epoch: 1, Instances: 1, ToolCount: 2,
-		Tools: []coord.MCPListedTool{listedAs("close_issue", "v2"), listedAs("export", "e1")}}}
+	listings := []coord.MCPListing{{Server: "tracker", Node: "node-a", Epoch: 1, Instances: 1, Tools: []coord.MCPListedTool{listedAs("close_issue", "v2"), listedAs("export", "e1")}}}
 	return &fakeReviews{review: queries.MCPReview{Server: "tracker", Listings: listings, Accepted: accepted,
 		Changes: mcpreview.Changes(listings, accepted), Entry: entry}, moved: map[string]bool{}}
 }
@@ -71,6 +78,9 @@ func (f *fakeReviews) PutMCPAccepted(_ context.Context, a coord.MCPAcceptedTool,
 	defer f.mu.Unlock()
 	if f.moved[a.Tool] {
 		return coord.MCPAcceptedTool{}, false, nil
+	}
+	if f.failing[a.Tool] {
+		return coord.MCPAcceptedTool{}, false, errors.New("the coordination store did not answer")
 	}
 	if held, ok := f.review.Accepted[a.Tool]; ok != (version != 0) || (ok && held.Version != version) {
 		return coord.MCPAcceptedTool{}, false, nil
@@ -241,6 +251,158 @@ func TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder(t *testing.T) {
 	if len(reviews.written) != 1 || reviews.written[0].Tool != "close_issue" ||
 		reviews.written[0].Digest != reviewDigest("v2") {
 		t.Fatalf("always accepted %+v, want close_issue at the definition the call was made under", reviews.written)
+	}
+}
+
+// A DECISION WRITTEN IN PART SAYS WHICH: decisions are written one by one, and
+// one the store fails answers 503 naming what was decided and what was not,
+// so the dashboard can say exactly that rather than "nothing was changed".
+//
+// Mutation: answer the failure without naming the decided and the undecided,
+// and this is red.
+func TestADecisionWrittenInPartSaysWhich(t *testing.T) {
+	t.Parallel()
+	reviews := trackerReview()
+	reviews.failing = map[string]bool{"export": true}
+	svc := reviewSurface(t, reviews, &fakeToolDocuments{}, &recordedAudit{})
+	body := `{"accept": {"close_issue": "` + reviewDigest("v2") + `", "export": "` + reviewDigest("e1") +
+		`", "purge": null}}`
+	code, got := answer(t, svc, proved(time.Minute), "/mcp-servers/tracker/changes", body)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("POST = %d %v, want 503", code, got)
+	}
+	if fmtList(got["accepted"]) != "close_issue" || fmtList(got["undecided"]) != "export,purge" ||
+		fmtList(got["blocked"]) != "" || fmtList(got["moved"]) != "" {
+		t.Errorf("answered accepted %v, undecided %v, blocked %v, moved %v; want close_issue decided and "+
+			"export and purge not", got["accepted"], got["undecided"], got["blocked"], got["moved"])
+	}
+	detail, _ := got["detail"].(string)
+	if !strings.Contains(detail, `Decided already: "close_issue"`) || !strings.Contains(detail, "export") {
+		t.Errorf("the detail %q does not name what was decided", detail)
+	}
+	if len(reviews.written) != 1 || reviews.written[0].Tool != "close_issue" {
+		t.Errorf("wrote %+v, want close_issue alone", reviews.written)
+	}
+}
+
+// cloudTools is how many tools the large server lists, and changedTool the
+// one it changed since its first listing: past the 256th by name.
+const (
+	cloudTools  = 500
+	changedTool = "tool_0336"
+)
+
+// cloudReview is a server listing 500 tools, its listing held to the bounds a
+// store writes it under, every one accepted as first listed and changedTool
+// listed now under another definition, v2.
+func cloudReview(t *testing.T) *fakeReviews {
+	t.Helper()
+	var was, now []coord.MCPListedTool
+	for i := 1; i <= cloudTools; i++ {
+		raw := fmt.Sprintf("tool_%04d", i)
+		was = append(was, listedAs(raw, raw+"/v1"))
+		if raw == changedTool {
+			now = append(now, listedAs(raw, raw+"/v2"))
+		} else {
+			now = append(now, listedAs(raw, raw+"/v1"))
+		}
+	}
+	entry := &config.MCPServer{Name: "tracker", Command: "tracker-mcp", ToolPrefix: "tr_"}
+	accepted := map[string]coord.MCPAcceptedTool{}
+	for i, a := range mcpreview.Baseline(coord.MCPListing{Server: "tracker", Tools: was}, time.Now()) {
+		a.Version = uint64(10 + i)
+		accepted[a.Tool] = a
+	}
+	listing := coord.MCPListing{Server: "tracker", Node: "node-a", Epoch: 1, At: time.Now(), Instances: 1,
+		Tools: now}.Bounded()
+	if err := listing.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	listings := []coord.MCPListing{listing}
+	return &fakeReviews{review: queries.MCPReview{Server: "tracker", Listings: listings, Accepted: accepted,
+		Changes: mcpreview.Changes(listings, accepted), Entry: entry}, moved: map[string]bool{}}
+}
+
+// alwaysAllow answers the held call to raw at digest Always allow, over reviews.
+func alwaysAllow(t *testing.T, reviews *fakeReviews, raw, digest string) {
+	t.Helper()
+	run := waitingRun()
+	run.HeldCall.Raw, run.HeldCall.Tool, run.HeldCall.Digest = raw, "tr_"+raw, digest
+	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
+		Registry: &fakeRegistry{}, Detail: listedDetail(), Restarter: &fakeRestarter{}, Checker: &fakeChecker{},
+		Tools: &fakeToolDocuments{}, Values: valueStore(t), SignIns: &fakeSignIns{}, Audit: &recordedAudit{},
+		Approvals: &fakeApprovals{run: run}, Reviews: reviews,
+		Guard: authz.ContextGuard(leadOf{lead: "cto", seat: "swe"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID, `{"answer": "`+sandbox.HeldAlways+`"}`)
+	if code != http.StatusAccepted {
+		t.Fatalf("POST = %d %v", code, body)
+	}
+}
+
+// ALWAYS ALLOW ON A TOOL PAST THE 256TH STICKS: a server listing 500 tools is
+// listed whole, so the definition a call to its 336th tool was held on is
+// accepted with the level, and the tool does not ask again.
+//
+// Mutation: cut a listing at 256 tools, or accept only a change the review's
+// own list finds, and this is red.
+func TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition(t *testing.T) {
+	t.Parallel()
+	reviews := cloudReview(t)
+	if n := len(reviews.review.Listings[0].Tools); n != cloudTools {
+		t.Fatalf("the listing names %d tools of %d", n, cloudTools)
+	}
+	alwaysAllow(t, reviews, changedTool, reviewDigest(changedTool+"/v2"))
+	if len(reviews.written) != 1 || reviews.written[0].Tool != changedTool ||
+		reviews.written[0].Digest != reviewDigest(changedTool+"/v2") || reviews.written[0].By != "jane.doe" {
+		t.Fatalf("always accepted %+v, want %s at the definition the call was made under", reviews.written,
+			changedTool)
+	}
+	index := mcpreview.IndexOf([]coord.MCPAcceptedTool{reviews.written[0]})
+	if index.Unreviewed("tracker", changedTool, reviewDigest(changedTool+"/v2")) {
+		t.Error("the accepted definition still reads as unreviewed")
+	}
+}
+
+// AN ALWAYS ALLOW THAT ACCEPTS NOTHING SAYS WHY in the log: a held call whose
+// definition no live listing names (the server lists another since) at WARN,
+// naming the definitions listed, and one already accepted at INFO.
+//
+// Not parallel: it installs the process's log sink.
+//
+// Mutation: return without a line where nothing is accepted, and this is red.
+func TestAnAlwaysAllowThatAcceptsNothingSaysWhy(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	reviews := cloudReview(t)
+	alwaysAllow(t, reviews, changedTool, reviewDigest(changedTool+"/v3"))
+	if len(reviews.written) != 0 {
+		t.Fatalf("a definition no listing names was accepted: %+v", reviews.written)
+	}
+	alwaysAllow(t, reviews, "tool_0001", reviewDigest("tool_0001/v1"))
+	if len(reviews.written) != 0 {
+		t.Fatalf("an accepted definition was accepted again: %+v", reviews.written)
+	}
+	var unlisted, accepted string
+	for line := range strings.Lines(out.String()) {
+		switch {
+		case strings.Contains(line, "mcp_held_definition_not_accepted") && strings.Contains(line, changedTool):
+			unlisted = line
+		case strings.Contains(line, "mcp_held_definition_left") && strings.Contains(line, "tool_0001"):
+			accepted = line
+		}
+	}
+	if !strings.Contains(unlisted, "level=WARN") || !strings.Contains(unlisted, "no live listing names it") ||
+		!strings.Contains(unlisted, reviewDigest(changedTool+"/v2")) {
+		t.Errorf("the unlisted definition logged %q, want a WARN saying no listing names it and what is listed",
+			unlisted)
+	}
+	if !strings.Contains(accepted, "level=INFO") || !strings.Contains(accepted, "accepted already") {
+		t.Errorf("the accepted definition logged %q, want an INFO saying it is accepted already", accepted)
 	}
 }
 

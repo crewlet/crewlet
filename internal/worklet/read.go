@@ -1608,6 +1608,11 @@ type sortTerm struct {
 	// JoinArgs are the join's bound values, which ride AHEAD of the
 	// predicate's: a join is written before the WHERE.
 	JoinArgs []any
+
+	// Basis is what the term's values are positions in beyond its text,
+	// the seats' order a place is read from ([assigneeOrder]): digested by
+	// [cursorOrder] and never rendered.
+	Basis string
 }
 
 // sortColumn is a column a caller may order by, and whether it can be absent.
@@ -1721,7 +1726,9 @@ func sortTerms(q Query, fields map[string]resolvedField, basis orderBasis) []sor
 			continue
 		}
 		if derived, ok := derivedOrders[sort.Key]; ok {
-			terms = append(terms, derived(basis, sort.Descending)...)
+			// ITS OWN ALIAS for the reason a field sort's is above.
+			terms = append(terms, derived(basis, sort.Descending,
+				"ord"+strconv.Itoa(i))...)
 			continue
 		}
 		column, known := sortColumns[sort.Key]
@@ -1845,14 +1852,31 @@ type page struct {
 }
 
 // cursorOrder is what a cursor carries of its order: a digest of the order as
-// compiled, which names it as exactly as the text does.
+// compiled, its joins and what they bind included, which names it as exactly
+// as the statement does.
 //
-// A DIGEST RATHER THAN THE TEXT, because an order over the chart is a CASE
-// naming every seat ([assigneeOrder]), and a cursor carrying it would be
-// kilobytes in every URL and every model's context that pages a listing.
+// WHAT A TERM BINDS AND IS RELATIVE TO IS THE ORDER TOO. A field sort binds
+// the field it reads, and a seat's place is a position in one roster
+// ([sortTerm.Basis]), so a digest of the rendered order alone took a cursor of
+// `sort=f.effort` for one of `sort=f.cost`, and one minted before a seat was
+// added for one of the chart after it.
+//
+// A DIGEST RATHER THAN THE TEXT, because the catalogue's order names every
+// type, and a cursor carrying it would be that long in every URL and every
+// model's context that pages a listing.
 func cursorOrder(terms []sortTerm) string {
-	sum := sha256.Sum256([]byte(renderOrder(terms)))
-	return base64.RawURLEncoding.EncodeToString(sum[:16])
+	digest := sha256.New()
+	digest.Write([]byte(renderOrder(terms)))
+	for _, term := range terms {
+		if term.Join == "" && term.Basis == "" {
+			continue
+		}
+		digest.Write([]byte("\x00" + term.Join + "\x00" + term.Basis))
+		for _, arg := range term.JoinArgs {
+			fmt.Fprintf(digest, "\x00%T:%v", arg, arg)
+		}
+	}
+	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil)[:16])
 }
 
 // sortSpelling is an order as a caller wrote it, for a refusal to name.
@@ -1899,23 +1923,16 @@ func sortSpelling(sorts []Sort) string {
 // rule and why neither a range nor a union of the arms will do are
 // [keyset]'s; [readPage] reads the arms in turn until the page is full.
 func cursorArms(q Query, fields map[string]resolvedField, basis orderBasis) ([]keyset.Arm, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
+	resume, err := decodePage(q.Cursor)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: the cursor is not one this surface "+
-			"minted: %w", err)
-	}
-	var resume page
-	if err := json.Unmarshal(raw, &resume); err != nil {
-		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
-			"after")
+		return nil, err
 	}
 	terms := sortTerms(q, fields, basis)
 	if len(resume.Keys) == 0 || resume.Keys[len(resume.Keys)-1] == nil {
 		// THE LAST KEY IS THE ROW'S ID, which is never NULL: a cursor
 		// without one names no row, and resumed it would be read as the
 		// rows after nothing — none at all.
-		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
-			"after")
+		return nil, fmt.Errorf("%w: it names no row to resume after", ErrBadCursor)
 	}
 	if len(resume.Keys) != len(terms) || resume.Order != cursorOrder(terms) {
 		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
@@ -1924,13 +1941,36 @@ func cursorArms(q Query, fields map[string]resolvedField, basis orderBasis) ([]k
 		// column the query does not sort by, which drops rows without
 		// saying so. The ORDER is what decides that, not the key count —
 		// see [page].
-		return nil, fmt.Errorf("worklet: this cursor was minted for another "+
-			"order than this query's (%s): a cursor belongs to the order that "+
-			"minted it, and re-sorting, or an edit to the type catalogue or the "+
-			"seats' names an order is built from, starts a new page",
-			sortSpelling(q.Sort))
+		return nil, fmt.Errorf("%w: it was minted for another order than this "+
+			"query's (%s). A cursor belongs to the order that minted it, and "+
+			"re-sorting, or an edit to the type catalogue or the org chart an "+
+			"order is built from, starts again from the first page",
+			ErrBadCursor, sortSpelling(q.Sort))
 	}
 	return keyset.After(keysetTerms(terms), resume.Keys), nil
+}
+
+// ErrBadCursor refuses a cursor a listing cannot resume: one it did not mint,
+// or one minted for another order than the query's, the chart's or the type
+// catalogue's before an edit included. A [ErrBadQuery], since the same cursor
+// is refused on every attempt; the remedy is the listing's first page.
+//
+// A SENTINEL, because a refusal spelled as a plain error was answered as this
+// node's fault: a 500 to a reader paging a list after somebody added a seat,
+// and "try again" to a model, both for ever.
+var ErrBadCursor = fmt.Errorf("%w: the cursor does not resume this listing", ErrBadQuery)
+
+// decodePage reads a cursor [mintCursor] minted back into its page.
+func decodePage(cursor string) (page, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return page{}, fmt.Errorf("%w: it is not one this listing minted", ErrBadCursor)
+	}
+	var resume page
+	if err := json.Unmarshal(raw, &resume); err != nil {
+		return page{}, fmt.Errorf("%w: it is not one this listing minted", ErrBadCursor)
+	}
+	return resume, nil
 }
 
 // keysetTerms is an order as [keyset] reads one.

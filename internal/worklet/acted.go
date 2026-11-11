@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -25,8 +26,12 @@ type ActedDecision struct {
 	Ask      string
 	Question string
 	// Choice is the label of the option the answer chose, empty for an answer
-	// in words; AnsweredBy and AnsweredAt are who answered and when.
+	// in words, and ChoiceID its id; Act is what the question was for where
+	// the engine composed it (ADR-0125). AnsweredBy and AnsweredAt are who
+	// answered and when.
 	Choice     string
+	ChoiceID   string
+	Act        *delegated.Act
 	AnsweredBy string
 	AnsweredAt time.Time
 }
@@ -128,12 +133,12 @@ func readAnswerGiven(ctx context.Context, tx *sql.Tx, answer, asker string) (*Ac
 		return nil, fmt.Errorf("worklet: decode the answer %s: %w", answer, err)
 	}
 	acted.AnsweredAt = store.DecodeTime(answeredAt)
-	acted.Question = question.Body
+	acted.Question, acted.Act = question.Body, question.Act
 	if question.Decision != nil {
 		acted.Question = question.Decision.Question
 		for _, o := range question.Decision.Options {
 			if given.Choice != "" && o.ID == given.Choice {
-				acted.Choice = o.Label
+				acted.Choice, acted.ChoiceID = o.Label, o.ID
 			}
 		}
 	}

@@ -202,6 +202,15 @@ func (h *fleetHarness) worked(scope string, keys ...string) map[string]bool {
 	return got
 }
 
+func (h *fleetHarness) workedAt(scope string, keys ...string) map[string]time.Time {
+	h.t.Helper()
+	got, err := h.f.WorkedAt(h.ctx, scope, keys)
+	if err != nil {
+		h.t.Fatalf("WorkedAt(%s): %v", scope, err)
+	}
+	return got
+}
+
 func (h *fleetHarness) record(scope, key, detail string, at time.Time) {
 	h.t.Helper()
 	if err := h.f.Record(h.ctx, scope, key, detail, at); err != nil {
@@ -530,6 +539,25 @@ var ledgerCases = []fleetCase{{
 		h.record("ceo", "wk-1", "turn-b", h.now().Add(time.Second))
 		if !h.worked("ceo", "wk-1")["wk-1"] {
 			h.t.Fatal("the key stopped being worked after a second record")
+		}
+	},
+}, {
+	// WHEN A KEY WAS WORKED is the first record's instant: the work pickup
+	// spaces a recheck from the end of the item's last pickup by it.
+	name: "a worked key says when its first record was made",
+	fn: func(h *fleetHarness) {
+		first := h.now().Add(-time.Hour).UTC().Truncate(time.Second)
+		h.record("ceo", "wk-1", "turn-a", first)
+		h.record("ceo", "wk-1", "turn-b", h.now())
+		got := h.workedAt("ceo", "wk-1", "wk-2")
+		if at, ok := got["wk-1"]; !ok || !at.Equal(first) {
+			h.t.Fatalf("a key first recorded at %s answered %s (worked %v)", first, at, ok)
+		}
+		if _, ok := got["wk-2"]; ok {
+			h.t.Fatal("an unrecorded key came back worked")
+		}
+		if _, ok := h.workedAt("cto", "wk-1")["wk-1"]; ok {
+			h.t.Fatal("one seat's completion answered for another seat")
 		}
 	},
 }, {

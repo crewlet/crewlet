@@ -321,6 +321,48 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 	return affected(res)
 }
 
+// applyRoster writes the chart's seat order: the roster's own row, and each
+// seat's place in `tracker_seat_places`, the key `sort=assignee` joins.
+//
+// THE PLACES FOLLOW THE ROSTER'S VERSION GUARD, as a document's children do:
+// a redelivered or reprocessed older roster rewrites nothing.
+func (a *Applier) applyRoster(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+	var roster Roster
+	if err := decodePayload(c.record.Mutation, &roster); err != nil {
+		return 0, fmt.Errorf("worklet: decode the roster at %s: %w", c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_rosters (name, chart_epoch, version, document)
+		VALUES (?,?,?,?)
+		ON CONFLICT (name) DO UPDATE SET
+			chart_epoch = excluded.chart_epoch, version = excluded.version,
+			document = excluded.document
+		WHERE excluded.version > tracker_rosters.version`,
+		c.subject().ID, roster.ChartEpoch, c.packed, []byte(c.record.Mutation))
+	if err != nil {
+		return 0, fmt.Errorf("worklet: write the roster at %s: %w", c.position, err)
+	}
+	rows, err := affected(res)
+	if err != nil || rows == 0 {
+		return rows, err
+	}
+	cleared, err := tx.ExecContext(ctx, `DELETE FROM tracker_seat_places`)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: clear the seats' places at %s: %w", c.position, err)
+	}
+	n, err := affected(cleared)
+	if err != nil {
+		return 0, err
+	}
+	written, err := store.InsertRows(ctx, tx, c.maxVariables,
+		`INSERT INTO tracker_seat_places (handle, place) VALUES`, `(?,?)`, "",
+		len(roster.Seats), func(i int) []any { return []any{roster.Seats[i], i} })
+	if err != nil {
+		return 0, fmt.Errorf("worklet: write the seats' places at %s: %w", c.position, err)
+	}
+	return rows + n + written, nil
+}
+
 // placeTask writes one placement of a rank order.
 //
 // INTO THE MOVED TASK'S DOCUMENT, not its rank column alone ([rewriteOther]):

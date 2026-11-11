@@ -1053,6 +1053,7 @@ export function AnswerRunButton({
         seat={run.agent_handle}
         fixed={run.held_call.fixed}
         approvers={run.held_call.approvers}
+        act={run.held_call.act}
       />
     );
   return (

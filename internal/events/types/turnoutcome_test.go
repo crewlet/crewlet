@@ -55,3 +55,40 @@ func TestATurnsWakeIsWhatWokeIt(t *testing.T) {
 		}
 	}
 }
+
+// A PICKUP ANSWERED TYPED MOVED ITS ITEM (ADR-0122): an ask is a comment by
+// kind, words on any other turn, and on a pickup the delivery check's own
+// reading counts it a move; a pickup nothing typed answered keeps what its
+// writes committed, an item that left the seat included.
+//
+// Mutation: read a pickup's outcome from its committed changes alone, and the
+// advisor counts every pickup answered with a question as words.
+func TestAPickupAnsweredTypedMovedItsItem(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		committed types.TurnOutcome
+		answer    types.PickupAnswer
+		want      types.TurnOutcome
+	}{
+		{types.OutcomeWords, types.PickupTyped, types.OutcomeMoved},
+		{types.OutcomeMoved, types.PickupTyped, types.OutcomeMoved},
+		{types.OutcomeWords, types.PickupUnanswered, types.OutcomeWords},
+		{types.OutcomeNothing, types.PickupRemoved, types.OutcomeNothing},
+		{types.OutcomeWords, types.PickupUnread, types.OutcomeWords},
+		{types.OutcomeWords, "", types.OutcomeWords},
+	} {
+		if got := types.OutcomeOfPickup(c.committed, c.answer); got != c.want {
+			t.Errorf("a turn committing %s and answering %q is %s, want %s", c.committed, c.answer, got, c.want)
+		}
+	}
+	for _, a := range []types.PickupAnswer{types.PickupUnanswered, types.PickupTyped, types.PickupRemoved,
+		types.PickupFinished, types.PickupReassigned, types.PickupUnread} {
+		if !a.Valid() || a.Accepted() == (a == types.PickupUnanswered) ||
+			a.Moot() != (a == types.PickupRemoved || a == types.PickupFinished || a == types.PickupReassigned) {
+			t.Errorf("%q: valid %v accepted %v moot %v", a, a.Valid(), a.Accepted(), a.Moot())
+		}
+	}
+	if types.PickupAnswer("pondered").Accepted() {
+		t.Error("an answer this build does not know is accepted")
+	}
+}

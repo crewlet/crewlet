@@ -161,17 +161,19 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 // calls a run gave up on, or whose session ended under them, before they
 // returned. TOLD UNDER WORDS OF THEIR OWN, WHATEVER THE SESSION'S END, since no
 // point tells them and each of the other headings is untrue of them: the
-// session above may show such a call with no outcome, as interrupted or as
-// failed, its harness having died, given up on it or been replaced before the
-// call returned; and an earlier brief may have told it, since every
-// continuation of the work tells it again. So it is said to be ONE call, made
-// once, whose outcome as told here stands — never one the session lacks.
+// session above may show such a call with no outcome, as still running, as
+// interrupted or as failed, its harness having died, given up on it, been
+// answered that it was still running as its session on the bridge ended, or
+// been replaced before the call returned; and an earlier brief may have told
+// it, since every continuation of the work tells it again. So it is said to be
+// ONE call, made once, whose outcome as told here stands — never one the
+// session lacks.
 const lateCallsHeader = "## Calls that finished after the run that made them stopped waiting for them" +
 	"\nA run of this work made these calls through your tools, and they finished only after that run had stopped" +
 	" waiting for them — it gave up on them, or it was cut off or replaced — so the session above may show one" +
-	" with no outcome, as interrupted or as failed, and an earlier message may have told it. Each is ONE call," +
-	" made once, not two, and the outcome told here stands: a call marked `→ success` ALREADY RAN, so do NOT" +
-	" issue a write among them again; one marked `→ error` did not take effect."
+	" with no outcome, as still running, as interrupted or as failed, and an earlier message may have told it." +
+	" Each is ONE call, made once, not two, and the outcome told here stands: a call marked `→ success` ALREADY" +
+	" RAN, so do NOT issue a write among them again; one marked `→ error` did not take effect."
 
 // lateSubmission tells a run that a successful `submit_work` among the calls
 // under [lateCallsHeader] is no submission of the work it carries on: the run

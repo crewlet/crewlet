@@ -224,13 +224,16 @@ type Message struct {
 	// keeps it, as it keeps the post's [Message.Reach]: it is a fact about
 	// the post.
 	//
-	// ON THE DOCUMENT FROM THE CARRIER'S FIRST BUILD ON, though nothing reads
-	// it yet: the applier writes a message's document once, at its post's
+	// ON THE DOCUMENT FROM THE CARRIER'S FIRST BUILD ON, which the engine's
+	// turn-start thread read alone takes ([Reader.TurnThread]), so a turn
+	// works through only the waiting messages written for whom it works for:
+	// the applier writes a message's document once, at its post's
 	// position, so a field a later build began to fill would be missing from
 	// every post a node applied before that build and present on a node that
 	// applied the same post after it. NEVER HANDED TO A READER: every read
 	// and every write's answer takes the message without it
-	// ([Message.forReaders]).
+	// ([Message.forReaders]); the turn-start read hands it to the engine
+	// beside the views, never inside them ([TurnThread]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// CreatedAt is the BROKER's own instant. A message's displayed time

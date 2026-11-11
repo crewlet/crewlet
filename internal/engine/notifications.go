@@ -384,12 +384,17 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 // it is the same read the operator surfaces make: a READ, so a data node in a
 // maintenance mode, which hands its seats no chat writer, is no reason to
 // withhold one.
+//
+// OVER THE ENGINE'S OWN TURN-START READ ([estate.TurnThreads]), never the
+// [estate.Chat] facade every reader's surface holds: the turn's read is the one
+// that hands over whom each message was written for, which a turn works its
+// waiting messages through by, and which no reader of a room may see. This is
+// the one place the engine builds that facade.
 func (e *Engine) chatletThreads() notify.ThreadReader {
-	rooms, ok := OperatorChat(e)
-	if !ok {
+	if _, ok := OperatorChat(e); !ok {
 		return nil
 	}
-	return chatlet.NewThreadReader(rooms, e.liveParties)
+	return chatlet.NewThreadReader(e.router.TurnThreads(), e.liveParties)
 }
 
 // liveParties is the party registry current when a read renders, as

@@ -319,7 +319,7 @@ func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun,
 		}
 		answered = e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, lost)
 	}
-	return e.runEnding(company, run, bridged, answered)
+	return e.runEnding(ctx, company, run, bridged, answered)
 }
 
 // runLostError is a turn ended by the loss of its executor's run: the reason

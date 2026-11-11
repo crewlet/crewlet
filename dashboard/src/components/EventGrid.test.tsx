@@ -12,7 +12,7 @@ import { afterEach, beforeAll, expect, test } from "vitest";
 
 import { EventGrid, eventDayBands } from "./EventGrid.tsx";
 import { Router } from "~/app/router.tsx";
-import type { FeedRow } from "~/protocol/index.ts";
+import type { EventEnvelope, FeedRow } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -94,4 +94,23 @@ test("what happened is said without the actor its column already names", () => {
   ]);
   expect(container.textContent).toContain("Its executor launched");
   expect(container.textContent?.match(/Agent PM/g)).toHaveLength(1);
+});
+
+// AN ANSWER A DELEGATE GAVE IS MARKED WITH ITS RULE (ADR-0125), off the live
+// row's payload (`EventEnvelope`); a person's answer is not. Mutation: drop
+// the mark, or draw it off any answer.
+test("an answer a delegate gave is marked as decided under delegation", () => {
+  const answered = (id: string, payload: Record<string, unknown>): FeedRow =>
+    ({
+      ...row({ id, type: "executor_answered", summary: "SRE's executor was answered" }),
+      payload,
+    }) as EventEnvelope;
+  const { container } = grid([
+    answered("e-1", { delegated_rule: 3 }),
+    answered("e-2", { answered_by: "ops-lead" }),
+  ]);
+  const marks = [...container.querySelectorAll(".crewlet-data-grid__row")].map((r) =>
+    r.textContent?.includes("Decided under delegation, rule 3"),
+  );
+  expect(marks).toEqual([true, false]);
 });

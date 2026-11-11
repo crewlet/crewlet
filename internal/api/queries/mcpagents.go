@@ -143,7 +143,6 @@ func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCP
 			BuiltinTools: builtins}
 		agent.Unit, agent.UnitKey = unitOf(seat, roster)
 		names := map[string]struct{}{}
-		past := 0
 		for _, server := range servers {
 			reach, ok := server.Reach(seat)
 			if !ok {
@@ -153,15 +152,14 @@ func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCP
 			if server.Grants(seat) {
 				offer := offers[server.Name]
 				offered := offer.to(seat.LimitOn(server.Name))
-				view.Tools = len(offered) + offer.past
+				view.Tools = len(offered)
 				for _, name := range offered {
 					names[name] = struct{}{}
 				}
-				past += offer.past
 			}
 			agent.Servers = append(agent.Servers, view)
 		}
-		agent.MCPTools = len(names) + past
+		agent.MCPTools = len(names)
 		agent.OverBudget = agent.MCPTools > MCPToolBudget
 		out = append(out, agent)
 	}
@@ -184,17 +182,10 @@ func unitOf(seat *org.Role, roster *org.Organization) (name, key *string) {
 }
 
 // mcpOffer is what one server offers each agent its grant reaches, before
-// the agent's own limits.
+// the agent's own limits: the tools offered under each name the listings
+// carry, each with the server's own name for it, which a limit keys a tool by.
 type mcpOffer struct {
-	// tools are the tools offered under each name the listings carry, each
-	// with the server's own name for it, which a limit keys a tool by.
 	tools []offeredTool
-	// past is how many tools the listings count beyond the names they carry
-	// ([coord.MaxMCPListedTools]), each offered unless the entry's default
-	// blocks it (no tool starts at blocked): a server that lists that many
-	// puts every agent it reaches far past the budget whatever the levels of
-	// a few of them.
-	past int
 }
 
 // offeredTool is one tool an offer carries: its name, prefix applied, and the
@@ -202,9 +193,7 @@ type mcpOffer struct {
 type offeredTool struct{ name, raw string }
 
 // to is the names of the tools the offer hands one agent whose limits on the
-// server are limit: every tool but one a limit blocks. A tool past the
-// listing's record is unnamed, so no limit is matched against it, and it stays
-// counted (past), erring toward flagging the agent.
+// server are limit: every tool but one a limit blocks.
 func (o mcpOffer) to(limit org.ServerLimit) []string {
 	out := make([]string, 0, len(o.tools))
 	for _, t := range o.tools {
@@ -219,15 +208,12 @@ func (o mcpOffer) to(limit org.ServerLimit) []string {
 // offerOf is what server offers each agent it is granted to, as its live
 // listings name its tools: every one at a level other than blocked.
 func offerOf(server *config.MCPServer, listings []coord.MCPListing) mcpOffer {
-	tools, counted, _ := serverTools(listings, server)
+	tools, _ := serverTools(listings, server)
 	var out mcpOffer
 	for _, t := range tools {
 		if t.Level != config.MCPToolBlocked {
 			out.tools = append(out.tools, offeredTool{name: t.Name, raw: t.Raw})
 		}
-	}
-	if server.Tools.Default != config.MCPToolBlocked {
-		out.past = counted - len(tools)
 	}
 	return out
 }

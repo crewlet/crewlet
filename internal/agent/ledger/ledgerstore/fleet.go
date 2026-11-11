@@ -45,6 +45,10 @@ type Completions interface {
 	// answering nothing is not.
 	Worked(ctx context.Context, handle string, keys []string) map[string]bool
 
+	// WorkedAt is Worked with when each key was worked, zero where its
+	// record states no instant. Fails open as Worked does.
+	WorkedAt(ctx context.Context, handle string, keys []string) map[string]time.Time
+
 	// Record marks a key worked. Best effort — see Worked.
 	Record(ctx context.Context, handle, key, turnID string, at time.Time) error
 
@@ -84,6 +88,17 @@ var _ Completions = (*FleetCompletions)(nil)
 // Worked returns the subset of keys already recorded for this seat.
 func (f *FleetCompletions) Worked(ctx context.Context, handle string, keys []string) map[string]bool {
 	got, err := f.ledger.Worked(ctx, handle, keys)
+	if err != nil {
+		log.WarnContext(ctx, "completion_ledger_unreadable", "seat", handle, "error", err,
+			"detail", "treating every trigger as unworked, which may repeat a turn a peer took")
+		return nil
+	}
+	return got
+}
+
+// WorkedAt returns the keys already recorded for this seat, each with when.
+func (f *FleetCompletions) WorkedAt(ctx context.Context, handle string, keys []string) map[string]time.Time {
+	got, err := f.ledger.WorkedAt(ctx, handle, keys)
 	if err != nil {
 		log.WarnContext(ctx, "completion_ledger_unreadable", "seat", handle, "error", err,
 			"detail", "treating every trigger as unworked, which may repeat a turn a peer took")

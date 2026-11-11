@@ -15,6 +15,7 @@ package statelog
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -117,6 +118,12 @@ const (
 	// idea how long they have.
 	DeferralGrace = 30 * time.Minute
 
+	// RelapseWindow is how long an alarm must stay clear before its next
+	// raise starts a new run; one raised again sooner is dated from its run's
+	// first raise, so a flapping condition reaches a person as a steady one.
+	// The deferral grace: as long clear as it must stand to be noticed.
+	RelapseWindow = DeferralGrace
+
 	// FloorCacheStale is how old a cached trim floor may be before the
 	// node stops answering from it. Four heartbeats, the same idiom every
 	// other cached coordination fact uses.
@@ -214,6 +221,12 @@ const (
 	// measured by the last one; before any copy has run, the tenth stands
 	// for it.
 	VolumeHeadroomFactor = 1.1
+
+	// VolumeClearFactor is the multiple of the store, plus the held log, a
+	// raised `volume_low` waits for before it clears. The band above the
+	// raise is 15% of the store, wider than the raise's own tenth, so a
+	// volume hovering at the raise keeps one alarm up rather than flapping.
+	VolumeClearFactor = 1.25
 
 	// PoolWaitAlarm is how long a caller may queue for a database
 	// connection before the pool is the problem. A hundred milliseconds
@@ -534,6 +547,11 @@ const (
 // snapshot and no maintenance in flight evaluate the same table as one with
 // all three.
 type Reading struct {
+	// Up is the kinds this node's tracker had up at its latest evaluation
+	// ([Tracker.Standing]): a rule that clears past its raise ([rule.stays])
+	// is judged by it.
+	Up []Kind
+
 	// ApplyLag is how old the oldest unapplied record is.
 	ApplyLag time.Duration
 
@@ -1391,6 +1409,10 @@ type rule struct {
 	// closure rather than a threshold plus an accessor, because half the
 	// conditions compare two fields of the reading against each other.
 	fires func(Reading) (string, bool)
+	// stays, where set, keeps a node-wide alarm that is up ([Reading.Up])
+	// standing: a wider condition than fires, so a reading hovering at the
+	// raise threshold does not clear and raise it on alternate evaluations.
+	stays func(Reading) (string, bool)
 	// remedy is what an operator does about it.
 	remedy string
 	// perLog marks a condition that is a property of ONE LOG rather than
@@ -1929,29 +1951,16 @@ var table = []rule{
 			"it.",
 	},
 	{
-		kind: KindVolumeLow,
-		fires: func(r Reading) (string, bool) {
-			if r.StoreVolumeUnmeasured != "" {
-				return fmt.Sprintf("a store volume could not be measured (%s), so nothing "+
-					"shows the next restore, vacuum or snapshot has room for a second "+
-					"copy", r.StoreVolumeUnmeasured), true
-			}
-			detail := fmt.Sprintf("%s free on the volume holding %s against %s of store "+
-				"there, and the next restore, vacuum or snapshot needs room for a "+
-				"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
-				bytesHuman(r.StoreBytes))
-			if r.CopyHeldBytes > 0 {
-				detail += fmt.Sprintf(" and for the %s of write-ahead log a copy holds "+
-					"back there while it runs", bytesHuman(r.CopyHeldBytes))
-			}
-			return detail, r.StoreBytes > 0 && float64(r.FreeBytes) <
-				VolumeHeadroomFactor*float64(r.StoreBytes)+float64(r.CopyHeldBytes)
-		},
+		kind:  KindVolumeLow,
+		fires: volumeLow(VolumeHeadroomFactor),
+		stays: volumeLow(VolumeClearFactor),
 		remedy: "Add space to the volume the alarm names. Where it could not be " +
 			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
 			"join all need the room, and each fails partway through without it; a " +
 			"backup's or a snapshot's copy also needs room there for the write-ahead " +
-			"log it holds back while it runs, which the alarm counts.",
+			"log it holds back while it runs, which the alarm counts. The alarm " +
+			"clears once the volume has room for the copy and a quarter of the " +
+			"store besides, which its detail states in bytes.",
 	},
 	{
 		kind: KindWALLarge,
@@ -2909,6 +2918,31 @@ func spokenDays(d time.Duration) string {
 	return fmt.Sprintf("%d days", d/day)
 }
 
+// volumeLow judges the store's tightest volume against factor times its store
+// plus the log a copy holds back there: the raise's factor, or the wider one a
+// raised alarm stays up within ([VolumeClearFactor]).
+func volumeLow(factor float64) func(Reading) (string, bool) {
+	return func(r Reading) (string, bool) {
+		if r.StoreVolumeUnmeasured != "" {
+			return fmt.Sprintf("a store volume could not be measured (%s), so nothing "+
+				"shows the next restore, vacuum or snapshot has room for a second "+
+				"copy", r.StoreVolumeUnmeasured), true
+		}
+		detail := fmt.Sprintf("%s free on the volume holding %s against %s of store "+
+			"there, and the next restore, vacuum or snapshot needs room for a "+
+			"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
+			bytesHuman(r.StoreBytes))
+		if r.CopyHeldBytes > 0 {
+			detail += fmt.Sprintf(" and for the %s of write-ahead log a copy holds "+
+				"back there while it runs", bytesHuman(r.CopyHeldBytes))
+		}
+		clears := VolumeClearFactor*float64(r.StoreBytes) + float64(r.CopyHeldBytes)
+		detail += fmt.Sprintf("; the alarm clears once %s is free", bytesHuman(int64(math.Ceil(clears))))
+		return detail, r.StoreBytes > 0 && float64(r.FreeBytes) <
+			factor*float64(r.StoreBytes)+float64(r.CopyHeldBytes)
+	}
+}
+
 // Evaluate reports every alarm currently true, in the table's own order.
 //
 // PURE, over a reading gathered once. What makes an alarm real is that the
@@ -2924,7 +2958,11 @@ func Evaluate(r Reading) []Alarm {
 			}
 			continue
 		}
-		if detail, firing := rule.fires(r); firing {
+		judge := rule.fires
+		if rule.stays != nil && slices.Contains(r.Up, rule.kind) {
+			judge = rule.stays
+		}
+		if detail, firing := judge(r); firing {
 			out = append(out, Alarm{Kind: rule.kind, Detail: detail, Remedy: rule.remedy})
 		}
 	}

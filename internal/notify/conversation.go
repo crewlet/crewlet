@@ -339,24 +339,47 @@ func writerOf(ev *events.Event) string {
 const ForSeparator = " for "
 
 // forOf is whom an agent's write was made for, as the partition splits on it
-// ([types.NotificationWriter.WorkingFor]): empty for an agent's write made for
-// nobody else and for every other writer, and otherwise the WHOLE carrier (its
-// kind, the seat or the login, and a credential's apps), so every constituent
-// of one partition carries the same carrier and the turn's requester, read off
-// the first of them, is every one's. A kind this build does not know keys by
-// the kind alone: the turn reads any such carrier as a stranger's, and two
-// strangers hold the same nothing.
+// ([types.NotificationWriter.WorkingFor]): empty for every writer that is no
+// agent, and otherwise [WorkingForKey] of its carrier, so every constituent of
+// one partition carries the same carrier and the turn's requester, read off the
+// first of them, is every one's.
 func forOf(w *types.NotificationWriter) string {
-	if w.Kind != iam.ActorAgent || w.WorkingFor == nil {
+	if w.Kind != iam.ActorAgent {
 		return ""
 	}
-	c := w.WorkingFor
+	return WorkingForKey(w.WorkingFor)
+}
+
+// WorkingForKey is whom a write was made for as the partition keys it: empty
+// for nobody, and otherwise [ForSeparator] and the WHOLE carrier, its kind, the
+// seat or the login, and a credential's apps.
+//
+// THE ONE SPELLING, because two readers compare carriers and must agree with the
+// partition that split them: a worked-through mark of a chat message's edit
+// keys on the marking turn's carrier, and the drop keys an edit's wake on the
+// carrier its writer stated. A turn's carrier does not always come through
+// [FirstPartyWriter]: a pickup's is read off an item's history row, which keeps
+// a credential's apps in the order they were granted. So the apps are held to
+// the order a writer carries them in ([knownApps]: the apps this build knows,
+// once each, in iam.Apps order), never to the order they arrived in, and never
+// sorted by spelling, which a writer's own order is not.
+//
+// ONLY NIL IS "". A carrier of an empty kind is a carrier, which the turn reads
+// as a stranger's, and keying it as nobody would match it to a turn that works
+// for nobody. A kind this build does not know keys by the kind alone: the turn
+// reads any such carrier as a stranger's, and two strangers hold the same
+// nothing.
+func WorkingForKey(c *types.WorkingFor) string {
+	if c == nil {
+		return ""
+	}
 	switch c.Kind {
 	case types.WorkingForSeat:
 		return ForSeparator + "seat:" + url.PathEscape(strings.TrimSpace(c.Seat))
 	case types.WorkingForCredential:
-		apps := make([]string, 0, len(c.Apps))
-		for _, app := range c.Apps {
+		known := knownApps(c.Apps)
+		apps := make([]string, 0, len(known))
+		for _, app := range known {
 			apps = append(apps, url.PathEscape(string(app)))
 		}
 		return ForSeparator + "login:" + url.PathEscape(strings.TrimSpace(c.Login)) + ":" +

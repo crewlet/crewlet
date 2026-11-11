@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -144,6 +145,11 @@ type WorkMover interface {
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
+
+	// ApprovesAct reports whether the person ctx resolves to may approve an
+	// act of kind now, at the proof its approval asks (ADR-0125); nil admits
+	// nobody, so an answer approving an act is refused by the tracker.
+	ApprovesAct func(ctx context.Context, kind delegated.Kind) bool
 
 	// ChangeRef is a pull request's tracker name, where raw is one under the
 	// company's GitHub owners, or why one on its host is refused; both empty,
@@ -1027,7 +1033,8 @@ func (t *listWorkItems) Parameters() map[string]any {
 			"sort": map[string]any{
 				"type": "string",
 				"description": "How to order: `rank` (the board's own order), " +
-					"`updated`, `created`, `due`, `priority`, or `f.<slug>` " +
+					"`updated`, `created`, `due`, `priority`, `key`, `status`, " +
+					"`type`, `assignee` (by the seat's name), or `f.<slug>` " +
 					"for a custom field. Prefix with `-` to reverse.",
 			},
 			"cursor": map[string]any{
@@ -1219,6 +1226,12 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// same keys refuse again for ever. What the model needs is the
 		// refusal's own sentence, which names what would narrow it.
 		return failed(fmt.Sprintf("%s: %s.", ListWorkItemsTool, worklet.Sentence(err))), nil
+	case errors.Is(err, worklet.ErrBadCursor):
+		// NOT [readFailure]'s "change the arguments" alone: the one
+		// argument to change is the cursor, and the remedy is to drop it.
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the "+
+			"cursor: %s. Call it again without `cursor` to start from the first "+
+			"page.", ListWorkItemsTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, ListWorkItemsTool, err), nil
 	}
@@ -1486,6 +1499,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
+	case errors.Is(err, worklet.ErrBadCursor):
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the "+
+			"comments cursor: %s. Call it again without `comments_cursor` to read "+
+			"the newest comments.", GetWorkItemTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, GetWorkItemTool, err), nil
 	}
@@ -2942,7 +2959,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Kind:   kind,
 				Before: before.Task,
 				After:  patched(before.Task, patch),
-				Parent: t.deps.parentParty(ctx, before.Task, patch),
 				// THE REASON IS THE CHANGE'S EXCERPT, which is the one line
 				// both the history row and the wake already carry — so the
 				// new assignee is woken with it and the item's history
@@ -3638,6 +3654,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 		comment.Decision = decision
+		// WHAT THE ASK IS FOR, where an engine tool composed it: never
+		// read from the caller's arguments (ADR-0125).
+		if act, ok := delegated.ActOf(ctx); ok {
+			comment.Act = &act
+		}
 	}
 	if reply := strings.TrimSpace(argString(args, "reply_to")); reply != "" {
 		comment.ReplyTo = &reply
@@ -3710,6 +3731,16 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if refused := t.deps.grantChosen(ctx, comment.Choice, thread); refused != nil {
 		return *refused, nil
+	}
+	// AN ANSWER THAT APPROVES AN ACT is that act's approval, so whether this
+	// person may give one, at its proof, is decided here and carried to the
+	// tracker's check of the choice against its ask (ADR-0125).
+	if comment.Choice != "" && t.deps.ApprovesAct != nil {
+		for _, kind := range delegated.DelegableKinds() {
+			if t.deps.ApprovesAct(ctx, kind) {
+				ctx = delegated.WithApproval(ctx, kind)
+			}
+		}
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a

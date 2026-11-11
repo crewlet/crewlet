@@ -206,6 +206,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.ClaudeSkillsSettings(), p.OpenCodeConfig(),
+		// And its MCP configuration under either token, which names a bridge
+		// session that is over, and which this run's start writes as a new file.
+		"'" + p.MCPConfig() + "'", "'" + p.MCPConfigFresh() + "'",
 		// And its session's pieces: a run that packs nothing must never be
 		// collected with the last run's capture as its own, nor restore the
 		// last run's carried archive.

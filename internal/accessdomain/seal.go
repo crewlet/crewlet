@@ -1,16 +1,18 @@
 package accessdomain
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// SEALING: a command's text is stored as ciphertext under the fleet keyring,
-// bound to the one record it belongs to. The writer seals before it publishes,
-// the applier writes the bytes through (so every node's rows are identical
-// whatever keys its ring holds), and only an administrator's audit read opens.
+// SEALING: a command's text, and what a verdict decided with its giver's
+// reason and findings, are stored as ciphertext under the fleet keyring, bound
+// to the one record they belong to. The writer seals before it publishes, the
+// applier writes the bytes through (so every node's rows are identical whatever
+// keys its ring holds), and only an administrator's audit read opens.
 
 // AAD is the associated data a command's text is sealed under, so a value moved
 // to another record does not open.
@@ -57,6 +59,77 @@ func (s *Sealer) SealCommand(handle, commandID, text string) (SealedCommand, err
 		return SealedCommand{}, err
 	}
 	return SealedCommand{Sealed: sealed, Key: key}, nil
+}
+
+// The places a verdict's two texts are sealed to: what it decided, and its
+// giver's reason and findings.
+const (
+	verdictSubjectPart = "subject"
+	verdictWordsPart   = "words"
+)
+
+// verdictAAD is the associated data one of a verdict's texts is sealed under:
+// its record and its place in it, so neither opens moved to another record or
+// swapped for the other.
+func verdictAAD(handle, verdictID, part string) string {
+	return "access/" + handle + "/verdict/" + verdictID + "/" + part
+}
+
+// SealedVerdict is a verdict's two texts sealed to its record, and the keyring
+// key both are sealed under: what crosses between nodes in place of the text.
+type SealedVerdict struct {
+	Subject string
+	Words   string
+	Key     string
+}
+
+// verdictWords is a giver's reason and findings as one sealed value.
+type verdictWords struct {
+	Reason   string   `json:"reason,omitempty"`
+	Findings []string `json:"findings,omitempty"`
+}
+
+// SealVerdict seals what seat handle's verdict verdictID decided, and its
+// giver's reason and findings, to the record, under one key.
+func (s *Sealer) SealVerdict(handle, verdictID, subject, reason string,
+	findings []string) (SealedVerdict, error) {
+
+	words, err := json.Marshal(verdictWords{Reason: reason, Findings: findings})
+	if err != nil {
+		return SealedVerdict{}, fmt.Errorf("accessdomain: encode a verdict's words: %w", err)
+	}
+	sealedSubject, key, err := s.Seal(subject, verdictAAD(handle, verdictID, verdictSubjectPart))
+	if err != nil {
+		return SealedVerdict{}, err
+	}
+	sealedWords, wordsKey, err := s.Seal(string(words), verdictAAD(handle, verdictID, verdictWordsPart))
+	if err != nil {
+		return SealedVerdict{}, err
+	}
+	if wordsKey != key {
+		return SealedVerdict{}, errors.New("accessdomain: the keyring moved its active key between " +
+			"a verdict's two texts; seal it again")
+	}
+	return SealedVerdict{Subject: sealedSubject, Words: sealedWords, Key: key}, nil
+}
+
+// openVerdict opens a verdict's two texts sealed to seat handle's verdictID.
+func (s *Sealer) openVerdict(handle, verdictID, subjectSealed, wordsSealed string) (
+	subject, reason string, findings []string, err error) {
+
+	subject, err = s.Open(subjectSealed, verdictAAD(handle, verdictID, verdictSubjectPart))
+	if err != nil {
+		return "", "", nil, err
+	}
+	raw, err := s.Open(wordsSealed, verdictAAD(handle, verdictID, verdictWordsPart))
+	if err != nil {
+		return "", "", nil, err
+	}
+	var words verdictWords
+	if err := json.Unmarshal([]byte(raw), &words); err != nil {
+		return "", "", nil, fmt.Errorf("%w: a verdict's words are not the record's: %w", ErrUnreadable, err)
+	}
+	return subject, words.Reason, words.Findings, nil
 }
 
 // Seal seals plain under aad, answering the envelope and the key it names.

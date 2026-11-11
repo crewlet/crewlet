@@ -64,7 +64,9 @@ import (
 // a build reading 11 would resolve it and drop the reason.
 // Version 13 is whom an agent's record a later turn reads was written for
 // ([MutationRecord.WorkingFor], ADR-0109).
-const RecordVersion = 13
+// Version 14 is an ask the engine stamped with its act ([Comment.Act]): a
+// build reading 13 would keep the question and drop what approving it means.
+const RecordVersion = 14
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -140,6 +142,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
 	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
+	{Name: "Comment.Act", Since: 14, Op: string(OpPatch), Path: []string{"mutation", "comment", "act"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -278,7 +281,7 @@ const (
 	TermContainer TermKind = "container"
 
 	// TermFamily is a set of objects with no container: "person",
-	// "catalogue".
+	// "catalogue", "roster".
 	TermFamily TermKind = "family"
 
 	// TermDomain is everything on this domain's log. The fallback for an
@@ -537,6 +540,8 @@ func subjectPath(s Subject, container string) string {
 		return keyTerm(key).Path()
 	case KindCatalogue:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
+	case KindRoster:
+		return ScopeTerm{Kind: TermFamily, ID: string(KindRoster)}.Path()
 	case KindPerson:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindPerson)}.Path()
 	case KindBarrier, KindTrimmed:
@@ -855,7 +860,7 @@ type MutationRecord struct {
 	// (notify.FirstPartyWriter), never for the writing seat, which holds every
 	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
 	// [WorkingForVersion]), applied on every node from the carrier's first
-	// build on, though no read takes it yet. Version 12: an older build
+	// build on, which the work pickup reads. Version 13: an older build
 	// retains a record carrying it rather than waking a seat for the writing
 	// agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
@@ -1243,9 +1248,13 @@ func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 // the status's, and the tags', the watchers', the team's or a link's only
 // where nothing before them set it. So the change of one of these kinds is
 // found by its delta, whatever kind its record ended with, as the pickup finds
-// an assignment by its assignee delta (readyAssignedArm, #930). A kind that
-// names no single field, `fields` among them, is found by its kind alone, and
-// a checklist's move records no delta to find it by.
+// an assignment by its assignee delta (readyAssignedArm, #930), the router
+// tells a hand-off and the finished edge ([Notify.moved], #953) and a wake's
+// prompt names every kind of change its write made ([Notify.movedKinds]). A
+// kind that names no single field, `fields` among them, is found by its kind
+// alone, and a checklist's move is not always a delta (a renamed or reassigned
+// item moves no list's done count), so its holders are told by the items it
+// touched ([Snapshot.ChecklistAssignees]) and never by this.
 func (k ChangeKind) MovedFields() []string {
 	switch k {
 	case ChangeStatus:
@@ -1428,12 +1437,15 @@ type Snapshot struct {
 	ThreadOwing    []string `json:"thread_owing,omitempty"`
 	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
 
-	// RemovedWatchers are the handles a watchers commit dropped. They go
-	// to the INBOX only: a human learns that a lead removed her watch, and
-	// an agent is not woken about a decision that was not its own.
+	// RemovedWatchers are the handles a write dropped from the watchers,
+	// whatever kind its record ends with ([Snapshot.moves]). They go to
+	// the INBOX only: a human learns that a lead removed her watch, and an
+	// agent is not woken about a decision that was not its own.
 	RemovedWatchers []string `json:"removed_watchers,omitempty"`
 
-	// ParentAssignee hears when a child enters or leaves a finished group.
+	// ParentAssignee hears when a child enters or leaves a finished group:
+	// the parent's assignee as the write's decide read it, filled only
+	// across that edge ([Notify.restated]).
 	ParentAssignee string `json:"parent_assignee,omitempty"`
 
 	// ChecklistAssignees are the people whose checklist items changed.
@@ -1546,9 +1558,10 @@ type Notify struct {
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	// FieldsOmitted is how many more fields this change moved than
-	// [Notify.Fields] shows — the ones past [MaxDeltas], by field name.
+	// [Notify.Fields] shows — the ones past [MaxDeltas] ([cardFields]).
 	// SAID, because a card that dropped them silently reads as a change
-	// that moved only what it lists.
+	// that moved only what it lists, and the router reads it so
+	// ([Notify.watchOnly]).
 	FieldsOmitted int `json:"fields_omitted,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

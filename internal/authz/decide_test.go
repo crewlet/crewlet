@@ -107,7 +107,8 @@ func nimbus() chart {
 		containers: map[[2]string]bool{{"cto", "RUNBOOKS"}: true},
 		members:    map[[2]string]bool{{"sre", "sre"}: true},
 		granted: map[[2]string]bool{{"sre", string(authz.SeatGrantHealth)}: true,
-			{"sre", string(authz.SeatGrantSSHRead)}: true, {"sre", string(authz.SeatGrantSSHOperate)}: true},
+			{"sre", string(authz.SeatGrantSSHRead)}: true, {"sre", string(authz.SeatGrantSSHOperate)}: true,
+			{"sre", string(authz.SeatGrantDelegate)}: true},
 	}
 }
 

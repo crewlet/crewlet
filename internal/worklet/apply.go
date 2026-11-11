@@ -220,6 +220,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyAlias(ctx, tx, at)
 	case KindRankOrder:
 		return a.applyRankOrder(ctx, tx, at)
+	case KindRoster:
+		return a.applyRoster(ctx, tx, at)
 	case KindCounter:
 		return a.applyCounter(ctx, tx, at)
 	case KindTask:

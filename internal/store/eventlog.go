@@ -444,6 +444,11 @@ func (q ListQuery) at() time.Time { return askedAt(q.At) }
 // filter's index as the statement stands ([HistogramQuery.barsSQL]). The plans
 // are read back for the exact statements in
 // TestEveryGroupedReadSeeksItsFiltersIndex, the bars' at every bucket width.
+//
+// A PAGE OF TURNS NEWEST FIRST IS READ BACK FROM ITS NEWEST EDGE, a span at a
+// time ([EventLog.pageOfTurns]): a seek of the filter's index still costs every
+// row it matches in the window, and a seat's newest three turns folded over
+// its week, payloads included, took seconds on a store of a few GiB.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.

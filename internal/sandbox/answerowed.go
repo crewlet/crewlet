@@ -305,6 +305,14 @@ type Reply struct {
 	// conversation (a message, a comment, a review), judged by the engine from
 	// the event's surface. Only such a delivery answers a parked question.
 	Says bool
+
+	// WorkingFor is whom the delivery's writer wrote it for: the carrier an
+	// agent's write states (ADR-0109), read off the newest event by the rule
+	// a wake is read by, and nil for every writer that is no agent, for a
+	// vendor's delivery and for an agent's write made for nobody else. A
+	// reply answers a run only when it was written for whom the run works for
+	// ([Reply.putTo]).
+	WorkingFor *types.WorkingFor
 }
 
 // Posted is when the delivery's NEWEST event was posted — the vendor's own
@@ -415,8 +423,103 @@ func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 // dashboard's route, decided by authority, still answers it. Whether the seat's
 // holder may act NOW is the coordinator's to ask, once a run would take the
 // reply ([AudienceResolver.MayAnswer]).
+//
+// AND ONE TURN WORKS FOR ONE WHOM: the reply must have been written for whom
+// the run works for ([Reply.writtenForTheRun]). A colleague's reply written
+// for somebody else is that somebody's work, owed a turn of its own held to
+// their apps, and never the answer to a question the run asked for another.
 func (r Reply) putTo(run PendingRun) bool {
-	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer))
+	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) &&
+		r.writtenForTheRun(run)
+}
+
+// writtenForTheRun reports whether the reply was written for whom run works
+// for.
+//
+// NIL ALWAYS MATCHES: the writer spoke for itself. That is every vendor's
+// reply, Gitlet's until it carries the requester, every person's and
+// credential's, and an agent's written for nobody else. It is safe because a
+// record skips its carrier only where its decide proves no agent but the
+// writer may start a turn (ADR-0109), and a wake held back delivers nothing.
+//
+// OTHERWISE BOTH SIDES ARE READ AS THE CEILING READS THEM BEFORE IT ASKS THE
+// DIRECTORY ([runPrincipal], [carriedPrincipal]), and compared by kind and by the seat's handle or
+// the credential's login. Whether a node can place a login is left out on
+// purpose: it differs by node, so asking it here would make the answer depend
+// on which node matched it, and a stranger cannot be told from a login one
+// node could not place. Such a reply runs as its own turn and the run waits,
+// the safe direction. A credential's apps are never compared: the resumed run
+// composes its ceiling from its own row and narrows its apps again on every
+// call, so a reply's apps grant it nothing, and comparing them would refuse a
+// genuine reply whenever its writer's node had narrowed them.
+func (r Reply) writtenForTheRun(run PendingRun) bool {
+	if r.WorkingFor == nil {
+		return true
+	}
+	return carriedPrincipal(r.WorkingFor, run.AgentHandle) == runPrincipal(run)
+}
+
+// principal is whom a run works for, or whom a reply was written for, as the
+// answer rule compares them: a kind, and the seat's handle or the credential's
+// login. The run's own work and a stranger are kinds of their own.
+type principal struct {
+	kind string
+	id   string
+}
+
+const (
+	principalOwn        = "own"
+	principalStranger   = "stranger"
+	principalSeat       = "seat"
+	principalCredential = "credential"
+)
+
+// runPrincipal is whom run works for, read in the order the ceiling composes
+// it: its WorkingFor where set, else its Requester where set and not its own
+// seat, else its RequesterLogin with RequesterApps, else its own work.
+func runPrincipal(run PendingRun) principal {
+	switch {
+	case run.WorkingFor != nil:
+		return carriedPrincipal(run.WorkingFor, run.AgentHandle)
+	case run.Requester != "" && run.Requester != run.AgentHandle:
+		return principal{kind: principalSeat, id: run.Requester}
+	case run.RequesterLogin != "":
+		return credentialPrincipal(run.RequesterLogin, len(run.RequesterApps))
+	}
+	return principal{kind: principalOwn}
+}
+
+// carriedPrincipal is a carrier as the ceiling reads it before it asks the
+// directory: a seat naming the run's own seat is its own work, a seat with an
+// empty handle and a kind this build does not know are a stranger, and a
+// credential is read by [credentialPrincipal].
+func carriedPrincipal(w *types.WorkingFor, own string) principal {
+	switch w.Kind {
+	case types.WorkingForSeat:
+		switch handle := strings.TrimSpace(w.Seat); handle {
+		case "":
+			return principal{kind: principalStranger}
+		case own:
+			return principal{kind: principalOwn}
+		default:
+			return principal{kind: principalSeat, id: handle}
+		}
+	case types.WorkingForCredential:
+		return credentialPrincipal(w.Login, len(w.Apps))
+	}
+	return principal{kind: principalStranger}
+}
+
+// credentialPrincipal is a credential as the ceiling reads it before it asks
+// the directory: one carrying no apps is a stranger on every node, the first
+// thing the ceiling decides of it, and so is one with no login, which no
+// directory places.
+func credentialPrincipal(login string, apps int) principal {
+	login = strings.TrimSpace(login)
+	if login == "" || apps == 0 {
+		return principal{kind: principalStranger}
+	}
+	return principal{kind: principalCredential, id: login}
 }
 
 // recordedOn is the run this delivery is ALREADY the recorded answer of.

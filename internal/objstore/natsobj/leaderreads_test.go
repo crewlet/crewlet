@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +160,84 @@ func TestAListingWhoseLeaderReadAMemberDropsIsAskedAgain(t *testing.T) {
 	}
 	if n := held.Count(); n != 1 {
 		t.Errorf("the broker held %d leader reads, want the 1 it dropped", n)
+	}
+}
+
+// A LISTING THE BROKER BEGINS PAST ITS CLIENT'S OWN BOUND FINISHES, and one it
+// never begins fails naming the time it was given: the broker reads the bucket
+// before it makes the listing's consumer, and the collector sets no deadline.
+func TestAListingIsGivenWhatItsBeginningTakes(t *testing.T) {
+	t.Parallel()
+	const bound = time.Second
+	for _, c := range []struct {
+		name string
+		// late is how long the broker takes to begin the listing; zero
+		// never begins it.
+		late time.Duration
+	}{
+		{"begun_past_the_clients_bound", 2 * bound},
+		{"never_begun", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv, b, name := accountBucketAt(t, natsobj.Config{MaxBytes: testCeiling, Replicas: 1},
+				jetstream.WithDefaultTimeout(bound))
+			// A bucket of a few bytes, one mebibyte begun, given what a
+			// large one is: four of the client's bounds beside its own.
+			natsobj.SetBeginPace(b, 4*bound)
+			held := jsapitest.Hold(t, srv, jsapitest.ConsumerCreate(natsobj.Stream))
+			answered := make(chan error, 1)
+			go func() {
+				if c.late == 0 {
+					answered <- nil
+					return
+				}
+				r, err := held.Next(t.Context())
+				if err == nil {
+					time.Sleep(c.late) //fixedwait:simulated a broker reading the bucket's blocks past its client's bound
+					held.Release()
+					err = r.Answer()
+				}
+				answered <- err
+			}()
+			var names []string
+			err := b.List(context.Background(), func(info objstore.Info) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			if aerr := <-answered; aerr != nil {
+				t.Fatalf("answer the listing's consumer: %v", aerr)
+			}
+			given := fmt.Sprintf("in the %v it was given", bound+4*bound)
+			switch {
+			case c.late > 0 && err != nil:
+				t.Fatalf("a listing the broker began %v in, past its client's %v, failed: %v",
+					c.late, bound, err)
+			case c.late > 0 && !slices.Equal(names, []string{name}):
+				t.Fatalf("the listing named %q, want [%s]", names, name)
+			case c.late == 0 && (!errors.Is(err, context.DeadlineExceeded) ||
+				!strings.Contains(err.Error(), given)):
+				t.Fatalf("a listing the broker never began = %v, want its deadline %s", err, given)
+			}
+		})
+	}
+}
+
+// THE SLOWEST LISTING BEGINNING MEASURED FITS ITS BUDGET FOUR TIMES OVER (a
+// bucket of 580 MB began in 13.6 s on a volume 98% full), and a bucket holding
+// nothing is given the client's own bound on one request.
+func TestTheSlowestListingBeginningMeasuredFitsItsBudget(t *testing.T) {
+	t.Parallel()
+	const bound = 5 * time.Second
+	_, b, _ := accountBucketAt(t, natsobj.Config{MaxBytes: testCeiling, Replicas: 1},
+		jetstream.WithDefaultTimeout(bound))
+	if got := natsobj.ListBegin(b, 0); got != bound {
+		t.Errorf("a listing of an empty bucket is given %v, want the client's %v", got, bound)
+	}
+	const size, took = 580_000_000, 13600 * time.Millisecond
+	if got := natsobj.ListBegin(b, size); got < 4*took {
+		t.Errorf("a listing of %d bytes is given %v to begin, under four times the %v "+
+			"one took on a volume 98%% full", size, got, took)
 	}
 }
 

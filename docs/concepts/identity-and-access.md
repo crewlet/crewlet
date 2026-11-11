@@ -609,9 +609,10 @@ work item reads both, and any other write where it may wake another agent.
 The agent it wakes works for them, composed again on its own node, and so does
 every agent a chain of writes reaches; two writes one agent makes for two
 different people wake its colleague in two turns wherever the wake asks
-something of the colleague, except, until crewlet#798's piece 4b-ii, where a
-turn reads a chat thread's waiting messages or a parked run's answer, which
-it matches by their writer alone. A wake that asks nothing of it, arriving after a
+something of the colleague. The pickup of an item filed or assigned for
+somebody works for them too, a turn works through only the waiting messages
+in its thread written for whom it works for, and a parked run's question is
+answered only by a reply written for whom the run works for. A wake that asks nothing of it, arriving after a
 turn of its already read past the change, is dropped whoever it was written
 for, and runs nothing for anybody
 ([ADR-0120](../../adr/0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md)).
@@ -2665,8 +2666,25 @@ where the block is on with a server, `ssh_operate` where it is at `operate`.
 In a turn somebody woke, whoever woke it is decided on `ssh.requester.read`, a row
 everybody of the company holds, so a turn a stranger woke reaches no server.
 Answering an `ssh_operate` call is `ssh.operate.approve`, **human-only**: an
-administrator, or a person `integrations.ssh.approvers` names, at a fresh
-step-up. See [SSH](../integrations/ssh.md#the-agents-tools).
+administrator, or a person `integrations.ssh.approvers` or the `ssh_operate`
+rule's `escalate_to` names, at a fresh step-up; choosing the approving option
+of an `ask_to_operate` decision is decided on the same row. `ask_to_operate`
+is admin's with the `ssh_operate` seat grant. See [SSH](../integrations/ssh.md#the-agents-tools).
+
+**And a delegate's verdict.** `review_delegated` is admin's, and its row names
+the `delegated_decisions` seat grant an enabled rule of the company's
+`delegated_decisions` gives each seat it names a delegate; what its allow
+carries out is bounded by the engine's own limits, not by this row. Reading
+what delegates decided is `delegated_decisions.read`, **human-only**, named:
+an administrator, or a person a rule's `escalate_to` names. See
+[Delegated Decisions](../guides/delegated-decisions.md).
+
+**And a merge or a deploy asked for.** `ask_to_merge` and `ask_to_deploy` are
+everybody's: asking changes nothing, and what an approval carries out is the
+agent's own credential's and its target's rules'. Answering one is
+`release.approve`, **human-only**, at a fresh step-up: an administrator, a
+lead of the agent, or a person the kind's rule names in `escalate_to`
+(`own_or_lead`, whose object names those people beside the leads).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat

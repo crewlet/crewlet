@@ -68,7 +68,7 @@ func TestSeedingReadsTheFeedAndTheSpendWindowFromTheStore(t *testing.T) {
 	old := storePhase(t, log, "Lead", 900, now.Add(-72*time.Hour))
 
 	live := livestate.New()
-	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
+	if _, err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestASeededRowKeepsItsFailureMark(t *testing.T) {
 	fine := storePhase(t, log, "Lead", 10, time.Now().UTC().Add(-2*time.Minute))
 
 	live := livestate.New()
-	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
+	if _, err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	marks := map[string]bool{}
@@ -149,7 +149,7 @@ func TestASeededWebhookRowCarriesTheTopicTheReceiverPushes(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	live := livestate.New()
-	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
+	if _, err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	rows := live.RecentEvents(0)
@@ -168,7 +168,7 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("the store could not be read")
 	live := livestate.New()
-	err := observe.Seed(t.Context(), halfBroken{feed: boom}, nil, live)
+	_, err := observe.Seed(t.Context(), halfBroken{feed: boom}, nil, live)
 	if err == nil {
 		t.Fatal("an unreadable feed was seeded silently")
 	}
@@ -186,7 +186,7 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	// that fails must still leave the feed seeded. Without this case a
 	// change that let either error short-circuit the other would pass.
 	live = livestate.New()
-	err = observe.Seed(t.Context(), halfBroken{spend: boom}, nil, live)
+	_, err = observe.Seed(t.Context(), halfBroken{spend: boom}, nil, live)
 	if err == nil {
 		t.Fatal("an unreadable spend window was seeded silently")
 	}
@@ -217,7 +217,7 @@ func TestASlowFeedReadLeavesTheSpendReadItsOwnTime(t *testing.T) {
 
 	live := livestate.New()
 	history := &slowFeed{}
-	err := observe.Seed(ctx, history, nil, live)
+	_, err := observe.Seed(ctx, history, nil, live)
 	if err == nil {
 		t.Fatal("the feed read outran its own half of the budget silently")
 	}
@@ -305,7 +305,7 @@ func answered(nodes ...string) eventfan.Coverage {
 func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 	t.Parallel()
 	history := &recordingHistory{}
-	if err := observe.Seed(t.Context(), history, nil, livestate.New()); err != nil {
+	if _, err := observe.Seed(t.Context(), history, nil, livestate.New()); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	if history.spend.Limit != livestate.SpendRecordLimit {
@@ -405,7 +405,7 @@ func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 	t.Parallel()
 	o := testOrg()
 	history := &recordingHistory{}
-	if err := observe.Seed(t.Context(), history, o, livestate.New()); err != nil {
+	if _, err := observe.Seed(t.Context(), history, o, livestate.New()); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	var seats []string
@@ -435,7 +435,7 @@ func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	t.Parallel()
 	live := livestate.New()
 	history := partialFleet{}
-	if err := observe.Seed(t.Context(), history, testOrg(), live); err != nil {
+	if _, err := observe.Seed(t.Context(), history, testOrg(), live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	coverage, seeded := live.SeededFrom()
@@ -450,7 +450,7 @@ func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	// with no agent seat, which asks nobody for turns and so has no read
 	// whose silence could make the seed partial.
 	live = livestate.New()
-	if err := observe.Seed(t.Context(), halfBroken{}, nil, live); err != nil {
+	if _, err := observe.Seed(t.Context(), halfBroken{}, nil, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	if coverage, _ := live.SeededFrom(); !coverage.Complete {
@@ -460,7 +460,7 @@ func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	// A READ THAT FAILED leaves the seed incomplete, whoever answered the
 	// rest: what it would have said is missing.
 	live = livestate.New()
-	_ = observe.Seed(t.Context(), halfBroken{feed: errors.New("boom")}, nil, live)
+	_, _ = observe.Seed(t.Context(), halfBroken{feed: errors.New("boom")}, nil, live)
 	if coverage, _ := live.SeededFrom(); coverage.Complete {
 		t.Errorf("seeded from %+v after a failed read, want it incomplete", coverage)
 	}
@@ -510,7 +510,7 @@ func TestARestartedNodesSeedIsTheFleets(t *testing.T) {
 	}
 	_ = fanQueue(t, broker, b, "node-b")
 	live := livestate.New()
-	if err := observe.Seed(t.Context(), fan, o, live); err != nil {
+	if _, err := observe.Seed(t.Context(), fan, o, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	ids := map[string]bool{}
@@ -591,7 +591,7 @@ func TestOneSeatsFailedTurnReadKeepsTheOthersTurns(t *testing.T) {
 
 	live := livestate.New()
 	history := failingSeat{FleetHistory: eventfan.Solo("node-a", log), seat: ada}
-	err := observe.Seed(t.Context(), history, o, live)
+	_, err := observe.Seed(t.Context(), history, o, live)
 	if err == nil {
 		t.Fatal("Seed reported no error for the seat whose read failed")
 	}
@@ -666,7 +666,7 @@ func TestALiveRowAndASeededRowNameTheSameSeat(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	seeded := livestate.New()
-	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
+	if _, err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	rows := seeded.RecentEvents(0)
@@ -713,7 +713,7 @@ func TestALiveRowAndASeededRowNameTheSameChannel(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	seeded := livestate.New()
-	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
+	if _, err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	rows := seeded.RecentEvents(0)

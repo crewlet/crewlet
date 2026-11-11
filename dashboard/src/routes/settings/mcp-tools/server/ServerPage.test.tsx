@@ -321,7 +321,7 @@ test("the tools' levels are set by the server's own name for each tool, and read
     { default: "approve" },
     "Linear's default set to Needs approval",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Set 2 shown" }));
+  fireEvent.click(screen.getByRole("button", { name: "Set 2 tools" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Always allow" }));
   await afterMicrotasks();
   expect(setLevels).toHaveBeenLastCalledWith(

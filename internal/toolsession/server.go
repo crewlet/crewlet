@@ -43,8 +43,16 @@ type Dispatcher interface {
 	// there. So a call runs under the context of the run the dispatcher
 	// serves, which it holds, and the request's is not even on offer to be
 	// used by mistake: all it is handed of the request is whether anybody can
-	// still read the answer ([Call.Abandoned]), and a way to say the call has
-	// started running ([Call.Running]).
+	// still read the answer ([Call.Abandoned]), when the request is over on its
+	// transport ([Call.Over]), and a way to say the call has started running
+	// ([Call.Running]).
+	//
+	// A DISPATCHER MAY ANSWER A CALL BEFORE ITS TOOL RETURNS, and run the
+	// tool on: the tool loop answers a call "still running" ahead of its
+	// harness's own tool timeout, and the bridge answers every call still
+	// running as the opening it was made on ends (internal/api/mcpbridge). The
+	// call is then the dispatcher's to finish and to record, and the server
+	// writes the answer it was handed as it writes any.
 	Call(call Call) Result
 }
 
@@ -94,6 +102,22 @@ type Call struct {
 	// and this says only, once it has run, whether its answer still had a
 	// reader — which a dispatcher that records the call records beside it.
 	Abandoned <-chan struct{}
+
+	// Over is closed once the request is OVER ON ITS TRANSPORT, nothing more
+	// to be written for it: its answer's write has returned — written,
+	// refused, or failed — or the request was cancelled, or the connection it
+	// came on failed. NEVER BEFORE THE ANSWER'S WRITE HAS RETURNED, which is
+	// what a dispatcher that answers a call while its tool runs on waits for
+	// before it closes the session the call came on: the SDK refuses every
+	// answer not yet written once a session's close has begun. It is the
+	// request's context's Done, which the SDK ends only after the answer's
+	// write (go-sdk v1.8.0; held by this package's
+	// TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten, since it is the SDK's
+	// behaviour and not its promise); and unlike [Call.Abandoned] nothing here
+	// widens it: a progress that finds the call's response gone, and the
+	// handler's own return, close Abandoned and leave Over to the transport.
+	// Nil, never closed, for a call no request carries.
+	Over <-chan struct{}
 
 	// Running is for the dispatcher to call once, the moment it starts
 	// RUNNING the call, past every answer it gives without running it; nil
@@ -317,9 +341,10 @@ func (s *Server) awaitRelist(ctx context.Context, after uint64) {
 // handler hands one call to the dispatcher.
 func (s *Server) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// WHETHER THE HARNESS STILL WAITS, the request's context's Done and
-		// nothing else of it ([Call.Abandoned]).
-		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done()}
+		// WHETHER THE HARNESS STILL WAITS, and WHEN THE REQUEST IS OVER: the
+		// request's context's Done, and nothing else of it ([Call.Abandoned],
+		// [Call.Over]).
+		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done(), Over: ctx.Done()}
 		s.mu.Lock()
 		every := s.answerEvery
 		s.mu.Unlock()

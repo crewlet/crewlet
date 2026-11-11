@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -486,8 +487,14 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 // ([sandbox.BridgeLog.ElisionKnown]) — and what it kept shows no delivery: a
 // definite "did not reply" read off no log, or half of one, is the false
 // account the end exists to prevent.
-func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun, bridged sandbox.RunCalls) (reply turn.Reply,
-	delivered, known bool) {
+//
+// A WORK PICKUP'S TURN IS HELD TO ITS ITEM, as its loop holds it: delivered
+// only where the seat's rows since the turn's first launch typed an answer on
+// the item or the item left the seat ([Engine.pickupAnswerFor], ADR-0122), and
+// unknown where that read fails, so a run lost after a comment alone is never
+// recorded as having answered.
+func (e *Engine) runDelivered(ctx context.Context, c *Company, run sandbox.PendingRun,
+	bridged sandbox.RunCalls) (reply turn.Reply, delivered, known bool) {
 
 	reply = turn.ParseReply(run.Reply)
 	if !reply.Valid() {
@@ -508,7 +515,35 @@ func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun, bridged sandbo
 	calls = append(calls, ledger.Called(identitiesOf(dropped))...)
 	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
 	incomplete := logged.PriorCallsElided || !logged.ElisionKnown()
-	return reply, delivered, delivered || !incomplete
+	delivered, known = heldToItem(ctx, run.TurnID, reply.Item, delivered, delivered || !incomplete,
+		e.pickupAnswerFor(run.AgentHandle, run.CreatedAt, reply))
+	return reply, delivered, known
+}
+
+// heldToItem is an ended run's delivery held to its work pickup's item, read
+// by read, nil for a turn no pickup handed an item: a delivery the calls show
+// stands only where the item was answered typed or left the seat, and is
+// unknown where the read fails.
+func heldToItem(ctx context.Context, turnID, item string, delivered, known bool,
+	read func(context.Context) (types.PickupAnswer, error)) (bool, bool) {
+
+	if read == nil || !delivered {
+		return delivered, known
+	}
+	answer, err := read(ctx)
+	if err == nil && !answer.Valid() {
+		err = fmt.Errorf("the read answered %q, which this build does not know", answer)
+	}
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "pickup_answer_unread", "item", item, "turn_id", turnID,
+			"error", err.Error(), "detail", "how the ended run's pickup left its item could "+
+				"not be read, so its delivery is recorded as unknown")
+		return false, false
+	case !answer.Accepted():
+		return false, true
+	}
+	return true, true
 }
 
 // deliverySurface is the delivery surface a seat's calls are judged against, as
@@ -526,10 +561,10 @@ func deliverySurface(reg *tools.Registry) turn.Surface {
 // turn's loop, ended it: lost, or stopped by a person — whether its reply
 // reached anybody read off the turn's own calls, and the engine's answer to a
 // colleague's ask beside it.
-func (e *Engine) runEnding(c *Company, run sandbox.PendingRun, bridged sandbox.RunCalls,
-	answered colleagueAnswer) executorkeep.Ending {
+func (e *Engine) runEnding(ctx context.Context, c *Company, run sandbox.PendingRun,
+	bridged sandbox.RunCalls, answered colleagueAnswer) executorkeep.Ending {
 
-	reply, delivered, known := e.runDelivered(c, run, bridged)
+	reply, delivered, known := e.runDelivered(ctx, c, run, bridged)
 	ending := executorkeep.Ending{Delivered: delivered, DeliveredTo: replySurface(reply),
 		DeliveryUnknown: !known}
 	switch {
