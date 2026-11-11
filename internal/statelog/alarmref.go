@@ -23,7 +23,7 @@ func AlarmReference() string {
 	// diffs the page against this function still green, because the page
 	// would be regenerated from the same stale words.
 	fmt.Fprintf(&b, alarmHeader,
-		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
+		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace), spoken(RelapseWindow))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
 		fmt.Fprintf(&b, perLogNote, saidKinds(perLog))
 	}
@@ -156,7 +156,10 @@ var alarmMeaning = map[Kind]string{
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
 		"than the next restore, vacuum or snapshot needs for a second copy and for " +
 		"the write-ahead log a copy holds back there while it runs, or could not " +
-		"be measured at all. The alarm names the volume.",
+		"be measured at all. The alarm names the volume. Once raised it stands " +
+		"until the volume has room for that copy and a quarter of the store " +
+		"besides, so free space hovering at the line is one alarm rather than one " +
+		"every few minutes.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
 		"a checkpoint is not happening: a backup's or a snapshot's copy holds it " +
 		"back for the copy's run, which the alarm names, and anything else " +
@@ -353,6 +356,12 @@ threshold is %s is raised within a beat of passing it.
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
+
+An alarm raised again within %s of clearing is a new ` + "`alarm_raised`" + ` line,
+carrying ` + "`first_raised`" + `, and a new wake, but the same run: the fleet view
+and the health count date it from that first raise, and so does the
+administrators' notice once it has stood that long, so a condition that keeps
+coming back reaches a person as one that never cleared.
 `
 
 // perLogNote says which alarms are evaluated once per log, rendered from the
