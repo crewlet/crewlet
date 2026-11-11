@@ -5,6 +5,7 @@ import (
 
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -894,9 +895,10 @@ func TestAnUnreachableValveStillDelivers(t *testing.T) {
 	}
 }
 
-// A shedding node DEFERS: leaves the delivery unacked and stops consuming.
-// A NAK dead-letters a healthy delivery after a few one-second redeliveries
-// while a shed can last minutes.
+// A shedding node DEFERS: hands the delivery back at once for a peer that
+// admits work, and stops consuming. A NAK would withhold it from every node for
+// the failure's backoff while this node went on taking, and failing, every
+// delivery the shed lasted.
 func TestAsheddingNodeDefersRatherThanNaks(t *testing.T) {
 	h := newService(t, nil)
 	h.admits = false
@@ -948,6 +950,37 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 		t.Fatalf("skips = %+v, want one %q with the parser's error as its detail",
 			skips, notify.ReasonParseFailed)
 	}
+}
+
+// A RECORD A NEWER BUILD WROTE IS PASSED TO A PEER THAT READS IT, never acked
+// as a parse failure.
+//
+// Every node takes inbound mail from ONE fleet-wide group, so a delivery this
+// node acks is one no peer ever sees: a wake an older node met during a roll
+// was recorded as a parse failure and acked, gone fleet-wide (crewlet#993). A
+// parser's deferral — here wrapped, as a parser may return it — is handed back
+// for a peer instead, as a pass: neither a failure, which a NAK would log it
+// as, nor a deferral, which would stop this node taking its other mail. And no
+// skip is recorded, because the delivery was not skipped: a peer takes it.
+// TestAParseFailureIsRecordedAndNotRetried is the other half: an error that
+// carries no deferral is still a parse failure, recorded and acked.
+//
+// Mutation: ack a parser's deferral, and the delivery is gone; record the
+// parse-failed skip for it, and the event log says it reached nobody.
+func TestARecordANewerBuildWroteIsPassedToAPeer(t *testing.T) {
+	h := newService(t, nil)
+	newer := errors.New("worklet: the record on task.t-1 is version 9 and this build reads 8")
+	h.parser.err = fmt.Errorf("tracker: %w", notify.Defer(notify.DeferNewerRecord, newer))
+
+	got := h.svc.Handle(t.Context(), delivery("tracker"))
+	if got.Outcome != queue.OutcomePass || got.Reason != string(notify.DeferNewerRecord) {
+		t.Fatalf("Handle = %+v, want a pass for %q so a peer on the newer build reads "+
+			"the record", got, notify.DeferNewerRecord)
+	}
+	if !errors.Is(got.Err, newer) {
+		t.Errorf("the pass carries %v, want what the parser met", got.Err)
+	}
+	h.quiet(t, skipTopic)
 }
 
 // The registry is read through a function, so an epoch swap is picked up: a

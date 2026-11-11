@@ -848,6 +848,22 @@ The consequences worth stating plainly:
   or discards is kept for `stream.event_retention_hours` and then expires,
   and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
   [Dead letters](../concepts/event-system.md#dead-letters).
+- **An older node hands a newer record's wake back to the fleet, for about
+  ten minutes.** Every node takes the notification service's deliveries from
+  one consumer group, `notify-inbound`, and a wake carries the record its
+  feed relayed, so a wake whose record the newer build wrote reaches the
+  older nodes too, which cannot read it. An older node that wins one hands
+  it back for a peer on the newer build rather than acknowledge it for the
+  whole fleet (`inbound_deferred` and `delivery_passed`, both at `INFO`),
+  and goes on taking its other deliveries. It comes back on the redelivery
+  backoff, a second doubling to thirty, so the group's 25 deliveries offer
+  it to the fleet for about ten minutes; one that no newer node has taken
+  by then is dead-lettered with its copy under
+  `dlq.crewlet.notifications.inbound.notify-inbound` (`dead_lettered` at
+  `ERROR`), and nothing replays it, so its wake is lost. The newer node
+  whose feed relayed the record is already in the group, so keeping the
+  upgraded nodes running while the roll goes on is what delivers it. See
+  [Delivery semantics](../concepts/event-system.md#delivery-semantics).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two

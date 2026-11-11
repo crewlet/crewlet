@@ -3,6 +3,7 @@ package worklet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -492,6 +493,14 @@ func withVia(base map[string]string, via string) map[string]string {
 // it is what lets the record's own two-pass decode run — which is what makes a
 // body relayed by a build that did not understand every field still yield
 // everything the writer wrote.
+//
+// A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
+// build ([notify.Defer]), never refused as a payload nobody can read: the
+// notify service acks what a parser refuses, on the ONE group every node takes
+// inbound mail from, so the wake the newer node's feed relayed was gone for
+// the whole fleet when an older node won its delivery during a roll
+// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
+// on this side of the relay.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -500,6 +509,10 @@ func recordFromBody(body map[string]any) (MutationRecord, error) {
 	}
 	record, err := Decode(raw)
 	if err != nil {
+		var future *ErrFutureVersion
+		if errors.As(err, &future) {
+			return MutationRecord{}, notify.Defer(notify.DeferNewerRecord, err)
+		}
 		return MutationRecord{}, fmt.Errorf("worklet: read the record out of a "+
 			"delivery: %w", err)
 	}

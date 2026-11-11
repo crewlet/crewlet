@@ -46,8 +46,11 @@ type Parser interface {
 	Source() string
 
 	// Parse reports what a delivery means. An error is a malformed
-	// payload; no notifications is an ordinary outcome, and by far the
-	// most common one — most webhooks concern nobody here.
+	// payload — unless it carries a [Deferral], a record this node cannot
+	// read and a peer can, which the service hands back to the group for
+	// that peer rather than record as a parse failure. No notifications is
+	// an ordinary outcome, and by far the most common one — most webhooks
+	// concern nobody here.
 	//
 	// It takes a context because parsing genuinely does I/O on some
 	// backends: a chat message consults the thread-follow store, and a
@@ -397,16 +400,31 @@ func (s *Service) Sources() []string {
 
 // Handle routes one delivery.
 //
-// # Returning an error NAKs; returning DeferDelivery parks
+// # A failure NAKs, a shed DEFERS, a record a newer build wrote PASSES
 //
-// A shedding node DEFERS — leaves the delivery unacked and stops consuming —
-// rather than NAKing or republishing. A NAK dead-letters a healthy delivery
-// after a few one-second redeliveries while a shed can last minutes. A
-// republish is worse: inbound events are key-partitioned by conversation, so
-// a copy sent to the topic's tail while its siblings replay from the head
-// reorders that conversation, and it lands on a topic this node is still
-// attached to — so it comes straight back, is shed again and republished
-// again as fast as the broker will serve it. A deferral cannot spin.
+// A shedding node DEFERS — hands the delivery back at once, at the head of the
+// group, and stops consuming until its posture admits work again (the
+// engine's resumeInbound) — rather than NAKing or republishing. A NAK is a
+// failure: the broker withholds it from every node for the failure's backoff,
+// a second doubling to thirty, while this node, still consuming, takes the
+// next delivery only to fail that too, so every delivery the shed lasts waits
+// out a backoff and spends a delivery of its budget on a node that will not
+// handle it. A republish is worse: inbound events are key-partitioned by
+// conversation, so a copy sent to the topic's tail while its siblings replay
+// from the head reorders that conversation, and it lands on a topic this node
+// is still attached to — so it comes straight back, is shed again and
+// republished again as fast as the broker will serve it. A deferral cannot
+// spin.
+//
+// A record a newer build wrote PASSES ([queue.Pass]): its parser answers a
+// [Deferral], since this node cannot read the record and a peer on that build
+// can. It goes back to the ONE group every node takes inbound mail from, for
+// that peer, and is never acked — an ack here was the wake gone for every
+// node (crewlet#993). Nor is it deferred: nothing is wrong with this node, so
+// it goes on taking its other mail, and the delivery's returns are spaced as a
+// failure's are, so the older nodes of a roll cannot spin it between them. The
+// group's 25 deliveries offer it to the fleet for about ten minutes before it
+// is dead-lettered with its copy.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
@@ -461,6 +479,14 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		s.observe(ctx, ev.Source, *w)
 	}
 	routed, err := parser.Parse(ctx, *w, reg)
+	if d, deferred := deferralOf(err); deferred {
+		// NO SKIP IS RECORDED, because the delivery is not skipped: a
+		// peer takes it, and a skip would tell a reader of the event log
+		// that it reached nobody.
+		log.InfoContext(ctx, "inbound_deferred", "source", ev.Source,
+			"event", ev.ID, "reason", string(d.Reason), "error", d.Err)
+		return queue.Pass(string(d.Reason), d)
+	}
 	if err != nil {
 		log.ErrorContext(ctx, "inbound_parse_failed", "source", ev.Source,
 			"event", ev.ID, "error", err.Error())
