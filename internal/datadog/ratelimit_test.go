@@ -25,13 +25,12 @@ type limiter struct {
 	limited int
 	headers map[string]string
 
-	mu      sync.Mutex
-	sent    int           // 429s answered
-	owed    time.Duration // what those 429s asked the client to wait
-	waited  []time.Duration
-	early   []string // requests that arrived before the client waited
-	bodies  []string
-	answers []func(w http.ResponseWriter, r *http.Request)
+	mu     sync.Mutex
+	sent   int           // 429s answered
+	owed   time.Duration // what those 429s asked the client to wait
+	waited []time.Duration
+	early  []string // requests that arrived before the client waited
+	bodies []string
 }
 
 func newLimiter(t *testing.T, limited int, headers map[string]string) (*limiter, *datadog.Client) {
