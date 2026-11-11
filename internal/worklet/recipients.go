@@ -549,6 +549,28 @@ func noticeWakes(n *Notify, actor string) (map[string]bool, bool) {
 	return woken, false
 }
 
+// mayWakeAnAgent reports whether a change actor made may wake an agent other
+// than actor (ADR-0109), proved from its Notify alone, as a writer's decide
+// holds it ([Writer.carries]): some candidate it offers, ordinary or the
+// fallback chain's, that hears the change and whose notice starts a turn. A
+// credential's inbox is no candidate, so the decide asks it of the Notify it
+// has already taken credentials out of.
+//
+// NOT [noticeWakes], [tellsWithoutWaking] or [Heard] with a nil registry: those
+// route with no registry, and with none a fallback is never reached while an
+// ordinary candidate is heard. The parser routes with the live one, so when a
+// watcher's or an assignee's seat is gone it wakes the lead instead — a wake a
+// nil registry's answer misses, and a turn that would then work for the
+// writing seat. So every offered candidate counts, the fallback's included.
+func mayWakeAnAgent(n *Notify, actor string) bool {
+	for _, c := range Candidates(n) {
+		if !c.InboxOnly && c.Hears(actor, Reason.WakesActor) && c.Wakes {
+			return true
+		}
+	}
+	return false
+}
+
 // Heard is [Route] without its last step: everybody told, woken or not.
 func Heard(candidates []routing.Candidate[Reason], registry func(string) bool,
 	actor string) []routing.Candidate[Reason] {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -105,7 +106,7 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	// this package keeps of its own: a seat that LEADS somebody is
 	// admitted by [authz.ClassOwnOrLead] and marking their mail read is
 	// still not a gesture anybody asked an agent to make.
-	agent := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{})
+	agent := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := agent.WritePins(t.Context(), "op-agent-pins", "ana",
 		worklet.PinGesture{Views: worklet.SetChange[string]{Add: []string{"v-1"}}},
 		worklet.PersonAuthority{Authorized: true, Agent: true}); err == nil {

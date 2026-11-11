@@ -684,7 +684,11 @@ the last word anybody said about that item.
   item already has moves nothing and is none. A seat the organisation no
   longer holds is worked for as a stranger, and a write an older build
   recorded carries no apps. Work the seat filed for itself is worked as its
-  own.
+  own. An agent's assignment made in a turn somebody woke is the
+  exception for now: the turn the assignment wakes works for that somebody,
+  but the pickup reads only the history row's writer, the agent, until
+  crewlet#798's piece 4b-ii reads its `working_for`, which the row already
+  keeps.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under

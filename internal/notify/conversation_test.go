@@ -307,9 +307,9 @@ func TestOneTurnWorksForOneWriter(t *testing.T) {
 // notice's by the kind its record names (a seat by its handle, a credential
 // acting as no seat by its login, the engine as itself), and a vendor's by the
 // actor its parser stamped, else its sender. Each is a partition of its own,
-// and no writer can spell another's key: a writer is escaped, so it never
-// holds the separator. An event that is no external notification, and an event
-// with no stamped key, are not split at all.
+// and no writer can spell another's key: a writer's parts are escaped, so it
+// never holds the separator. An event that is no external notification, and
+// an event with no stamped key, are not split at all.
 func TestEveryWriterIsAPartitionOfItsOwn(t *testing.T) {
 	writers := map[string]types.ExternalNotification{
 		"a seat":                 {Writer: &types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto"}},
@@ -342,5 +342,62 @@ func TestEveryWriterIsAPartitionOfItsOwn(t *testing.T) {
 		events.TraceContext{})
 	if got, want := notify.KeyOf(unstamped), notify.Fallback(unstamped.ID.String()); got != want {
 		t.Errorf("an event with no stamped key partitions on %q, want its own fallback %q unsplit", got, want)
+	}
+}
+
+// ONE TURN WORKS FOR ONE WHOM (ADR-0109): an agent's writes carry whom its
+// turn worked for, and the turn each wakes works for them, so one seat's
+// writes for two requesters are two partitions and two turns: coalesced, the
+// second requester's write would be worked inside the first's turn, held to
+// the first's apps. The WHOLE carrier keys the partition (its kind, the seat
+// or the login, a credential's apps), so every constituent of one turn carries
+// the same; the same requester's writes are one turn, as one writer's are. A
+// carrier on a writer that is no agent's is never read, so it splits nothing.
+//
+// Mutation: leave the carrier out of writerOf, and the agent's writes for ada
+// and for omar coalesce into one turn worked for ada.
+func TestEveryWhomAnAgentWroteForIsAPartitionOfItsOwn(t *testing.T) {
+	t.Parallel()
+	by := func(kind iam.ActorKind, w *types.WorkingFor) *events.Event {
+		return threadNotice(t, types.ExternalNotification{Sender: "cto",
+			Writer: &types.NotificationWriter{Kind: kind, Seat: "cto", WorkingFor: w}})
+	}
+	token := func(apps ...iam.Grant) *types.WorkingFor {
+		return &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: apps}
+	}
+	whoms := map[string]*events.Event{
+		"for nobody else":           by(iam.ActorAgent, nil),
+		"for ada":                   by(iam.ActorAgent, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}),
+		"for omar":                  by(iam.ActorAgent, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}),
+		"for a token using Worklet": by(iam.ActorAgent, token(iam.GrantWorklet)),
+		"for the token using Worklet and Doclet": by(iam.ActorAgent,
+			token(iam.GrantWorklet, iam.GrantDoclet)),
+		"for a stranger": by(iam.ActorAgent, &types.WorkingFor{Kind: types.WorkingForStranger}),
+	}
+	seen := map[string]string{}
+	for name, ev := range whoms {
+		key := notify.KeyOf(ev)
+		writer, split := strings.CutPrefix(key, "chat:C1:1718.003"+notify.WriterSeparator)
+		if !split || !strings.HasPrefix(writer, "seat:cto") || strings.Contains(writer, notify.WriterSeparator) {
+			t.Errorf("%s: KeyOf = %q, want the thread's key split by the agent's seat", name, key)
+		}
+		if other, taken := seen[key]; taken {
+			t.Errorf("the writes %s and %s share the partition %q", name, other, key)
+		}
+		seen[key] = name
+	}
+
+	drain := []*events.Event{whoms["for ada"],
+		by(iam.ActorAgent, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}), whoms["for omar"]}
+	parts := queue.PartitionByKey(drain, notify.KeyOf, func(e *events.Event) *events.Event { return e })
+	if len(parts) != 2 || len(parts[0].Items) != 2 || len(parts[1].Items) != 1 {
+		t.Fatalf("two writes for ada and one for omar made %d partitions, want ada's two as one "+
+			"turn and omar's as another", len(parts))
+	}
+
+	person := by(iam.ActorHuman, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"})
+	if got, want := notify.KeyOf(person), notify.KeyOf(by(iam.ActorHuman, nil)); got != want {
+		t.Errorf("a person's writer handed a carrier partitions on %q, want %q: a person writes "+
+			"for nobody but themselves", got, want)
 	}
 }

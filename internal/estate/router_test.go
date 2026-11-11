@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -314,6 +315,12 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 	f.patches = append(f.patches, patch)
 	f.mu.Unlock()
 	return worklet.WriteResult{}, nil
+}
+
+// ViewPrior answers that no view is held, noting it was asked.
+func (f *fakeNode) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	f.note("view_prior")
+	return worklet.ViewPrior{}, nil
 }
 
 func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
@@ -856,7 +863,8 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 	return nil
 }
 
-var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent}
+var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent,
+	Provenance: worklet.Provenance{WrittenFor: types.ForTurn(nil)}}
 
 // A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
 // attached — the asking node's chart cannot cross a wire, and

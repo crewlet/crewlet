@@ -47,7 +47,7 @@ func TestASeatsOwnOpenAsksToAPersonAreReadNewestFirst(t *testing.T) {
 	answerOn(t, r, "op-answer", "c", "c-answer", "jane", "c-answered", "ship", "Ship it",
 		wednesday.Add(-time.Hour))
 	ask("c-gone", "d", "bo", "jane", 2*time.Hour)
-	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	bo := r.writer.As("bo", worklet.AuthorAgent, aTurnNobodyWoke())
 	if _, err := bo.ResolveComment(t.Context(), "op-withdraw", "d", "ENG", "c-gone", nil,
 		nil); err != nil {
 		t.Fatalf("withdraw: %v", err)

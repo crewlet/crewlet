@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -258,7 +259,7 @@ func TestANoticeCarriesItsCommentTurnAuthorAndAsk(t *testing.T) {
 	assign(t, r, "decide", "ana")
 	task := r.task(t, "decide").Task
 
-	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-7"})
+	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-7"})
 	ask := worklet.Comment{
 		ID: "c-ask", Task: "decide", Author: "dev", AuthorKind: worklet.AuthorAgent,
 		Body: "Friday?", Ask: "ana", Decision: decisionFixture(), CreatedAt: wednesday,

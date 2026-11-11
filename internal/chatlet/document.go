@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
@@ -215,6 +216,23 @@ type Message struct {
 	// with later messages, so that is `chat_receipts` ([MessageView.Answered]).
 	Reach *Reach `json:"reach,omitempty"`
 
+	// WorkingFor is whom an AGENT'S post was written for (ADR-0109): the
+	// carrier its record rode ([MutationRecord.WorkingFor]), written by the
+	// applier from that record ([workingForOf]), and nil on every other
+	// message — a post that carries nobody, a record below
+	// [WorkingForVersion], a person's message and a room event. An edit
+	// keeps it, as it keeps the post's [Message.Reach]: it is a fact about
+	// the post.
+	//
+	// ON THE DOCUMENT FROM THE CARRIER'S FIRST BUILD ON, though nothing reads
+	// it yet: the applier writes a message's document once, at its post's
+	// position, so a field a later build began to fill would be missing from
+	// every post a node applied before that build and present on a node that
+	// applied the same post after it. NEVER HANDED TO A READER: every read
+	// and every write's answer takes the message without it
+	// ([Message.forReaders]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
+
 	// CreatedAt is the BROKER's own instant. A message's displayed time
 	// is the broker's for the reason the ordering is: two people posting
 	// a second apart on nodes whose clocks disagree by a minute would
@@ -282,6 +300,27 @@ func reachOf(author AuthorKind, n *Notify) *Reach {
 		out.Recipients = append(out.Recipients, Reached(r))
 	}
 	return out
+}
+
+// workingForOf is whom a post was written for as its message keeps it: the
+// carrier of a record at [WorkingForVersion] or above, as a copy of its own,
+// and nil for every other, so every node writes the same document.
+func workingForOf(record MutationRecord) *types.WorkingFor {
+	if record.V < WorkingForVersion {
+		return nil
+	}
+	return record.WorkingFor.Clone()
+}
+
+// forReaders is m as a read or a write's answer hands it to whoever asked:
+// without whom an agent's post was written for ([Message.WorkingFor]), which
+// the document keeps for the engine's own reads alone. A room's reader needs
+// no requester's seat, nor a credential's login and apps, to read what was
+// said, so neither leaves the package on a message: the transcript, a thread,
+// the agents' read tools and the answer of a post, an edit or a removal.
+func (m Message) forReaders() Message {
+	m.WorkingFor = nil
+	return m
 }
 
 // widen adds the seats an EDIT newly reached to a post's reach, each once and

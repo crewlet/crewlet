@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -495,7 +496,7 @@ func TestAnAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
 	r := newRoundTrip(t)
 	filedTask(t, r, "t-1")
 	operator := r.writer.As("ops-1", worklet.AuthorOperator, worklet.Provenance{})
-	agent := r.writer.As("swe", worklet.AuthorAgent, worklet.Provenance{})
+	agent := r.writer.As("swe", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	for i, writer := range []*worklet.Writer{operator, r.writer, agent, operator,
 		r.writer, operator} {
 		title := "title " + itoa(i)

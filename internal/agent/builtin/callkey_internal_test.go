@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -44,7 +45,7 @@ func TestTwoToolsCalledAlikeInOneTurnDeriveTwoKeys(t *testing.T) {
 // its ids are seeded from, the instant that work began, and the run's log.
 func seatInATurn() Actor {
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	return Actor{Handle: "eng", Kind: worklet.AuthorAgent,
+	return Actor{Handle: "eng", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil),
 		TurnID: statelog.NewOpID(began.Add(time.Minute), ""), WorkKey: "wk-1",
 		WorkSince: began, Calls: turnctx.NewCallLog()}
 }

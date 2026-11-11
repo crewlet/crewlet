@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -61,11 +62,18 @@ import (
 // Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
 // Version 12 is a question its asker withdrew saying why ([Comment.Withdrawal]):
 // a build reading 11 would resolve it and drop the reason.
-const RecordVersion = 12
+// Version 13 is whom an agent's record a later turn reads was written for
+// ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 13
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
 const AppsKeptVersion = 4
+
+// WorkingForVersion is the version from which a record carries whom it was
+// written for ([MutationRecord.WorkingFor]), which the applier keeps on its
+// history row; every older record keeps the column NULL.
+const WorkingForVersion = 13
 
 // NoticeAsksVersion is the version from which the applier keeps a comment
 // author's statement on its notice rows; every older record leaves it NULL.
@@ -131,6 +139,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
+	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -817,10 +826,13 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 
 	// ActorApps are the apps the credential behind an [AuthorOperator]
-	// record that wakes somebody used when the node that took the write
-	// resolved it (iam.ActorApps), and absent on every other record — one
-	// that wakes nobody included, a gate among them. The change feed reads
-	// it, and a turn the record wakes uses no app outside it (ADR-0109,
+	// record a later turn reads used when the node that took the write
+	// resolved it (iam.ActorApps): an item's creation and every move of its
+	// assignee, whatever they wake, and any other record whose wake may start
+	// an agent's turn ([Writer.carries]); absent on every other record, a
+	// gate always among them. The change feed reads it, and so does the work
+	// pickup off the history row, and a turn the record wakes or hands work
+	// to uses no app outside it (ADR-0109, ADR-0112,
 	// notify.FirstPartyWriter). Version 2: an older build retains a record
 	// carrying it rather than waking a seat for a credential it would read as
 	// a stranger.
@@ -830,6 +842,23 @@ type MutationRecord struct {
 	// history row keeps (`tracker_history.actor_apps`, ADR-0112). Version 4,
 	// so a record older than the rule keeps an empty column on every node.
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
+
+	// WorkingFor is whom an [AuthorAgent] record a later turn reads was
+	// written for (ADR-0109): whoever the turn that wrote it worked for,
+	// composed from that turn's own bound ceiling, on an item's creation and
+	// every move of its assignee, whatever they wake, and on any other record
+	// whose wake may start an agent's turn ([Writer.carries]), and absent on
+	// every other record: an
+	// agent's write made for nobody else, every other author's, and one no
+	// later turn reads (a gate always among them). The change feed reads
+	// it, and the turn the record wakes works for them
+	// (notify.FirstPartyWriter), never for the writing seat, which holds every
+	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
+	// [WorkingForVersion]), applied on every node from the carrier's first
+	// build on, though no read takes it yet. Version 12: an older build
+	// retains a record carrying it rather than waking a seat for the writing
+	// agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// NoticeAsksKept marks a record whose comment author's statement its notice
 	// rows keep (`tracker_notifications.asks`). Version 6, so a record older than
@@ -973,7 +1002,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
-	"notice_asks_kept", "notice_woke_kept", "operator_id", "turn_id", "chain", "kind", "notify",
+	"notice_asks_kept", "notice_woke_kept", "working_for", "operator_id", "turn_id", "chain", "kind",
+	"notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

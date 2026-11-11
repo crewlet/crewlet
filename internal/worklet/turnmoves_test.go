@@ -15,13 +15,17 @@ func TestATurnMovedWorkOnlyWhereItWroteMoreThanWords(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("the health check")
-	talker := r.writer.As("sre", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-words"})
+	words := aTurnNobodyWoke()
+	words.TurnID = "turn-words"
+	talker := r.writer.As("sre", worklet.AuthorAgent, words)
 	if _, err := talker.UpdateTask(t.Context(), "op-1", task.ID, "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Comment: &worklet.Comment{Body: "All green."}}, worklet.ChangeComment, nil); err != nil {
 		t.Fatal(err)
 	}
 	r.drain()
-	mover := r.writer.As("sre", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-moved"})
+	moved := aTurnNobodyWoke()
+	moved.TurnID = "turn-moved"
+	mover := r.writer.As("sre", worklet.AuthorAgent, moved)
 	done := worklet.StatusDone
 	if _, err := mover.UpdateTask(t.Context(), "op-2", task.ID, "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Status: &done}, worklet.ChangeStatus, nil); err != nil {

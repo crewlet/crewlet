@@ -14,7 +14,9 @@ type typedProbe func(t *testing.T, r *roundTrip, turn, id string)
 func probeUpdate(patch worklet.TaskPatch, kind worklet.ChangeKind) typedProbe {
 	return func(t *testing.T, r *roundTrip, turn, id string) {
 		t.Helper()
-		ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{TurnID: turn})
+		provenance := aTurnNobodyWoke()
+		provenance.TurnID = turn
+		ana := r.writer.As("ana", worklet.AuthorAgent, provenance)
 		if _, err := ana.UpdateTask(t.Context(), "op-"+turn, id, "ENG", worklet.NoIfMatch, patch,
 			kind, nil); err != nil {
 			t.Fatalf("%s writes %s: %v", turn, id, err)

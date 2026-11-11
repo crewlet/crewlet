@@ -284,11 +284,12 @@ type Turn struct {
 	RequesterLogin string
 	RequesterApps  []iam.Grant
 
-	// WorkingFor is who the turn works for when a colleague's ask, or the
-	// answer to this seat's own ask, handed it on ([types.WorkingFor]): the
-	// requester ceiling is theirs whoever asked or answered, read before
-	// Requester. Nil for a turn no hand-on woke. Carried on the run's row
-	// with Requester.
+	// WorkingFor is who the turn works for when a colleague's ask, the
+	// answer to this seat's own ask, or a colleague's write on Worklet,
+	// Doclet or Chatlet handed it on ([types.WorkingFor]): the requester
+	// ceiling is theirs whoever asked, answered or wrote, read before
+	// Requester. Nil for a turn no hand-on woke, and for one handed on by a
+	// colleague working for itself. Carried on the run's row with Requester.
 	WorkingFor *types.WorkingFor
 
 	// Senders are the parties who triggered this turn, in the order they

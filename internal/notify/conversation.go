@@ -93,6 +93,19 @@ import (
 // thread-grained ([KeyOfAll]): it is the conversation a merged event carries
 // and a parked run's batch, which a later writer's reply in the same thread
 // must still find.
+//
+// AND BY WHOM AN AGENT WROTE FOR ([ForSeparator]): a seat woken by somebody
+// writes for them, and its record and its wake carry whom
+// ([types.NotificationWriter.WorkingFor]), so the turn that write wakes works
+// for them. One seat's writes for two requesters are two partitions and two
+// turns, since a turn works for one writer and for one whom: coalesced, the
+// second requester's write would be worked inside the first's turn, held to the
+// first's apps. ONE DELIBERATE EXCEPTION: ADR-0120's seen-through mark keys on
+// the thread ([KeyOfAll]), never on this partition, so a completed turn
+// absorbs a later wake at or below its mark that obliges the seat to nothing,
+// whatever that wake's writer or whom. Absorption only drops, so nothing
+// widens; but two requesters are two turns only for wakes that oblige the
+// seat (ADR-0109).
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -253,7 +266,10 @@ func Namespaced(source, local string) string {
 //
 // ONE TURN WORKS FOR ONE WRITER (see "THE PARTITION FUNCTION SPLITS THE STAMPED
 // KEY BY WRITER" above): a person's four messages in a thread are one turn, and
-// a second person's message in the same thread is a turn of its own. Only an
+// a second person's message in the same thread is a turn of its own. And for
+// one whom: an agent's writes for two requesters are two turns, for every wake
+// that obliges the seat (ADR-0120's seen-through mark, keyed on [KeyOfAll],
+// absorbs one that obliges it to nothing, whatever its writer). Only an
 // external notification names a writer; an A2A ask, a task assignment and a
 // schedule's fire partition by their stamped key as before. A per-event
 // fallback is a partition of one already, and gets no writer.
@@ -272,20 +288,23 @@ func KeyOf(ev *events.Event) string {
 }
 
 // WriterSeparator joins a stamped partition key to its writer in [KeyOf]. A
-// writer is escaped (url.PathEscape), so it can hold no space and the
-// separator is never part of one; a stamped key holds no writer at all.
+// writer's parts are escaped (url.PathEscape), so none holds a space, and the
+// only spaces in a writer are [ForSeparator]'s, so this separator is never
+// part of one; a stamped key holds no writer at all.
 const WriterSeparator = " by "
 
 // writerOf is who wrote ev, as the partition function splits on it: a
 // first-party notice's writer by the kind its record names (a seat by its
-// handle, a credential acting as no seat by its login, the engine as itself),
-// and anything else by the actor every parser stamps ([ActorField]), else its
-// sender. Empty for an event that is no external notification.
+// handle, with whom an agent wrote for, a credential acting as no seat by its
+// login, the engine as itself), and anything else by the actor every parser
+// stamps ([ActorField]), else its sender. Empty for an event that is no
+// external notification.
 //
 // THE SAME IDENTITY THE TURN IS THEN WORKED FOR: the requester a turn's reads
 // are decided for is composed from these fields (the engine's turnRequesters,
-// writerSubject), so a partition never holds two principals the turn would
-// have to work for at once.
+// writerSubject, and whom an agent's write was made for, read before them), so
+// a partition never holds two principals the turn would have to work for at
+// once.
 func writerOf(ev *events.Event) string {
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
 	if !ok || n == nil {
@@ -295,7 +314,7 @@ func writerOf(ev *events.Event) string {
 		switch w.Kind {
 		case iam.ActorAgent, iam.ActorHuman:
 			if seat := strings.TrimSpace(w.Seat); seat != "" {
-				return "seat:" + url.PathEscape(seat)
+				return "seat:" + url.PathEscape(seat) + forOf(w)
 			}
 		case iam.ActorOperator:
 			if login := strings.TrimSpace(w.Login); login != "" {
@@ -312,6 +331,38 @@ func writerOf(ev *events.Event) string {
 		return "sender:" + url.PathEscape(sender)
 	}
 	return ""
+}
+
+// ForSeparator joins an agent writer to whom it wrote for in [KeyOf]'s
+// writer: `seat:lead for seat:ada`. Every part is escaped (url.PathEscape), so
+// none holds a space and the separator is never part of one.
+const ForSeparator = " for "
+
+// forOf is whom an agent's write was made for, as the partition splits on it
+// ([types.NotificationWriter.WorkingFor]): empty for an agent's write made for
+// nobody else and for every other writer, and otherwise the WHOLE carrier (its
+// kind, the seat or the login, and a credential's apps), so every constituent
+// of one partition carries the same carrier and the turn's requester, read off
+// the first of them, is every one's. A kind this build does not know keys by
+// the kind alone: the turn reads any such carrier as a stranger's, and two
+// strangers hold the same nothing.
+func forOf(w *types.NotificationWriter) string {
+	if w.Kind != iam.ActorAgent || w.WorkingFor == nil {
+		return ""
+	}
+	c := w.WorkingFor
+	switch c.Kind {
+	case types.WorkingForSeat:
+		return ForSeparator + "seat:" + url.PathEscape(strings.TrimSpace(c.Seat))
+	case types.WorkingForCredential:
+		apps := make([]string, 0, len(c.Apps))
+		for _, app := range c.Apps {
+			apps = append(apps, url.PathEscape(string(app)))
+		}
+		return ForSeparator + "login:" + url.PathEscape(strings.TrimSpace(c.Login)) + ":" +
+			strings.Join(apps, "+")
+	}
+	return ForSeparator + url.PathEscape(string(c.Kind))
 }
 
 // KeyOfAll is the partition key for a whole partition: the key its events
