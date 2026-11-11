@@ -175,6 +175,34 @@ const (
 	steerSettleRetryCeiling = 8 * time.Second
 )
 
+// steerSettleStopBudget is the window a stopping node's last attempts at the
+// settles it holds are made in ([runSteers.settleRun]): every one of them, of
+// every run, together, from the moment the node's teardown begins — so the
+// teardown's wait for them ([runSteers.waitSettles]) is over within it too.
+//
+// A WINDOW OF ITS OWN, BESIDE THE GIVE-BACKS, AND NEVER A STEP OF THE STOP'S
+// ALLOWANCE (internal/seat's StopBudget, "Only what lapses"): a settle that runs
+// out leaves a take unsettled, which the stop says, where a give-back that runs
+// out leaves a lease lapsing on its TTL. And the run records are a bucket of
+// their own, a stream that can lose its quorum alone — which is when settles
+// are held — so settles made on the allowance, charged for every moment they
+// asked with no give-back beside them, spent what the give-backs made later in
+// the stop are owed — the presence given back after the flushes, and every seat
+// the node's own stop releases once the settles are waited out — and those
+// leases lapsed on their TTL instead of being given back.
+//
+// FIVE SECONDS: the bound the JetStream client gives one request with no
+// deadline of its own, as each lifecycle event and the admission's share have —
+// a store answering at all answers a settle well inside it. And the length of
+// the ledgers' last flush, which the teardown makes after the window opens and
+// before it waits the settles out ([Engine.stopLedgers], [ledgerStopBudget]):
+// where that flush spends its bound — a member that has lost its event stream
+// — the window is over before the wait, so the stop's longest case, which the
+// deployment guide sizes a pod's grace by, is unchanged; and where it does not,
+// the stop is that much shorter than its longest case. A member that has lost
+// its coordination store alone stops up to this much later than its allowance.
+const steerSettleStopBudget = 5 * time.Second
+
 // runSteers is this node's half of a turn's notes on its run's record: it seals
 // and opens them, files them for a person, takes them for a resumed segment and
 // for a run's own harness, and records what became of them.
@@ -191,15 +219,14 @@ type runSteers struct {
 	warned sync.Map
 
 	// stopped is closed when this node's teardown begins
-	// ([Engine.teardownSignal]), and stopStep makes a context a step of the
-	// stop's allowance from that moment ([Engine.stepOnceTornDown]): a settle
-	// this node makes off the path that took asks its store until the store
-	// answers, or until then — and then once more, on the allowance
-	// ([runSteers.settleRun]). Nil stopped is a node that never stops, as an
-	// engine assembled by hand is, and nil stopStep keeps a context as it is.
-	// Both set by [runSteers.stopWith].
-	stopped  <-chan struct{}
-	stopStep func(context.Context) (context.Context, func())
+	// ([Engine.teardownSignal]), and stopWindow ends [steerSettleStopBudget]
+	// after it: a settle this node makes off the path that took asks its store
+	// until the store answers, or until the teardown begins — and then once
+	// more, in that window ([runSteers.settleRun]). Nil is a node that never
+	// stops, as an engine assembled by hand is. Both set by
+	// [runSteers.stopWith].
+	stopped    <-chan struct{}
+	stopWindow context.Context
 
 	// settleMu guards settling and settlesShut: every run this node is
 	// settling takes of off the path that took, by turn id — one loop a run,
@@ -538,7 +565,8 @@ func takeName() string { return uuid.NewString() }
 // in time answers once it is back. So it is asked again, rounds a second apart
 // doubling to eight, until an attempt is answered — the notes marked, or the
 // record gone with the run — or the node stops, which it asks every take once
-// more before it ends ([runSteers.settleRun]); said at ERROR once
+// more before it ends, in a window of its own ([steerSettleStopBudget],
+// [runSteers.settleRun]); said at ERROR once
 // [steerSettlePatience] has passed unanswered, and again where the node stops
 // with it unsettled, since what a stopping node did not settle no other node
 // knows to. A take lost once the teardown has waited the settles out
@@ -580,17 +608,17 @@ func (s *runSteers) settleUnanswered(ctx context.Context, turnID, take string) {
 // settleRun asks turnID's store to settle run's takes, round after round, until
 // it has answered for every one, or the node stops — see
 // [runSteers.settleUnanswered]. base is the loop's own context, which nothing
-// ends: an attempt is held to [steerSettleAttempt], and from the moment the
-// node's teardown begins to the stop's allowance too ([runSteers.settleOnce]).
+// ends: an attempt is held to [steerSettleAttempt], and to the window the
+// node's teardown opens too ([steerSettleStopBudget], [runSteers.settleOnce]).
 //
 // ONE LAST ATTEMPT AT EVERY TAKE AS THE NODE STOPS, never none: a store that
 // came back while the loop slept between rounds, or a take a segment the
 // teardown ended handed off, would otherwise stay unsettled for good. So the
-// round in flight as the teardown begins goes on, a step of the stop's
-// allowance; a loop asleep between rounds wakes; and a round begun once the
-// teardown has asks every take no such round has asked yet — one that joins
-// it meanwhile is asked by the next — after which what is left is said
-// unsettled, and the loop ends.
+// round in flight as the teardown begins goes on, held to the window; a loop
+// asleep between rounds wakes; and a round begun once the teardown has asks
+// every take no such round has asked yet — one that joins it meanwhile is asked
+// by the next, and one the window is over for fails at once — after which what
+// is left is said unsettled, and the loop ends.
 func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettle) {
 	for round := 1; ; round++ {
 		last := s.stopping()
@@ -665,18 +693,21 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 	}
 }
 
-// settleOnce is one attempt at settling take, held to [steerSettleAttempt] and,
-// from the moment this node's teardown begins, to the stop's allowance
-// ([runSteers.stopStep]): the teardown waits for it ([runSteers.waitSettles]),
-// and a store that does not answer must not hold the stop past what every
-// give-back it makes shares.
+// settleOnce is one attempt at settling take, held to [steerSettleAttempt] and
+// to the window this node's teardown opens ([runSteers.stopWindow]): the
+// teardown waits for it ([runSteers.waitSettles]), and a store that does not
+// answer must hold the stop no longer than that window — never on the stop's
+// allowance, which is the give-backs' ([steerSettleStopBudget]). An attempt
+// begun once the window is over is made on a context that has already ended,
+// so it fails at once.
 func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]sandbox.RunNote, error) {
 	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
 	defer cancel()
-	if s.stopStep != nil {
-		var done func()
-		ctx, done = s.stopStep(ctx)
-		defer done()
+	if window := s.stopWindow; window != nil {
+		defer context.AfterFunc(window, cancel)()
+		if window.Err() != nil {
+			cancel()
+		}
 	}
 	return s.store.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
 }
@@ -692,18 +723,26 @@ func (s *runSteers) stopping() bool {
 }
 
 // stopWith ends this node's settles with e's teardown, as [New] wires them: the
-// moment it begins ([Engine.teardownSignal]), and the stop's allowance every
-// attempt is held to from then on ([Engine.stepOnceTornDown]).
+// moment it begins ([Engine.teardownSignal]), and the window every attempt is
+// held to from then on, which ends [steerSettleStopBudget] after that moment —
+// one window for every settle the node holds, opened as the teardown begins
+// whether or not one is being asked then, so a take handed off later in the
+// stop is asked inside it too. Nothing waits for the moment: the window is
+// armed by the teardown signal itself, and its timer starts then.
 func (s *runSteers) stopWith(e *Engine) {
-	s.stopped = e.teardownSignal().Done()
-	s.stopStep = e.stepOnceTornDown
+	begun := e.teardownSignal()
+	window, end := context.WithCancel(context.Background())
+	context.AfterFunc(begun, func() { time.AfterFunc(steerSettleStopBudget, end) })
+	s.stopped, s.stopWindow = begun.Done(), window
 }
 
 // waitSettles waits out every settle loop this node runs, for its teardown,
-// which has begun: each makes its last attempt on the stop's allowance and
-// ends ([runSteers.settleRun]). From here a take lost is said unsettled, and no
-// loop starts — the store it would ask is closing. Nil-safe: an engine whose
-// boot failed before it built its steers has no settle to wait for.
+// which has begun: each makes its last attempt in the window the teardown
+// opened and ends ([runSteers.settleRun]), so this returns within
+// [steerSettleStopBudget] of the teardown's start. From here a take lost is
+// said unsettled, and no loop starts — the store it would ask is closing.
+// Nil-safe: an engine whose boot failed before it built its steers has no
+// settle to wait for.
 func (s *runSteers) waitSettles() {
 	if s == nil {
 		return

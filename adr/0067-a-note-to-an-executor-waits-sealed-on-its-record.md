@@ -118,9 +118,13 @@ handed while the store that did not answer in time answers once it is back —
 one loop a run however many takes it loses, said at ERROR once thirty seconds,
 which outlast a leader election, have passed unanswered
 (`steer_take_unsettled`), and ended only by its node stopping, once it has
-asked every take once more on the stop's allowance — a store back while it
-slept between rounds, and a take a segment the stop ended handed off, settle
-then. A review's take
+asked every take once more — a store back while it slept between rounds, and a
+take a segment the stop ended handed off, settle then — in a window of its own
+from the teardown's start, five seconds, beside the give-backs and never on
+the stop's allowance (`steerSettleStopBudget`): a settle that runs out leaves a
+take unsettled, not a lease lapsing, and the run records' bucket can lose its
+quorum alone, so settles on the allowance spent what the give-backs made later
+in the stop are owed. A review's take
 settles ON ITS OWN PATH, in answer mode, and hands over what its write
 recorded, its round still waiting on it, never marking it. One whose settle the
 store does not answer either is kept by the segment that reviews the run and
@@ -159,7 +163,7 @@ the job's status to be right.
 the network held past the hook's own ten seconds is recorded read and was never
 seen by the harness, and nothing on the engine's side can tell it from one the
 harness read: the five seconds are what keep it to a stall that long. A node
-that stops mid-settle asks the store once more, on the stop's allowance, and
+that stops mid-settle asks the store once more, in the stop's settle window, and
 leaves a take that attempt does not settle unsettled for good: no other node
 knows of it, and the record says the run read notes its reader was never handed —
 a capture counts them held, and a continuation is not told them — though the

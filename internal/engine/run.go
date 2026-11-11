@@ -1910,7 +1910,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// AND THE SETTLES THOSE RECORDS TAKE OFF THE PATH THAT TOOK END WITH THE
 	// NODE: each asks its store until it answers, and no longer than this
 	// node's teardown, which is when its store goes — asking every take once
-	// more as it begins, on the stop's allowance (runsteer.go).
+	// more as it begins, in a window of its own beside the give-backs, never
+	// on the stop's allowance (runsteer.go, steerSettleStopBudget).
 	e.runSteers.stopWith(e)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
@@ -3444,8 +3445,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	// AND THE SETTLES OF TAKES WHOSE ANSWERS WERE LOST, once nothing is left
 	// to lose one — the drain ended the turns, and the sandbox's resumes and
 	// the bridge's relay are stopped above — and while the coordination store
-	// they write is still there: each loop made its last attempt on this
-	// stop's allowance as the teardown began, and is waited out here.
+	// they write is still there: each loop made its last attempt in the window
+	// the teardown opened as it began, which is over within
+	// steerSettleStopBudget of that — the ledgers' flush above covers it where
+	// that flush spends its own bound — and is waited out here, having spent
+	// none of the allowance the give-backs after it are owed.
 	e.runSteers.waitSettles()
 	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the

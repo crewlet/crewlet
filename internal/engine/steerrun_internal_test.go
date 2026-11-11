@@ -985,18 +985,20 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 // round is asked joining it, even the round the store first answers past the
 // patience, which met no error to say the take unsettled with and says nothing.
 //
-// It stops when its node stops — once it has asked every take once more, on the
-// stop's allowance and held to it: a store back while the loop slept between
-// rounds settles then, and so does a take a segment the teardown ended hands
-// off, one joining that last round included, whereas a store still silent is
-// asked nothing more. And once the teardown has waited the settles out, a take
-// lost is asked nothing at all: the store it would ask is closing.
+// It stops when its node stops — once it has asked every take once more, in a
+// window of its own the teardown opens as it begins and none of the stop's
+// allowance, which the give-backs made after it are owed: a store back while
+// the loop slept between rounds settles then, and so does a take a segment the
+// teardown ended hands off, one joining that last round included, whereas a
+// store still silent is asked nothing more once the window is over — of every
+// run and every take together. And once the teardown has waited the settles
+// out, a take lost is asked nothing at all: the store it would ask is closing.
 //
 // Mutation: give the settle up at its patience, end it with the context of the
 // take that lost it, ask on past the node's stop, start a loop for every take,
 // say unsettled a round that met no error, sleep through the node's stop, make
-// no last attempt, leave a take joining the last round unasked, hold the last
-// attempt to its own bound rather than the stop's allowance, or start a loop
+// no last attempt, leave a take joining the last round unasked, make the last
+// attempts on the stop's allowance or hold them to no window, or start a loop
 // once the teardown waited them out, and a case goes red — the panic one a
 // crash of the test binary, as it would end the node.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
@@ -1105,31 +1107,47 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			}
 		})
 	})
-	t.Run("its last attempt held to the stop's allowance", func(t *testing.T) {
+	t.Run("its last attempts in a window of their own, beside the stop's allowance", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			// A STORE THAT NEVER ANSWERS: every attempt waits until its
+			// context ends.
 			settles := &gatedSettles{PendingStore: store, gate: make(chan struct{})}
 			runs, _ := steersOver(t, steerRing, settles)
-			// A TTL WHOSE STOP ALLOWANCE IS SHORTER THAN AN ATTEMPT'S OWN BOUND,
-			// so what ends a hung attempt is the allowance — of an Engine
-			// literal, as the stop's other cases build, since the allowance is
-			// a fraction of the TTL and nothing New builds.
-			e := &Engine{leaseTTL: 9 * time.Second}
+			// THE SHIPPED TTL, of an Engine literal as the stop's other cases
+			// build: its allowance is longer than the settles' window, so last
+			// attempts made on the allowance would hold the stop past the
+			// window, and leave the give-backs after them less than the
+			// allowance, or none.
+			e := &Engine{}
 			allowance := seat.StopAllowance(e.stopTTL()) - e.admissionShare()
-			if allowance >= steerSettleAttempt {
-				t.Fatalf("the premise: the stop's allowance of %v is no shorter than an attempt's %v",
-					allowance, steerSettleAttempt)
+			if allowance <= steerSettleStopBudget {
+				t.Fatalf("the premise: the stop's allowance of %v is no longer than the settles' window of %v",
+					allowance, steerSettleStopBudget)
 			}
 			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
+			// SEVERAL RUNS AND TAKES, each loop's first attempt in flight as
+			// the teardown begins, and a take joining one of them then.
+			lostTakes(t, store, runs, "n-1", "n-2")
 			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+			runs.settleUnanswered(t.Context(), "run-2", "take-x")
 			synctest.Wait()
 			begun := time.Now()
 			e.tearingDown()
+			runs.settleUnanswered(t.Context(), "run-1", "take-joined")
 			runs.waitSettles()
-			if took := time.Since(begun); took > allowance {
-				t.Errorf("the settle held its node's stop %v, past the stop's allowance of %v", took, allowance)
+			if took := time.Since(begun); took > steerSettleStopBudget {
+				t.Errorf("the settles held their node's stop %v, past their window of %v", took,
+					steerSettleStopBudget)
+			}
+			// AND A GIVE-BACK MADE AFTER THEM IS HANDED THE WHOLE ALLOWANCE.
+			step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
+			defer done()
+			if deadline, ok := step.Deadline(); !ok || deadline.Sub(time.Now()) != allowance {
+				t.Errorf("a give-back after the settles is handed %v, want the whole allowance of %v: the "+
+					"settles spent the rest", deadline.Sub(time.Now()), allowance)
 			}
 		})
 	})
