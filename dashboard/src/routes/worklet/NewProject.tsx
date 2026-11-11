@@ -35,9 +35,10 @@
  *
  * # The key is checked as the engine will
  *
- * Its shape (`KEY_SHAPE`: capital letters, digits and underscores, starting
- * with a letter), and that no project, active or archived, and no other node
- * in the document already has it.
+ * Its shape, by the engine's own grammar (`CONTAINER_KEY_PATTERN`: a capital
+ * letter, then one to nine capitals or digits, the shape every backend
+ * accepts), and that no project, active or archived, and no other node in
+ * the document already has it.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -53,15 +54,16 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { KEY_SHAPE, STRUCTURE_PATH } from "~/app/routes.ts";
+import { STRUCTURE_PATH } from "~/app/routes.ts";
+import { CONTAINER_KEY_MAX, CONTAINER_KEY_PATTERN } from "~/contract/config.ts";
 import { documentUnits } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
 
-/** The longest key the field takes. */
-const KEY_MAX = 12;
+/** A project's key, as the engine holds one (`config.ContainerKeyPattern`). */
+const KEY = new RegExp(CONTAINER_KEY_PATTERN);
 /** How long typing rests before the key is looked up. */
 const CHECK_DELAY_MS = 150;
 
@@ -116,18 +118,21 @@ function keysIn(doc: CompanyDocument | null | undefined): Set<string> {
   return keys;
 }
 
-/** A key the field holds: capitals, digits and underscores, cut at the field's length. */
+/** A key the field holds: capitals and digits, cut at the grammar's width. */
 export function cleanKey(typed: string): string {
   return typed
     .toUpperCase()
-    .replace(/[^A-Z0-9_]/g, "")
-    .slice(0, KEY_MAX);
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, CONTAINER_KEY_MAX);
 }
 
-/** A key to suggest for an owner: the first letters of its name. */
+/**
+ * A key to suggest for an owner: the first letters of its name, where it has
+ * the two a key needs at least.
+ */
 export function suggestedKey(name: string): string {
   const letters = name.toUpperCase().replace(/[^A-Z]/g, "");
-  return letters.slice(0, 3) || "PRJ";
+  return letters.length >= 2 ? letters.slice(0, 3) : "PRJ";
 }
 
 /** What the key field says about the key it holds, and whether Continue may go on. */
@@ -139,10 +144,10 @@ export function keyVerdict(
   if (key === "") {
     return { ok: false, message: `Choose a key, such as ${suggestedKey(owner?.name ?? "")}.` };
   }
-  if (!KEY_SHAPE.test(key)) {
+  if (!KEY.test(key)) {
     return {
       ok: false,
-      message: "Use capital letters, digits and underscores, starting with a letter.",
+      message: `Use a capital letter, then 1 to ${CONTAINER_KEY_MAX - 1} capitals or digits.`,
     };
   }
   if (taken.inDocument || taken.inTracker === true) {
@@ -174,7 +179,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
   const { socket } = useClient();
   const [checked, setChecked] = useState<{ key: string; taken: boolean } | null>(null);
   useEffect(() => {
-    if (!KEY_SHAPE.test(key)) return;
+    if (!KEY.test(key)) return;
     let live = true;
     const timer = window.setTimeout(() => {
       socket.query("work_project", { key }).then(
@@ -277,7 +282,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
                 appearance="reference"
                 error={!verdict.ok && key !== ""}
                 value={key}
-                maxLength={KEY_MAX}
+                maxLength={CONTAINER_KEY_MAX}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(event) => setKey(cleanKey(event.target.value))}

@@ -29,7 +29,21 @@ import (
 // Comparison is case-insensitive on the vendors and exact natively, so
 // accepting `eng` would make one company's `eng` and `ENG` the same container
 // and another's two — and the config would not say which.
-var containerKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
+var containerKeyPattern = regexp.MustCompile(ContainerKeyPattern)
+
+// ContainerKeyPattern is [ValidContainerKey]'s grammar as text, at most
+// [MaxContainerKey] characters.
+//
+// EXPORTED FOR THE DASHBOARD's copy: the new-project dialog holds the key a
+// person types to it before the write that names it, rather than send one
+// every node refuses (`CONTAINER_KEY_PATTERN`, held equal by
+// TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar). Written with no
+// flag and no escape, so the dashboard compiles the same text.
+const ContainerKeyPattern = `^[A-Z][A-Z0-9]{1,9}$`
+
+// MaxContainerKey is the longest a container key may be: [ContainerKeyPattern]'s
+// bound, where the dashboard's key field stops (`CONTAINER_KEY_MAX`).
+const MaxContainerKey = 10
 
 // ValidContainerKey reports whether s is a well-formed container key.
 //

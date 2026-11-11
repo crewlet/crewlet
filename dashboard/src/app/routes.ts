@@ -49,7 +49,13 @@ import {
   type Workspace,
 } from "./nav.ts";
 
-/** A project or container key: uppercase, as the engine mints it. */
+/**
+ * A project or container key IN AN ADDRESS: uppercase. Looser than the grammar
+ * a key is written in (`CONTAINER_KEY_PATTERN`) on purpose, because a route
+ * only has to tell a key from a lowercase segment, and an address naming no
+ * project is answered as none; a key a person types is held to the grammar
+ * itself.
+ */
 export const KEY_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 /** An item key: a project key, a dash, a number. */
 export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
