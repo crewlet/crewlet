@@ -280,6 +280,7 @@ var contract = []Entry{
 	{"DEFAULT_HARNESS_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_HARNESS_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_HARNESS_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"MODEL_KEY_PATTERN", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"HARNESS_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInHarnessHasAProductName"},
 	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},

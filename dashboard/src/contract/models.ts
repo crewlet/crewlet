@@ -74,6 +74,14 @@ export const DEFAULT_HARNESS_TIMEOUT_SECONDS = 600;
 export const DEFAULT_HARNESS_MAX_CONCURRENT = 4;
 
 /**
+ * What a model's name, its `providers.llm` key, may look like
+ * (`config.ProviderKeyPattern`): a lowercase letter or digit, then up to 62
+ * more of those, `.`, `_` and `-`. The wizard holds the name a person types to
+ * it before the entry is written. A STRING, compiled where it is used.
+ */
+export const MODEL_KEY_PATTERN = "^[a-z0-9][a-z0-9._-]{0,62}$";
+
+/**
  * ONE reading of a model's condition, decided by the engine
  * (`queries.ModelHealth`) so the list, the model's page and the By job view
  * cannot each decide it differently. Held against `queries.ModelHealths` by
