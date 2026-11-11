@@ -17,7 +17,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -35,7 +37,11 @@ import (
 // nobody can make of them. An engine write on any other domain would be
 // carried by a facade the other side of the gate does not read, so the class
 // would hold it to nothing. And a read is never the engine's: the engine's
-// reads are ordinary ones, which a surface may hold.
+// reads are ordinary ones, which a surface may hold — save one ANSWER, the
+// turn-start thread read's (chat.turn_thread, through [TurnThreads]), which
+// hands over whom each chat message was written for and is the engine's alone,
+// so the same gate over the source tree holds the surfaces off it too
+// ([TestOnlyTheEngineReadsWhomAMessageWasWrittenFor]).
 //
 // A TURN'S BEGIN IS ONE OF THEM: the record of a turn's first read and the
 // base it holds is the engine's account of what its launch read, which nobody
@@ -196,6 +202,22 @@ var writeSideTypes = []string{"ExecutorWrites", "ExecutorWriter", "ExecutorHalf"
 // name a file imports the domain under: its writer, how one is built, and the
 // call every write takes and no read does.
 var domainWriteNames = []string{"Writer", "NewWriter", "WriterDeps", "Call"}
+
+// turnReadNames are the names the engine's turn-start thread read is reached
+// by, matched on any operand: the router's facade and its accessor
+// (TurnThreads), the serving read and its answer (TurnThread), Chatlet's thread
+// reader, which the engine builds over the facade (NewThreadReader), and the
+// engine's own set of thread readers (ChatThreads). That read hands over whom
+// each chat message was written for, which no reader of a room may see; a
+// surface reads a thread through [Chat]'s Thread.
+var turnReadNames = []string{"TurnThreads", "TurnThread", "NewThreadReader", "ChatThreads"}
+
+// The import paths of the types that carry the turn-start read, as a
+// hand-out's results name them.
+var (
+	chatletImport = reflect.TypeFor[chatlet.ThreadReader]().PkgPath()
+	notifyImport  = reflect.TypeFor[notify.ThreadReaders]().PkgPath()
+)
 
 // NO SURFACE HOLDS THE ENGINE'S EXECUTOR WRITES.
 //
@@ -371,6 +393,79 @@ func TestTheEngineWritesGuardFindsEveryRoad(t *testing.T) {
 	})
 }
 
+// ONLY THE ENGINE READS WHOM A MESSAGE WAS WRITTEN FOR (ADR-0109).
+//
+// The engine's turn-start thread read hands over whom each chat message was
+// written for, so a turn works through only the waiting messages of its own
+// requester; no reader of a room may see it. The guard over the packages that
+// serve a person or a model ([TestNoSurfaceHoldsTheEnginesExecutorWrites])
+// holds them off that read as it holds them off the engine's writes: by name
+// on any operand ([turnReadNames]), and through every engine hand-out whose
+// results carry it. Each case plants files and scans them: a road is one
+// failure, and the plain thread read a surface does hold is none.
+//
+// Mutation: drop a name from turnReadNames, or leave the read's hand-outs
+// underived, and the case for that road changes its answer.
+func TestOnlyTheEngineReadsWhomAMessageWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	estate, chat := strconv.Quote(estateImport), strconv.Quote(chatletImport)
+	notifyPath := strconv.Quote(notifyImport)
+	engine := strconv.Quote(path.Join(path.Dir(estateImport), "engine"))
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"the engine's set of thread readers": {
+			files: map[string]string{"internal/api/road.go": "package api\n" +
+				"func read(e interface{ ChatThreads() any }) any { return e.ChatThreads() }\n"},
+			want: "internal/api/road.go:2: ChatThreads",
+		},
+		"Chatlet's thread reader built over the chat facade": {
+			files: map[string]string{"internal/assistant/road.go": "package assistant\nimport " + chat +
+				"\nfunc reader(c chatlet.ThreadSource) any { return chatlet.NewThreadReader(c, nil) }\n"},
+			want: "internal/assistant/road.go:3: NewThreadReader",
+		},
+		"the turn's read asked directly": {
+			files: map[string]string{"internal/agent/builtin/road.go": "package builtin\n" +
+				"func read(c interface{ TurnThread() any }) any { return c.TurnThread() }\n"},
+			want: "internal/agent/builtin/road.go:2: TurnThread",
+		},
+		"the router's facade under an aliased import": {
+			files: map[string]string{"cmd/crewlet/road.go": "package main\nimport est " + estate +
+				"\nvar t est.TurnThreads\n"},
+			want: "cmd/crewlet/road.go:3: TurnThreads",
+		},
+		"a hand-out the engine exports under a name of its own": {
+			files: map[string]string{
+				"internal/engine/handout.go": "package engine\nimport " + notifyPath + "\ntype Engine struct{}\n" +
+					"func Threads(e *Engine) *notify.ThreadReaders { return nil }\n",
+				"internal/api/road.go": "package api\nimport " + engine +
+					"\nfunc read(e *engine.Engine) { _ = engine.Threads(e) }\n",
+			},
+			want: "internal/api/road.go:3: Threads",
+		},
+		"the plain thread read, which a surface may hold": {
+			files: map[string]string{"internal/api/road.go": "package api\nimport " + estate +
+				"\nfunc read(c estate.Chat) any { return c.Thread }\n"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			report, err := scanEngineWrites(plantTree(t, tc.files), personSurfaces)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failures := report.failures(personSurfaces)
+			switch {
+			case tc.want == "" && len(failures) > 0:
+				t.Errorf("files that take no road failed:\n%s", strings.Join(failures, "\n"))
+			case tc.want != "" && (len(failures) != 1 || !strings.Contains(failures[0], tc.want)):
+				t.Errorf("failures %q, want exactly one naming %q", failures, tc.want)
+			}
+		})
+	}
+}
+
 // plantTree is a fresh tree holding files (a slash path below the root to its
 // source), and a quiet Go file in every surface.
 func plantTree(t *testing.T, files map[string]string) string {
@@ -421,14 +516,18 @@ func (r engineWritesReport) failures(surfaces []string) []string {
 // write side, after deriving the engine's hand-outs of it.
 func scanEngineWrites(root string, surfaces []string) (engineWritesReport, error) {
 	report := engineWritesReport{read: map[string]int{}}
-	handOuts, files, err := engineHandOuts(filepath.Join(root, filepath.FromSlash(engineDir)))
+	writeHandOuts, readHandOuts, files, err := engineHandOuts(
+		filepath.Join(root, filepath.FromSlash(engineDir)))
 	if err != nil {
 		return report, err
 	}
 	report.engineFiles = files
-	names := map[string]bool{}
-	for _, name := range append(slices.Clone(engineWriteNames), handOuts...) {
-		names[name] = true
+	names := roadNames{writes: map[string]bool{}, reads: map[string]bool{}}
+	for _, name := range append(slices.Clone(engineWriteNames), writeHandOuts...) {
+		names.writes[name] = true
+	}
+	for _, name := range append(slices.Clone(turnReadNames), readHandOuts...) {
+		names.reads[name] = true
 	}
 	fset := token.NewFileSet()
 	for _, surface := range surfaces {
@@ -465,8 +564,15 @@ func scanEngineWrites(root string, surfaces []string) (engineWritesReport, error
 	return report, nil
 }
 
-// roadsIn is every road one surface file takes to the log's write side.
-func roadsIn(fset *token.FileSet, rel string, file *ast.File, names map[string]bool) []string {
+// roadNames are the names a surface may not take: writes, to the engine-class
+// logs' write side, and reads, to the engine's turn-start thread read.
+type roadNames struct {
+	writes, reads map[string]bool
+}
+
+// roadsIn is every road one surface file takes to the log's write side, or to
+// the engine's turn-start thread read.
+func roadsIn(fset *token.FileSet, rel string, file *ast.File, names roadNames) []string {
 	var out []string
 	at := func(n ast.Node, what string) {
 		out = append(out, fmt.Sprintf("%s:%d: %s", rel, fset.Position(n.Pos()).Line, what))
@@ -488,10 +594,15 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names map[string]b
 		if !ok {
 			return true
 		}
-		if names[sel.Sel.Name] {
+		if names.writes[sel.Sel.Name] {
 			at(sel, sel.Sel.Name+" reaches the executor or access log's writes, which are the "+
 				"engine's alone (internal/estate's engine-originated class); a surface holds "+
 				"their reads, ExecutorReads and AccessReads")
+		}
+		if names.reads[sel.Sel.Name] {
+			at(sel, sel.Sel.Name+" reaches the engine's turn-start thread read, which hands over "+
+				"whom each chat message was written for and is the engine's alone (ADR-0109); a "+
+				"surface reads a thread through estate.Chat's Thread")
 		}
 		if x, isIdent := sel.X.(*ast.Ident); isIdent && domain[x.Name] &&
 			slices.Contains(domainWriteNames, sel.Sel.Name) {
@@ -504,40 +615,66 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names map[string]b
 }
 
 // engineHandOuts is every exported function and method in dir — the engine
-// package — whose results name the log's write side, and how many files it
-// read: a door a surface could take the writes through without naming them.
-func engineHandOuts(dir string) ([]string, int, error) {
+// package — whose results name the log's write side (writes), or the
+// turn-start thread read (reads), and how many files it read: a door a surface
+// could take either through without naming it.
+func engineHandOuts(dir string) (writes, reads []string, files int, err error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	fset := token.NewFileSet()
-	var out []string
-	files := 0
 	for _, p := range matches {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
 		}
 		parsed, err := parser.ParseFile(fset, p, nil, 0)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 		files++
 		estateNames, domainNames := importNamesOf(parsed, estateImport), map[string]bool{}
 		for _, imported := range domainImports {
 			maps.Copy(domainNames, importNamesOf(parsed, imported))
 		}
+		chatletNames, notifyNames := importNamesOf(parsed, chatletImport), importNamesOf(parsed, notifyImport)
 		for _, decl := range parsed.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !fn.Name.IsExported() || fn.Type.Results == nil {
 				continue
 			}
 			if namesWriteSide(fn.Type.Results, estateNames, domainNames) {
-				out = append(out, fn.Name.Name)
+				writes = append(writes, fn.Name.Name)
+			}
+			if namesTurnRead(fn.Type.Results, estateNames, chatletNames, notifyNames) {
+				reads = append(reads, fn.Name.Name)
 			}
 		}
 	}
-	return out, files, nil
+	return writes, reads, files, nil
+}
+
+// namesTurnRead reports whether a declaration's results name the engine's
+// turn-start thread read: this package's facade over it, Chatlet's thread
+// reader or its answer, or notify's set of thread readers, which holds it.
+func namesTurnRead(results *ast.FieldList, estateNames, chatletNames, notifyNames map[string]bool) bool {
+	found := false
+	ast.Inspect(results, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if x, isIdent := sel.X.(*ast.Ident); isIdent {
+			found = (estateNames[x.Name] && sel.Sel.Name == "TurnThreads") ||
+				(chatletNames[x.Name] && (sel.Sel.Name == "ThreadReader" || sel.Sel.Name == "TurnThread")) ||
+				(notifyNames[x.Name] && sel.Sel.Name == "ThreadReaders")
+		}
+		return !found
+	})
+	return found
 }
 
 // importNamesOf is every name file imports want under, a dot-import and a

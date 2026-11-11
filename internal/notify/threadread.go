@@ -1,6 +1,10 @@
 package notify
 
-import "context"
+import (
+	"context"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+)
 
 // Reading a conversation back: the mirror of the write side in this package.
 //
@@ -26,11 +30,12 @@ import "context"
 
 // Message is one thing somebody said in a thread.
 //
-// Every field but two is read by the renderer — the text, the speaker and
+// Every field but three is read by the renderer — the text, the speaker and
 // whose it is: a value type here exists to be rendered, and a field nothing
 // reads is a field that drifts out of step with the vendor that fills it. The
-// two that are not rendered, [Message.ID] and [Message.Version], say which
-// message a turn was shown, and which version of it.
+// three that are not rendered say which message a turn was shown, which
+// version of it, and whom it was written for: [Message.ID],
+// [Message.Version] and [Message.WorkingFor].
 type Message struct {
 	// SenderID is the sender's id ON THAT BACKEND — a Slack `U…`, a
 	// Mattermost user id — which is what the party registry resolves a
@@ -82,6 +87,17 @@ type Message struct {
 	// else: on Chatlet, the log position of the record that last wrote the
 	// message, which is what that edit's wake carries as its trigger.
 	Version string
+
+	// WorkingFor is whom an agent's message was written for (ADR-0109), as
+	// its post's record carried it; nil for a message written for nobody
+	// else and on every vendor surface, whose writes carry nobody.
+	//
+	// NOT RENDERED, and never a reader's: the engine's own turn-start read
+	// alone hands it over, so a turn works through only the waiting
+	// messages written for whom it works for. A pointer, so a Message stays
+	// comparable. It holds identifiers, never words, so it is no fenced
+	// field.
+	WorkingFor *types.WorkingFor
 }
 
 // Transcript is what a backend read back from a thread.
@@ -119,6 +135,15 @@ type Transcript struct {
 	// ([provenance.TrustForHosted]). Set by the engine's own chat reader;
 	// a vendor's leaves it false.
 	Hosted bool
+
+	// WorkingForUnread says the read could not say whom its messages were
+	// written for ([Message.WorkingFor]): the engine's own chat reader read
+	// the plain thread, which happens while no data node serves its own
+	// read, during a rolling upgrade. A turn then marks no waiting message
+	// as worked through, the safe direction. A vendor's reader leaves it
+	// false: every message there is written for nobody, which is the
+	// truth.
+	WorkingForUnread bool
 }
 
 // Thread is a chat thread that ALREADY EXISTS.

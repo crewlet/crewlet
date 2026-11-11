@@ -115,11 +115,8 @@ func (th *editedThread) relayedEdit(t *testing.T) types.RawWebhook {
 // Chatlet reader, through the router.
 func (th *editedThread) read(t *testing.T) notify.Transcript {
 	t.Helper()
-	rooms, ok := OperatorChat(th.e)
-	if !ok {
-		t.Fatal("the node hands out no chat")
-	}
-	got, ok := chatlet.NewThreadReader(rooms, nil).ReadThread(t.Context(), "ceo", th.room, th.root)
+	got, ok := th.e.ChatThreads().ReadThread(t.Context(), "ceo",
+		notify.Thread{Backend: chatlet.Source, Channel: th.room, Root: th.root})
 	if !ok {
 		t.Fatal("ceo could not read the thread")
 	}

@@ -170,7 +170,9 @@ migration runs on each node when it opens and not at a log position, so a column
 build began to fill would hold nothing for the records a node applied before it upgraded and the
 carrier for the same records on a node that applied them after. Chatlet's stays on the stored document
 alone: no read view of a message and no write's answer hands it out (`Message.forReaders`), since
-a room's reader needs no requester's seat, login or apps, so 4b-ii reads it off the document.
+a room's reader needs no requester's seat, login or apps, so the engine's turn-start thread read
+alone hands it over (`chat.turn_thread`, through the engine-only facade `estate.TurnThreads`), never
+a reader's view.
 Doclet's carrier stays on its record alone.
 
 **On the wake, and in the partition.** `notify.FirstPartyWriter(kind, actor, apps, workingFor)`

@@ -9,32 +9,46 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// threadAnswerer is a data node's chat reader answering one thread, and
-// recording what it was asked. Every other read is a case's mistake.
+// threadAnswerer is a data node's chat reader answering one thread, with whom
+// its messages were written for, and recording what it was asked. Every other
+// read is a case's mistake.
 type threadAnswerer struct {
 	noReaderViews
 
-	mu     sync.Mutex
-	thread chatlet.Thread
-	asked  struct {
+	mu         sync.Mutex
+	thread     chatlet.Thread
+	workingFor map[string]*types.WorkingFor
+	asked      struct {
 		viewer string
 		query  chatlet.ThreadQuery
 		called bool
+		// plain is that the reader's plain Thread was asked, which the
+		// engine's turn-start read never asks of a node that serves its own.
+		plain bool
 	}
 }
 
 var _ estate.ChatReader = (*threadAnswerer)(nil)
 
-func (a *threadAnswerer) Thread(_ context.Context, viewer string, q chatlet.ThreadQuery,
-	_ statelog.Freshness) (chatlet.Thread, error) {
+func (a *threadAnswerer) TurnThread(_ context.Context, viewer string, q chatlet.ThreadQuery,
+	_ statelog.Freshness) (chatlet.TurnThread, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.asked.viewer, a.asked.query, a.asked.called = viewer, q, true
+	return chatlet.TurnThread{Thread: a.thread, WorkingFor: a.workingFor, Carried: true}, nil
+}
+
+func (a *threadAnswerer) Thread(context.Context, string, chatlet.ThreadQuery,
+	statelog.Freshness) (chatlet.Thread, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asked.plain = true
 	return a.thread, nil
 }
 
@@ -97,6 +111,8 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 			Body: "on it", ThreadRoot: "root", V: chatlet.DocumentVersion,
 		}}},
 		Earlier: 7,
+	}, workingFor: map[string]*types.WorkingFor{
+		"root": {Kind: types.WorkingForSeat, Seat: "ada"},
 	}}
 	broker := memory.NewBroker()
 	started := func() *memory.Queue {
@@ -141,6 +157,19 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 		asked.query.RootID != "root" || asked.query.Newest != chatlet.MaxLimit {
 		t.Errorf("the data node was asked (called=%v) as %q for %+v, want the woken "+
 			"seat's own newest-end read of the thread", asked.called, asked.viewer, asked.query)
+	}
+	// THE TURN'S OWN READ, and only it, served by the data node: whom each
+	// message was written for crosses with the thread, and the transcript
+	// says it was read. The plain thread is a fallback a node that serves
+	// the turn's read never sees.
+	if asked.plain {
+		t.Error("the data node was asked the plain thread, which the turn's own read never asks " +
+			"of a node that serves it")
+	}
+	if got.WorkingForUnread || len(got.Messages) == 0 || got.Messages[0].WorkingFor == nil ||
+		got.Messages[0].WorkingFor.Seat != "ada" {
+		t.Errorf("the transcript is %+v, want the root's carrier ada crossed and the read saying it "+
+			"read whom each message was written for", got)
 	}
 	if len(got.Messages) != 2 || got.Messages[0].Text != "what is the plan" ||
 		!got.Messages[1].Own || got.Older != 7 {

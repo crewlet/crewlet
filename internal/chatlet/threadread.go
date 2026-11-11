@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -27,11 +28,18 @@ import (
 // whichever node answers.
 
 // ThreadSource is the one read a [ThreadReader] makes: a thread from its root,
-// as a viewer. Declared by its consumer; the estate router's chat facade
-// satisfies it on every node, a data node and one that holds no data alike.
+// as a viewer, with whom each of its messages was written for ([TurnThread]).
+// Declared by its consumer; the engine's own turn-start facade over the estate
+// router satisfies it on every node, a data node and one that holds no data
+// alike, and nothing a reader of a room holds does.
+//
+// ONE READ, which falls back to the plain thread where no data node serves
+// the turn's own read, during a rolling upgrade: that answer says it carried
+// nothing ([TurnThread.Carried]), and the turn then marks no waiting message
+// as worked through.
 type ThreadSource interface {
-	Thread(ctx context.Context, viewer string, q ThreadQuery,
-		fresh statelog.Freshness) (Thread, error)
+	TurnThread(ctx context.Context, viewer string, q ThreadQuery,
+		fresh statelog.Freshness) (TurnThread, error)
 }
 
 // ThreadReader is Chatlet's [notify.ThreadReader].
@@ -94,7 +102,7 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 	if r.threads == nil || handle == "" || channel == "" || root == "" {
 		return notify.Transcript{}, false
 	}
-	thread, err := r.threads.Thread(ctx, handle, ThreadQuery{
+	turn, err := r.threads.TurnThread(ctx, handle, ThreadQuery{
 		ChannelID: channel, RootID: root, Newest: threadWindow,
 	}, threadRead)
 	if err != nil {
@@ -106,6 +114,7 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 			"channel", channel, "thread", root, "error", err.Error())
 		return notify.Transcript{}, false
 	}
+	thread := turn.Thread
 	var parties notify.Parties
 	if r.parties != nil {
 		parties = r.parties()
@@ -121,10 +130,14 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 		// a person or the engine, so a line whose sender the roster no
 		// longer names reads as a colleague's.
 		Hosted: true,
+		// AND WHETHER IT SAYS WHOM EACH MESSAGE WAS WRITTEN FOR: a read
+		// that could not, the plain thread a fallback asked for, marks no
+		// waiting message as worked through.
+		WorkingForUnread: !turn.Carried,
 	}
-	out.Messages = append(out.Messages, r.message(thread.Root, handle, parties))
+	out.Messages = append(out.Messages, r.message(thread.Root, handle, parties, turn.WorkingFor))
 	for _, reply := range thread.Replies {
-		out.Messages = append(out.Messages, r.message(reply, handle, parties))
+		out.Messages = append(out.Messages, r.message(reply, handle, parties, turn.WorkingFor))
 	}
 	return out, true
 }
@@ -146,7 +159,12 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 // that position, and a deleted message renders no line, so it is never
 // marked. An unedited message names none: its post's own wake is dropped by
 // its id, as it always was.
-func (ThreadReader) message(view MessageView, viewer string, parties notify.Parties) notify.Message {
+//
+// AND WHOM IT WAS WRITTEN FOR ([notify.Message.WorkingFor]), from the carriers
+// the turn-start read alone hands over: a copy, never the answer's own.
+func (ThreadReader) message(view MessageView, viewer string, parties notify.Parties,
+	carriers map[string]*types.WorkingFor) notify.Message {
+
 	m := view.Message
 	out := notify.Message{
 		// THE MESSAGE'S OWN ID, which is what a Chatlet wake stamps as the
@@ -161,6 +179,9 @@ func (ThreadReader) message(view MessageView, viewer string, parties notify.Part
 	}
 	if m.EditedAt != nil {
 		out.Version = view.Position.String()
+	}
+	if carrier := carriers[m.ID]; carrier != nil {
+		out.WorkingFor = carrier.Clone()
 	}
 	return out
 }
