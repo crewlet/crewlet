@@ -132,6 +132,13 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
     why: "an agent's permissions and scope, set in their dialogs into the Agents tab's draft, which the tab declares",
   },
+  // A SHEET, AND STILL THE BOARD'S: each change made in a widget's settings is
+  // written into the board being arranged as it is made, through Home's own
+  // setter, and Done keeps it there (Cancel takes it back).
+  "routes/home/board/settings.tsx": {
+    screen: ["routes/home/Home.tsx"],
+    why: "a widget's settings, written into the board being arranged as they are made, which Home declares",
+  },
 };
 
 /** A module with editing marks and no draft the assistant could be asked about, and why. */
@@ -177,7 +184,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":
     "not an editor: its select filters what a published board shows, and changes nothing",
-  "routes/home/board/settings.tsx": "modal: a widget's settings, in a sheet over the board",
   "routes/org/builder/NodeEditor.tsx": "modal: a unit or seat, in a side sheet over the builder",
   "routes/org/builder/dialogParts.tsx": "modal: the fields of the builder's dialogs",
   "routes/signin/SignIn.tsx": "signed out: there is no assistant before a sign-in",
