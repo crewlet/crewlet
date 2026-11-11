@@ -478,21 +478,42 @@ func TestAStartedCacheEmptiesTrashWhenKicked(t *testing.T) {
 
 // NOTHING OF A STOPPED CACHE STARTS AGAIN: a Start after Stop runs no
 // janitor, so nothing of this process touches a directory that may already be
-// the next boot's.
+// the next boot's — here a file of trash/ the next boot wrote before the
+// Start. "Nothing" is read in a synctest bubble, twice, never after a pause:
+// once every goroutine of the case is durably blocked or gone (synctest.Wait)
+// — a janitor the Start began has made its first pass over trash/ by then,
+// however late it ran — and again once the clock has moved past every timer
+// the cache arms (pastEveryTimer) and every goroutine has blocked again — a
+// janitor begun behind a wait on that clock has made its pass by then too. On
+// a healthy build the Start begins nothing, so nothing runs in the span.
+//
+// Mutations: Stop stops nothing (marks nothing stopped and leaves the cache's
+// lifetime running) — the Start after it begins the janitor, whose first pass
+// empties trash/; and the same with the janitor begun a minute after the
+// Start — its pass empties trash/ once the clock has moved.
 func TestStartAfterStopDoesNothing(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t)
-	c := w.open(t)
-	c.Stop(context.Background())
-	c.Start(t.Context())
-	write(t, w.path("trash", "the-next-boots"), "not this cache's to remove")
-	time.Sleep(200 * time.Millisecond)
-	if !exists(w.path("trash", "the-next-boots")) {
-		t.Fatal("a cache started after its Stop removed a file from trash/")
-	}
-	if got := cache.Running(c); got != 0 {
-		t.Errorf("a stopped cache has %d pieces of work running", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		w := newWorld(t)
+		c := w.open(t)
+		c.Stop(context.Background())
+		write(t, w.path("trash", "the-next-boots"), "not this cache's to remove")
+		c.Start(t.Context())
+		nothing := func(when string) {
+			t.Helper()
+			if !exists(w.path("trash", "the-next-boots")) {
+				t.Fatalf("a cache started after its Stop removed a file from trash/ %s", when)
+			}
+			if got := cache.Running(c); got != 0 {
+				t.Errorf("a stopped cache has %d pieces of work running %s", got, when)
+			}
+		}
+		synctest.Wait()
+		nothing("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		nothing("once the clock had then moved past every timer the cache arms")
+	})
 }
 
 // heldRemoval opens a started cache whose janitor stops inside its first
@@ -527,36 +548,59 @@ func heldRemoval(t *testing.T, w *world) (c *cache.Cache, release func()) {
 
 // STOP WAITS FOR A PASS IN FLIGHT before it gives the directory back: a
 // janitor still removing in trash/ is this process writing in a directory the
-// next boot would own.
+// next boot would own. The Stop is read in a synctest bubble, twice, never
+// after a pause: once every goroutine of the case is durably blocked
+// (synctest.Wait) — a Stop that did not wait has returned by then, however
+// late it ran — and again once the clock has moved past every timer the cache
+// arms (pastEveryTimer) and every goroutine has blocked again — a Stop that
+// waited for the pass only as long as a grace of its own has returned by then
+// too. On a healthy build the Stop has ended the cache's loops by the first
+// read, and the held pass waits on no clock, so nothing runs in the span.
+//
+// Mutations: Stop takes the cache for idle whatever runs in it (idle read as
+// true) — it gives the claim back and returns while the pass is held; Stop
+// waits for the pass a minute at most — it returns while the pass is held,
+// once the clock has moved.
 func TestStopWaitsForAPassInFlight(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t)
-	c, release := heldRemoval(t, w)
+	synctest.Test(t, func(t *testing.T) {
+		w := newWorld(t)
+		c, release := heldRemoval(t, w)
 
-	stopped := make(chan struct{})
-	go func() {
-		c.Stop(context.Background())
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("Stop returned while a janitor pass was in flight")
-	case <-time.After(200 * time.Millisecond):
-	}
-	if _, err := cache.Prepare(t.Context(), w.layout.Dir); !errors.Is(err, cache.ErrCacheInUse) {
-		t.Fatalf("Prepare while the stopping cache's pass is in flight = %v, want ErrCacheInUse", err)
-	}
-	release()
-	select {
-	case <-stopped:
-	case <-time.After(hangDetector):
-		t.Fatalf("Stop has not returned %v after the pass was let go", hangDetector)
-	}
-	layout, err := cache.Prepare(t.Context(), w.layout.Dir)
-	if err != nil {
-		t.Fatalf("Prepare after Stop returned = %v, want the directory free", err)
-	}
-	layout.Release()
+		stopped := make(chan struct{})
+		go func() {
+			c.Stop(context.Background())
+			close(stopped)
+		}()
+		stopping := func(when string) {
+			t.Helper()
+			select {
+			case <-stopped:
+				t.Fatalf("Stop returned while a janitor pass was in flight, %s", when)
+			default:
+			}
+			if _, err := cache.Prepare(t.Context(), w.layout.Dir); !errors.Is(err, cache.ErrCacheInUse) {
+				t.Fatalf("Prepare while the stopping cache's pass is in flight, %s, = %v, want ErrCacheInUse",
+					when, err)
+			}
+		}
+		synctest.Wait()
+		stopping("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		stopping("once the clock had then moved past every timer the cache arms")
+		release()
+		select {
+		case <-stopped:
+		case <-time.After(hangDetector):
+			t.Fatalf("Stop has not returned %v after the pass was let go", hangDetector)
+		}
+		layout, err := cache.Prepare(t.Context(), w.layout.Dir)
+		if err != nil {
+			t.Fatalf("Prepare after Stop returned = %v, want the directory free", err)
+		}
+		layout.Release()
+	})
 }
 
 // A STOP ITS CONTEXT CUTS SHORT KEEPS THE CLAIM until the last of the cache's

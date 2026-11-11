@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -263,174 +264,214 @@ func TestTheLargestPackIsFetchedFirst(t *testing.T) {
 // asked for a GET as soon as they could gave its first shares to the packs it
 // handed out last, and a round whose workers made their own files held its
 // first GET behind whichever pack's files were made last. Here the order the
-// round made the files in is read, and the largest pack's worker is held, its
-// files made, until the round's whole share is in GETs or grantQuiet passes: a
-// round that grants in its order starts none meanwhile. Eight packs at a share
-// of two, more than the four a round holds in hand, every GET held until the
-// case lets it go, one at a time — so the order is checked at every grant,
-// across every window the hand moves through, and never at the instant two
-// GETs start together.
+// round made the files in is read, and the largest pack's worker is held as it
+// asks for its GET, its files made, while the case reads the round in a
+// synctest bubble: once every goroutine of the case is durably blocked
+// (synctest.Wait), and again once the clock has moved past every timer the
+// cache arms (pastEveryTimer) and every goroutine has blocked again. The
+// round's other workers in hand are parked on their turns by then, so a round
+// that grants in its order has started no GET — while one whose workers ask
+// as soon as they can has given its whole share away by the first read,
+// however late its workers ran, and one whose workers ask once a wait on that
+// clock of their own has passed, by the second. Eight packs at a share of
+// two, more than the four a round holds in hand, every GET held until the
+// case lets it go, one at a time, and the round read the same two ways after
+// each — so the order is checked at every grant, across every window the hand
+// moves through, and never at the instant two GETs start together. On a
+// healthy build the round waits on no clock, so nothing runs in the spans.
+//
+// Mutations: a worker asks for its GET as soon as its pack is in hand
+// (getSlot's turn taken out) — the round's first two GETs are two smaller
+// packs'; a worker waits for its turn a minute at most — the same, once the
+// clock has moved.
 func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	// Sizes in an order that is neither the pushes' nor their pack ids'.
-	sizes := map[objstore.Key]int64{}
-	var largest []objstore.Key
-	for i, n := range []int{3, 7, 1, 5, 0, 6, 2, 4} {
-		_, row := w.push(t, repo, "refs/heads/main", map[string]string{fmt.Sprintf("blob%d", i): noise(i, (n+1)<<13)})
-		sizes[row.Object] = row.Size
-		largest = append(largest, row.Object)
-	}
-	slices.SortFunc(largest, func(a, b objstore.Key) int { return cmp.Compare(sizes[b], sizes[a]) })
-
-	const share = 2
-	// full is closed once the round's whole share is in GETs: a round that
-	// granted out of its order has given every share away by then, before
-	// the largest pack has asked for one.
-	full := make(chan struct{})
-	var opens atomic.Int64
-	gets := map[objstore.Key]chan struct{}{}
-	for k := range sizes {
-		gets[k] = make(chan struct{})
-	}
-	w.objects.hold = func(k objstore.Key) <-chan struct{} {
-		if opens.Add(1) == share {
-			close(full)
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		// Sizes in an order that is neither the pushes' nor their pack ids'.
+		sizes := map[objstore.Key]int64{}
+		var largest []objstore.Key
+		for i, n := range []int{3, 7, 1, 5, 0, 6, 2, 4} {
+			_, row := w.push(t, repo, "refs/heads/main",
+				map[string]string{fmt.Sprintf("blob%d", i): noise(i, (n+1)<<13)})
+			sizes[row.Object] = row.Size
+			largest = append(largest, row.Object)
 		}
-		return gets[k]
-	}
-	var stagedMu sync.Mutex
-	var staged []objstore.Key
-	c := w.open(t, cache.StagedWith(func(k objstore.Key) {
-		stagedMu.Lock()
-		defer stagedMu.Unlock()
-		staged = append(staged, k)
-	}), cache.AskingWith(func(k objstore.Key) {
-		if k == largest[0] {
+		slices.SortFunc(largest, func(a, b objstore.Key) int { return cmp.Compare(sizes[b], sizes[a]) })
+
+		const share = 2
+		gets := map[objstore.Key]chan struct{}{}
+		for k := range sizes {
+			gets[k] = make(chan struct{})
+		}
+		w.objects.hold = func(k objstore.Key) <-chan struct{} { return gets[k] }
+		var stagedMu sync.Mutex
+		var staged []objstore.Key
+		asking, asked := make(chan struct{}), make(chan struct{})
+		c := w.open(t, cache.StagedWith(func(k objstore.Key) {
+			stagedMu.Lock()
+			defer stagedMu.Unlock()
+			staged = append(staged, k)
+		}), cache.AskingWith(func(k objstore.Key) {
+			if k == largest[0] {
+				// Held as it asks while the case reads the round: its other
+				// workers in hand park meanwhile, on their turns or — granting
+				// out of its order — in GETs of their own, held.
+				close(asking)
+				<-asked
+			}
+		}))
+		ask := sync.OnceFunc(func() { close(asked) })
+		var letMu sync.Mutex
+		let := func(k objstore.Key) {
+			letMu.Lock()
+			defer letMu.Unlock()
 			select {
-			case <-full:
-			case <-time.After(grantQuiet):
+			case <-gets[k]:
+			default:
+				close(gets[k])
 			}
 		}
-	}))
-	var letMu sync.Mutex
-	let := func(k objstore.Key) {
-		letMu.Lock()
-		defer letMu.Unlock()
-		select {
-		case <-gets[k]:
-		default:
-			close(gets[k])
+		t.Cleanup(func() { // before the cache's Stop, which waits for the round
+			ask()
+			for k := range gets {
+				let(k)
+			}
+		})
+		cache.SetFetchConcurrency(c, share)
+		done := make(chan error, 1)
+		go func() {
+			s, err := c.Sync(context.Background(), repo, linearizable)
+			if err == nil {
+				s.Release()
+			}
+			done <- err
+		}()
+		describe := func(keys []objstore.Key) []int64 {
+			var out []int64
+			for _, k := range keys {
+				out = append(out, sizes[k])
+			}
+			return out
 		}
-	}
-	t.Cleanup(func() { // before the cache's Stop, which waits for the round
+		// started is the round's GETs so far, in the order they started, read
+		// once every goroutine of the case is durably blocked; then read again
+		// once the clock has moved past every timer the cache arms, which must
+		// have started none.
+		started := func(when string) []objstore.Key {
+			t.Helper()
+			synctest.Wait()
+			_, order, _ := w.objects.counts()
+			time.Sleep(pastEveryTimer)
+			synctest.Wait()
+			if _, later, _ := w.objects.counts(); len(later) != len(order) {
+				t.Fatalf("%s the round had started GETs on bundles of %v bytes, and on %v once the clock had "+
+					"moved past every timer the cache arms", when, describe(order), describe(later))
+			}
+			return order
+		}
+		<-asking
+		if got := started("with the largest pack's worker held as it asks,"); len(got) != 0 {
+			t.Fatalf("with the largest pack's worker held as it asks, the round started GETs on bundles of %v "+
+				"bytes, want none: its first grant is the largest's", describe(got))
+		}
+		ask()
+		got := started("once the largest pack's worker asked,")
+		if len(got) != share || !slices.Contains(got, largest[0]) || !slices.Contains(got, largest[1]) {
+			t.Fatalf("a round of two GETs at once started bundles of %v bytes first, want the two largest %v",
+				describe(got), describe(largest[:share]))
+		}
+		for i := share; i < len(largest); i++ {
+			// The earliest GET still held ends, and its share is the round's
+			// one grant: exactly one more GET starts, and it is the next
+			// largest.
+			let(got[i-share])
+			got = started(fmt.Sprintf("once GET %d ended,", i-share+1))
+			if len(got) != i+1 || got[i] != largest[i] {
+				t.Fatalf("a round's GETs started on bundles of %v bytes, want %v",
+					describe(got), describe(largest[:i+1]))
+			}
+		}
 		for k := range gets {
 			let(k)
 		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		stagedMu.Lock()
+		defer stagedMu.Unlock()
+		if !slices.Equal(staged, largest) {
+			t.Errorf("the round made the files of bundles of %v bytes in that order, want %v",
+				describe(staged), describe(largest))
+		}
 	})
-	cache.SetFetchConcurrency(c, share)
-	done := make(chan error, 1)
-	go func() {
-		s, err := c.Sync(context.Background(), repo, linearizable)
-		if err == nil {
-			s.Release()
-		}
-		done <- err
-	}()
-	opened := func(n int) []objstore.Key {
-		t.Helper()
-		eventually(t, fmt.Sprintf("GET %d of the round", n), func() bool { return w.objects.total() >= n })
-		_, order, _ := w.objects.counts()
-		return order
-	}
-	describe := func(keys []objstore.Key) []int64 {
-		var out []int64
-		for _, k := range keys {
-			out = append(out, sizes[k])
-		}
-		return out
-	}
-	got := opened(share)
-	if len(got) != share || !slices.Contains(got, largest[0]) || !slices.Contains(got, largest[1]) {
-		t.Fatalf("a round of two GETs at once started bundles of %v bytes first, want the two largest %v",
-			describe(got), describe(largest[:share]))
-	}
-	for i := share; i < len(largest); i++ {
-		// The earliest GET still held ends, and its share is the round's one
-		// grant: exactly one more GET starts, and it is the next largest.
-		let(got[i-share])
-		got = opened(i + 1)
-		if len(got) != i+1 || got[i] != largest[i] {
-			t.Fatalf("a round's GETs started on bundles of %v bytes, want %v",
-				describe(got), describe(largest[:i+1]))
-		}
-	}
-	for k := range gets {
-		let(k)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	stagedMu.Lock()
-	defer stagedMu.Unlock()
-	if !slices.Equal(staged, largest) {
-		t.Errorf("the round made the files of bundles of %v bytes in that order, want %v",
-			describe(staged), describe(largest))
-	}
 }
-
-// grantQuiet is how long TestARoundGrantsItsGetsInItsOrder holds the largest
-// pack's worker while the round's share is not all in GETs: room for the
-// round's other workers to make their files and ask, a few milliseconds each.
-// Never a performance claim — a round that grants in its order passes however
-// long it is.
-const grantQuiet = 250 * time.Millisecond
 
 // A ROUND'S GETS NEVER WAIT ON ITS DISK: the round's share goes back when a GET
 // ends, so with every file's sync held, a round of one GET at a time still
 // downloads its next bundle — and stops at the packs it may hold in hand
 // (installsPerFetch, two), so the disk it does wait on holds its GETs back
-// rather than a growing backlog of downloads.
+// rather than a growing backlog of downloads. Where the round stops is read in
+// a synctest bubble, twice: once every goroutine of the case is durably
+// blocked (synctest.Wait) — a third GET the round was free to make has been
+// made by then — and again once the clock has moved past every timer the
+// cache arms (pastEveryTimer) and every goroutine has blocked again — a third
+// GET a pack in hand given back behind a wait on that clock let through has
+// been made by then too. On a healthy build the round, held on its syncs,
+// waits on no clock, so nothing runs in the span.
+//
+// Mutations: a round holds a pack in hand more (inHand of installsPerFetch ×
+// fetchConcurrency + 1), or gives one back at its GET's end rather than once
+// it is placed — a third GET is made while the first two wait on the disk; or
+// gives one back a minute after its GET's end — the same, once the clock has
+// moved.
 func TestARoundsGetsNeverWaitOnItsDisk(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	for range 4 {
-		w.push(t, repo, "refs/heads/main", nil)
-	}
-	held := make(chan struct{})
-	release := sync.OnceFunc(func() { close(held) })
-	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
-		<-held
-		return f.Sync()
-	}))
-	t.Cleanup(release) // before the cache's Stop, which waits for the round
-	cache.SetFetchConcurrency(c, 1)
-	done := make(chan error, 1)
-	go func() {
-		s, err := c.Sync(context.Background(), repo, linearizable)
-		if err == nil {
-			s.Release()
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		for range 4 {
+			w.push(t, repo, "refs/heads/main", nil)
 		}
-		done <- err
-	}()
-	eventually(t, "a second GET while the first bundle's syncs are held", func() bool {
-		return w.objects.total() >= 2
+		held := make(chan struct{})
+		release := sync.OnceFunc(func() { close(held) })
+		c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+			<-held
+			return f.Sync()
+		}))
+		t.Cleanup(release) // before the cache's Stop, which waits for the round
+		cache.SetFetchConcurrency(c, 1)
+		done := make(chan error, 1)
+		go func() {
+			s, err := c.Sync(context.Background(), repo, linearizable)
+			if err == nil {
+				s.Release()
+			}
+			done <- err
+		}()
+		// The round parked: its two packs in hand, one whose syncs are held
+		// and one downloaded behind it. A third GET would be a backlog.
+		parked := func(when string) {
+			t.Helper()
+			if got := w.objects.total(); got != 2 {
+				t.Errorf("with its syncs held, a round of one GET at a time made %d GETs %s, want its two packs "+
+					"in hand", got, when)
+			}
+		}
+		synctest.Wait()
+		parked("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		parked("once the clock had then moved past every timer the cache arms")
+		release()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if got := w.objects.total(); got != 4 {
+			t.Errorf("the round made %d GETs for its four packs", got)
+		}
 	})
-	// The round holds its two packs in hand now: one whose syncs are held,
-	// and one downloaded behind it. A third GET would be a backlog.
-	time.Sleep(50 * time.Millisecond)
-	if got := w.objects.total(); got != 2 {
-		t.Errorf("with its syncs held, a round of one GET at a time made %d GETs, want its two packs in hand", got)
-	}
-	release()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if got := w.objects.total(); got != 4 {
-		t.Errorf("the round made %d GETs for its four packs", got)
-	}
 }
 
 // THE NODE HOLDS TWO SHARES OF PACKS IN HAND: however many rounds run, the
@@ -438,50 +479,71 @@ func TestARoundsGetsNeverWaitOnItsDisk(t *testing.T) {
 // and waiting on the disk — are at most installsPerFetch × NodeFetches, so a
 // joining node whose disk stalls under a burst of cold syncs stops starting
 // GETs rather than piling up downloads, and syncs in flight, without end.
+// Where the rounds stop is read in a synctest bubble, twice: once every
+// goroutine of the case is durably blocked (synctest.Wait) — a GET the node
+// was free to start has been started by then — and again once the clock has
+// moved past every timer the cache arms (pastEveryTimer) and every goroutine
+// has blocked again — a GET a pack in hand given back behind a wait on that
+// clock let through has been started by then too. On a healthy build the
+// rounds, held on their syncs and their hands, wait on no clock, so nothing
+// runs in the span.
+//
+// Mutations: the node holds a pack in hand more (installsPerFetch ×
+// NodeFetches + 1), or gives one back at its GET's end rather than once it is
+// placed — a third GET is made while the first two wait on the disk; or gives
+// one back a minute after its GET's end — the same, once the clock has moved.
 func TestTheNodeHoldsTwoSharesOfPacksInHand(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	var repos []string
-	for i := range 3 {
-		repo := w.repo(t, i+1)
-		for range 4 {
-			w.push(t, repo, "refs/heads/main", nil)
-		}
-		repos = append(repos, repo)
-	}
-	held := make(chan struct{})
-	release := sync.OnceFunc(func() { close(held) })
-	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
-		<-held
-		return f.Sync()
-	}))
-	t.Cleanup(release) // before the cache's Stop, which waits for the rounds
-	cache.SetNodeFetches(c, 1)
-	cache.SetFetchConcurrency(c, 4)
-	var wg sync.WaitGroup
-	for _, repo := range repos {
-		wg.Go(func() {
-			s, err := c.Sync(context.Background(), repo, linearizable)
-			if err != nil {
-				t.Errorf("sync of %s: %v", repo, err)
-				return
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		var repos []string
+		for i := range 3 {
+			repo := w.repo(t, i+1)
+			for range 4 {
+				w.push(t, repo, "refs/heads/main", nil)
 			}
-			s.Release()
-		})
-	}
-	eventually(t, "the node's two packs in hand downloaded while their syncs are held", func() bool {
-		return w.objects.total() >= 2
+			repos = append(repos, repo)
+		}
+		held := make(chan struct{})
+		release := sync.OnceFunc(func() { close(held) })
+		c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+			<-held
+			return f.Sync()
+		}))
+		t.Cleanup(release) // before the cache's Stop, which waits for the rounds
+		cache.SetNodeFetches(c, 1)
+		cache.SetFetchConcurrency(c, 4)
+		var wg sync.WaitGroup
+		for _, repo := range repos {
+			wg.Go(func() {
+				s, err := c.Sync(context.Background(), repo, linearizable)
+				if err != nil {
+					t.Errorf("sync of %s: %v", repo, err)
+					return
+				}
+				s.Release()
+			})
+		}
+		// Every round parked: the node's two packs in hand downloaded, their
+		// syncs held, and each round waiting for a pack in hand of its own.
+		parked := func(when string) {
+			t.Helper()
+			if got := w.objects.total(); got != 2 {
+				t.Errorf("with every sync held, three rounds made %d GETs through a node of one slot %s, "+
+					"want its two packs in hand", got, when)
+			}
+		}
+		synctest.Wait()
+		parked("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		parked("once the clock had then moved past every timer the cache arms")
+		release()
+		wg.Wait()
+		if _, most := cache.InHand(c); most != 2 {
+			t.Errorf("the node held at most %d packs in hand, want its two", most)
+		}
 	})
-	time.Sleep(50 * time.Millisecond)
-	if got := w.objects.total(); got != 2 {
-		t.Errorf("with every sync held, three rounds made %d GETs through a node of one slot, "+
-			"want its two packs in hand", got)
-	}
-	release()
-	wg.Wait()
-	if _, most := cache.InHand(c); most != 2 {
-		t.Errorf("the node held at most %d packs in hand, want its two", most)
-	}
 }
 
 // A BUNDLE IS DURABLE BEFORE ANY OF IT IS PLACED: every file of a bundle is

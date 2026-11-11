@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -621,78 +622,98 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 // the installer's one share for checks in turn, as the scrub, the cache's
 // other work behind the serving, holds one slot; and every canary takes the
 // one share for canaries (TestAnInstallersCanaryWaitsBehindNoCheck holds why
-// it is a share of its own).
+// it is a share of its own). Each holder of a share keeps it for
+// pastEveryTimer of a synctest bubble's clock, which moves only once every
+// other goroutine of the case is durably blocked — so any other task's work of
+// the kind its share let through meanwhile is seen beside it, however late
+// that task ran, and so is work that would go ahead without the share once a
+// wait on that clock of its own had passed. Nothing the case runs on a
+// healthy build waits on that clock meanwhile: the world's read lane has two
+// slots, one for the one piece and one for the one canary the shares let in,
+// so no admission to it waits out its bound; and a canary's git deadline runs
+// only while its process does, when the clock cannot move.
 //
 // Mutations, each seen red: the shares as wide as the tasks
 // (installReadSlots 16) — each kind holds many at once; the canary outside a
-// share, or told as a check's — no canary takes the canaries' share.
+// share, or told as a check's — no canary takes the canaries' share; a task
+// that waits for its share a minute at most and then reads without it — it
+// reads beside the holder once the hold outlasts the minute.
 func TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	first := w.repo(t, 1)
-	p := w.pushN(t, first, 2)
-	chain := w.buildChain(t, p[:1], p[1:])
-	type share struct{ now, most, holds int }
-	var mu sync.Mutex
-	shares := map[bool]*share{false: {}, true: {}}
-	c := w.open(t, cache.InstallReadingWith(func(canary, held bool) {
-		mu.Lock()
-		s := shares[canary]
-		if !held {
-			s.now--
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		first := w.repo(t, 1)
+		p := w.pushN(t, first, 2)
+		chain := w.buildChain(t, p[:1], p[1:])
+		type share struct{ now, most, holds int }
+		var mu sync.Mutex
+		shares := map[bool]*share{false: {}, true: {}}
+		c := w.open(t, cache.InstallReadingWith(func(canary, held bool) {
+			mu.Lock()
+			s := shares[canary]
+			if !held {
+				s.now--
+				mu.Unlock()
+				return
+			}
+			s.now++
+			s.holds++
+			s.most = max(s.most, s.now)
 			mu.Unlock()
-			return
+			// Held by a sleep, never by synctest.Wait: the checks' share and
+			// the canaries' are two, so on a healthy build a holder of each
+			// can be here at once, and Wait must not be called by two
+			// goroutines of one bubble at once (testing/synctest). A sleep in
+			// a bubble ends only once every other goroutine is durably blocked
+			// and the clock has reached its end, so it holds the share at
+			// least until the case is idle — any length would do that — and
+			// pastEveryTimer long, so a task that waits for the share only so
+			// long before reading without it reads beside this holder.
+			time.Sleep(pastEveryTimer)
+		}))
+		const repos = cache.FetchConcurrency
+		ids := []string{first}
+		for n := 2; n <= repos; n++ {
+			id := w.repo(t, n)
+			var rows []gitlet.PackRow
+			for _, r := range rowsOf(p) {
+				rows = append(rows, w.storeBundle(t, w.bundle(r.GitChecksum), ""))
+			}
+			w.log.write(id, rows, map[string]string{"refs/heads/main": p[len(p)-1].oid})
+			ids = append(ids, id)
 		}
-		s.now++
-		s.holds++
-		s.most = max(s.most, s.now)
-		mu.Unlock()
-		// Held a while, so any other task's work of the kind the share let
-		// through meanwhile would be seen beside it.
-		time.Sleep(20 * time.Millisecond)
-	}))
-	const repos = cache.FetchConcurrency
-	ids := []string{first}
-	for n := 2; n <= repos; n++ {
-		id := w.repo(t, n)
-		var rows []gitlet.PackRow
-		for _, r := range rowsOf(p) {
-			rows = append(rows, w.storeBundle(t, w.bundle(r.GitChecksum), ""))
+		for _, id := range ids {
+			w.sync(t, c, id).Release()
+			w.log.publish(id, chain, nil)
+			w.sync(t, c, id).Release()
 		}
-		w.log.write(id, rows, map[string]string{"refs/heads/main": p[len(p)-1].oid})
-		ids = append(ids, id)
-	}
-	for _, id := range ids {
-		w.sync(t, c, id).Release()
-		w.log.publish(id, chain, nil)
-		w.sync(t, c, id).Release()
-	}
-	if took := cache.InstallPass(c); len(took) != repos {
-		t.Fatalf("the pass took up %d repositories, want %d at once", len(took), repos)
-	}
-	for _, id := range ids {
-		if got := layerIDs(cache.Installed(c, id)); !slices.Equal(got, layerIDs(chain)) {
-			t.Fatalf("%s holds %v, want %v", id, got, layerIDs(chain))
+		if took := cache.InstallPass(c); len(took) != repos {
+			t.Fatalf("the pass took up %d repositories, want %d at once", len(took), repos)
 		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	// Two layers a repository, each its three files' check, and one
-	// placement's canary.
-	for _, k := range []struct {
-		canary bool
-		what   string
-		least  int
-	}{{false, "check pieces", repos * 2 * 3}, {true, "canaries", repos}} {
-		s := shares[k.canary]
-		if s.holds < k.least {
-			t.Errorf("the installer's %s took their share of the read lane %d times, want every one: at least %d",
-				k.what, s.holds, k.least)
+		for _, id := range ids {
+			if got := layerIDs(cache.Installed(c, id)); !slices.Equal(got, layerIDs(chain)) {
+				t.Fatalf("%s holds %v, want %v", id, got, layerIDs(chain))
+			}
 		}
-		if s.most != 1 {
-			t.Errorf("the installer's %s held %d slots of the read lane at once, want one", k.what, s.most)
+		mu.Lock()
+		defer mu.Unlock()
+		// Two layers a repository, each its three files' check, and one
+		// placement's canary.
+		for _, k := range []struct {
+			canary bool
+			what   string
+			least  int
+		}{{false, "check pieces", repos * 2 * 3}, {true, "canaries", repos}} {
+			s := shares[k.canary]
+			if s.holds < k.least {
+				t.Errorf("the installer's %s took their share of the read lane %d times, want every one: at least %d",
+					k.what, s.holds, k.least)
+			}
+			if s.most != 1 {
+				t.Errorf("the installer's %s held %d slots of the read lane at once, want one", k.what, s.most)
+			}
 		}
-	}
+	})
 }
 
 // AN INSTALLER'S CANARY WAITS BEHIND NO CHECK: a placement's canary runs

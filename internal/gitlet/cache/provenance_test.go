@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -910,32 +911,52 @@ func TestAFileUnderCrewletIsCountedInTheBudget(t *testing.T) {
 // A CACHE NEVER STARTED BACKFILLS NOTHING, and a started one does: the backfill
 // is background work, begun by Start beside the janitor, the maintainer and the
 // scrubber — never by Open, so a cache opened to answer one command does no
-// work nobody asked for.
+// work nobody asked for. "Nothing" is read in a synctest bubble, twice, never
+// after a pause: once every goroutine of the case is durably blocked
+// (synctest.Wait) — a backfill Open began has taken its first step, a page of
+// the gap read, by then, however late it ran — and again once the clock has
+// moved past every timer the cache arms (pastEveryTimer) and every goroutine
+// has blocked again — one Open began behind a wait on that clock has taken it
+// by then too. On a healthy build a cache never started runs nothing of its
+// own, so nothing runs in the span. The started one is waited for on the
+// bubble's clock, which moves only while every goroutine of the case is
+// blocked, so its paces pass at once.
 //
-// Mutation: start the backfill in Open — the unstarted cache reads the gap.
+// Mutations: start the backfill in Open — the unstarted cache reads the gap;
+// start it from Open a minute later — it reads the gap once the clock has
+// moved.
 func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t)
-	w.sync(t, c, repo)
-	c.Stop(context.Background())
-	w.push(t, repo, "refs/heads/main", nil)
-	c = w.open(t)
-	w.sync(t, c, repo)
-	time.Sleep(200 * time.Millisecond)
-	if reads := w.log.readsOf(repo); len(reads) != 0 {
-		t.Fatalf("a cache never started read %d pages of pushes", len(reads))
-	}
-	c.Start(t.Context())
-	deadline := time.Now().Add(30 * time.Second)
-	for mustIndex(t, c, repo).GapThrough != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("a started cache's backfill never closed the gap")
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t)
+		w.sync(t, c, repo)
+		c.Stop(context.Background())
+		w.push(t, repo, "refs/heads/main", nil)
+		c = w.open(t)
+		w.sync(t, c, repo)
+		nothingRead := func(when string) {
+			t.Helper()
+			if reads := w.log.readsOf(repo); len(reads) != 0 {
+				t.Fatalf("a cache never started read %d pages of pushes %s", len(reads), when)
+			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		synctest.Wait()
+		nothingRead("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		nothingRead("once the clock had then moved past every timer the cache arms")
+		c.Start(t.Context())
+		deadline := time.Now().Add(hangDetector)
+		for mustIndex(t, c, repo).GapThrough != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("a started cache's backfill never closed the gap")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 }
 
 // A FAILING COPY HOLDS UP NO OTHER. A step that fails waits on its own

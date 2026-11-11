@@ -760,6 +760,15 @@ func TestARepairWhileARequestIsRepairedAnswersItAsItStands(t *testing.T) {
 // at once, such a request would be handed the copy half way, and its retry
 // fail as it failed; it joins the round queued behind the one running
 // instead, and is answered from the copy as it stands once that one ends.
+// Joined is read off the waiters the cache keeps (cache.Waiting), never
+// waited out: the read decides that the guarded request waits on the round
+// queued behind the held one rather than being answered at once, however late
+// its goroutine ran. It cannot decide that nothing answers the request later
+// while the held round runs — once a wait on a clock of the cache's own has
+// passed, say — since the case runs on the machine's clock, which it does not
+// move: the request is guarded because the repair stamped its write after an
+// instant the case read before it (predates), and in a synctest bubble the
+// two would be one instant.
 //
 // Mutation: answer a guarded request at once (asItStands pinning while the
 // round runs) — the request returns while the repairing round is held.
@@ -800,25 +809,38 @@ func TestAGuardedRequestWaitsForTheRoundStillRepairing(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the in-place round never reached its end")
 	}
 	if got := rebuilds(w, cache.RebuildStored); got != 1 {
 		t.Fatalf("rebuilds{reason=stored} = %d before the held round ends, want its reinstall counted", got)
 	}
 
-	// A request whose git began before that reinstall: guarded.
+	// A request whose git began before that reinstall: guarded. It waits
+	// beside the held round's own caller — on the round queued behind it —
+	// or it was answered at once.
 	second := make(chan answer, 1)
 	go func() {
 		r, err := c.Rebuild(context.Background(), s, cache.Failure{Reason: cache.RebuildCorrupt, Began: early})
 		second <- answer{r, err}
 	}()
-	select {
-	case a := <-second:
-		a.s.Release()
+	var (
+		premature answer
+		answered  bool
+	)
+	eventually(t, "the guarded request waiting on a round, or answered", func() bool {
+		select {
+		case premature = <-second:
+			answered = true
+			return true
+		default:
+		}
+		return cache.Waiting(c, h.repo) == 2
+	})
+	if answered {
+		premature.s.Release()
 		t.Fatalf("the guarded request was answered (%s, %v) while the round repairing the copy still ran",
-			a.s.Kind, a.err)
-	case <-time.After(200 * time.Millisecond):
+			premature.s.Kind, premature.err)
 	}
 	close(release)
 	for _, tc := range []struct {
@@ -843,7 +865,7 @@ func TestAGuardedRequestWaitsForTheRoundStillRepairing(t *testing.T) {
 				t.Errorf("%s request's copy still fails: %v", tc.name, err)
 			}
 			a.s.Release()
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 			t.Fatalf("%s request was never answered", tc.name)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -243,32 +244,25 @@ func (w *syncWorld) layerCount(outcome string) uint64 {
 	return n
 }
 
-// timedStore is the world's store as a case watches it: every object's read
-// begun only after a first byte of delay, when each began and ended (its
-// reader closed: the object landed), and how many reads of each are in
-// flight at once and at most — and, for a key a case holds, every read held
-// until the case lets it go.
-type timedStore struct {
+// flightStore is the world's store as a case watches it: how many reads of
+// each object are in flight at once and at most — a read in flight from its
+// open until its reader is closed (the object landed) — and, for a key a case
+// holds, every read held until the case lets it go.
+type flightStore struct {
 	inner cache.Objects
-	delay time.Duration
 
 	mu             sync.Mutex
-	opened, landed map[objstore.Key]time.Time
 	inFlight, most map[objstore.Key]int
 	hold           map[objstore.Key]chan struct{}
 }
 
-func newTimedStore(inner cache.Objects, delay time.Duration) *timedStore {
-	return &timedStore{inner: inner, delay: delay, opened: map[objstore.Key]time.Time{},
-		landed: map[objstore.Key]time.Time{}, inFlight: map[objstore.Key]int{}, most: map[objstore.Key]int{},
+func newFlightStore(inner cache.Objects) *flightStore {
+	return &flightStore{inner: inner, inFlight: map[objstore.Key]int{}, most: map[objstore.Key]int{},
 		hold: map[objstore.Key]chan struct{}{}}
 }
 
-func (s *timedStore) Open(ctx context.Context, obj objstore.Object) (io.ReadCloser, error) {
+func (s *flightStore) Open(ctx context.Context, obj objstore.Object) (io.ReadCloser, error) {
 	s.mu.Lock()
-	if _, ok := s.opened[obj.Key]; !ok {
-		s.opened[obj.Key] = time.Now()
-	}
 	s.inFlight[obj.Key]++
 	s.most[obj.Key] = max(s.most[obj.Key], s.inFlight[obj.Key])
 	hold := s.hold[obj.Key]
@@ -277,27 +271,13 @@ func (s *timedStore) Open(ctx context.Context, obj objstore.Object) (io.ReadClos
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.inFlight[obj.Key]--
-		s.landed[obj.Key] = time.Now()
 	})
-	wait := func(ch <-chan struct{}) error {
+	if hold != nil {
 		select {
-		case <-ch:
-			return nil
+		case <-hold:
 		case <-ctx.Done():
 			done()
-			return context.Cause(ctx)
-		}
-	}
-	if hold != nil {
-		if err := wait(hold); err != nil {
-			return nil, err
-		}
-	}
-	if s.delay > 0 {
-		timer := make(chan struct{})
-		time.AfterFunc(s.delay, func() { close(timer) })
-		if err := wait(timer); err != nil {
-			return nil, err
+			return nil, context.Cause(ctx)
 		}
 	}
 	rc, err := s.inner.Open(ctx, obj)
@@ -309,7 +289,7 @@ func (s *timedStore) Open(ctx context.Context, obj objstore.Object) (io.ReadClos
 }
 
 // holdKey holds every read of key until the answer is called.
-func (s *timedStore) holdKey(key objstore.Key) func() {
+func (s *flightStore) holdKey(key objstore.Key) func() {
 	ch := make(chan struct{})
 	s.mu.Lock()
 	s.hold[key] = ch
@@ -323,33 +303,10 @@ func (s *timedStore) holdKey(key objstore.Key) func() {
 }
 
 // flight is how many reads of key are in flight now, and the most at once.
-func (s *timedStore) flight(key objstore.Key) (now, most int) {
+func (s *flightStore) flight(key objstore.Key) (now, most int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inFlight[key], s.most[key]
-}
-
-// times is when the read of each of keys first began and last landed: the
-// earliest and the latest of either across them.
-func (s *timedStore) times(keys []objstore.Key) (firstOpened, lastOpened, firstLanded, lastLanded time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, k := range keys {
-		o, l := s.opened[k], s.landed[k]
-		if firstOpened.IsZero() || o.Before(firstOpened) {
-			firstOpened = o
-		}
-		if o.After(lastOpened) {
-			lastOpened = o
-		}
-		if firstLanded.IsZero() || l.Before(firstLanded) {
-			firstLanded = l
-		}
-		if l.After(lastLanded) {
-			lastLanded = l
-		}
-	}
-	return firstOpened, lastOpened, firstLanded, lastLanded
 }
 
 // keysOf is the stored objects of rows and of a chain's parts.
@@ -1037,38 +994,68 @@ func TestALayerIsInstalledOnlyOverItsOwnPacks(t *testing.T) {
 // joins the round's one download queue behind its packs, so a layer's GET
 // begins the moment a slot the packs no longer need frees — before the
 // round's last pack has landed — and no layer waits for the one below it:
-// at a first byte of 200 ms, a chain of three costs the round no first byte
-// in series.
+// at S3's first byte, a chain of three costs the round no first byte in
+// series. Here one pack's GET and every layer part's are held open, and the
+// round is read once every goroutine of the case is durably blocked
+// (synctest.Wait, in a bubble): every layer's GET has begun beside the pack
+// still downloading, all three at once — an order and a count the store
+// records, never two instants a clock stamped.
 //
 // Mutation: fetch the layers after the packs, one after another (install's
 // layer loop moved past workers.Wait, each layer's parts waited for in turn)
-// — the first layer's GET begins after the last pack landed, and no two
-// layers' GETs overlap.
+// — with a pack's GET held open no layer's begins, and with the root's held
+// no layer above it begins.
 func TestAFullRoundFetchesItsLayersBesideItsPacks(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	// Twenty packs: a round's share of sixteen GETs, then four more beside
-	// the three layers' — so the layers' begin before the packs' last ends.
-	p := w.pushN(t, repo, 20)
-	chain := w.buildChain(t, p[:6], p[6:12], p[12:18])
-	w.log.publish(repo, chain, nil)
-	store := newTimedStore(w.objects, 200*time.Millisecond)
-	c := w.open(t, func(o *cache.Options) { o.Objects = store })
-	w.sync(t, c, repo).Release()
-	if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
-		t.Fatalf("the round's answer holds %v, want %v", got, layerIDs(chain))
-	}
-	_, _, _, lastPack := store.times(keysOf(rowsOf(p)))
-	firstLayer, lastLayer, firstLayerLanded, _ := store.times(keysOf(nil, chain...))
-	if !firstLayer.Before(lastPack) {
-		t.Errorf("the first layer's GET began %v after the round's last pack landed: a layer waits for no pack's "+
-			"download, only for a slot", firstLayer.Sub(lastPack))
-	}
-	if !lastLayer.Before(firstLayerLanded) {
-		t.Errorf("the last layer's GET began %v after the first layer landed: the layers' GETs overlap, none "+
-			"waiting for the one below it", lastLayer.Sub(firstLayerLanded))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		// Twenty packs: a round's share of sixteen GETs, then four more beside
+		// the three layers'.
+		p := w.pushN(t, repo, 20)
+		chain := w.buildChain(t, p[:6], p[6:12], p[12:18])
+		w.log.publish(repo, chain, nil)
+		store := newFlightStore(w.objects)
+		c := w.open(t, func(o *cache.Options) { o.Objects = store })
+		pack, parts := p[0].row.Object, keysOf(nil, chain...)
+		var holds []func()
+		for _, k := range append([]objstore.Key{pack}, parts...) {
+			holds = append(holds, store.holdKey(k))
+		}
+		release := func() {
+			for _, let := range holds {
+				let()
+			}
+		}
+		t.Cleanup(release) // before the cache's Stop, which waits for the round
+		synced := make(chan error, 1)
+		go func() {
+			s, err := c.Sync(context.Background(), repo, linearizable)
+			if err == nil {
+				s.Release()
+			}
+			synced <- err
+		}()
+		// The round parked: every GET it was free to begin begun.
+		synctest.Wait()
+		if now, _ := store.flight(pack); now != 1 {
+			t.Fatalf("the held pack has %d GETs in flight, want its one", now)
+		}
+		for i, k := range parts {
+			if now, _ := store.flight(k); now != 1 {
+				t.Errorf("part %d of %d of the chain has %d GETs in flight beside a pack still downloading, want "+
+					"its one: a layer waits for no pack's download, only for a slot, and none for the one below it",
+					i+1, len(parts), now)
+			}
+		}
+		release()
+		if err := <-synced; err != nil {
+			t.Fatal(err)
+		}
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
+			t.Fatalf("the round's answer holds %v, want %v", got, layerIDs(chain))
+		}
+	})
 }
 
 // THE INSTALLER KEEPS HALF THE NODE'S FETCHES, ACROSS REPOSITORIES: with
@@ -1076,96 +1063,117 @@ func TestAFullRoundFetchesItsLayersBesideItsPacks(t *testing.T) {
 // parts in flight from its first pass — never one repository at a time, and
 // never more than the share — and a round started meanwhile is granted its
 // GETs from the node's other half; and one repository's chain is placed by
-// one task, once.
+// one task, once. The parts in flight are read in a synctest bubble, twice
+// each time: once every goroutine of the case is durably blocked
+// (synctest.Wait) — a part the installer was free to fetch has been asked for
+// by then, and the share is read exactly rather than polled for or waited out
+// — and again once the clock has moved past every timer the cache arms
+// (pastEveryTimer) and every goroutine has blocked again — a part the
+// installer would fetch past its share only once a wait on that clock of its
+// own had passed has been asked for by then too. The cache is not started, so
+// its installer's loop arms no wake, and on a healthy build the pass, held on
+// its part, waits on no clock: nothing runs in the spans.
 //
-// Mutation: install one repository at a time (the installer's tasks bound at
-// one) — the parts in flight stay at one.
+// Mutations: install one repository at a time (the installer's pass taking up
+// one task) — the parts in flight stay at one; a task more than the share, no
+// part held to the share — seventeen parts in flight; a task more than the
+// share and the share one wider a minute after the installer is made — the
+// same, once the clock has moved.
 func TestTheInstallerKeepsHalfTheNodesFetchesAcrossRepositories(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	first := w.repo(t, 1)
-	p := w.pushN(t, first, 3)
-	chain := w.buildChain(t, p[:1], p[1:2])
-	store := newTimedStore(w.objects, 0)
-	c := w.open(t, func(o *cache.Options) { o.Objects = store })
-	const repos = 64
-	ids := []string{first}
-	for n := 2; n <= repos; n++ {
-		id := w.repo(t, n)
-		// The same packs under rows of its own, so one published chain
-		// serves every repository.
-		var rows []gitlet.PackRow
-		for _, r := range rowsOf(p) {
-			rows = append(rows, w.storeBundle(t, w.bundle(r.GitChecksum), ""))
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		first := w.repo(t, 1)
+		p := w.pushN(t, first, 3)
+		chain := w.buildChain(t, p[:1], p[1:2])
+		store := newFlightStore(w.objects)
+		c := w.open(t, func(o *cache.Options) { o.Objects = store })
+		const repos = 64
+		ids := []string{first}
+		for n := 2; n <= repos; n++ {
+			id := w.repo(t, n)
+			// The same packs under rows of its own, so one published chain
+			// serves every repository.
+			var rows []gitlet.PackRow
+			for _, r := range rowsOf(p) {
+				rows = append(rows, w.storeBundle(t, w.bundle(r.GitChecksum), ""))
+			}
+			w.log.write(id, rows, map[string]string{"refs/heads/main": p[len(p)-1].oid})
+			ids = append(ids, id)
 		}
-		w.log.write(id, rows, map[string]string{"refs/heads/main": p[len(p)-1].oid})
-		ids = append(ids, id)
-	}
-	for _, id := range ids {
-		w.sync(t, c, id).Release()
-		w.log.publish(id, chain, nil)
-		w.sync(t, c, id).Release()
-	}
-	if q := cache.InstallQueued(c); len(q) != repos {
-		t.Fatalf("the installer holds %d repositories queued, want %d", len(q), repos)
-	}
-	share := cache.FetchConcurrency
-	if got := cache.InstallerShare(c); got != share {
-		t.Fatalf("the installer's share is %d, want a round's, %d", got, share)
-	}
+		for _, id := range ids {
+			w.sync(t, c, id).Release()
+			w.log.publish(id, chain, nil)
+			w.sync(t, c, id).Release()
+		}
+		if q := cache.InstallQueued(c); len(q) != repos {
+			t.Fatalf("the installer holds %d repositories queued, want %d", len(q), repos)
+		}
+		share := cache.FetchConcurrency
+		if got := cache.InstallerShare(c); got != share {
+			t.Fatalf("the installer's share is %d, want a round's, %d", got, share)
+		}
 
-	root := chain[0].Parts[0].Object
-	release := store.holdKey(root)
-	pass := make(chan []string, 1)
-	go func() { pass <- cache.InstallPass(c) }()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		now, _ := store.flight(root)
-		if now == share {
-			break
+		root := chain[0].Parts[0].Object
+		release := store.holdKey(root)
+		t.Cleanup(release) // before the cache's Stop, which waits for the pass
+		pass := make(chan []string, 1)
+		go func() { pass <- cache.InstallPass(c) }()
+		// The pass's tasks parked, each on the held part or behind the share.
+		synctest.Wait()
+		if now, _ := store.flight(root); now != share {
+			t.Fatalf("the installer has %d parts in flight, want its share, %d, at once", now, share)
 		}
-		if time.Now().After(deadline) {
-			release()
-			t.Fatalf("the installer has %d parts in flight after 30 s, want its share, %d, at once", now, share)
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		if now, most := store.flight(root); now != share || most != share {
+			t.Fatalf("once the clock had moved past every timer the cache arms, the installer has %d parts in "+
+				"flight (at most %d), want its share, %d, and never more", now, most, share)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	// A ROUND MEANWHILE: a cold copy's packs, from the node's other half.
-	other := w.repo(t, repos+1)
-	w.pushN(t, other, 2)
-	w.sync(t, c, other).Release()
-	time.Sleep(50 * time.Millisecond)
-	if now, most := store.flight(root); now != share || most != share {
-		t.Errorf("the installer has %d parts in flight (at most %d), want its share, %d, and never more", now,
-			most, share)
-	}
-	release()
-	took := <-pass
-	for len(cache.InstallQueued(c)) > 0 {
-		took = append(took, cache.InstallPass(c)...)
-	}
-	slices.Sort(took)
-	want := slices.Sorted(slices.Values(ids))
-	if !slices.Equal(took, want) {
-		t.Errorf("the installer took up %d repositories, want each of the %d once", len(took), len(want))
-	}
-	for _, id := range ids {
-		if got := layerIDs(cache.Installed(c, id)); !slices.Equal(got, layerIDs(chain)) {
-			t.Errorf("%s holds %v, want %v", id, got, layerIDs(chain))
+		// A ROUND MEANWHILE: a cold copy's packs, from the node's other half.
+		other := w.repo(t, repos+1)
+		w.pushN(t, other, 2)
+		w.sync(t, c, other).Release()
+		inFlight := func(when string) {
+			t.Helper()
+			if now, most := store.flight(root); now != share || most != share {
+				t.Errorf("with a round meanwhile, %s, the installer has %d parts in flight (at most %d), want "+
+					"its share, %d, and never more", when, now, most, share)
+			}
 		}
-	}
-	if _, most := store.flight(root); most > share {
-		t.Errorf("the installer had %d of one part in flight at once, past its share, %d", most, share)
-	}
-	swaps := map[string]int{}
-	for _, line := range w.logs.lines(t, "code_cache_swapped") {
-		swaps[line["repo"].(string)]++
-	}
-	for _, id := range ids {
-		if swaps[id] != 1 {
-			t.Errorf("%s's chain was placed by %d swaps, want one", id, swaps[id])
+		synctest.Wait()
+		inFlight("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		inFlight("once the clock had then moved past every timer the cache arms")
+		release()
+		took := <-pass
+		for len(cache.InstallQueued(c)) > 0 {
+			took = append(took, cache.InstallPass(c)...)
 		}
-	}
+		slices.Sort(took)
+		want := slices.Sorted(slices.Values(ids))
+		if !slices.Equal(took, want) {
+			t.Errorf("the installer took up %d repositories, want each of the %d once", len(took), len(want))
+		}
+		for _, id := range ids {
+			if got := layerIDs(cache.Installed(c, id)); !slices.Equal(got, layerIDs(chain)) {
+				t.Errorf("%s holds %v, want %v", id, got, layerIDs(chain))
+			}
+		}
+		if _, most := store.flight(root); most > share {
+			t.Errorf("the installer had %d of one part in flight at once, past its share, %d", most, share)
+		}
+		swaps := map[string]int{}
+		for _, line := range w.logs.lines(t, "code_cache_swapped") {
+			swaps[line["repo"].(string)]++
+		}
+		for _, id := range ids {
+			if swaps[id] != 1 {
+				t.Errorf("%s's chain was placed by %d swaps, want one", id, swaps[id])
+			}
+		}
+	})
 }
 
 // A ROUND WRITES NO INDEX BESIDE A CHAIN (incidental (b)): a full round past

@@ -34,6 +34,27 @@ import (
 // case here is about who waits for a transfer slot.
 var suiteShare = gitproc.Share{Class: gitproc.ShareMachine, Principal: "suite"}
 
+// pastEveryTimer is how far a case in a synctest bubble moves the clock before
+// it reads, a second time, that something did NOT happen. The first read is
+// once synctest.Wait returns: every other goroutine of the case is durably
+// blocked by then, but one asleep on the bubble's clock is durably blocked
+// too, so an event the code would make only after a wait on that clock of its
+// own — a grace, a pace, a retry — has not been made yet, however wrong it
+// is. The case then sleeps pastEveryTimer and waits again: the sleep ends
+// only once the clock has reached its end, every timer due before then fired
+// and what each woke run until it blocked, and the second Wait lets run what
+// woke at that very instant. So the second read decides what the first
+// cannot.
+//
+// Past the longest timer the cache arms, a day — the scrubber's wake at a
+// copy's interval (ScrubInterval) and the backfill's at its next horizon
+// (HorizonEvery) — so a bug that delays its event by any wait of the cache's
+// own is past it too. It costs a bubble nothing, since the clock jumps from
+// one timer to the next; and a case moves it only where nothing the span
+// fires starts or ends any work on a healthy build, which each such case
+// says.
+const pastEveryTimer = max(cache.ScrubInterval, cache.HorizonEvery) + time.Second
+
 // world is one cache directory and the pool that serves it.
 type world struct {
 	layout cache.Layout
@@ -270,23 +291,60 @@ func (n noObjects) Open(context.Context, objstore.Object) (io.ReadCloser, error)
 type logs struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
-	// slow is a message whose lines are written a quarter of a second late,
-	// so a case can tell a line logged before what it watches from one logged
-	// after; set before the cache that logs here is opened.
-	slow string
+	// logging, when set, is told each line's message as the line is logged,
+	// on the goroutine logging it and before the line is written: a case
+	// holds a line there to tell one logged before what it watches from one
+	// logged after. Set before the cache that logs here is opened.
+	//
+	// NO LOCK OF THE LOGGER'S IS HELD WHILE IT RUNS. It is told by the
+	// logger's own handler (heard), ahead of the JSON handler, and never from
+	// Write: the JSON handler calls Write holding a lock that every logger
+	// made from it shares, so a line held there would hold every other line
+	// of the cache behind it, and a goroutine queued on a sync.Mutex is not
+	// durably blocked — the hold's synctest.Wait would never return, and the
+	// case would hang to the binary's timeout rather than fail.
+	//
+	// A hook that holds a line waits with synctest.Wait, never on a timer,
+	// which nothing fires once the case has returned. It holds only a line
+	// its code logs with no lock held that another goroutine of the case may
+	// take — one queued on that lock would keep the Wait from returning just
+	// the same — and holds it on one goroutine at a time: two Waits at once
+	// panic.
+	logging func(msg string)
 }
 
 func (l *logs) Write(p []byte) (int, error) {
-	if l.slow != "" && bytes.Contains(p, []byte(`"msg":"`+l.slow+`"`)) {
-		time.Sleep(250 * time.Millisecond)
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.Write(p)
 }
 
+// logger logs every level into l, telling l.logging of each line first.
 func (l *logs) logger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return slog.New(heard{slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelDebug}), l})
+}
+
+// heard is the handler of a logger logs made: the JSON handler over logs,
+// which each line reaches only once logs.logging has been told of it. A
+// logger made from it with With or WithGroup tells logging too.
+type heard struct {
+	slog.Handler
+	l *logs
+}
+
+func (h heard) Handle(ctx context.Context, r slog.Record) error {
+	if h.l.logging != nil {
+		h.l.logging(r.Message)
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h heard) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return heard{h.Handler.WithAttrs(attrs), h.l}
+}
+
+func (h heard) WithGroup(name string) slog.Handler {
+	return heard{h.Handler.WithGroup(name), h.l}
 }
 
 // lines is every logged line whose message is msg, decoded.
