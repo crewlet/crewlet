@@ -14,6 +14,7 @@ import type {
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
+  AccessLaneStatus,
   AccessObserved,
   AccessOptions,
   AccessSeatLane,
@@ -503,27 +504,21 @@ export interface Status {
 export function statusOf(lane: Lane, saved: AccessSeatLane, drafted: boolean): Status {
   if (drafted && saved.status !== "departed")
     return { label: "Not saved", tone: "info", outline: true };
-  switch (saved.status) {
-    case "departed":
-      return { label: "Agent left", tone: "warning" };
-    case "syncing":
-      return { label: "Syncing", tone: "info", busy: true };
-    case "refused":
-      return { label: "Refused", tone: "danger" };
-    case "changed_at_vendor":
-      return { label: `Changed at ${lane.name}`, tone: "warning" };
-    case "needs_you":
-      return { label: "Needs you", tone: "warning" };
-    case "next_sync":
-      return { label: "Next sync", tone: "info" };
-    case "in_sync":
-      return { label: "In sync", tone: "success" };
-    case "off_account_kept":
-      return { label: "Off, account kept", tone: "neutral" };
-    case "off":
-      return { label: "Off", tone: "neutral", outline: true };
-  }
+  return STATUS_WORDS[saved.status](lane);
 }
+
+/** Each engine status in the tab's words, keyed by the contract's set so a new one is worded here. */
+const STATUS_WORDS: Record<AccessLaneStatus, (lane: Lane) => Status> = {
+  departed: () => ({ label: "Agent left", tone: "warning" }),
+  syncing: () => ({ label: "Syncing", tone: "info", busy: true }),
+  refused: () => ({ label: "Refused", tone: "danger" }),
+  changed_at_vendor: (lane) => ({ label: `Changed at ${lane.name}`, tone: "warning" }),
+  needs_you: () => ({ label: "Needs you", tone: "warning" }),
+  next_sync: () => ({ label: "Next sync", tone: "info" }),
+  in_sync: () => ({ label: "In sync", tone: "success" }),
+  off_account_kept: () => ({ label: "Off, account kept", tone: "neutral" }),
+  off: () => ({ label: "Off", tone: "neutral", outline: true }),
+};
 
 /** Whether a lane's status needs a person's attention. */
 export function needsAttention(status: Status): boolean {

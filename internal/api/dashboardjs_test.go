@@ -2200,7 +2200,7 @@ const (
 	// agent's two access clocks, the note on what its GitHub App holds past its
 	// grant, the engine's status word and Ask Crewlet taking images only where
 	// deep work reads them, merged on top of it, took it to 5720.3 KiB
-	// (5,857,605 bytes, +1,401, all script): 5721 KiB.
+	// (5,857,555 bytes, +1,351, all script): 5721 KiB.
 	treeBudget = 5<<20 + 601<<10
 )
 

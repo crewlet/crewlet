@@ -832,18 +832,25 @@ test("where the operator writes the document, only what writes a revision is hid
 
 // TWO CLOCKS IN THE DETAILS: when a pass last read the vendor (Check now's dry
 // run included) and when a sync last applied the setting.
+// AT A STATED INSTANT, so the shell's clock and the fixture read one time.
 test("an agent's details say when it was checked and when its access was last applied", () => {
-  const now = Date.now();
-  draw(
-    datadogAnswer({
-      observed_at: new Date(now - 60_000).toISOString(),
-      sync: { at: new Date(now - 10 * 60_000).toISOString(), outcome: "ok", steps: [] },
-    }),
-  );
-  details("SRE");
-  const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
-  expect(within(list).getByText("Sync")).toBeTruthy();
-  expect(list.textContent).toContain("Checked 1m ago, last applied 10m ago");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const now = Date.parse("2026-11-10T12:00:00Z");
+    vi.setSystemTime(now);
+    draw(
+      datadogAnswer({
+        observed_at: new Date(now - 60_000).toISOString(),
+        sync: { at: new Date(now - 10 * 60_000).toISOString(), outcome: "ok", steps: [] },
+      }),
+    );
+    details("SRE");
+    const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
+    expect(within(list).getByText("Sync")).toBeTruthy();
+    expect(list.textContent).toContain("Checked 1m ago, last applied 10m ago");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // THE APP'S PERMISSIONS ARE A CEILING TOKENS ARE NARROWED FROM, so one the
