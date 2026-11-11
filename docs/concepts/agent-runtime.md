@@ -682,8 +682,11 @@ run](code-sandbox.md#notes-to-a-running-run)), or the review that judges its wor
 reads it, and an executor parked on a question reads it once the question is
 answered. The turn's own record says what became of it (`agent_turn_steered`:
 `delivered` where it was read — the round, or the kind of step inside the launch —
-or `expired` when the turn ended first). See [Turn Engine § Steering a running
-turn](turn-engine.md#steering-a-running-turn).
+and where a later launch's brief told it again after a step that took it never
+handed it over; `expired` when the turn ended first; `missed` where a step took
+it for a reader that never had it and no later launch told it; or `unconfirmed`
+where the executor was handed it and never confirmed reading it). See [Turn
+Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown
 

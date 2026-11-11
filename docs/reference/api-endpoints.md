@@ -7060,7 +7060,12 @@ the turn took the note, and `reads` says when it reads it — `next_step`, or
 it once the question is answered. What became of it is recorded as
 `agent_turn_steered` — `delivered` naming the phase and round that read it, the
 kind of step (`boundary`) and, for a read by the executor in its box, its
-launch (`launch_id`); or `expired` if the turn ended first. `note_id` is the request's
+launch (`launch_id`), with `retold` where a later launch's brief told it again
+after a step that took it never handed it over; `expired` if the turn ended
+first; `missed`, at the step that took it, where that step's reader never had
+it (a take whose answer was lost) and no later launch told it; or
+`unconfirmed`, at the job, where the executor's harness was handed it and never
+confirmed reading it. `note_id` is the request's
 own id, so a retry of one request is one note however often it is sent.
 
 **Where it goes**: a turn whose executor has launched in its box keeps its

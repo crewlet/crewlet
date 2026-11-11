@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARunIsSteerableAfterItsLaunchingNodeRestarts`, `internal/engine.TestATakenNoteIsRecordedDeliveredOnce`, `internal/engine.TestTheReviewerOpensWithANoteTheRunTook`, `internal/engine.TestAParkedRunHoldsItsNotesForWhatResumesIt`, `internal/engine.TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob`, `internal/engine.TestARunsRecordIsASteerSource`, `internal/engine.TestAnEndingExpiresWaitingNotesOnceUnderStableIDs`, `internal/engine.TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator`, `internal/engine.TestAnOfferRacingTheLaunchIsNeverAnsweredClosed`, `internal/engine.TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord`, `internal/engine.TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten`, `internal/engine.TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding`, `internal/engine.TestAResumedTurnCarriesItsNotesInTheOrderRead`, `internal/sandbox.TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestPendingStoreContract`, `internal/agent/builtin.TestARunRecordDecidesWithoutAScatter`, `internal/agent/builtin.TestAuthorityIsDecidedOnTheAnchoredSeat`, `internal/api/mcpbridge.TestSteerTakeIsServedUnlistedAndNeverRecorded`, `internal/sandbox/executor.TestARealBoxsHooksReachTheBridgeTool`, `internal/sandbox/executor.TestThePluginAdmitsNotesAtTheRunsNextStep`, `internal/sandbox/executor.TestThePluginReadsTheBridgesOwnNotesRoute`, `internal/sandbox/executor.TestARunCancelsTheNotesItsSessionNeverDelivered`, `internal/sandbox.TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad`, `internal/sandbox.TestEveryStampOfACaptureStatesTheNotesItsSessionHolds`, `internal/engine.TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered`, `internal/engine.TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver`, `internal/agent/runner.TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead`, `internal/agent/runner.TestTheExecuteRecordListsItsRoundsReads`, `internal/engine.TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode`, `internal/engine.TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered`, `internal/agent/runner.TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`, `internal/agent/runner.TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt`
+- **Enforced-by:** `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARunIsSteerableAfterItsLaunchingNodeRestarts`, `internal/engine.TestATakenNoteIsRecordedDeliveredOnce`, `internal/engine.TestTheReviewerOpensWithANoteTheRunTook`, `internal/engine.TestAParkedRunHoldsItsNotesForWhatResumesIt`, `internal/engine.TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob`, `internal/engine.TestARunsRecordIsASteerSource`, `internal/engine.TestAnEndingExpiresWaitingNotesOnceUnderStableIDs`, `internal/engine.TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator`, `internal/engine.TestAnOfferRacingTheLaunchIsNeverAnsweredClosed`, `internal/engine.TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord`, `internal/engine.TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten`, `internal/engine.TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding`, `internal/engine.TestAResumedTurnCarriesItsNotesInTheOrderRead`, `internal/sandbox.TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestPendingStoreContract`, `internal/agent/builtin.TestARunRecordDecidesWithoutAScatter`, `internal/agent/builtin.TestAuthorityIsDecidedOnTheAnchoredSeat`, `internal/api/mcpbridge.TestSteerTakeIsServedUnlistedAndNeverRecorded`, `internal/sandbox/executor.TestARealBoxsHooksReachTheBridgeTool`, `internal/sandbox/executor.TestThePluginAdmitsNotesAtTheRunsNextStep`, `internal/sandbox/executor.TestThePluginReadsTheBridgesOwnNotesRoute`, `internal/sandbox/executor.TestARunCancelsTheNotesItsSessionNeverDelivered`, `internal/sandbox.TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad`, `internal/sandbox.TestEveryStampOfACaptureStatesTheNotesItsSessionHolds`, `internal/engine.TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered`, `internal/engine.TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver`, `internal/agent/runner.TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead`, `internal/agent/runner.TestTheExecuteRecordListsItsRoundsReads`, `internal/engine.TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode`, `internal/engine.TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered`, `internal/agent/runner.TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`, `internal/agent/runner.TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt`, `internal/engine.TestAnEndingReportsEachNoteAsItsRecordKnowsIt`, `internal/sandbox.TestEachNoteEndsAsItsRecordKnowsIt`, `internal/agent/steer.TestARecordIsDeliveredExactlyWhereItWasRead`, `internal/events/types.TestTheDashboardNamesEverySteerOutcome`, `internal/engine.TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain`, `internal/engine.TestAMarkedNoteIsToldAgainByTheNextLaunchThroughTheRealTurn`, `internal/agent/runner.TestALaunchNamesEveryMarkedNoteItsBriefsTellAgain`, `internal/agent/runner.TestAContinuationOfAJobCutOffAfterTellingAMarkedNoteAgainIsStillToldIt`
 - **Measured:** on Claude Code 2.1.263 and 2.1.310, against stub APIs: a hook's tool call that fails makes the CLI drop and re-initialise the run's whole MCP server, telling the model its tools are still connecting — so a hook's call is never answered with an error; a hook's timeout is in seconds, and at it the CLI cancels the call and discards a late answer — so the engine answers within half of it; additional context longer than 10,000 UTF-16 code units is moved to a file the model is shown a 2 KB preview of — so one answer carries at most 9,000. On OpenCode 2.0.32 and 2.1.4, a second admission under an id the session already holds is answered with the first — so a note's id is derived from the job and the note; a note admitted during a tool call, or during the final model call, is read in the same execution, and on 2.1.4 one admitted after the execution settles, with `resume: false`, starts nothing — so a note sent after a run's last step waits on the record for the review — but stays pending in the session, across the server's restart, and is handed to the next run in that session ahead of its prompt unless it is cancelled (`session.inbox.cancel`) — so a run's script cancels every admission OpenCode never delivered once the run has ended. A sealed note is at most about 11 KiB, and a turn takes at most ten.
 - **Cost-when-tried:** before this, a turn whose executor was its coding CLI's own run answered every note `steer_unsupported`, and a turn parked on its run answered `closed`: a person could not correct an executor at all, and a correction sent while a run worked never reached the reviewer that judged the work.
 - **Tag-status:** unreleased
@@ -177,9 +177,9 @@ review concludes — its last round asked for no tool, or the store stayed silen
 past the thirty seconds — leaves that review without the note: where the turn
 goes on, the relaunch's brief settles it, or the mark the segment's end makes
 tells it to a launch that continues the session; where the turn ends there,
-nothing reads it. A note a settle marks has no `delivered` record: the step
-that recorded it never handed it over, and the review reads it carried, which
-records nothing anew.
+nothing reads it. A note a settle marks has no `delivered` record of the step
+that recorded it, which never handed it over, and the review reads it carried,
+which records nothing anew. Its run's ending reports it instead (below).
 
 **Mid-upgrade.** Both fields are wire-additive (`omitempty`), and an older build
 keeps them in the read's `Extra` through every write it makes. An older build's
@@ -227,11 +227,108 @@ served note may also be in no session at all: "may already show" is the most
 the record can say, and it says it.
 
 **What it does not reach.** A note a bridge of an older build served carries no
-mark, and a continuation tells it as one the turn had not read, as before. And
-a served note still waiting when the turn ends is reported `expired`, as every
-note no job's read recorded is, though the session may have read it.
+mark, and a continuation tells it as one the turn had not read, as before. A
+served note still waiting when the turn ends is reported `unconfirmed`, never
+`expired` (below).
 
 **Mid-upgrade.** The field is wire-additive (`omitempty`), and an older build
 keeps it in the note's `Extra` through every write it makes. An older build's
 poll serves without the mark, and reads a served note as waiting, as before. No
 state-log record and no `coord.ProtocolVersion` change.
+
+## Amendment: a note's end is reported as its record knows it
+
+A run's ending reported what became of a note in one word, and only of the
+notes no job ran with: `expired`, for one still waiting or read into the brief
+of a job that never started. A note a take recorded read whose answer was lost,
+marked unanswered, got no report at all: no step reported reading it, and the
+ending did not report it either, though the brief of every later launch tells
+it again and a launch whose job started had handed it to its harness. And a
+served note its harness never confirmed was reported `expired`, though its
+session may hold it.
+
+**A launch records the marked notes its brief tells again.** The runner names
+every read it carries marked unanswered as the brief is built
+(`runner.AgentRunRequest.Retold`), and every brief a launch may hand its run
+tells each of them again: the fresh one among every note the turn has read, and
+a continued session, kept or the job's own copy in its box, from the first such
+read on. The launch's write records each one the record still marks read by
+the job it opens, told again (`sandbox.PendingRun.RetoldNotes`,
+`sandbox.NoteRead.Retold`). Who read it changes to that job's brief, unmarked;
+where it sits among the reads stays the marked take's own place
+(`sandbox.NoteRead.Order`), as a lost take's note is recorded (the first
+amendment above), so every later brief tells it where the record first read
+it. That job's session holds it from its brief, so a capture of it counts it
+held, and a continuation of the job cut off is told it with every note the turn
+has read, as a cut-off session always is.
+
+**The ending reports every note no step reported reading, as the record knows
+it** (`sandbox.PendingRun.EndedNotes`, `sandbox.CoordinatorOptions.SteersEnded`,
+the engine's `runSteers.ended`), in this order of precedence:
+
+- `delivered`, told again (`types.AgentTurnSteered.Retold`): read by a later
+  launch's brief that told it again, where that job started, at that brief
+  (`boundary: brief`, its `launch_id` and iteration). The step that took it
+  first never handed it over, and nothing reported the telling; its harness
+  was handed it in its brief, under the header of notes it may already show.
+- `unconfirmed` (`types.SteerUnconfirmed`): served to a job's harness and read
+  by no step that handed it over (still waiting, or read only by a take marked
+  unanswered or by the brief of a job that never started), at that job
+  (`boundary: step`, its `launch_id`, and the iteration the record keeps for it
+  where it is still the record's job). Ahead of the two below, since a session
+  may hold it, and a note that may have reached the run is never said to have
+  reached nothing.
+- `missed` (`types.SteerMissed`): read by a take marked unanswered and told
+  again by no later launch whose job started, at the step that took it (its
+  phase, iteration, round, boundary and job). The turn ended with the mark
+  standing: its review read the note carried and accepted the work, or the
+  turn ended before any later launch.
+- `expired`, as before: still waiting, or read into the brief of a job that
+  never started, a note that brief told again included, at no step.
+
+A note a step reported reading is none of them: that step published it
+`delivered` as it read it. So every note on a record is reported once, by the
+step that read it or by the ending, under the ids the ending used before (the
+turn, the ending and the note, never the outcome), at the ending's instant.
+
+**One constructor states every outcome with its step.** `steer.Record` takes an
+`End` that `steer.Delivered`, `Retold`, `Missed`, `Unconfirmed` and `Expired`
+alone make: each but an expiry carries the step it came to, an expiry none, and
+the zero `End` is an expiry.
+
+**Why the ending reports a note told again, and not the runner that briefed
+it.** The record is the one witness of both the telling and whether the job
+started, which the ending already reads to report a brief's notes expired; and
+an ending's report is made again until it lands, before the record goes, where
+a runner's, made once after its launch returned, is lost with its node.
+
+**Why two words, not one.** The record knows different things of a missed note
+and an unconfirmed one. A missed note's reader certainly never had it from the
+take that recorded it, the take having answered its reader nothing, and no
+later launch whose job started was told it. An unconfirmed note's session may
+hold it, and nothing says it does. One word for both would tell a person less
+than the record knows.
+
+**What it does not reach.** A take still unsettled when its node stops, its
+last attempt unanswered, leaves its read unmarked, and the ending reports
+nothing of a note the record says was read and answered. A mark that lands
+after a launch's brief was built is on no brief as marked: where that brief told
+every note all the same (a fresh run's, or a cut-off session's continuation),
+the note is reported `missed` unless a later launch tells it again, though that
+harness was told it. A note told again by a launch that failed after its write
+is reported `expired` with the rest of that brief, as the record then says, the
+take that missed it no longer on it. A missed note the review reads carried,
+which records nothing anew, is still `missed`. And a note told again is
+reported when the turn ends, not when its brief was handed over.
+
+**Mid-upgrade.** Additive throughout. The read gains `retold`, wire-additive
+(`omitempty`), which an older build keeps in the read's `Extra` through every
+write it makes. The event gains `retold` and two values of `outcome`
+(`types.SteerOutcome.Valid`): an older build's dashboard draws the two as
+`expired` and a note told again as read at that brief, and this build's draws
+an outcome it does not know as one it cannot name, never as `expired`. An older
+node's launch names no note told again, so its write leaves the mark standing,
+and the ending reports the note `missed` unless a later launch tells it. An
+older node that finishes an ending reports as before, under the same ids: a
+served note `expired`; a marked one, and one a job that started told again,
+not at all. No state-log record and no `coord.ProtocolVersion` change.

@@ -938,15 +938,17 @@ func TestACaptureStatesTheNotesItHoldsOnlyWhereItsHarnessEndedItsOwnRun(t *testi
 // whose write landed after its answer was lost is marked unanswered on the
 // record: the session lacks those notes however cleanly its harness ended,
 // while it holds the answered reads after them, which one number cannot say. So
-// the cursor stops before the first read marked unanswered — whichever job's
-// take it was, since a later brief that told the note again is not known to
-// have been built after the mark landed — and a launch that continues the
-// session tells every note past it, as notes it may already show. A record with
-// none marked holds every read, and a capture cut off states none either way.
+// the cursor stops before the first read marked unanswered, whichever job's
+// take it was: a mark can land after a later brief was built, and that brief
+// did not tell the note as marked. A launch that continues the session tells
+// every note past it, as notes it may already show. A read a later launch's
+// brief told again is no longer marked, its write recording it read by its
+// job: that job's session holds it from its brief. A record with none marked
+// holds every read, and a capture cut off states none either way.
 //
 // Mutation: count a read marked unanswered as held, stop before the last such
-// read rather than the first, or stop only before the capture's own job's, and
-// a case goes red.
+// read rather than the first, stop only before the capture's own job's, or stop
+// before a read a brief told again, and a case goes red.
 func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
 	t.Parallel()
 	read := func(id string, order int, launch string, unanswered bool) RunNote {
@@ -967,6 +969,10 @@ func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
 			read("b", 2, "job-2", true), read("a", 1, "job-2", false)}, want: 1},
 		"an earlier job's take marked": {notes: []RunNote{read("a", 1, "job-1", true), read("b", 2, "job-2", false),
 			read("c", 3, "job-2", false)}, want: 0},
+		"an earlier job's take marked, told again by the job's brief": {notes: []RunNote{
+			{ID: "a", Read: &NoteRead{Order: 1, Boundary: string(types.SteerBoundaryBrief), Launch: "job-2",
+				Retold: true}},
+			read("b", 2, "job-2", false), read("c", 3, "job-2", false)}, want: 3},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

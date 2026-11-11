@@ -309,13 +309,17 @@ type LaunchRequest struct {
 	// person's authority to send the turn a note is decided on
 	// ([RunSteer.Seat]) — and BriefNotes the notes the job's brief carries,
 	// each sealed, which the write that opens the job records read by it
-	// ([PendingRun.BriefNotes]). HandedNotes are the notes the turn's first
-	// segment's box still held unread as the launch began, each sealed, which
-	// the same write files WAITING after them ([PendingRun.HandedNotes]). All
-	// written onto the record the launch opens, never anywhere else. Empty
-	// writes no anchor and files nothing.
+	// ([PendingRun.BriefNotes]). RetoldNotes are the notes the turn has read
+	// whose read the record marked unanswered, which the brief tells again,
+	// by ID: the same write records each read by the job, told again, where
+	// the record still marks it ([PendingRun.RetoldNotes]). HandedNotes are
+	// the notes the turn's first segment's box still held unread as the
+	// launch began, each sealed, which the same write files WAITING after them
+	// ([PendingRun.HandedNotes]). All written onto the record the launch
+	// opens, never anywhere else. Empty writes no anchor and files nothing.
 	SteerSeat   []byte
 	BriefNotes  []RunNote
+	RetoldNotes []RunNote
 	HandedNotes []RunNote
 
 	// Recorded is told the job's name the moment the store has written the
@@ -324,7 +328,7 @@ type LaunchRequest struct {
 	// that write the record holds the turn's notes, the brief's and the
 	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
 	// ENDS the record, whose ending reports every one of them no job ran
-	// with ([PendingRun.UnreadNotes]); a launch that fails before it wrote
+	// with ([PendingRun.EndedNotes]); a launch that fails before it wrote
 	// nothing, and its notes are the caller's still. Nil tells nobody.
 	Recorded func(launchID string)
 
@@ -647,11 +651,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
 			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},
-		// THE TURN'S NOTES: the seat anchor, the brief's notes, read by the
-		// job this write opens, and the box's, waiting after them — see
-		// [PendingStore.BeginLaunch].
+		// THE TURN'S NOTES: the seat anchor, the brief's notes and the ones it
+		// tells again, read by the job this write opens, and the box's,
+		// waiting after them. See [PendingStore.BeginLaunch].
 		Steer:       RunSteer{Seat: req.SteerSeat},
 		BriefNotes:  req.BriefNotes,
+		RetoldNotes: req.RetoldNotes,
 		HandedNotes: req.HandedNotes,
 		// WHAT THE TURN HOLDS FROM GITLET'S EXPIRY, on the row before
 		// any box exists: once the turn parks, the row is the only place

@@ -147,8 +147,11 @@ type RunFiled struct {
 // `next_step`, at the turn's next step, or `after_answer`, once the person its
 // executor asked has answered and whatever resumes the turn reads it. What
 // became of it is recorded where the turn reads it, as `agent_turn_steered` —
-// `delivered` where it was read, or `expired` if the turn ended first. This node
-// sees no further.
+// `delivered` where it was read, `expired` if the turn ended first, and, from
+// the run's ending, `delivered` where a later launch's brief told it again
+// after a step that took it never handed it over, `missed` where that step's
+// reader never had it and no later launch told it, or `unconfirmed` where the
+// executor was handed it and never confirmed it. This node sees no further.
 //
 // `unknown`: no node answered a scattered offer in time. The note may have been
 // taken — an answer lost on its way back is indistinguishable from none — so

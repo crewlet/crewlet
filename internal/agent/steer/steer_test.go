@@ -296,17 +296,26 @@ func TestATurnTakesAtMostItsNotes(t *testing.T) {
 	}
 }
 
-// ONE RECORD PER FACT: a reading makes the note delivered there, and none makes
-// it expired — so no publisher can state a delivery without saying where, or an
-// expiry that names a step — and the send time is always UTC.
+// ONE RECORD PER FACT: every outcome but an expiry is made with the step it came
+// to and says it: where a delivered note was read, where a missed one was
+// taken, the job an unconfirmed one was handed to. An expiry, the zero End
+// among them, names none; so no publisher can state an outcome without saying
+// where, or an expiry that names a step. A note a brief told again is delivered
+// there and says it was told again, and no other record says so. The send time
+// is always UTC.
+//
+// Mutation: copy the step onto an expiry, record a missed or unconfirmed note
+// as delivered, say a note told again as a plain read, or any other as told
+// again, and the case goes red.
 func TestARecordIsDeliveredExactlyWhereItWasRead(t *testing.T) {
 	t.Parallel()
 	turn := steer.Turn{Agent: "a", AgentHandle: "swe", Role: "Engineer", TurnID: "run-1", WorkKey: "wk"}
 	sent := time.Date(2026, 10, 26, 9, 0, 0, 0, time.FixedZone("CET", 3600))
 	n := steer.Note{ID: "n-1", Text: "use staging", By: "founder", ByKind: "human",
 		OperatorID: "session:f", At: sent}
-	read := steer.Record(turn, n, &steer.Reading{Phase: types.PhaseExecute, Iteration: 2, Round: 1,
-		Boundary: types.SteerBoundaryToolBatch, Launch: "job-2"})
+	at := steer.Reading{Phase: types.PhaseExecute, Iteration: 2, Round: 1,
+		Boundary: types.SteerBoundaryToolBatch, Launch: "job-2"}
+	read := steer.Record(turn, n, steer.Delivered(at))
 	if read.Outcome != types.SteerDelivered || read.Boundary != types.SteerBoundaryToolBatch ||
 		read.LaunchID != "job-2" || read.Phase != types.PhaseExecute || read.Iteration != 2 ||
 		read.Round != 1 || read.TurnID != "run-1" || read.AgentHandle != "swe" || read.Note != "use staging" ||
@@ -317,9 +326,31 @@ func TestARecordIsDeliveredExactlyWhereItWasRead(t *testing.T) {
 	if !read.SentAt.Equal(sent) || read.SentAt.Location() != time.UTC {
 		t.Errorf("sent at %v, want %v in UTC", read.SentAt, sent)
 	}
-	expired := steer.Record(turn, n, nil)
-	if expired.Outcome != types.SteerExpired || expired.Boundary != "" || expired.Phase != "" ||
-		expired.LaunchID != "" || expired.Round != 0 {
-		t.Errorf("expired as %+v", expired)
+	for _, expired := range []types.AgentTurnSteered{steer.Record(turn, n, steer.Expired()),
+		steer.Record(turn, n, steer.End{})} {
+		if expired.Outcome != types.SteerExpired || expired.Boundary != "" || expired.Phase != "" ||
+			expired.LaunchID != "" || expired.Round != 0 {
+			t.Errorf("expired as %+v", expired)
+		}
+	}
+	for want, end := range map[types.SteerOutcome]steer.End{
+		types.SteerMissed: steer.Missed(at), types.SteerUnconfirmed: steer.Unconfirmed(at),
+	} {
+		got := steer.Record(turn, n, end)
+		if got.Outcome != want || got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != "job-2" ||
+			got.Phase != types.PhaseExecute || got.Iteration != 2 || got.Round != 1 || got.Retold {
+			t.Errorf("%s as %+v, want it at the step it came to", want, got)
+		}
+	}
+	brief := steer.Reading{Phase: types.PhaseExecute, Iteration: 3, Round: 1, Boundary: types.SteerBoundaryBrief,
+		Launch: "job-3"}
+	retold := steer.Record(turn, n, steer.Retold(brief))
+	if retold.Outcome != types.SteerDelivered || !retold.Retold || retold.Boundary != types.SteerBoundaryBrief ||
+		retold.LaunchID != "job-3" || retold.Phase != types.PhaseExecute || retold.Iteration != 3 ||
+		retold.Round != 1 {
+		t.Errorf("a note a brief told again is recorded %+v, want it delivered at that brief, told again", retold)
+	}
+	if read.Retold || steer.Record(turn, n, steer.Expired()).Retold {
+		t.Error("a note read once, or expired, is recorded as told again")
 	}
 }

@@ -2307,6 +2307,22 @@ func (r *Runner) markUnanswered(ids []string) {
 	}
 }
 
+// retold is every note the turn carries whose read the run's record marks
+// unanswered, by id, in the order read ([AgentRunRequest.Retold]): what every
+// brief of a launch tells again, built once the reads are marked as the record
+// marks them now ([Runner.steerBrief]).
+func (r *Runner) retold() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, read := range r.steered {
+		if read.Unanswered {
+			out = append(out, read.ID)
+		}
+	}
+	return out
+}
+
 // steerReturn hands back the notes a launch that failed took for its brief —
 // only where it failed before it wrote its run's record: once it named the job
 // it opened, the record holds them, and its ending reports them

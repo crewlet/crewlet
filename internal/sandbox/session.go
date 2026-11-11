@@ -1179,12 +1179,14 @@ func openPlaces(calls BridgeLog, last int) []int {
 // One number cannot say both, so the cursor stops before the unanswered read,
 // and a launch that continues the session tells every note past it, as notes it
 // may already show (internal/agent/runner's keptSession). WHICHEVER JOB'S TAKE
-// it was: a later job's brief that told the note again is not known to have
-// been built after the mark landed — a mark is made off the take's frame, and a
-// store's bad moment can hold it past the next launch — so a read marked
-// unanswered stops the cursor of every capture after it, told again rather than
-// never. An older build, which tells a continuation every note past the cursor
-// with no header, tells the unanswered note too.
+// it was: a later launch whose brief told the note again records it read by
+// its job, unmarked ([NoteRead.Retold]), and records only a note its brief
+// told as marked. A mark made off the take's frame can land after a brief was
+// built, held past the next launch by a store's bad moment, and that brief did
+// not tell it as marked; so a read still marked unanswered stops the cursor of
+// every capture after it, told again rather than never. An older build, which
+// tells a continuation every note past the cursor with no header, tells the
+// unanswered note too.
 //
 // NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
 // the write that answers the harness's ask, before the answer is handed back
