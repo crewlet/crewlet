@@ -118,6 +118,18 @@ func TestACallWhoseEntryCannotBeWrittenIsNotRunAndIsRefused(t *testing.T) {
 	}
 }
 
+// lostAnswer takes every entry and then answers its write as failed, as a
+// coordination store does whose answer to a compare-and-swap that landed was
+// lost on its way back.
+type lostAnswer struct{ *ledger }
+
+func (l lostAnswer) Begin(ctx context.Context, runID string, b mcpbridge.Begun) error {
+	if err := l.ledger.Begin(ctx, runID, b); err != nil {
+		return err
+	}
+	return errors.New("the coordination store's answer was lost")
+}
+
 // A CALL WHOSE ENTRY IS STILL BEING WRITTEN IS NEVER RUN WHERE ITS OPENING ENDS
 // OR ITS SEAT'S FENCE CLOSES MEANWHILE. An opening's end answers a call it holds
 // whose entry is still being written that it was not run — failed, in the words
@@ -126,12 +138,14 @@ func TestACallWhoseEntryCannotBeWrittenIsNotRunAndIsRefused(t *testing.T) {
 // tells the box its session was closing; either way the call never runs, and
 // its entry, written all the same, is withdrawn in the same step, so no
 // collection waits on it and no continuation is told of a call that never
-// happened.
+// happened. AND AN ENTRY WHOSE WRITE LANDED AND LOST ITS ANSWER as the end came
+// is withdrawn as well: the log may hold it, and only a withdrawal finds out.
 //
 // Mutation: answer a call the end finds not yet begun as still running (`false
 // &&` before the end's test of it), and its box is told a call that never runs
-// is running; leave the entry of a call the end answered in flight, and the run's
-// log holds a call nobody runs.
+// is running; withdraw an ended call's entry only where its write answered nil
+// (entry-of-an-unrun-call-left-in-flight), and an entry that landed and lost its
+// answer stays in the run's log, a call nobody runs.
 func TestACallWhoseEntryIsStillBeingWrittenIsNeverRunWhereItsOpeningEnds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -140,19 +154,27 @@ func TestACallWhoseEntryIsStillBeingWrittenIsNeverRunWhereItsOpeningEnds(t *test
 		// entry is being written.
 		stop func(b *bubbled, fenced *atomic.Bool)
 		want string
+		// lost is an entry whose write lands and answers failed.
+		lost bool
 	}{
-		{"the run's close", func(b *bubbled, _ *atomic.Bool) { b.bridge.Close("run-1") }, mcpbridge.EndedNote},
+		{"the run's close", func(b *bubbled, _ *atomic.Bool) { b.bridge.Close("run-1") }, mcpbridge.EndedNote, false},
+		{"the run's close, the entry's answer lost", func(b *bubbled, _ *atomic.Bool) { b.bridge.Close("run-1") },
+			mcpbridge.EndedNote, true},
 		{"the seat leaving the node", func(b *bubbled, _ *atomic.Bool) { b.bridge.ReleaseSeat(seat()) },
-			mcpbridge.ClosingNote},
+			mcpbridge.ClosingNote, false},
 		{"the seat's fence closing", func(_ *bubbled, fenced *atomic.Bool) { fenced.Store(true) },
-			mcpbridge.ClosingNote},
+			mcpbridge.ClosingNote, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				l := &ledger{beginHold: make(chan struct{}), beginHolding: make(chan struct{}, 1)}
 				tool := &stubTool{name: "write"}
-				b := openBubbled(t, l, tool)
+				var led mcpbridge.Ledger = l
+				if tc.lost {
+					led = lostAnswer{l}
+				}
+				b := openBubbledOn(t, l, led, tool)
 				var fenced atomic.Bool
 				b.session.Fence = func() error {
 					if fenced.Load() {

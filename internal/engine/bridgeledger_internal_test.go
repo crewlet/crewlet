@@ -348,24 +348,25 @@ func (s *spendlessStore) AppendBridgeCall(_ context.Context, _ string, a sandbox
 	return s.then()
 }
 
-// A CALL THE LOG TOOK IS NEVER SAID TO HAVE LOST ITS OUTCOME, WHATEVER BECAME
-// OF ITS SPEND. A call's update is one write of the run's log and then, where it
+// A CALL THE LOG TOOK IS NEVER ANSWERED AS AN UPDATE STILL OWED, WHATEVER
+// BECAME OF ITS SPEND. A call's update is one write of the run's log and then, where it
 // moved the job's spend, one of its record; a store that took the first and
 // refused the second answers the call recorded beside the error. The call is in
 // the log, and nothing an attempt after that one answers takes it out: the
 // attempts after it are for the spend alone, whether they meet the spend
 // refused again, the store out of reach, or the job replaced — by a new round,
 // or by a later job of its own round, whose log lists the call. So the call is
-// never said to have lost what it answered, and the run's waiter is still
-// nudged for a submission that landed; the spend is cumulative, so the next
-// record that lands carries it. And the error answered is the spend's, the one
+// never answered as an update its bridge should ask for again
+// ([mcpbridge.ErrUnrecorded]), and the run's waiter is still nudged for a
+// submission that landed; the spend is cumulative, so the next record that
+// lands carries it. And the error answered is the spend's, the one
 // write that failed, WHICHEVER RELAUNCH REPLACED THE JOB: never the store's
 // word that its job was replaced, which no write failed over. On a bubble's
 // clock, so the retries cost the suite nothing.
 //
 // Mutation: answer a record as its last attempt alone, and a call the first
-// attempt put in the log is said to have lost its outcome where the store was
-// then out of reach, its submission's waiter never told; nudge only on a record
+// attempt put in the log is answered as still owed where the store was then
+// out of reach, its submission's waiter never told; nudge only on a record
 // that answered no error, and the waiter is not told the run's work is in;
 // take the store's word that the job was replaced in its round for another
 // write's failure, and the spend's own error is lost.
@@ -388,18 +389,20 @@ func TestACallTheLogTookIsNeverSaidToHaveLostItsOutcomeWhateverBecameOfItsSpend(
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				store := &spendlessStore{then: tc.then}
-				l, logs := readingLedger(store)
+				l, _ := readingLedger(store)
 				var nudged []sandbox.Nudge
 				l.nudge = func(_ context.Context, n sandbox.Nudge) { nudged = append(nudged, n) }
-				if err := l.Record(t.Context(), "run-1", mcpbridge.Call{
-					Call: tools.Call{Name: sandbox.SubmitWorkTool}, Seq: 2, Digest: strings.Repeat("d2", 32)}); !errors.Is(err, errSpendRefused) {
+				err := l.Record(t.Context(), "run-1", mcpbridge.Call{
+					Call: tools.Call{Name: sandbox.SubmitWorkTool}, Seq: 2, Digest: strings.Repeat("d2", 32)})
+				if !errors.Is(err, errSpendRefused) {
 					t.Errorf("a record whose spend never reached the row answered %v, want the spend's error", err)
 				}
 				if len(nudged) != 1 || nudged[0].Why != sandbox.NudgeSubmitted {
 					t.Errorf("the waiter was nudged %+v, want once for the submission that landed", nudged)
 				}
-				if line := logLine(t, logs, "bridge_call_outcome_unrecorded"); line != nil {
-					t.Errorf("a call the log took was said to have lost its outcome: %v", line)
+				if errors.Is(err, mcpbridge.ErrUnrecorded) {
+					t.Errorf("a call the log took was answered as an update still owed (%v): its bridge "+
+						"would ask for it again", err)
 				}
 			})
 		})
@@ -442,19 +445,22 @@ func ledgerOn(t *testing.T, store sandbox.PendingStore) (*bridgeLedger, *bytes.B
 	return l, &logs, launched
 }
 
-// AN UPDATE THE STORE REFUSES LEAVES THE CALL'S IDENTITY ON RECORD. A call's
-// entry is written before it runs, so a store that then refuses every attempt
-// at its update loses what the call answered, cost and committed, and nothing
-// else: the entry stands in the run's log, the call's identity on the record
-// for every later segment's call log — handed to the runner as a call whose
-// outcome is unknown — and the ledger names the call at warning. A blip the
-// retries outlast loses nothing: the update lands on a later attempt and takes
-// the entry out. Nothing is owed to a later call: the next call's update
-// carries only itself.
+// AN UPDATE THE STORE REFUSES LEAVES THE CALL'S IDENTITY ON RECORD, AND IS
+// ANSWERED AS ONE STILL OWED. A call's entry is written before it runs, so a
+// store that then refuses every attempt at its update holds back what the call
+// answered, cost and committed, and nothing else: the entry stands in the run's
+// log, the call's identity on the record for every later segment's call log —
+// handed to the runner as a call whose outcome is unknown — and the ledger
+// answers [mcpbridge.ErrUnrecorded], which its bridge asks for again once the
+// call's answer is out. A blip the retries outlast loses nothing: the update
+// lands on a later attempt and takes the entry out. Nothing is carried by a
+// later call: the next call's update carries only itself.
 //
 // Mutation: make one attempt at an update, and a blip loses the call's
 // outcome; take the entry out of the log where the update did not land, and
-// the call is off the record.
+// the call is off the record; answer a refused update without
+// [mcpbridge.ErrUnrecorded] (refused-update-not-owed), and its bridge never asks
+// for it again.
 func TestAnUpdateTheStoreRefusesLeavesTheCallsIdentityOnRecord(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -470,15 +476,17 @@ func TestAnUpdateTheStoreRefusesLeavesTheCallsIdentityOnRecord(t *testing.T) {
 		}
 		store.down.Store(true)
 		if err := l.Record(ctx, "run-1", mcpbridge.Call{Call: tools.Call{Name: "post_message", Output: "posted"},
-			Seq: 1, StartedAt: started.Add(time.Second), Digest: strings.Repeat("a", 64)}); err == nil {
-			t.Fatal("an update the store refused at every attempt answered no error")
+			Seq: 1, StartedAt: started.Add(time.Second), Digest: strings.Repeat("a", 64)}); !errors.Is(err,
+			mcpbridge.ErrUnrecorded) {
+			t.Fatalf("an update the store refused at every attempt answered %v, want it owed "+
+				"(mcpbridge.ErrUnrecorded) for its bridge to ask again", err)
 		}
 		if n := int(store.records.Load()); n != appendAttempts {
 			t.Errorf("the update was tried %d times, want %d", n, appendAttempts)
 		}
-		line := logLine(t, logs, "bridge_call_outcome_unrecorded")
-		if line == nil || line["level"] != "WARN" || line["call"] != "post_message at place 1, digest aaaaaaaa" {
-			t.Errorf("the update that did not land was said as %v, want the call named at warning\n%s", line, logs)
+		line := logLine(t, logs, "bridge_call_update_refused")
+		if line == nil || line["call"] != "post_message at place 1, digest aaaaaaaa" {
+			t.Errorf("the update that did not land was said as %v, want the call named\n%s", line, logs)
 		}
 
 		// THE STORE BACK, the next call's update carries itself alone.

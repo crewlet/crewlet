@@ -2,12 +2,18 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A CALL'S RECORD IS ONE ENTRY, UPDATED BY ITS IDENTITY, end to end: through the
@@ -83,5 +89,101 @@ func TestAResumedTurnsDeliveryIsUnknownBesideACallWhoseOutcomeIsUnknown(t *testi
 			t.Errorf("%s: the turn ended delivered %v, unknown %v; want %v, %v", name, ending.Delivered,
 				ending.DeliveryUnknown, tc.delivered, tc.unknown)
 		}
+	}
+}
+
+// submitTool is a seat's submit_work as a run's record reads it: the call that
+// hands the round's work in, answered once it runs.
+type submitTool struct{}
+
+func (submitTool) Name() string               { return runner.SubmitWorkTool }
+func (submitTool) Description() string        { return "hands the round's work in" }
+func (submitTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (submitTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "submitted"}, nil
+}
+
+// heldRecords is a run store whose calls' updates fail while it is down, as a
+// coordination store does through an outage its ledger's own attempts do not
+// outlast, and which closes landed once an update lands after it is back; it
+// counts the updates it refused.
+type heldRecords struct {
+	sandbox.PendingStore
+	down    atomic.Bool
+	refused atomic.Int32
+	once    sync.Once
+	landed  chan struct{}
+}
+
+func (s *heldRecords) AppendBridgeCall(ctx context.Context, turnID string, a sandbox.BridgeAppend) (bool, error) {
+	if a.Step != sandbox.AppendRecord {
+		return s.PendingStore.AppendBridgeCall(ctx, turnID, a)
+	}
+	if s.down.Load() {
+		s.refused.Add(1)
+		return false, errors.New("the coordination store is electing a leader")
+	}
+	recorded, err := s.PendingStore.AppendBridgeCall(ctx, turnID, a)
+	if recorded {
+		s.once.Do(func() { close(s.landed) })
+	}
+	return recorded, err
+}
+
+// A SUBMISSION WHOSE UPDATE THE STORE REFUSED LANDS ONCE THE STORE IS BACK, end
+// to end: through the real launcher, bridge, ledger and run store. The run hands
+// its work in while the coordination store refuses every update for longer than
+// the ledger's own attempts: the box is answered with the call's own result, the
+// run's log holds the call's entry — its identity, its outcome not yet — and the
+// bridge asks for the update again once the answer is out. Once the store is
+// back the update lands, takes the entry out and lists the submission, so the
+// collection that waited for the call reads it, and the resume replays it as the
+// round's submission rather than a call whose outcome is unknown.
+//
+// Mutation: answer an update the store refused as an error the bridge does not
+// ask again (refused-update-not-owed), or have the bridge ask for none
+// (owed-update-never-asked-again), and the submission's update never lands.
+func TestASubmissionWhoseUpdateTheStoreRefusedLandsOnceTheStoreIsBack(t *testing.T) {
+	t.Parallel()
+	const turnID = "t-owed-update"
+	rig := bridgedRig(t, turnID, submitTool{})
+	rt := rig.engine.sandbox.Load()
+	store := &heldRecords{PendingStore: rt.pending, landed: make(chan struct{})}
+	store.down.Store(true)
+	rig.engine.useSandbox(store, rt.coordinator)
+	rig.pending = store
+	run := rig.launch(t, nil)
+
+	run.call(t, runner.SubmitWorkTool)
+	if n := int(store.refused.Load()); n < appendAttempts {
+		t.Fatalf("the store refused %d updates before the box was answered, want the ledger's %d attempts",
+			n, appendAttempts)
+	}
+	held := run.calls(t, turnID)
+	if len(held.InFlight) != 1 || held.InFlight[0].Name != runner.SubmitWorkTool || len(held.Calls) != 0 {
+		t.Fatalf("with the store out, the log holds %+v in flight and lists %+v, want the submission's entry "+
+			"alone", held.InFlight, held.Calls)
+	}
+
+	store.down.Store(false)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	select {
+	case <-store.landed:
+	case <-ctx.Done():
+		t.Fatal("the submission's update never landed once the store was back: nothing asked for it again")
+	}
+	logged := run.calls(t, turnID)
+	if len(logged.InFlight) != 0 || len(logged.Calls) != 1 || logged.Calls[0].Name != runner.SubmitWorkTool ||
+		logged.Calls[0].Output != "submitted" || logged.Calls[0].Failed {
+		t.Fatalf("once the store was back the log holds %+v in flight and lists %+v, want the submission "+
+			"listed with what it answered", logged.InFlight, logged.Calls)
+	}
+	resumed := runnerResume(resumeInput{Run: run.row(t, turnID), Bridged: logged}, nil, nil)
+	if len(resumed.Unfinished) != 0 || !slices.ContainsFunc(resumed.Bridged, func(c runner.BridgedCall) bool {
+		return c.Name == runner.SubmitWorkTool && !c.Failed && c.Result == "submitted"
+	}) {
+		t.Errorf("the resume reads %+v (unfinished %+v), want the submission it replays", resumed.Bridged,
+			resumed.Unfinished)
 	}
 }

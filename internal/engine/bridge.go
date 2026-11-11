@@ -173,10 +173,12 @@ func decodeBridgeArgs(raw string) map[string]any {
 // never derives an earlier call's operation id. An ENTRY THE STORE DOES NOT
 // TAKE within [beginBudget] is a call not run, its box told it could not be
 // recorded and may make it again (`bridge_call_not_recorded`); an UPDATE THE
-// STORE DOES NOT TAKE, after [appendAttempts], leaves the entry — the call's
-// identity on the record, and its outcome unknown, which is all it loses
-// (`bridge_call_outcome_unrecorded`). Nothing is owed and nothing carried: no
-// later write of the session has anything of this one's to bring.
+// STORE DOES NOT TAKE within [appendAttempts] leaves the entry — the call's
+// identity on the record — and is answered [mcpbridge.ErrUnrecorded], so the
+// call's own goroutine on the bridge asks for the same update again once the
+// call's answer is out, until it lands or the call's bound passes. Nothing is
+// carried by another write: no later write of the session has anything of this
+// one's to bring.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB AND ITS ROUND BEFORE
 // ITS BOX EXISTS ([bridgeLedger.bind], handed to
@@ -233,7 +235,9 @@ type bridgeLedger struct {
 // box waits for its call's answer. A store out for longer — a leader lost
 // rather than stepping down, which its followers wait four seconds and more to
 // replace — refuses a call's entry, so the call is not run, and leaves a
-// finished call's update unwritten, its entry standing.
+// finished call's update unwritten for now, its entry standing: the bridge asks
+// for it again once the call's answer is out (internal/api/mcpbridge's
+// owedUpdateBase), so the box waits for none of that.
 var appendRetryWaits = [...]time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
 // appendAttempts is how many times one write of a bridged call's is tried:
@@ -383,10 +387,13 @@ func (l *bridgeLedger) Withdraw(ctx context.Context, runID string, call mcpbridg
 // total is cumulative — only the last call of a run can lose it, and then the
 // task is charged short of what the turn shows rather than past it.
 //
-// AN UPDATE THAT DID NOT LAND LEAVES THE CALL'S ENTRY: its identity on the
-// record, and what it answered, cost and committed lost — which a resumed
-// segment reads as a call whose outcome is not known — said at warning,
-// naming the call (`bridge_call_outcome_unrecorded`).
+// AN UPDATE THAT DID NOT LAND LEAVES THE CALL'S ENTRY, its identity on the
+// record, and is answered [mcpbridge.ErrUnrecorded] beside the store's error:
+// the bridge asks for it again once the call's answer is out, and asked again
+// a record whose earlier answer was lost after it landed lands nothing twice
+// ([sandbox.PendingStore.AppendBridgeCall]). Until it lands, a resumed segment
+// reads the call as one whose outcome is not known. Said at debug, naming the
+// call: the bridge says at warning what it asks again and what it gave up on.
 func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.Call) error {
 	if l == nil || l.store == nil {
 		return nil
@@ -442,12 +449,9 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 	}
 	recorded, err := l.appendRetrying(ctx, runID, a)
 	if err != nil && !recorded {
-		l.logger().WarnContext(ctx, "bridge_call_outcome_unrecorded", "run_id", runID,
-			"launch_id", launch, "call", namedCall(a.Call), "error", err.Error(),
-			"detail", "the call ran and its answer goes back to the box, but the run's log did not "+
-				"take its update: its entry stands, so the call is on the record by its identity and "+
-				"counted by every later segment, and what it answered, cost and committed is lost")
-		return err
+		l.logger().DebugContext(ctx, "bridge_call_update_refused", "run_id", runID,
+			"launch_id", launch, "call", namedCall(a.Call), "attempts", appendAttempts, "error", err.Error())
+		return fmt.Errorf("%w: %w", mcpbridge.ErrUnrecorded, err)
 	}
 	if !recorded {
 		// THE ORDINARY END OF A ROUND for the call: its log is gone, or takes

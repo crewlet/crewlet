@@ -234,8 +234,9 @@ and its process gone (ADR-0073's amendment on a collection's calls in flight),
 and its update finds no record where it returns after the ending's delete. A
 relaunch's job takes it as a late call of the round, and a run whose box goes
 on takes it as its own while its record stands. A call whose entry is still
-being written as its opening ends is answered that it was not run, failed, and
-never runs. A call that reaches an opening
+being written as its opening ends, or that waits to be admitted behind a call
+that arrived before it, is answered that it was not run, failed, and never
+runs. A call that reaches an opening
 after its end is refused and runs nothing, as before, now in the words of how
 the opening ended: told to end its turn where the run ended, and, where the box
 goes on, that the session it reached was closing and to call again, which

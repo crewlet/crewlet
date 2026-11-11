@@ -40,9 +40,9 @@ const (
 // why it must not be made again. NEITHER SAYS WHERE ITS RESULT GOES: its
 // identity is on the run's log from before it ran, and its result lands there
 // only where the log still takes its update — a run whose record is deleted
-// before the call returns, or a store that refuses the update, leaves it with
-// none (see the package doc) — so a promise that the result reaches the run's
-// log would not hold for every call so answered.
+// before the call returns, or a store that refuses the update until the call's
+// bound, leaves it with none (see the package doc) — so a promise that the
+// result reaches the run's log would not hold for every call so answered.
 const (
 	// endedRunningNote answers a call still running as its opening ends where
 	// the run ended for its box. NOT A FAILURE, as the tool loop's own "still
@@ -117,13 +117,13 @@ func (e ending) notRun() string {
 // Not a setting: nothing about a deployment moves what it is sized for.
 const endAnswerWait = 5 * time.Second
 
-// bridgedCall is one call an opening admitted, from its admission until its
+// bridgedCall is one call an opening took, from its arrival until its
 // answer is out ([binding.Call]), and in the bridge's registry until it is
 // recorded ([bridgedCalls]).
 type bridgedCall struct {
 	// run is the run the call was made for.
 	run string
-	// opening is the opening that admitted it.
+	// opening is the opening that took it.
 	opening *binding
 	// over is the call's request's [toolsession.Call.Over]: closed once its
 	// answer is out. Nil for a call no request carries.
@@ -146,10 +146,20 @@ type bridgedCall struct {
 	cut      chan struct{}
 
 	// begun is under the opening's mu, and began closed with it: the call's
-	// entry is on the run's log and its tool runs ([binding.writeAhead]). Until
-	// then an end answers it as not run, and it never runs.
+	// entry is on the run's log, the call admitted to the run's call log, and
+	// its tool runs ([binding.writeAhead]). Until then an end answers it as not
+	// run, and it never runs.
 	begun bool
 	began chan struct{}
+
+	// admitAfter is the decision of the call that reached the opening just
+	// before this one — closed once that call was admitted to the run's call
+	// log or refused — and nil for the opening's first; decided is this call's
+	// own, closed once it is. Set as the call is held, under the opening's mu:
+	// so the calls an opening admits are admitted in the order they arrived,
+	// whichever entry's write came back first ([binding.writeAhead]).
+	admitAfter <-chan struct{}
+	decided    chan struct{}
 }
 
 // answeredLocked reports whether the call's answer is decided: its own, or
@@ -165,7 +175,7 @@ func (c *bridgedCall) endsAnswer() toolsession.Result {
 }
 
 // bridgedCalls is the bridge's registry of the calls it runs: every call an
-// opening of it admitted, from its admission until its record step has run,
+// opening of it took, from its arrival until its record step has run,
 // whatever became of the opening — and every close of an opening's sessions
 // its end left to finish behind it.
 //
@@ -188,7 +198,7 @@ func newBridgedCalls() *bridgedCalls {
 	return &bridgedCalls{set: map[*bridgedCall]struct{}{}}
 }
 
-// add registers a call its opening just admitted.
+// add registers a call its opening just took.
 func (r *bridgedCalls) add(c *bridgedCall) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -323,20 +333,21 @@ func (o *binding) end(how ending) { o.endKeeping(nil, how) }
 // box how the opening ended (how).
 //
 // IT WAITS FOR NO CALL. Under the opening's lock it refuses every later call
-// and answers every call it admitted whose tool has not returned, in the words
-// of how it ended ([ending.stillRunning]) — and a call whose entry is still
-// being written ahead of it ([binding.writeAhead]), which it answers as not run, as
-// a call reaching the opening after its end is ([ending.notRun]), failed, and
-// which never runs; each call's handler stops its beat and hands that answer
-// to the SDK as any. It then waits for every answer of
-// the opening still on its way to be out ([binding.answersOut]) — those; the
-// answer of a call whose tool returned before the end, which its own result
-// answers once its record is made; and every answer the opening gave without
-// running a call, the refusal of one that reached it after its end among them
-// — for at most [endAnswerWait], and only then closes the box's sessions: the
-// SDK's close of a session waits for every request in flight on it, and
-// writes no answer once it has begun. Past that bound the sessions are closed
-// behind it ([bridgedCalls]), once those answers are out, and the end returns.
+// and answers every call it took whose tool has not returned, in the words of
+// how it ended ([ending.stillRunning]) — and a call whose entry is still being
+// written ahead of it, or that waits for its admission ([binding.writeAhead]),
+// which it answers as not run, as a call reaching the opening after its end is
+// ([ending.notRun]), failed, and which never runs; each call's handler stops
+// its beat and hands that answer to the SDK as any. It then waits for every
+// answer of the opening still on its way to be out ([binding.answersOut]) —
+// those; the answer of a call whose tool returned before the end, which its own
+// result answers once its record is made; and every answer the opening gave
+// without running a call, the refusal of one that reached it after its end
+// among them — for at most [endAnswerWait], and only then closes the box's
+// sessions: the SDK's close of a session waits for every request in flight on
+// it, and writes no answer once it has begun. Past that bound the sessions are
+// closed behind it ([bridgedCalls]), once those answers are out, and the end
+// returns.
 //
 // NOTHING IS OWED THE RUN'S LOG AS IT ENDS: every call the opening ran has its
 // identity there from before it ran ([Ledger.Begin]), and a call still running
@@ -407,7 +418,7 @@ func (o *binding) closeSessions() {
 	}
 }
 
-// holdLocked holds a call the opening just admitted, under mu: with the
+// holdLocked holds a call the opening just took, under mu: with the
 // opening, whose end answers it and waits for its answer, and with the bridge,
 // which runs its tool to its end and records it ([bridgedCalls]). over is the
 // call's request's [toolsession.Call.Over]. And it lets go of every call the

@@ -241,8 +241,8 @@ func (s *replacedStore) AppendBridgeCall(context.Context, string, sandbox.Bridge
 // update of a job replaced in its round recorded beside its word that the job
 // was replaced: the call is in the round's log, and what it cost can reach no
 // record, by design. Asking again would write nothing more, so it is asked
-// once; and nothing failed, so the box's call answers no error and no line says
-// it lost its outcome.
+// once; and nothing failed, so the ledger answers no error — neither one its
+// bridge says nor one it asks for again.
 //
 // Mutation: read the store's word that the job was replaced as a write that
 // failed, and the call is asked again and answers an error.
@@ -250,15 +250,13 @@ func TestALateCallsAppendIsAskedOnceAndAnswersNoError(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		store := &replacedStore{}
-		l, logs := readingLedger(store)
+		l, _ := readingLedger(store)
 		if err := l.Record(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 1}); err != nil {
-			t.Errorf("a late call's update answered %v, want no error", err)
+			t.Errorf("a late call's update answered %v, want no error: an error is one its bridge says, and "+
+				"an owed one it asks for again", err)
 		}
 		if store.asked != 1 {
 			t.Errorf("a late call's update was asked %d times, want once", store.asked)
-		}
-		if line := logLine(t, logs, "bridge_call_outcome_unrecorded"); line != nil {
-			t.Errorf("a late call the round's log lists was said to have lost its outcome: %v", line)
 		}
 	})
 }

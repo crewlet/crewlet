@@ -39,6 +39,13 @@ type bubbled struct {
 // the bubble, so everything it builds is the bubble's.
 func openBubbled(t *testing.T, l *ledger, extra ...tools.Callable) *bubbled {
 	t.Helper()
+	return openBubbledOn(t, l, l, extra...)
+}
+
+// openBubbledOn is [openBubbled] whose session writes through led — a ledger
+// that answers in a way of its own, over l, which records what it takes.
+func openBubbledOn(t *testing.T, l *ledger, led mcpbridge.Ledger, extra ...tools.Callable) *bubbled {
+	t.Helper()
 	reg := tools.NewRegistry()
 	var names []string
 	for _, tool := range extra {
@@ -58,7 +65,7 @@ func openBubbled(t *testing.T, l *ledger, extra ...tools.Callable) *bubbled {
 	_ = b.bridge.Handler()
 	b.session = &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(turn), Ledger: l,
+		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(turn), Ledger: led,
 	}
 	if b.bridge.Open(t.Context(), b.session) == "" {
 		t.Fatal("no endpoint was minted")
