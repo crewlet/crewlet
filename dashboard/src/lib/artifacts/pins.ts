@@ -18,13 +18,14 @@
  */
 
 import { useEffect, useRef } from "react";
+import { ARTIFACT_LIST_MAX } from "~/contract/pins.ts";
 import { useQuery } from "../useQuery.ts";
 
-/** The most pins the sidebar lists, and the page's own check reads. */
-export const PINS_LIMIT = 200;
-
-/** What a pin list is asked as: every artifact the reader can open that they pinned. */
-export const PINS_QUERY = { scope: "all", pinned: true, "max-keys": PINS_LIMIT } as const;
+/**
+ * What a pin list is asked as: every artifact the reader can open that they
+ * pinned, as many as one listing answers.
+ */
+export const PINS_QUERY = { scope: "all", pinned: true, "max-keys": ARTIFACT_LIST_MAX } as const;
 
 const listeners = new Set<() => void>();
 

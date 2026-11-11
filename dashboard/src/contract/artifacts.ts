@@ -263,6 +263,23 @@ export const DATA_COLLECTIONS_MAX = 64;
 export const DATA_COLUMNS_MAX = 128;
 
 /**
+ * The most rows one page of a collection's read answers (`artifacts.MaxQueryLimit`):
+ * a larger `limit` is refused. A store is read in pages this wide.
+ */
+export const DATA_QUERY_MAX_ROWS = 500;
+
+/**
+ * What an option's stable id is written in, as the body of a character class
+ * (`artifactdata.OptionIDChars`): the schema editor mints an option's id from
+ * its label with every other character written `_`. At most
+ * [DATA_OPTION_ID_MAX] of them (`artifactdata.MaxOptionIDBytes`).
+ */
+export const DATA_OPTION_ID_CHARS = "A-Za-z0-9_-";
+
+/** The longest an option's id may be: see [DATA_OPTION_ID_CHARS]. */
+export const DATA_OPTION_ID_MAX = 64;
+
+/**
  * The most a column's or an option's label holds, and a collection's title,
  * in UTF-8 bytes (`artifactdata.MaxLabelBytes`): the sheet's create page says
  * so on the name before the press.
@@ -696,6 +713,12 @@ export const DASHBOARD_MAX_DATASETS = 32;
 
 /** The most columns one table widget draws (`artifacts.MaxTableColumns`). */
 export const DASHBOARD_MAX_TABLE_COLUMNS = 16;
+
+/**
+ * The most parts one share widget draws (`artifacts.MaxShareParts`): a share
+ * that names no `limit` draws this many.
+ */
+export const DASHBOARD_MAX_SHARE_PARTS = 8;
 
 /** Where a board version's spec lives (`dashspec.EntryPath`). */
 export const DASHBOARD_SPEC_PATH = "dashboard.json";

@@ -51,7 +51,7 @@ import type {
   LogPosition,
 } from "~/protocol/index.ts";
 import { QueryError, RestError } from "~/protocol/index.ts";
-import { DATA_BATCH_MAX_OPS } from "~/contract/artifacts.ts";
+import { DATA_BATCH_MAX_OPS, DATA_QUERY_MAX_ROWS } from "~/contract/artifacts.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { undoData, writeData, type DataVia } from "./api.ts";
 import { requiredColumns } from "./sheet.ts";
@@ -377,7 +377,7 @@ export class ArtifactDataStore {
         const page = await this.socket.query("artifact_data", {
           id: this.artifact,
           collection,
-          limit: 500,
+          limit: DATA_QUERY_MAX_ROWS,
           ...(cursor ? { cursor } : {}),
         });
         if (this.stopped || c.reads !== read) return;
@@ -434,7 +434,7 @@ export class ArtifactDataStore {
           id: this.artifact,
           collection,
           since,
-          limit: 500,
+          limit: DATA_QUERY_MAX_ROWS,
           ...(cursor ? { cursor } : {}),
         });
         if (this.stopped) return;

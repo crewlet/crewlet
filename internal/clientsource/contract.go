@@ -753,6 +753,7 @@ var contract = []Entry{
 	{"DASHBOARD_MAX_WIDGETS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_MAX_DATASETS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_MAX_TABLE_COLUMNS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
+	{"DASHBOARD_MAX_SHARE_PARTS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_SPEC_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_FORMAT_VERSION", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"ARTIFACT_CAPABILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
@@ -793,6 +794,9 @@ var contract = []Entry{
 	{"ARTIFACT_MOVE_MAX_ITEMS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_LIST_DELIMITER", ReadScalar, "internal/api/artifactsapi.TestTheDashboardListsWithTheEnginesDelimiter"},
 
+	// pins.ts
+	{"ARTIFACT_LIST_MAX", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+
 	// brand.ts
 	{"BRAND_NAME_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"BRAND_ENTRY_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
@@ -828,6 +832,9 @@ var contract = []Entry{
 	{"DATA_COLLECTIONS_MAX", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
 	{"DATA_COLUMNS_MAX", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
 	{"DATA_LABEL_MAX_BYTES", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
+	{"DATA_QUERY_MAX_ROWS", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
+	{"DATA_OPTION_ID_CHARS", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardMintsAnOptionIDByTheEnginesGrammar"},
+	{"DATA_OPTION_ID_MAX", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardMintsAnOptionIDByTheEnginesGrammar"},
 	{"COLLECTION_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"RESERVED_COLLECTIONS", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"FIELD_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},

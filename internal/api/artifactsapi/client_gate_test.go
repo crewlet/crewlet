@@ -144,6 +144,7 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
 		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
 		"ARTIFACT_MOVE_MAX_ITEMS":        artifacts.MaxMovesPerCall,
+		"ARTIFACT_LIST_MAX":              artifactsdomain.MaxListLimit,
 		"BRAND_NAME_MAX_BYTES":           brandformat.MaxNameBytes,
 		"BRAND_TAGLINE_MAX_BYTES":        brandformat.MaxTaglineBytes,
 		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
@@ -411,6 +412,7 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		"DASHBOARD_MAX_WIDGETS":         artifacts.MaxDashboardWidgets,
 		"DASHBOARD_MAX_DATASETS":        artifacts.MaxDashboardDatasets,
 		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns,
+		"DASHBOARD_MAX_SHARE_PARTS":     artifacts.MaxShareParts,
 		"DASHBOARD_FORMAT_VERSION":      dashspec.FormatVersion} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {

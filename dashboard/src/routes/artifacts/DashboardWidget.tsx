@@ -58,6 +58,17 @@ import {
   type SeatNames,
 } from "~/lib/artifacts/dashboard.ts";
 import { useSeatNames } from "~/lib/artifacts/people.ts";
+import { DASHBOARD_MAX_SHARE_PARTS } from "~/contract/artifacts.ts";
+
+/**
+ * How many rows a bars widget and a table widget that name no `limit` draw:
+ * THE DASHBOARD'S OWN, as `docs/reference/dashboard-spec.md` states them, since
+ * the dashboard is what draws a widget and the engine only holds `limit` to
+ * its bounds. A share that names none draws every part it may
+ * ([DASHBOARD_MAX_SHARE_PARTS], the engine's).
+ */
+const DEFAULT_BAR_ROWS = 10;
+const DEFAULT_TABLE_ROWS = 100;
 
 /** The widget types drawn as a chart, which a reader may save as an image. */
 const CHARTS = new Set<Widget["type"]>(["timeseries", "columns", "activity", "bars", "share"]);
@@ -350,7 +361,7 @@ function Figure({
       return (
         <BarList
           emptyLabel={empty}
-          limit={w.limit ?? 10}
+          limit={w.limit ?? DEFAULT_BAR_ROWS}
           data={rows.map((r, i) => ({
             id: String(i),
             label: wordsOf(column(w.label), r[w.label ?? ""] ?? null, seatName),
@@ -364,7 +375,7 @@ function Figure({
       // parts, so the legend, keyed from the same list, says which part is
       // which and how much it holds.
       const parts = shareParts(
-        rows.slice(0, w.limit ?? 8).map((r, i) => ({
+        rows.slice(0, w.limit ?? DASHBOARD_MAX_SHARE_PARTS).map((r, i) => ({
           id: String(i),
           label: wordsOf(column(w.label), r[w.label ?? ""] ?? null, seatName),
           value: numberOr0(r[w.value ?? ""]),
@@ -388,7 +399,7 @@ function Figure({
         <RowsTable
           columns={columns}
           shown={w.columns ?? columns.map((c) => c.key)}
-          rows={rows.slice(0, w.limit ?? 100)}
+          rows={rows.slice(0, w.limit ?? DEFAULT_TABLE_ROWS)}
           empty={empty}
         />
       );

@@ -2,6 +2,7 @@
 /** The schema editor's checks and the templates a new sheet starts from. */
 
 import { describe, expect, test } from "vitest";
+import { DATA_OPTION_ID_CHARS, DATA_OPTION_ID_MAX } from "~/contract/artifacts.ts";
 import {
   collectionNameProblem,
   fieldNameProblem,
@@ -47,6 +48,22 @@ describe("an option's id", () => {
     expect(optionID("In review", ["in_review", "in_review_2"])).toBe("in_review_3");
     expect(optionID("???", [])).toBe("option");
     expect(optionID("Crème", [])).toBe("creme");
+  });
+
+  // AN ID IT MINTS IS ONE THE ENGINE TAKES, written in the engine's class and
+  // within its width (`artifactdata.OptionIDChars`, `MaxOptionIDBytes`), a
+  // suffix that makes it unique included. Mutation: mint from a wider class,
+  // or cut the base at the engine's whole width, and an id here is refused.
+  test("is one the engine's grammar takes, however long or unique it is made", () => {
+    const engine = new RegExp(`^[${DATA_OPTION_ID_CHARS}]{1,${DATA_OPTION_ID_MAX}}$`);
+    const long = "Needs a decision from the board before the quarter closes, or later";
+    const taken: string[] = [];
+    for (let i = 0; i < 12; i++) taken.push(optionID(long, taken));
+    for (const label of ["In review", "Crème brûlée", "a.b/c d", "設計レビュー", long]) {
+      expect(optionID(label, []), label).toMatch(engine);
+    }
+    for (const id of taken) expect(id).toMatch(engine);
+    expect(new Set(taken).size).toBe(taken.length);
   });
 });
 
