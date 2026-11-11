@@ -326,18 +326,24 @@ func (s *syncer) seat(
 			s.finding(integration.FindingUnknownTier, h, lane, f)
 			return laneEffect{}
 		}
-		if len(shared) > 0 && slices.ContainsFunc(steps, func(st Step) bool { return st.Op.Seals() }) {
-			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed,
-				Steps: []StepOutcome{}, Error: sharedFailure})
-			s.finding(integration.FindingIdentityFailed, h, lane, sharedFailure)
-			return laneEffect{}
-		}
+		sealsShared := len(shared) > 0 && slices.ContainsFunc(steps, func(st Step) bool { return st.Op.Seals() })
 		if s.in.Sink == nil {
 			// A DRY RUN refreshes what the vendor shows and keeps the last
-			// sync's result.
+			// sync's result. A refusal it finds is said on the integration,
+			// since the seat's record does not carry it.
 			lr := rec.Lanes[lane]
 			lr.Observed, lr.ObservedAt = hv, s.now
 			rec.Lanes[lane] = lr
+			if sealsShared {
+				s.report.Findings = append(s.report.Findings, s.seatFinding(
+					integration.FindingIdentityFailed, h, lane, sharedFailure, false))
+			}
+			return laneEffect{}
+		}
+		if sealsShared {
+			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed,
+				Steps: []StepOutcome{}, Error: sharedFailure})
+			s.finding(integration.FindingIdentityFailed, h, lane, sharedFailure)
 			return laneEffect{}
 		}
 		if i := slices.IndexFunc(steps, func(st Step) bool { return st.Op.Retires() }); holding && i >= 0 {
@@ -837,17 +843,25 @@ func (s *syncer) faultAll(rec *Record, lanes []Lane, verb StepVerb, err error) {
 // Confluence are two lanes over one Atlassian account, and there the lane is
 // what tells a reader which product refused.
 func (s *syncer) finding(kind integration.FindingKind, h string, lane Lane, f *Failure) {
+	// SEAT, because the seat's own record carries the same failure, which
+	// its agent's row draws with the step's own control; see
+	// [integration.Finding.Seat].
+	s.report.Findings = append(s.report.Findings, s.seatFinding(kind, h, lane, f, true))
+}
+
+// seatFinding is one seat's failure as a finding; seat is whether its record
+// carries the failure too.
+func (s *syncer) seatFinding(kind integration.FindingKind, h string, lane Lane, f *Failure,
+	seat bool) integration.Finding {
+
 	detail := f.Said
 	if lane != "" && len(LanesOf(s.kind)) > 1 {
 		detail = LaneName(lane) + ": " + f.Said
 	}
-	// SEAT, because the seat's own record carries the same failure, which
-	// its agent's row draws with the step's own control; see
-	// [integration.Finding.Seat].
-	s.report.Findings = append(s.report.Findings, integration.Finding{
+	return integration.Finding{
 		Kind: kind, Subject: h, Detail: detail, Remedy: f.Remedy, ActionURL: f.ActionURL,
-		Seat: true,
-	})
+		Seat: seat,
+	}
 }
 
 // failureOf is the failure a step's error reports: the vendor's own refusal,

@@ -258,6 +258,46 @@ func TestSyncRefusesASinkTheCompanyNames(t *testing.T) {
 	}
 }
 
+// A DRY RUN THAT FINDS A SINK SOMETHING ELSE NAMES REPORTS IT AND KEEPS THE LAST
+// SYNC: the refusal is said on the integration, since the seat's record does
+// not carry it, and the lane's result and its clock stay the writing sync's.
+//
+// Mutation: refuse the shared sink before the dry-run branch again and the
+// lane reads refused at the dry run's instant.
+func TestADryRunReportsASharedSinkAndKeepsTheLastSync(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: no(), Role: "a"}), nil)
+	written := h.record(t).Lanes[dd].Sync
+	if written == nil {
+		t.Fatal("the writing sync recorded no result")
+	}
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	c.Integrations.Datadog = &config.Datadog{Enabled: true, Provisioning: &config.DatadogProvisioning{
+		AppKey: "${DATADOG_APP_KEY_SRE}",
+	}}
+	dry := at.Add(10 * time.Minute)
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger,
+		Now: func() time.Time { return dry },
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	lane := h.record(t).Lanes[dd]
+	if lane.Sync == nil || lane.Sync.Outcome != written.Outcome || !lane.Sync.At.Equal(written.At) ||
+		!lane.ObservedAt.Equal(dry) {
+		t.Fatalf("lane = %+v, want the writing sync's result kept and the check moved to %v", lane, dry)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Seat ||
+		!strings.Contains(report.Findings[0].Detail, "DATADOG_APP_KEY_SRE") {
+		t.Fatalf("findings = %+v, want the shared name reported on the integration", report.Findings)
+	}
+	if len(h.v.Applied) != 0 {
+		t.Fatalf("a dry run applied %v", h.v.Applied)
+	}
+}
+
 // A WRITING SYNC RECORDS THE VENDOR'S NAMES FOR THE GRANT, as it read the
 // vendor's offer, so a turn names the level with no vendor asked; a dry run
 // keeps them, and a level the document moves is named as the next writing sync

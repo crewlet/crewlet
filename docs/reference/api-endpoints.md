@@ -4318,7 +4318,9 @@ of the integration runs), `refused` (the last sync failed), `changed_at_vendor`
 `off`. A lane carries two clocks: `observed_at` is when a pass last read the
 vendor for it, every pass including the check's dry run
 (`POST /setup/integrations/{kind}/check`), and `sync.at` is when a writing sync
-last ended, which a dry run leaves alone. The tab draws them as one value,
+last ended, which a dry run leaves alone: a refusal a dry run finds (a sealing
+step the sync would refuse) is reported on the integration and leaves the
+lane's last sync as it was. The tab draws them as one value,
 "Checked 1m ago, last applied 10m ago", and its header's "Last check" is the
 integration's own pass. On GitHub, `observed.ceiling` is the permissions the
 agent's app is registered with, which every token is narrowed from: a
