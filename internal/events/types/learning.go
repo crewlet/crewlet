@@ -418,7 +418,7 @@ func (e PrefetchSummary) SummaryFor(actor string) string {
 	}
 	gated := ""
 	if e.TriggerRequiresRecon {
-		gated = " (thin trigger — filters gated)"
+		gated = " (thin trigger, filters gated)"
 	}
 	return lead(actor, fmt.Sprintf("prefetch: %d/%d hits%s", hits, len(blocks), gated))
 }

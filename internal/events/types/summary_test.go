@@ -203,14 +203,14 @@ func TestSummaries(t *testing.T) {
 	}, {
 		name:    "a gated prefetch says it was gated",
 		payload: PrefetchSummary{RoleName: "Dev", TriggerRequiresRecon: true},
-		want:    "Dev prefetch: 0/7 hits (thin trigger — filters gated)",
+		want:    "Dev prefetch: 0/7 hits (thin trigger, filters gated)",
 	}, {
 		// THE THREAD BLOCK IS NOT GATED: it is what makes a thin trigger
 		// thick, so a turn whose filters were all skipped still counts it.
 		name: "a gated turn still counts the thread it was handed",
 		payload: PrefetchSummary{RoleName: "Dev",
 			TriggerRequiresRecon: true, ThreadContextHit: true},
-		want: "Dev prefetch: 1/7 hits (thin trigger — filters gated)",
+		want: "Dev prefetch: 1/7 hits (thin trigger, filters gated)",
 	}, {
 		name:    "a no-op persist decision",
 		payload: PersistDeciderCompleted{RoleName: "Dev", Classification: PersistNOOP},
