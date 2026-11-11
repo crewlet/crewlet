@@ -308,6 +308,21 @@
 // package holds is [settled]: its conditional writes are retried through
 // [jsinflight.Decide] until the leader decides them, and one still undecided
 // at its deadline is UNKNOWN rather than a race somebody else won (settle.go).
+//
+// # A write across a link waits as long as its bytes take to cross
+//
+// A node without the `data` role reaches these buckets across its leaf link,
+// and every node on an external broker across the network, at a pace the
+// engine allows to be as slow as the object store's floor, thirty seconds a
+// mebibyte; held to the client's five seconds, a write whose value took longer
+// to cross — an MCP listing of up to 896 KiB, which every node with seats
+// writes — failed as the store being unavailable while its bytes were still
+// on the link. So every write of a settled bucket whose caller set no deadline
+// waits the request term and, across a link, the crossing of what it carries
+// for every send the client may make of it (settle.go), and each store is told
+// how its connection reaches its buckets where it is opened ([Reach]: the
+// engine states it from its broker's kind), since nothing it is handed can
+// say.
 package kv
 
 import (
@@ -425,9 +440,17 @@ type Config struct {
 	// the other's claims, because the protocol gate is deliberately
 	// fleet-wide.
 	BucketPrefix string
+
+	// Reach is how this node's connection reaches the buckets — in its own
+	// process, or across a link — which decides how long a write's bytes
+	// are given to cross ([Reach]). Required.
+	Reach Reach
 }
 
 func (c *Config) normalize() error {
+	if err := checkReach("Config", c.Reach); err != nil {
+		return err
+	}
 	switch {
 	case c.TTL <= 0:
 		return fmt.Errorf("coord/kv: Config.TTL is required")
@@ -447,7 +470,8 @@ func (c *Config) normalize() error {
 // lease buckets: ONE prefix and one replica count, so a store and a counter
 // opened from the same deployment name the same bucket (see [OpenEpochs]).
 func (c *Config) buckets() EpochsConfig {
-	return EpochsConfig{Clustered: c.Clustered, Replicas: c.Replicas, BucketPrefix: c.BucketPrefix}
+	return EpochsConfig{Clustered: c.Clustered, Replicas: c.Replicas, BucketPrefix: c.BucketPrefix,
+		Reach: c.Reach}
 }
 
 // lane is one lease bucket and the rule its records expire by.
@@ -619,7 +643,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// bucket, so believing a number the bucket does not carry would
 		// accept deadlines it will not honour.
 		leases: &lane{
-			kv:         settled(js, leases),
+			kv:         settled(js, leases, cfg.Reach),
 			read:       readers[0],
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
@@ -628,7 +652,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// The duty bucket's ceiling is the CONTRACT's, and its age only has
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
-			kv:         settled(js, duties),
+			kv:         settled(js, duties, cfg.Reach),
 			read:       readers[1],
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,

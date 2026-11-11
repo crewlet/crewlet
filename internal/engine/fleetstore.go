@@ -104,7 +104,7 @@ func OpenFleetStore(ctx context.Context, b *config.Bootstrap) (*FleetStore, erro
 	openCtx, cancel := context.WithTimeout(ctx,
 		jsprovision.Clustered(clustered).SequenceBudget())
 	defer cancel()
-	fleet, err := openFleet(openCtx, broker.JetStream(), b.Stream.Replicas, clustered)
+	fleet, err := openFleet(openCtx, broker.JetStream(), b.Stream.Replicas, clustered, coordinationReach(b))
 	if err != nil {
 		broker.Close()
 		return nil, fmt.Errorf("engine: open the fleet's store on %s: %w", broker.Where(), err)

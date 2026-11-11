@@ -608,6 +608,11 @@ type FleetConfig struct {
 	// real deployment, and every create on it still waits on the same
 	// metadata group. See [jsprovision.Clustered].
 	Clustered bool
+
+	// Reach is how this node's connection reaches the buckets — in its own
+	// process, or across a link — which decides how long a write's bytes
+	// are given to cross ([Reach]). Required.
+	Reach Reach
 }
 
 // rateBucketFactor is how many windows the rate bucket keeps.
@@ -620,6 +625,9 @@ type FleetConfig struct {
 const rateBucketFactor = 3
 
 func (c *FleetConfig) normalize() error {
+	if err := checkReach("FleetConfig", c.Reach); err != nil {
+		return err
+	}
 	if c.BucketPrefix == "" {
 		c.BucketPrefix = defaultBucketPrefix
 	}
@@ -792,7 +800,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		reportRetention(ctx, name, ttl, facts)
 		// EVERY CONDITIONAL WRITE TO IT IS DECIDED BY THE LEADER — see
 		// settle.go for the third answer a compare-and-set can get.
-		return settled(js, bucket), facts, nil
+		return settled(js, bucket, cfg.Reach), facts, nil
 	}
 
 	store := &FleetStore{

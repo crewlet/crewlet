@@ -174,6 +174,7 @@ func boxRunFleet(b *testing.B) *FleetStore {
 		return client
 	}
 	cfg := FleetConfig{
+		Reach:         InProcess,
 		BucketPrefix:  fmt.Sprintf("f%d", bucketSeq.Add(1)),
 		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,

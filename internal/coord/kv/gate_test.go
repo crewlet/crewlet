@@ -207,6 +207,7 @@ func BenchmarkAGatedClaim(b *testing.B) {
 			_, nc := embeddedServer(b)
 			s, err := Open(context.Background(), jsOf(nc), Config{
 				TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("b%d", bucketSeq.Add(1)),
+				Reach: InProcess,
 			})
 			if err != nil {
 				b.Fatalf("Open: %v", err)
