@@ -193,29 +193,30 @@ func (f pidFile) written(t testing.TB) (int, bool) {
 
 // pastItsDeadline runs the stand-in under deadlines doubling from first until
 // a run's tree was up — its pid written — before the deadline fired, and
-// returns that run's outcome, its deadline, how long Run took and the pid.
+// returns that run's outcome and the pid.
 //
 // A deadline that fires before the shell has started its tree ends a run
 // that never did what the case is about, and on a loaded -race runner a
 // shell's start-up is a matter of scheduling: so a run whose pid never
 // appeared is run again with more room rather than failed, and the case
 // asserts only about a run whose tree existed when the deadline ended it.
-// Each try is bounded; the sum stays inside the hang detector.
-func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Duration) (o outcome, deadline, took time.Duration, pid int) {
+// Each try is bounded; the sum stays inside the hang detector. It times
+// nothing: a case holds the wait the pool armed (gitproc.SeeGrace) rather than
+// how long Run took, which a loaded runner lengthens.
+func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Duration) (o outcome, pid int) {
 	t.Helper()
-	for deadline = first; deadline <= hang/3; deadline *= 2 {
+	deadline := first
+	for ; deadline <= hang/3; deadline *= 2 {
 		if err := os.Remove(pids.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatal(err)
 		}
-		began := time.Now()
 		o = await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassRead, Deadline: deadline}), "a run past its deadline")
-		took = time.Since(began)
 		if pid, ok := pids.written(t); ok {
-			return o, deadline, took, pid
+			return o, pid
 		}
 	}
 	t.Fatalf("no run wrote its pid before a deadline of up to %v fired", deadline/2)
-	return outcome{}, 0, 0, 0
+	return outcome{}, 0
 }
 
 // awaitGauge waits, up to the hang detector, until name's series for class

@@ -6,43 +6,66 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A RESULT SAYS WHEN ITS PROCESS BEGAN: after its slot was granted — a run
 // waiting behind a held lane began only once the lane let it in — and before
-// everything the process did, so a run that sleeps 200 ms began at least that
-// long before Run returned. A caller orders it against a time.Now() of its
+// everything the process did. A caller orders it against a time.Now() of its
 // own: the cache spares a file it rewrote after a report's process began.
 //
-// Mutation: take Began at the reap — the run began less than 200 ms before it
-// returned; take it before the lane's wait — it began before the holder let go.
+// The pool reads Began from a clock the case steps (gitproc.SetClock), so
+// each claim is an instant the case stated rather than two readings of the
+// wall clock, which a coarse clock stamps equal and a strict order then
+// fails: the clock reads queued while the run waits behind the held lane
+// (gitproc.Waiting), admitted from just before the case lets the lane go, and
+// running once the processes gauge counts the run's process, which it does
+// only after the process has started.
+//
+// Mutation: take Began at the reap — it reads running; take it before the
+// lane's wait — it reads queued.
 func TestAResultSaysWhenItsProcessBegan(t *testing.T) {
 	t.Parallel()
-	p := fakePool(t, `case "$1" in hold) `+holdBody+`;; sleepy) sleep 0.2 ;; esac`, gitproc.Options{MaxProcesses: 1})
-	called := time.Now()
-	h := hold(t, p, gitproc.ClassRead)
-	done := start(t.Context(), p, gitproc.Cmd{Args: []string{"sleepy"}, Class: gitproc.ClassRead, Deadline: time.Minute})
-	awaitWaiting(t, p, gitproc.ClassRead, 1) // waiting behind the held lane before the release is stamped
-	released := time.Now()
-	h.end(t)
-	o := await(t, done, "a run behind a held lane")
-	returned := time.Now()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := fakePool(t, `case "$1" in hold) `+holdBody+`;; esac`, gitproc.Options{MaxProcesses: 1, Metrics: rec})
+	queued := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	admitted, running := queued.Add(time.Minute), queued.Add(2*time.Minute)
+	var clock atomic.Pointer[time.Time]
+	clock.Store(&queued)
+	gitproc.SetClock(p, func() time.Time { return *clock.Load() })
+
+	held := hold(t, p, gitproc.ClassRead)
+	dir := t.TempDir()
+	run := holder{started: filepath.Join(dir, "started"), release: filepath.Join(dir, "release")}
+	run.done = start(t.Context(), p, gitproc.Cmd{Args: []string{"hold", run.started, run.release},
+		Class: gitproc.ClassRead, Deadline: time.Minute})
+	awaitWaiting(t, p, gitproc.ClassRead, 1) // queued behind the held lane while the clock reads queued
+	clock.Store(&admitted)
+	held.end(t)
+	awaitGauge(t, rec, metrics.CodeGitProcesses, "read", 1) // its process has started
+	clock.Store(&running)
+	o := run.end(t)
 	if o.err != nil {
 		t.Fatalf("the run: %v", o.err)
 	}
-	switch {
-	case !o.res.Began.After(called):
-		t.Errorf("Began %v is not after the call at %v", o.res.Began, called)
-	case !o.res.Began.After(released):
-		t.Errorf("Began %v is before the held lane let the run in at %v", o.res.Began, released)
-	case returned.Sub(o.res.Began) < 200*time.Millisecond:
-		t.Errorf("Began %v is %v before Run returned, less than the process slept", o.res.Began,
-			returned.Sub(o.res.Began))
+	switch began := o.res.Began; {
+	case began.Equal(queued):
+		t.Errorf("Began reads %v, the clock while the run waited behind the held lane: it was taken before the lane let the run in",
+			began)
+	case began.Equal(running):
+		t.Errorf("Began reads %v, the clock once the process was running: it was taken after the process began", began)
+	case !began.Equal(admitted):
+		t.Errorf("Began reads %v, want %v: the clock between the lane letting the run in and its process starting",
+			began, admitted)
 	}
 }
 

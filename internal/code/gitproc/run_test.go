@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -342,7 +343,7 @@ func TestADeadlineEndsTheWholeTree(t *testing.T) {
 	t.Parallel()
 	pids := newPIDFile(t)
 	p := fakePool(t, treeBody(pids), gitproc.Options{})
-	o, _, _, pid := pastItsDeadline(t, p, pids, 300*time.Millisecond)
+	o, pid := pastItsDeadline(t, p, pids, 300*time.Millisecond)
 	if !errors.Is(o.err, gitproc.ErrDeadline) || o.res.Exit != -1 {
 		t.Fatalf("a run past its deadline: exit %d, %v; want ErrDeadline and a signal", o.res.Exit, o.err)
 	}
@@ -370,6 +371,17 @@ func TestACancelledRequestKillsTheWholeTree(t *testing.T) {
 }
 
 // A PROCESS THAT IGNORES SIGTERM IS KILLED KillGrace later — and Run returns.
+//
+// The pool arms the wait between the two signals through the case
+// (gitproc.SeeGrace), which records the grace it was armed with and ends the
+// wait at once: so the grace is the one the case set, held exactly. Read off
+// the wall clock instead — how long Run took past its deadline, under ten
+// seconds — a loaded runner could lose the bound, and a grace of KillGrace's
+// five seconds passed inside it.
+//
+// Mutation: arm the grace with the KillGrace constant rather than the pool's
+// own — the pool waits 5s, not the 300ms the case set; send no SIGKILL once
+// the grace ends — the run ignoring SIGTERM never returns.
 func TestAProcessThatIgnoresTerminateIsKilled(t *testing.T) {
 	t.Parallel()
 	pids := newPIDFile(t)
@@ -378,12 +390,32 @@ func TestAProcessThatIgnoresTerminateIsKilled(t *testing.T) {
 	// signal stays ignored across exec — when its deadline fired.
 	p := fakePool(t, "trap '' TERM; "+treeBody(pids), gitproc.Options{})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
-	o, deadline, took, pid := pastItsDeadline(t, p, pids, 200*time.Millisecond)
+	var (
+		mu     sync.Mutex
+		graces []time.Duration
+	)
+	gitproc.SeeGrace(p, func(grace time.Duration) <-chan time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		graces = append(graces, grace)
+		ended := make(chan time.Time, 1)
+		ended <- time.Time{}
+		return ended
+	})
+	o, pid := pastItsDeadline(t, p, pids, 200*time.Millisecond)
 	if !errors.Is(o.err, gitproc.ErrDeadline) {
 		t.Fatalf("a run ignoring SIGTERM: %v, want ErrDeadline", o.err)
 	}
-	if took-deadline >= 10*time.Second {
-		t.Fatalf("Run took %v past its %v deadline to end a run with a 300ms grace", took-deadline, deadline)
+	mu.Lock()
+	armed := slices.Clone(graces)
+	mu.Unlock()
+	if len(armed) == 0 {
+		t.Fatal("the pool sent SIGTERM and armed no wait before SIGKILL")
+	}
+	for _, grace := range armed {
+		if grace != 300*time.Millisecond {
+			t.Errorf("the pool waited %v between SIGTERM and SIGKILL, want the 300ms grace the case set", grace)
+		}
 	}
 	if !procgrouptest.AwaitGone(t, pid, 10*time.Second) {
 		t.Fatalf("the grandchild %d ignoring SIGTERM outlived its run", pid)
@@ -547,19 +579,26 @@ func TestNothingARunStartedOutlivesIt(t *testing.T) {
 
 // A STRAGGLER HOLDING STDOUT DOES NOT HOLD RUN: the sweep ends it, which closes
 // the pipes — the drain watch never has to.
+//
+// Who closed the pipes is read off the pool's own reports: the sweep's line
+// for the straggler it killed, and none from the drain watch. Run answers
+// while the straggler has ten minutes left to sleep, so a Run held by it
+// never answers inside the hang detector; how soon it answers is no part of
+// the claim. A bound on the wall clock — under ten seconds — failed a runner
+// that lost them, and passed a pool that never swept, whose drain watch freed
+// Run within a third of a second.
+//
+// Mutation: skip the sweep — the straggler outlives the run, and the drain
+// watch releases the pipes it holds.
 func TestAStragglerHoldingStdoutDoesNotHoldRun(t *testing.T) {
 	t.Parallel()
 	pids := newPIDFile(t)
 	var logs logBuffer
 	p := fakePool(t, "sleep 600 & echo $! > "+pids.shell()+"; exit 0", gitproc.Options{Logger: logs.logger()})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
-	began := time.Now()
 	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassRead, Deadline: time.Minute}), "a run with a straggler")
 	if o.err != nil {
 		t.Fatal(o.err)
-	}
-	if took := time.Since(began); took >= 10*time.Second {
-		t.Fatalf("Run took %v with a straggler holding its stdout", took)
 	}
 	if pid := pids.read(t); !procgrouptest.AwaitGone(t, pid, 10*time.Second) {
 		t.Fatalf("the straggler %d outlived the run", pid)
@@ -691,25 +730,48 @@ func (r *blockedReader) Read([]byte) (int, error) {
 }
 
 // RUN RETURNS ONLY AFTER ITS INPUT ENDS — and still kills on time: the process
-// is reaped long before the caller's Read returns, and Run waits for that Read
-// rather than leave a goroutine inside it.
+// is reaped while the caller's Read is still blocked, and Run waits for that
+// Read rather than leave a goroutine inside it.
+//
+// Both halves are read off the pool, never the clock: the processes gauge
+// says the process was reaped and its group swept with the Read still
+// blocked, and the drain says when it begins to wait for the run's input
+// (gitproc.OnDrain) — only then does the case let the Read end, so a Run that
+// would not wait for it has answered by then. A release three seconds after
+// the start instead passed a Run that would not wait once the runner held it
+// past them, and failed a healthy run the runner reaped after them.
+//
+// Mutation: drain git's own streams alone, leaving stdin's copier inside the
+// caller's Read — Run answers with the Read still blocked; reap the process
+// only once its input has ended — the gauge never counts it gone.
 func TestRunReturnsOnlyAfterItsInputEnds(t *testing.T) {
 	t.Parallel()
-	p := fakePool(t, "sleep 600", gitproc.Options{})
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := fakePool(t, "sleep 600", gitproc.Options{Metrics: rec})
+	input := make(chan struct{})
+	waits := sync.OnceFunc(func() { close(input) })
+	gitproc.OnDrain(p, func(stream string) {
+		if stream == "stdin" {
+			waits()
+		}
+	})
 	in := &blockedReader{release: make(chan struct{})}
-	began := time.Now()
-	time.AfterFunc(3*time.Second, func() { close(in.release) })
-	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Class: gitproc.ClassTransfer, Share: suiteShare,
-		Deadline: time.Minute, Stall: 200 * time.Millisecond}), "a run whose input blocks")
-	returned := time.Since(began)
-	if !errors.Is(o.err, gitproc.ErrStalled) {
+	done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Class: gitproc.ClassTransfer, Share: suiteShare,
+		Deadline: time.Minute, Stall: 200 * time.Millisecond})
+	awaitGauge(t, rec, metrics.CodeGitProcesses, "transfer", 0) // reaped and swept: the Read is still blocked
+	select {
+	case <-input:
+	case o := <-done:
+		t.Fatalf("Run returned (%v) with its input's Read still blocked", o.err)
+	case <-time.After(hang): //fixedwait:liveness
+		t.Fatalf("Run's drain had not waited for its input after %v", hang)
+	}
+	close(in.release)
+	if o := await(t, done, "a run whose input blocks"); !errors.Is(o.err, gitproc.ErrStalled) {
 		t.Fatalf("a stalled run with a blocked input: %v, want ErrStalled", o.err)
-	}
-	if o.res.Took >= 3*time.Second {
-		t.Errorf("the process was reaped after %v: it was not killed before its input ended", o.res.Took)
-	}
-	if returned < 3*time.Second {
-		t.Errorf("Run returned after %v, before its input's Read did", returned)
 	}
 }
 
@@ -1132,7 +1194,7 @@ func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
 		t.Parallel()
 		pids := newPIDFile(t)
 		p := fakePool(t, treeBody(pids), gitproc.Options{})
-		o, _, _, _ := pastItsDeadline(t, p, pids, 300*time.Millisecond)
+		o, _ := pastItsDeadline(t, p, pids, 300*time.Millisecond)
 		if !errors.Is(o.err, gitproc.ErrDeadline) || o.res.Exit >= 0 {
 			t.Fatalf("exit %d, %v; want ErrDeadline and a signal", o.res.Exit, o.err)
 		}
