@@ -12,7 +12,7 @@ import (
 // The access sections a dispatch renders, as a seat reads them.
 const (
 	toldAccess  = "## Your access\nWhat you can reach with your own credentials now.\n- Cloudflare (example.com): Secure."
-	toldChanges = "## What changed since your last turn\nYour access changed.\n- Cloudflare: your level is now Secure (was Operate)."
+	toldChanges = "## What changed since your last turn\nYour access changed.\n- Cloudflare: your Crewlet grant now sets your level to Secure (was Operate)."
 )
 
 // A RELAUNCH CARRIES THE SAME BLOCK. What the dispatch told the seat is frozen

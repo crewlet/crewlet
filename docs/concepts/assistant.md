@@ -201,7 +201,11 @@ logo on the brand draft you have open, is a further proposal by the file.
 **Attach images** to a question (a screenshot, a sketch, a current logo): pick
 them, drop them on the panel or paste them, up to four PNG, JPEG, WebP or GIF
 images of at most 5 MiB each. Deep work reads them; quick answers cannot see
-them.
+them. Where your company has not turned on deep work, nothing reads an image,
+so Attach image is drawn disabled with that reason and a pasted or dropped
+image is refused: paste the text the image shows instead, or ask an
+administrator to turn on deep work. A question that reaches the engine with
+images all the same is answered with the same advice.
 
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from

@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -146,6 +147,14 @@ var argsFor = map[string]map[string]any{
 // answer, because this App does not stand their surface up.
 var heldElsewhere = map[string]bool{
 	"get_org_chart/seats": true, // internal/api/iamapi: TestTheSeatsCardReadsTheSeatsAnswer
+}
+
+// ONE AGENT'S LANE is a setup route this App does not stand up, held by
+// internal/api/setupapi's own suite (TestTheSeatAccessCardReadsItsRoutesOwnAnswer).
+func init() {
+	for _, lane := range seataccess.Lanes() {
+		heldElsewhere["get_seat_access/"+string(lane)] = true
+	}
 }
 
 // answerTypes are, by card variant, the Go types the handler encodes where

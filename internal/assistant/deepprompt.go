@@ -106,8 +106,9 @@ const deepBlock = "When a task needs research, scripts, generated files, the ima
 	"change it proposed, from the engine's own records: state those outcomes as facts, " +
 	"with the keys and ids they name."
 
-// attachmentsBlock tells the quick-mode model what the question carried.
-func attachmentsBlock(files []wire.FileRef, deep bool) string {
+// attachmentsBlock tells the quick-mode model what the question carried and,
+// where this turn cannot hand it to deep work, what to offer the person instead.
+func attachmentsBlock(files []wire.FileRef, deep, configured bool) string {
 	if len(files) == 0 {
 		return ""
 	}
@@ -116,8 +117,15 @@ func attachmentsBlock(files []wire.FileRef, deep bool) string {
 		names = append(names, fmt.Sprintf("%s (%s, file id %s)", oneLine(f.Name), f.MediaType, f.FileID))
 	}
 	line := "The person attached: " + strings.Join(names, "; ") + "."
-	if deep {
+	switch {
+	case deep:
 		return line + " You cannot see them; deep work can."
+	case configured:
+		return line + " You cannot see them, and deep work, which reads them, cannot run " +
+			"here now. Say so, and offer what works: they can paste the text the images show, " +
+			"or ask again shortly."
 	}
-	return line + " You cannot see them, and deep work is not available here: say so."
+	return line + " You cannot see them: only deep work reads images, and this company " +
+		"has not turned it on. Say so, and offer what works: they can paste the text the " +
+		"images show, or ask an administrator to turn on deep work."
 }

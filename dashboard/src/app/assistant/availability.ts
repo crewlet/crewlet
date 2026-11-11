@@ -123,6 +123,30 @@ function shortFor(code: AssistantErrorCode): string {
   }
 }
 
+/** Why a question cannot carry images, in the words each place draws. */
+export interface AttachClosed {
+  /** The Attach button's reason: one short sentence. */
+  short: string;
+  /** What a dropped or pasted image is refused with, and what works instead. */
+  body: string;
+}
+
+/**
+ * Why a question cannot carry images, or null where it can. ONLY DEEP WORK
+ * READS AN IMAGE, so where the company runs none the composer takes no image
+ * rather than keeping one nothing reads; the button stays drawn, disabled,
+ * with this reason, and a dropped or pasted image is refused with the body.
+ */
+export function attachClosedFor(
+  viewer: Pick<ViewerState, "assistantReadsImages">,
+): AttachClosed | null {
+  if (viewer.assistantReadsImages) return null;
+  return {
+    short: "Images are read only in deep work, which is off here",
+    body: "Ask Crewlet reads images only in deep work, which this company has not turned on. Paste the text instead, or ask an admin to turn on deep work.",
+  };
+}
+
 /**
  * Why the assistant's model cannot answer now, or null when nothing is known
  * to be wrong with it. The heading and the hint are the engine's (an

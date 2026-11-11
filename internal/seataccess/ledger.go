@@ -70,6 +70,10 @@ type LaneRecord struct {
 	// Observed is what the vendor showed on the last sync.
 	Observed Observed `json:"observed"`
 
+	// ObservedAt is when a pass last read Observed from the vendor: every
+	// pass, a dry run included, where Sync moves only on a writing sync.
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+
 	// Sync is what the last sync did.
 	Sync *SyncResult `json:"sync,omitempty"`
 

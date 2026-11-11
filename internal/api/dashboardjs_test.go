@@ -2200,7 +2200,11 @@ const (
 	// withdrawn question read with its asker's reason and what covers it, and
 	// the Inbox leading with the agent work a person holds up, merged on top of
 	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
-	treeBudget = 5<<20 + 601<<10
+	// An agent's two access clocks, the note on what its GitHub App holds past
+	// its grant, the engine's status word and Ask Crewlet taking images only
+	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
+	// (5,859,202 bytes, +1,351, all script): 5722 KiB.
+	treeBudget = 5<<20 + 602<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

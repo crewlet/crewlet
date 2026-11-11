@@ -54,6 +54,7 @@ const BOUND: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  assistantReadsImages: false,
   chatVendors: [],
 };
 

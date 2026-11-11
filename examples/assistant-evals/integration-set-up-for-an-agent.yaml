@@ -1,0 +1,81 @@
+# Is an integration set up right for one agent? The assistant reads that
+# agent's access rather than the integration's health alone, sees the agent is
+# off there, and proposes turning it on with what its work needs.
+person:
+  apps: [admin]
+page:
+  screen: integrations
+  title: Integrations
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:5e3f7a21
+  accepts: []
+question: >-
+  Is our GitHub integration set up right for the QA Engineer? It should be
+  able to review pull requests.
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: qa, name: QA Engineer, kind: agent}
+  - route: GET /integrations
+    body:
+      integrations:
+        - {key: github, enabled: true, inbound: 12, last_at: "2026-11-10T11:30:00Z", reconcile: {phase_label: Connected, last_attempt_at: "2026-11-10T11:47:00Z", findings: []}}
+  - route: GET /setup/integrations/{kind}/access/seats/{handle}/{lane}
+    body:
+      kind: github
+      lane: github
+      integration: GitHub
+      handle: qa
+      name: QA Engineer
+      status: "off"
+      status_label: "Off"
+      grant: "Off"
+      holds: No account yet
+      tool: "off"
+      plan: []
+  - route: GET /setup/integrations/{kind}/access
+    body:
+      kind: github
+      revision: r7
+      syncing: false
+      options:
+        - lane: github
+          live: false
+          permissions:
+            - {key: contents, name: Contents}
+            - {key: pull_requests, name: Pull requests}
+      seats:
+        - handle: qa
+          name: QA Engineer
+          lanes:
+            github:
+              desired: {enabled: false}
+              observed: {exists: false, enabled: false}
+              status: "off"
+              plan: []
+              tool: "off"
+  - route: PUT /setup/integrations/{kind}/access
+    body:
+      kind: github
+      revision: r7
+      plans:
+        - handle: qa
+          lane: github
+          steps:
+            - {op: create, verb: create, text: "Create the QA Engineer's GitHub App", by: you}
+script:
+  - call: list_integrations
+  - call: get_seat_access
+    args: {handle: QA Engineer, integration: github}
+  - call: set_seat_access
+    args: {handle: qa, integration: github, enabled: true, permissions: {pull_requests: write, contents: read}}
+expect:
+  calls: [get_seat_access, set_seat_access]
+  proposals: 1
+  state: waiting_for_approval
+  shows: [QA Engineer]

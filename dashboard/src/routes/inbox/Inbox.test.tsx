@@ -925,13 +925,16 @@ describe("a question asked before its agent's access changed", () => {
     const ask = {
       ...askItem(),
       access_changed: {
-        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
+        lines: [
+          "SSH: its Crewlet grant now sets its level to Read (was Operate).",
+          "SSH: its Crewlet grant no longer lets it work in db-2.",
+        ],
       },
     };
     mount({ answers: { decisions: decisionsOf(ask) } });
     await settle();
     const note =
-      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
+      "Asked before this agent's access changed: SSH: its Crewlet grant now sets its level to Read (was Operate). (and 1 more change)";
     const list = screen.getByRole("navigation", { name: "Inbox" });
     expect(list.textContent).toContain(note);
     expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);

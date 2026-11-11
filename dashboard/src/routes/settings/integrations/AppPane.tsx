@@ -165,10 +165,7 @@ export function AppPane({
       if (
         lanes.some((l) => {
           const saved = seat.lanes[l.key];
-          return (
-            saved !== undefined &&
-            needsAttention(statusOf(l, saved, false, data.syncing, seat.departed))
-          );
+          return saved !== undefined && needsAttention(statusOf(l, saved, false));
         })
       )
         waiting++;

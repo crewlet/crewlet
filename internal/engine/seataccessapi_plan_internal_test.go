@@ -98,9 +98,13 @@ func TestAPlanIsDrawnOnlyWhereTheSyncTakesSteps(t *testing.T) {
 			t.Fatalf("%s: answer: %v", name, err)
 		}
 		for _, seat := range answer.Seats {
-			if got := len(seat.Lanes[tc.lane].Plan) > 0; got && !tc.planned {
-				t.Errorf("%s: the tab plans %s: %+v", name, seat.Handle,
-					seat.Lanes[tc.lane].Plan)
+			la := seat.Lanes[tc.lane]
+			if got := len(la.Plan) > 0; got && !tc.planned {
+				t.Errorf("%s: the tab plans %s: %+v", name, seat.Handle, la.Plan)
+			}
+			// THE STATUS IS THE ENGINE'S, read off the lane as answered.
+			if want := seataccess.StatusOf(la, answer.Syncing, seat.Departed); la.Status != want {
+				t.Errorf("%s: %s reads %q, want %q", name, seat.Handle, la.Status, want)
 			}
 		}
 	}
