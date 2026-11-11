@@ -11,7 +11,7 @@ import (
 // It names the definition everywhere the definition travels without it. A
 // node's listing names each tool's schemas by it rather than carrying them,
 // so a schema forty seats' children all list is stored once
-// (internal/coord's MCPToolSchema), and a decision taken on a tool can be
+// (internal/coord's MCPToolDefinition), and a decision taken on a tool can be
 // held to the definition it was taken on: a server that changes a tool
 // changes its digest.
 //

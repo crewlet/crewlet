@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/mcpreview`
-- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheSchemasWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`
+- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`
 - **Cost-when-tried:** a tool's level was read off its name alone, so a server could change what a tool its operator had set to Always allow does (a description that now says it deletes, a read-only hint dropped, a new tool behind a familiar prefix) and every agent went on calling it unasked; and the engine listed a running server only when it started it, so nothing would have seen the change anyway.
 - **Tag-status:** unreleased
 
@@ -32,7 +32,9 @@ each call, exactly as a tool at Needs approval does (ADR-0077).
    not read the copy holds every allowed tool; the server's page lists each
    change with the part it moved, the definition before and after, and
    whether it claims less risk than before (LOOSENED, read off the hints the
-   server declared); the alarm `mcp_tools_changed` counts the changes that
+   server declared), each definition whole from the record ADR-0074 keeps of
+   it, and any part it cannot show named as unshown rather than drawn as
+   unchanged; the alarm `mcp_tools_changed` counts the changes that
    hold a tool. A tool no live listing names keeps its row, removed, until a
    person accepts that it went.
 4. **A person decides a change by the definition they reviewed**:
@@ -49,9 +51,9 @@ each call, exactly as a tool at Needs approval does (ADR-0077).
    answers in the server's stead.
 6. **A box is given no server a tool of which is unreviewed**: it reaches a
    server whole, and could call the tool without being asked.
-7. **The sweep keeps what an accepted record names**: its schemas, for as
-   long as a change is shown beside them, and the records of a server the
-   company declares or a node lists.
+7. **The sweep keeps what an accepted record names**: its definition whole,
+   for as long as a change is shown beside it, and the records of a server
+   the company declares or a node lists.
 
 ## Why the obvious alternatives are wrong
 

@@ -33,7 +33,7 @@ func (h *fleetHarness) listing(server, node string, epoch int64, tools ...string
 			Idempotent: coord.HintUnknown, OpenWorld: coord.HintYes}
 		l.Tools = append(l.Tools, coord.MCPListedTool{
 			Name: name, Raw: name, Description: "does " + name, Hints: hints, Declared: hints,
-			Digest: aDigest(server + "/" + name), SchemaKept: true, Instances: 2,
+			Digest: aDigest(server + "/" + name), DefinitionKept: true, Instances: 2,
 			Parts: aParts(server + "/" + name),
 		})
 	}
@@ -252,58 +252,62 @@ var mcpListingCases = []fleetCase{{
 		}
 	},
 }, {
-	// A SCHEMA IS STORED ONCE, under its digest, whoever lists the tool:
-	// the first write stores it and every later one is told it is held,
-	// leaving it as it was.
-	name: "a tool's schemas are stored once under their digest",
+	// A DEFINITION IS STORED ONCE, under its digest, whoever lists the
+	// tool: the first write stores it and every later one is told it is
+	// held, leaving it as it was. Its words are kept whole, past the cut a
+	// listing makes of them, since a change is shown by them.
+	name: "a tool's definition is stored once under its digest, its words whole",
 	fn: func(h *fleetHarness) {
 		digest := aDigest("github/get_issue")
-		schema := coord.MCPToolSchema{
+		schema := coord.MCPToolDefinition{
 			Digest: digest, At: h.now(),
 			Input:  json.RawMessage(`{"properties":{"number":{"type":"integer"}},"type":"object"}`),
 			Output: json.RawMessage(`{"type":"object"}`),
 		}
 		nodes := h.nodes(2)
-		if created, err := nodes[0].CreateMCPToolSchema(h.ctx, schema); err != nil || !created {
+		if created, err := nodes[0].CreateMCPToolDefinition(h.ctx, schema); err != nil || !created {
 			h.t.Fatalf("the first store = (%v, %v), want it stored", created, err)
 		}
 		again := schema
 		again.At = h.now().Add(time.Hour)
-		if created, err := nodes[1].CreateMCPToolSchema(h.ctx, again); err != nil || created {
+		if created, err := nodes[1].CreateMCPToolDefinition(h.ctx, again); err != nil || created {
 			h.t.Fatalf("a second store = (%v, %v), want it held already", created, err)
 		}
-		read, found, err := nodes[1].MCPToolSchema(h.ctx, digest)
+		read, found, err := nodes[1].MCPToolDefinition(h.ctx, digest)
 		if err != nil || !found || !read.At.Equal(h.now()) || read.Version == 0 ||
 			string(read.Input) != string(schema.Input) || string(read.Output) != string(schema.Output) {
-			h.t.Fatalf("MCPToolSchema = %+v (found %v, %v), want the first store's", read, found, err)
+			h.t.Fatalf("MCPToolDefinition = %+v (found %v, %v), want the first store's", read, found, err)
 		}
-		all, err := h.f.ListMCPToolSchemas(h.ctx)
+		all, err := h.f.ListMCPToolDefinitions(h.ctx)
 		if err != nil || len(all) != 1 || all[0].Digest != digest {
-			h.t.Fatalf("ListMCPToolSchemas = %+v, %v", all, err)
+			h.t.Fatalf("ListMCPToolDefinitions = %+v, %v", all, err)
 		}
-		if _, found, err := h.f.MCPToolSchema(h.ctx, aDigest("nothing")); err != nil || found {
+		if _, found, err := h.f.MCPToolDefinition(h.ctx, aDigest("nothing")); err != nil || found {
 			h.t.Fatalf("a digest nothing stored read as (%v, %v)", found, err)
 		}
-		if gone, err := h.f.DeleteMCPToolSchema(h.ctx, digest, read.Version); err != nil || !gone {
-			h.t.Fatalf("DeleteMCPToolSchema = (%v, %v)", gone, err)
+		if gone, err := h.f.DeleteMCPToolDefinition(h.ctx, digest, read.Version); err != nil || !gone {
+			h.t.Fatalf("DeleteMCPToolDefinition = (%v, %v)", gone, err)
 		}
-		if _, found, _ := h.f.MCPToolSchema(h.ctx, digest); found {
+		if _, found, _ := h.f.MCPToolDefinition(h.ctx, digest); found {
 			h.t.Fatal("a deleted schema is still read")
 		}
 	},
 }, {
-	// A SCHEMA PAST ITS BOUND IS NEVER STORED, and one that is not JSON or
-	// is filed under something that is not a digest neither.
-	name: "a schema past its bound, not JSON or under no digest is refused",
+	// A DEFINITION PAST ITS BOUNDS IS NEVER STORED, its schemas or its
+	// words, and one that is not JSON or is filed under something that is
+	// not a digest neither.
+	name: "a definition past its bounds, not JSON or under no digest is refused",
 	fn: func(h *fleetHarness) {
 		big := `{"type":"object","description":"` + strings.Repeat("x", coord.MaxMCPToolSchemaBytes) + `"}`
-		for name, s := range map[string]coord.MCPToolSchema{
+		for name, s := range map[string]coord.MCPToolDefinition{
 			"too large": {Digest: aDigest("big"), At: h.now(), Input: json.RawMessage(big)},
+			"too wordy": {Digest: aDigest("wordy"), At: h.now(), Input: json.RawMessage(`{}`),
+				Description: strings.Repeat("d", coord.MaxMCPToolWordsBytes-1), Title: "ab"},
 			"not JSON":  {Digest: aDigest("bad"), At: h.now(), Input: json.RawMessage(`{`)},
 			"no digest": {Digest: "abc", At: h.now(), Input: json.RawMessage(`{}`)},
 		} {
-			if created, err := h.f.CreateMCPToolSchema(h.ctx, s); err == nil || created {
-				h.t.Errorf("a schema %s was stored (%v, %v)", name, created, err)
+			if created, err := h.f.CreateMCPToolDefinition(h.ctx, s); err == nil || created {
+				h.t.Errorf("a definition %s was stored (%v, %v)", name, created, err)
 			}
 		}
 	},
