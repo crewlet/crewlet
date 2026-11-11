@@ -160,8 +160,13 @@ type roundCalls struct {
 // makes again — the duplicate delegation, post or write the late calls'
 // telling exists to prevent — but a call whose effects may stand, to be
 // checked before it is made again.
-const UnfinishedNote = "This call's outcome is unknown: it was still running when its turn " +
-	"stopped waiting for it, so what it did may have taken effect. Check whether it did " +
+//
+// IN WORDS TRUE OF EVERY SUCH CALL: one still running as its turn stopped
+// waiting, one that had returned and whose update the store had not taken by
+// then, and one whose process stopped — each a call whose result no record
+// held when the turn stopped waiting for it, which is all the words say of it.
+const UnfinishedNote = "This call's outcome is unknown: its turn stopped waiting for it before " +
+	"its result was recorded, so what it did may have taken effect. Check whether it did " +
 	"before making it again."
 
 // seedCalls records into a resumed run's log every call the turn made before
