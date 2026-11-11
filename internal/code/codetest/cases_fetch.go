@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // F9: a git request that finds every transfer slot busy for the slot wait is
@@ -46,41 +47,64 @@ func aCorruptCacheIsRebuiltUnderAFetch(t *testing.T, newFleet NewFleet) {
 	work := p.Init()
 	head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
 	c.MustPush(p, work, "main")
+	n := c.Fleet.Nodes()[0]
+	before := rebuilds(n)
 	damageNewestIndex(t, c, 0)
 	clone := p.Clone(c.URL(0))
 	if got := p.Head(clone); got != head {
 		t.Errorf("a clone of the damaged cache is at %s, want %s", got, head)
 	}
+	if rebuilds(n) == before {
+		t.Errorf("%s served the clone of its damaged copy without rebuilding it", n.ID())
+	}
 	assertConverged(t, c.Fleet)
 }
 
-// damageNewestIndex truncates the newest .idx of RepoName's cache on node i
-// to 100 bytes: `index file … is too small`, which git classifies corrupt.
+// rebuilds is how many copies node n's cache has read whole from the rows
+// again, every reason together (crewlet.code.cache.rebuilds).
+func rebuilds(n Node) uint64 {
+	var total uint64
+	for _, s := range n.Metrics().Read() {
+		if s.Name == metrics.CodeCacheRebuilds {
+			total += s.Total
+		}
+	}
+	return total
+}
+
+// damageNewestIndex truncates the index of the newest pack RepoName's rows name,
+// in node i's copy, to 100 bytes: `index file … is too small`, which git
+// classifies corrupt. NEWEST BY THE RECORD THAT ADDED IT, the code log's own
+// order, never by the files' modification times: the filesystem stamps those
+// from a clock that steps and stamps two writes alike.
 func damageNewestIndex(t *testing.T, c *Case, i int) {
 	t.Helper()
 	rows := c.Rows()
+	if len(rows.Packs) == 0 {
+		t.Fatalf("the rows of %s name no pack", RepoName)
+	}
+	newest := rows.Packs[0]
+	for _, p := range rows.Packs[1:] {
+		later, err := newest.Added.Before(p.Added)
+		if err != nil {
+			t.Fatalf("order the packs added at %s and %s: %v", newest.Added, p.Added, err)
+		}
+		if later {
+			newest = p
+		}
+	}
 	s, err := c.Fleet.Nodes()[i].Cache().Sync(c.Ctx, rows.Repo.ID, Linearizable)
 	if err != nil {
 		t.Fatalf("sync the cache: %v", err)
 	}
-	dir := filepath.Join(s.Dir, "objects", "pack")
+	path := filepath.Join(s.Dir, "objects", "pack", "pack-"+newest.GitChecksum+".idx")
 	s.Release()
-	list, err := filepath.Glob(filepath.Join(dir, "*.idx"))
-	if err != nil || len(list) == 0 {
-		t.Fatalf("no pack index in %s (%v)", dir, err)
-	}
-	newest, at := "", time.Time{}
-	for _, path := range list {
-		if info, err := os.Stat(path); err == nil && info.ModTime().After(at) {
-			newest, at = path, info.ModTime()
-		}
-	}
 	// The cache installs its indexes read-only; only root writes past that.
-	if err := os.Chmod(newest, 0o600); err != nil {
-		t.Fatalf("make %s writable: %v", newest, err)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("make %s writable: %v", path, err)
 	}
-	if err := os.Truncate(newest, 100); err != nil {
-		t.Fatalf("truncate %s: %v", newest, err)
+	if err := os.Truncate(path, 100); err != nil {
+		t.Fatalf("truncate %s: %v", path, err)
 	}
 }
 

@@ -105,6 +105,12 @@ type Work struct {
 	// Rescued marks an outcome the ENGINE synthesised because the executor
 	// never submitted one. See [OutcomeIncomplete].
 	Rescued bool
+
+	// Typed is the engine's own reading of whether the turn has put a typed
+	// answer on the item its [Reply.Item] names, read after the phase from
+	// the tracker's record of the turn's writes (ADR-0122). Unread, and
+	// false, where the reply names no item.
+	Typed bool
 }
 
 // RefusedReply is a reply to a question the round's run asked that the engine
@@ -591,7 +597,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
-		res.Delivered = Answered(work.Called(), surface, in.Reply)
+		res.Delivered = Answered(work.Called(), surface, in.Reply) && !UntypedPickup(work, in.Reply)
 		if err != nil {
 			return broke(res, fmt.Errorf("turn: %s round %d: %w", entered, round, err))
 		}

@@ -55,8 +55,15 @@ func TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant(t *testing.T) {
 // the catalogue does not name, a person who is not one, or no reason.
 func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {
 	t.Parallel()
+	workflows := advisor.GitHubAccessKey("workflows", "write")
+	says := map[string]string{
+		"an unknown access": "Settings, Integrations, then the integration's Agents tab",
+		"no GitHub App":     "Settings, Integrations, GitHub, Agents",
+	}
 	for name, args := range map[string]map[string]any{
 		"an unknown access": {"item": "ENG-1", "ask": "founder", "access": "grant-everything",
+			"why": "x"},
+		"no GitHub App": {"item": "ENG-1", "ask": "founder", "access": string(workflows),
 			"why": "x"},
 		"asked of an agent": {"item": "ENG-1", "ask": "agent-ceo",
 			"access": string(advisor.AccessHealth), "why": "x"},
@@ -80,7 +87,32 @@ func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {
 				t.Errorf("result = %+v with %d writes, want a refusal and nothing posted",
 					got, len(trk.patched))
 			}
+			if want := says[name]; !strings.Contains(got.Output, want) {
+				t.Errorf("refusal %q does not say where an administrator grants it (%q)",
+					got.Output, want)
+			}
 		})
+	}
+}
+
+// THE TOOL OFFERS EVERY GITHUB PERMISSION A SEAT CAN HOLD, and says the access
+// is the Crewlet grant an administrator sets, so an agent never improvises a
+// path at the vendor for a gap the catalogue names.
+func TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet(t *testing.T) {
+	t.Parallel()
+	reg := workRegistry(t, accessDeps(newFakeTracker()))
+	entry, ok := reg.Lookup(builtin.RequestAccessTool)
+	if !ok {
+		t.Fatal("request_access is not registered")
+	}
+	desc := entry.Tool.Description()
+	for _, want := range []string{"`" + string(advisor.GitHubAccessKey("workflows", "write")) + "`",
+		"`" + string(advisor.GitHubAccessKey("deployments", "read")) + "`",
+		"your Crewlet grant, which an administrator sets in Crewlet, never at the vendor",
+		"Settings, Integrations, then the integration's Agents tab"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("the description lacks %q:\n%s", want, desc)
+		}
 	}
 }
 

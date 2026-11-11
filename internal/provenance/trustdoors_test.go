@@ -101,6 +101,12 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 	}},
+	// One agent's access at an integration, as the vendor shows it: its
+	// refusals, level, account and scope names are the vendor's words.
+	"internal/assistant/catalog/seataccess.go:seatAccessRead": {vendor, []string{
+		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
+		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
+	}},
 	"internal/assistant/catalog/api.go:read": {hosted, []string{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 	}},

@@ -719,9 +719,9 @@ func prepare(ctx context.Context, dir string) (cache.Layout, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		layout, err := cache.Prepare(ctx, dir)
-		if !errors.Is(err, cache.ErrCacheInUse) || time.Now().After(deadline) {
+		if !errors.Is(err, cache.ErrCacheInUse) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers Prepare's last error, which fails the restart
 			return layout, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

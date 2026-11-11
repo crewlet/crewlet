@@ -55,6 +55,16 @@
 // publisher they wrap around the committer's, and its before-admit point by
 // the usage reading they hand the code log's reserve.
 //
+// The maintainer's step ([MaintainBeforeStep]) and an engine write's join
+// ([WriteJoined]) are the two points a case only ever HOLDS or reaches, on no
+// crash path. No crash matrix walks a maintenance run, whose derived files
+// recover by their own declarations, so a case blocks every run's step to
+// read a copy as a round left it, before the run that round's end owes the
+// maintainer can replace a file of it. And a second ask of a write that joins
+// the first builds nothing of its own, so a crash there leaves nothing a
+// crash at the first ask's points does not: a case reaches the join to let
+// the first ask's write go only once the second waits on it.
+//
 // Every misuse is LOUD. A case that arms a point that does not exist, an
 // offset on a point that reads none, an action no hit could ever reveal, or a
 // crash beside an Err or a Block it would never reach panics in the case; a
@@ -260,6 +270,27 @@ const (
 	// starts and never on a barrier's. ON NO CRASH PATH: the step leaves
 	// nothing behind to recover, so a case faults it for the refusal.
 	CommitterBeforeAdmit Point = "committer.before_admit"
+
+	// MaintainBeforeStep: a maintenance run of a copy is about to take its
+	// next step — an index, with or without its bitmap, the commit-graph, or
+	// the node's tip over a published chain (internal/code/cache's
+	// maintain.go) — and nothing of the step is written. Hit before every
+	// step of every run. ON NO CRASH PATH: what a run leaves behind is the
+	// derived files' own to recover, by their declarations. A case HOLDS it
+	// (a Block) to read a copy as a round left it: a round's end owes the
+	// maintainer a run, and the index that run writes takes the commit-graph
+	// with it, so a case reading the graph once the round let go read
+	// whichever came first.
+	MaintainBeforeStep Point = "maintain.before_step"
+
+	// WriteJoined: an engine write asked while another ask of its push id is
+	// building and landing it on this node has JOINED that one, and waits for
+	// its answer having built, stored and proposed nothing (internal/code/host's
+	// Server.Write). Hit by the joining ask alone, each time it joins. ON NO
+	// CRASH PATH: a joiner holds nothing a crash could leave behind. A case
+	// REACHES it to let the write it joined go only once the second ask waits
+	// on it, so the join, and never the push's row, is what answers that ask.
+	WriteJoined Point = "write.joined"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -317,6 +348,12 @@ var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose
 // refusalPoints are the steps no crash matrix walks, each faulted for the
 // refusal a case asserts on: a committer's admission reading the log's usage.
 var refusalPoints = []Point{CommitterBeforeAdmit}
+
+// holdPoints are the steps no crash matrix walks, each held or reached so a
+// case orders what it does next behind the step: a maintenance run's step,
+// held to read what precedes it before it runs, and an engine write's join,
+// reached to let the write joined go only once a second ask waits on it.
+var holdPoints = []Point{MaintainBeforeStep, WriteJoined}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write
@@ -390,7 +427,7 @@ func MirrorPath() []Point { return slices.Clone(mirrorPath) }
 // accepts.
 func Points() []Point {
 	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, chainPath,
-		checkPath, expungePath, importPath, mirrorPath, refusalPoints)
+		checkPath, expungePath, importPath, mirrorPath, refusalPoints, holdPoints)
 }
 
 // Valid reports whether p is one of [Points].
@@ -398,7 +435,8 @@ func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
 		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(mergePath, p) ||
 		slices.Contains(chainPath, p) || slices.Contains(checkPath, p) || slices.Contains(expungePath, p) ||
-		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p) || slices.Contains(refusalPoints, p)
+		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p) || slices.Contains(refusalPoints, p) ||
+		slices.Contains(holdPoints, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

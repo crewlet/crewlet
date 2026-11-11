@@ -336,7 +336,7 @@ func (s *syncer) seat(
 			// A DRY RUN refreshes what the vendor shows and keeps the last
 			// sync's result.
 			lr := rec.Lanes[lane]
-			lr.Observed = hv
+			lr.Observed, lr.ObservedAt = hv, s.now
 			rec.Lanes[lane] = lr
 			return laneEffect{}
 		}
@@ -748,7 +748,7 @@ func (s *syncer) forget(ctx context.Context, rec *Record, fields []string) error
 func (s *syncer) finish(rec *Record, lane Lane, want Desired, have Observed, result SyncResult) {
 	lr := rec.Lanes[lane]
 	lr.Sync = &result
-	lr.Observed = have
+	lr.Observed, lr.ObservedAt = have, s.now
 	// A GRANT THAT HAS SETTLED, or one for a lane now off, holds nothing.
 	if !lr.Settling.active(s.now) || !want.Enabled {
 		lr.Settling = nil

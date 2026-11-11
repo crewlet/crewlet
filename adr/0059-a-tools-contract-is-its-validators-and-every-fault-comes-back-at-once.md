@@ -268,7 +268,7 @@ turn's round budget, which the loop guard leaves alone: the guard speaks to
 the model, and the round cap still ends the run.
 
 The brand's own name is allowed in its text as written and as a domain
-(`GoPhrase.me` for the brand `GoPhrase`). The company record's name is not
+(`Acme.me` for the brand `Acme`). The company record's name is not
 consulted: an adoption reads the kit again from its snapshot, and a rule that
 read a value held outside the bytes it judges would let a rename turn a kit
 already published into one its own reader refuses.

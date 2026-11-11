@@ -2619,7 +2619,8 @@ func (t *updateWorkItem) Description() string {
 	return "Change a work item: its status, assignee, priority, title, " +
 		"description, labels, checklists, or whether you watch it. Only the " +
 		"fields you pass are changed. An assignment can carry a `reason` the " +
-		"new assignee reads. Say WHY you closed something with " +
+		"new assignee reads. Moving an item you keep into `in_review` names its " +
+		"`reviewer`. Say WHY you closed something with " +
 		worklet.CommentOnWorkTool + " — an item that went to `cancelled` with no " +
 		"word is one somebody has to reconstruct. Closing as a duplicate " +
 		"also names the item that survives, in `duplicate_of`."
@@ -2635,9 +2636,10 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"status":   map[string]any{"type": "string", "description": "One of " + words.Or(worklet.Statuses) + "."},
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
+			"reviewer": reviewerParam,
 			"reason": map[string]any{
 				"type": "string",
-				"description": fmt.Sprintf("Only with `assignee`: one line "+
+				"description": fmt.Sprintf("Only with `assignee` or `reviewer`: one line "+
 					"saying why the work is theirs now, at most %d "+
 					"characters. It is what the new assignee is woken with "+
 					"and what the item's history shows beside the hand-off.",
@@ -2688,7 +2690,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"waiting_on": setArgSchema("The items this one is blocked BY. " + itemRefs +
 				" A pull request under the company's GitHub owners, by its URL, blocks it " +
-				"until it merges or closes, when you are told to update the item."),
+				"until it merges or closes, when you are told to update the item. When it " +
+				"covers a question you asked a person on this item, withdraw that question " +
+				"in the same step with " + WithdrawAskTool + " and `replaced_by`."),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
@@ -2768,6 +2772,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	if refused := t.deps.checkWaitOnPerson(ctx, actor, before, patch); refused != nil {
+		return *refused, nil
+	}
 	if patch.Body != nil {
 		// The description get_work_item answered arrives fenced, and the
 		// likeliest edit sends the fence back with it; see [unfence].
@@ -2813,6 +2820,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(refusal), nil
 		}
 		patch.Assignee = &assignee
+	}
+	if refused := t.deps.holdReview(ctx, actor, before, args, &patch, &kind); refused != nil {
+		return *refused, nil
 	}
 	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
 	// exactly one delta, and the new unit's lead hears it as an ORDINARY

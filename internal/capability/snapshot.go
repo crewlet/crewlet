@@ -21,7 +21,9 @@ import (
 // Version is the snapshot shape this build writes. A snapshot evolves by
 // addition only, so an older one decodes into this shape. Version 2 added the
 // seat's boxes, so a baseline below it never told them ([Snapshot.Boxes]).
-const Version = 2
+// Version 3 added the GitHub permissions the seat's app holds outside its
+// grant ([Integration.AppHolds]), which "Your access" says and no change does.
+const Version = 3
 
 // boxesFrom is the first version whose snapshots hold the seat's boxes.
 const boxesFrom = 2
@@ -139,6 +141,11 @@ type Integration struct {
 	// what is not granted.
 	Permissions     map[string]string `json:"permissions,omitempty"`
 	PermissionNames map[string]string `json:"permission_names,omitempty"`
+
+	// AppHolds is the offered GitHub permissions, by key, the seat's app holds
+	// and its grant leaves out: granting one waits on no organization owner.
+	// The app's registration is not the seat's access, so it is never a change.
+	AppHolds []string `json:"app_holds,omitempty"`
 
 	Scope       []string          `json:"scope,omitempty"`
 	ScopeLabels map[string]string `json:"scope_labels,omitempty"`
@@ -297,6 +304,11 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 	}
 	slices.Sort(pending)
 	out.Pending = strings.Join(pending, ",")
+	for _, p := range words.Permissions {
+		if _, granted := want.Permissions[p.Key]; !granted && have.Ceiling[p.Key] != "" {
+			out.AppHolds = append(out.AppHolds, p.Key)
+		}
+	}
 	if lane == seataccess.LaneSSH {
 		out.Commands = hostCommands(c, want.Scope)
 	}
@@ -423,6 +435,11 @@ func (s Snapshot) normal() Snapshot {
 	slices.SortFunc(s.Integrations, func(a, b Integration) int { return strings.Compare(a.Lane, b.Lane) })
 	for i := range s.Integrations {
 		s.Integrations[i].Scope = sortedSet(s.Integrations[i].Scope)
+		if held := sortedSet(s.Integrations[i].AppHolds); len(held) > 0 {
+			s.Integrations[i].AppHolds = held
+		} else {
+			s.Integrations[i].AppHolds = nil
+		}
 		s.Integrations[i].Commands = slices.Clone(s.Integrations[i].Commands)
 		slices.SortFunc(s.Integrations[i].Commands, func(a, b HostCommands) int { return strings.Compare(a.Host, b.Host) })
 	}

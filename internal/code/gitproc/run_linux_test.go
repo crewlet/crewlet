@@ -68,7 +68,7 @@ func TestARunTheNodeEndsCountsWhatItsGroupSpent(t *testing.T) {
 	case <-client.halted:
 	case o := <-done:
 		t.Fatalf("upload-pack ended (%v) before its client had read half the pack", o.err)
-	case <-time.After(hang):
+	case <-time.After(hang): //fixedwait:liveness
 		t.Fatalf("upload-pack had not sent half the pack's %d bytes after %v", pack.n, hang)
 	}
 	// The client goes away, its Write still blocked: the leader is reaped —

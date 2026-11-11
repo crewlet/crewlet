@@ -63,6 +63,8 @@ type TrackerReader interface {
 		loc *time.Location) (worklet.MyWork, error)
 	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 		worklet.ReadyWork, error)
+	TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error)
+	OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -136,7 +138,7 @@ type TrackerWriter interface {
 	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
 		notify *worklet.Notify) (worklet.WriteResult, error)
 	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
-		notify *worklet.Notify) (worklet.WriteResult, error)
+		withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
@@ -527,6 +529,10 @@ type ServerSeams struct {
 	Units worklet.Units
 	Leads worklet.Leads
 
+	// Roster is attached to every task listing, for the seats' names
+	// `sort=assignee` orders by.
+	Roster worklet.Roster
+
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
@@ -629,7 +635,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		if b.Tracker == nil {
 			return worklet.Answer{}, errNoHalf
 		}
-		a.Query.Units = b.Units
+		a.Query.Units, a.Query.Roster = b.Units, b.Roster
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
 	})
 
@@ -862,6 +868,28 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 			return worklet.ReadyWork{}, errNoHalf
 		}
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
+	})
+
+var opTypedAnswer = define("tracker.typed_answer", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.TypedAnswerQuery) (bool, error) {
+		if b.Tracker == nil {
+			return false, errNoHalf
+		}
+		return b.Tracker.TypedAnswer(ctx, q)
+	})
+
+// ownAsksArgs is [opOwnAsks]' input.
+type ownAsksArgs struct {
+	Query worklet.OwnAsksQuery
+	Now   time.Time
+}
+
+var opOwnAsks = define("tracker.own_asks", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a ownAsksArgs) (worklet.OwnAsks, error) {
+		if b.Tracker == nil {
+			return worklet.OwnAsks{}, errNoHalf
+		}
+		return b.Tracker.OwnAsks(ctx, a.Query, a.Now)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,
@@ -1547,7 +1575,10 @@ type resolveCommentOnTaskArgs struct {
 	TaskID    string
 	Project   string
 	CommentID string
-	Notify    *worklet.Notify
+	// Withdrawal is why its asker withdraws the question; nil resolves a
+	// remark, which is what an older build does.
+	Withdrawal *worklet.Withdrawal
+	Notify     *worklet.Notify
 }
 
 // RESOLVING ONE'S OWN REMARK, a question its asker withdraws: the author is
@@ -1558,7 +1589,7 @@ var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, 
 		if err != nil {
 			return worklet.WriteResult{}, err
 		}
-		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Notify)
+		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Withdrawal, a.Notify)
 	})
 
 type removeTaskArgs struct {

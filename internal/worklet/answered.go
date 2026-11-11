@@ -77,8 +77,13 @@ type AskAnswer struct {
 	Choice string `json:"choice,omitempty"`
 	Body   string `json:"body"`
 
-	// Resolved says the ask was closed without an answer.
+	// Resolved says the ask was closed without an answer: by its asker, who
+	// alone resolves a question, withdrawing it.
 	Resolved bool `json:"resolved,omitempty"`
+
+	// Withdrawn is why the asker withdrew it and what covers it now, where
+	// the withdrawal recorded them ([Withdrawal]).
+	Withdrawn *Withdrawn `json:"withdrawn,omitempty"`
 }
 
 // AskFollowUp is the asker's first record on the task after the ask closed.
@@ -325,6 +330,11 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		} else {
 			answer = AskAnswer{By: c.resolvedBy.String, At: store.DecodeTime(c.resolvedAt.Int64),
 				Resolved: true}
+			withdrawn, werr := withdrawnFrom(ctx, tx, rec)
+			if werr != nil {
+				return nil, false, werr
+			}
+			answer.Withdrawn = withdrawn
 			var resolveErr error
 			if closedBy, resolveErr = readResolve(ctx, tx, rec.task, rec.comment,
 				c.askRecord); resolveErr != nil {
@@ -339,6 +349,19 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 			FollowedUp: followUp})
 	}
 	return out, truncated, nil
+}
+
+// withdrawnFrom is how the withdrawal an ask's stored document records reads,
+// nil for an ask withdrawn without one.
+func withdrawnFrom(ctx context.Context, tx *sql.Tx, ask askRecord) (*Withdrawn, error) {
+	if len(ask.document) == 0 {
+		return nil, nil
+	}
+	var stored Comment
+	if err := json.Unmarshal(ask.document, &stored); err != nil {
+		return nil, fmt.Errorf("worklet: decode the ask %s: %w", ask.comment, err)
+	}
+	return readWithdrawn(ctx, tx, ask.task, stored.Withdrawal)
 }
 
 // readResolve answers the newest record on the task that resolved this ask

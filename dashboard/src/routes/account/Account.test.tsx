@@ -959,7 +959,7 @@ describe("a credential that is not a person's", () => {
   // the page asked `/iam/people/<that id>` and drew "Not found" where the
   // profile goes. Mutation: decide on `kind` alone and the directory is asked.
   test("a Tier A token bound to a seat is still a token's session, not a missing person", async () => {
-    const engineIs = engine({ session: { ...TIER_A, kind: "person", seat: "miles" } });
+    const engineIs = engine({ session: { ...TIER_A, kind: "person", seat: "morgan" } });
     mount();
     expect(await screen.findByText(/You’re signed in with the API token/)).toBeDefined();
     expect(screen.getByText("Signed in with an API token. Ends within an hour.")).toBeDefined();

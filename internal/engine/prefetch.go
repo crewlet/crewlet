@@ -7,6 +7,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -15,8 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // What a turn is given before it starts.
@@ -72,6 +76,11 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)
 	}
+	// THE SEAT'S OWN OPEN ASKS, on Worklet's tracker alone: a vendor tracker
+	// holds no asks this engine can read.
+	if e.router != nil && company.Config.TrackerBackendFor() == config.TrackerWorklet {
+		src.Asks = ownAsks{work: e.router.Work()}
+	}
 	// A nil *Registry would satisfy the interface and then be dereferenced,
 	// so the seam is left unset rather than filled with one — which renders
 	// every sender as the raw platform id, legible but not recognisable.
@@ -90,6 +99,16 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	// told its access, read for a memory refresh as a turn's start reads it.
 	src.Build, src.AccessTold = version.String(), e.accessToldAt
 	return src
+}
+
+// ownAsks is [prefetch.Asks] over the estate router: a seat's open asks to one
+// person, at the level a seat's own reads take, from whichever data node
+// serves the tracker.
+type ownAsks struct{ work estate.Work }
+
+func (a ownAsks) OwnAsks(ctx context.Context, asker, person string, limit int) (worklet.OwnAsks, error) {
+	return a.work.OwnAsks(ctx, worklet.OwnAsksQuery{Asker: asker, AskedOf: person, Limit: limit,
+		Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}, time.Now())
 }
 
 // prefetchFor renders one turn's context blocks.
@@ -235,6 +254,8 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		DurationMS:             int(took / time.Millisecond),
 		CounterpartyHit:        b.CounterpartyProfile != "",
 		CounterpartyBytes:      len(b.CounterpartyProfile),
+		OpenAsksHit:            b.OpenAsks != "",
+		OpenAsksBytes:          len(b.OpenAsks),
 		SynthesizedSkillsHit:   b.SynthesizedSkills != "",
 		SynthesizedSkillsBytes: len(b.SynthesizedSkills),
 		EpisodeRecallHit:       b.EpisodeRecall != "",

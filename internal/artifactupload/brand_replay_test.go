@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 )
 
-// THE GP-38 REPLAY (ADR-0059). On the GoPhrase engine a designer seat (turn
+// THE GP-38 REPLAY (ADR-0059). On the Acme engine a designer seat (turn
 // 01a17c82-716c-7cd8-bdc4-99cfda5c47a9) spent rounds 11 to 24 of one turn on
 // create_artifact refusals, learning one fault of its brand kit per attempt.
 // These are the faults it met, in one version, published through the real
@@ -27,13 +27,13 @@ import (
 func gp38Faulty() map[string]string {
 	return map[string]string{
 		brandformat.EntryPath: `{
-  "name": "GoPhrase",
+  "name": "Acme",
   "fonts": {"body": "Inter"},
   "logos": {"primary": {"path": "logos/primary.svg"}, "mark": "logos/mark.svg", "zzz": "x"},
   "colors": {"primary": {"hex": "#2450e6"}, "background": "#ffffff", "text": "#14161a"},
-  "type": {"heading": {"kit": "geist", "family": "GoPhrase Sans", "weights": [400]},
+  "type": {"heading": {"kit": "geist", "family": "Acme Sans", "weights": [400]},
     "body": "Inter", "mono": {"stack": "system-mono"}},
-  "voice": {"summary": "Friendly and exact, as GoPhrase.me speaks to learners.",
+  "voice": {"summary": "Friendly and exact, as Acme.me speaks to learners.",
     "write_like": ["Find the phrase.", "Hear it said.", "` + strings.Repeat("a", 223) + `"],
     "x": "probe"}
 }`,
@@ -49,11 +49,11 @@ func gp38Fixed() map[string]string {
 	return map[string]string{
 		brandformat.EntryPath: `{
   "v": 1,
-  "name": "GoPhrase",
+  "name": "Acme",
   "logos": {"primary": "logos/primary.svg", "mark": "logos/mark.svg"},
   "colors": {"primary": "#2450e6", "light_ground": "#ffffff", "text": "#14161a"},
   "type": {"heading": {"kit": "geist"}, "body": {"stack": "system-sans"}},
-  "voice": {"summary": "Friendly and exact, as GoPhrase.me speaks to learners.",
+  "voice": {"summary": "Friendly and exact, as Acme.me speaks to learners.",
     "write_like": ["Find the phrase.", "Hear it said."]}
 }`,
 		"logos/primary.svg": authoredLogo,
@@ -98,7 +98,7 @@ func TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext(t *testing.T) {
 			t.Errorf("the one refusal does not say %q; it said:\n%s", want, all)
 		}
 	}
-	if strings.Contains(all, "GoPhrase.me") {
+	if strings.Contains(all, "Acme.me") {
 		t.Errorf("the brand's own domain was refused:\n%s", all)
 	}
 	if _, err := createKit(h, gp38Fixed()); err != nil {

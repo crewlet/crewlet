@@ -10,11 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -71,8 +74,8 @@ func seatAccessWrite() Tool {
 			"vendor's id or exact name, such as Datadog Standard Role, Developer or " +
 			"Viewers), its GitHub permissions, and its scope (the repositories, " +
 			"projects, spaces or channels it is narrowed to). Give only what changes; " +
-			"everything else stays as it is. Read the integration with " +
-			"list_integrations first. The person sees what the engine will do at the " +
+			"everything else stays as it is. Read the agent's access there with " +
+			seatAccessReadTool + " first. The person sees what the engine will do at the " +
 			"vendor and approves it before anything is saved. The engine names and " +
 			"seals the agent's credential itself, so never name a variable, a key or a " +
 			"token. Use this for any change to an agent's access at an integration, " +
@@ -392,4 +395,89 @@ func scopeWords(scope []string) string {
 		return "Default reach"
 	}
 	return strings.Join(scope, ", ")
+}
+
+// seatAccessReadTool is the read of one agent's access at one integration.
+const seatAccessReadTool = "get_seat_access"
+
+// accessSeatRoute is one agent's lane at one integration, in words.
+const accessSeatRoute = "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}"
+
+// seatAccessRead is get_seat_access: the Agents tab's row for one agent on one
+// lane, worded by the engine ([seataccess.LaneView]).
+//
+// THE GRANT AND WHAT THE VENDOR HOLDS, SIDE BY SIDE: an agent's missing
+// permission is decided by its grant in Crewlet, which "In sync" never
+// compares with what the app holds past it.
+func seatAccessRead() Tool {
+	lanes := make([]string, 0, len(seataccess.Lanes()))
+	for _, lane := range seataccess.Lanes() {
+		lanes = append(lanes, string(lane))
+	}
+	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceSeat, ID: "handle",
+		Title: "name", Subtitle: "integration",
+		Facts: []cards.Fact{fact("Status", "status_label", tText),
+			fact("Grant in Crewlet", "grant", tText),
+			fact("Holds now", "holds", tText),
+			fact("App holds", "app_holds", tText),
+			fact("Grant leaves unused", "unused", tText),
+			fact("Scope", "scope", tText),
+			fact("Account", "account", tText),
+			fact("Tool", "tool", tLabel),
+			fact("Last check", "checked_at", tDatetime),
+			fact("Last applied", "applied_at", tDatetime),
+			fact("Last outcome", "outcome", tText),
+			fact("Refused because", "refusal", tText)},
+		Items: &cards.Items{Path: "plan", Label: "text", Fact: "by",
+			Noun: wire.Noun{One: "step for the next sync", Many: "steps for the next sync"}},
+		Open: &cards.Open{Screen: "integrations"}}}
+	// ONE CARD PER LANE, so the same agent read at two integrations is two
+	// records to the drawer rather than the second replacing the first.
+	specs := make(map[string]cards.Spec, len(lanes))
+	for _, lane := range lanes {
+		specs[lane] = spec
+	}
+	return Tool{
+		Name: seatAccessReadTool, Phrase: "read an agent's access to an integration",
+		Description: "Administrators: one agent's access at one integration, as its Agents " +
+			"tab shows it. Its grant in Crewlet (what the agent is allowed; only an " +
+			"administrator changes it, with set_seat_access), what its credential holds at " +
+			"the vendor now, for GitHub what the agent's app is registered with and which of " +
+			"that its grant leaves unused (never drift: every token is narrowed to the grant), " +
+			"its scope, its status, what the next sync will do, and two clocks: when a pass " +
+			"last checked the vendor (every pass, Check now included) and when a sync last " +
+			"applied the grant. Read this whenever an agent says it lacks access, or somebody " +
+			"asks whether an integration is set up right for an agent.",
+		schema: object([]string{"handle", "integration"}, map[string]*schema{
+			"handle": text("The agent's handle or name.", nameBytes),
+			"integration": oneOf("The integration. Jira and Confluence are read "+
+				"separately, on the agent's one Atlassian account.", lanes...),
+		}),
+		Names:  map[string]Directory{"handle": DirSeat},
+		Routes: []string{accessSeatRoute}, Apps: adminOnly,
+		// THE VENDOR'S WORDS REACH THE MODEL: a refusal quotes the vendor, and
+		// level, account and scope names are written there.
+		Fence: true, Trust: provenance.TrustExternal,
+		Build: func(a map[string]any) (exec.Request, error) {
+			args := Args(a)
+			lane := seataccess.Lane(args.String("integration"))
+			if !lane.Valid() {
+				return exec.Request{}, fmt.Errorf("%w: no integration %q", ErrInvalidArguments,
+					lane)
+			}
+			return get(accessSeatRoute, map[string]string{"kind": string(lane.Kind()),
+				"handle": args.String("handle"), "lane": string(lane)}, nil)
+		},
+		Variant: by("integration", string(seataccess.LaneGitHub)),
+		Cards:   specs,
+		Label: func(a map[string]any) string {
+			args := Args(a)
+			title := laneTitle(seataccess.Lane(args.String("integration")))
+			if handle := args.String("handle"); handle != "" && len(handle) <= nameBytes &&
+				title != "" {
+				return "Reading " + handle + "'s " + title + " access"
+			}
+			return "Reading an agent's access"
+		},
+	}
 }

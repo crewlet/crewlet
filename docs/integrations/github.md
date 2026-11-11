@@ -412,6 +412,12 @@ alone, and what the seat may do on GitHub is this list:
 - **Narrowing applies on the next token.** Every token is minted with the seat's
   permissions and repositories, so lowering a level or removing a repository
   needs nothing at GitHub.
+- **The app may hold more than the agent uses.** A permission the app is
+  registered with that the agent's grant in Crewlet leaves out, or holds at a
+  lower level, is never drift, since every token is narrowed to the grant. The
+  Agents tab says so under the agent's row ("The app also holds Workflows; this
+  agent does not use it"), and the agent gets it only once an administrator
+  adds it to the grant on that tab.
 - **A raise past the registration waits for two people.** The app's owner adds
   the permission on the app's permissions page, and GitHub then asks an
   organization owner to accept it on the installation. The Agents tab shows the

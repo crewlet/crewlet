@@ -149,7 +149,7 @@ its carrier, and a member the serving build does not declare there is refused at
 
 **On every record a later turn reads, and no other.** `MutationRecord.WorkingFor` rides an agent's
 record that a later turn reads to learn whom it works for, a wake now or a pickup later: Worklet at
-record version 12, Doclet at 4, Chatlet at 3. Worklet carries it on an item's own creation (a create of
+record version 13, Doclet at 4, Chatlet at 3. Worklet carries it on an item's own creation (a create of
 kind `created`, never the alias a move claims for the item's old key, which nothing reads) and on
 every record whose patch moves the item's assignee, whatever kind it ends with and whatever they
 wake, a status move that takes the item included, because the work pickup reads an item's

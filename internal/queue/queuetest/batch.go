@@ -706,6 +706,49 @@ func (s *suite) runBatch(t *testing.T) {
 		batches.awaitSizes(t, "an event published after the hold lifted", 1, 1)
 	})
 
+	t.Run("an_event_published_while_a_window_is_delivered_waits_its_own", func(t *testing.T) {
+		t.Parallel()
+		// A window's flush delivers what the window collected, and only that
+		// goes without a window: an event published after the flush began has
+		// waited for nothing, so it opens a window of its own. Its handler
+		// publishes it while the flushed batch is being delivered, so it
+		// lands inside the flush's own delivery — where the twin's flush let
+		// its skip run on over the whole drain and delivered it at once, the
+		// race behind the hold case's last step (#983).
+		//
+		// Mutation: skip the linger for the whole drain a flush starts rather
+		// than for the events its window collected (the twin's flushWindow),
+		// and the event published inside the delivery never lingers.
+		lingering := s.needLingering(t)
+		onClock := s.needLingerClock(t)
+		clock := &Clock{}
+		q := s.startQueue(ctx, t, onClock(t, clock))
+		batches := newBatchJournal()
+		record := recordingBatchHandler(batches)
+		published := make(chan error, 1)
+		var once sync.Once
+		subscribeBatch(ctx, t, q, "t.inflush", "g", func(hctx context.Context, evs []*events.Event) queue.Result {
+			res := record(hctx, evs)
+			once.Do(func() { published <- q.Publish(ctx, "t.inflush", newConvEvent("published-in-delivery", "c1")) })
+			return res
+		}, queue.NewBatchOptions(clockedWindow.Seconds(), 20))
+
+		publish(ctx, t, q, "t.inflush", newConvEvent("first", "c1"))
+		awaitState(t, "the window to hold the first event", func() bool { return lingering(q, "t.inflush", "g") })
+		clock.Advance(clockedWindow)
+		batches.awaitSizes(t, "the first window's batch", 1)
+		if err := <-published; err != nil {
+			t.Fatalf("Publish from inside the delivery: %v", err)
+		}
+		// LIVENESS: a backend that delivered it with no window fails here,
+		// at settleFor; on the case's clock a window cannot end on its own.
+		awaitState(t, "the event published inside the delivery to open a window of its own", func() bool {
+			return lingering(q, "t.inflush", "g")
+		})
+		clock.Advance(clockedWindow)
+		batches.awaitSizes(t, "the event published inside the delivery, once its own window ends", 1, 1)
+	})
+
 	t.Run("an_aged_conversation_dispatches_before_a_fresher_one", func(t *testing.T) {
 		t.Parallel()
 		// Between-partition fairness, asserted against the BACKEND rather

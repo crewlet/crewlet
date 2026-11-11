@@ -20,7 +20,7 @@ function json(body: unknown, status = 200) {
 
 const DOC: BrandDocument = {
   v: 1,
-  name: "FairSplit",
+  name: "Acme",
   logos: { primary: "logos/primary.svg" },
   colors: { primary: "#0f7b5f" },
   type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -31,7 +31,7 @@ function save(kit: string | null): BrandSave {
   return {
     kit,
     head: 7,
-    title: "FairSplit brand",
+    title: "Acme brand",
     document: DOC,
     files: [{ path: "logos/primary.svg", body: new Blob(["<svg/>"], { type: "image/svg+xml" }) }],
   };
@@ -80,7 +80,7 @@ test("with no brand adopted, a first kit is made from the files and adopted", as
   const body = JSON.parse(String(create.init.body));
   expect(body).toMatchObject({
     kind: "brand",
-    title: "FairSplit brand",
+    title: "Acme brand",
     upload: "u-1",
     entry: "brand.json",
     shares: [{ audience: { kind: "company" }, role: "viewer" }],
@@ -88,7 +88,7 @@ test("with no brand adopted, a first kit is made from the files and adopted", as
   expect(new Headers(create.init.headers).get("Idempotency-Key")).toBe(keys.write);
   // THE INDEX TRAVELS AS THE CANONICAL TEXT a reader of the version reads.
   const index = sent.find((s) => /files\/brand\.json$/.test(s.url))!;
-  expect(JSON.parse(String(index.init.body))).toMatchObject({ v: 1, name: "FairSplit" });
+  expect(JSON.parse(String(index.init.body))).toMatchObject({ v: 1, name: "Acme" });
   const adopt = sent.find((s) => /\/brand\/adoptions$/.test(s.url))!;
   expect(JSON.parse(String(adopt.init.body))).toEqual({ kit: "k-1", version: 1 });
   expect(new Headers(adopt.init.headers).get("Idempotency-Key")).toBe(keys.adopt);

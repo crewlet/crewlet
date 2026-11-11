@@ -34,7 +34,7 @@ const MaxWithdrawReasonBytes = sandbox.MaxAnswerTextBytes
 // withdraws ([worklet.Writer.ResolveComment]).
 type AskResolver interface {
 	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
-		notify *worklet.Notify) (worklet.WriteResult, error)
+		withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // WithdrawDeps are withdraw_ask's dependencies: the tracker's, for a question
@@ -75,12 +75,16 @@ func (t *withdrawAsk) Description() string { return withdrawAskDescription }
 
 // withdrawAskDescription is the tool's contract as a model reads it.
 var withdrawAskDescription = "Withdraw a question you asked that is still open, or a call your " +
-	"executor holds for a person's approval, when it no longer fits: your access changed, or " +
-	"the work moved on. Name a question on a work item with `item` and `ask` (the question's " +
-	"comment id), or a question or held call your executor waits on with `run` (its turn id). " +
-	"`reason` is required and is what the person reads: say why, in one or two sentences. A " +
-	"question's options never change once asked, so to re-word a question or change its " +
-	"options, withdraw it and ask again with `" + toolname.CommentOnWorkItem + "`."
+	"executor holds for a person's approval, when it no longer fits: your access changed, " +
+	"the work moved on, or other work now covers it. Name a question on a work item with `item` " +
+	"and `ask` (the question's comment id), or a question or held call your executor waits on " +
+	"with `run` (its turn id). `reason` is required and is what the person reads in their " +
+	"Inbox: say why, in one or two sentences. When you record work that covers a question you " +
+	"asked (a pull request that now runs what you asked a person to run, another work item), " +
+	"withdraw the question in the same step and name that work in `replaced_by`, so the " +
+	"person is not left answering what no longer needs them. A question's options never " +
+	"change once asked, so to re-word a question or change its options, withdraw it and ask " +
+	"again with `" + toolname.CommentOnWorkItem + "`."
 
 func (t *withdrawAsk) Parameters() map[string]any {
 	return map[string]any{
@@ -102,6 +106,12 @@ func (t *withdrawAsk) Parameters() map[string]any {
 			"reason": map[string]any{
 				"type":        "string",
 				"description": "Why you withdraw it, as the person who reads it should hear it.",
+			},
+			"replaced_by": map[string]any{
+				"type": "string",
+				"description": "What now covers the question, with `item` and `ask`: a link, " +
+					"such as a pull request's URL, or another work item. The person sees it " +
+					"beside your reason. For a work item: " + itemRef,
 			},
 		},
 		"required": []any{"reason"},
@@ -140,6 +150,9 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case len(reason) > MaxWithdrawReasonBytes:
 		return failed(fmt.Sprintf(WithdrawAskTool+": `reason` is %d bytes and the most is %d. "+
 			"Say why in a sentence or two.", len(reason), MaxWithdrawReasonBytes)), nil
+	case run != "" && strings.TrimSpace(argString(args, "replaced_by")) != "":
+		return failed(WithdrawAskTool + ": `replaced_by` names what covers a question on a " +
+			"work item; a run's withdrawal says it in `reason`."), nil
 	case run != "" && (item != "" || ask != ""):
 		return failed(WithdrawAskTool + " withdraws one thing: a question on a work item " +
 			"(`item` and `ask`) or what your executor waits on (`run`), never both."), nil
@@ -266,6 +279,10 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 			"only for somebody who uses Worklet, or for the person it asks.", question.ID,
 			before.Named())), nil
 	}
+	replaced, refusal := t.replacementOf(ctx, before, strings.TrimSpace(argString(args, "replaced_by")))
+	if refusal != nil {
+		return *refusal, nil
+	}
 	writer := work.Writer(actor)
 	reply := &worklet.Comment{
 		ID:   commentID(actor, WithdrawAskTool, before.Task.ID, args),
@@ -291,8 +308,9 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	resolved := *question
 	resolved.Resolved, resolved.ResolvedBy = true, actor.Handle
 	resolveOp := opIDFor(actor, WithdrawAskTool, "resolve", question.ID, args)
+	withdrawal := &worklet.Withdrawal{Reason: reply.ID, ReplacedBy: replaced}
 	got, err := t.deps.Resolver(actor).ResolveComment(ctx, resolveOp, before.Task.ID,
-		before.Task.Project, question.ID, worklet.Wake{Kind: worklet.ChangeCommentResolved,
+		before.Task.Project, question.ID, withdrawal, worklet.Wake{Kind: worklet.ChangeCommentResolved,
 			Before: before.Task, After: before.Task, Comment: &resolved}.Notify(work.Leads))
 	if err != nil {
 		return writeFailure(ctx, actor, WithdrawAskTool, err), nil
@@ -310,6 +328,41 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
 	}, before), actor))
+}
+
+// replacementOf is what `replaced_by` names on the question's item: a link, or
+// another work item by id; nil for nothing named, or the refusal.
+func (t *withdrawAsk) replacementOf(ctx context.Context, item worklet.TaskDetail,
+	ref string) (*worklet.Replacement, *tools.Result) {
+
+	if ref == "" {
+		return nil, nil
+	}
+	if strings.Contains(ref, "://") {
+		link, err := worklet.ReplacementURL(ref)
+		if err != nil {
+			r := failed(WithdrawAskTool + ": `replaced_by` " + strings.TrimPrefix(err.Error(),
+				"worklet: ") + ". Name a work item, or an http or https link. Nothing was withdrawn.")
+			return nil, &r
+		}
+		return &worklet.Replacement{URL: link}, nil
+	}
+	other, err := t.deps.Work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
+	switch {
+	case errors.Is(err, worklet.ErrNoTask):
+		r := refusedBy(tools.RefusalNotFound, err, fmt.Sprintf(WithdrawAskTool+": `replaced_by` "+
+			"names no work item %q. Name a work item, or a link. Nothing was withdrawn.", clip(ref)))
+		return nil, &r
+	case err != nil:
+		r := readFailure(ctx, WithdrawAskTool, err)
+		return nil, &r
+	case other.Task.ID == item.Task.ID:
+		r := failed(fmt.Sprintf(WithdrawAskTool+": `replaced_by` names %s, the item the question "+
+			"is on. Name the other item, or the link, that now covers it. Nothing was withdrawn.",
+			item.Named()))
+		return nil, &r
+	}
+	return &worklet.Replacement{Item: other.Task.ID}, nil
 }
 
 // workingForSeat is the seat of the person or colleague a ceiling works for,

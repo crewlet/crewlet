@@ -529,8 +529,9 @@ export function integrationFacts(
     },
     {
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
-      // reports what the last pass CONCLUDED and never when that was.
-      label: "Sync",
+      // reports what the last pass CONCLUDED and never when that was. A CHECK,
+      // since Check now moves it without applying anything.
+      label: "Last check",
       // A LEAF OF THE CLOCK, so the header around it does not re-render each second.
       value: (
         <Clocked

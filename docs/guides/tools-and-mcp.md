@@ -1496,6 +1496,18 @@ at the change.
   beside the one listed now, whether it is loosened, whether it holds the
   tool, and when the fleet first saw it. A held tool's row answers its level
   as `approve` with `held: true`.
+- **A change is shown whole.** A server's listing keeps the first KiB of each
+  description, enough for a list, while the definition's digest covers every
+  byte, so a server may change a sentence past that cut. Each definition is
+  therefore also kept whole, once under its digest: its title, the title its
+  hints carry, its description (up to 64 KiB of words) and its schemas (up to
+  64 KiB). A change is served from those, so its before and after differ
+  where the server changed them. A definition waiting for a review is kept
+  before any other within the 1 MiB a listing keeps of its definitions, and
+  the accepted one is kept for as long as its acceptance stands. A part the
+  engine can still not show (a definition past those bounds, or past that
+  budget) is named in the change's `unshown`, and the review says it changed
+  and is not shown, never that nothing changed.
 - **Accept it or keep it blocked** with
   [`POST /mcp-servers/{name}/changes`](../reference/api-endpoints.md#post-mcp-serversnamechanges),
   naming each change by the digest of the definition you reviewed, at a
@@ -1522,13 +1534,29 @@ and one it no longer lists *Removed*, counts the changes over the list with
 **Review**, and filters them with **Changed**; the tab itself is marked while
 any wait. The alarm's fix opens the same review. **Review** shows each change,
 one that now claims less risk first and flagged: a description or title as a
-text diff, the arguments a line each, and each hint that moved with its old
-word and its new. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
+text diff, the arguments a line each (or the schemas whole, where what moved
+is inside an argument or in the output), and each hint that moved with its old
+word and its new. A part the engine cannot show is said to have changed and
+not to be shown. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
 blocked** decide it by the digest of the definition shown, and a removal is
 accepted with **Accept that it went**. A definition the server swapped since it
 was shown is refused and read again. The **Servers** tab's **Waiting on you**
 counts the servers with changes to review beside the calls waiting for an
 answer.
+
+A server that rewords its tools often leaves several such changes at once, so
+when two or more of them only reword a read-only tool, **Accept N wording
+changes** accepts them together. A change qualifies when only its title or
+description moved, every part it moved is shown, it claims no less risk, and
+the tool is read-only both as the server declares it and as it runs here, your
+overrides applied. A rewording can still change what a tool says it does, so
+the action first lists each tool with the words it changed, one line each
+(hover a cut line for the whole of it), and nothing is decided until you press
+**Accept N changes** there; **Cancel** returns to the review. That press sends
+every tool's reviewed digest in one decision, so a definition the server
+swapped since is refused by name and nothing is decided. Every other change (new or changed arguments, changed hints, a claim
+of less risk, a tool that writes, a tool added or removed) is decided one by
+one.
 
 ### Each agent's tools, and the budget
 
@@ -1912,7 +1940,7 @@ a model acts on:
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |
 | `store_full` | The object store has no room for the content the call would store — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](../concepts/object-store.md#an-s3-bucket--s3) — so nothing was stored or recorded. Waiting alone does not clear it | Tell an operator, who makes the room the sentence names — on NATS, moves the files to a bucket, raises the bucket's reservation on an external broker, or lets the collector remove what nothing names; on S3, frees space or raises the quota on the bucket's provider, or lets the collector remove what nothing names; the same call is refused the same until then |
-| `vendor_forbidden` | The vendor a built-in reaches refused the agent's own credential with a 403, and the engine's grant of the permission the tool declares it needs is not in place, as the seat access ledger last observed it at the vendor. Every built-in declares that need (`search_knowledge` on a Confluence knowledge base needs read access to the spaces it searches; every other built-in reaches no vendor), and the refusal names it from the declaration, never from the vendor's words. A refusal of the company's connection (a seat with no credential of its own searches as the company) is the company's, said as such; a 403 the grant does cover, or one whose grant cannot be read, stays a plain failure; and a 401 is the credential itself, expired or revoked, never a missing permission. |
+| `vendor_forbidden` | The vendor a built-in reaches refused the agent's own credential with a 403, and the engine's grant of the permission the tool declares it needs is not in place, as the seat access ledger last observed it at the vendor. Every built-in declares that need (`search_knowledge` on a Confluence knowledge base needs read access to the spaces it searches; every other built-in reaches no vendor), and the refusal names it from the declaration, never from the vendor's words: it says the permission is not in the agent's Crewlet grant, that the fix is in Crewlet rather than at the vendor, and that an administrator adds it under Settings, Integrations, the integration's card, Agents. A refusal of the company's connection (a seat with no credential of its own searches as the company) is the company's, said as such; a 403 the grant does cover, or one whose grant cannot be read, stays a plain failure; and a 401 is the credential itself, expired or revoked, never a missing permission. |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |
 

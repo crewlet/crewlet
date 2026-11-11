@@ -137,7 +137,7 @@ func await(t testing.TB, done <-chan outcome, what string) outcome {
 	select {
 	case o := <-done:
 		return o
-	case <-time.After(hang):
+	case <-time.After(hang): //fixedwait:liveness
 		t.Fatalf("%s had not returned after %v", what, hang)
 		return outcome{}
 	}
@@ -165,10 +165,10 @@ func (f pidFile) read(t testing.TB) int {
 			}
 			return pid
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			t.Fatalf("no pid in %s after %v", f.path, hang)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -193,29 +193,30 @@ func (f pidFile) written(t testing.TB) (int, bool) {
 
 // pastItsDeadline runs the stand-in under deadlines doubling from first until
 // a run's tree was up — its pid written — before the deadline fired, and
-// returns that run's outcome, its deadline, how long Run took and the pid.
+// returns that run's outcome and the pid.
 //
 // A deadline that fires before the shell has started its tree ends a run
 // that never did what the case is about, and on a loaded -race runner a
 // shell's start-up is a matter of scheduling: so a run whose pid never
 // appeared is run again with more room rather than failed, and the case
 // asserts only about a run whose tree existed when the deadline ended it.
-// Each try is bounded; the sum stays inside the hang detector.
-func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Duration) (o outcome, deadline, took time.Duration, pid int) {
+// Each try is bounded; the sum stays inside the hang detector. It times
+// nothing: a case holds the wait the pool armed (gitproc.SeeGrace) rather than
+// how long Run took, which a loaded runner lengthens.
+func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Duration) (o outcome, pid int) {
 	t.Helper()
-	for deadline = first; deadline <= hang/3; deadline *= 2 {
+	deadline := first
+	for ; deadline <= hang/3; deadline *= 2 {
 		if err := os.Remove(pids.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatal(err)
 		}
-		began := time.Now()
 		o = await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassRead, Deadline: deadline}), "a run past its deadline")
-		took = time.Since(began)
 		if pid, ok := pids.written(t); ok {
-			return o, deadline, took, pid
+			return o, pid
 		}
 	}
 	t.Fatalf("no run wrote its pid before a deadline of up to %v fired", deadline/2)
-	return outcome{}, 0, 0, 0
+	return outcome{}, 0
 }
 
 // awaitGauge waits, up to the hang detector, until name's series for class
@@ -240,13 +241,37 @@ func awaitGauge(t *testing.T, rec *metrics.Recorder, name, class string, want fl
 		if s.Name == name && s.Value == want {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			if s.Name != name {
 				t.Fatalf("%s is not recorded after %v, want %v", series, hang, want)
 			}
 			t.Fatalf("%s reads %v after %v, want %v", series, s.Value, hang, want)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
+	}
+}
+
+// awaitWaiting waits, up to the hang detector, until want runs wait in p's
+// lane of class c (gitproc.Waiting): queued for a slot and granted none yet.
+//
+// A case that lets a slot go to a queued run, or ends a queued run's caller,
+// waits here first rather than for a fixed time. A run a loaded runner has
+// left on its way to the lane takes the slot free when it gets there, or
+// meets its caller's end before it ever queued, and the case passes without
+// the path it names; one that arrives behind a later arrival queues behind
+// it, and the case fails a healthy build.
+func awaitWaiting(t *testing.T, p *gitproc.Pool, c gitproc.Class, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(hang)
+	for {
+		got := gitproc.Waiting(p, c)
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
+			t.Fatalf("%d runs wait in the %s lane after %v, want %d", got, c, hang, want)
+		}
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

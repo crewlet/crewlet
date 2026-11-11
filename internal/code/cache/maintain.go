@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
@@ -1547,6 +1548,12 @@ func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, 
 		name := w.Writer.Subcommand
 		if c.knobs != nil && c.knobs.maintaining != nil {
 			c.knobs.maintaining(ctx, name)
+		}
+		if c.faults != nil {
+			if err := c.faults.Hit(ctx, codefault.MaintainBeforeStep, 0); err != nil {
+				out.step, out.err = name, err
+				return out
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			out.step, out.err = name, context.Cause(ctx)

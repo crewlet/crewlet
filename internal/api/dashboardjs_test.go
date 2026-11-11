@@ -2190,8 +2190,21 @@ const (
 	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
 	// script): still 5713 KiB. An agent's permissions and scope read as their
 	// values beside a pencil, the scope changed in a dialog of its own, took it
-	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB.
-	treeBudget = 5<<20 + 596<<10
+	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. The work
+	// grid's Key, Status, Type and Assignee sort heads, merged with a session's
+	// relaunch note on Executors, took it to 5716.1 KiB (5,853,244 bytes, +431,
+	// all script): 5717 KiB. A tool change reviewed whole, a part it cannot
+	// show said rather than drawn as unchanged, and wording changes to
+	// read-only tools listed and accepted together, merged on top of it, took
+	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB. A
+	// withdrawn question read with its asker's reason and what covers it, and
+	// the Inbox leading with the agent work a person holds up, merged on top of
+	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
+	// An agent's two access clocks, the note on what its GitHub App holds past
+	// its grant, the engine's status word and Ask Crewlet taking images only
+	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
+	// (5,859,202 bytes, +1,351, all script): 5722 KiB.
+	treeBudget = 5<<20 + 602<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -30,10 +30,10 @@ const (
 	// BadMarker refuses a marker of no kind the gate knows, a simulated one
 	// that does not say what it stands in for, a measure one that does not
 	// say why its reading decides nothing, a stated one that does not say
-	// which instants or clock its Sub reads, a bench one outside a function
-	// that takes a *testing.B, and a marker over only references it does not
-	// cover: a measure or a stated over a fixed wait, a fixed wait's kind
-	// over a reading of elapsed time, a stated over time.Since or
+	// which instants or clock its comparison reads, a bench one outside a
+	// function that takes a *testing.B, and a marker over only references it
+	// does not cover: a measure or a stated over a fixed wait, a fixed wait's
+	// kind over a reading of elapsed time, a stated over time.Since or
 	// time.Until.
 	BadMarker Rule = "malformed marker"
 	// StaleMarker refuses a marker with no counted reference on the one line
@@ -46,9 +46,10 @@ const (
 	// BubbleEscapes refuses a reference to a bubble-only helper outside a
 	// bubble.
 	BubbleEscapes Rule = "bubble-only helper outside a bubble"
-	// Untyped refuses a Sub in a test-code file the platform the gate runs on
-	// does not build, whose receiver's type it therefore cannot read.
-	Untyped Rule = "untyped Sub"
+	// Untyped refuses a Sub, Before, After or Compare in a test-code file the
+	// platform the gate runs on does not build, whose receiver's type it
+	// therefore cannot read.
+	Untyped Rule = "untyped receiver"
 )
 
 // LastPiece is the number of the series' last pull request, in

@@ -126,6 +126,13 @@
 // approval chain, a quorum or a state machine. decision.go holds the type and
 // the rules; the ADR says why the engine stops there.
 //
+// # A question and a review say whom they wait on
+//
+// ADR-0124 is the record: an asker withdraws a question saying why and what
+// covers it ([Withdrawal]), an item in review its holder submitted itself is
+// held by a question to its reviewer or comes back to it, and `holding_up`
+// counts the agent work waiting on a person through what they hold or are asked.
+//
 // # What a day costs the log, measured
 //
 // The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits

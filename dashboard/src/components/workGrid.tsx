@@ -115,18 +115,20 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     cell: (row) =>
       row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
   };
+  // TWO MARKS UNDER WORDS: a glyph head left the type and the seat looking like
+  // decoration rather than columns, and a sortable head needs a word to press.
   const type: Column = {
     key: "type",
-    header: "",
-    label: "Type",
-    icon: true,
+    header: "Type",
+    shrink: true,
+    align: "center",
     cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
   };
   const assignee: Column = {
     key: "assignee",
-    header: "",
-    label: "Assignee",
-    icon: true,
+    header: "Assignee",
+    shrink: true,
+    align: "center",
     cell:
       cells.assignee ??
       ((row) => (
@@ -232,11 +234,9 @@ export function HoldingList({
     const waiting: DataGridColumn<WorkHoldingRow> = {
       key: "waiting",
       header: "Waiting on it",
-      cell: (row) => {
-        const count = `${plural(row.blocks, "item")}${row.blocks_capped ? " or more" : ""}`;
-        const who = row.holders.map((h) => chrome.seatName?.(h) ?? h).join(", ");
-        return <span className="truncate">{who ? `${count}, held by ${who}` : count}</span>;
-      },
+      cell: (row) => (
+        <span className="truncate">{holdingWaiting(row, (h) => chrome.seatName?.(h) ?? h)}</span>
+      ),
     };
     const held: DataGridColumn<WorkHoldingRow> = {
       key: "held",
@@ -264,6 +264,19 @@ export function HoldingList({
       phoneRows="compact"
     />
   );
+}
+
+/**
+ * What waits on a held row, as its cell says it: the person's answer where the
+ * row is held by a question to them, then the items behind it, how many of
+ * them agents hold, and who holds them.
+ */
+export function holdingWaiting(row: WorkHoldingRow, nameOf: (handle: string) => string): string {
+  const behind = `${plural(row.blocks, "item")}${row.blocks_capped ? " or more" : ""}`;
+  const base = row.asked ? `Your answer${row.blocks > 0 ? `, then ${behind}` : ""}` : behind;
+  const agents = row.agent_waiting > 0 ? ` (${plural(row.agent_waiting, "agent item")})` : "";
+  const who = row.holders.map(nameOf).join(", ");
+  return `${base}${agents}${who ? `, held by ${who}` : ""}`;
 }
 
 /** How long a row has been held, as a span a person reads: "3 days". */

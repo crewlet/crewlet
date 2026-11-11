@@ -355,6 +355,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		sa.Departed = true
 		answer.Seats = append(answer.Seats, sa)
 	}
+	answer.SetStatuses()
 	for _, rec := range records {
 		for _, lr := range rec.Lanes {
 			if lr.Sync != nil && lr.Sync.At.After(answer.LastSyncAt) {
@@ -407,7 +408,8 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 		}
 		tool, reason := seataccess.ToolOf(q.Company, ref.Handle, lane, d, observed, lr.Settling, time.Now())
 		sa.Lanes[lane] = seataccess.LaneAnswer{
-			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
+			Desired: d, Observed: observed, ObservedAt: lr.ObservedAt, Sync: lr.Sync,
+			Plan: nonNilSteps(steps[lane]),
 			Tool: tool, ToolReason: reason,
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),

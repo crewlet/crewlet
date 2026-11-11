@@ -15,26 +15,14 @@ type TurnsMovedQuery struct {
 	Level statelog.ReadLevel
 }
 
-// turnsMovedStatement is, of the turns its first argument lists (a JSON
-// array), every history row they wrote of a kind its second does not list:
-// each row's turn, kind and deltas, which [TurnsMoved] reads a move of work
-// from.
+// turnsMovedStatement is, of the turns its argument lists (a JSON array),
+// every history row they wrote but the conversation's ([conversationKinds],
+// whose words are the change): each row's turn, kind and deltas, which
+// [TurnsMoved] reads a move of work from.
 const turnsMovedStatement = `SELECT h.turn_id, h.kind, h.fields_json
 	FROM json_each(?) AS j
 	JOIN tracker_history AS h ON h.turn_id = CAST(j.value AS TEXT)
-	WHERE h.turn_id != '' AND h.kind NOT IN (SELECT value FROM json_each(?))`
-
-// conversationKinds are the changes whose words are the change: a turn that
-// wrote only these moved no work.
-var conversationKinds = func() []ChangeKind {
-	var out []ChangeKind
-	for _, k := range ChangeKinds {
-		if k.Conversation() {
-			out = append(out, k)
-		}
-	}
-	return out
-}()
+	WHERE h.turn_id != '' AND h.kind NOT IN ` + conversationKinds
 
 // TurnsMoved reports which of q's turns moved work on the tracker: wrote any
 // history row but a comment or a change of who watches and nothing else.
@@ -57,16 +45,12 @@ func (r *Reader) TurnsMoved(ctx context.Context, q TurnsMovedQuery) (map[string]
 	if err != nil {
 		return nil, fmt.Errorf("worklet: encode the turns: %w", err)
 	}
-	still, err := json.Marshal(conversationKinds)
-	if err != nil {
-		return nil, fmt.Errorf("worklet: encode the conversation's kinds: %w", err)
-	}
 	_, err = r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, turnsMovedStatement, string(turns), string(still))
+		rows, qerr := tx.QueryContext(ctx, turnsMovedStatement, string(turns))
 		if qerr != nil {
 			return qerr
 		}

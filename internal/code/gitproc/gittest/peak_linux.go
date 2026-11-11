@@ -37,7 +37,7 @@ func PeakAnon(fn func()) (int64, bool) {
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(peakAnonSample)
+		tick := time.NewTicker(peakAnonSample) //fixedwait:liveness
 		defer tick.Stop()
 		for {
 			n := childrenAnon()

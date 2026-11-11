@@ -7,13 +7,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ---- MCP listings and tool schemas ------------------------------------- //
+// ---- MCP listings and tool definitions ---------------------------------- //
 
 // Both are classes of the positions register, for the reason internal/coord's
 // mcplisting.go gives, and both are written through [entryClass], whose verbs
 // the model records already share. A listing's "entry" is its whole key,
 // because it is named by two segments (the server and the node) where an
-// entry class names one; the schema's is its digest.
+// entry class names one; the definition's is its digest.
 
 var (
 	listingClass = entryClass[coord.MCPListing]{
@@ -33,12 +33,12 @@ var (
 			return l
 		},
 	}
-	schemaClass = entryClass[coord.MCPToolSchema]{
-		name:   "the MCP tool schemas",
-		filter: coord.DocumentFilter(coord.MCPSchemaClass),
-		key:    coord.MCPSchemaKey,
-		entry:  coord.MCPSchemaDigest,
-		stored: func(s coord.MCPToolSchema, digest string, version uint64) coord.MCPToolSchema {
+	definitionClass = entryClass[coord.MCPToolDefinition]{
+		name:   "the MCP tool definitions",
+		filter: coord.DocumentFilter(coord.MCPDefinitionClass),
+		key:    coord.MCPDefinitionKey,
+		entry:  coord.MCPDefinitionDigest,
+		stored: func(s coord.MCPToolDefinition, digest string, version uint64) coord.MCPToolDefinition {
 			s.Digest, s.At, s.Version = digest, s.At.UTC(), version
 			return s
 		},
@@ -94,33 +94,33 @@ func (f *FleetStore) WatchMCPListings(ctx context.Context) (<-chan coord.MCPList
 		})
 }
 
-// CreateMCPToolSchema stores a definition's schemas unless its digest holds
-// some.
-func (f *FleetStore) CreateMCPToolSchema(ctx context.Context, s coord.MCPToolSchema) (bool, error) {
+// CreateMCPToolDefinition stores a definition unless its digest holds
+// one.
+func (f *FleetStore) CreateMCPToolDefinition(ctx context.Context, s coord.MCPToolDefinition) (bool, error) {
 	if err := s.Validate(); err != nil {
 		return false, err
 	}
-	_, created, err := schemaClass.create(ctx, f, s.Digest, s)
+	_, created, err := definitionClass.create(ctx, f, s.Digest, s)
 	return created, err
 }
 
-// MCPToolSchema reads one definition's schemas.
-func (f *FleetStore) MCPToolSchema(ctx context.Context, digest string) (coord.MCPToolSchema, bool, error) {
+// MCPToolDefinition reads one definition.
+func (f *FleetStore) MCPToolDefinition(ctx context.Context, digest string) (coord.MCPToolDefinition, bool, error) {
 	if !coord.IsMCPDigest(digest) {
-		return coord.MCPToolSchema{}, false, fmt.Errorf("coord/kv: %q is not a definition digest", digest)
+		return coord.MCPToolDefinition{}, false, fmt.Errorf("coord/kv: %q is not a definition digest", digest)
 	}
-	return schemaClass.read(ctx, f, digest)
+	return definitionClass.read(ctx, f, digest)
 }
 
-// ListMCPToolSchemas returns every stored schema, ordered by digest.
-func (f *FleetStore) ListMCPToolSchemas(ctx context.Context) ([]coord.MCPToolSchema, error) {
-	return schemaClass.list(ctx, f)
+// ListMCPToolDefinitions returns every stored definition, ordered by digest.
+func (f *FleetStore) ListMCPToolDefinitions(ctx context.Context) ([]coord.MCPToolDefinition, error) {
+	return definitionClass.list(ctx, f)
 }
 
-// DeleteMCPToolSchema removes a definition's schemas at a version.
-func (f *FleetStore) DeleteMCPToolSchema(ctx context.Context, digest string, version uint64) (bool, error) {
+// DeleteMCPToolDefinition removes a definition at a version.
+func (f *FleetStore) DeleteMCPToolDefinition(ctx context.Context, digest string, version uint64) (bool, error) {
 	if !coord.IsMCPDigest(digest) {
 		return false, fmt.Errorf("coord/kv: %q is not a definition digest", digest)
 	}
-	return schemaClass.remove(ctx, f, digest, version)
+	return definitionClass.remove(ctx, f, digest, version)
 }

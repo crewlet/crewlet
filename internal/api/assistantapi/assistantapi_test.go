@@ -354,6 +354,10 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 			if got.Reason != c.reason || got.Available != (c.reason == "") {
 				t.Errorf("viewer = %+v, want reason %q", got, c.reason)
 			}
+			// NO DEEP WORK HERE, so nothing reads a question's images.
+			if got.ReadsImages {
+				t.Errorf("viewer = %+v, which says images are read without deep work", got)
+			}
 		})
 	}
 }

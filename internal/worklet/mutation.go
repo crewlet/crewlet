@@ -60,9 +60,11 @@ import (
 // neither, and would apply the patch as one that names no date — keeping a
 // date every newer node cleared.
 // Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
-// Version 12 is whom an agent's record a later turn reads was written for
+// Version 12 is a question its asker withdrew saying why ([Comment.Withdrawal]):
+// a build reading 11 would resolve it and drop the reason.
+// Version 13 is whom an agent's record a later turn reads was written for
 // ([MutationRecord.WorkingFor], ADR-0109).
-const RecordVersion = 12
+const RecordVersion = 13
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -71,7 +73,7 @@ const AppsKeptVersion = 4
 // WorkingForVersion is the version from which a record carries whom it was
 // written for ([MutationRecord.WorkingFor]), which the applier keeps on its
 // history row; every older record keeps the column NULL.
-const WorkingForVersion = 12
+const WorkingForVersion = 13
 
 // NoticeAsksVersion is the version from which the applier keeps a comment
 // author's statement on its notice rows; every older record leaves it NULL.
@@ -136,6 +138,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
 	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
+	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
 	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
