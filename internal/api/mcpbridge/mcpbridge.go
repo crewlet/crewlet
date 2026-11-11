@@ -51,9 +51,10 @@
 //     which the session does not even hand over: a box that disconnects
 //     mid-call abandons only the answer, never a tool half-way through a
 //     write. And the record says so ([Call.Abandoned]): a call whose
-//     harness had given up on it, or whose opening had ended, by the time it
-//     returned is one its job's session holds with no outcome or a failed
-//     one, though it ran.
+//     harness had given up on it — cancelled it, or hung up on the response
+//     its answer was kept going on (below) — or whose opening had ended, by
+//     the time it returned is one its job's session holds with no outcome
+//     or a failed one, though it ran.
 //   - A PANIC IS CONTAINED. A tool that panics is answered as failed, said in
 //     the log with its stack, and the run's tools are closed to it: the
 //     process stays up, and a defect does not run again on the next call.
@@ -86,6 +87,37 @@
 // started — the one its launch continued, or one of its own in that one's place
 // — it reads off the token the box dials, one of the job's two, and has the
 // run's skill guard held to it before the run's first call — see started.go.
+//
+// # A call's answer starts at once and keeps going
+//
+// A box's harness times a call's response, and the SDK's streamable HTTP
+// transport writes nothing on it until the response's first event: with
+// nothing else sent, the answer itself. Claude Code 2.1.310 gives an HTTP
+// response's first byte a minute where the server's entry sets no timeout,
+// then answers its model that the call timed out and cancels nothing, while
+// the call runs on and its effect happens (measured: a 90-second call cut at
+// sixty seconds, run to its end here, its answer written on no response). So
+// every call this bridge runs starts its answer the moment its tool starts
+// ([toolsession.Call.Running]): a progress on the call's own token, another
+// every [answerEvery], none once the tool has returned, on every server of
+// the opening. A call answered without running is answered at once and gets
+// none, and a request with no progress token gets its answer alone: both
+// harnesses that dial the bridge give one on every call (measured). A
+// progress that can no longer be written is the call's response gone, and the
+// call is recorded as one nobody waited for.
+//
+// # How long a box waits for a call
+//
+// Kept going, a call keeps its harness waiting for as long as it runs: every
+// silence check a harness keeps on a call is answered, so only the harness's
+// own tool timeout bounds the wait, which neither sets short (Claude Code's
+// 1e8 ms, OpenCode's twelve hours, by reading their bundles). So the box is
+// told the bridge's own bound for a call on every server it is handed
+// ([Bridge.CallTimeout], rendered as each harness's per-server timeout):
+// past it the harness gives the call up and cancels it, whatever progress
+// flows, and the call is recorded as one nobody waited for. The bridge
+// itself cuts nothing: a call past every bound the engine sets is a defect or
+// a hang, and a tool half-way through a write is the run's.
 //
 // # A run outlives the process that opened its session
 //
@@ -500,12 +532,13 @@ type Call struct {
 	Committed []types.CommittedChange
 
 	// Abandoned marks a call NOBODY WAITED FOR BY THE TIME IT RETURNED: its
-	// harness had given up on it and cancelled its request
-	// ([toolsession.Call.Abandoned]), or the opening it was made on had
-	// ended. The call ran and its effect happened, but the session of the job
-	// that made it holds it with no outcome or a failed one, so no save point
-	// may hold it (sandbox.BridgeCall.Abandoned). False for every call
-	// answered without running, which returns at once.
+	// harness had given up on it and cancelled its request, or hung up on
+	// the response its answer was kept going on, which the next progress
+	// found gone ([toolsession.Call.Abandoned]), or the opening it was made
+	// on had ended. The call ran and its effect happened, but the session of
+	// the job that made it holds it with no outcome or a failed one, so no
+	// save point may hold it (sandbox.BridgeCall.Abandoned). False for every
+	// call answered without running, which returns at once.
 	Abandoned bool
 }
 
@@ -1533,6 +1566,55 @@ type binding struct {
 
 var _ toolsession.Dispatcher = (*binding)(nil)
 
+// answerEvery is how often a running call's answer is kept going, a
+// `notifications/progress` on the call's own token, after the one written the
+// moment it starts running ([toolsession.Server.KeepAnswersGoing]).
+//
+// TWENTY SECONDS, held to the watchdogs Claude Code keeps on an HTTP call,
+// which are what the beat answers (2.1.310: the first-byte budget measured,
+// the rest by reading its bundle), none of which cancels the call it gives up:
+//   - a response's FIRST BYTE within a minute where the server's entry sets no
+//     timeout, and within the entry's timeout where it does: met by the first
+//     progress, at once, whatever the cadence — what keeps a call past that
+//     minute on a release that does not read the entry's timeout
+//     ([Bridge.CallTimeout]) — once the call has reached the node that runs
+//     it: one that first waits for a node that can answer it
+//     ([FleetOptions.HolderWait]) has nothing written on its response while it
+//     waits;
+//   - an IDLE CHECK that gives up a call that "sent no response or progress"
+//     for five minutes on HTTP where the entry sets no timeout, and for the
+//     entry's timeout where it does: every progress starts it again;
+//   - a TRANSPORT-LOSS CHECK, run every 30 seconds, that gives up a call whose
+//     transport was marked lost more than 90 seconds before, unless a
+//     progress has cleared the mark since. The mark is routine: Claude Code
+//     loses the session's standing GET stream 360 seconds after it opens it,
+//     with the entry's timeout and without (measured), counts that a terminal
+//     connection error, and marks every call then in flight (by reading its
+//     bundle). A cadence of twenty puts four beats inside the ninety, any one
+//     of which clears the mark, so one or two delayed on a loaded node or a
+//     relayed frame still clear it, and each 30-second check sees a beat no
+//     older than twenty.
+//
+// And a proxy between a box and the node that drops a response silent for
+// longer than its own idle bound sees none silent for longer than the cadence.
+// Measured on 2.1.310 against this bridge, at this cadence: a 90-second call
+// answered whole with no timeout on the server's entry, the minute's budget
+// met by the first progress; a 90-second, a 330-second and a 540-second call
+// answered whole with the bridge's own, the last through the loss of its
+// session's GET stream at 359.2 seconds; and the same 540-second call with no
+// progress token, on which nothing is kept going, given up at 449.9 seconds,
+// 90 after that loss, with no cancel. OpenCode keeps no silence check on a
+// call (2.1.4, measured; its timeout is absolute), and reads a progress
+// harmlessly.
+//
+// WHAT A BEAT COSTS: one SSE event and a flush per running call (116 bytes on
+// a progress token of one digit, 117 from the tenth beat on, measured), and
+// for a call relayed from another node one broker round trip a frame, half
+// the rate of the relay's own heartbeat on every open stream
+// ([httprelay.Heartbeat]); and a goroutine and a ticker per running call.
+// Not a setting: nothing about a deployment moves the harnesses' clocks.
+const answerEvery = 20 * time.Second
+
 func newBinding(ctx context.Context, s *Session, where route) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
 		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer}
@@ -1554,6 +1636,10 @@ func newBinding(ctx context.Context, s *Session, where route) *binding {
 			instructions = instructionsOf(s.seat(), ep.name)
 		}
 		ep.server = toolsession.NewServer(ep.listedName(), title, instructions, ep)
+		// EVERY RUNNING CALL'S ANSWER STARTS AT ONCE AND KEEPS GOING, on
+		// every server of the opening ([answerEvery]): a seat's MCP server's
+		// call can take as long as the engine's own.
+		ep.server.KeepAnswersGoing(answerEvery)
 	}
 	own := opened.servers[""].server
 	// steer_take, ANSWERED BEFORE THE TOOLS ARE: never listed, never handed
@@ -1764,6 +1850,15 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	digest := s.Surface.DigestOf(in.Name, args)
 	o.mu.Unlock()
 
+	// ITS ANSWER STARTS HERE, past every answer given without running it, and
+	// is kept going while its tool runs ([toolsession.Call.Running]): a call
+	// the surface goes on to refuse or hold is answered a moment after its
+	// first progress, and telling those apart here would be this package's
+	// own idea of the surface's gates. Nil for a call no request carries.
+	if in.Running != nil {
+		in.Running()
+	}
+
 	written := writtenOf(s.Surface)
 	before := written.Changes()
 	started := time.Now()
@@ -1816,10 +1911,12 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.stop(after)
 	}
 	// WHETHER ANYBODY STILL WAITS FOR THE ANSWER, read as the tool returns and
-	// before the record: the harness cancelled its request, or the opening
-	// ended and its session is closed behind it ([Call.Abandoned]). A harness
-	// that stopped waiting without cancelling is not seen here: a request this
-	// transport carries runs on when its harness hangs up on its POST.
+	// before the record: the harness cancelled its request, a progress kept
+	// going on its response found the response gone, or the opening ended and
+	// its session is closed behind it ([Call.Abandoned]). A harness that hung
+	// up on its POST is seen at the next progress after it, and only then: a
+	// request this transport carries runs on when its harness hangs up, so a
+	// hang-up in the last cadence before the tool returns is not seen here.
 	abandoned := gone(in.Abandoned) || o.over()
 	recorded := args
 	if res.Held {

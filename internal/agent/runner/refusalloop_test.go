@@ -80,7 +80,7 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 		t.Fatal(err)
 	}
 	role := &org.Role{Name: "Designer", DeclaredHandle: "designer"}
-	o := &org.Organization{Name: "GoPhrase", Roles: []*org.Role{role}}
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{
 		Seat: prompts.Seat{Org: o, Role: role}, Registry: reg, Models: models, Skills: registry,

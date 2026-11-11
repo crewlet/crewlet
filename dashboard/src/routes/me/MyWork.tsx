@@ -561,12 +561,12 @@ export function MyWork({ section }: { section: MeSection }) {
                   <EmptyState
                     size="compact"
                     title="Nothing is waiting"
-                    description={`Open work assigned to ${they} that other work waits on appears here, the most waited on first.`}
+                    description={`Open work ${ownDay ? "you hold" : "they hold"} that other work waits on appears here, the most waited on first: work assigned to ${they}, and work waiting on ${ownDay ? "your" : "their"} answer.`}
                   />
                 ) : (
                   <>
                     <p className="t-caption">
-                      {`Open work assigned to ${they} that other work waits on, the most waited on first. Open an item to answer, reassign or close it.`}
+                      {`Open work ${ownDay ? "you hold" : "they hold"} that other work waits on, the most waited on first: work assigned to ${they}, and work waiting on ${ownDay ? "your" : "their"} answer. Open an item to answer, reassign or close it.`}
                     </p>
                     <HoldingList
                       rows={mine.holding_up}

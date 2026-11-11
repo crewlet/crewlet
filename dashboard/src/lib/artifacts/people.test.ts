@@ -84,10 +84,10 @@ test("a doc's tab and a deck's slide are said by the names their views give them
 test("the reader's own other tab is counted beside You, never drawn as somebody else", () => {
   const { others, ownTabs } = splitOwnSessions(
     [
-      { seat: "miles", session: "1" },
+      { seat: "morgan", session: "1" },
       { seat: "maya", session: "2" },
     ],
-    "miles",
+    "morgan",
   );
   expect(others.map((m) => m.seat)).toEqual(["maya"]);
   expect(selfWords(ownTabs)).toBe("You, 2 tabs");

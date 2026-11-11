@@ -132,8 +132,10 @@ func (r deepRig) started(t *testing.T) sandbox.RunRequest {
 // server; a call over that bridge reaches the surface decided as NOBODY, so
 // the request's identity reaches none of it; the attachments are in its
 // inputs and its outbox comes back; its token is useless once it ends. No
-// engine credential is in its environment. Mutation: decide bridged calls as
-// the request and the identity reads resolved.
+// engine credential is in its environment. Its box waits for a call as long as
+// its bridge can take to answer one, as a seat's does. Mutation: decide bridged
+// calls as the request and the identity reads resolved; hand its bridge's
+// server no wait, and its box waits on the harness's own default.
 func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 	t.Parallel()
 	rig := newDeepRig(t)
@@ -173,6 +175,10 @@ func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 		if strings.HasPrefix(name, "CREWLET_") || strings.Contains(value, "test-key") {
 			t.Errorf("the run's environment carries %s", name)
 		}
+	}
+	if got, want := req.MCPServers[config.ToolServerName].CallTimeout, rig.bridge.CallTimeout(surface); got <= 0 ||
+		got != want {
+		t.Errorf("the run's box waits %s for a call, want its bridge's %s", got, want)
 	}
 	endpoint := req.MCPServers[config.ToolServerName].URL
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)

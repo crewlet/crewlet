@@ -34,7 +34,7 @@
  *       "Design is late" and "Notes from the call" start a sentence with a
  *       capital the way every sentence does, and are not the team or the
  *       page. A name no ordinary word is spelled like (all capitals, a
- *       capital inside it, a digit: "QA", "GoPhrase", "iOS"), a name of two
+ *       capital inside it, a digit: "QA", "AcmeWorks", "iOS"), a name of two
  *       words or more, and a key are matched there.
  *     - A NAME TWO READS SHARE NAMES NEITHER: two seats both called "QA"
  *       cannot be told apart by the word, so neither is a chip and both are

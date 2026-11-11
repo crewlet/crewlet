@@ -71,7 +71,7 @@ function Harness({
 }
 
 /**
- * GoPhrase's split: `default` runs every job for the engineers and QA,
+ * Acme's split: `default` runs every job for the engineers and QA,
  * `default-host` (its coding on the engine's host) every job for the PM and
  * the designer.
  */

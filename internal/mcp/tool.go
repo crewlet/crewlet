@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 )
@@ -355,6 +356,13 @@ func (t *Tool) Server() string { return ServerName(t.srv.spec.Name) }
 // Origin is this tool's entry in the tool-origin grammar, ready for whatever
 // registry the caller keeps. See origin.go.
 func (t *Tool) Origin() string { return Origin(t.Server()) }
+
+// CallBound is the longest one call of the tool runs: its server's request
+// timeout, at which the client cuts a call that has not answered
+// ([DefaultRequestTimeout] unless the server's entry sets its own). What a
+// box's harness is told to wait for a call to the tool, beside the rest
+// (internal/api/mcpbridge's Bridge.CallTimeout).
+func (t *Tool) CallBound() time.Duration { return t.srv.spec.requestTimeout() }
 
 // Call runs the tool on its server.
 //

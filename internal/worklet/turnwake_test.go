@@ -121,7 +121,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment on the task, which speaks to everyone following it",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: humanComment},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"app-engineer", "backend-engineer", "designer", "pm", "qa"},
 	}, {
 		name: "an agent's reply in a thread two seats wrote in",
@@ -145,7 +145,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment naming one seat",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: humanComment},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"pm"},
 	}, {
 		name:  "a change to who watches the task",
@@ -178,7 +178,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a new assignment, which the reporter hears as the owner does",
 		n:     worklet.Notify{Kind: worklet.ChangeAssignee, Snapshot: agentComment},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"app-engineer", "backend-engineer", "pm"},
 	}, {
 		name: "the assignee finishing the task, which its reporter verifies",
@@ -215,7 +215,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment on an unowned, unwatched task",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: worklet.Snapshot{ProjectLead: "pm", CommentAuthorKind: worklet.AuthorHuman}},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"pm"},
 	}, {
 		name:  "a new task nobody owns",

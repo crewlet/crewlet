@@ -308,7 +308,7 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	t.Parallel()
 	seal := answerSeal(t, "the fleet's key material")
-	run := answeredBy(t, seal, parked(t, "t1", sandbox.StatusAnswered), "miles",
+	run := answeredBy(t, seal, parked(t, "t1", sandbox.StatusAnswered), "morgan",
 		time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC))
 
 	unopened := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run},
@@ -330,7 +330,7 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalAlreadyAnswered ||
-		!strings.Contains(result.Output, "already answered by miles at 2026-10-28T00:35:06Z") {
+		!strings.Contains(result.Output, "already answered by morgan at 2026-10-28T00:35:06Z") {
 		t.Fatalf("answer_executor = %+v, want an already_answered refusal naming who answered and "+
 			"when, in RFC 3339", result)
 	}
@@ -339,7 +339,7 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	}
 	// A PERSON IS TOLD WHOSE IT WAS, and their own screen says when on their
 	// own clock: the engine's UTC instant is the model's, never theirs.
-	if person := result.PersonRefusal.Person(); !strings.Contains(person, "@miles") ||
+	if person := result.PersonRefusal.Person(); !strings.Contains(person, "@morgan") ||
 		strings.Contains(person, "UTC") {
 		t.Fatalf("a person is told %q, want who answered and no engine clock", person)
 	}
@@ -356,7 +356,7 @@ func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
 		sandbox.StatusRunning:  "",
 	} {
 		seal := answerSeal(t, "the fleet's key material")
-		run := answeredBy(t, seal, parked(t, "t1", status), "miles", time.Time{})
+		run := answeredBy(t, seal, parked(t, "t1", status), "morgan", time.Time{})
 		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}, seal: seal}
 		result, err := answerExecutorTool(t, desk).Call(t.Context(),
 			map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use the release branch"})

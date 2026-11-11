@@ -2506,6 +2506,11 @@ func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	}
 	resolved.Resolved = true
 	resolved.ResolvedBy, resolved.ResolvedAt = comment.ResolvedBy, comment.ResolvedAt
+	// A WITHDRAWAL IS KEPT by a later resolve that carries none: resolving a
+	// withdrawn question again does not unsay why it was withdrawn.
+	if comment.Withdrawal != nil {
+		resolved.Withdrawal = comment.Withdrawal
+	}
 	document, err := json.Marshal(resolved)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",

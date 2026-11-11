@@ -89,7 +89,7 @@ func draftPage() *wire.PageContext {
 			{Path: "voice.avoid", Label: "Avoid", Kind: wire.DraftFieldList, Editable: true},
 			{Path: "logos.primary", Label: "Primary logo", Kind: wire.DraftFieldFile,
 				Editable: true},
-			{Path: "name", Label: "Name", Kind: wire.DraftFieldText, Value: "FairSplit"},
+			{Path: "name", Label: "Name", Kind: wire.DraftFieldText, Value: "Acme"},
 		}}}
 }
 
@@ -343,7 +343,7 @@ func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 				evals.Call("c1", "propose_page_change", map[string]any{"action": catalog.DraftSet,
 					"args": map[string]any{"values": map[string]any{"voice.summary": "Plain and warm."}}}),
 				evals.Call("c2", "propose_page_change", map[string]any{"action": catalog.DraftSet,
-					"args": map[string]any{"values": map[string]any{"name": "FairSplit"}}}),
+					"args": map[string]any{"values": map[string]any{"name": "Acme"}}}),
 				evals.Say("Done.")}})
 		page := draftPage()
 		page.Draft.Fields[3].Editable = true

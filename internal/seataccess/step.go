@@ -155,7 +155,7 @@ type Step struct {
 	Op Op `json:"op"`
 
 	// Verb, Text and Note are how the step is drawn: Text is one sentence in
-	// the vendor's own words ("Add it to gophrase/infra as Developer"), Note
+	// the vendor's own words ("Add it to acme/infra as Developer"), Note
 	// a caveat printed under it.
 	Verb StepVerb `json:"verb"`
 	Text string   `json:"text"`

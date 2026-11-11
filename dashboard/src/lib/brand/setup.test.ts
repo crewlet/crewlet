@@ -26,7 +26,7 @@ const edit = (document: BrandDocument): BrandEdit => ({ document, files: new Map
 /** A draft with the name, the primary logo and the primary colour: what Colours ends on. */
 function complete(over: Partial<BrandDocument> = {}): BrandDocument {
   return {
-    ...blankBrand("FairSplit"),
+    ...blankBrand("Acme"),
     logos: { primary: "logos/primary.svg" },
     colors: { primary: "#0f7b5f" },
     ...over,
@@ -44,24 +44,22 @@ function pair(colors: BrandDocument["colors"], foreground: string, ground: strin
 describe("each step's Continue", () => {
   test("Identity needs a name, and holds a tagline to its bound and free of links", () => {
     expect(partProblem("identity", edit(blankBrand("")))).toMatch(/Name the brand/);
-    expect(partProblem("identity", edit(blankBrand("FairSplit")))).toBeUndefined();
-    const linked = { ...blankBrand("FairSplit"), tagline: "See www.example.com" };
+    expect(partProblem("identity", edit(blankBrand("Acme")))).toBeUndefined();
+    const linked = { ...blankBrand("Acme"), tagline: "See www.example.com" };
     expect(partProblem("identity", edit(linked))).toMatch(/Leave links out/);
-    const long = { ...blankBrand("FairSplit"), tagline: "x".repeat(141) };
+    const long = { ...blankBrand("Acme"), tagline: "x".repeat(141) };
     expect(partProblem("identity", edit(long))).toMatch(/1 character too long/);
   });
 
   test("Logos needs the primary logo, and nothing else", () => {
-    expect(partProblem("logos", edit(blankBrand("FairSplit")))).toBe(
+    expect(partProblem("logos", edit(blankBrand("Acme")))).toBe(
       "Add the primary logo, for light grounds.",
     );
     expect(partProblem("logos", edit(complete()))).toBeUndefined();
   });
 
   test("Colours needs the primary colour, and holds only the pair that blocks an adoption", () => {
-    expect(partProblem("colours", edit(blankBrand("FairSplit")))).toBe(
-      "Choose the primary colour.",
-    );
+    expect(partProblem("colours", edit(blankBrand("Acme")))).toBe("Choose the primary colour.");
     // A LIGHT PRIMARY IS LOW ON A LIGHT PAGE, and allowed.
     expect(partProblem("colours", edit(complete({ colors: { primary: "#00baba" } })))).toBe(
       undefined,
@@ -76,7 +74,7 @@ describe("each step's Continue", () => {
 describe("done, resume and the rail", () => {
   test("a fresh setup starts on Identity and a named draft resumes on Logos", () => {
     expect(resumeStep(edit(blankBrand("")))).toBe("identity");
-    expect(resumeStep(edit(blankBrand("FairSplit")))).toBe("logos");
+    expect(resumeStep(edit(blankBrand("Acme")))).toBe("logos");
   });
 
   test("a draft with a logo and a colour resumes on Typography, and with every step done on Review", () => {
@@ -109,7 +107,7 @@ describe("done, resume and the rail", () => {
 
 describe("publishing a draft", () => {
   test("names what a draft lacks, in the engine's order, then the pair that refuses", () => {
-    expect(adoptionProblem(blankBrand("FairSplit"))).toBe("Add a primary logo and colour.");
+    expect(adoptionProblem(blankBrand("Acme"))).toBe("Add a primary logo and colour.");
     expect(adoptionProblem(complete({ logos: {} }))).toBe("Add a primary logo.");
     expect(adoptionProblem(complete({ colors: {} }))).toBe("Add a primary colour.");
     expect(adoptionProblem(complete({ colors: { primary: "#0f7b5f", text: "#9aa3ad" } }))).toMatch(
@@ -119,7 +117,7 @@ describe("publishing a draft", () => {
   });
 
   test("says where a draft is offered that it is not ready, and nothing for one that is", () => {
-    expect(draftReadiness(blankBrand("FairSplit"))).toBe(
+    expect(draftReadiness(blankBrand("Acme"))).toBe(
       "Not ready to publish: add a primary logo and colour.",
     );
     expect(draftReadiness(complete())).toBeUndefined();

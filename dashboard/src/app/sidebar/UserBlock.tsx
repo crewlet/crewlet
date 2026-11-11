@@ -30,8 +30,8 @@
  *
  * A CREDENTIAL THAT IS NOT A PERSON BUT ACTS AS A SEAT is called by the SEAT,
  * because it has no name of its own and the seat is who it acts as: a Tier A
- * token bound to Miles's seat is "Miles", "via API token" under it.
- * It was "token:review" over "Miles", the credential's spelling as the name
+ * token bound to Morgan's seat is "Morgan", "via API token" under it.
+ * It was "token:review" over "Morgan", the credential's spelling as the name
  * and the place it acts for as the aside. The row says only the KIND of
  * credential (`viaKind`): the token's name beside it ("via API token review")
  * cut the line short in the rail's width and said what the reader looks up

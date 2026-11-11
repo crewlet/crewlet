@@ -111,6 +111,10 @@ type Blocks struct {
 	// SynthesizedSkills are the procedures this seat wrote for itself.
 	SynthesizedSkills string
 
+	// OpenAsks is the seat's own open questions to the people who triggered
+	// the turn, with the call that withdraws each ([Fetcher.openAsks]).
+	OpenAsks string
+
 	// SkillIDs are the ids behind that block, carried out because a skill
 	// OFFERED to a turn is a skill used: the curator ages a skill on when
 	// it was last used, so a menu that never reports back would archive
@@ -193,7 +197,7 @@ type Blocks struct {
 func (b Blocks) Empty() bool {
 	return b.PersonalMemory == "" && b.RelevantKnowledge == "" &&
 		b.EpisodeRecall == "" && b.CounterpartyProfile == "" &&
-		b.SynthesizedSkills == "" && b.ThreadContext == ""
+		b.SynthesizedSkills == "" && b.ThreadContext == "" && b.OpenAsks == ""
 }
 
 // Request is one turn's worth of context to prefetch against.
@@ -564,6 +568,10 @@ type Sources struct {
 	Counterparties Counterparties
 	Skills         Skills
 
+	// Asks reads the seat's open asks to a person who triggered the turn.
+	// Nil on a company whose tracker is not Worklet's, which renders none.
+	Asks Asks
+
 	// Threads reads the chat thread a turn was woken in. Nil renders the
 	// UNREADABLE hint rather than an empty block for a trigger that names
 	// a thread, because a node with no chat transport — one in maintenance
@@ -658,6 +666,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	})
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r, vector) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
+	run(&blocks.OpenAsks, func() string { return f.openAsks(ctx, r) })
 	// Its own goroutine rather than a run(), because it is the one block that
 	// reports something back besides its prose.
 	wg.Go(func() {

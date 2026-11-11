@@ -545,7 +545,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// WHO IS ASKING, as the turn-start filter was told: its per-subject
 	// rule — a preference about somebody not party to the task does not
 	// apply — is unenforceable without it, so the re-filter would surface
-	// "Sam prefers short replies" on a turn where Miles is asking.
+	// "Sam prefers short replies" on a turn where Morgan is asking.
 	senders := make([]learning.Subject, 0, len(turn.Senders))
 	for _, sender := range turn.Senders {
 		senders = append(senders, learning.SubjectOf(sender))
