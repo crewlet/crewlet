@@ -911,18 +911,68 @@ func TestACaptureStatesTheNotesItHoldsOnlyWhereItsHarnessEndedItsOwnRun(t *testi
 	}
 }
 
+// A CAPTURE'S NOTE CURSOR STOPS BEFORE A READ ITS HARNESS NEVER HAD. A take
+// whose write landed after its answer was lost is marked unanswered on the
+// record: the session lacks those notes however cleanly its harness ended,
+// while it holds the answered reads after them, which one number cannot say. So
+// the cursor stops before the first read marked unanswered — whichever job's
+// take it was, since a later brief that told the note again is not known to
+// have been built after the mark landed — and a launch that continues the
+// session tells every note past it, as notes it may already show. A record with
+// none marked holds every read, and a capture cut off states none either way.
+//
+// Mutation: count a read marked unanswered as held, stop before the last such
+// read rather than the first, or stop only before the capture's own job's, and
+// a case goes red.
+func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
+	t.Parallel()
+	read := func(id string, order int, launch string, unanswered bool) RunNote {
+		return RunNote{ID: id, Read: &NoteRead{Order: order, Boundary: string(types.SteerBoundaryToolBatch),
+			Launch: launch, Unanswered: unanswered}}
+	}
+	for name, tc := range map[string]struct {
+		notes []RunNote
+		want  int
+	}{
+		"no read marked": {notes: []RunNote{read("a", 1, "job-2", false), read("b", 2, "job-2", false),
+			read("c", 3, "job-2", false)}, want: 3},
+		"the job's own take marked": {notes: []RunNote{read("a", 1, "job-2", false), read("b", 2, "job-2", true),
+			read("c", 3, "job-2", false)}, want: 1},
+		"two takes marked, the first stops it": {notes: []RunNote{read("a", 1, "job-2", false),
+			read("b", 2, "job-2", true), read("c", 3, "job-2", true)}, want: 1},
+		"the marked take listed after a later read": {notes: []RunNote{read("c", 3, "job-2", false),
+			read("b", 2, "job-2", true), read("a", 1, "job-2", false)}, want: 1},
+		"an earlier job's take marked": {notes: []RunNote{read("a", 1, "job-1", true), read("b", 2, "job-2", false),
+			read("c", 3, "job-2", false)}, want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := PendingRun{LaunchID: "job-2", Steer: RunSteer{Reads: 3, Notes: tc.notes}}
+			if got := notesHeld(run, false); got != tc.want {
+				t.Errorf("a session its harness ended its own run in holds notes through %d, want %d", got, tc.want)
+			}
+			if got := notesHeld(run, true); got != 0 {
+				t.Errorf("a cut-off session states it holds notes through %d, want none", got)
+			}
+		})
+	}
+}
+
 // EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED.
 // The note cursor on a capture's stamp is what a launch that continues it tells
 // it the notes past, on this build where its harness ended its own run and on
 // an older build whatever it ended: so the stamp of a session its harness ended
-// its own run in states every note the record says was read, and the stamp of
-// one cut off states none — the stamp of a capture taken, and that of one
-// refused before its place was reserved, alike. An older build tells a
-// continuation of a capture cut off every note the turn has read only because
-// its stamp states none.
+// its own run in states every note the record says was read up to the first
+// read it marks unanswered — a take whose answer never reached the harness —
+// and the stamp of one cut off states none — the stamp of a capture taken, and
+// that of one refused before its place was reserved, alike. An older build
+// tells a continuation of a capture cut off every note the turn has read, and
+// one of a capture whose take went unanswered that take's notes, only because
+// its stamp states so.
 //
-// Mutation: stamp a capture cut off with every note read, where it is taken or
-// where it is refused before its place, and that case goes red.
+// Mutation: stamp a capture cut off with every note read, or one whose take
+// went unanswered with that take's notes, where it is taken or where it is
+// refused before its place, and that case goes red.
 func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -933,11 +983,18 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 		// untaken fails the take, so the capture is refused before its place
 		// was reserved.
 		untaken bool
+		// unanswered settles the job's second take as one whose answer never
+		// reached its harness.
+		unanswered bool
 	}{
 		{name: "a job whose harness ended its own run, its capture taken"},
 		{name: "a job whose harness was killed, its capture taken", cutOff: true},
 		{name: "a job whose harness ended its own run, its take refused", untaken: true},
 		{name: "a job whose harness was killed, its take refused", cutOff: true, untaken: true},
+		{name: "a job whose harness ended its own run, a take of it unanswered, its capture taken",
+			unanswered: true},
+		{name: "a job whose harness ended its own run, a take of it unanswered, its take refused",
+			unanswered: true, untaken: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -948,13 +1005,20 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 				fileNote(t, rig.pending, "t1", id)
 				taken, err := rig.pending.TakeNotes(t.Context(), "t1", NoteTake{IDs: []string{id},
 					Launch: launched.LaunchID, Statuses: []string{StatusRunning},
-					Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch)}})
+					Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch),
+						Take: "take-" + id}})
 				if err != nil || len(taken) != 1 {
 					t.Fatalf("taking note %s took %d (%v), want it", id, len(taken), err)
 				}
 			}
 			if reads := rig.get("t1").Steer.Reads; reads != 2 {
 				t.Fatalf("the record says %d notes were read, want 2", reads)
+			}
+			if tc.unanswered {
+				if settled, err := rig.pending.SettleTake(t.Context(), "t1",
+					NoteSettle{Take: "take-second", Unanswered: true}); err != nil || len(settled) != 1 {
+					t.Fatalf("settling the second take = %d, %v, want its note", len(settled), err)
+				}
 			}
 			if tc.untaken {
 				rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
@@ -974,8 +1038,11 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 			if tc.untaken {
 				state = CaptureRefused
 			}
-			if tc.cutOff {
+			switch {
+			case tc.cutOff:
 				want = 0
+			case tc.unanswered:
+				want = 1
 			}
 			capture := rig.get("t1").Capture
 			if capture == nil || capture.State != state || capture.Interrupted != tc.cutOff {

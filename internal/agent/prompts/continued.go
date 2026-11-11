@@ -351,14 +351,21 @@ func droppedLate(n int) string {
 		" check whether its tool already did what it was for before doing it again.)"
 }
 
-// notesAgainHeader opens the notes a session that may have been cut off is told
-// again ([NotesReadAgain]).
+// notesAgainHeader opens the notes a session is told again that it may not show
+// ([NotesReadAgain]).
 const notesAgainHeader = "## Notes this turn read that the session above may not show"
 
-// NotesReadAgain is the section that tells a session its run may have been cut
-// off in the notes the turn has read again, each already rendered as the model
-// reads a note ([SteerMessage]), "" for none: the session may not show them, and
-// may show some.
+// NotesReadAgain is the section that tells a session again notes the turn has
+// read that it may not show, each already rendered as the model reads a note
+// ([SteerMessage]), "" for none: every note the turn has read, to a session its
+// run may have been cut off in; every note from a read whose take's answer
+// never reached its harness on, to one whose harness ended its own run; and,
+// with them, a note the run's bridge served its harness, which may have
+// delivered it unconfirmed, whether the turn read it before this message or
+// reads it in it. The session may not show them, and may show some.
+//
+// NEVER "EVERY NOTE" IN ITS WORDS: the notes before such a read are the
+// session's, and are not told again.
 //
 // SAID AS NOTES IT MAY ALREADY SHOW, ONE NOTE WHEREVER SHOWN, AND COUNTED. Each
 // note says it stands for the rest of the turn, so a model reading one both above
@@ -368,9 +375,10 @@ const notesAgainHeader = "## Notes this turn read that the session above may not
 // AND THE NOTES AFTER THEM AS ONES THE TURN HAD NOT READ, never as new to the
 // session. Which notes the turn has read is the run's record's word, and a
 // harness can be handed a note before the record says it was read: OpenCode's
-// delivery is recorded read only once its plugin confirms it, so a harness gone
-// before its confirmation landed leaves a session that may show a note the
-// brief takes as waiting.
+// delivery is recorded read only once its plugin confirms it. A note the run's
+// bridge recorded serving is told among these, however it was delivered
+// (internal/agent/runner's toldNotes); one a bridge of an older build served is
+// not marked, and the record cannot tell it from a note no harness was handed.
 func NotesReadAgain(notes []string) string {
 	if len(notes) == 0 {
 		return ""
@@ -379,8 +387,8 @@ func NotesReadAgain(notes []string) string {
 	if len(notes) > 1 {
 		which = "the " + strconv.Itoa(len(notes)) + " notes below"
 	}
-	return notesAgainHeader + "\nThe session above may not show " + which + ": every note a person sent" +
-		" this turn that the turn has read so far, in the order it read them. A note shown both above and" +
+	return notesAgainHeader + "\nThe session above may not show " + which + ": notes a person sent" +
+		" this turn, in the order the turn read them. A note shown both above and" +
 		" here is ONE note, sent once, not two: do what it asks once. A note after them is one the turn" +
 		" had not read before this message." +
 		"\n\n" + strings.Join(notes, "\n\n")

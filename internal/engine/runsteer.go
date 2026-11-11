@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -75,6 +76,40 @@ import (
 // resumes the turn starts from them ([runSteers.carried]) — whichever node it
 // is on.
 //
+// # A take whose answer was lost is settled, never left saying it was read
+//
+// A take's write can land and its answer not: a hook's take is held to five
+// seconds (internal/api/mcpbridge's steerTakeBudget), and a compare-and-swap the
+// store answers after them, or one whose answer a broken connection lost, may
+// still have landed — the record then says the job read a note its harness was
+// never handed. So every take names itself ([sandbox.NoteRead.Take]), and one
+// whose call answered an error is SETTLED by that name
+// ([sandbox.PendingStore.SettleTake]), which also leaves its write, if it is
+// still in flight, unable to land after. A hook's take settles OFF THE HOOK'S
+// PATH, its notes marked unanswered, since the hook has already been answered
+// nothing ([runSteers.settleUnanswered]): its job's session lacks them, so no
+// capture of it counts them held, and a launch that continues it tells them
+// again, while the review still reads them, carried as every read note is. A
+// review's take settles ON ITS OWN PATH, in answer mode, and hands over what its
+// write recorded, its round still waiting on it; where the store answers that
+// settle no more than the take, the take is kept and settled again by the
+// segment's next round or brief, standing meanwhile for a note waiting, and is
+// handed off the path, marked, only when the segment ends ([rowSource]). A
+// settle off the path asks until its store answers, or until the node stops
+// ([runSteers.settleUnanswered]).
+//
+// # A note a harness may have delivered is never one the record says nothing of
+//
+// OpenCode's plugin is handed its notes by a poll and confirms each once
+// OpenCode delivered it, and only the confirmation records the note read: a
+// harness cut off between the two — or whose confirmation the store never took —
+// leaves a session that may hold a note the record says waits, which the next
+// launch's brief would tell it as one it had not read. So a poll answers a note
+// only once the record says it was SERVED to the job
+// ([sandbox.PendingStore.ServeNotes]), in a write before its answer, and a
+// launch that continues the job's session tells a served note as one it may
+// already show ([servedNotes], internal/agent/runner).
+//
 // # Who records what became of a note
 //
 // The node whose step read it: the runner for a round of the engine's loop or
@@ -112,6 +147,63 @@ var (
 // path that read it.
 const steerPublishBudget = 5 * time.Second
 
+// steerSettlePatience is how long a settle the store has not answered is taken
+// for a blip ([runSteers.settleUnanswered]): past it, the settle is said
+// unsettled (steer_take_unsettled) and goes on asking, and a review stops
+// holding its rounds open for one ([rowSource.Waiting]).
+//
+// THIRTY SECONDS. The take a settle follows failed on a store that did not
+// answer in time — a hook's take within its five seconds — which is a store
+// mid leader election (four seconds at nats-server's raft default, nine at
+// worst) or reconnecting, and its answer comes once that is over. Thirty
+// seconds outlasts it with room, as a capture's record does (internal/sandbox's
+// sessionRecordBudget); a store silent past it is an outage its own alarms
+// name.
+const steerSettlePatience = 30 * time.Second
+
+// steerSettleAttempt bounds one attempt at a settle: an attempt the store has
+// not answered in TEN SECONDS — past a leader election's nine at worst — is
+// asked again, so a request that hangs never holds a run's settle, nor keeps
+// it from hearing that its node has stopped.
+const steerSettleAttempt = 10 * time.Second
+
+// steerSettleRetryBase and steerSettleRetryCeiling space a run's rounds of
+// settle attempts: a second, doubling to eight, for as long as its store does
+// not answer — a round every eight seconds at most is a few reads of one
+// record a minute, which a store just back from an outage barely notices.
+const (
+	steerSettleRetryBase    = time.Second
+	steerSettleRetryCeiling = 8 * time.Second
+)
+
+// steerSettleStopBudget is the window a stopping node's last attempts at the
+// settles it holds are made in ([runSteers.settleRun]): every one of them, of
+// every run, together, from the moment the node's teardown begins — so the
+// teardown's wait for them ([runSteers.waitSettles]) is over within it too.
+//
+// A WINDOW OF ITS OWN, BESIDE THE GIVE-BACKS, AND NEVER A STEP OF THE STOP'S
+// ALLOWANCE (internal/seat's StopBudget, "Only what lapses"): a settle that runs
+// out leaves a take unsettled, which the stop says, where a give-back that runs
+// out leaves a lease lapsing on its TTL. And the run records are a bucket of
+// their own, a stream that can lose its quorum alone — which is when settles
+// are held — so settles made on the allowance, charged for every moment they
+// asked with no give-back beside them, spent what the give-backs made later in
+// the stop are owed — the presence given back after the flushes, and every seat
+// the node's own stop releases once the settles are waited out — and those
+// leases lapsed on their TTL instead of being given back.
+//
+// FIVE SECONDS: the bound the JetStream client gives one request with no
+// deadline of its own, as each lifecycle event and the admission's share have —
+// a store answering at all answers a settle well inside it. And the length of
+// the ledgers' last flush, which the teardown makes after the window opens and
+// before it waits the settles out ([Engine.stopLedgers], [ledgerStopBudget]):
+// where that flush spends its bound — a member that has lost its event stream
+// — the window is over before the wait, so the stop's longest case, which the
+// deployment guide sizes a pod's grace by, is unchanged; and where it does not,
+// the stop is that much shorter than its longest case. A member that has lost
+// its coordination store alone stops up to this much later than its allowance.
+const steerSettleStopBudget = 5 * time.Second
+
 // runSteers is this node's half of a turn's notes on its run's record: it seals
 // and opens them, files them for a person, takes them for a resumed segment and
 // for a run's own harness, and records what became of them.
@@ -126,6 +218,38 @@ type runSteers struct {
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
 	warned sync.Map
+
+	// stopped is closed when this node's teardown begins
+	// ([Engine.teardownSignal]), and stopWindow ends [steerSettleStopBudget]
+	// after it: a settle this node makes off the path that took asks its store
+	// until the store answers, or until the teardown begins — and then once
+	// more, in that window ([runSteers.settleRun]). Nil is a node that never
+	// stops, as an engine assembled by hand is. Both set by
+	// [runSteers.stopWith].
+	stopped    <-chan struct{}
+	stopWindow context.Context
+
+	// settleMu guards settling and settlesShut: every run this node is
+	// settling takes of off the path that took, by turn id — one loop a run,
+	// whatever its takes — and whether the teardown has waited the loops out
+	// ([runSteers.waitSettles]), after which no loop starts.
+	settleMu    sync.Mutex
+	settling    map[string]*runSettle
+	settlesShut bool
+
+	// settles is the settle loops running, which the teardown waits out.
+	settles sync.WaitGroup
+}
+
+// runSettle is one run's takes this node is settling off the path that took
+// ([runSteers.settleUnanswered]): their names, when the first was lost,
+// whether the settle was said unsettled, and the takes a round begun once the
+// node stopped has asked — each its last attempt ([runSteers.settleRun]).
+type runSettle struct {
+	takes []string
+	since time.Time
+	said  bool
+	tried []string
 }
 
 var _ builtin.RunSteers = (*runSteers)(nil)
@@ -372,11 +496,16 @@ func readsOf(status string) steer.Reads {
 
 // briefNotes is notes a launch's brief carries, sealed for the record the
 // launch opens and marked read at the brief — the launch names the job
-// ([sandbox.LaunchRequest.BriefNotes]).
-func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]sandbox.RunNote, error) {
+// ([sandbox.LaunchRequest.BriefNotes]) — each one a lost take's settle handed
+// the brief of from, the segment that briefed, naming that take, whose read
+// the launch's write takes over ([rowSource.lostTakes]). from is nil for a
+// first segment, whose brief's notes are its box's.
+func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note, from *rowSource,
+) ([]sandbox.RunNote, error) {
 	if s == nil || len(notes) == 0 {
 		return nil, nil
 	}
+	lost := from.lostTakes(notes)
 	out := make([]sandbox.RunNote, 0, len(notes))
 	for _, n := range notes {
 		sealed, err := s.seal(turnID, n)
@@ -385,6 +514,7 @@ func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]
 		}
 		sealed.Read = &sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: round,
 			Round: 1, Boundary: string(types.SteerBoundaryBrief)}
+		sealed.LostTake = lost[n.ID]
 		out = append(out, sealed)
 	}
 	return out, nil
@@ -417,7 +547,224 @@ func readOf(at steer.Reading) sandbox.NoteRead {
 // readingOf is a record's read as the agent layer states it.
 func readingOf(read sandbox.NoteRead) steer.Reading {
 	return steer.Reading{Phase: types.Phase(read.Phase), Iteration: read.Iteration, Round: read.Round,
-		Boundary: types.SteerBoundary(read.Boundary), Launch: read.Launch, At: read.At, Order: read.Order}
+		Boundary: types.SteerBoundary(read.Boundary), Launch: read.Launch, At: read.At, Order: read.Order,
+		Unanswered: read.Unanswered}
+}
+
+// takeName names one take of a run's notes ([sandbox.NoteRead.Take]): fresh for
+// every call, so a settle finds the reads of that call and no other's.
+func takeName() string { return uuid.NewString() }
+
+// settleUnanswered settles, off the path that took, a take of turnID's notes
+// whose answer never reached its reader ([sandbox.PendingStore.SettleTake]):
+// every note its write recorded is marked unanswered, and a write of it still
+// in flight can no longer land.
+//
+// UNTIL THE STORE ANSWERS, never until a clock says so: a settle given up leaves
+// the record saying the run read notes its reader was never handed — which a
+// capture of its session then counts held — while the store that did not answer
+// in time answers once it is back. So it is asked again, rounds a second apart
+// doubling to eight, until an attempt is answered — the notes marked, or the
+// record gone with the run — or the node stops, which it asks every take once
+// more before it ends, in a window of its own ([steerSettleStopBudget],
+// [runSteers.settleRun]); said at ERROR once
+// [steerSettlePatience] has passed unanswered, and again where the node stops
+// with it unsettled, since what a stopping node did not settle no other node
+// knows to. A take lost once the teardown has waited the settles out
+// ([runSteers.waitSettles]) is said so at once: the store it would be asked of
+// is closing.
+//
+// ONE LOOP A RUN: a take a run loses while its loop runs joins it, so a run
+// whose store does not answer holds one loop, however many takes it loses. The
+// loop keeps ctx's values — the first take's trace — and none of its ending:
+// the take's own is spent, or its hook gone, or its segment over.
+func (s *runSteers) settleUnanswered(ctx context.Context, turnID, take string) {
+	s.settleMu.Lock()
+	defer s.settleMu.Unlock()
+	if run, ok := s.settling[turnID]; ok {
+		if !slices.Contains(run.takes, take) {
+			run.takes = append(run.takes, take)
+		}
+		return
+	}
+	if s.settlesShut {
+		log.ErrorContext(ctx, "steer_take_unsettled", "turn_id", turnID, "takes", 1,
+			"detail", "a take of the run's notes answered an error once this node had stopped settling: "+
+				"where the store recorded it, the record says the run read notes its reader was never "+
+				"handed, and no other node knows to settle it")
+		return
+	}
+	if s.settling == nil {
+		s.settling = map[string]*runSettle{}
+	}
+	run := &runSettle{takes: []string{take}, since: s.now()}
+	s.settling[turnID] = run
+	s.settles.Add(1)
+	go func() {
+		defer s.settles.Done()
+		s.settleRun(context.WithoutCancel(ctx), turnID, run)
+	}()
+}
+
+// settleRun asks turnID's store to settle run's takes, round after round, until
+// it has answered for every one, or the node stops — see
+// [runSteers.settleUnanswered]. base is the loop's own context, which nothing
+// ends: an attempt is held to [steerSettleAttempt], and to the window the
+// node's teardown opens too ([steerSettleStopBudget], [runSteers.settleOnce]).
+//
+// ONE LAST ATTEMPT AT EVERY TAKE AS THE NODE STOPS, never none: a store that
+// came back while the loop slept between rounds, or a take a segment the
+// teardown ended handed off, would otherwise stay unsettled for good. So the
+// round in flight as the teardown begins goes on, held to the window; a loop
+// asleep between rounds wakes; and a round begun once the teardown has asks
+// every take no such round has asked yet — one that joins it meanwhile is asked
+// by the next, and one the window is over for fails at once — after which what
+// is left is said unsettled, and the loop ends.
+func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettle) {
+	for round := 1; ; round++ {
+		last := s.stopping()
+		s.settleMu.Lock()
+		takes := slices.Clone(run.takes)
+		if last {
+			takes = slices.DeleteFunc(takes, func(t string) bool { return slices.Contains(run.tried, t) })
+			run.tried = append(run.tried, takes...)
+			if len(takes) == 0 {
+				delete(s.settling, turnID)
+				left := len(run.takes)
+				s.settleMu.Unlock()
+				log.ErrorContext(base, "steer_take_unsettled", "turn_id", turnID, "takes", left,
+					"detail", "this node stopped before the store answered the settle of a take of the run's "+
+						"notes, its last attempt included, made in the window that opened as the stop's "+
+						"teardown began (none for a take handed off once the window was over): where the "+
+						"store recorded it, the record says the run read notes its reader was never handed, "+
+						"and no other node knows to settle it")
+				return
+			}
+		}
+		s.settleMu.Unlock()
+		var answered []string
+		var unanswered error
+		for _, take := range takes {
+			marked, err := s.settleOnce(base, turnID, take)
+			if err != nil {
+				unanswered = err
+				continue
+			}
+			answered = append(answered, take)
+			if len(marked) > 0 {
+				log.WarnContext(base, "steer_take_unanswered", "turn_id", turnID, "notes", len(marked),
+					"detail", "a take of the run's notes was recorded and its answer lost: its reader never "+
+						"had them, the turn carries them as read, and a launch that continues the run's "+
+						"session tells them again")
+			}
+		}
+		s.settleMu.Lock()
+		run.takes = slices.DeleteFunc(run.takes, func(t string) bool { return slices.Contains(answered, t) })
+		left := len(run.takes)
+		if left == 0 {
+			delete(s.settling, turnID)
+			s.settleMu.Unlock()
+			return
+		}
+		// SAID ONLY OF A ROUND THAT MET AN ERROR: one whose every attempt was
+		// answered asked no take that is left — what is left joined the run's
+		// loop while the round was asked, and has not been asked yet — so there
+		// is nothing unanswered to say, and its error to say it with is none.
+		// And never of a last round, whose end says what is left.
+		overdue := !last && unanswered != nil && !run.said && s.now().Sub(run.since) >= steerSettlePatience
+		run.said = run.said || overdue
+		s.settleMu.Unlock()
+		if overdue {
+			log.ErrorContext(base, "steer_take_unsettled", "turn_id", turnID, "takes", left,
+				"error", unanswered.Error(),
+				"detail", "a take of the run's notes answered an error, and the store has not answered its "+
+					"settle: where the store recorded it, the record says the run read notes its reader was "+
+					"never handed, and a continuation of its session is not told them. Asked again until "+
+					"the store answers")
+		}
+		if last {
+			continue
+		}
+		timer := time.NewTimer(backoff.Jitter(backoff.Doubling(round, steerSettleRetryBase,
+			steerSettleRetryCeiling), 0.2))
+		select {
+		case <-timer.C:
+		case <-s.stopped:
+			timer.Stop()
+		}
+	}
+}
+
+// settleOnce is one attempt at settling take, held to [steerSettleAttempt] and
+// to the window this node's teardown opens ([runSteers.stopWindow]): the
+// teardown waits for it ([runSteers.waitSettles]), and a store that does not
+// answer must hold the stop no longer than that window — never on the stop's
+// allowance, which is the give-backs' ([steerSettleStopBudget]). An attempt
+// begun once the window is over is made on a context that has already ended,
+// so it fails at once.
+func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]sandbox.RunNote, error) {
+	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
+	defer cancel()
+	if window := s.stopWindow; window != nil {
+		//nolint:contextcheck // the window is the node's teardown's, never base's: it ends the attempt beside base's own bound, and is ended by nothing base holds
+		defer context.AfterFunc(window, cancel)()
+		if window.Err() != nil {
+			cancel()
+		}
+	}
+	return s.store.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
+}
+
+// stopping reports whether this node's teardown has begun ([runSteers.stopped]).
+func (s *runSteers) stopping() bool {
+	select {
+	case <-s.stopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// stopWith ends this node's settles with e's teardown, as [New] wires them: the
+// moment it begins ([Engine.teardownSignal]), and the window every attempt is
+// held to from then on, which ends [steerSettleStopBudget] after that moment
+// ([windowFrom]) — one window for every settle the node holds, opened as the
+// teardown begins whether or not one is being asked then, so a take handed off
+// later in the stop is asked inside it too.
+func (s *runSteers) stopWith(e *Engine) {
+	begun := e.teardownSignal()
+	s.stopped, s.stopWindow = begun.Done(), windowFrom(begun, steerSettleStopBudget)
+}
+
+// windowFrom is a context that ends d after begun does, and not before: the
+// window of d that opens as begun ends. Nothing waits for that moment: the
+// window is armed by begun itself, so its timer starts then.
+//
+// MADE FROM BEGUN AND NOTHING ELSE. It carries begun's values and none of its
+// ending, which would close the window the moment it opens; and none of a
+// caller's context either: [New], which opens the settles' window, holds one
+// that may end as the stop begins, and the window would end with it.
+func windowFrom(begun context.Context, d time.Duration) context.Context {
+	window, end := context.WithCancel(context.WithoutCancel(begun))
+	context.AfterFunc(begun, func() { time.AfterFunc(d, end) })
+	return window
+}
+
+// waitSettles waits out every settle loop this node runs, for its teardown,
+// which has begun: each makes its last attempt in the window the teardown
+// opened and ends ([runSteers.settleRun]), so this returns within
+// [steerSettleStopBudget] of the teardown's start. From here a take lost is
+// said unsettled, and no loop starts — the store it would ask is closing.
+// Nil-safe: an engine whose boot failed before it built its steers has no
+// settle to wait for.
+func (s *runSteers) waitSettles() {
+	if s == nil {
+		return
+	}
+	s.settleMu.Lock()
+	s.settlesShut = true
+	s.settleMu.Unlock()
+	s.settles.Wait()
 }
 
 // carried is every note run's record holds read, opened, in the order read —
@@ -454,6 +801,21 @@ func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 			continue
 		}
 		out = append(out, steer.Read{Note: note, Reading: readingOf(*n.Read)})
+	}
+	return out
+}
+
+// servedNotes is every note on run's record its bridge served a harness
+// ([sandbox.RunNote.Served]), by id, in the order filed — read since, or waiting
+// still: what a segment resuming the turn tells a continued session as notes it
+// may already show ([runner.Resume.Served]). In the clear, as a note's id is:
+// a note whose seal does not open is never told, served or not.
+func servedNotes(run sandbox.PendingRun) []string {
+	var out []string
+	for _, n := range run.Steer.Notes {
+		if n.Served != "" {
+			out = append(out, n.ID)
+		}
 	}
 	return out
 }
@@ -555,11 +917,47 @@ func (s *runSteers) expired(ctx context.Context, run sandbox.PendingRun) error {
 // rowSource is the turn's notes as a segment that resumes it from its executor
 // reads them: off the run's record, taken under the segment's claim
 // ([runner.SteerSource]).
+//
+// # A take whose answer was lost is the segment's own to settle
+//
+// A take whose call answered an error may have landed, and what it recorded is
+// read by the record's word, so no later take hands it over. Where its settle
+// answers on the take's own path, what it recorded is handed over there and
+// then; where the store does not answer that either, the take is LOST and kept
+// here, by name: settled again on the segment's own path, in answer mode, at
+// each later round's take and at a relaunch's brief, and handed over by the
+// first that the store answers — the review reads it, or the relaunch's run
+// does. Until then a lost take stands for a note waiting ([rowSource.Waiting]),
+// so a round of the review asking for tools ends and the next one opens with
+// the note, for as long as [steerSettlePatience] takes a silent store for a
+// blip. A take still lost when the segment ends is handed off its path at
+// [rowSource.Close], marked unanswered where it recorded anything
+// ([runSteers.settleUnanswered]): nothing of the segment reads it any more, and
+// a launch that continues the run's session tells it again.
 type rowSource struct {
 	steers *runSteers
 	run    sandbox.PendingRun
 	fence  sandbox.Fence
 	watch  *noteWatch
+
+	// mu guards lost, lostAt, briefed and orders.
+	mu sync.Mutex
+	// lost is every take of this segment whose call and settle both answered
+	// an error and whose settle has not answered since, by name, oldest first,
+	// and lostAt when the first of them was lost.
+	lost   []string
+	lostAt time.Time
+	// briefed is the take each note a relaunch's brief was handed from a
+	// settle came from, by note id: a launch that fails before its write hands
+	// the brief back, and its takes with it ([rowSource.Return]), and one that
+	// writes takes each take's read over ([rowSource.lostTakes]).
+	briefed map[string]string
+	// orders is the place among the record's reads ([sandbox.NoteRead.Order])
+	// of every note this segment's takes recorded and handed over — its
+	// rounds', and a lost take's a settle handed a round or a brief — by note
+	// id: what a relaunch's brief tells the turn's read notes in the order of
+	// ([steer.Briefing.Orders]), its runner holding them unnumbered.
+	orders map[string]int
 }
 
 // source is the resumed segment's notes for run, which it claimed under fence:
@@ -578,25 +976,35 @@ func (r *rowSource) live(status, launch string, ending bool) bool {
 	return status == sandbox.StatusResumed && launch == r.run.LaunchID && !ending
 }
 
-// Take takes every waiting note that opens, read where at says.
+// Take takes every waiting note that opens, read where at says — after the
+// notes the segment's lost takes recorded, where their settle answers now
+// ([rowSource.settleLost]), which were read before them.
 func (r *rowSource) Take(ctx context.Context, at steer.Reading) []steer.Note {
 	if r == nil {
 		return nil
 	}
+	settled := r.opened(r.settleLost(ctx))
 	run, found, err := r.steers.store.Get(ctx, r.run.TurnID)
 	if err != nil {
 		log.WarnContext(ctx, "steer_notes_unread", "turn_id", r.run.TurnID, "error", err.Error(),
 			"detail", "the record could not be read; its notes wait for the next step")
-		return nil
+		return notesOf(settled)
 	}
 	if !found || !r.live(run.Status, run.LaunchID, run.Ending != nil) {
-		return nil
+		return notesOf(settled)
 	}
 	candidates := r.steers.waiting(run.TurnID, run.Steer.Notes)
-	return r.take(ctx, candidates, readOf(at))
+	return append(notesOf(settled), r.take(ctx, candidates, readOf(at))...)
 }
 
 // take records candidates read, and answers the ones the write took.
+//
+// A TAKE THAT ANSWERED AN ERROR IS SETTLED HERE, its round still waiting on it:
+// its write may have landed with its answer lost, and what it recorded is read
+// by the record's word, so no later take hands it over — the settle answers it,
+// and it is handed over now. One whose settle the store does not answer either
+// is LOST, and settled again by the segment's next take or brief
+// ([rowSource.settleLost]).
 func (r *rowSource) take(ctx context.Context, candidates []openedNote, read sandbox.NoteRead) []steer.Note {
 	if len(candidates) == 0 {
 		return nil
@@ -605,16 +1013,122 @@ func (r *rowSource) take(ctx context.Context, candidates []openedNote, read sand
 	for _, c := range candidates {
 		ids = append(ids, c.held.ID)
 	}
+	read.Take = takeName()
 	taken, err := r.steers.store.TakeNotes(ctx, r.run.TurnID, sandbox.NoteTake{
 		IDs: ids, Launch: r.run.LaunchID, Statuses: []string{sandbox.StatusResumed},
 		Fence: r.fence, Read: read,
 	})
 	if err != nil {
-		log.WarnContext(ctx, "steer_notes_untaken", "turn_id", r.run.TurnID, "error", err.Error(),
-			"detail", "the notes wait for the next step")
-		return nil
+		settled, settleErr := r.steers.store.SettleTake(ctx, r.run.TurnID, sandbox.NoteSettle{Take: read.Take})
+		switch {
+		case settleErr != nil:
+			log.WarnContext(ctx, "steer_notes_untaken", "turn_id", r.run.TurnID, "error", err.Error(),
+				"settle_error", settleErr.Error(),
+				"detail", "the notes wait for the next step, or, where the store recorded this take, are "+
+					"handed over by the segment's next round or brief that the store answers, and marked "+
+					"unanswered if none does before the segment ends")
+			r.lose(read.Take)
+			return nil
+		case len(settled) == 0:
+			log.WarnContext(ctx, "steer_notes_untaken", "turn_id", r.run.TurnID, "error", err.Error(),
+				"detail", "the notes wait for the next step")
+			return nil
+		}
+		// RECORDED, ITS ANSWER LOST: handed over now.
+		taken = settled
 	}
+	r.numbered(taken)
 	return notesTaken(candidates, taken)
+}
+
+// numbered keeps the place among the record's reads of every note of recorded,
+// which this segment hands over ([rowSource.orders]).
+func (r *rowSource) numbered(recorded []sandbox.RunNote) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range recorded {
+		if n.Read == nil {
+			continue
+		}
+		if r.orders == nil {
+			r.orders = map[string]int{}
+		}
+		r.orders[n.ID] = n.Read.Order
+	}
+}
+
+// lose keeps take as one of the segment's lost takes.
+func (r *rowSource) lose(take string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if slices.Contains(r.lost, take) {
+		return
+	}
+	if len(r.lost) == 0 {
+		r.lostAt = r.steers.now()
+	}
+	r.lost = append(r.lost, take)
+}
+
+// settledNote is a note a lost take recorded, as its settle answered it.
+type settledNote struct {
+	take string
+	held sandbox.RunNote
+}
+
+// settleLost settles the segment's lost takes on its own path, in answer mode,
+// and answers the notes they recorded, in the order the takes were lost — for
+// the caller to hand over now. A settle the store answers ends its take: what
+// it recorded is answered, and where it recorded nothing its notes wait again
+// for the take the caller makes next. One the store does not answer stays lost.
+func (r *rowSource) settleLost(ctx context.Context) []settledNote {
+	r.mu.Lock()
+	lost := slices.Clone(r.lost)
+	r.mu.Unlock()
+	var out []settledNote
+	var answered []string
+	for _, take := range lost {
+		recorded, err := r.steers.store.SettleTake(ctx, r.run.TurnID, sandbox.NoteSettle{Take: take})
+		if err != nil {
+			continue
+		}
+		answered = append(answered, take)
+		r.numbered(recorded)
+		for _, n := range recorded {
+			out = append(out, settledNote{take: take, held: n})
+		}
+	}
+	r.mu.Lock()
+	r.lost = slices.DeleteFunc(r.lost, func(t string) bool { return slices.Contains(answered, t) })
+	r.mu.Unlock()
+	return out
+}
+
+// openedSettled is a settled note, and the note it opens as.
+type openedSettled struct {
+	take string
+	note steer.Note
+}
+
+// opened is the settled notes that open, in their order. One that does not is
+// never handed over: nobody can say it is a person's.
+func (r *rowSource) opened(settled []settledNote) []openedSettled {
+	out := make([]openedSettled, 0, len(settled))
+	for _, s := range settled {
+		if note, ok := r.steers.open(r.run.TurnID, s.held); ok {
+			out = append(out, openedSettled{take: s.take, note: note})
+		}
+	}
+	return out
+}
+
+// notesOf is the notes of opened settled notes.
+func notesOf(settled []openedSettled) []steer.Note {
+	out := make([]steer.Note, 0, len(settled))
+	for _, s := range settled {
+		out = append(out, s.note)
+	}
+	return out
 }
 
 // notesTaken is the notes of candidates a take recorded, in the take's order.
@@ -631,55 +1145,159 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 	return out
 }
 
-// Brief is the waiting notes that open, for a relaunch's brief: a peek, which
-// the launch's own write records read.
-func (r *rowSource) Brief(ctx context.Context) []steer.Note {
+// Brief is what a relaunch's brief takes of the turn's notes
+// ([steer.Briefing]): the notes the segment's lost takes recorded, where their
+// settle answers now ([rowSource.settleLost]) — which the launch's write records
+// read by its job in their take's place, at that take's own place among the
+// reads ([rowSource.lostTakes]) — then the waiting notes that open — a peek,
+// which the launch's own write records read — and every note the record marks
+// unanswered, by id, read off the same record; and the place among the
+// record's reads of every note this segment's takes handed over, those the
+// brief carries among them ([rowSource.orders]), so the brief tells the turn's
+// read notes in the order the record numbered them.
+//
+// THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
+// read them: a take's settle is made off the path that took, and can mark a
+// read after this segment resumed from the record — so the relaunch's briefs,
+// built from the reads the turn carries, count the mark as the record does.
+func (r *rowSource) Brief(ctx context.Context) steer.Briefing {
 	if r == nil {
-		return nil
+		return steer.Briefing{}
 	}
+	settled := r.opened(r.settleLost(ctx))
+	r.mu.Lock()
+	for _, s := range settled {
+		if r.briefed == nil {
+			r.briefed = map[string]string{}
+		}
+		r.briefed[s.note.ID] = s.take
+	}
+	r.mu.Unlock()
+	notes := notesOf(settled)
 	run, found, err := r.steers.store.Get(ctx, r.run.TurnID)
 	if err != nil {
 		log.WarnContext(ctx, "steer_notes_unread", "turn_id", r.run.TurnID, "error", err.Error(),
 			"detail", "the record could not be read; the launch's brief carries no new note, and "+
 				"its notes wait for the run's own steps")
-		return nil
+		return steer.Briefing{Notes: notes, Orders: r.ordersNow()}
 	}
 	if !found || run.Ending != nil {
-		return nil
+		return steer.Briefing{Notes: notes, Orders: r.ordersNow()}
 	}
-	opened := r.steers.waiting(run.TurnID, run.Steer.Notes)
-	out := make([]steer.Note, 0, len(opened))
-	for _, o := range opened {
-		out = append(out, o.note)
+	for _, o := range r.steers.waiting(run.TurnID, run.Steer.Notes) {
+		notes = append(notes, o.note)
+	}
+	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: r.ordersNow()}
+}
+
+// ordersNow is the places among the record's reads of the notes this segment's
+// takes handed over, a lost take's this brief carries among them
+// ([rowSource.orders]): a copy, the brief's to keep.
+func (r *rowSource) ordersNow() map[string]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.orders)
+}
+
+// unansweredNotes is every note on run's record whose read the record marks
+// unanswered ([sandbox.NoteRead.Unanswered]), by id.
+func unansweredNotes(run sandbox.PendingRun) []string {
+	var out []string
+	for _, n := range run.Steer.Notes {
+		if n.Read != nil && n.Read.Unanswered {
+			out = append(out, n.ID)
+		}
 	}
 	return out
 }
 
-// Return takes back the notes a relaunch's brief peeked where the launch failed
-// before it wrote the record ([runner.SteerSource.Return]) — which is nothing to
-// do: a peek takes nothing, and the notes still wait on the record for whatever
-// reads the turn next, or for its ending. A launch that failed after its write
-// is never handed back: the record holds what its brief read, and the ending
-// that deletes the record reports them ([runSteers.expired]) — which is also
-// why nothing here may publish: a note this source peeked can be reported
-// expired by another node's ending while the launch is still failing.
-func (r *rowSource) Return(context.Context, []steer.Note) {}
+// lostTakes is the take each of notes was handed to a relaunch's brief from,
+// by note id, where a lost take's settle handed it ([rowSource.Brief]) — for
+// the launch's write, which records such a note read by the job it opens in
+// that take's place ([sandbox.RunNote.LostTake]): the take's reader never had
+// the note, and the brief is the first to tell it. Nil for a nil source, whose
+// brief took none so.
+func (r *rowSource) lostTakes(notes []steer.Note) map[string]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out map[string]string
+	for _, n := range notes {
+		if take, ok := r.briefed[n.ID]; ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[n.ID] = take
+		}
+	}
+	return out
+}
+
+// Return takes back the notes a relaunch's brief took where the launch failed
+// before it wrote the record ([runner.SteerSource.Return]). A waiting note it
+// peeked needs nothing: a peek takes nothing, and the note still waits on the
+// record for whatever reads the turn next, or for its ending. A note a lost
+// take's settle handed the brief is read already, so its take is lost again,
+// for the segment's next round or brief to hand over. A launch that failed
+// after its write is never handed back: the record holds what its brief read,
+// and the ending that deletes the record reports them ([runSteers.expired]) —
+// which is also why nothing here may publish: a note this source peeked can be
+// reported expired by another node's ending while the launch is still failing.
+func (r *rowSource) Return(_ context.Context, notes []steer.Note) {
+	if r == nil {
+		return
+	}
+	var takes []string
+	r.mu.Lock()
+	for _, n := range notes {
+		if take, ok := r.briefed[n.ID]; ok {
+			delete(r.briefed, n.ID)
+			takes = append(takes, take)
+		}
+	}
+	r.mu.Unlock()
+	for _, take := range takes {
+		r.lose(take)
+	}
+}
 
 // Waiting reports a waiting note that opens, from the segment's view of the
 // record — never a store read: the tool loop asks it under its dispatcher's
-// lock.
+// lock — or a lost take the store may yet settle: one lost less than
+// [steerSettlePatience] ago, whose notes the next round's take hands over once
+// the store answers.
 func (r *rowSource) Waiting() bool {
 	if r == nil {
 		return false
+	}
+	r.mu.Lock()
+	pending := len(r.lost) > 0 && r.steers.now().Sub(r.lostAt) < steerSettlePatience
+	r.mu.Unlock()
+	if pending {
+		return true
 	}
 	view, opened, _ := r.watch.snapshot()
 	return view.Found && r.live(view.Status, view.LaunchID, view.EndingDecided) && len(opened) > 0
 }
 
-// Close stops the segment's view of the record.
-func (r *rowSource) Close() {
-	if r != nil {
-		r.watch.stop()
+// Close stops the segment's view of the record, and hands every take still
+// lost off the segment's path, to be marked unanswered where it recorded
+// anything ([runSteers.settleUnanswered]): nothing of the segment reads it any
+// more. Under ctx stripped of its ending, which the settle takes, as a teardown
+// does. Safe twice: the takes are handed off once.
+func (r *rowSource) Close(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	r.watch.stop()
+	r.mu.Lock()
+	lost := r.lost
+	r.lost, r.briefed = nil, nil
+	r.mu.Unlock()
+	for _, take := range lost {
+		r.steers.settleUnanswered(ctx, r.run.TurnID, take)
 	}
 }
 
@@ -810,6 +1428,15 @@ func (i *runInbox) Take(ctx context.Context, event string) string {
 
 // take records candidates read by the job at boundary, publishes them delivered
 // and answers what it took.
+//
+// A TAKE THAT ANSWERED AN ERROR HANDS THE HARNESS NOTHING, and is settled off
+// this path ([runSteers.settleUnanswered]): its ctx is the hook's five seconds
+// (internal/api/mcpbridge's steerTakeBudget), and a write the store answered
+// after them may have landed — so where it did, the notes it recorded are marked
+// unanswered, which no capture of the job's session counts held, rather than
+// left read by a harness that was handed nothing; and where it did not, they
+// wait for the run's next step, the settle's own write keeping a write of the
+// take still in flight from landing after it.
 func (i *runInbox) take(ctx context.Context, launch string, candidates []openedNote,
 	boundary types.SteerBoundary,
 ) []steer.Note {
@@ -821,13 +1448,16 @@ func (i *runInbox) take(ctx context.Context, launch string, candidates []openedN
 		ids = append(ids, c.held.ID)
 	}
 	read := sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: i.round, Round: 1,
-		Boundary: string(boundary), Launch: launch}
+		Boundary: string(boundary), Launch: launch, Take: takeName()}
 	taken, err := i.steers.store.TakeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteTake{
 		IDs: ids, Launch: launch, Statuses: steerTakeStatuses, Read: read,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "steer_take_failed", "turn_id", i.ident.turn.TurnID,
-			"error", err.Error(), "detail", "the notes wait for the run's next step")
+			"error", err.Error(), "detail", "the run's harness is handed nothing at this step: the notes "+
+				"wait for its next one, or, where the store recorded this take, are marked unanswered, read "+
+				"by its review and told again to a launch that continues its session")
+		i.steers.settleUnanswered(ctx, i.ident.turn.TurnID, read.Take)
 		return nil
 	}
 	notes := notesTaken(candidates, taken)
@@ -886,7 +1516,16 @@ func (i *runInbox) markPulled(ctx context.Context, launch string) {
 	}()
 }
 
-// Wait is the waiting notes past the cursor after — see [mcpbridge.SteerInbox].
+// Wait is the waiting notes past the cursor after, each served to the job on
+// the record first — see [mcpbridge.SteerInbox].
+//
+// SERVED BEFORE IT IS ANSWERED ([sandbox.PendingStore.ServeNotes]), in a write
+// of its own wherever the view does not show the mark yet: the harness admits
+// what it is answered and delivers it, and records it read only once it has, so
+// a note answered without the mark could sit in a session the record says
+// never read it. A note the serve did not answer — its write failed, or the
+// record moved on from the job — is not answered either, nor is any after it,
+// and they wait for the next poll.
 func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	launch, watch := i.bound()
 	if launch == "" {
@@ -897,10 +1536,37 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	if !liveFor(view, launch) {
 		return nil, changed
 	}
-	var out []mcpbridge.SteerNote
+	var due []openedNote
+	var unserved []string
 	for _, o := range opened {
 		if o.held.Seq <= after {
 			continue
+		}
+		due = append(due, o)
+		if o.held.Served != launch {
+			unserved = append(unserved, o.held.ID)
+		}
+	}
+	served := map[string]bool{}
+	if len(unserved) > 0 {
+		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses})
+		if err != nil {
+			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
+				"detail", "the poll is answered without the notes the record could not mark served; they "+
+					"wait for the next poll")
+		}
+		for _, n := range marked {
+			served[n.ID] = true
+		}
+	}
+	var out []mcpbridge.SteerNote
+	for _, o := range due {
+		// UP TO THE FIRST NOTE NOT MARKED, never past it: the poller's cursor
+		// moves past every note it is answered, and one past an unmarked note
+		// would never ask for that note again.
+		if o.held.Served != launch && !served[o.held.ID] {
+			break
 		}
 		out = append(out, mcpbridge.SteerNote{
 			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),
