@@ -279,6 +279,19 @@ func checkCommentShape(task string, c *Comment) error {
 				c.Decision.Inform.Channel, cmp.Or(string(c.AuthorKind), "nameless"))
 		}
 	}
+	if a := c.Act; a != nil {
+		if err := a.Validate(); err != nil {
+			return invalid("comment %s on task %s: %w", c.ID, task, err)
+		}
+		if c.Decision == nil {
+			return invalid("comment %s on task %s carries an act and no decision to approve it by",
+				c.ID, task)
+		}
+		if _, ok := c.Decision.Option(a.Approve); !ok {
+			return invalid("comment %s on task %s carries an act whose approving option %q is not an "+
+				"option of its decision", c.ID, task, a.Approve)
+		}
+	}
 	if c.Choice != "" && (c.Answers == nil || *c.Answers == "") {
 		return invalid("comment %s on task %s makes the choice %q and "+
 			"answers nothing — a choice is an answer to a decision, so it "+

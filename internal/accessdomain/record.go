@@ -19,7 +19,10 @@ import (
 //   - 1: the base format: a told record, an SSH certificate, an SSH command, a
 //     seat's removal, an hour's expiry, the trim's trimmed record, and the
 //     framework's eviction, generation and barrier.
-const RecordVersion = 1
+//   - 2: a verdict on a delegated request ([KindVerdict]: [OpVerdict], and
+//     [OpResealed] on its subject), which a build at 1 has no applier or
+//     table for.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -33,7 +36,14 @@ const GateRecordVersion = 1
 // A new record kind (the box's own SSH command record, say) is a row naming the
 // subject kind's value, [RecordVersion] moved to it, and a conformance record
 // that carries it.
-var versionedFields = statelog.RecordFields{}
+//
+// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling upgrade
+// disagree about it all the same, and a build without the row would fault on
+// the record rather than retain it. The kind's row covers every op on its
+// subject, a verdict's reseal included.
+var versionedFields = statelog.RecordFields{
+	{Name: "Subject.Kind verdict", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindVerdict)},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -53,12 +63,18 @@ const (
 	// create-only.
 	OpRan OpKind = "ran"
 
-	// OpResealed moves one command's text onto the keyring's active key, on
-	// the command's own subject: the same text, sealed afresh.
+	// OpVerdict records one giver's verdict on a delegated request,
+	// create-only.
+	OpVerdict OpKind = "verdict"
+
+	// OpResealed moves one command's or verdict's sealed text onto the
+	// keyring's active key, on the record's own subject: the same text,
+	// sealed afresh.
 	OpResealed OpKind = "resealed"
 
 	// OpForget removes what a seat the company removed was told, on the
-	// seat's subject. Its certificates and commands stay to their retention.
+	// seat's subject. Its certificates, commands and verdicts stay to their
+	// retention.
 	OpForget OpKind = "forget"
 
 	// OpExpire removes every record past the retention through an hour, but
@@ -80,7 +96,8 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpTold, OpIssued, OpRan, OpResealed, OpForget, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpTold, OpIssued, OpRan, OpVerdict, OpResealed, OpForget, OpExpire, OpEviction, OpGeneration,
+	OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

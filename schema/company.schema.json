@@ -1442,6 +1442,100 @@
         "null"
       ]
     },
+    "DelegatedDecisions": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn delegated decisions on. Off puts every request to people at once, and keeps the rules.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "rules": {
+          "description": "Which kinds of request which agent seats decide, and who an escalation is put to. A kind is in at most one rule. At most 16.",
+          "items": {
+            "$ref": "#/$defs/DelegatedRule"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "DelegatedRule": {
+      "additionalProperties": false,
+      "properties": {
+        "delegates": {
+          "description": "The agent seat that decides, or two for a panel that must both allow (any disagreement escalates); a panel's two run on different first llm entries. A delegate can never request a kind it decides.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "escalate_to": {
+          "description": "The people an escalation is put to, beside administrators: at least one. They read what was decided for them, and may approve what the rule's kinds ask as approvers do.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "kinds": {
+          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user). other is never delegated.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sample_one_in": {
+          "description": "One decision in this many is shown to the escalate_to people for a spot-check after the fact: 1 to 1000. Empty is 10.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kinds",
+        "delegates",
+        "escalate_to"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Delegation": {
       "additionalProperties": false,
       "properties": {
@@ -4836,6 +4930,21 @@
     "SSH": {
       "additionalProperties": false,
       "properties": {
+        "always_escalate": {
+          "description": "Regular expressions (RE2) matched against an operate command and its stdin, added to the engine's own always-escalate list: a command any of them matches is never allowed by a delegate (delegation.rules). At most 64, each up to 512 bytes. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "approvers": {
           "description": "Handles of human seats that may approve an agent's operate command, beside administrators. Optional.",
           "items": {
@@ -6257,6 +6366,9 @@
     },
     "code": {
       "$ref": "#/$defs/Code"
+    },
+    "delegated_decisions": {
+      "$ref": "#/$defs/DelegatedDecisions"
     },
     "diagnostics": {
       "$ref": "#/$defs/Diagnostics"

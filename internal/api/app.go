@@ -958,6 +958,11 @@ func New(opts Options) (*App, error) {
 	sources.Pauses = opts.Runtime.SeatPauses()
 	// And what each agent may do, for the go-live check's review.
 	sources.AgentAccess = opts.Runtime.AgentAccess()
+	// And what delegates decided, where the runtime keeps an access log
+	// (ADR-0125).
+	if d, ok := opts.Runtime.(delegatedRuntime); ok {
+		sources.Delegated = d.DelegatedReads()
+	}
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()

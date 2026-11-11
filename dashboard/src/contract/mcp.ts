@@ -26,6 +26,7 @@
 
 import type { Coverage } from "./coverage.ts";
 import type { ToolAnnotations, ToolRow } from "./tools.ts";
+import type { DelegatedAct, HeldDelegation } from "./delegated.ts";
 
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
@@ -1337,6 +1338,14 @@ export interface McpHeldCall {
   fixed?: boolean;
   /** Who answers it where not the seat's lead: `ssh` for an SSH operate command's approvers. */
   approvers?: string;
+  /** What approving it does (ADR-0125): `ssh_operate`, or `other`, which is never delegated. */
+  act: DelegatedAct;
+  /**
+   * The delegates it went to first, their answers and why it reached people;
+   * null for a call put to people at once. Set with `escalated` null, it
+   * waits on its delegates and is in nobody's decisions.
+   */
+  delegation: HeldDelegation | null;
 }
 
 /** `GET /mcp-approvals/{id}`: the held call whole, for whoever may answer it. */

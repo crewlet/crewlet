@@ -125,5 +125,15 @@ func wakeTypes(o *org.Organization, reg *notify.Registry, said string) map[strin
 			return events.New(types.WorkPickup{RoleName: "SWE", Item: "t-1", Key: said,
 				Status: "todo", Why: types.PickupQueue, Ready: 1}, events.NewTrace())
 		}, "", ""},
+		// THE REQUEST'S OWN WORDS, as the delegate's node read them where they
+		// wait: the requesting seat's, fenced at external trust (ADR-0125).
+		types.DelegatedReviewType: {func(*testing.T) *events.Event {
+			review := types.DelegatedReview{AgentHandle: "cto", Kind: "ssh_operate", Rule: 1,
+				RequestID: "req-1", Requester: "sre"}
+			return events.New(types.DelegatedReviewRead{DelegatedReview: review,
+				Request: &types.DelegatedRequest{About: "sre asks to run a command.",
+					Parts:  []types.RequestPart{{Title: "Command, exactly", Text: said, Fenced: true}},
+					Digest: strings.Repeat("ab", 32)}}, events.NewTrace())
+		}, provenance.SourceDelegatedRequest, "trust=external authors=agent:sre]"},
 	}
 }

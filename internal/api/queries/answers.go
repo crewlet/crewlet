@@ -102,6 +102,10 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
+	// Delegated is the access log's verdicts, which `delegated_decisions`
+	// reads (ADR-0125); nil serves no such question.
+	Delegated DelegatedReads
+
 	// Chart answers the lead relations the personal questions are scoped
 	// by, through the SAME seam internal/authz asks every other surface's
 	// through — see [Sources.recordHandle]. Nil is a surface with no
@@ -1147,6 +1151,11 @@ func Register(r *Registry, s Sources) {
 		// AND THE CHANGE AN AGENT'S ACCESS REQUEST WOULD MAKE, built from
 		// the same document for the person deciding it (ADR-0118).
 		r.Register("advisor_access", Requires(iam.GrantAdmin), s.advisorAccess)
+	}
+	if s.Delegated != nil {
+		// WHAT DELEGATES DECIDED, for the people they answer to: decided
+		// per caller against the rules' escalate_to (ADR-0125).
+		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one

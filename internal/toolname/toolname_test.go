@@ -52,6 +52,12 @@ var spelledElsewhere = map[string]map[string]string{
 		"my_work":        "an estate operation's wire name",
 		"write_project":  "an estate operation's wire name",
 	},
+	// AN ACT'S KIND (ADR-0125) is stored on held calls, tracker asks and the
+	// access log's verdicts, and a rename of the tool must not move what was
+	// written under it.
+	"internal/delegated/delegated.go": {
+		"ssh_operate": "an act's kind, stored on held calls, asks and verdicts",
+	},
 	// EVENT PAYLOAD VALUES: the event envelope evolves additive-only, and a
 	// row written before a tool's rename keeps the word it was written with.
 	"internal/events/types/auxiliary.go": {

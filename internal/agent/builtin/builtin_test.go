@@ -409,6 +409,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// anything on a server, so a worker is never handed it.
 		builtin.SSHReadTool:    false,
 		builtin.SSHOperateTool: true,
+		// An approval asked for posts a question the person it asks reads,
+		// and a delegate's verdict carries out what a person's would.
+		builtin.SSHAskOperateTool:   true,
+		builtin.ReviewDelegatedTool: true,
 		// CHATLET. Its reads are reads; saying something and
 		// reacting are words on somebody else's screen; joining and
 		// leaving move only where this seat listens, which is its own.
@@ -1191,6 +1195,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// read as rules no registered tool answers.
 		SSH: builtin.SSHDeps{Servers: &fakeServers{cfg: &config.Company{}}, Requesters: codeRequesters(),
 			Chart: chartLeads},
+		// AND A DELEGATE'S VERDICT, over a desk holding no request: left
+		// out, its row reads as a rule no registered tool answers.
+		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

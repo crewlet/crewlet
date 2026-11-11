@@ -71,7 +71,13 @@ const EVERY_SERVICE: ServicesRun = { tracker: true, knowledge: true, chat: true,
 /** Settings' Admin pages: every section but Spend's readings, Models and MCP & tools, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
-    .sections.filter((s) => s.group !== "Spend" && s.key !== "models" && s.key !== "mcp-tools")
+    .sections.filter(
+      (s) =>
+        s.group !== "Spend" &&
+        s.key !== "models" &&
+        s.key !== "mcp-tools" &&
+        s.key !== "delegated-decisions",
+    )
     .map((s) => s.path);
 }
 
@@ -290,7 +296,7 @@ describe("the navigation grammar", () => {
     expect(groups).toEqual({
       Runtime: ["models", "mcp-tools", "secrets", "limits", "advisor"],
       Spend: ["spend", "spend-tasks"],
-      Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
+      Access: ["people", "service-accounts", "tokens", "sign-in", "delegated-decisions", "audit"],
       Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
@@ -489,6 +495,9 @@ describe("the navigation grammar", () => {
       // are why an agent lacks a tool. Launch lines, alarms and every action
       // stay an Admin's, on the page itself.
       ["settings", "mcp-tools"],
+      // WHAT DELEGATES DECIDED is the read of an administrator and the people
+      // a rule escalates to, whom no grant names: the engine decides it.
+      ["settings", "delegated-decisions"],
       ["account"],
     ];
     for (const path of OVERVIEW) {

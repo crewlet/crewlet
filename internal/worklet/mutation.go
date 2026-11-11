@@ -64,7 +64,9 @@ import (
 // a build reading 11 would resolve it and drop the reason.
 // Version 13 is whom an agent's record a later turn reads was written for
 // ([MutationRecord.WorkingFor], ADR-0109).
-const RecordVersion = 13
+// Version 14 is an ask the engine stamped with its act ([Comment.Act]): a
+// build reading 13 would keep the question and drop what approving it means.
+const RecordVersion = 14
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -140,6 +142,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
 	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
+	{Name: "Comment.Act", Since: 14, Op: string(OpPatch), Path: []string{"mutation", "comment", "act"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

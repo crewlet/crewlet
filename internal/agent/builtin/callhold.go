@@ -3,8 +3,10 @@ package builtin
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,12 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // CallHold records a call an executor's run makes to a tool at Needs approval
@@ -48,7 +52,14 @@ type CallHold struct {
 	desk   RunAskDesk
 	seal   *sandbox.CallSeal
 	acting ActedDecisions
+	rules  DelegatedRules
 	now    func() time.Time
+}
+
+// DelegatedRules is the live delegated-decisions rule for an act: its
+// delegates and 1-based number, false where none delegates it (ADR-0125).
+type DelegatedRules interface {
+	Rule(kind delegated.Kind) (delegates []string, rule, sampleOneIn int, ok bool)
 }
 
 // ActedDecisions reads the decision answers gave a seat: the newest question
@@ -63,12 +74,37 @@ var _ tools.Holder = (*CallHold)(nil)
 // seal (what the arguments are sealed under), or nil without either: a
 // surface with no holder refuses every call to a tool at Needs approval,
 // which is the safe reading of a node that cannot record one.
-// A nil acting names no decision on any held call.
-func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal, acting ActedDecisions) *CallHold {
+// A nil acting names no decision on any held call, and nil rules delegate
+// nothing.
+func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal, acting ActedDecisions, rules DelegatedRules) *CallHold {
 	if desk == nil || seal == nil {
 		return nil
 	}
-	return &CallHold{desk: desk, seal: seal, acting: acting, now: time.Now}
+	return &CallHold{desk: desk, seal: seal, acting: acting, rules: rules, now: time.Now}
+}
+
+// delegation is how a held call of act is put to delegates before any
+// person, nil where no rule delegates it: the rule's number and seats as they
+// stand now, and the digest of the arguments as its delegates will read them.
+func (h *CallHold) delegation(act delegated.Kind, args map[string]any) *sandbox.HeldDelegation {
+	if h.rules == nil {
+		return nil
+	}
+	delegates, rule, _, ok := h.rules.Rule(act)
+	if !ok || len(delegates) == 0 {
+		return nil
+	}
+	// AS THE SEAL GIVES THEM BACK, which is what a delegate's digest is of.
+	var opened map[string]any
+	data, err := json.Marshal(args)
+	if err == nil {
+		err = json.Unmarshal(data, &opened)
+	}
+	digest, derr := sandbox.HeldArgumentsDigest(opened)
+	if err != nil || derr != nil {
+		return nil
+	}
+	return &sandbox.HeldDelegation{Rule: rule, Delegates: slices.Clone(delegates), Digest: digest}
 }
 
 // actedOn is the decision turn's call carries out: a person's answer to the
@@ -135,7 +171,7 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: tool.Server(), Tool: call.Name, Raw: tool.RawName(), Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Acting: h.actedOn(ctx, turn),
+		HeldAt: h.now().UTC(), Acting: h.actedOn(ctx, turn), Act: string(delegated.KindOther),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -180,11 +216,19 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	if refusal := tool.BeforeHold(ctx, turn, call.Args); refusal != nil {
 		return *refusal, false
 	}
+	acting := h.actedOn(ctx, turn)
+	// APPROVED ALREADY, through the decision this turn carries out: made
+	// now, and never held (ADR-0125).
+	if decided, ok := tool.(decidedTool); ok {
+		if res, ran := decided.RunDecided(ctx, turn, call.Args, acting); ran {
+			return res, false
+		}
+	}
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
 		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
-		Acting: h.actedOn(ctx, turn),
+		Acting: acting, Act: string(tool.Act()), Delegation: h.delegation(tool.Act(), call.Args),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -245,8 +289,13 @@ func (h *CallHold) record(ctx context.Context, runID, launch, name string, ask s
 		return refused(tools.RefusalNotRunning, name+" was not called: this run is no "+
 			"longer running, so nothing can wait on a person here. End your turn."), false
 	}
-	return tools.Result{Output: name + " was NOT called: it needs a person's approval " +
-		"before each call, and the call has been put to a person who may approve it. END YOUR " +
+	who := "a person who may approve it"
+	if ask.Held != nil && ask.Held.Delegation != nil {
+		who = "the company's delegate for it (" + words.And(ask.Held.Delegation.Delegates) + "), who " +
+			"may allow it, deny it or put it to a person"
+	}
+	return tools.Result{Output: name + " was NOT called: it needs approval " +
+		"before each call, and the call has been put to " + who + ". END YOUR " +
 		"TURN NOW: commit and push your work in progress first, then stop working. Do not call `" +
 		toolname.SubmitWork + "`, and do not call " + name + " again. When they answer, " +
 		"this session continues and is told whether the call was made and what it returned; " +
@@ -272,6 +321,15 @@ type fixedTool interface {
 	Binding(turn *turnctx.Turn, args map[string]any) string
 	HeldWords(turn *turnctx.Turn, args map[string]any) (question, context string)
 	Approvers() string
+	// Act is what the call is for (ADR-0125).
+	Act() delegated.Kind
+}
+
+// decidedTool is a fixed tool whose call a person may approve before it is
+// made, through a decision the engine composed: it makes the call now where
+// the decision the turn carries out approved exactly it (ADR-0125).
+type decidedTool interface {
+	RunDecided(ctx context.Context, turn *turnctx.Turn, args map[string]any, act *sandbox.HeldAct) (tools.Result, bool)
 }
 
 // heldTool is an MCP server's tool as a held call names it: its server, the

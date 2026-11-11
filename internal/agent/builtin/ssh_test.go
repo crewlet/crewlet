@@ -90,9 +90,31 @@ type fakeServers struct {
 	denied []builtin.SSHCall
 	res    sshint.Result
 	err    error
+
+	verdicts   []builtin.DelegatedVerdict
+	verdictErr error
+	approvers  []string
 }
 
 func (f *fakeServers) Reach(handle string) config.SSHReach { return f.cfg.SSHReachOf(handle) }
+
+// RecordVerdict keeps every verdict, each (Request, By) once.
+func (f *fakeServers) RecordVerdict(_ context.Context, v builtin.DelegatedVerdict) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, prior := range f.verdicts {
+		if prior.Request == v.Request && prior.By == v.By {
+			return false, nil
+		}
+	}
+	f.verdicts = append(f.verdicts, v)
+	return true, f.verdictErr
+}
+
+// MayApprove admits the approvers the fake names.
+func (f *fakeServers) MayApprove(_ context.Context, seat string) (bool, error) {
+	return slices.Contains(f.approvers, seat), nil
+}
 
 func (f *fakeServers) Read(_ context.Context, call builtin.SSHCall) (sshint.Result, error) {
 	f.mu.Lock()
@@ -258,7 +280,7 @@ func TestAnOperateCallIsHeldInEveryCase(t *testing.T) {
 		turn := sshTurn(o, "sre", requester, nil)
 		turn.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "id-9", Key: "ENG-9"}
 		exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHOperateTool}).
-			WithHolder(builtin.NewCallHold(desk, seal, nil)).ForTurn(turn)
+			WithHolder(builtin.NewCallHold(desk, seal, nil, nil)).ForTurn(turn)
 		res, err := exec.Execute(turnctx.WithJob(asSeat("sre"), "launch-1"),
 			llm.ToolCall{Name: builtin.SSHOperateTool, Arguments: args})
 		if err != nil {
