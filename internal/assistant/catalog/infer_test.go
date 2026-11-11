@@ -27,7 +27,10 @@ var readRoutes = []catalog.Route{
 	{Pattern: "GET /config/revisions"},
 	{Pattern: "GET /config/roles/{id}"},
 	{Pattern: "GET /events"},
+	{Pattern: "GET /integrations"},
 	{Pattern: "GET /mcp-servers"},
+	{Pattern: "GET /setup/integrations/{kind}/access"},
+	{Pattern: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}"},
 	{Pattern: "GET /tokens/breakdown"},
 	{Pattern: "GET /worklet/files/{project}/{path...}"},
 	{Pattern: "GET /worklet/projects/{key}"},
@@ -116,6 +119,27 @@ func realAnswers(t *testing.T) map[string]any {
 			"exhausted": false,
 			"coverage":  map[string]any{"answered": []any{"node-a"}, "missing": []any{}},
 		},
+		// A VENDOR'S WORDS: an agent's refused sync, and its level and account
+		// as the vendor names them.
+		"GET /integrations": map[string]any{"integrations": []any{map[string]any{
+			"key": "github", "enabled": true,
+			"reconcile": map[string]any{"phase_label": "Needs attention", "findings": []any{
+				map[string]any{"kind": "identity_failed", "subject": "sre", "seat": true,
+					"detail": "Resource not accessible by integration",
+					"label":  "An agent identity could not be created for sre"}}},
+		}}},
+		"GET /setup/integrations/{kind}/access": map[string]any{"kind": "datadog", "revision": "r1",
+			"options": []any{map[string]any{"lane": "datadog", "levels": []any{
+				map[string]any{"id": "90b75548-0002", "name": "Datadog Admin Role"}}}},
+			"seats": []any{map[string]any{"handle": "sre", "name": "SRE", "lanes": map[string]any{
+				"datadog": map[string]any{"status": "refused", "status_label": "Refused",
+					"observed": map[string]any{"account": "crewlet-sre@agents.example.com"},
+					"sync": map[string]any{"outcome": "failed",
+						"error": map[string]any{"said": "Forbidden: missing user_access_manage"}}}}}}},
+		"GET /setup/integrations/{kind}/access/seats/{handle}/{lane}": map[string]any{
+			"kind": "datadog", "lane": "datadog", "integration": "Datadog", "handle": "sre", "name": "SRE",
+			"status": "refused", "status_label": "Refused", "grant": "Datadog Admin Role",
+			"refusal": "Forbidden: missing user_access_manage"},
 		"GET /worklet/projects/{key}": map[string]any{
 			"key": "ENG", "name": "Engineering", "description": "Everything the platform team ships.",
 			"statuses": []any{
@@ -257,9 +281,9 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 // colleague's, by the one rule for a surface the engine hosts; an answer with
 // no body carries nobody's words, and is the read's own trust whatever its
 // route. Mutation: drop the generic read's TrustOf, read the event log by the
-// hosted rule, or drop `/agents/{id}/sessions` from outsideRoutes, and that
-// route reads as a colleague's; label the read itself external and the empty
-// answer does.
+// hosted rule, or drop `/agents/{id}/sessions` or an integrations route from
+// outsideRoutes, and that route reads as a colleague's; label the read itself
+// external and the empty answer does.
 func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable(readRoutes)
@@ -281,6 +305,11 @@ func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
 		// asks and endings quote it, and the transcript alike.
 		{"GET /agents/{id}/sessions", true, provenance.TrustExternal},
 		{"GET /agents/{id}/sessions/{turn_id}", true, provenance.TrustExternal},
+		// AN INTEGRATION'S FINDINGS AND AN AGENT'S ACCESS carry a vendor's
+		// refusals and names, as the curated read of one agent's access does.
+		{"GET /integrations", true, provenance.TrustExternal},
+		{"GET /setup/integrations/{kind}/access", true, provenance.TrustExternal},
+		{"GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", true, provenance.TrustExternal},
 	} {
 		resp := exec.Response{Status: 200}
 		if c.body {
