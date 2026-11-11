@@ -47,8 +47,8 @@ func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) 
 		want       *types.WorkingFor
 		version    int
 	}{
-		{"t-for-ada", worklet.AuthorAgent, types.ForTurn(ada), true, ada, 12},
-		{"t-quiet-for-ada", worklet.AuthorAgent, types.ForTurn(ada), false, ada, 12},
+		{"t-for-ada", worklet.AuthorAgent, types.ForTurn(ada), true, ada, worklet.WorkingForVersion},
+		{"t-quiet-for-ada", worklet.AuthorAgent, types.ForTurn(ada), false, ada, worklet.WorkingForVersion},
 		{"t-by-a-turn-nobody-woke", worklet.AuthorAgent, types.ForTurn(nil), true, nil, 1},
 	} {
 		w := r.writer.As("dev", c.kind, worklet.Provenance{WrittenFor: c.writtenFor})
@@ -194,7 +194,7 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 		version int
 	}{
 		{"a self-assigned creation that wakes nobody", func(*testing.T) worklet.MutationRecord { return created },
-			ada, 12},
+			ada, worklet.WorkingForVersion},
 		{"a reassertion of the holder, which moves nothing", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-reassert", "w-ana", worklet.TaskPatch{Assignee: &anaHandle},
 				worklet.ChangeAssignee, nil, nil, nil)
@@ -233,7 +233,7 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 				worklet.ChangeStatus, nil, func(w *worklet.Wake) {
 					w.After.Status, w.After.StatusGroup, w.After.Assignee = started, started.Group(), "dev"
 				}, nil)
-		}, ada, 12},
+		}, ada, worklet.WorkingForVersion},
 		{"a status move told only to a watcher, falling back on the lead", func(t *testing.T) worklet.MutationRecord {
 			record := update(t, "op-start-watched", "w-watched", worklet.TaskPatch{Status: &started},
 				worklet.ChangeStatus, fixedLeads{project: "lena"}, func(w *worklet.Wake) {
@@ -248,7 +248,7 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 				t.Errorf("the status move routed without wanda reached %+v, want the lead", routed)
 			}
 			return record
-		}, ada, 12},
+		}, ada, worklet.WorkingForVersion},
 		{"a comment that asks nothing and names nobody, on ana's item", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-c-quiet-ana", "w-ana", commentPatch, worklet.ChangeComment, nil, commentShape, nil)
 		}, nil, 7},
@@ -264,11 +264,11 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 		{"a comment that asks nothing and answers an agent's ask", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-c-answers-qa", "w-own", answerPatch, worklet.ChangeComment, nil, answerShape,
 				func(n *worklet.Notify) { n.Snapshot.AnsweredAuthor = "qa" })
-		}, ada, 12},
+		}, ada, worklet.WorkingForVersion},
 		{"a reply that asks nothing in a thread that still owes an agent", func(t *testing.T) worklet.MutationRecord {
 			return update(t, "op-c-owing-qa", "w-own", owingPatch, worklet.ChangeComment, nil, owingShape,
 				func(n *worklet.Notify) { n.Snapshot.ThreadOwing = []string{"qa"} })
-		}, ada, 12},
+		}, ada, worklet.WorkingForVersion},
 	} {
 		record := c.record(t)
 		switch {
