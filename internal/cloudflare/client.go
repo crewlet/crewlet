@@ -29,14 +29,9 @@ const APIBase = "https://api.cloudflare.com/client/v4"
 const ClientTimeout = 15 * time.Second
 
 // Rate limiting: Cloudflare allows 1,200 requests per five minutes per token
-// and answers 429 with `retry-after`. A wait up to rateLimitWaitCap is taken
-// in the call, up to rateLimitRetries times; a longer one is returned to the
-// pass, whose loop backs off on its own schedule.
-const (
-	rateLimitRetries  = 3
-	rateLimitWaitCap  = 30 * time.Second
-	defaultRetryAfter = 5 * time.Second
-)
+// and answers 429 with `retry-after`, which every call waits out by
+// [httpx.VendorRateLimit]: a short wait is taken in the call, and a longer one
+// is returned to the pass, whose loop backs off on its own schedule.
 
 // maxResponse bounds what one answer may be: a page of 50 zones or tokens is
 // tens of kilobytes, and the cap stops a proxy's page being read whole.
@@ -116,7 +111,7 @@ type Client struct {
 	account string
 	token   string
 	http    *http.Client
-	wait    func(ctx context.Context, d time.Duration) error
+	limit   httpx.RateLimit
 }
 
 // ClientOptions builds a client.
@@ -144,7 +139,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if hc == nil {
 		hc = httpx.Client(ClientTimeout)
 	}
-	return &Client{account: account, token: token, http: hc, wait: sleep}, nil
+	return &Client{account: account, token: token, http: hc, limit: httpx.VendorRateLimit()}, nil
 }
 
 // AccountID is the account this client addresses.
@@ -157,18 +152,6 @@ func (c *Client) TokensURL() string { return TokensURL(c.account) }
 // TokensURL is the account API tokens page for one account.
 func TokensURL(accountID string) string {
 	return "https://dash.cloudflare.com/" + url.PathEscape(accountID) + "/api-tokens"
-}
-
-// sleep waits for d or until ctx is done.
-func sleep(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 // envelope is Cloudflare's response shape on every route.
@@ -205,10 +188,7 @@ func (c *Client) do(
 		env, err := c.once(ctx, method, path, query, encoded)
 		var api *APIError
 		if errors.As(err, &api) && api.Status == http.StatusTooManyRequests &&
-			attempt < rateLimitRetries && api.RetryAfter <= rateLimitWaitCap && fits(ctx, api.RetryAfter) {
-			if werr := c.wait(ctx, api.RetryAfter); werr != nil {
-				return nil, err
-			}
+			c.limit.WaitOut(ctx, attempt, api.RetryAfter) == nil {
 			continue
 		}
 		if err != nil {
@@ -221,12 +201,6 @@ func (c *Client) do(
 		}
 		return env.ResultInfo, nil
 	}
-}
-
-// fits reports whether a wait ends before ctx's deadline.
-func fits(ctx context.Context, d time.Duration) bool {
-	deadline, ok := ctx.Deadline()
-	return !ok || time.Until(deadline) > d
 }
 
 // once sends one request and reads its envelope.
@@ -273,7 +247,7 @@ func (c *Client) once(
 			api.Detail = noDetail
 		}
 		if res.StatusCode == http.StatusTooManyRequests {
-			api.RetryAfter = retryAfter(res.Header.Get("Retry-After"))
+			api.RetryAfter = retryAfter(res.Header)
 		}
 		return envelope{}, api
 	}
@@ -305,13 +279,13 @@ func refusalOf(errs []Message) ([]int, string) {
 	return codes, httpx.Refusal("text/plain", []byte(strings.Join(texts, "; ")))
 }
 
-// retryAfter reads Cloudflare's wait in seconds, or the default where it
-// named none.
-func retryAfter(raw string) time.Duration {
-	if seconds, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && seconds >= 0 {
-		return time.Duration(seconds) * time.Second
+// retryAfter reads Cloudflare's wait from `retry-after`, or the default where
+// it named none.
+func retryAfter(h http.Header) time.Duration {
+	if wait, ok := httpx.RetryAfter(h, time.Now()); ok {
+		return wait
 	}
-	return defaultRetryAfter
+	return httpx.DefaultRetryAfter
 }
 
 // Paging: listings ask for listPageSize rows, the largest Cloudflare serves on
