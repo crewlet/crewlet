@@ -219,6 +219,7 @@ func (l windowLog) Verdicts(_ context.Context, q accessdomain.VerdictQuery,
 	var out []accessdomain.VerdictRow
 	for _, row := range l.rows {
 		switch {
+		//fixedwait:stated a row's instant the case states off delegatedAt, against the window the query derives from its frozen Now
 		case row.At.Before(q.Since), !q.Until.IsZero() && !row.At.Before(q.Until),
 			q.Sampled != nil && row.Sampled != *q.Sampled, q.Verdict != "" && row.Verdict != q.Verdict:
 			continue
