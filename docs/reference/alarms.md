@@ -3,6 +3,8 @@
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
+## How an alarm reaches you
+
 An alarm reaches you four ways, and they are the same table evaluated once: a
 `crewlet.alarm.active{kind}` gauge your collector scrapes, a named `WARN`
 line when it starts and another when it clears, carrying how long it was up,
@@ -29,11 +31,15 @@ The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
 
+## An alarm that comes back
+
 An alarm raised again within 30m of clearing is a new `alarm_raised` line,
 carrying `first_raised`, and a new wake, but the same run: the fleet view
 and the health count date it from that first raise, and so does the
 administrators' notice once it has stood that long, so a condition that keeps
 coming back reaches a person as one that never cleared.
+
+## Alarms about a log, a model or a server
 
 Each kind is one alarm, however many logs it stands on. These are about a log
 rather than the node:
@@ -92,6 +98,8 @@ listings name it, read off the listings and what was accepted of them rather tha
 the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
 The MCP servers answer (`GET /mcp-servers`) carries each of them with the
 gesture that fixes it.
+
+## Every alarm
 
 | Alarm | What it means | What to do |
 |---|---|---|

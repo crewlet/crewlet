@@ -24,6 +24,9 @@ func AlarmReference() string {
 	// would be regenerated from the same stale words.
 	fmt.Fprintf(&b, alarmHeader,
 		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace), spoken(RelapseWindow))
+	// HEADINGS, so a reader of this long page, and an editor that opens it
+	// part by part, can find a section without reading the whole table.
+	b.WriteString("\n## Alarms about a log, a model or a server\n")
 	if perLog := PerLogKinds(); len(perLog) > 0 {
 		fmt.Fprintf(&b, perLogNote, saidKinds(perLog))
 	}
@@ -35,7 +38,7 @@ func AlarmReference() string {
 		fmt.Fprintf(&b, perServerNote, saidKinds(perServer),
 			spoken(MCPOutageGrace), spoken(MCPWaitingGrace), spoken(MCPApprovalGrace))
 	}
-	b.WriteString("\n| Alarm | What it means | What to do |\n")
+	b.WriteString("\n## Every alarm\n\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
 	for _, rule := range table {
 		// The DETAIL is per-reading and belongs in the log line; what the
@@ -331,6 +334,8 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
+## How an alarm reaches you
+
 An alarm reaches you four ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
 line when it starts and another when it clears, carrying how long it was up,
@@ -356,6 +361,8 @@ threshold is %s is raised within a beat of passing it.
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
+
+## An alarm that comes back
 
 An alarm raised again within %s of clearing is a new ` + "`alarm_raised`" + ` line,
 carrying ` + "`first_raised`" + `, and a new wake, but the same run: the fleet view
