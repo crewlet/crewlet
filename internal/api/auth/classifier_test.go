@@ -969,7 +969,7 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 	}
 	files := map[string]string{
 		"internal/gitlet/host/host.go": fixtureHost,
-		classifierFile:               fixtureClassifier,
+		classifierFile:                 fixtureClassifier,
 		// A package declaring a constant from the host's, which another
 		// package compares against: the fixed point's second hop.
 		"internal/relay/relay.go": `package relay
@@ -1015,7 +1015,7 @@ func TestTheClassifierAllowancesAreLive(t *testing.T) {
 	// Neither allowance holds a reading: the classifier's is stale (or the
 	// matcher inert), and so is the host's once it holds a file.
 	found := walkFixture(t, map[string]string{
-		classifierFile:               "package auth\n",
+		classifierFile:                 "package auth\n",
 		"internal/gitlet/host/host.go": "package host\n",
 	})
 	if v := found.verdict(); len(v) != 2 {

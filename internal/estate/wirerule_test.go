@@ -581,8 +581,8 @@ var zeroByMethod = map[string]string{
 		"their absence is the same answer",
 	"gitlet.HumanPathMatch.Held":   "an empty list and none are one answer to the decide, which reads its length",
 	"gitlet.HumanPathMatch.Waived": "an empty list and none are one answer to the decide, which reads its length",
-	"objstore.Key":               "Go's own zero: its method compares the key with Key{}",
-	"artifacts.ID":               "Go's own zero: its method compares the id with ID{}",
+	"objstore.Key":                 "Go's own zero: its method compares the key with Key{}",
+	"artifacts.ID":                 "Go's own zero: its method compares the id with ID{}",
 	"types.WrittenFor": "a carrier of nobody, stated or not: the asking node refuses an agent's " +
 		"actor that states nothing before anything is asked (estate's actorWrites), and the serving " +
 		"node reads the absence as stated nobody (each actor's UnmarshalJSONFrom calls " +
