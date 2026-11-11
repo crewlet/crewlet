@@ -97,6 +97,8 @@ export interface Attachments {
   /** Some image is still on its way up. */
   uploading: boolean;
   add: (files: readonly File[]) => void;
+  /** Refuse what was brought, in these words, attaching nothing. */
+  refuse: (why: string) => void;
   remove: (key: string) => void;
   dismiss: () => void;
   /** The stored images, for the question being sent; the composer is emptied. */
@@ -236,6 +238,7 @@ export function useAttachments(
     refusal,
     uploading: drafts.some((d) => d.state === "uploading"),
     add,
+    refuse: setRefusal,
     remove: (key) => drop([key]),
     dismiss: () => setRefusal(null),
     take,
