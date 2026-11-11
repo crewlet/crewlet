@@ -705,6 +705,7 @@ func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]san
 	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
 	defer cancel()
 	if window := s.stopWindow; window != nil {
+		//nolint:contextcheck // the window is the node's teardown's, never base's: it ends the attempt beside base's own bound, and is ended by nothing base holds
 		defer context.AfterFunc(window, cancel)()
 		if window.Err() != nil {
 			cancel()

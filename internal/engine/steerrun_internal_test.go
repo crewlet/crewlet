@@ -1190,9 +1190,9 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			// AND A GIVE-BACK MADE AFTER THEM IS HANDED THE WHOLE ALLOWANCE.
 			step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
 			defer done()
-			if deadline, ok := step.Deadline(); !ok || deadline.Sub(time.Now()) != allowance {
+			if deadline, ok := step.Deadline(); !ok || time.Until(deadline) != allowance {
 				t.Errorf("a give-back after the settles is handed %v, want the whole allowance of %v: the "+
-					"settles spent the rest", deadline.Sub(time.Now()), allowance)
+					"settles spent the rest", time.Until(deadline), allowance)
 			}
 		})
 	})
