@@ -30,7 +30,7 @@ func TestHeldRootsSharingADownstreamReadItOnce(t *testing.T) {
 	waiters, reads := fanGraph(n)
 	w := newHoldingWalk("owner", MaxHoldingSteps, waiters)
 	for _, root := range []string{"root-a", "root-b"} {
-		row, err := w.walk(TaskRow{ID: root})
+		row, _, err := w.walk(TaskRow{ID: root})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func TestAWalkPastItsBudgetSaysItsCountIsAFloor(t *testing.T) {
 	t.Parallel()
 	waiters, reads := fanGraph(50)
 	w := newHoldingWalk("owner", 10, waiters)
-	row, err := w.walk(TaskRow{ID: "root-a"})
+	row, _, err := w.walk(TaskRow{ID: "root-a"})
 	if err != nil {
 		t.Fatal(err)
 	}

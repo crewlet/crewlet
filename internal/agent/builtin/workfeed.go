@@ -240,7 +240,7 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// ([PrincipalActor]), so their day is the seat's and never the
 	// credential's.
 	out, err := reader.MyWork(ctx, worklet.MyWorkQuery{
-		Handle: actor.Handle, Level: seatReadLevel,
+		Handle: actor.Handle, Level: seatReadLevel, Agents: t.deps.agentHandles(),
 	}, t.deps.now(), t.deps.zone())
 	if err != nil {
 		return readFailure(ctx, worklet.MyWorkTool, err), nil

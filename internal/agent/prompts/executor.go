@@ -226,6 +226,10 @@ type ExecutorInput struct {
 	// triggering counterparty, pre-rendered and trimmed by the profiler.
 	CounterpartyProfile string
 
+	// OpenAsks is the seat's own open questions to the people who triggered
+	// the turn, each with the call that withdraws it.
+	OpenAsks string
+
 	// SynthesizedSkills is the block of skills this agent has learned for
 	// itself (distinct from the operator-authored tool skills, which are its
 	// harness's own and listed by it — internal/agent/runner,
@@ -341,6 +345,11 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.ThreadContext != "" {
 		b.Heading(KeyThreadContext, "\n## The thread so far", in.ThreadContext)
 	}
+	// RIGHT AFTER THE THREAD, because it is about the same people: what the
+	// seat already asked them, before anything it remembers or looks up.
+	if in.OpenAsks != "" {
+		b.Heading(KeyOpenAsks, "\n## Your open questions to them", in.OpenAsks)
+	}
 	if in.PersonalMemory != "" {
 		b.Heading(KeyPersonalMemory, "\n## Personal memory", in.PersonalMemory)
 	}
@@ -447,4 +456,5 @@ const (
 	KeyRelevantKnowledge = "relevant_knowledge"
 	KeyEpisodeRecall     = "episode_recall"
 	KeyCounterparty      = "counterparty"
+	KeyOpenAsks          = "open_asks"
 )

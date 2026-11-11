@@ -1017,6 +1017,7 @@ func frozen(blocks prefetch.Blocks, d dispatched) execstate.Frozen {
 		EpisodeRecall:       blocks.EpisodeRecall,
 		CounterpartyProfile: blocks.CounterpartyProfile,
 		SynthesizedSkills:   blocks.SynthesizedSkills,
+		OpenAsks:            blocks.OpenAsks,
 		Endings:             d.endings,
 		Access:              d.access,
 		CapabilityChanges:   d.changes,
@@ -1033,6 +1034,7 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, dispatched) {
 		EpisodeRecall:       f.EpisodeRecall,
 		CounterpartyProfile: f.CounterpartyProfile,
 		SynthesizedSkills:   f.SynthesizedSkills,
+		OpenAsks:            f.OpenAsks,
 	}, dispatched{endings: f.Endings, access: f.Access, changes: f.CapabilityChanges}
 }
 

@@ -792,6 +792,24 @@ func taskReads() map[string]indexedRead {
 		"the asks waiting":       seek(key, asksPageStatement, person, 21),
 		"the asks closed lately": seek(key, answeredStatement, person,
 			store.EncodeTime(planNow), MaxAnswered+1),
+		// A SEAT'S OWN OPEN ASKS TO ONE PERSON, by the asker's index.
+		"a seat's own open asks": seek("tracker_comments_asked_of_idx", ownAsksPageStatement,
+			"agent", person, MaxOwnAsks),
+		"a seat's own open asks counted": seek("tracker_comments_asked_of_idx",
+			cappedCountStatement(ownAsksFrom, ownAsksWhere), "agent", person, TotalHintCeiling+1),
+		// WHOM AN IDLE REVIEW'S HOLDER ASKED, by the open asks' item index.
+		"whom a review waits on": seek("tracker_comments_open_asks_idx", reviewAsksStatement,
+			task, "agent"),
+		// WHAT A PERSON HOLDS BY BEING ASKED, its page and its count.
+		"what waits on a person's answers": func() indexedRead {
+			statement, open := heldByAsksStatement()
+			return seek(key, statement, append(append([]any{person, person}, open...), 101)...)
+		}(),
+		"what waits on a person's answers counted": func() indexedRead {
+			statement, open := heldByAsksCountStatement()
+			return seek(key, statement, append(append([]any{person, person}, open...),
+				TotalHintCeiling+1)...)
+		}(),
 		"the checklist items owned": seek("tracker_checklist_items_assignee_idx",
 			claimsPageStatement, person, 21),
 		"the checklist items counted": seek("tracker_checklist_items_assignee_idx",

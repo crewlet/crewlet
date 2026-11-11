@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -1214,6 +1215,12 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var agents []string
+	if s.Company != nil {
+		if company, _ := s.Company(); company != nil {
+			agents = advisor.AgentHandles(company)
+		}
+	}
 	out, err := s.Work.MyWork(ctx, worklet.MyWorkQuery{
 		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
@@ -1221,6 +1228,8 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// see [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		Floors: fresh.Floors,
+		// THE AGENT SEATS, so holding up counts the agent work a person holds.
+		Agents: agents,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err

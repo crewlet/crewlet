@@ -879,8 +879,14 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 // As an edit that changes no word is written again: the record says its
 // author resolved it now, and the row holds the newest resolution
 // ([resolveComment]).
+//
+// # A withdrawal says why
+//
+// A non-nil withdrawal resolves an open question as its asker withdrawing it,
+// with the reason they posted in its thread and what covers it now
+// ([Withdrawal]), checked in the same snapshot ([checkWithdrawal]).
 func (w *Writer) ResolveComment(ctx context.Context, opID, taskID, project,
-	commentID string, notify *Notify) (WriteResult, error) {
+	commentID string, withdrawal *Withdrawal, notify *Notify) (WriteResult, error) {
 
 	if strings.TrimSpace(commentID) == "" {
 		return WriteResult{}, invalid("a resolve names no comment")
@@ -911,8 +917,16 @@ func (w *Writer) ResolveComment(ctx context.Context, opID, taskID, project,
 			// edit's reason: the record states the remark as it stands
 			// resolved, and the apply writes the resolution alone whatever
 			// the record carries ([resolveComment]).
+			if withdrawal != nil {
+				if err := checkWithdrawal(ctx, tx, taskID, stored, withdrawal); err != nil {
+					return TaskPatch{}, err
+				}
+			}
 			resolved := stored
 			resolved.Resolved, resolved.ResolvedBy, resolved.ResolvedAt = true, w.Actor, &at
+			if withdrawal != nil {
+				resolved.Withdrawal = withdrawal
+			}
 			patch.Comment = &resolved
 			return patch, nil
 		})

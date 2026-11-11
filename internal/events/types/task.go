@@ -133,6 +133,9 @@ type WorkPickup struct {
 	// Quiet is set on a recheck (ADR-0122): when the item went quiet with no
 	// typed answer from the seat, a day or more before this pickup.
 	Quiet *time.Time `json:"quiet,omitempty"`
+	// SubmittedBy is who moved an item in review into review: the asker of
+	// a review, or the seat itself on one nobody reviews.
+	SubmittedBy string `json:"submitted_by,omitempty"`
 }
 
 // PickupWhy is what put an item first in a seat's ready work.
@@ -145,6 +148,10 @@ const (
 	// PickupReview is an item in review that somebody else moved there and
 	// the seat holds: its review, which comes before work it has not started.
 	PickupReview PickupWhy = "review"
+	// PickupUnreviewed is an item in review that the seat moved there itself
+	// and nobody reviews: no reviewer holds it and no question of the seat's
+	// waits on one, so it acts on the review it was given or names one.
+	PickupUnreviewed PickupWhy = "unreviewed"
 	// PickupPriorityList is the first item of the seat's priority list,
 	// the order somebody arranged for it.
 	PickupPriorityList PickupWhy = "priority_list"
@@ -155,7 +162,7 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupReview, PickupPriorityList, PickupQueue:
+	case PickupInProgress, PickupReview, PickupUnreviewed, PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -168,6 +175,11 @@ func (w PickupWhy) sentence() string {
 		return "It is in progress and nothing is working on it now, so it comes before work you have not started."
 	case PickupReview:
 		return "It is in review and yours to review: somebody else asked for it, so it comes before work you have not started."
+	case PickupUnreviewed:
+		return "It is in review, but you moved it there yourself and nobody is reviewing it: no " +
+			"reviewer holds it and no question of yours waits on one. Act on the review it was " +
+			"given (finish it, or take it back to in progress), or name its reviewer with " +
+			toolname.UpdateWorkItem + " and `reviewer`."
 	case PickupPriorityList:
 		return "It is the first ready item on your priority list, the order your lead set for you."
 	case PickupQueue:
@@ -311,6 +323,9 @@ func (p WorkPickup) Brief() string {
 	if why := p.Why.sentence(); why != "" {
 		b.WriteString(" " + why)
 	}
+	if p.Why == PickupReview && p.SubmittedBy != "" {
+		b.WriteString(" " + p.SubmittedBy + " moved it into review.")
+	}
 	switch {
 	case p.ReadyCapped:
 		b.WriteString(" You hold at least " + strconv.Itoa(p.Ready) + " ready items.")
@@ -333,12 +348,13 @@ func (p WorkPickup) Brief() string {
 // PickupAnswers is the five typed answers to a work pickup, one per line: the
 // brief lists them, and the refusal of an answer in words names them again.
 const PickupAnswers = "- work it: change the item's own fields, its status (start it, finish it, " +
-	"move it to review) or its content, with " + toolname.UpdateWorkItem + ";\n" +
+	"move it to review naming its `reviewer`) or its content, with " + toolname.UpdateWorkItem + ";\n" +
 	"- if a person or a colleague must answer or decide first, ask them with " +
 	toolname.CommentOnWorkItem + " and `ask` (a person with a `decision`), which puts it in " +
 	"their Inbox;\n" +
 	"- if another item or a pull request blocks it, record it with " + toolname.UpdateWorkItem +
-	" (`waiting_on`);\n" +
+	" (`waiting_on`), and withdraw in the same step any question of yours that it now covers (" +
+	toolname.WithdrawAsk + " with `replaced_by`);\n" +
 	"- if it waits until a real date, set `wait_until` and `wait_reason` with " +
 	toolname.UpdateWorkItem + " (a wait on a person is an `ask`, never a date);\n" +
 	"- if it is not yours to do, reassign it with " + toolname.UpdateWorkItem + " (`assignee`)."

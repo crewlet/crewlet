@@ -366,6 +366,10 @@ type PrefetchSummary struct {
 	// asked it. Only a PAGED backend can set it; see
 	// internal/notify.Transcript.
 	ThreadContextStoppedShort bool `json:"thread_context_stopped_short"`
+	// OpenAsksHit says the turn was handed the seat's own open questions to
+	// the people who triggered it, and OpenAsksBytes how large that block was.
+	OpenAsksHit   bool `json:"open_asks_hit"`
+	OpenAsksBytes int  `json:"open_asks_bytes"`
 	// TriggerRequiresRecon says the trigger was a bare pointer, so the
 	// personal-memory, relevant-knowledge and episode-recall prefetches skipped
 	// their aux-LLM call entirely: their hit and byte counts reflect the GATE,
@@ -404,7 +408,7 @@ func (e PrefetchSummary) AgentID() string { return e.Agent }
 func (e PrefetchSummary) SummaryFor(actor string) string {
 	blocks := []bool{
 		e.CounterpartyHit, e.SynthesizedSkillsHit, e.EpisodeRecallHit,
-		e.PersonalMemoryHit, e.RelevantKnowledgeHit, e.ThreadContextHit,
+		e.PersonalMemoryHit, e.RelevantKnowledgeHit, e.ThreadContextHit, e.OpenAsksHit,
 	}
 	hits := 0
 	for _, hit := range blocks {
