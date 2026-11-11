@@ -258,6 +258,35 @@ func TestSyncRefusesASinkTheCompanyNames(t *testing.T) {
 	}
 }
 
+// A WRITING SYNC RECORDS THE VENDOR'S NAMES FOR THE GRANT, as it read the
+// vendor's offer, so a turn names the level with no vendor asked; a dry run
+// keeps them, and a level the document moves is named as the next writing sync
+// reads it.
+//
+// Mutation: drop the words from the lane's record and a turn is told the id.
+func TestAWritingSyncRecordsTheVendorsNamesForTheGrant(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "c"}), nil)
+	words := h.record(t).Lanes[dd].Words
+	if words == nil || len(words.Levels) != 1 || words.Levels[0].ID != "c" || words.Levels[0].Name != "C" ||
+		words.Levels[0].Administers {
+		t.Fatalf("words = %+v, want the vendor's name for level c alone", words)
+	}
+	if _, err := seataccess.Sync(t.Context(), seataccess.SyncInput{Vendor: h.v,
+		Open:   seataccess.OpenInput{Config: company(&config.RoleDatadog{Enabled: yes(), Role: "c"})},
+		Ledger: h.ledger, Now: func() time.Time { return at.Add(time.Minute) }}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if kept := h.record(t).Lanes[dd].Words; kept == nil || kept.Levels[0].Name != "C" {
+		t.Fatalf("a dry run left words %+v, want the writing sync's kept", kept)
+	}
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "b"}), nil)
+	if moved := h.record(t).Lanes[dd].Words; moved == nil || moved.Levels[0].Name != "B" {
+		t.Fatalf("after the level moved, words = %+v, want level b's name", moved)
+	}
+}
+
 // A SINK SOMETHING ELSE NAMES REFUSES ONLY THE STEPS THAT SEAL: turning the
 // agent off takes access away and clears nothing another reader holds, so it
 // goes ahead, and the shared name stays sealed for its other reader.

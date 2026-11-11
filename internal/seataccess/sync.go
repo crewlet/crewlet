@@ -361,6 +361,16 @@ func (s *syncer) seat(
 	if err != nil {
 		return fmt.Errorf("seataccess: plan %s for %s: %w", s.kind, h, err)
 	}
+	// THE VENDOR'S NAMES FOR THE GRANT, as this pass read its offer, so a turn
+	// names the level as the vendor does without asking the vendor.
+	for _, lane := range lanes {
+		offer, read := s.options[lane]
+		lr, kept := rec.Lanes[lane]
+		if read && kept && want[lane].Enabled {
+			lr.Words = GrantWordsOf(offer, want[lane])
+			rec.Lanes[lane] = lr
+		}
+	}
 	if removed {
 		if err := s.forget(ctx, &rec, s.cat.Credentials); err != nil {
 			s.faultAll(&rec, lanes, VerbRemove, err)
