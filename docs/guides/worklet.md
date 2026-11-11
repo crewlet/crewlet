@@ -1172,8 +1172,9 @@ input to something the tracker already reports:
 `update_work_item` also takes a **wait until a date**: `wait_until`, in the
 same spellings, sets the item's `start` with a required `wait_reason`, one line
 of at most 200 bytes saying what it waits for, which the item reads as
-`wait_reason`. The seat holding it is not handed it before the date and is
-handed it once when the date comes. A wait without a reason, a reason without
+`wait_reason`. The seat holding it is not handed it before the date, unless the
+reason waits on a person nobody asked (below), and is handed it once when the
+date comes. A wait without a reason, a reason without
 a wait, a wait beside `start`, or a date that has passed is refused with
 nothing written, and `wait_until: null` ends the wait. A `start` moved or
 cleared without a reason takes the old reason off, since it said why the item
@@ -1183,12 +1184,25 @@ date, as **Waits for** until the date comes and **Waited for** after.
 A date is for a real date: a release window, an agreed start. **A wait on a
 person is an ask**, never a date, because the date passes whether or not they
 answered and nothing reaches their Inbox. So an agent's `wait_until` whose
-`wait_reason` names a person, by handle (with or without its `@`) or by name,
-is refused with nothing written unless the agent already holds an open ask to
-that person on the item: ask them with `comment_on_work_item` and `ask`
-instead, which holds the item until they answer
+`wait_reason` names a person is refused with nothing written unless the agent
+already holds an open ask to that person on the item: ask them with
+`comment_on_work_item` and `ask` instead, which holds the item until they
+answer
 ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
-A person's own wait is written as given.
+A reason names a person by `@handle`, in any case, or by the name the org
+chart gives them, as a whole phrase in the case the chart writes it: a bare
+handle or a name in another case is not a person, since handles and one-word
+names are often ordinary words ("the release will be cut Friday" waits on
+nobody, whoever holds the handle `will`). A person whose access the directory
+withholds is not matched. A person's own wait is written as given.
+
+**A wait on a person nobody asked comes back.** An agent's wait until a later
+date whose reason names a person that the agent who set it has not asked on
+the item is ready for the item's holder before its date, however and whenever
+the wait was written: the [work pickup](../concepts/scheduling.md#the-work-pickup)
+hands it over naming the person, and the holder asks them, or restates the
+reason without naming them where the date is real and waits on nobody. The
+item is still handed once more when its date comes.
 
 **A review names its reviewer.** An agent that moves an item it keeps into
 `in_review` names `reviewer` with `update_work_item`, since a seat never

@@ -136,6 +136,9 @@ type WorkPickup struct {
 	// SubmittedBy is who moved an item in review into review: the asker of
 	// a review, or the seat itself on one nobody reviews.
 	SubmittedBy string `json:"submitted_by,omitempty"`
+	// WaitsOn is the persons an item set aside until a date names without an
+	// open ask from the seat ([PickupWaitsOnPerson]), by handle.
+	WaitsOn []string `json:"waits_on,omitempty"`
 }
 
 // PickupWhy is what put an item first in a seat's ready work.
@@ -152,6 +155,10 @@ const (
 	// and nobody reviews: no reviewer holds it and no question of the seat's
 	// waits on one, so it acts on the review it was given or names one.
 	PickupUnreviewed PickupWhy = "unreviewed"
+	// PickupWaitsOnPerson is an item set aside until a date by an agent
+	// whose reason names a person the seat has not asked on it (ADR-0122):
+	// it comes back before its date, so the wait becomes the ask it is.
+	PickupWaitsOnPerson PickupWhy = "waits_on_person"
 	// PickupPriorityList is the first item of the seat's priority list,
 	// the order somebody arranged for it.
 	PickupPriorityList PickupWhy = "priority_list"
@@ -162,7 +169,8 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupReview, PickupUnreviewed, PickupPriorityList, PickupQueue:
+	case PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson,
+		PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -180,6 +188,11 @@ func (w PickupWhy) sentence() string {
 			"reviewer holds it and no question of yours waits on one. Act on the review it was " +
 			"given (finish it, or take it back to in progress), or name its reviewer with " +
 			toolname.UpdateWorkItem + " and `reviewer`."
+	case PickupWaitsOnPerson:
+		return "It is set aside until a date, and its reason names a person you have not asked on " +
+			"it: the date passes whether or not they answer, and nothing reaches their Inbox. Ask " +
+			"them with " + toolname.CommentOnWorkItem + " and `ask` (with a `decision`), or, if " +
+			"the date is real and waits on nobody, restate `wait_reason` without naming them."
 	case PickupPriorityList:
 		return "It is the first ready item on your priority list, the order your lead set for you."
 	case PickupQueue:
@@ -326,6 +339,9 @@ func (p WorkPickup) Brief() string {
 	if p.Why == PickupReview && p.SubmittedBy != "" {
 		b.WriteString(" " + p.SubmittedBy + " moved it into review.")
 	}
+	if p.Why == PickupWaitsOnPerson && len(p.WaitsOn) > 0 {
+		b.WriteString(" Its reason names " + strings.Join(p.WaitsOn, ", ") + ".")
+	}
 	switch {
 	case p.ReadyCapped:
 		b.WriteString(" You hold at least " + strconv.Itoa(p.Ready) + " ready items.")
@@ -333,15 +349,18 @@ func (p WorkPickup) Brief() string {
 		b.WriteString(" You hold " + strconv.Itoa(p.Ready) + " ready items in all.")
 	}
 	if p.Quiet != nil {
-		b.WriteString(" It comes back to you because nothing typed has answered it since " +
-			p.Quiet.UTC().Format(time.RFC3339) + ": a comment that it still waits records nothing " +
-			"the engine can act on.")
+		b.WriteString(" It comes back to you because it is still ready for you and nothing has " +
+			"moved it since " + p.Quiet.UTC().Format(time.RFC3339) + ": a comment that it still " +
+			"waits, or an edit that leaves it ready, records nothing the engine can act on.")
 	}
 	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then answer it in this turn with " +
 		"one of these five, each a change on " + p.Key + " itself:\n" + PickupAnswers + "\n" +
 		"A comment alone is not an answer: this turn is not delivered until one of the five is on " +
-		"the item. With one, you are not handed this item again until it changes or the date it " +
-		"waits until comes; with words only, it comes back to you a day later.")
+		"the item, or the item has left you (removed, finished or reassigned by somebody else). " +
+		"With an answer that takes it out of your ready work (a question, what blocks it, a wait, " +
+		"another assignee), you are not handed this item again until it changes or the date it " +
+		"waits until comes; with one that leaves it ready, a change to its content alone, or with " +
+		"words only, it comes back to you a day later.")
 	return b.String()
 }
 
@@ -358,3 +377,45 @@ const PickupAnswers = "- work it: change the item's own fields, its status (star
 	"- if it waits until a real date, set `wait_until` and `wait_reason` with " +
 	toolname.UpdateWorkItem + " (a wait on a person is an `ask`, never a date);\n" +
 	"- if it is not yours to do, reassign it with " + toolname.UpdateWorkItem + " (`assignee`)."
+
+// PickupAnswer is how a work pickup's turn left the item it was handed
+// (ADR-0122), read off the tracker's rows: what the delivery checks accept a
+// delivery or a block by, and what the turn's ending record says.
+type PickupAnswer string
+
+const (
+	// PickupUnanswered is an item still the seat's with nothing typed from
+	// it since the turn began: the one answer the checks refuse.
+	PickupUnanswered PickupAnswer = "unanswered"
+	// PickupTyped is a change to one of the item's fields, or a question put
+	// on it with `ask`, by the seat since the turn began.
+	PickupTyped PickupAnswer = "typed"
+	// PickupRemoved, PickupFinished and PickupReassigned are an item that left
+	// the seat while the turn ran, by somebody else's change: in the trash,
+	// in a finished status, or held by another seat or by nobody. Nothing
+	// typed is owed on it, and on a removed item nothing could be written.
+	PickupRemoved    PickupAnswer = "removed"
+	PickupFinished   PickupAnswer = "finished"
+	PickupReassigned PickupAnswer = "reassigned"
+	// PickupUnread is a read that failed: the turn falls back to the
+	// delivery every turn owes rather than loop on a store it cannot reach.
+	PickupUnread PickupAnswer = "unread"
+)
+
+// Valid reports whether an answer off the wire is one this build knows.
+func (a PickupAnswer) Valid() bool {
+	switch a {
+	case PickupUnanswered, PickupTyped, PickupRemoved, PickupFinished, PickupReassigned, PickupUnread:
+		return true
+	}
+	return false
+}
+
+// Moot reports an item that left the seat while its pickup's turn ran.
+func (a PickupAnswer) Moot() bool {
+	return a == PickupRemoved || a == PickupFinished || a == PickupReassigned
+}
+
+// Accepted reports an answer the delivery checks take: anything but an item
+// still the seat's with nothing typed on it.
+func (a PickupAnswer) Accepted() bool { return a.Valid() && a != PickupUnanswered }

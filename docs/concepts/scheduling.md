@@ -639,10 +639,16 @@ the last word anybody said about that item.
   itself: its own item in review is ready for it only while nobody reviews it
   (no question of its own is open on the item), and the pickup says so, so it
   acts on the review it was given or names a reviewer ([ADR-0124](../../adr/0124-a-question-and-a-review-say-whom-they-wait-on.md)).
+  One wait is ready before its date: an agent's wait whose reason names a
+  person (by `@handle`, or by the name the org chart gives them) that the agent
+  who set it has not asked on the item. A wait on a person is an ask, so the
+  pickup hands such an item to its holder before the date, naming the person,
+  however and whenever the wait was written, and hands it once more when the
+  date comes ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
 - **Next** is work the seat already started first, then the reviews it holds,
-  then its own items in review nobody reviews, then its priority list in the
-  order its lead set, then the rest by priority and due date, the order
-  `my_work` lists them in.
+  then its own items in review nobody reviews, then its waits on a person
+  nobody asked, then its priority list in the order its lead set, then the rest
+  by priority and due date, the order `my_work` lists them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the
@@ -651,20 +657,24 @@ the last word anybody said about that item.
   nothing, or a watcher added, tells the seat and hands it nothing again. The fleet's completion ledger
   remembers it for seven days whichever node holds the seat, and a fleet claim
   keeps two nodes from both sending it during a move. A seat that answers an
-  item with a typed answer (below) is not handed it again until a change that
-  would wake it lands, or the date it set the item aside until comes. Started work the seat makes
+  item with a typed answer that takes it out of its ready work (a question, what
+  blocks it, a wait, another assignee) is not handed it again until a change
+  that would wake it lands, or the date it set the item aside until comes. Started work the seat makes
   progress on (a field it changes, never a write of the value already there)
   is handed back when it is idle again, at most once per cooldown (the next
   ready item is handed over meanwhile), and a turn that changed nothing does
   not bring it back.
-- **Words hold an item for a day, not for good.** An item the seat left
-  without a typed answer, with a comment that it still waits or with nothing
-  at all, comes back to it once a day: a day after it went quiet (the later of
-  the change that last woke the seat, the date it waited until and the seat's
-  own last word on it), the pickup is new work and is handed once more, saying
-  so. A day is the stand-up rhythm a team rechecks a stalled item at, and it is
-  not configurable. An item answered in words before this rule comes back by
-  it too ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+- **Words hold an item for a day, not for good.** An item still ready for the
+  seat, left with a comment that it still waits, with an edit of its content
+  that leaves it ready, or with nothing at all, comes back to it once a day: a
+  day after it went quiet (the latest of the change that last woke the seat,
+  the date it waited until and the seat's own last write on it, whatever that
+  write was), the pickup is new work and is handed once more, saying so. A
+  recheck is never handed within a day of the end of the item's last pickup,
+  so an item quiet for days before it was first handed does not come back
+  within the hour. A day is the stand-up rhythm a team rechecks a stalled item
+  at, and it is not configurable. An item answered in words before this rule
+  comes back by it too ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
 - **Past the first page.** Ready work is read twenty items at a time, so item
   twenty-one onwards is handed over once the first twenty were, and a seat
   whose whole ready set was handed over already is not asked about again until
@@ -703,10 +713,22 @@ record the item or pull request that blocks it (`waiting_on`); set it aside
 until a real date with why (`wait_until` and `wait_reason`); or reassign it.
 A comment alone is not an answer: the engine cannot tell when the condition
 such words name is met, so nothing would hand the item back when it is. The
-engine reads the answer off the tracker's own record of the turn's writes,
-never off the model's account, and a submission, a round or a reviewer's
-`done` over words alone is sent back naming the five
+engine reads the answer off the tracker's own record, the seat's rows on the
+item since the turn began, never off the model's account, so a merge queue's
+close of the item, made as the seat after its turn enqueued the change, answers
+it too; and a submission, a round or a reviewer's `done` over words alone is
+sent back naming the five
 ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+An item that leaves the seat while the turn runs, put in the trash, finished,
+or handed to another seat or to nobody by somebody else, owes it nothing: the
+turn ends as it is, and its `turn_completed` record says how the item was left
+(`pickup_answer`: `typed`, `removed`, `finished`, `reassigned`, `unanswered`,
+or `unread` where the read failed and the turn fell back to the delivery every
+turn owes). A run lost or stopped before its turn ends is held to the same
+reading: its delivery on the executor log stands only where the item was
+answered typed or left the seat. A pickup answered typed, a question put with
+`ask` included, counts as work moved in the advisor's turn ledger, so
+`work.pickup_still_waiting` counts only the pickups nothing typed answered.
 An item set aside until a date is handed once when the date comes. A company
 on a vendor tracker, or with no model, gets no pickups.
 

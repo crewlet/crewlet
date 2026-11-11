@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -132,10 +133,10 @@ func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.
 	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
 }
 
-// TypedAnswer answers whether a turn put a typed answer on an item: what a work
-// pickup's turn owes (ADR-0122), from whichever data node serves the tracker.
-func (w Work) TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error) {
-	return call(ctx, w.r, opTypedAnswer, nil, q)
+// PickupAnswer answers how a seat's turn left the item a work pickup handed it
+// (ADR-0122), from whichever data node serves the tracker.
+func (w Work) PickupAnswer(ctx context.Context, q worklet.PickupAnswerQuery) (types.PickupAnswer, error) {
+	return call(ctx, w.r, opPickupAnswer, nil, q)
 }
 
 // OwnAsks answers a seat's open asks to one person: what a turn the seat

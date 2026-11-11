@@ -16,11 +16,22 @@
 // # What answers a pickup, and a recheck a day
 //
 // A pickup's turn is delivered only by a typed answer on its item (ADR-0122):
-// a change to its fields or an ask, read off the tracker by the turn's id,
-// never a comment alone. An item the seat left quiet without one, in words or
-// with nothing, comes back once each [RecheckAfter] it stays so: the key gains
-// the instant the recheck came due ([Key.Recheck]), so the ledger takes it as
-// new work, and a typed answer holds the item until it changes.
+// a change to its fields or an ask, read off the seat's own rows on the item
+// since the turn began, never a comment alone, or by the item leaving the seat
+// meanwhile. An item still ready for the seat comes back once each
+// [RecheckAfter] it stays quiet: the key gains the instant the recheck came due
+// ([Key.Recheck]), so the ledger takes it as new work. An answer that took the
+// item out of the seat's ready set holds it there; one that left it ready, as
+// words and an edit of its content do, is the seat's last word, and a day on
+// it comes back. A recheck is never handed within [RecheckAfter] of the end of
+// the item's last pickup at its version, whatever instant it fell due at, so an
+// item quiet for days before its first pickup is not handed twice in an hour.
+//
+// # A wait on a person
+//
+// An agent's wait whose reason names a person it has not asked is ready
+// before its date ([worklet.PersonsNamed]). Its key is marked ([Key.OnPerson]),
+// so the pickup that hands it when its date comes is a new one.
 //
 // # When a seat is idle
 //
@@ -66,7 +77,8 @@ const RecheckAfter = 24 * time.Hour
 
 // Key identifies one pickup: the seat, the item, the last change to it that
 // would have woken the seat, its status, the seat's own progress on it when
-// started, the start it waited until, and the recheck it came back for.
+// started, the start it waited until, whether it is a wait on a person handed
+// before its date, and the recheck it came back for.
 type Key struct {
 	Seat       uuid.UUID
 	Item       string
@@ -74,6 +86,9 @@ type Key struct {
 	Status     string
 	Progressed uint64
 	Waited     int64
+
+	// OnPerson marks a wait on a person handed before its date.
+	OnPerson bool
 
 	// Recheck is the instant, in Unix seconds, the item came due for its
 	// latest recheck: whole [RecheckAfter]s after it went quiet
@@ -84,8 +99,8 @@ type Key struct {
 // KeyOf is the pickup an item would be for seat at now.
 func KeyOf(seat uuid.UUID, item worklet.ReadyItem, now time.Time) Key {
 	key := Key{Seat: seat, Item: item.ID, Moved: item.Moved, Status: string(item.Status),
-		Progressed: item.Progressed}
-	// Ready means the start has passed: the instant it waited until.
+		Progressed: item.Progressed, OnPerson: item.Why == types.PickupWaitsOnPerson}
+	// The instant it waited until: passed, or a wait on a person ahead.
 	if item.Start != nil {
 		key.Waited = item.Start.Unix()
 	}
@@ -108,8 +123,32 @@ func recheckDue(item worklet.ReadyItem, now time.Time) (time.Time, bool) {
 	return item.Quiet.Add(n * RecheckAfter), true
 }
 
+// earlierKeys is the keys key's item had at its version before the recheck key
+// names: none, and each recheck that came due since the item went quiet, as far
+// back as the ledger remembers. Empty for a key that names no recheck.
+func earlierKeys(key Key, item worklet.ReadyItem) []Key {
+	if key.Recheck == 0 || item.Quiet.IsZero() {
+		return nil
+	}
+	first := key
+	first.Recheck = 0
+	out := []Key{first}
+	day := int64(RecheckAfter / time.Second)
+	for n := (key.Recheck-item.Quiet.Unix())/day - 1; n >= 1 && len(out) <= ledgerDays; n-- {
+		earlier := key
+		earlier.Recheck = item.Quiet.Unix() + n*day
+		out = append(out, earlier)
+	}
+	return out
+}
+
+// ledgerDays is how many rechecks back an item's earlier pickups are looked
+// for: the completion ledger remembers a pickup for seven days, and one that
+// ended longer ago than a day spaces nothing.
+const ledgerDays = 8
+
 // nextRecheck is when item's key next changes on time alone, and false for one
-// it never will: a typed answer holds it.
+// it never will.
 func nextRecheck(item worklet.ReadyItem, now time.Time) (time.Time, bool) {
 	if item.Quiet.IsZero() {
 		return time.Time{}, false
@@ -130,6 +169,9 @@ func (k Key) text() string {
 		strconv.FormatUint(k.Progressed, 10)
 	if k.Waited != 0 {
 		text += "\x00" + strconv.FormatInt(k.Waited, 10)
+	}
+	if k.OnPerson {
+		text += "\x00p"
 	}
 	if k.Recheck != 0 {
 		text += "\x00r" + strconv.FormatInt(k.Recheck, 10)
@@ -171,7 +213,7 @@ func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready i
 		Item: item.ID, Key: worklet.ItemAddress(item.ID, item.Key, item.KeyCollision),
 		Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
 		Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
-		SubmittedBy: item.SubmittedBy,
+		SubmittedBy: item.SubmittedBy, WaitsOn: item.WaitsOn,
 	}
 	if key.Recheck != 0 {
 		// A RECHECK SAYS SO, and since when the item has been quiet.

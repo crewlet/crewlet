@@ -109,9 +109,11 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    ├── no_action nobody asked for and nothing acted on -> the turn ends
    ├── a claim the record refutes -> loop back with a correction
    │     naming the tools that deliver where the asker is waiting
-   └── a work pickup's turn with no typed answer on its item, read
-         off the tracker's rows the turn wrote -> loop back naming
-         the five typed answers; a comment alone is none
+   └── a work pickup's turn with no typed answer on its item while
+         the item is still the seat's, read off the seat's own rows
+         on it since the turn began -> loop back naming the five
+         typed answers; a comment alone is none, and an item removed,
+         finished or reassigned meanwhile ends the turn as it is
 
 4. Reviewer phase
    ├── submit_review emits a decision
