@@ -3896,8 +3896,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
-		// THE TURN'S OWN WRITES are what answer a pickup (ADR-0122).
-		TypedAnswer: e.typedAnswerFor(req.RunID, reply),
+		// THE SEAT'S OWN WRITES SINCE THE TURN BEGAN are what answer a
+		// pickup (ADR-0122).
+		PickupAnswer: e.pickupAnswerFor(req.Handle, tel.startedAt, reply),
 		// BOUNDED AT RENDER: the newest endings whole while they fit, the
 		// rest counted ([prompts.EndingsMaxBytes]), and frozen on every park.
 		Endings: conversation.endingsBlock(),

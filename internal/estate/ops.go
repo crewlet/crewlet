@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -63,7 +64,7 @@ type TrackerReader interface {
 		loc *time.Location) (worklet.MyWork, error)
 	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 		worklet.ReadyWork, error)
-	TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error)
+	PickupAnswer(ctx context.Context, q worklet.PickupAnswerQuery) (types.PickupAnswer, error)
 	OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
@@ -875,12 +876,12 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
 	})
 
-var opTypedAnswer = define("tracker.typed_answer", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q worklet.TypedAnswerQuery) (bool, error) {
+var opPickupAnswer = define("tracker.pickup_answer", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.PickupAnswerQuery) (types.PickupAnswer, error) {
 		if b.Tracker == nil {
-			return false, errNoHalf
+			return "", errNoHalf
 		}
-		return b.Tracker.TypedAnswer(ctx, q)
+		return b.Tracker.PickupAnswer(ctx, q)
 	})
 
 // ownAsksArgs is [opOwnAsks]' input.

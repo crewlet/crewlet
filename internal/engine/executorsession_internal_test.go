@@ -305,36 +305,83 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "vendor"}.String()
 	stop := &sandbox.RunStop{By: "jane"}
 	run := sandbox.PendingRun{AgentHandle: "swe", Reply: reply, Stop: stop}
-	earlier := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{
+	earlier := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{
 		PriorCalls: []string{"vendor_post"}}}, colleagueAnswer{})
 	if earlier.Outcome != executorkeep.OutcomeStopped || !earlier.Delivered || earlier.DeliveryUnknown {
 		t.Fatalf("a turn that replied in an earlier round ended %+v, want its reply delivered", earlier)
 	}
-	none := e.runEnding(company, run, sandbox.RunCalls{}, colleagueAnswer{})
+	none := e.runEnding(t.Context(), company, run, sandbox.RunCalls{}, colleagueAnswer{})
 	if none.Delivered || none.DeliveryUnknown {
 		t.Fatalf("a turn that never replied ended %+v, want its reply known not to have gone", none)
 	}
-	elided := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Elided: 4}}, colleagueAnswer{})
+	elided := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Elided: 4}}, colleagueAnswer{})
 	if elided.Delivered || !elided.DeliveryUnknown {
 		t.Fatalf("a log whose calls were elided ended %+v, want whether it replied not known", elided)
 	}
-	unread := e.runEnding(company, run, sandbox.RunCalls{Unread: errors.New("the store is down")},
+	unread := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Unread: errors.New("the store is down")},
 		colleagueAnswer{})
 	if unread.Delivered || !unread.DeliveryUnknown {
 		t.Fatalf("a log the ending could not read ended %+v, want whether it replied not known", unread)
 	}
 	// THE ROUND'S TALLY of the calls its log dropped, by identity.
 	round := []sandbox.BridgeCall{{Name: "read_file", Seq: 1}}
-	tallied := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+	tallied := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
 		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 3},
 			{Name: "vendor_post", Digest: "b", Calls: 1}}}}, colleagueAnswer{})
 	if !tallied.Delivered || tallied.DeliveryUnknown {
 		t.Fatalf("a log whose dropped calls hold the reply ended %+v, want its reply delivered", tallied)
 	}
-	reads := e.runEnding(company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
+	reads := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round, Elided: 4,
 		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}}}, colleagueAnswer{})
 	if reads.Delivered || reads.DeliveryUnknown {
 		t.Fatalf("a log whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
+	}
+}
+
+// A LOST OR STOPPED PICKUP'S RUN IS HELD TO ITS ITEM (ADR-0122): a comment the
+// run's calls show delivered nothing while the item is still the seat's with no
+// typed answer on it; a typed answer, or an item that left the seat, lets the
+// delivery stand; a read that fails, or answers what this build does not know,
+// leaves it unknown; a run whose calls delivered nothing reads no answer; and a
+// turn no pickup handed an item reads none either.
+//
+// Mutation: answer the ending from the calls alone, and a run lost after only a
+// comment is recorded as having answered its pickup.
+func TestALostPickupsRunIsHeldToItsItem(t *testing.T) {
+	t.Parallel()
+	reads := 0
+	read := func(a types.PickupAnswer, err error) func(context.Context) (types.PickupAnswer, error) {
+		return func(context.Context) (types.PickupAnswer, error) { reads++; return a, err }
+	}
+	for _, c := range []struct {
+		name             string
+		answer           types.PickupAnswer
+		err              error
+		delivered, known bool
+	}{
+		{"a comment alone", types.PickupUnanswered, nil, false, true},
+		{"a typed answer", types.PickupTyped, nil, true, true},
+		{"an item trashed under the run", types.PickupRemoved, nil, true, true},
+		{"an item finished by somebody else", types.PickupFinished, nil, true, true},
+		{"an item reassigned", types.PickupReassigned, nil, true, true},
+		{"a read that failed", "", errors.New("no data node answered"), false, false},
+		{"an answer this build does not know", "pondered", nil, false, false},
+	} {
+		delivered, known := heldToItem(t.Context(), "turn-1", "w-1", true, true, read(c.answer, c.err))
+		if delivered != c.delivered || known != c.known {
+			t.Errorf("%s: delivered %v known %v, want %v and %v", c.name, delivered, known,
+				c.delivered, c.known)
+		}
+	}
+	before := reads
+	if delivered, known := heldToItem(t.Context(), "turn-1", "w-1", false, true,
+		read(types.PickupTyped, nil)); delivered || !known || reads != before {
+		t.Errorf("a run whose calls delivered nothing: delivered %v known %v after %d reads",
+			delivered, known, reads-before)
+	}
+	if delivered, known := heldToItem(t.Context(), "turn-1", "", true, true, nil); !delivered || !known {
+		t.Errorf("a turn with no pickup's item: delivered %v known %v, want its calls' answer",
+			delivered, known)
 	}
 }
 
@@ -460,7 +507,7 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	}
 	stopped := got
 	stopped.Stop = &sandbox.RunStop{By: "jane"}
-	if ending := e.runEnding(company, stopped, sandbox.RunCalls{Log: logged}, colleagueAnswer{}); !ending.Delivered ||
+	if ending := e.runEnding(t.Context(), company, stopped, sandbox.RunCalls{Log: logged}, colleagueAnswer{}); !ending.Delivered ||
 		ending.DeliveryUnknown {
 		t.Fatalf("a turn whose reply was the approved call ended %+v, want its reply delivered", ending)
 	}

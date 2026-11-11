@@ -57,9 +57,9 @@ type Reply struct {
 
 	// Item is the work item a work pickup handed this turn, by id, and
 	// empty for every other trigger. Its answer is delivered only by a
-	// typed answer on that item, which the engine reads off its own record
-	// ([Work.Typed]): a comment alone records nothing the engine can act on
-	// (ADR-0122).
+	// typed answer on that item, or by the item leaving the seat, which the
+	// engine reads off its own record ([Work.Answer]): a comment alone
+	// records nothing the engine can act on (ADR-0122).
 	Item string
 }
 
@@ -167,8 +167,10 @@ const PickupUntyped = "this turn answers a work pickup, and nothing typed is on 
 	"these five, on the item itself:\n" + types.PickupAnswers + "\nThen report what you did"
 
 // UntypedPickup reports a pickup's turn whose record shows no typed answer on
-// its item: the one condition the three delivery checks refuse a pickup on.
-func UntypedPickup(w Work, reply Reply) bool { return reply.Item != "" && !w.Typed }
+// its item while the item is still the seat's: the one condition the three
+// delivery checks refuse a pickup on. An item that left the seat mid-turn
+// (removed, finished or reassigned) owes it nothing ([types.PickupAnswer]).
+func UntypedPickup(w Work, reply Reply) bool { return reply.Item != "" && !w.Answer.Accepted() }
 
 // Awaited reports whether anyone is waiting for this turn's answer.
 func (r Reply) Awaited() bool { return r.Kind == ReplyTool || r.Kind == ReplyEngine }

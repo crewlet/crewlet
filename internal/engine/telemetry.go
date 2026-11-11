@@ -720,6 +720,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
 		Acted:           actedOutside(spend.ToolExecutions, deliverySurface(e.ToolsFor(t.handle))),
+		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -737,8 +738,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		whole := t.measured(spend, ended)
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted,
-			Tools: whole.Tools, Wake: whole.Wake, Outcome: t.written.Outcome(), Tokens: whole.Tokens,
-			Refusals: whole.Refusals}
+			Tools: whole.Tools, Wake: whole.Wake, Tokens: whole.Tokens, Refusals: whole.Refusals,
+			// A PICKUP ANSWERED TYPED MOVED ITS ITEM, an ask included, by the
+			// gate's own reading; its ledger outcome says so (ADR-0122).
+			Outcome: types.OutcomeOfPickup(t.written.Outcome(), res.PickupAnswer)}
 	}
 	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)

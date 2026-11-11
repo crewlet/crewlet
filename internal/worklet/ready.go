@@ -29,6 +29,11 @@ import (
 // reviews what it submitted itself, so it acts on the review it was given or
 // names a reviewer).
 //
+// AND ONE WAIT IS READY BEFORE ITS DATE: an agent's wait whose reason names a
+// person its writer has not asked on the item ([PersonsNamed], ADR-0122). A
+// wait on a person is an ask, so such a wait comes back to be asked rather
+// than sit out a date nobody was told of, whenever and however it was written.
+//
 // # The order
 //
 // Started work first, then the reviews the seat holds, then its own items in
@@ -40,8 +45,8 @@ import (
 // [ReadyItem.Moved] is the last change to the item that would have woken the
 // seat, so neither its own comment nor a change that only tells it (another
 // agent's words that ask nothing, a watcher added) hands it the same item
-// again. [ReadyItem.Quiet] is when the item went quiet without a typed answer
-// from the seat, which the pickup rechecks once a day (ADR-0122).
+// again. [ReadyItem.Quiet] is when the item went quiet for the seat, which the
+// pickup rechecks once a day (ADR-0122).
 // [ReadyItem.For] is whom the item's work is for, so the turn is held to
 // their apps (ADR-0109): whom its assignment, else its creation, was written
 // for, as the history row keeps it (`working_for`), else that row's writer.
@@ -64,6 +69,10 @@ type ReadyWorkQuery struct {
 
 	// Page is which page of [ReadyRows] items, from 0.
 	Page int
+
+	// People is the chart's persons a wait's reason can name: an agent's
+	// wait naming one it has not asked is ready before its date.
+	People []PersonSeat
 }
 
 // ReadyItem is one item a seat could start now, and why it sits where it does.
@@ -85,9 +94,11 @@ type ReadyItem struct {
 	Progressed uint64 `json:"progressed,omitempty"`
 
 	// Quiet is when the item went quiet for the seat: the latest of MovedAt,
-	// the start it waited until and the seat's own last write on it since.
-	// Zero where that last write is a typed answer (typedanswer.go), which
-	// holds the item until a change would wake the seat again (ADR-0122).
+	// the start it waited until (once passed) and the seat's own last write
+	// on it since, whatever that write was (ADR-0122). AN ITEM STILL READY
+	// is one no answer took out of the seat's ready set: an answer that moved
+	// its pickup key has it handed again anyway, and one that did not, an
+	// edit of its content, leaves it as quiet as words do.
 	Quiet time.Time `json:"quiet,omitzero"`
 
 	// For is whom the item's work is for: whom its last assignment was
@@ -101,6 +112,11 @@ type ReadyItem struct {
 	// SubmittedBy is who moved an item in review into review (or filed it
 	// there): the review's asker, the seat itself on one nobody reviews.
 	SubmittedBy string `json:"submitted_by,omitempty"`
+
+	// WaitsOn is the persons an agent's wait on the item names without its
+	// writer's open ask, by handle: set on an item ready before its date
+	// ([types.PickupWaitsOnPerson]).
+	WaitsOn []string `json:"waits_on,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -158,13 +174,29 @@ func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time)
 	return out, nil
 }
 
+// readyStatuses is the statuses ready work is in, started work first.
+var readyStatuses = []Status{StatusInProgress, StatusInReview, StatusTodo}
+
 // readyBlock is one status's ready items for a seat, in queue order: named for
 // the plan test, which holds it to a seek of the queue index.
 func readyBlock(handle string, status Status, now time.Time) blockQuery {
+	return heldBlock(handle, status, "(t.start_at IS NULL OR t.start_at <= ?)", now)
+}
+
+// waitBlock is one status's items a seat holds that wait until a later date
+// with a reason: the candidates for a wait on a person ([readyWaits]).
+func waitBlock(handle string, status Status, now time.Time) blockQuery {
+	return heldBlock(handle, status, "t.start_at > ? "+
+		"AND COALESCE(json_extract(t.document, '$.wait_reason'), '') <> ''", now)
+}
+
+// heldBlock is one status's items a seat holds that wait on no open blocker
+// and no question of its own, whose start meets started, in queue order.
+func heldBlock(handle string, status Status, started string, now time.Time) blockQuery {
 	return blockQuery{
 		where: "t.removed_at IS NULL AND t.assignee = ? AND t.status_group = ? " +
 			"AND t.status = ? AND t.archived = 0 AND t.merging = 0 " +
-			"AND (t.start_at IS NULL OR t.start_at <= ?) " +
+			"AND " + started + " " +
 			"AND NOT EXISTS (SELECT 1 FROM tracker_task_deps d " +
 			"WHERE d.task_id = t.id AND d.blocker_open = 1) " +
 			"AND NOT EXISTS (SELECT 1 FROM tracker_comments c " +
@@ -183,7 +215,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	out *ReadyWork) error {
 
 	var blocks [3][]TaskRow
-	for i, status := range []Status{StatusInProgress, StatusInReview, StatusTodo} {
+	for i, status := range readyStatuses {
 		block := readyBlock(q.Handle, status, now)
 		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
 			block.terms, MaxReady, now)
@@ -197,11 +229,15 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
+	waits, err := readyWaits(ctx, tx, q, now, &out.Capped)
+	if err != nil {
+		return err
+	}
 	person, _, err := readPerson(ctx, tx, q.Handle)
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, own, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], reviews, own, waits, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -214,7 +250,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err := loadProgressed(ctx, tx, q.Handle, out.Items); err != nil {
 		return err
 	}
-	if err := loadQuiet(ctx, tx, q.Handle, out.Items); err != nil {
+	if err := loadQuiet(ctx, tx, q.Handle, out.Items, now); err != nil {
 		return err
 	}
 	return loadFor(ctx, tx, q.Handle, out.Items)
@@ -261,11 +297,10 @@ func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []Read
 
 // readyLastWordArm is the seat's own last write to one item after the change
 // that last woke it (its log position) and the start it waited until (its
-// instant), and whether that write is a typed answer. A creation, a change of
-// who watches and nothing else, and a write that changed nothing are no
-// answer at all; a watch written beside a change is that change
-// ([movedBeyondWatch]).
-const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + typedWrite + `
+// instant), whatever the write was. A creation, a change of who watches and
+// nothing else, and a write that changed nothing are no word at all; a watch
+// written beside a change is that change ([movedBeyondWatch]).
+const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND h.actor = ? AND h.log_seq > ? AND h.created_at >= ?
 	  AND h.kind <> '` + string(ChangeCreated) + `'
@@ -273,52 +308,30 @@ const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + type
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // loadQuiet stamps each item with when it went quiet for the seat: the latest
-// of the change that last woke it, the start it waited until and the seat's
-// own last word on it since, unless that word is a typed answer.
-func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+// of the change that last woke it, the start it waited until where that has
+// passed, and the seat's own last word on it since.
+func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem, now time.Time) error {
 	if len(items) == 0 {
 		return nil
 	}
 	args := make([]any, 0, 4*len(items))
 	for _, item := range items {
 		var start int64
-		if item.Start != nil {
-			start = store.EncodeTime(*item.Start)
+		if waited, ok := passedStart(item, now); ok {
+			start = store.EncodeTime(waited)
 		}
 		args = append(args, item.ID, handle, int64(item.Moved), start)
 	}
-	rows, err := tx.QueryContext(ctx, arms(len(items), readyLastWordArm), args...)
+	last, err := seqAt(ctx, tx, arms(len(items), readyLastWordArm), args)
 	if err != nil {
 		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
 	}
-	type word struct {
-		at    time.Time
-		typed bool
-	}
-	last := map[string]word{}
-	for rows.Next() {
-		var id string
-		var seq, at int64
-		var typed bool
-		if serr := rows.Scan(&id, &seq, &at, &typed); serr != nil {
-			_ = rows.Close()
-			return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, serr)
-		}
-		last[id] = word{at: store.DecodeTime(at), typed: typed}
-	}
-	if err := closeRows(rows); err != nil {
-		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
-	}
 	for i := range items {
-		w, said := last[items[i].ID]
-		if said && w.typed {
-			continue
-		}
 		quiet := items[i].MovedAt
-		if start := items[i].Start; start != nil && start.After(quiet) {
-			quiet = *start
+		if waited, ok := passedStart(items[i], now); ok && waited.After(quiet) {
+			quiet = waited
 		}
-		if said && w.at.After(quiet) {
+		if w, said := last[items[i].ID]; said && w.at.After(quiet) {
 			quiet = w.at
 		}
 		items[i].Quiet = quiet
@@ -326,14 +339,139 @@ func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem
 	return nil
 }
 
+// passedStart is the start item waited until, where that start has passed: a
+// wait on a person is ready before its date, which bounds nothing yet.
+func passedStart(item ReadyItem, now time.Time) (time.Time, bool) {
+	if item.Start == nil || item.Start.After(now) {
+		return time.Time{}, false
+	}
+	return *item.Start, true
+}
+
+// readyWaitArm is who last set one item's wait and why it waits: the newest
+// row that moved its start or its reason, since a start moved without a reason
+// takes the old reason off.
+const readyWaitArm = `SELECT h.subject_id, h.actor, h.actor_kind,
+	COALESCE(json_extract(t.document, '$.wait_reason'), '')
+	FROM tracker_history h JOIN tracker_tasks t ON t.id = h.subject_id
+	WHERE h.subject_id = ? AND (json_extract(h.fields_json, '$.start') IS NOT NULL
+	  OR json_extract(h.fields_json, '$.wait_reason') IS NOT NULL)
+	ORDER BY h.log_seq DESC LIMIT 1`
+
+// readyWaitAsksArm is whom one writer's open asks on one item are put to.
+const readyWaitAsksArm = `SELECT c.task_id, c.ask FROM tracker_comments c
+	WHERE c.task_id = ? AND c.author = ? AND c.ask <> '' AND c.resolved = 0
+	  AND c.answered_by IS NULL AND c.removed = 0`
+
+// waitRow is an item set aside until a later date, and the persons its wait's
+// reason names that its writer has not asked.
+type waitRow struct {
+	TaskRow
+	on []string
+}
+
+// readyWaits is the items q's seat holds that an agent set aside until a later
+// date with a reason naming a person ([PersonsNamed]) the agent has not asked
+// on the item, in queue order, each status's started work first.
+func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+	capped *bool) ([]waitRow, error) {
+
+	if len(q.People) == 0 {
+		return nil, nil
+	}
+	var candidates []TaskRow
+	for _, status := range readyStatuses {
+		block := waitBlock(q.Handle, status, now)
+		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
+			block.terms, MaxReady, now)
+		if err != nil {
+			return nil, fmt.Errorf("worklet: read %s's %s work set aside: %w", q.Handle, status, err)
+		}
+		candidates = append(candidates, rows...)
+		*capped = *capped || more != ""
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(candidates))
+	for _, row := range candidates {
+		args = append(args, row.ID)
+	}
+	rows, err := tx.QueryContext(ctx, arms(len(candidates), readyWaitArm), args...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's work aside: %w", q.Handle, err)
+	}
+	type wait struct{ writer, reason string }
+	waits := map[string]wait{}
+	for rows.Next() {
+		var id, actor, kind, reason string
+		if serr := rows.Scan(&id, &actor, &kind, &reason); serr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("worklet: read who set %s's work aside: %w", q.Handle, serr)
+		}
+		// AN AGENT'S WAIT ALONE: a person's own wait is written as given.
+		if AuthorKind(kind) == AuthorAgent {
+			waits[id] = wait{writer: actor, reason: reason}
+		}
+	}
+	if cerr := closeRows(rows); cerr != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's work aside: %w", q.Handle, cerr)
+	}
+	var named []waitRow
+	var askArgs []any
+	for _, row := range candidates {
+		w, ok := waits[row.ID]
+		if !ok {
+			continue
+		}
+		if on := PersonsNamed(w.reason, q.People); len(on) > 0 {
+			named = append(named, waitRow{TaskRow: row, on: on})
+			askArgs = append(askArgs, row.ID, w.writer)
+		}
+	}
+	if len(named) == 0 {
+		return nil, nil
+	}
+	asked, err := tx.QueryContext(ctx, arms(len(named), readyWaitAsksArm), askArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the asks behind %s's waits: %w", q.Handle, err)
+	}
+	open := map[[2]string]bool{}
+	for asked.Next() {
+		var id, ask string
+		if serr := asked.Scan(&id, &ask); serr != nil {
+			_ = asked.Close()
+			return nil, fmt.Errorf("worklet: read the asks behind %s's waits: %w", q.Handle, serr)
+		}
+		open[[2]string{id, ask}] = true
+	}
+	if cerr := closeRows(asked); cerr != nil {
+		return nil, fmt.Errorf("worklet: read the asks behind %s's waits: %w", q.Handle, cerr)
+	}
+	out := make([]waitRow, 0, len(named))
+	for _, row := range named {
+		var unasked []string
+		for _, handle := range row.on {
+			if !open[[2]string{row.ID, handle}] {
+				unasked = append(unasked, handle)
+			}
+		}
+		if len(unasked) > 0 {
+			out = append(out, waitRow{TaskRow: row.TaskRow, on: unasked})
+		}
+	}
+	return out, nil
+}
+
 // orderReady is the pickup order over the blocks and the priority list:
 // started work in queue order, then the reviews the seat holds, then its own
-// items in review nobody reviews, then the waiting items the list names in its
-// order, then the rest in queue order.
-func orderReady(started []TaskRow, reviews, own []reviewRow, waiting []TaskRow,
-	priorities []string) []ReadyItem {
+// items in review nobody reviews, then the waits on a person nobody asked,
+// then the waiting items the list names in its order, then the rest in queue
+// order.
+func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow,
+	waiting []TaskRow, priorities []string) []ReadyItem {
 
-	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(waiting))
+	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(onPerson)+len(waiting))
 	for _, row := range started {
 		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupInProgress})
 	}
@@ -342,6 +480,9 @@ func orderReady(started []TaskRow, reviews, own []reviewRow, waiting []TaskRow,
 	}
 	for _, r := range own {
 		out = append(out, ReadyItem{TaskRow: r.TaskRow, Why: types.PickupUnreviewed, SubmittedBy: r.by})
+	}
+	for _, w := range onPerson {
+		out = append(out, ReadyItem{TaskRow: w.TaskRow, Why: types.PickupWaitsOnPerson, WaitsOn: w.on})
 	}
 	listed := make(map[string]bool, len(priorities))
 	byID := make(map[string]TaskRow, len(waiting))

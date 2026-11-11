@@ -644,6 +644,7 @@ func taskReads() map[string]indexedRead {
 		"the move stragglers walk":      seek(stranded, strandedAfterStatement, "", WalkBatch),
 		"the apply's duplicate probe": seek(ranks, rankDuplicateStatement,
 			"P01", "P01", "a000001", "t-00002"),
+		"where a pickup's item stands": seek(key, pickupItemStatement, "t-0008"),
 		"the advisor's answers in a window": seek(key, patternAnswersStatement,
 			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
 		"the advisor's idle reviews": seek("tracker_tasks_queue_idx", patternIdleReviewsStatement,
@@ -800,6 +801,9 @@ func taskReads() map[string]indexedRead {
 		// WHOM AN IDLE REVIEW'S HOLDER ASKED, by the open asks' item index.
 		"whom a review waits on": seek("tracker_comments_open_asks_idx", reviewAsksStatement,
 			task, "agent"),
+		// WHOM A WAIT'S WRITER ASKED, by the open asks' item index.
+		"whom a wait's writer asked": seek("tracker_comments_open_asks_idx", arms(2, readyWaitAsksArm),
+			task, "ana", "t-0008", "ana"),
 		// WHAT A PERSON HOLDS BY BEING ASKED, its page and its count.
 		"what waits on a person's answers": func() indexedRead {
 			statement, open := heldByAsksStatement()
@@ -837,6 +841,9 @@ func taskReads() map[string]indexedRead {
 		// by the seat and the status group.
 		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
 		"ready (waiting)": {readyBlock(person, StatusTodo, planNow), queue},
+		// AND ITS WAITS ON A PERSON, the same seek bounded the other way.
+		"set aside (started)": {waitBlock(person, StatusInProgress, planNow), queue},
+		"set aside (waiting)": {waitBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
 		page, args := taskRowsStatement(set, block.query.terms)
@@ -1183,8 +1190,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			task, "ana", "t-0008", "ana"),
 		"a seat's last word on its ready work": seek(subject, arms(2, readyLastWordArm),
 			task, "ana", int64(0), int64(0), "t-0008", "ana", int64(0), int64(0)),
-		"whether a turn answered an item typed": seek(subject, typedAnswerStatement,
-			"t-1", task),
+		"whether a seat answered an item typed": seek(subject, pickupTypedStatement,
+			task, "ana", int64(0)),
+		"who set a seat's work aside": seek(subject, arms(2, readyWaitArm), task, "t-0008"),
 		"who filed a seat's ready work": seek(subject, arms(2, readyCreatedArm),
 			task, "ana", "t-0008", "ana"),
 		"who assigned a seat's ready work": seek(subject, arms(2, readyAssignedArm),
