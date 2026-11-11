@@ -566,3 +566,48 @@ test("a page that fails keeps the pages held, and next asks it again", async () 
   expect(ids(result.current.items)).toEqual(down(15, 1).map((n) => `e-${n}`));
   expect(result.current.pageError).toBeNull();
 });
+
+// A LATER PAGE REFUSED AS `bad_params` STARTS THE LIST AGAIN. The page is the
+// first page's question and a cursor, so the refusal is of the cursor (one
+// minted before what the order is built from changed), and the same press would
+// be refused for ever. The held pages go, the first page is asked again for a
+// cursor of the order as it is now, and the hook says it restarted.
+// Mutation: keep the held pages on that code, or skip the first page's
+// refetch, and this goes red.
+test("a later page whose cursor is refused starts the list again", async () => {
+  const refetch = vi.fn();
+  const history = { now: down(15, 1) };
+  const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
+  const first = { ...answered(pageOf(history.now)), refetch };
+  const { result } = renderHook(() => usePaged(first, PARAMS, page, pick, idOf, cursorOf));
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(2 * PAGE));
+
+  page.mockImplementationOnce(async () => {
+    throw new Error("bad_params");
+  });
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.restarted).toBe(true));
+  expect(ids(result.current.items)).toEqual(down(15, 11).map((n) => `e-${n}`));
+  expect(result.current.pageError).toBeNull();
+  expect(result.current.more).toBe(true);
+  expect(refetch).toHaveBeenCalledTimes(1);
+
+  // AND THE NEXT PRESS PAGES ON FROM THE FIRST PAGE, saying nothing more.
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(2 * PAGE));
+  expect(page).toHaveBeenLastCalledWith("11");
+  expect(result.current.restarted).toBe(false);
+});
+
+// A HELD PAGE WHOSE CURSOR A RE-READ FINDS REFUSED starts the list again too:
+// that page can never be read again, and the pages after it were read from it.
+test("a re-read whose cursor is refused starts the list again", async () => {
+  const { result, page } = await pagedBack(down(15, 1));
+  page.mockImplementationOnce(async () => {
+    throw new Error("bad_params");
+  });
+  act(() => result.current.refresh());
+  await waitFor(() => expect(result.current.restarted).toBe(true));
+  expect(ids(result.current.items)).toEqual(down(15, 11).map((n) => `e-${n}`));
+});

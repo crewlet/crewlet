@@ -31,6 +31,13 @@
  * looking at — never by its key, which two tasks can hold (`key_collision`):
  * merged on it, the second of the pair was dropped from every list.
  *
+ * # A cursor the engine refuses starts the list again
+ *
+ * A list sorted by type or by assignee is ordered by the type catalogue or the
+ * org chart, so an edit to either changes the order, and a cursor minted before
+ * it is refused as `bad_params`. The pager then starts again from the first
+ * page (`lib/usePaged.ts`), and the foot says so.
+ *
  * GROUPED ANSWERS HAVE NO CURSOR (a board's lanes each carry their own count and
  * a link to the rest), so for them this is `useQuery` and nothing more.
  */
@@ -58,6 +65,9 @@ export interface PagedItems {
   paging: boolean;
   /** Why the last "Load more" failed, until the next one. */
   pageError: QueryErrorCode | null;
+  /** The engine refused the next page's cursor, so the list started again
+   *  from the first page, until the next "Load more". */
+  restarted: boolean;
   refetch: () => void;
 }
 
@@ -94,6 +104,7 @@ export function usePagedItems(
     loadMore: paged.next,
     paging: paged.paging,
     pageError: paged.pageError,
+    restarted: paged.restarted,
     refetch: paged.refetch,
   };
 }

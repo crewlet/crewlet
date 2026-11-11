@@ -44,6 +44,14 @@
  * (`components/common.tsx`'s `PageFailed`), never in its place: in its place
  * it left the reader nothing to press, and nothing to do but reload.
  *
+ * EXCEPT A PAGE REFUSED AS `bad_params`, which STARTS THE LIST AGAIN. A later
+ * page is the first page's question and a cursor, and the first page was
+ * answered, so the refusal is of the cursor: one the engine no longer resumes,
+ * because what the order is built from changed (a seat added to the chart a
+ * work list is sorted by), and asked again it is refused again for ever. So
+ * the held pages go, the first page is asked again for a cursor of the order
+ * as it is now, and `restarted` says so until the reader pages on.
+ *
  * # Every page has to meet the next one
  *
  * A HELD PAGE BEGINS WHERE THE PAGE BEFORE IT ENDED WHEN IT WAS ASKED FOR —
@@ -112,6 +120,9 @@ import type { QueryErrorCode } from "~/contract/errors.ts";
 /** No page held after the first — one constant, so an unpaged list is not a new array each render. */
 const NONE: readonly never[] = [];
 
+/** A held page whose cursor a re-read found refused. */
+const REFUSED = Symbol("refused");
+
 /** Where a page sits among those drawn: what a caller deciding which pages a
  *  change reached may need besides the page's own entries. */
 export interface PagePlace {
@@ -139,6 +150,12 @@ export interface Paged<T, A> {
   /** Ask for it. A no-op when there is none or one is on its way. */
   next: () => void;
   paging: boolean;
+  /**
+   * The engine refused the cursor of a page after the first, so the list
+   * started again from the first page (the package doc), until the next page
+   * is asked for.
+   */
+  restarted: boolean;
   /**
    * Why the last page asked for — or a read that joins the held pages to a
    * first page that moved — did not arrive: its code alone, until the next
@@ -209,6 +226,9 @@ interface Gap<A> {
 const errorOf = (err: unknown): QueryErrorCode =>
   queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
 
+/** A cursor refused: the one code a later page's ask restarts the list on. */
+const REFUSED_CURSOR: QueryErrorCode = "bad_params";
+
 /**
  * THE QUESTION IS THE CALLER'S, asked with its kind written out at the call
  * — the first page through `useQuery("…")` or `useCodeQuery("…")`, every
@@ -243,6 +263,9 @@ export function usePaged<A, T>(
   // last one's page could not be read.
   const [failed, setFailed] = useState<{ era: string; code: QueryErrorCode } | null>(null);
   const pageError = failed?.era === era ? failed.code : null;
+  // AND A RESTART, for the same reason: it is about the reading it happened in.
+  const [restartedIn, setRestartedIn] = useState<string | null>(null);
+  const restarted = restartedIn === era;
   const kept = held && held.era === era ? held : null;
 
   // THE LATEST OF WHAT THE CALLER HANDS IN, read when a change runs rather
@@ -313,6 +336,15 @@ export function usePaged<A, T>(
       return { outcome: cursor ? "unfilled" : "ended", pages: gap, error: null };
     };
 
+    /** START AGAIN from the first page: drop what is held and ask the first
+     *  page again, whose cursor may be as stale as the one refused. */
+    const restart = (q: string) => {
+      if (asked.current !== q) return;
+      commit(null);
+      setRestartedIn(q);
+      latest.current.refetch();
+    };
+
     /** JOIN THE FIRST PAGE: draw the latest answer, with the gap under it
      *  read first where it no longer meets the first held page. */
     const join = async (q: string) => {
@@ -327,6 +359,10 @@ export function usePaged<A, T>(
       // BOUNDED BY EVERYTHING HELD, all of which is below this gap.
       const gap = await bridge(answer, anchor, kept.pages.length);
       if (holding(q) !== kept) return;
+      if (gap.error === REFUSED_CURSOR) {
+        restart(q);
+        return;
+      }
       if (gap.error) setFailed({ era: q, code: gap.error });
       if (gap.outcome === "met") {
         commit({ era: q, top: answer, pages: [...gap.pages, ...kept.pages] });
@@ -357,14 +393,19 @@ export function usePaged<A, T>(
       const fresh = await Promise.all(
         chosen.map((held) =>
           ask.current(held.cursor).then(
-            (answer) => answer,
+            (answer): A | null | typeof REFUSED => answer,
             // A PAGE THAT COULD NOT BE READ AGAIN keeps what it last said:
-            // the next change that reaches it asks again.
-            () => null,
+            // the next change that reaches it asks again. One whose cursor
+            // was refused never will be, and the list starts again.
+            (err: unknown) => (errorOf(err) === REFUSED_CURSOR ? REFUSED : null),
           ),
         ),
       );
       if (holding(q) !== kept) return;
+      if (fresh.includes(REFUSED)) {
+        restart(q);
+        return;
+      }
       let pages = kept.pages;
       // FROM THE FOOT UP, so the page a foot is checked against has already
       // been read again wherever it was asked for too — and what a page's
@@ -372,7 +413,7 @@ export function usePaged<A, T>(
       // was found.
       for (let k = chosen.length - 1; k >= 0; k--) {
         const answer = fresh[k];
-        if (!answer) continue;
+        if (!answer || answer === REFUSED) continue;
         const { cursor } = chosen[k]!;
         const at = pages.findIndex((held) => held.cursor === cursor);
         const placed: HeldPage<A> = { cursor, answer };
@@ -412,7 +453,7 @@ export function usePaged<A, T>(
       );
     };
 
-    return { join, reread, onward };
+    return { join, reread, onward, restart };
   }, [commit]);
 
   // WHAT IS DRAWN AS THE FIRST PAGE: the latest answer where it meets what
@@ -443,11 +484,14 @@ export function usePaged<A, T>(
     pagingNow.current = true;
     setPaging(true);
     setFailed(null);
+    setRestartedIn(null);
     serially(async () => {
       try {
         await changes.onward(era);
       } catch (err) {
-        setFailed({ era, code: errorOf(err) });
+        const code = errorOf(err);
+        if (code === REFUSED_CURSOR) changes.restart(era);
+        else setFailed({ era, code });
       } finally {
         pagingNow.current = false;
         setPaging(false);
@@ -510,6 +554,7 @@ export function usePaged<A, T>(
     more: following !== "",
     next,
     paging,
+    restarted,
     pageError,
     refetch: first.refetch,
     refresh,

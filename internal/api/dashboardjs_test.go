@@ -2203,8 +2203,10 @@ const (
 	// An agent's two access clocks, the note on what its GitHub App holds past
 	// its grant, the engine's status word and Ask Crewlet taking images only
 	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
-	// (5,859,202 bytes, +1,351, all script): 5722 KiB.
-	treeBudget = 5<<20 + 602<<10
+	// (5,859,202 bytes, +1,351, all script): 5722 KiB. A work list starting
+	// again from its first page when the engine refuses its cursor took it to
+	// 5722.2 KiB (5,859,560 bytes, +358, all script): 5723 KiB.
+	treeBudget = 5<<20 + 603<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
