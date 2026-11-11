@@ -22,7 +22,8 @@ import (
 // addition only, so an older one decodes into this shape. Version 2 added the
 // seat's boxes, so a baseline below it never told them ([Snapshot.Boxes]).
 // Version 3 added the GitHub permissions the seat's app holds outside its
-// grant ([Integration.AppHolds]), which "Your access" says and no change does.
+// grant, at the level it holds each ([Integration.AppHolds]), which "Your
+// access" says and no change does.
 const Version = 3
 
 // boxesFrom is the first version whose snapshots hold the seat's boxes.
@@ -142,10 +143,11 @@ type Integration struct {
 	Permissions     map[string]string `json:"permissions,omitempty"`
 	PermissionNames map[string]string `json:"permission_names,omitempty"`
 
-	// AppHolds is the offered GitHub permissions, by key, the seat's app holds
-	// and its grant leaves out: granting one waits on no organization owner.
-	// The app's registration is not the seat's access, so it is never a change.
-	AppHolds []string `json:"app_holds,omitempty"`
+	// AppHolds is the offered GitHub permissions the seat's app holds and its
+	// grant leaves out, by key, each at the level the app holds it: a grant up
+	// to that level waits on no organization owner, and one past it does. The
+	// app's registration is not the seat's access, so it is never a change.
+	AppHolds map[string]string `json:"app_holds,omitempty"`
 
 	Scope       []string          `json:"scope,omitempty"`
 	ScopeLabels map[string]string `json:"scope_labels,omitempty"`
@@ -306,7 +308,10 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 	out.Pending = strings.Join(pending, ",")
 	for _, p := range words.Permissions {
 		if _, granted := want.Permissions[p.Key]; !granted && have.Ceiling[p.Key] != "" {
-			out.AppHolds = append(out.AppHolds, p.Key)
+			if out.AppHolds == nil {
+				out.AppHolds = map[string]string{}
+			}
+			out.AppHolds[p.Key] = string(have.Ceiling[p.Key])
 		}
 	}
 	if lane == seataccess.LaneSSH {
@@ -435,9 +440,7 @@ func (s Snapshot) normal() Snapshot {
 	slices.SortFunc(s.Integrations, func(a, b Integration) int { return strings.Compare(a.Lane, b.Lane) })
 	for i := range s.Integrations {
 		s.Integrations[i].Scope = sortedSet(s.Integrations[i].Scope)
-		if held := sortedSet(s.Integrations[i].AppHolds); len(held) > 0 {
-			s.Integrations[i].AppHolds = held
-		} else {
+		if len(s.Integrations[i].AppHolds) == 0 {
 			s.Integrations[i].AppHolds = nil
 		}
 		s.Integrations[i].Commands = slices.Clone(s.Integrations[i].Commands)
@@ -523,8 +526,24 @@ func (s Snapshot) JSON() []byte {
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
 }
 
-// Digest is `sha256:` and the hex SHA-256 of [Snapshot.JSON].
-func (s Snapshot) Digest() string { return digestOf(s.JSON()) }
+// Digest is `sha256:` and the hex SHA-256 of the access s holds: s at its
+// coarsest level ([Snapshot.at]), so a shortened snapshot digests as a whole
+// one does, with the fields [Diff] never compares cleared. The vendor's names
+// for levels, permissions and scope entries, a level's note, an SSH host's
+// read commands, what the GitHub App holds and the integrations not granted
+// are said beside the access and are never a change: one moving tells no
+// change, asks for no review and leaves a pending one as it was measured
+// ([Snapshot.JSON] keeps them, for the turn to say).
+func (s Snapshot) Digest() string {
+	access := s.at(2)
+	access.NotGranted = []string{}
+	for i := range access.Integrations {
+		in := &access.Integrations[i]
+		in.LevelName, in.LevelNote, in.PermissionNames, in.ScopeLabels = "", "", nil, nil
+		in.Commands, in.AppHolds = nil, nil
+	}
+	return digestOf(access.JSON())
+}
 
 // Parse reads a snapshot written by [Snapshot.JSON], as a told record holds it.
 func Parse(data []byte) (Snapshot, error) {
