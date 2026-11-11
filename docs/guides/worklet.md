@@ -1308,6 +1308,7 @@ commit may move several of these, and the row names each one it moved:
 |---|---|
 | `title` `status` `assignee` `priority` `project` `type` `tags` | the columns a board is read by |
 | `due` `due_all_day` `start` `estimate` `points` | the schedule and the sizing. The flag is recorded beside the instant because an all-day date is stored as the company's own midnight, so making a midnight due date all-day moves the flag and leaves the instant where it was |
+| `wait_reason` | why the item waits until its start, whole: recorded on its own when a wait is restated on the same date with another reason |
 | `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you — the last three as the handles that joined and left |
 | `parent` `routing_unit` `archived` `removed_with` | where it sits, whose lead hears about it, whether it is filed away, and — when a removal cascaded — the item it went with |
 | `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries — each as the items that joined and left it |
