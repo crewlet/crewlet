@@ -496,21 +496,26 @@ func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.Pending
 // word, and its settle can hand them to a relaunch's brief instead — the first
 // step to tell them, the take's reader never having had them. So a brief's note
 // naming that take (sandbox.RunNote.LostTake) is recorded read by the job the
-// write opens, in the take's place and at the write's own place among the reads,
-// and the ending of that job, should it never start, reports it with the rest of
-// its brief. A note another take read is left as that take read it, whatever
-// take the brief names.
+// write opens, in the take's place — and at the take's own place among the
+// reads, never the write's: a note filed after it and read by a later take, a
+// correction of it, stays after it in the order every reader tells the turn's
+// notes in — and the ending of that job, should it never start, reports it with
+// the rest of its brief. A note another take read is left as that take read it,
+// whatever take the brief names, and a waiting note the brief reads takes the
+// write's place.
 //
-// Mutation: leave every note the record holds read as it was, or take over its
-// read whatever take recorded it, and the case goes red.
+// Mutation: leave every note the record holds read as it was, take over its
+// read whatever take recorded it, or number the read taken over at the write's
+// place, and the case goes red.
 func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-lost-brief"))
 	for _, id := range []string{"n-1", "n-2", "n-3"} {
 		mustFile(t, s, "t-lost-brief", id)
 	}
-	if _, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "lost", "n-1")); err != nil {
-		t.Fatal(err)
+	lost, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "lost", "n-1"))
+	if err != nil || len(lost) != 1 {
+		t.Fatalf("the lost take took %d (%v), want n-1", len(lost), err)
 	}
 	if _, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "answered", "n-2")); err != nil {
 		t.Fatal(err)
@@ -533,15 +538,19 @@ func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandb
 	for _, n := range row.Steer.Notes {
 		byID[n.ID] = n
 	}
-	for _, id := range []string{"n-1", "n-3"} {
+	for id, place := range map[string]int{"n-1": lost[0].Read.Order, "n-3": row.Steer.Reads} {
 		if read := byID[id].Read; read == nil || read.Launch != relaunched.LaunchID || read.Boundary != "brief" ||
-			read.Iteration != 2 || read.Take != "" || read.Order != row.Steer.Reads {
-			t.Errorf("note %s is read %+v, want it read by job %s's brief, at the write's place %d",
-				id, read, relaunched.LaunchID, row.Steer.Reads)
+			read.Iteration != 2 || read.Take != "" || read.Order != place {
+			t.Errorf("note %s is read %+v, want it read by job %s's brief, at place %d among the reads",
+				id, read, relaunched.LaunchID, place)
 		}
 	}
 	if read := byID["n-2"].Read; read == nil || read.Take != "answered" || read.Launch != launch {
 		t.Errorf("a note another take read is read %+v, want it left as take answered read it", read)
+	}
+	if n1, n2 := byID["n-1"].Read, byID["n-2"].Read; n1 == nil || n2 == nil || n1.Order >= n2.Order {
+		t.Errorf("n-1 is read at %+v and n-2, read by a later take, at %+v: the note taken over is no longer "+
+			"ahead of it", n1, n2)
 	}
 	var unread []string
 	for _, n := range row.UnreadNotes() {

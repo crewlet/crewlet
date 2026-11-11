@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"cmp"
 	"context"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -661,8 +663,12 @@ func (r *Runner) readsSince(cursor int) []steer.Read {
 // IN THE ORDER READ, WHATEVER THE HEADER: a later note is the one that wins, so
 // the header takes every read and every fresh note up to the last served one,
 // and only the fresh notes after that follow it plainly — each one the turn had
-// not read before this brief, which is what the header says of them.
+// not read before this brief, which is what the header says of them. A note of
+// fresh its record holds read already — a lost take's, which this brief hands
+// over — is one of reads, at the place the record read it
+// ([Runner.inReadOrder]).
 func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) []string {
+	reads, fresh = r.inReadOrder(reads, fresh)
 	var served []string
 	if r.cfg.Resume != nil {
 		served = r.cfg.Resume.Served
@@ -689,6 +695,50 @@ func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) 
 		out = append(out, again)
 	}
 	return append(out, renderedNotes(fresh[upTo:])...)
+}
+
+// inReadOrder is reads together with every note of fresh the run's record holds
+// read already — a take recorded it and its answer was lost, and the take's
+// settle handed it to this brief ([steer.Briefing.Orders]) — in the order the
+// record numbered their reads, and the rest of fresh, the notes the brief is
+// the first to read, in their own order.
+//
+// BY THE RECORD'S PLACES, never by when the runner came to hold a note: a read
+// this segment made reaches the runner before the record has numbered it (Order
+// zero), and the source that recorded it says where it is ([Runner.placed]);
+// and a lost take's note is handed over only once its settle is answered — at a
+// later round, after a later take's notes, or at a brief — while the record
+// numbered it where the take was made. Told in the order the runner came to hold
+// them, a person's later note, correcting it, was told ahead of the note it
+// corrects. A read the source has not placed — the first segment's box keeps no
+// record — keeps its turn, after every placed one.
+func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Read, []steer.Note) {
+	r.mu.Lock()
+	placed := r.placed
+	r.mu.Unlock()
+	if len(placed) == 0 {
+		return reads, fresh
+	}
+	merged := slices.Clone(reads)
+	var rest []steer.Note
+	for _, n := range fresh {
+		if order, ok := placed[n.ID]; ok {
+			merged = append(merged, steer.Read{Note: n, Reading: steer.Reading{Order: order}})
+			continue
+		}
+		rest = append(rest, n)
+	}
+	place := func(read steer.Read) int {
+		if read.Order > 0 {
+			return read.Order
+		}
+		if order, ok := placed[read.ID]; ok {
+			return order
+		}
+		return math.MaxInt
+	}
+	slices.SortStableFunc(merged, func(a, b steer.Read) int { return cmp.Compare(place(a), place(b)) })
+	return merged, rest
 }
 
 // notesHeldBy is the last read a session saved holding the notes read through

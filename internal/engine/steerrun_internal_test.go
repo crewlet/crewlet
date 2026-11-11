@@ -738,14 +738,17 @@ func reviewRound(n int) steer.Reading {
 // and the write of one that launches records the note read by the job it opens,
 // in the take's place — the brief is the first to tell it — so the job's ending
 // reports it where the job never started, with the rest of its brief, and a
-// resume carries it as that job's read, which the job's execute record lists.
-// Only a take still unsettled when the segment ends is handed off its path, and
-// marked unanswered.
+// resume carries it as that job's read, which the job's execute record lists:
+// at the take's own place among the reads, which the brief says, so a note a
+// later round read, correcting it, is told after it by every brief. Only a take
+// still unsettled when the segment ends is handed off its path, and marked
+// unanswered.
 //
 // Mutation: hand the round nothing where the settle answers, settle a lost take
 // at no later round or brief, mark it where a later one answers, forget it when
 // a brief is handed back, seal a brief without the takes its notes came from,
-// report no note waiting while it is lost, or never hand it off at the
+// number the read taken over at the write's place, place no note a settle hands
+// over, report no note waiting while it is lost, or never hand it off at the
 // segment's end, and a case goes red.
 func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	t.Parallel()
@@ -856,6 +859,48 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 		if !slices.Equal(unread, []string{"n-1", "n-2"}) {
 			t.Errorf("the ending of the job that never started reports %v, want every note its brief carried",
 				unread)
+		}
+	})
+	t.Run("a later round's note correcting it, its brief handing it over in its place", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		// ITS SETTLE FAILING TWICE: on the round's own path, and again at the
+		// next round, whose own take of the later note is answered.
+		store, runs, source := setup(t, 2)
+		if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "no, use production instead of staging",
+			By: "founder"})
+		if got := source.Take(ctx, reviewRound(2)); len(got) != 1 || got[0].ID != "n-2" {
+			t.Fatalf("the next round was handed %+v, want the later note alone", got)
+		}
+		brief := source.Brief(ctx)
+		handed(t, brief.Notes, "the relaunch's brief")
+		if lost, later := brief.Orders["n-1"], brief.Orders["n-2"]; lost == 0 || later <= lost {
+			t.Errorf("the brief places the lost take's note at %d and the later round's at %d, want the lost "+
+				"one first, where its take was made", lost, later)
+		}
+		sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed := mustRow(t, store, "run-1")
+		relaunch := claimed
+		relaunch.BriefNotes = sealed
+		if _, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner,
+			Epoch: claimed.OwnerEpoch}); err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		// EVERY LATER BRIEF TELLS THE TWO IN THE ORDER THE RECORD READ THEM,
+		// the correction after the note it corrects.
+		var carried []string
+		for _, read := range runs.carried(mustRow(t, store, "run-1")) {
+			carried = append(carried, read.ID)
+		}
+		if !slices.Equal(carried, []string{"n-1", "n-2"}) {
+			t.Errorf("the record carries the notes as %v, want n-1 then n-2: the later round's note, "+
+				"correcting it, is told ahead of the note it corrects", carried)
 		}
 	})
 	t.Run("its settle failing until the segment ends", func(t *testing.T) {

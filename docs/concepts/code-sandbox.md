@@ -1257,7 +1257,9 @@ it, in one of two ways:
   brief of a relaunch it makes, handing over what it recorded to whichever the
   store answers first — a brief's launch then records the note read by the job
   it opens, in the take's place, so the note is that job's as every other note
-  its brief carries is; meanwhile, for thirty seconds, it stands for a note
+  its brief carries is, and keeps the take's own place among the turn's reads,
+  where the brief tells it too: a note a later round read, a correction of it,
+  is never told ahead of it; meanwhile, for thirty seconds, it stands for a note
   waiting, so a round asking for tools ends and the next one opens with the
   note. Only a take the store has still not answered when the segment ends is
   settled off its path, and marked.

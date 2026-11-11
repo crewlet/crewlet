@@ -135,9 +135,11 @@ type RunNote struct {
 	// to the brief instead ([PendingStore.SettleTake]). The record holds the
 	// note read by that take, yet the brief is the first to tell it, so the
 	// launch's write records it read by the job it opens, in the take's place
-	// ([openNotes]): it is that job's as every note its brief carries is — the
-	// job's ending reports it where the job never started, and the job's
-	// execute record lists it where it did. Never persisted.
+	// and at the take's own place among the reads ([openNotes]): it is that
+	// job's as every note its brief carries is — the job's ending reports it
+	// where the job never started, and the job's execute record lists it where
+	// it did — and it stays where the record first numbered its read, ahead of
+	// every read a later take made. Never persisted.
 	LostTake string `json:"-"`
 
 	// Extra is every key of the note this build does not know — see
@@ -635,10 +637,12 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 //     a note the record already holds, still waiting, is recorded read; one it
 //     holds read by the take the brief names as lost ([RunNote.LostTake]) is
 //     recorded read by the job in that take's place, the brief being the first
-//     to tell it; one it holds read otherwise is left as it was read; and any
-//     other — a turn's first segment's own, which the record has never held —
-//     is added already read, numbered as if filed now. Every read this write
-//     records takes its place among the record's reads ([RunSteer.Reads]);
+//     to tell it, and at that take's own place among the reads, which this
+//     write leaves as it was; one it holds read otherwise is left as it was
+//     read; and any other — a turn's first segment's own, which the record has
+//     never held — is added already read, numbered as if filed now. Every
+//     other read this write records takes its place among the record's reads
+//     ([RunSteer.Reads]);
 //   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
 //     are filed WAITING, numbered after them — so they are on the record from
 //     the write that creates it, ahead of every note a person files there once
@@ -662,9 +666,21 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 		}
 		read.Order = order
 		if i := slices.IndexFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }); i >= 0 {
-			if held := steer.Notes[i]; held.Waiting() || (note.LostTake != "" && held.Read.Take == note.LostTake) {
+			switch held := steer.Notes[i]; {
+			case held.Waiting():
 				steer.Notes[i].Read = &read
 				steer.Reads = order
+			case note.LostTake != "" && held.Read.Take == note.LostTake:
+				// THE JOB IN THE LOST TAKE'S PLACE, AT THAT TAKE'S OWN PLACE
+				// AMONG THE READS: the record numbered the note's read there,
+				// before every read a later take made — a note a person sent
+				// after it, correcting it, among them — and every reader
+				// orders the turn's notes by that number. Read at this
+				// write's place, it came after them, and every later brief
+				// told the correction ahead of the note it corrects.
+				took := read
+				took.Order = held.Read.Order
+				steer.Notes[i].Read = &took
 			}
 			continue
 		}

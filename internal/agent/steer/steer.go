@@ -255,9 +255,20 @@ type Reading struct {
 // path of the take it settles, and can land after the segment that launches
 // read the record it resumed from — so a launch counts the record's marks as
 // they stand when it briefs, never only as its segment found them.
+//
+// Orders is the place among the record's reads (Reading.Order) of every note
+// the segment's source handed it from the record, and of every note of Notes
+// read already by the record's word — a lost take's, whose settle handed it to
+// this brief — by id; nil from a source that keeps no record. A brief tells
+// the notes the turn has read in the order the record numbered their reads, and
+// the reads a segment makes reach it before the record has numbered them (Order
+// zero), so the source that recorded them says where they are: a note a lost
+// take recorded is then told at its take's place, never after a note a later
+// take read — a correction of it among them.
 type Briefing struct {
 	Notes      []Note
 	Unanswered []string
+	Orders     map[string]int
 }
 
 // Read is a note the turn has read, and where: what a turn carries into every

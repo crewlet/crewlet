@@ -62,6 +62,20 @@ func (m markingBox) Brief(ctx context.Context) steer.Briefing {
 	return b
 }
 
+// placingBox is a box whose briefs say where the run's record numbered the
+// reads of the notes it names ([steer.Briefing.Orders]): the segment's own
+// reads, and a note of the brief's a lost take recorded.
+type placingBox struct {
+	*steer.Box
+	orders map[string]int
+}
+
+func (p placingBox) Brief(ctx context.Context) steer.Briefing {
+	b := p.Box.Brief(ctx)
+	b.Orders = p.orders
+	return b
+}
+
 // keptBasis is a turn's kept session as a launcher answers it: captured once
 // round 1's run had made its one call and read its first note.
 var keptBasis = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1",
@@ -543,6 +557,84 @@ func TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad(t *testing.
 				at = i
 			}
 		})
+	}
+}
+
+// A RELAUNCH TELLS A NOTE A LOST TAKE RECORDED WHERE THE RECORD READ IT. A take
+// whose answer was lost hands its notes over only once its settle is answered
+// — at a relaunch's brief, after a later round of the segment read a note
+// filed after them, a correction of one among them — while the record numbered
+// their read where the take was made, and the segment's own reads reach the
+// runner unnumbered. So the brief tells such a note at the record's place among
+// the notes the turn has read, ahead of the later round's note, in the session
+// the relaunch continues and in the fresh brief beside it alike, and the notes
+// the brief is the first to read after them.
+//
+// Mutation: tell a note the source places among the brief's own notes, or a
+// read of the segment where the runner came to hold it, and a case goes red.
+func TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	msg := func(n steer.Note) string { return prompts.SteerMessage(n.By, n.Text) }
+	held := steer.Note{ID: "held", Text: "the note the session read in its brief", By: "founder"}
+	lost := steer.Note{ID: "lost", Text: "use staging", By: "founder"}
+	later := steer.Note{ID: "later", Text: "no, use production instead of staging", By: "founder"}
+	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
+	box := steer.New()
+	for _, n := range []steer.Note{lost, waiting} {
+		box.Offer(n)
+	}
+	// THE RECORD READ held first, then lost by a take whose answer was lost,
+	// then later by the segment's next round — which reached the runner
+	// unnumbered, as every read of the segment does.
+	source := placingBox{Box: box, orders: map[string]int{"lost": 2, "later": 3}}
+	basis := keptBasis
+	basis.NoteCursor = 1
+	relauncher := &probingLauncher{basis: basis}
+	resume := &runner.Resume{State: parked.State, Steered: []steer.Read{
+		{Note: held, Reading: steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1,
+			Boundary: types.SteerBoundaryBrief, Launch: "job-1", Order: 1}},
+		{Note: later, Reading: steer.Reading{Phase: types.PhaseReview, Iteration: 1, Round: 2,
+			Boundary: types.SteerBoundaryRound}},
+	},
+		Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder", SessionID: "s-1",
+			BoxKept: true},
+		Bridged: []runner.BridgedCall{numbered("jira_create", map[string]any{"summary": "the job's issue"}, 1, 1)}}
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+		steer: source, resume: resume})
+	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	again := relauncher.last(t)
+	if again.Session == nil {
+		t.Fatal("the relaunch continues no kept session")
+	}
+	for name, tc := range map[string]struct {
+		brief string
+		order []steer.Note
+		not   []steer.Note
+	}{
+		"the session it continues": {brief: again.Session.Brief, order: []steer.Note{lost, later, waiting},
+			not: []steer.Note{held}},
+		"the fresh brief beside it": {brief: again.Brief, order: []steer.Note{held, lost, later, waiting}},
+	} {
+		at := -1
+		for _, n := range tc.order {
+			i := strings.Index(tc.brief, msg(n))
+			if i < 0 || i < at || strings.Count(tc.brief, msg(n)) != 1 {
+				t.Errorf("%s is not told %q once, in the order the record read the notes:\n%s", name, n.ID,
+					tc.brief)
+			}
+			at = i
+		}
+		for _, n := range tc.not {
+			if strings.Contains(tc.brief, msg(n)) {
+				t.Errorf("%s is told %q, which the session holds:\n%s", name, n.ID, tc.brief)
+			}
+		}
 	}
 }
 

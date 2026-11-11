@@ -691,6 +691,14 @@ type Runner struct {
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
 
+	// placed is the place among the run's record's reads of every note this
+	// segment's source handed over, and of every note the launch's brief
+	// carries that the record holds read already, by id — what the last
+	// brief's source said ([steer.Briefing.Orders]), nil where it keeps no
+	// record. A brief tells the reads in that order ([Runner.inReadOrder]).
+	// Guarded by mu.
+	placed map[string]int
+
 	// sent is every record this runner publishes off the path of the request
 	// that occasioned it — the frame stating the fresh brief a run whose box
 	// started a session of its own read ([Runner.sessionStarted]) — each
@@ -879,9 +887,23 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// corrected the turn starts from the turn as corrected — and then
 		// the notes this brief is the first to read. The run is a fresh
 		// session with no conversation of the engine's to carry them in,
-		// so its brief does. See [Runner.steered].
-		Steered: append(r.carriedSteers(), renderedNotes(fresh)...),
+		// so its brief does. See [Runner.steered]. IN THE ORDER THE RECORD
+		// READ THEM, a note a lost take recorded that this brief hands over
+		// among them ([Runner.inReadOrder]).
+		Steered: r.readFirst(fresh),
 	})
+}
+
+// readFirst is every note the turn has read, rendered, in the order its record
+// read them, and then the notes of fresh it has not read yet
+// ([Runner.inReadOrder]).
+func (r *Runner) readFirst(fresh []steer.Note) []string {
+	reads, rest := r.inReadOrder(r.readsSince(0), fresh)
+	out := make([]string, 0, len(reads)+len(rest))
+	for _, read := range reads {
+		out = append(out, prompts.SteerMessage(read.By, read.Text))
+	}
+	return append(out, renderedNotes(rest)...)
 }
 
 // renderedNotes is notes as the model reads each ([prompts.SteerMessage]).
@@ -2230,14 +2252,18 @@ func (r *Runner) carriedSteers() []string {
 
 // steerBrief is the notes a launch's brief takes — none on a turn nobody
 // can steer — once the reads the turn carries are marked unanswered as the
-// record marks them now ([Runner.markUnanswered]), which every brief the
-// launch builds after it counts.
+// record marks them now ([Runner.markUnanswered]), and the places the record
+// numbered this segment's reads at are known ([Runner.placed]), which every
+// brief the launch builds after it counts.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {
 		return nil
 	}
 	briefing := r.cfg.Steer.Brief(ctx)
 	r.markUnanswered(briefing.Unanswered)
+	r.mu.Lock()
+	r.placed = briefing.Orders
+	r.mu.Unlock()
 	return briefing.Notes
 }
 

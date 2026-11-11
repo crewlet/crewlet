@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -926,7 +927,7 @@ type rowSource struct {
 	fence  sandbox.Fence
 	watch  *noteWatch
 
-	// mu guards lost, lostAt and briefed.
+	// mu guards lost, lostAt, briefed and orders.
 	mu sync.Mutex
 	// lost is every take of this segment whose call and settle both answered
 	// an error and whose settle has not answered since, by name, oldest first,
@@ -938,6 +939,12 @@ type rowSource struct {
 	// the brief back, and its takes with it ([rowSource.Return]), and one that
 	// writes takes each take's read over ([rowSource.lostTakes]).
 	briefed map[string]string
+	// orders is the place among the record's reads ([sandbox.NoteRead.Order])
+	// of every note this segment's takes recorded and handed over — its
+	// rounds', and a lost take's a settle handed a round or a brief — by note
+	// id: what a relaunch's brief tells the turn's read notes in the order of
+	// ([steer.Briefing.Orders]), its runner holding them unnumbered.
+	orders map[string]int
 }
 
 // source is the resumed segment's notes for run, which it claimed under fence:
@@ -1017,7 +1024,24 @@ func (r *rowSource) take(ctx context.Context, candidates []openedNote, read sand
 		// RECORDED, ITS ANSWER LOST: handed over now.
 		taken = settled
 	}
+	r.numbered(taken)
 	return notesTaken(candidates, taken)
+}
+
+// numbered keeps the place among the record's reads of every note of recorded,
+// which this segment hands over ([rowSource.orders]).
+func (r *rowSource) numbered(recorded []sandbox.RunNote) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range recorded {
+		if n.Read == nil {
+			continue
+		}
+		if r.orders == nil {
+			r.orders = map[string]int{}
+		}
+		r.orders[n.ID] = n.Read.Order
+	}
 }
 
 // lose keeps take as one of the segment's lost takes.
@@ -1056,6 +1080,7 @@ func (r *rowSource) settleLost(ctx context.Context) []settledNote {
 			continue
 		}
 		answered = append(answered, take)
+		r.numbered(recorded)
 		for _, n := range recorded {
 			out = append(out, settledNote{take: take, held: n})
 		}
@@ -1110,9 +1135,13 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 // Brief is what a relaunch's brief takes of the turn's notes
 // ([steer.Briefing]): the notes the segment's lost takes recorded, where their
 // settle answers now ([rowSource.settleLost]) — which the launch's write records
-// read by its job in their take's place ([rowSource.lostTakes]) — then the
-// waiting notes that open — a peek, which the launch's own write records read —
-// and every note the record marks unanswered, by id, read off the same record.
+// read by its job in their take's place, at that take's own place among the
+// reads ([rowSource.lostTakes]) — then the waiting notes that open — a peek,
+// which the launch's own write records read — and every note the record marks
+// unanswered, by id, read off the same record; and the place among the
+// record's reads of every note this segment's takes handed over, those the
+// brief carries among them ([rowSource.orders]), so the brief tells the turn's
+// read notes in the order the record numbered them.
 //
 // THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
 // read them: a take's settle is made off the path that took, and can mark a
@@ -1137,15 +1166,24 @@ func (r *rowSource) Brief(ctx context.Context) steer.Briefing {
 		log.WarnContext(ctx, "steer_notes_unread", "turn_id", r.run.TurnID, "error", err.Error(),
 			"detail", "the record could not be read; the launch's brief carries no new note, and "+
 				"its notes wait for the run's own steps")
-		return steer.Briefing{Notes: notes}
+		return steer.Briefing{Notes: notes, Orders: r.ordersNow()}
 	}
 	if !found || run.Ending != nil {
-		return steer.Briefing{Notes: notes}
+		return steer.Briefing{Notes: notes, Orders: r.ordersNow()}
 	}
 	for _, o := range r.steers.waiting(run.TurnID, run.Steer.Notes) {
 		notes = append(notes, o.note)
 	}
-	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run)}
+	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: r.ordersNow()}
+}
+
+// ordersNow is the places among the record's reads of the notes this segment's
+// takes handed over, a lost take's this brief carries among them
+// ([rowSource.orders]): a copy, the brief's to keep.
+func (r *rowSource) ordersNow() map[string]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.orders)
 }
 
 // unansweredNotes is every note on run's record whose read the record marks
