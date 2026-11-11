@@ -63,14 +63,15 @@ func TestTheDashboardSpeaksTheDatastoreVocabulary(t *testing.T) {
 //
 // A paste that spans more cells than one write carries is split by the
 // native sheet at this bound, and the schema editor stops adding collections
-// and columns at these, so a person is told in place rather than refused
-// whole after Save.
+// and columns at these, and the sheet's create page a column's or an option's
+// name, so a person is told in place rather than refused whole after Save.
 func TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
 		"DATA_BATCH_MAX_OPS":   artifacts.MaxBatchOps,
 		"DATA_COLLECTIONS_MAX": artifacts.MaxCollections,
 		"DATA_COLUMNS_MAX":     artifacts.MaxColumns,
+		"DATA_LABEL_MAX_BYTES": artifactdata.MaxLabelBytes,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

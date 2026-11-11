@@ -10,25 +10,17 @@
  * bounds and names the board it refuses.
  */
 
-import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
 import {
+  ARTIFACT_TITLE_MAX_BYTES,
+  BOARD_BRIEF_MAX_BYTES,
   CANVAS_MAX_SIDE,
   CANVAS_MIN_SIDE,
   CANVAS_VERSION,
-  addNote,
-  changeNote,
-  removeNote,
-  type CanvasNote,
-  type DesignCanvas,
-} from "./canvas.ts";
+  DESIGN_MAX_BOARDS,
+} from "~/contract/artifacts.ts";
+import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
+import { addNote, changeNote, removeNote, type CanvasNote, type DesignCanvas } from "./canvas.ts";
 import type { CanvasBoardNote } from "@crewlethq/ui";
-
-/** The most boards one design holds (`canvasformat.MaxBoards`). */
-export const DESIGN_MAX_BOARDS = 64;
-
-/** The most a board's brief holds, in bytes (`canvasformat.MaxBriefBytes`). */
-export const BOARD_BRIEF_MAX_BYTES = 2000;
 
 /** The room left between two boards laid side by side, in canvas pixels. */
 export const BOARD_GAP = 120;

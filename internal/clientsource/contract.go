@@ -95,6 +95,8 @@ var contract = []Entry{
 	{"PHASE_BANDS", ReadLiteral, "internal/api/queries.TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto"},
 	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
 	{"WakeKind", ReadUnion, "internal/api/queries.TestTheDashboardSaysEveryWakeKind"},
+	{"SERIES_MAX_GROUPS", ReadScalar,
+		"internal/api/queries.TestTheSpendScreenAsksForNoMoreBandsThanTheEngineNames"},
 
 	// work.ts
 	{"WorkViewShape", ReadUnion, "internal/worklet.TestEveryViewShapeTheEngineMintsHasARenderer"},
@@ -112,6 +114,10 @@ var contract = []Entry{
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_OPTION_MAX_BYTES", ReadScalar,
+		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"DECISION_MIN_OPTIONS", ReadScalar,
+		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"DECISION_MAX_OPTIONS", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
@@ -131,6 +137,7 @@ var contract = []Entry{
 	{"MAX_PURPOSE_CHARS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_MESSAGE_LINKS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_READ_PAGE", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
@@ -321,6 +328,8 @@ var contract = []Entry{
 
 	// actions.ts
 	{"ACTIONS", ReadLiteral, "internal/api/operator.TestEveryActionTheDashboardTakesIsOneTheActTransportServes"},
+	{"PAUSE_REASON_MAX_RUNES", ReadScalar,
+		"internal/agent/builtin.TestTheDashboardBoundsAPauseReasonAtTheEnginesCap"},
 
 	// domains.ts
 	{"SESSION_QUERIES", ReadLiteral, "internal/api/queries.TestEverySessionQueryTakesAFreshnessFloor"},
@@ -434,6 +443,7 @@ var contract = []Entry{
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 	{"TOKEN_MAX_DAYS", ReadScalar,
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"DIRECTORY_PAGE_MAX", ReadScalar, "internal/api/iamapi.TestTheDashboardPagesTheDirectoryAtTheEnginesSize"},
 	{"FINDING_KINDS", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardWordsEveryFindingKindInTheEnginesOrder"},
 	{"HumanSeatsAnswer", ReadInterface,
@@ -459,6 +469,12 @@ var contract = []Entry{
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"ChatBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"CodeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+
+	// objectids.ts
+	{"OBJECT_ID_HEX_DIGITS", ReadScalar, "internal/code.TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo"},
+	{"OBJECT_ID_MIN_ABBREV_DIGITS", ReadScalar,
+		"internal/code.TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo"},
+	{"CODE_SEARCH_TRIGRAM_BYTES", ReadScalar, "internal/codeindex.TestTheDashboardSearchesCodeAtTheTrigramsWidth"},
 
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
@@ -522,6 +538,7 @@ var contract = []Entry{
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
 	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
 	{"SEARCH_TERM_MIN", ReadScalar, "internal/textindex.TestTheDashboardsShortestSearchWordIsTheIndexs"},
+	{"TURNS_MAX_DAYS", ReadScalar, "internal/api/queries.TestTheTurnsTabSaysTheWindowTheEngineReads"},
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
@@ -704,6 +721,7 @@ var contract = []Entry{
 	{"PAGE_BODY_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_LABELS_MAX", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LIST_MAX", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_CHANGES", ReadLiteral, "internal/doclet.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
 	{"PAGE_LIST_ORDERS", ReadLiteral,
 		"internal/doclet.TestTheDashboardAsksForExactlyTheOrdersAListingIsReadIn"},
@@ -734,6 +752,8 @@ var contract = []Entry{
 	{"DASHBOARD_MAX_WIDGETS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_MAX_DATASETS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_MAX_TABLE_COLUMNS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
+	{"DASHBOARD_SPEC_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
+	{"DASHBOARD_FORMAT_VERSION", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"ARTIFACT_CAPABILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"SHAREABLE_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
@@ -754,6 +774,17 @@ var contract = []Entry{
 	{"DECK_SLIDE_TITLE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DECK_TITLE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DECK_NOTES_MAX_RUNES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"CANVAS_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"CANVAS_VERSION", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"DECK_INDEX_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"DECK_SLIDES_DIR", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"DECK_COVER_LAYOUT", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"DOC_INDEX_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
+	{"CANVAS_MIN_SIDE", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"CANVAS_MAX_SIDE", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"CANVAS_MAX_NOTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"DESIGN_MAX_BOARDS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"BOARD_BRIEF_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_TRASH_RETENTION_DAYS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_FOLDER_VISIBILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_FOLDER_NAME_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
@@ -763,6 +794,7 @@ var contract = []Entry{
 
 	// brand.ts
 	{"BRAND_NAME_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"BRAND_ENTRY_PATH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes"},
 	{"BRAND_TAGLINE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"BRAND_VOICE_SUMMARY_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"BRAND_VOICE_MAX_EXAMPLES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
@@ -794,6 +826,7 @@ var contract = []Entry{
 	{"DATA_BATCH_MAX_OPS", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
 	{"DATA_COLLECTIONS_MAX", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
 	{"DATA_COLUMNS_MAX", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
+	{"DATA_LABEL_MAX_BYTES", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps"},
 	{"COLLECTION_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"RESERVED_COLLECTIONS", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"FIELD_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},

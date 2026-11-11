@@ -24,21 +24,14 @@ import type {
   DashboardWidget,
 } from "~/protocol/index.ts";
 import {
+  ARTIFACT_TITLE_MAX_BYTES,
   DASHBOARD_COLUMNS,
+  DASHBOARD_FORMAT_VERSION,
   DASHBOARD_MAX_DATASETS,
   DASHBOARD_MAX_TABLE_COLUMNS,
   DASHBOARD_MAX_WIDGETS,
 } from "~/contract/artifacts.ts";
 import { wordsOf } from "~/lib/artifacts/dashboard.ts";
-
-/** Where a version's spec lives (`dashspec.EntryPath`). */
-export const SPEC_PATH = "dashboard.json";
-
-/** The spec format this build writes (`dashspec.FormatVersion`). */
-const FORMAT_VERSION = 1;
-
-/** The most bytes a widget's or a dataset's title holds (`artifacts.MaxTitleBytes`). */
-const MAX_TITLE_BYTES = 120;
 
 // ---- the sources, in a person's words ------------------------------------ //
 
@@ -505,13 +498,16 @@ export function datasetOf(
   };
 }
 
-/** Text cut to at most `MAX_TITLE_BYTES` of UTF-8 at a character boundary. */
+/**
+ * Text cut to at most `ARTIFACT_TITLE_MAX_BYTES` of UTF-8 at a character
+ * boundary: what a widget's or a dataset's title holds (`artifacts.MaxTitleBytes`).
+ */
 function clip(text: string): string {
   const enc = new TextEncoder();
-  if (enc.encode(text).length <= MAX_TITLE_BYTES) return text;
+  if (enc.encode(text).length <= ARTIFACT_TITLE_MAX_BYTES) return text;
   let out = "";
   for (const ch of text) {
-    if (enc.encode(out + ch + "…").length > MAX_TITLE_BYTES) break;
+    if (enc.encode(out + ch + "…").length > ARTIFACT_TITLE_MAX_BYTES) break;
     out += ch;
   }
   return `${out}…`;
@@ -592,7 +588,7 @@ export function composeSpec(
     });
   }
   return {
-    v: FORMAT_VERSION,
+    v: DASHBOARD_FORMAT_VERSION,
     title: title.trim(),
     datasets,
     widgets: resolved.map((r) => ({ ...r.widget, dataset: ids.get(r.dataset.key) ?? "" })),

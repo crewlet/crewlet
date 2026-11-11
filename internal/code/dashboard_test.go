@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -443,6 +444,32 @@ func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
 	}
 	if want := strconv.Itoa(code.MaxBlameLines); got != want {
 		t.Errorf("the dashboard's CODE_MAX_BLAME_LINES is %s, want the engine's code.MaxBlameLines, %s", got, want)
+	}
+}
+
+// THE DASHBOARD NAMES AN OBJECT AS THE ENGINE'S REPOSITORIES DO: a commit's
+// page is addressed by a whole id of [gitref.OIDHexLen] digits and git's null
+// id is that many zeros, and a row prints the fewest digits the engine takes
+// back ([code.MinAbbrevDigits]), so what a person copies out of a row is an id
+// a tool resolves. A width moved on one side alone is a commit page no address
+// reaches, or a printed id the engine refuses.
+//
+// Mutation: move either figure on either side and this fails.
+func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string]int{
+		"OBJECT_ID_HEX_DIGITS":        gitref.OIDHexLen,
+		"OBJECT_ID_MIN_ABBREV_DIGITS": code.MinAbbrevDigits,
+	} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != strconv.Itoa(engine) {
+			t.Errorf("the dashboard's %s is %s and the engine's is %d: change it in "+
+				"contract/objectids.ts", name, got, engine)
+		}
 	}
 }
 

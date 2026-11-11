@@ -21,17 +21,7 @@
  */
 
 import type { CanvasBoardItem, CanvasBoardNote, CanvasNoteColor } from "@crewlethq/ui";
-
-/** Where a design keeps its canvas (`canvasformat.Path`). */
-export const CANVAS_PATH = "canvas.json";
-
-/** The canvas format this build reads and writes (`canvasformat.Version`). */
-export const CANVAS_VERSION = 1;
-
-/** The bounds the engine holds a frame to (`canvasformat.MinSide`, `MaxSide`, `MaxNotes`). */
-export const CANVAS_MIN_SIDE = 40;
-export const CANVAS_MAX_SIDE = 8000;
-export const CANVAS_MAX_NOTES = 200;
+import { CANVAS_MAX_NOTES, CANVAS_PATH, CANVAS_VERSION } from "~/contract/artifacts.ts";
 
 /** A board of the canvas, keyed by its page's path. */
 export interface CanvasBoardFrame {

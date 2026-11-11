@@ -80,10 +80,13 @@ import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { createDesign } from "~/lib/artifacts/api.ts";
-import { CANVAS_MAX_SIDE, CANVAS_MIN_SIDE } from "~/lib/artifacts/canvas.ts";
 import {
   BOARD_BRIEF_MAX_BYTES,
+  CANVAS_MAX_SIDE,
+  CANVAS_MIN_SIDE,
   DESIGN_MAX_BOARDS,
+} from "~/contract/artifacts.ts";
+import {
   FRAME_PRESETS,
   STARTER_LAYOUTS,
   addBoard,

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/datasetsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -134,6 +135,11 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
 		"DECK_TITLE_MAX_BYTES":           slideformat.MaxTitleBytes,
 		"DECK_NOTES_MAX_RUNES":           slideformat.MaxNotesRunes,
+		"CANVAS_MIN_SIDE":                canvasformat.MinSide,
+		"CANVAS_MAX_SIDE":                canvasformat.MaxSide,
+		"CANVAS_MAX_NOTES":               canvasformat.MaxNotes,
+		"DESIGN_MAX_BOARDS":              canvasformat.MaxBoards,
+		"BOARD_BRIEF_MAX_BYTES":          canvasformat.MaxBriefBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
 		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
@@ -164,6 +170,40 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
 				"%s to the engine's figure", name, client, engine, contractFile(name))
+		}
+	}
+}
+
+// THE DASHBOARD NAMES EACH FORMAT'S FILES AS THE ENGINE DOES: the editors read
+// and write a version's files by these names — a design's canvas, a deck's
+// index and slides, a doc's index, a brand kit's entry — the design's editor
+// refuses a canvas of any version but the engine's, and a plan's cover is the
+// layout whose title is the deck's own. A name moved on one side alone is
+// every such artifact opening as unreadable, or a save written beside the file
+// the engine reads.
+func TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	if got, want := slideformat.SlidePath("plan"), slideformat.SlidesDir+"plan.html"; got != want {
+		t.Errorf("a slide's file is %q and lib/artifacts/deck.ts writes it as %q: "+
+			"change slidePath there to the engine's", got, want)
+	}
+	for name, engine := range map[string]string{
+		"CANVAS_PATH":       canvasformat.Path,
+		"CANVAS_VERSION":    strconv.Itoa(canvasformat.Version),
+		"DECK_INDEX_PATH":   slideformat.IndexPath,
+		"DECK_SLIDES_DIR":   slideformat.SlidesDir,
+		"DECK_COVER_LAYOUT": slideformat.LayoutCover,
+		"DOC_INDEX_PATH":    docindex.IndexPath,
+		"BRAND_ENTRY_PATH":  brandformat.EntryPath,
+	} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != engine {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change it in %s",
+				name, got, engine, contractFile(name))
 		}
 	}
 }
@@ -370,10 +410,14 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds,
 		"DASHBOARD_MAX_WIDGETS":         artifacts.MaxDashboardWidgets,
 		"DASHBOARD_MAX_DATASETS":        artifacts.MaxDashboardDatasets,
-		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns} {
+		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns,
+		"DASHBOARD_FORMAT_VERSION":      dashspec.FormatVersion} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
 		}
+	}
+	if got, err := clientsource.Scalar(tree, "DASHBOARD_SPEC_PATH"); err != nil || got != dashspec.EntryPath {
+		t.Errorf("DASHBOARD_SPEC_PATH is %q (%v), want %q", got, err, dashspec.EntryPath)
 	}
 }

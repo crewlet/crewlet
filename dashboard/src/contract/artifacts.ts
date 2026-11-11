@@ -135,6 +135,50 @@ export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
 export const DECK_TITLE_MAX_BYTES = 120;
 /** See [DECK_TITLE_MAX_BYTES]. */
 export const DECK_NOTES_MAX_RUNES = 4000;
+
+/**
+ * Where a design keeps its canvas (`canvasformat.Path`), and the version of
+ * the canvas format the engine reads and writes (`canvasformat.Version`): the
+ * design's editor reads the file there and refuses a canvas of another
+ * version rather than misread it. Held by
+ * `internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes`.
+ */
+export const CANVAS_PATH = "canvas.json";
+/** See [CANVAS_PATH]. */
+export const CANVAS_VERSION = 1;
+
+/**
+ * The files a deck and a tabbed doc keep, by the engine's names: a deck's
+ * index (`slideformat.IndexPath`), where its slides' files sit, each
+ * `<id>.html` (`slideformat.SlidesDir`, as `slideformat.SlidePath` names one),
+ * the layout whose title is the deck's own (`slideformat.LayoutCover`), and a
+ * doc's index (`docindex.IndexPath`). The editors read and write a version's
+ * files at these. Held, with [CANVAS_PATH], by
+ * `internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes`.
+ */
+export const DECK_INDEX_PATH = "deck.json";
+/** See [DECK_INDEX_PATH]. */
+export const DECK_SLIDES_DIR = "slides/";
+/** See [DECK_INDEX_PATH]. */
+export const DECK_COVER_LAYOUT = "cover";
+/** See [DECK_INDEX_PATH]. */
+export const DOC_INDEX_PATH = "doc.json";
+
+/**
+ * The bounds the engine holds a design's canvas to: a frame's sides in pixels
+ * (`canvasformat.MinSide`, `MaxSide`), its notes (`MaxNotes`), its boards
+ * (`MaxBoards`) and a board's brief in UTF-8 bytes (`MaxBriefBytes`). The
+ * design's create page and editor refuse past each before the press.
+ */
+export const CANVAS_MIN_SIDE = 40;
+/** See [CANVAS_MIN_SIDE]. */
+export const CANVAS_MAX_SIDE = 8000;
+/** See [CANVAS_MIN_SIDE]. */
+export const CANVAS_MAX_NOTES = 200;
+/** See [CANVAS_MIN_SIDE]. */
+export const DESIGN_MAX_BOARDS = 64;
+/** See [CANVAS_MIN_SIDE]. */
+export const BOARD_BRIEF_MAX_BYTES = 2000;
 /**
  * How many days a trashed artifact is kept before it is deleted for good
  * (`artifacts.TrashRetention`): the date every trash sentence names.
@@ -217,6 +261,13 @@ export const DATA_COLLECTIONS_MAX = 64;
 
 /** The most columns one collection declares (`artifacts.MaxColumns`). */
 export const DATA_COLUMNS_MAX = 128;
+
+/**
+ * The most a column's or an option's label holds, and a collection's title,
+ * in UTF-8 bytes (`artifactdata.MaxLabelBytes`): the sheet's create page says
+ * so on the name before the press.
+ */
+export const DATA_LABEL_MAX_BYTES = 120;
 
 /**
  * A collection's name (`artifactdata.ValidCollectionName`): a lowercase
@@ -645,3 +696,9 @@ export const DASHBOARD_MAX_DATASETS = 32;
 
 /** The most columns one table widget draws (`artifacts.MaxTableColumns`). */
 export const DASHBOARD_MAX_TABLE_COLUMNS = 16;
+
+/** Where a board version's spec lives (`dashspec.EntryPath`). */
+export const DASHBOARD_SPEC_PATH = "dashboard.json";
+
+/** The spec format the dashboard writes (`dashspec.FormatVersion`). */
+export const DASHBOARD_FORMAT_VERSION = 1;

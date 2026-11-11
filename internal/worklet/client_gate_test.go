@@ -276,7 +276,8 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 // figures agree: a dashboard cap above the engine's lets through a value the
 // engine refuses, and one below it refuses one the engine would take — which
 // the Save view dialog did, with a `maxLength` of 80 against 128, cutting a
-// pasted name in the browser where nobody saw it.
+// pasted name in the browser where nobody saw it. The Ask dialog's option rows
+// are held to the engine's fewest and most options the same way.
 func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
@@ -285,6 +286,8 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"VIEW_NAME_MAX_BYTES":         worklet.MaxViewName,
 		"DECISION_QUESTION_MAX_BYTES": decision.MaxQuestion,
 		"DECISION_OPTION_MAX_BYTES":   decision.MaxOptionLabel,
+		"DECISION_MIN_OPTIONS":        decision.MinOptions,
+		"DECISION_MAX_OPTIONS":        decision.MaxOptions,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -295,7 +298,7 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 			t.Fatalf("%s is %q, which is not an integer: %v", name, raw, err)
 		}
 		if client != engine {
-			t.Errorf("the dashboard bounds %s at %d bytes and the engine at %d — "+
+			t.Errorf("the dashboard bounds %s at %d and the engine at %d — "+
 				"change it in contract/work.ts to the engine's figure", name, client, engine)
 		}
 	}

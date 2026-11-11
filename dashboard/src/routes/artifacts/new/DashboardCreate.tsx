@@ -68,7 +68,7 @@ import {
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
-import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
+import { DASHBOARD_COLUMNS, DASHBOARD_SPEC_PATH } from "~/contract/artifacts.ts";
 import { createFromUpload, readCatalogue, uploadTexts } from "~/lib/artifacts/api.ts";
 import { refreshWords } from "~/lib/artifacts/dashboard.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -98,7 +98,6 @@ import {
 } from "./AskAgent.tsx";
 import {
   EMPTY_DRAFT,
-  SPEC_PATH,
   STARTERS,
   composeSpec,
   datasetOf,
@@ -301,7 +300,7 @@ export function DashboardCreate() {
     if (!brought) {
       setUploading(true);
       try {
-        const got = await uploadTexts(null, [{ path: SPEC_PATH, text }], newActOpID());
+        const got = await uploadTexts(null, [{ path: DASHBOARD_SPEC_PATH, text }], newActOpID());
         brought = { text, ...got };
         uploaded.current = brought;
       } catch (err) {
@@ -317,7 +316,7 @@ export function DashboardCreate() {
         title: name,
         upload: brought.upload,
         files: brought.files,
-        entry: SPEC_PATH,
+        entry: DASHBOARD_SPEC_PATH,
         ...(workItem ? { workItem } : {}),
         ...(folder ? { folder } : {}),
       }),

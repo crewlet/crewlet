@@ -44,7 +44,7 @@ import {
 import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
-import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_LABEL_MAX_BYTES, DOC_INDEX_PATH } from "~/contract/artifacts.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { clashesOf } from "~/lib/merge.ts";
@@ -53,7 +53,6 @@ import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
 import {
-  DOC_INDEX,
   addTab,
   addTabProblem,
   docChanged,
@@ -215,7 +214,7 @@ export function DocEditor({
       const indexChanges = c.index || c.added.length > 0 || c.removed.length > 0;
       const indexRaw =
         against.indexed && indexChanges
-          ? await versionText(detail.id, against.base, DOC_INDEX)
+          ? await versionText(detail.id, against.base, DOC_INDEX_PATH)
           : null;
       const plan = docPublishPlan(against, d, indexRaw);
       const brought =

@@ -96,6 +96,7 @@
  */
 
 import { safeHref } from "@crewlethq/ui";
+import { CHANNEL_NAME_PATTERN } from "~/contract/chat.ts";
 import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import type { LinkHost, LinkHostKind } from "~/contract/integrations.ts";
 import { overlapsAny, writtenOutSpans } from "./writtenOut.ts";
@@ -179,10 +180,12 @@ const COLOUR = /(?<![\p{L}\p{N}_&#/-])#([0-9a-f]{6}|[0-9a-f]{3})(?![\p{L}\p{N}_-
  * of it.
  */
 const inner = (grammar: string): string => grammar.slice(1, -1);
+/** A room's name, as the engine holds one (`CHANNEL_NAME_PATTERN`, bounded in itself). */
+const ROOM_NAME = inner(CHANNEL_NAME_PATTERN);
 /** A seat's handle, as the engine holds one (`SEAT_HANDLE`, bounded by `MAX_LOGIN`). */
 const HANDLE = inner(SEAT_HANDLE);
-/** A room's name after its `#` (`chatlet`'s name grammar), at a colour's boundaries. */
-const ROOM = /(?<![\p{L}\p{N}_&#/-])#([a-z0-9][a-z0-9_-]{0,63})(?![\p{L}\p{N}_-])/giu;
+/** A room's name after its `#`, at a colour's boundaries. */
+const ROOM = new RegExp(String.raw`(?<![\p{L}\p{N}_&#/-])#(${ROOM_NAME})(?![\p{L}\p{N}_-])`, "giu");
 const ADDRESS = /\bhttps?:\/\/[^\s<>"'`]+/giu;
 const REFERENCE =
   /(?<![\p{L}\p{N}_./@-])((?:[A-Za-z0-9][\w.-]*\/)+[A-Za-z0-9][\w.-]*?)([#!@])([0-9a-f]{7,40}|\d+)(?![\p{L}\p{N}_-])/gu;
@@ -252,7 +255,7 @@ export interface RoomSet {
 export const NO_ROOMS: RoomSet = new Set<string>();
 
 /** A code span that is one room's `#name` and nothing else. */
-const ROOM_ONLY = /^#([a-z0-9][a-z0-9_-]{0,63})$/iu;
+const ROOM_ONLY = new RegExp(`^#(${ROOM_NAME})$`, "iu");
 
 /**
  * Whether a code span holds one of the reader's rooms' `#name` and nothing

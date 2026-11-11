@@ -33,6 +33,7 @@ import { artifactPath, resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
+import { CODE_SEARCH_TRIGRAM_BYTES } from "~/contract/objectids.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
@@ -115,12 +116,13 @@ export const ARTIFACT_HITS = 8;
 export const CODE_HITS = 8;
 
 /**
- * The shortest term the Code scope asks the engine to search: THREE, because
- * Gitlet's plan needs one clause of three bytes or more (its trigrams)
- * and refuses `bad_params` below it — a refusal per keystroke a reader would
- * read as a broken search.
+ * The shortest term the Code scope asks the engine to search, in characters:
+ * a trigram's width, because Gitlet's plan needs one clause of that many bytes
+ * or more and refuses `bad_params` below it — a refusal per keystroke a reader
+ * would read as a broken search. A character is at least a byte, so a term
+ * this long always has one.
  */
-export const CODE_SEARCH_MIN = 3;
+export const CODE_SEARCH_MIN = CODE_SEARCH_TRIGRAM_BYTES;
 export const ALL_ROWS = 3;
 
 /**

@@ -88,3 +88,10 @@ export type BudgetState = "ok" | "near" | "refusing";
  */
 export type WakeKind =
   "chat_message" | "work_item" | "schedule" | "colleague_ask" | "code_change" | "alarm";
+
+/**
+ * The most bands one series answer names (`tokens.MaxSeriesGroups`): past it
+ * the engine refuses the ask. Held by
+ * `internal/api/queries.TestTheSpendScreenAsksForNoMoreBandsThanTheEngineNames`.
+ */
+export const SERIES_MAX_GROUPS = 20;

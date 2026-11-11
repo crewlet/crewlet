@@ -48,8 +48,8 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
 import { createFromStarter, readSlidesStarters } from "~/lib/artifacts/api.ts";
+import { DECK_COVER_LAYOUT } from "~/contract/artifacts.ts";
 import {
-  COVER_LAYOUT,
   addAfter,
   duplicate,
   planHold,
@@ -703,7 +703,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
                   />
                 )}
               </FormField>
-              {current.layout === COVER_LAYOUT ? (
+              {current.layout === DECK_COVER_LAYOUT ? (
                 <p className="slides-create-note">The cover shows the deck's title.</p>
               ) : (
                 <FormField label="Slide title" error={slideWrong}>
@@ -761,7 +761,7 @@ function ThemeCover({
 }) {
   const slide = previewSlide(
     theme,
-    { key: `theme-${theme.id}`, layout: COVER_LAYOUT, title: "" },
+    { key: `theme-${theme.id}`, layout: DECK_COVER_LAYOUT, title: "" },
     title || theme.name,
     coverLayout,
   );
@@ -774,4 +774,9 @@ function ThemeCover({
 }
 
 /** The cover's layout as the plan reads it: its title is the deck's. */
-const coverLayout: DeckLayout = { id: COVER_LAYOUT, name: "Cover", description: "", heading: "" };
+const coverLayout: DeckLayout = {
+  id: DECK_COVER_LAYOUT,
+  name: "Cover",
+  description: "",
+  heading: "",
+};

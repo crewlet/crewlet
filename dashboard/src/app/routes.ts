@@ -40,6 +40,7 @@
  * party's string and `servers` is a legal one.
  */
 
+import { OBJECT_ID_HEX_DIGITS } from "~/contract/objectids.ts";
 import { isMakeKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import {
   framelessOf,
@@ -121,7 +122,7 @@ export const CHANGE_NUMBER_SHAPE = /^[1-9][0-9]{0,15}$/;
  * the object an abbreviation finds can change as objects arrive, and a page
  * is an address that says the same thing tomorrow.
  */
-export const COMMIT_ID_SHAPE = /^[0-9a-f]{40}$/;
+export const COMMIT_ID_SHAPE = new RegExp(`^[0-9a-f]{${OBJECT_ID_HEX_DIGITS}}$`);
 
 /** My work's sections below its queue. */
 export type MeSection =

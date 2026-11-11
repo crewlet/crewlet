@@ -27,7 +27,11 @@ import {
   type SheetPerson,
   type SheetValueContext,
 } from "@crewlethq/ui";
-import { DATA_BATCH_MAX_OPS, DATA_COLUMNS_MAX } from "~/contract/artifacts.ts";
+import {
+  DATA_BATCH_MAX_OPS,
+  DATA_COLUMNS_MAX,
+  DATA_LABEL_MAX_BYTES,
+} from "~/contract/artifacts.ts";
 import type {
   CollectionPreset,
   ColumnType,
@@ -53,9 +57,6 @@ export interface SheetDraft {
   provisional: readonly string[];
   rows: readonly DraftRow[];
 }
-
-/** The most a column or option name holds, in bytes (`artifactdata.MaxLabelBytes`). */
-export const DRAFT_LABEL_MAX_BYTES = 120;
 
 /** How many empty rows a draft with none shows, so the grid reads as a sheet to fill in. */
 const EMPTY_ROWS = 3;
@@ -295,8 +296,8 @@ export function columnNameProblem(
   const name = label.trim();
   if (name === "") return "Give the column a name.";
   const bytes = utf8Bytes(name);
-  if (bytes > DRAFT_LABEL_MAX_BYTES) {
-    return `That name is ${overWords(name, DRAFT_LABEL_MAX_BYTES)}.`;
+  if (bytes > DATA_LABEL_MAX_BYTES) {
+    return `That name is ${overWords(name, DATA_LABEL_MAX_BYTES)}.`;
   }
   const clash = columnsOf(draft).find(
     (c) => c.key !== key && (c.label ?? c.key).trim().toLowerCase() === name.toLowerCase(),
@@ -316,8 +317,8 @@ export function draftProblem(draft: SheetDraft): string | undefined {
     const name = columnNameProblem(draft, column.key, column.label ?? column.key);
     if (name) return `${column.label || "A column"}: ${name}`;
     for (const option of column.options ?? []) {
-      if (utf8Bytes(option.label) > DRAFT_LABEL_MAX_BYTES) {
-        return `${column.label}: the choice “${option.label.slice(0, 24)}…” is longer than ${DRAFT_LABEL_MAX_BYTES} bytes.`;
+      if (utf8Bytes(option.label) > DATA_LABEL_MAX_BYTES) {
+        return `${column.label}: the choice “${option.label.slice(0, 24)}…” is longer than ${DATA_LABEL_MAX_BYTES} bytes.`;
       }
     }
   }
@@ -453,7 +454,7 @@ function headerNames(header: readonly string[] | undefined, width: number): stri
   const seen = new Set<string>();
   for (let i = 0; i < width; i++) {
     let name = (header?.[i] ?? "").trim().replace(/\s+/g, " ");
-    while (utf8Bytes(name) > DRAFT_LABEL_MAX_BYTES) name = name.slice(0, -1);
+    while (utf8Bytes(name) > DATA_LABEL_MAX_BYTES) name = name.slice(0, -1);
     if (name === "") name = `Column ${i + 1}`;
     let unique = name;
     for (let n = 2; seen.has(unique.toLowerCase()); n++) unique = `${name} ${n}`;
