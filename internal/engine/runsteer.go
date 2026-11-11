@@ -456,11 +456,16 @@ func readsOf(status string) steer.Reads {
 
 // briefNotes is notes a launch's brief carries, sealed for the record the
 // launch opens and marked read at the brief — the launch names the job
-// ([sandbox.LaunchRequest.BriefNotes]).
-func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]sandbox.RunNote, error) {
+// ([sandbox.LaunchRequest.BriefNotes]) — each one a lost take's settle handed
+// the brief of from, the segment that briefed, naming that take, whose read
+// the launch's write takes over ([rowSource.lostTakes]). from is nil for a
+// first segment, whose brief's notes are its box's.
+func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note, from *rowSource,
+) ([]sandbox.RunNote, error) {
 	if s == nil || len(notes) == 0 {
 		return nil, nil
 	}
+	lost := from.lostTakes(notes)
 	out := make([]sandbox.RunNote, 0, len(notes))
 	for _, n := range notes {
 		sealed, err := s.seal(turnID, n)
@@ -469,6 +474,7 @@ func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]
 		}
 		sealed.Read = &sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: round,
 			Round: 1, Boundary: string(types.SteerBoundaryBrief)}
+		sealed.LostTake = lost[n.ID]
 		out = append(out, sealed)
 	}
 	return out, nil
@@ -808,7 +814,8 @@ type rowSource struct {
 	lostAt time.Time
 	// briefed is the take each note a relaunch's brief was handed from a
 	// settle came from, by note id: a launch that fails before its write hands
-	// the brief back, and its takes with it ([rowSource.Return]).
+	// the brief back, and its takes with it ([rowSource.Return]), and one that
+	// writes takes each take's read over ([rowSource.lostTakes]).
 	briefed map[string]string
 }
 
@@ -981,9 +988,10 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 
 // Brief is what a relaunch's brief takes of the turn's notes
 // ([steer.Briefing]): the notes the segment's lost takes recorded, where their
-// settle answers now ([rowSource.settleLost]), then the waiting notes that open
-// — a peek, which the launch's own write records read — and every note the
-// record marks unanswered, by id, read off the same record.
+// settle answers now ([rowSource.settleLost]) — which the launch's write records
+// read by its job in their take's place ([rowSource.lostTakes]) — then the
+// waiting notes that open — a peek, which the launch's own write records read —
+// and every note the record marks unanswered, by id, read off the same record.
 //
 // THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
 // read them: a take's settle is made off the path that took, and can mark a
@@ -1026,6 +1034,30 @@ func unansweredNotes(run sandbox.PendingRun) []string {
 	for _, n := range run.Steer.Notes {
 		if n.Read != nil && n.Read.Unanswered {
 			out = append(out, n.ID)
+		}
+	}
+	return out
+}
+
+// lostTakes is the take each of notes was handed to a relaunch's brief from,
+// by note id, where a lost take's settle handed it ([rowSource.Brief]) — for
+// the launch's write, which records such a note read by the job it opens in
+// that take's place ([sandbox.RunNote.LostTake]): the take's reader never had
+// the note, and the brief is the first to tell it. Nil for a nil source, whose
+// brief took none so.
+func (r *rowSource) lostTakes(notes []steer.Note) map[string]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out map[string]string
+	for _, n := range notes {
+		if take, ok := r.briefed[n.ID]; ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[n.ID] = take
 		}
 	}
 	return out

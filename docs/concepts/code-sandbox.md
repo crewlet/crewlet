@@ -1243,7 +1243,9 @@ it, in one of two ways:
   that settle no more than it answered the take, the take is kept by the
   segment reviewing the run and settled again at its next round, or at the
   brief of a relaunch it makes, handing over what it recorded to whichever the
-  store answers first; meanwhile, for thirty seconds, it stands for a note
+  store answers first — a brief's launch then records the note read by the job
+  it opens, in the take's place, so the note is that job's as every other note
+  its brief carries is; meanwhile, for thirty seconds, it stands for a note
   waiting, so a round asking for tools ends and the next one opens with the
   note. Only a take the store has still not answered when the segment ends is
   settled off its path, and marked.

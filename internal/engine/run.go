@@ -3877,7 +3877,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

@@ -42,6 +42,8 @@ var noteCases = []struct {
 	{"ALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob",
 		testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob},
 	{"AResetKeepsTheTurnsNotesAndClearsPulled", testAResetKeepsTheTurnsNotesAndClearsPulled},
+	{"ALaunchTakesOverTheReadOfTheLostTakeItsBriefNames",
+		testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames},
 	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
 	{"EveryWriteThatRecordsAReadTakesTheNextPlace", testEveryWriteThatRecordsAReadTakesTheNextPlace},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
@@ -486,6 +488,67 @@ func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.Pending
 	if late := byID["late"]; late.Seq != 4 || late.Read == nil || late.Read.Launch != relaunched.LaunchID ||
 		!bytes.Equal(late.Sealed, []byte("sealed:late")) {
 		t.Errorf("the brief's own note is %+v, want it added read under the new job", late)
+	}
+}
+
+// A LAUNCH TAKES OVER THE READ OF THE LOST TAKE ITS BRIEF NAMES. A take whose
+// write landed and whose answer was lost left its notes read by the record's
+// word, and its settle can hand them to a relaunch's brief instead — the first
+// step to tell them, the take's reader never having had them. So a brief's note
+// naming that take (sandbox.RunNote.LostTake) is recorded read by the job the
+// write opens, in the take's place and at the write's own place among the reads,
+// and the ending of that job, should it never start, reports it with the rest of
+// its brief. A note another take read is left as that take read it, whatever
+// take the brief names.
+//
+// Mutation: leave every note the record holds read as it was, or take over its
+// read whatever take recorded it, and the case goes red.
+func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-lost-brief"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-lost-brief", id)
+	}
+	if _, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "lost", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "answered", "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, "t-lost-brief")
+
+	again := run("t-lost-brief")
+	brief := &sandbox.NoteRead{Phase: "execute", Iteration: 2, Round: 1, Boundary: "brief"}
+	again.BriefNotes = []sandbox.RunNote{
+		{ID: "n-1", Read: brief, LostTake: "lost"},
+		{ID: "n-2", Read: brief, LostTake: "lost"},
+		{ID: "n-3", Read: brief},
+	}
+	relaunched, err := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	row := mustGet(t, s, "t-lost-brief")
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range row.Steer.Notes {
+		byID[n.ID] = n
+	}
+	for _, id := range []string{"n-1", "n-3"} {
+		if read := byID[id].Read; read == nil || read.Launch != relaunched.LaunchID || read.Boundary != "brief" ||
+			read.Iteration != 2 || read.Take != "" || read.Order != row.Steer.Reads {
+			t.Errorf("note %s is read %+v, want it read by job %s's brief, at the write's place %d",
+				id, read, relaunched.LaunchID, row.Steer.Reads)
+		}
+	}
+	if read := byID["n-2"].Read; read == nil || read.Take != "answered" || read.Launch != launch {
+		t.Errorf("a note another take read is read %+v, want it left as take answered read it", read)
+	}
+	var unread []string
+	for _, n := range row.UnreadNotes() {
+		unread = append(unread, n.ID)
+	}
+	if !slices.Equal(unread, []string{"n-1", "n-3"}) {
+		t.Errorf("the ending of the job that never started reports %v, want every note its brief took", unread)
 	}
 }
 

@@ -378,7 +378,7 @@ func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnI
 	brief, handed []steer.Note,
 ) sandbox.PendingRun {
 	t.Helper()
-	briefed, err := runs.briefNotes(turnID, 1, brief)
+	briefed, err := runs.briefNotes(turnID, 1, brief, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

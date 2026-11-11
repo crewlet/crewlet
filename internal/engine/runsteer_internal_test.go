@@ -759,7 +759,7 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 			},
 			LaunchFailed: func(t *testing.T, notes []steer.Note) {
 				t.Helper()
-				sealed, err := runs.briefNotes("run-1", 2, notes)
+				sealed, err := runs.briefNotes("run-1", 2, notes, source)
 				if err != nil {
 					t.Fatal(err)
 				}

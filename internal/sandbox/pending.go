@@ -1889,7 +1889,9 @@ type PendingRun struct {
 	// as [PendingRun.Continues] is: the notes the job's brief carries, which
 	// the write that opens the job records read by it — a note the record
 	// holds already, and one it has never held (the turn's first segment's
-	// own), added already read. Never persisted as itself.
+	// own), added already read; and one a lost take's settle handed the
+	// brief, which names that take, read by the job in its place
+	// ([RunNote.LostTake]). Never persisted as itself.
 	BriefNotes []RunNote `json:"-"`
 
 	// HandedNotes is TRANSIENT as well: the notes the turn's first segment's
@@ -2401,7 +2403,10 @@ type PendingStore interface {
 	// job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY THE
 	// JOB THIS WRITE OPENS, in the same write — a note the row holds and one
 	// it has never held alike — so the job's own harness can never take them
-	// again. And the notes the turn's box still held
+	// again. A note the row holds read already is left as it was read, but for
+	// one the brief names the take that read it as lost ([RunNote.LostTake]):
+	// that take's reader never had it, and its read is the job's from this
+	// write. And the notes the turn's box still held
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
 	// it can land ahead of a note the box took first.

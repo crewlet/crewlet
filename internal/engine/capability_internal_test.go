@@ -197,7 +197,7 @@ func TestATurnsLaunchWritesItsToldRecordOnce(t *testing.T) {
 	told, turn := dispatchTurn(t, e, company)
 	launches, fail := 0, errors.New("the box could not be made")
 	l := e.agentRunFor(company, "ceo", &turnctx.Turn{RunID: turn, WorkKey: "wk-" + turn,
-		WorkSince: time.Now().UTC()}, nil, nil, told).(*agentLauncher)
+		WorkSince: time.Now().UTC()}, nil, nil, told, nil).(*agentLauncher)
 	l.run = func(context.Context, runner.AgentRunRequest) (runner.Launched, error) {
 		launches++
 		if launches == 1 {

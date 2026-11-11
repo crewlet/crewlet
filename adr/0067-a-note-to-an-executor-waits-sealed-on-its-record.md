@@ -122,7 +122,11 @@ settles ON ITS OWN PATH, in answer mode, and hands over what its write
 recorded, its round still waiting on it, never marking it. One whose settle the
 store does not answer either is kept by the segment that reviews the run and
 settled again, the same way, at its next round's take and at the brief of a
-relaunch it makes, which hand over what it recorded; meanwhile, for thirty
+relaunch it makes, which hand over what it recorded — the brief naming the take
+beside each such note (`sandbox.RunNote.LostTake`), so the launch's write
+records the note read by the job it opens in the take's place: the brief is the
+first to tell it, and the job's ending reports it where the job never started,
+and its execute record lists it where it did; meanwhile, for thirty
 seconds, it stands for a note waiting, so a round asking for tools ends and the
 next one opens with it (`runner.SteerSource.Waiting`). Only a take still
 unsettled when the segment ends is settled off its path, marked, as a hook's

@@ -733,14 +733,19 @@ func reviewRound(n int) steer.Reading {
 // settle no more than the take, the take is kept: it stands for a note waiting,
 // so a round asking for tools ends and the next opens; the next round's take,
 // or a relaunch's brief, settles it again and hands over what it recorded,
-// never marking it; a brief a failed launch hands back hands its take back too.
+// never marking it; a brief a failed launch hands back hands its take back too,
+// and the write of one that launches records the note read by the job it opens,
+// in the take's place — the brief is the first to tell it — so the job's ending
+// reports it where the job never started, with the rest of its brief, and a
+// resume carries it as that job's read, which the job's execute record lists.
 // Only a take still unsettled when the segment ends is handed off its path, and
 // marked unanswered.
 //
 // Mutation: hand the round nothing where the settle answers, settle a lost take
 // at no later round or brief, mark it where a later one answers, forget it when
-// a brief is handed back, report no note waiting while it is lost, or never
-// hand it off at the segment's end, and a case goes red.
+// a brief is handed back, seal a brief without the takes its notes came from,
+// report no note waiting while it is lost, or never hand it off at the
+// segment's end, and a case goes red.
 func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	t.Parallel()
 	setup := func(t *testing.T, failSettles int) (*sandbox.CoordStore, *runSteers, *rowSource) {
@@ -804,6 +809,53 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 		source.Return(t.Context(), brief.Notes)
 		handed(t, source.Take(t.Context(), reviewRound(2)), "the round after the failed launch")
 		answered(t, store)
+	})
+	t.Run("its settle failing once, a relaunch's brief settling it and its launch writing", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store, runs, source := setup(t, 1)
+		if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag the release", By: "founder"})
+		brief := source.Brief(ctx)
+		var briefed []string
+		for _, n := range brief.Notes {
+			briefed = append(briefed, n.ID)
+		}
+		if !slices.Equal(briefed, []string{"n-1", "n-2"}) {
+			t.Fatalf("the relaunch's brief carries %v, want the lost take's note, then the waiting one", briefed)
+		}
+		// THE LAUNCH'S WRITE, its brief sealed as its launcher seals it, and
+		// then the launch fails: its job never starts.
+		sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed := mustRow(t, store, "run-1")
+		relaunch := claimed
+		relaunch.BriefNotes = sealed
+		relaunched, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner,
+			Epoch: claimed.OwnerEpoch})
+		if err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		row := mustRow(t, store, "run-1")
+		for _, read := range runs.carried(row) {
+			if read.Phase != types.PhaseExecute || read.Iteration != 2 ||
+				read.Boundary != types.SteerBoundaryBrief || read.Launch != relaunched.LaunchID {
+				t.Errorf("note %s is carried read %+v, want it read by job %s's brief", read.ID, read.Reading,
+					relaunched.LaunchID)
+			}
+		}
+		var unread []string
+		for _, n := range row.UnreadNotes() {
+			unread = append(unread, n.ID)
+		}
+		if !slices.Equal(unread, []string{"n-1", "n-2"}) {
+			t.Errorf("the ending of the job that never started reports %v, want every note its brief carried",
+				unread)
+		}
 	})
 	t.Run("its settle failing until the segment ends", func(t *testing.T) {
 		t.Parallel()
@@ -1175,7 +1227,7 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 	if len(brief) != 2 || brief[0].ID != "n-before" || brief[1].ID != "n-parked" {
 		t.Fatalf("the relaunch's brief carries %+v, want both notes, oldest first", brief)
 	}
-	sealed, err := runs.briefNotes("run-1", 2, brief)
+	sealed, err := runs.briefNotes("run-1", 2, brief, source)
 	if err != nil {
 		t.Fatal(err)
 	}
