@@ -1693,11 +1693,14 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// `no_action` on a turn somebody was waiting on, and accepted a
 		// citation naming any surface at all, before the loop's later
 		// checks ever ran.
-		Reply:     resumedReply,
-		Publisher: e.backends.Queue,
-		Turn:      turnIdentity,
-		Sessions:  e.sessions,
-		Metrics:   e.metrics,
+		Reply: resumedReply,
+		// AND THE READ OF A PICKUP'S TYPED ANSWER, by the turn's own id:
+		// the run's writes over the bridge carry it (ADR-0122).
+		TypedAnswer: e.typedAnswerFor(in.Run.TurnID, resumedReply),
+		Publisher:   e.backends.Queue,
+		Turn:        turnIdentity,
+		Sessions:    e.sessions,
+		Metrics:     e.metrics,
 		// THE LAUNCHER, for the turn's LATER iterations rather than this
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on

@@ -343,18 +343,22 @@ func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding 
 			{Key: "agent_comments", Value: int64(ev.Work.AgentComments)}}, records)}
 }
 
+// personRequestsWithoutAsk is one finding per person agents asked for something
+// in words alone, counted by the comment tool's own predicate
+// ([worklet.RequestedWithoutAsk]): what this counts, the tool refuses.
 func personRequestsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, n := range ev.Work.Named {
-		if kind(n.Handle) != SeatPerson || n.Told < minNamedPerson {
+		if kind(n.Handle) != SeatPerson || n.Requested < minNamedPerson {
 			continue
 		}
 		out = append(out, engineFinding(ClassPersonRequestsWithoutAsk,
 			Subject{Kind: SubjectSeat, Seat: n.Handle},
-			"Agents named a person without asking them a question.",
-			fmt.Sprintf("In the last 7 days, agents named %s in %d comments with no question "+
-				"attached, so nothing in them reached the Inbox as a decision.", n.Handle, n.Told),
-			[]Fact{{Key: "named", Value: int64(n.Told)}}, n.Comments))
+			"Agents asked a person for something without asking them a question.",
+			fmt.Sprintf("In the last 7 days, agents asked %s for an answer or an action in %d "+
+				"comments that put no question to them with an ask, so nothing in them reached "+
+				"the Inbox as a decision.", n.Handle, n.Requested),
+			[]Fact{{Key: "named", Value: int64(n.Requested)}}, n.RequestedComments))
 	}
 	return out
 }

@@ -244,30 +244,27 @@ func (d WorkDeps) checkAsksOfNamed(tool string, actor Actor, asks bool, ask stri
 		return nil
 	}
 	return refusalOf(failed(fmt.Sprintf("%s: `asks` is true and this names a person (%s) "+
-		"outside `ask`. An agent's question to a person reaches their decisions only as an "+
-		"ask: set `ask` to their handle and give it a `decision` with %d to %d `options` they "+
-		"answer with one press, the one you `recommended`, your `rationale` and the `role` "+
-		"they answer in. If you only mention them, set `asks` to false. Nothing was posted.",
-		tool, words.And(persons), decision.MinOptions, decision.MaxOptions)))
+		"outside `ask`. An agent's request to a person, for their approval, a review, their "+
+		"input or a decision, reaches their Inbox only as an ask: set `ask` to their handle "+
+		"and give it a `decision` with %d to %d `options` they answer with one press, the one "+
+		"you `recommended`, your `rationale` and the `role` they answer in. Set `asks` to false "+
+		"only when the comment asks them for nothing and just tells them something. Nothing "+
+		"was posted.", tool, words.And(persons), decision.MinOptions, decision.MaxOptions)))
 }
 
 // askedInWords is the persons' seats an agent's words that ask (`asks`) name
-// other than ask, the one they put the question to (ADR-0100).
+// other than ask, the one they put the question to (ADR-0100): the one
+// predicate the advisor counts by ([worklet.RequestedWithoutAsk]).
 func askedInWords(agent, asks bool, ask string, named []string, roster func() []colleague.Seat) []string {
-	if !asks || !agent || roster == nil {
+	if roster == nil {
 		return nil
 	}
 	humans := map[string]bool{}
 	for _, seat := range roster() {
 		humans[seat.Handle] = seat.Kind == string(org.KindHuman)
 	}
-	var persons []string
-	for _, handle := range named {
-		if handle != ask && humans[handle] && !slices.Contains(persons, handle) {
-			persons = append(persons, handle)
-		}
-	}
-	return persons
+	return worklet.RequestedWithoutAsk(agent, &asks, ask, named,
+		func(handle string) bool { return humans[handle] })
 }
 
 // statedAsks is an agent's statement of whether its comment asks, which every

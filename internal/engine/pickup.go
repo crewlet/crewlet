@@ -2,15 +2,19 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pickup"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The work pickup's wiring (ADR-0112): every node that publishes runs one loop
@@ -128,6 +132,23 @@ func (e *Engine) picker() *pickup.Picker {
 		}
 	}
 	return e.pickup.picker
+}
+
+// typedAnswerFor is the read of whether the turn turnID put a typed answer on
+// the item a work pickup handed it (ADR-0122), and nil where reply names none:
+// at a level that has the turn's own writes, from whichever node serves them.
+func (e *Engine) typedAnswerFor(turnID string, reply turn.Reply) func(context.Context) (bool, error) {
+	if reply.Item == "" {
+		return nil
+	}
+	return func(ctx context.Context) (bool, error) {
+		if e.router == nil {
+			return false, errors.New("engine: no estate router to read the pickup's answer through")
+		}
+		return e.router.Work().TypedAnswer(ctx, worklet.TypedAnswerQuery{
+			Turn: turnID, Item: reply.Item, Level: statelog.ReadLinearizable,
+		})
+	}
 }
 
 // pickupHolder answers the conditions only the node holding a seat knows.

@@ -96,9 +96,11 @@ func scheduleSchema(update bool) map[string]any {
 	if update {
 		out["wait_until"] = map[string]any{
 			"type": nullable("string"),
-			"description": "Set the item aside until a date, in the spellings of `due`: " +
+			"description": "Set the item aside until a real date, in the spellings of `due`: " +
 				"you are not handed it before then, and are handed it once when it comes. " +
-				"It is the item's `start`, with `wait_reason` beside it. null ends the wait.",
+				"It is the item's `start`, with `wait_reason` beside it. null ends the wait. " +
+				"A wait on a person is an `ask` on " + CommentOnWorkTool + ", never a date: " +
+				"an agent's wait whose reason names a person it has not asked is refused.",
 		}
 		out["wait_reason"] = map[string]any{
 			"type": "string",
