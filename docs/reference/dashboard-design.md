@@ -5014,7 +5014,11 @@ never widening the person `#/me` is about), a project's lens
 (`project.lens.set`), a task's activity tab (`item.activity.set`), Spend's
 window and split (`spend.range.set`, `spend.group.set`), Live's and the Turns
 list's filters (`live.filter.apply`, `turns.filter.apply`) and Doclet's
-search (`knowledge.search.set`). Changes to a draft ask for approval and write
+search (`knowledge.search.set`). A key of the company's own things is listed
+while an enum may list every one and declared by its grammar past 64 (a seat
+by a handle's, a space by a space key's), its screen's own check refusing one
+it does not draw either way; an enum of every agent was an action the frame
+left out whole, in a company of more. Changes to a draft ask for approval and write
 into the draft only, saving staying the person's: the open draft's fields on
 any screen that declares one (`draft.set`, below), the org builder's draft
 (`org.draft.apply_ops`, recorded through the builder's own door so undo, the

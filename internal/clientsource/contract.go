@@ -309,6 +309,8 @@ var contract = []Entry{
 	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 	{"UNIT_ID_PATTERN", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
 	{"MAX_UNIT_ID", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
+	{"CONTAINER_KEY_PATTERN", ReadScalar, "internal/config.TestTheDashboardKeysAContainerByTheEnginesGrammar"},
+	{"CONTAINER_KEY_MAX", ReadScalar, "internal/config.TestTheDashboardKeysAContainerByTheEnginesGrammar"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,

@@ -66,7 +66,13 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
+import {
+  choiceKey,
+  seatKey,
+  urlAction,
+  windowKey,
+  type UrlActionKey,
+} from "~/app/assistant/urlAction.ts";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
@@ -147,6 +153,28 @@ const SEAT_EVENTS_POLL_MS = 15_000;
 const PHASES = ["execute", "review", "onboarding", "subagent", "judge"] as const;
 
 /**
+ * What Ask Crewlet may set on Live, as the controls write it: the window from
+ * this screen's offer, a seat from the menu's agent seats (past what an enum
+ * may list, by a handle's grammar), a phase from its picker, and the one
+ * failures switch.
+ */
+export function liveFilterKeys(
+  seats: readonly { handle: string; name: string }[],
+  now: () => number,
+): Readonly<Record<string, UrlActionKey>> {
+  return {
+    window: windowKey(STRIP_OFFER, now),
+    seat: seatKey("Seat", seats, "filter"),
+    phase: choiceKey(
+      "Phase",
+      PHASES.map((p) => ({ value: p, label: p })),
+      "filter",
+    ),
+    failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
+  };
+}
+
+/**
  * The phase a running turn is in, in the vocabulary the phase filter uses. A
  * PARKED turn is in its executor's round — the executor, out in its box, is
  * that round's work — so the filter that keeps `execute` keeps it.
@@ -186,20 +214,7 @@ export function LiveNow() {
   useAssistantContext({
     actions: urlAction("live.filter.apply", {
       scope: "Live filters and activity window (view only)",
-      keys: {
-        window: windowKey(STRIP_OFFER, () => now),
-        seat: choiceKey(
-          "Seat",
-          agentSeats.map((s) => ({ value: s.handle, label: s.name })),
-          "filter",
-        ),
-        phase: choiceKey(
-          "Phase",
-          PHASES.map((p) => ({ value: p, label: p })),
-          "filter",
-        ),
-        failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
-      },
+      keys: liveFilterKeys(agentSeats, () => now),
       nav,
     }),
   });
