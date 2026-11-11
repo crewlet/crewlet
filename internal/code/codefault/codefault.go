@@ -55,11 +55,15 @@
 // publisher they wrap around the committer's, and its before-admit point by
 // the usage reading they hand the code log's reserve.
 //
-// The maintainer's step ([MaintainBeforeStep]) is the one point a case only
-// ever HOLDS: no crash matrix walks a maintenance run, whose derived files
+// The maintainer's step ([MaintainBeforeStep]) and an engine write's join
+// ([WriteJoined]) are the two points a case only ever HOLDS or reaches, on no
+// crash path. No crash matrix walks a maintenance run, whose derived files
 // recover by their own declarations, so a case blocks every run's step to
 // read a copy as a round left it, before the run that round's end owes the
-// maintainer can replace a file of it.
+// maintainer can replace a file of it. And a second ask of a write that joins
+// the first builds nothing of its own, so a crash there leaves nothing a
+// crash at the first ask's points does not: a case reaches the join to let
+// the first ask's write go only once the second waits on it.
 //
 // Every misuse is LOUD. A case that arms a point that does not exist, an
 // offset on a point that reads none, an action no hit could ever reveal, or a
@@ -278,6 +282,15 @@ const (
 	// with it, so a case reading the graph once the round let go read
 	// whichever came first.
 	MaintainBeforeStep Point = "maintain.before_step"
+
+	// WriteJoined: an engine write asked while another ask of its push id is
+	// building and landing it on this node has JOINED that one, and waits for
+	// its answer having built, stored and proposed nothing (internal/code/host's
+	// Server.Write). Hit by the joining ask alone, each time it joins. ON NO
+	// CRASH PATH: a joiner holds nothing a crash could leave behind. A case
+	// REACHES it to let the write it joined go only once the second ask waits
+	// on it, so the join, and never the push's row, is what answers that ask.
+	WriteJoined Point = "write.joined"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -336,9 +349,11 @@ var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose
 // refusal a case asserts on: a committer's admission reading the log's usage.
 var refusalPoints = []Point{CommitterBeforeAdmit}
 
-// holdPoints are the steps no crash matrix walks, each held so a case reads
-// what precedes it before the step runs: a maintenance run's step.
-var holdPoints = []Point{MaintainBeforeStep}
+// holdPoints are the steps no crash matrix walks, each held or reached so a
+// case orders what it does next behind the step: a maintenance run's step,
+// held to read what precedes it before it runs, and an engine write's join,
+// reached to let the write joined go only once a second ask waits on it.
+var holdPoints = []Point{MaintainBeforeStep, WriteJoined}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write

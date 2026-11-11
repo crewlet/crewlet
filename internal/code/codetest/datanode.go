@@ -112,6 +112,9 @@ type DataNode struct {
 
 	// appends counts the records this node's committer appended.
 	appends atomic.Int64
+	// closes counts the graceful stops that closed this node's writers
+	// (StopCommitter), whatever incarnation each closed.
+	closes atomic.Int64
 
 	mu   sync.Mutex
 	cur  *dataIncarnation
@@ -727,6 +730,11 @@ func (d *DataNode) Health(ctx context.Context) (statelog.Health, error) {
 // declaration's or an eviction's, which go through the lifecycle store.
 func (d *DataNode) Appends() int { return int(d.appends.Load()) }
 
+// Closes is how many graceful stops have closed this node's writers
+// (StopCommitter): each counted once every writer refuses, and before any
+// batch it holds in flight is waited for.
+func (d *DataNode) Closes() int { return int(d.closes.Load()) }
+
 // Writer is the node that published the code log's record at at, read off the
 // log through the fleet's keyring: the record's envelope names it, and no row
 // keeps it.
@@ -841,11 +849,15 @@ func (d *DataNode) Restart(t testing.TB, q *js.Queue) {
 	d.mu.Unlock()
 }
 
-// StopCommitter stops the committer the way a graceful stop does — the
-// engine's teardown's first step, before the node stops answering — bounded
-// by statelog.DefaultResolveBudget: every new proposal refused
-// code.ErrNotServing, every queued one answered so, and the batches in flight
-// finished.
+// StopCommitter stops the committer, the change writer and the checks writer
+// the way a graceful stop does — the engine's teardown's first step, before
+// the node stops answering (internal/engine's stopTogether): every one CLOSED
+// FIRST, refusing every new write code.ErrNotServing and answering every
+// queued one so, and counted (Closes); then all of them drained TOGETHER under
+// one bound, statelog.DefaultResolveBudget, the batches in flight finished.
+// Stopped one after another, a writer still open took new work for as long as
+// the committer's drain waited on its batch, and a writer whose turn came
+// after a drain that spent the bound cancelled its own publishes at once.
 func (d *DataNode) StopCommitter() {
 	p := d.proc()
 	if p == nil {
@@ -853,9 +865,19 @@ func (d *DataNode) StopCommitter() {
 	}
 	bounded, cancel := context.WithTimeout(context.Background(), statelog.DefaultResolveBudget)
 	defer cancel()
-	p.committer.Stop(bounded)
-	p.changes.Stop(bounded)
-	p.checks.Stop(bounded)
+	writers := []interface {
+		Close()
+		Stop(context.Context)
+	}{p.committer, p.changes, p.checks}
+	for _, w := range writers {
+		w.Close()
+	}
+	d.closes.Add(1)
+	var drained sync.WaitGroup
+	for _, w := range writers {
+		drained.Go(func() { w.Stop(bounded) })
+	}
+	drained.Wait()
 }
 
 // teardown ends every incarnation: the crashes released FIRST, before anything

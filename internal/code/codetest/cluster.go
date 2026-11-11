@@ -56,6 +56,13 @@ type Cluster interface {
 	// Appends is how many records node's committer has appended
 	// (DataNode.Appends).
 	Appends(node string) int
+	// Closes is how many graceful stops have closed node's writers — its
+	// committer, change writer and checks writer each refusing every new
+	// write and every one queued, while what they hold in flight runs on
+	// (DataNode.Closes): what a case holding a batch at node's committer
+	// waits on before it lets the batch go, so the batch ends into a
+	// committer that refuses what is queued behind it.
+	Closes(node string) int
 	// RecordWriter is the member that published the code log's record at at,
 	// read off the log by a running member (DataNode.Writer).
 	RecordWriter(ctx context.Context, at statelog.Position) (string, error)
@@ -666,17 +673,6 @@ func aGateDroppedPushIsNotApplied(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// stopSettle is how long F20 lets a graceful stop run before it lets the held
-// record go: long enough that the stop's steps up to the committer's refusal
-// have happened — the presence given back, the member's Gitlet node stopped with
-// nothing running on it, the refusal itself a lock taken and a flag set — and
-// a tenth of the stop's own bound on the batch it waits for
-// (statelog.DefaultResolveBudget), which a later release would run into. Only
-// the case's power to catch a stop in the wrong order rests on it: let go
-// sooner, the held record and the pushes queued behind it commit before the
-// committer refuses, which passes the right order and the wrong one alike.
-const stopSettle = 500 * time.Millisecond
-
 // F20: a committer stopping hands its repositories on. (a) Gracefully: its
 // committer refuses before its subject stops answering, so the pushes queued
 // at it are answered "not serving" and committed by the runner-up, and the
@@ -716,31 +712,38 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 		results[i] = p.Push(rc.ctx, work, url, fmt.Sprintf("s%d", i))
 		took[i] = time.Since(start)
 	}
-	uploads := c.Faults().Hits(codefault.HostAfterUpload)
 	var wg sync.WaitGroup
 	wg.Go(func() { push(0) })
 	<-reached
 	for i := 1; i < pushes; i++ {
 		wg.Go(func() { push(i) })
 	}
-	if !within(time.Minute, func() bool { return c.Faults().Hits(codefault.HostAfterUpload)-uploads == pushes }) {
-		t.Errorf("only %d of %d pushes uploaded", c.Faults().Hits(codefault.HostAfterUpload)-uploads, pushes)
+	// THE OTHERS QUEUED AT THE COMMITTER behind the held record — each one's
+	// last trip, from its receiver to the committer's queue, made — before
+	// the committer is stopped under them (code.Committer.Queued).
+	if !within(time.Minute, func() bool { return c.Queued(rc.id) == pushes-1 }) {
+		t.Errorf("%d of %d pushes queued behind the held record", c.Queued(rc.id), pushes-1)
 	}
-	// THE LAST TRIP, from the receiver to the committer's queue, after the
-	// upload the count above saw.
-	time.Sleep(stopSettle)
 	down := true
 	defer func() {
 		if down {
 			c.Restart(t, committer)
 		}
 	}()
+	closes := c.Closes(committer)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		c.Stop(t, committer)
 	}()
-	time.Sleep(stopSettle)
+	// THE STOP REACHES THE COMMITTER'S REFUSAL — its presence given back, its
+	// Gitlet node stopped, its writers closed — before the held record goes:
+	// let go sooner, the record and the pushes queued behind it commit before
+	// the committer refuses, which passes the right order and the wrong one
+	// alike.
+	if !within(time.Minute, func() bool { return c.Closes(committer) > closes }) {
+		t.Errorf("the stop of %s never closed its committer", committer)
+	}
 	release()
 	wg.Wait()
 	<-stopped

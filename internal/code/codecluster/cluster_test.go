@@ -756,6 +756,17 @@ func (c *cluster) Appends(node string) int {
 	return 0
 }
 
+// Closes is how many graceful stops have closed node's writers, and zero for a
+// node that is no member (codetest.Cluster).
+func (c *cluster) Closes(node string) int {
+	for _, m := range c.members {
+		if m.id == node {
+			return m.data.Closes()
+		}
+	}
+	return 0
+}
+
 // RecordWriter is the writer of the code log's record at at, read through the
 // first running member (codetest.Cluster).
 func (c *cluster) RecordWriter(ctx context.Context, at statelog.Position) (string, error) {

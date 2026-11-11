@@ -110,6 +110,7 @@ var pointNames = map[string]codefault.Point{
 	"ImportAfterPropose": codefault.ImportAfterPropose, "MirrorAfterBuild": codefault.MirrorAfterBuild,
 	"MirrorAfterUpload": codefault.MirrorAfterUpload, "MirrorAfterPropose": codefault.MirrorAfterPropose,
 	"CommitterBeforeAdmit": codefault.CommitterBeforeAdmit, "MaintainBeforeStep": codefault.MaintainBeforeStep,
+	"WriteJoined": codefault.WriteJoined,
 }
 
 // byPoint is counts keyed by identifier, read as points.
