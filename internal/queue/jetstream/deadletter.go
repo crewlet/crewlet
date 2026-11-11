@@ -107,10 +107,10 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 	}
 	// THE CONTRACT'S CEILING FOR A KEEP, before the transport's: the twin
 	// refuses exactly these, so the two never disagree about an entry whose
-	// header block would take it past the transport ([queue.LetterFraming]).
-	if size := len(header) + len(body); size+queue.LetterFraming > queue.MaxPayloadBytes {
+	// header block would take it past the transport ([queue.LetterFits]).
+	if !queue.LetterFits(header, body) {
 		return fmt.Errorf("keep a dead letter on %s: %d bytes of header and body exceed the "+
-			"%d-byte limit less the %d a keep is framed in: %w", subject, size,
+			"%d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
 			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)
 	}
 	stream, err := q.streamFor(ctx, subject)

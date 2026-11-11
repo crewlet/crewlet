@@ -398,7 +398,7 @@ func (b *Broker) restoreLocked(
 	// an event whose budget the hand-back just spent belongs on the
 	// dead-letter subject, not at the head of a mailbox no budget can ever
 	// retire it from.
-	keep, dead := b.chargeLocked(sub, undispatched, budget)
+	keep, dead := b.chargeLocked(sub, undispatched, budget, nil)
 	restored := 0
 	for _, ev := range sub.mail {
 		if _, fromChunk := inChunk[ev]; !fromChunk {
@@ -513,12 +513,14 @@ func (b *Broker) invoke(
 		// than circling a mailbox no budget can ever retire it from.
 		dead = b.handBackLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeNak:
-		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, nil)
 	case queue.OutcomePass:
 		// BEHIND THE WAITING MAIL, AS A FAILURE, AND NOTHING QUIESCED: the
 		// broker withholds a pass for the failure path's backoff, and the
 		// attachment that passed goes on taking mail — see the doc above.
-		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
+		// And a pass that spends the budget keeps its copy UNDER ITS
+		// REASON, as the broker does ([queue.PassedLetter]).
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.PassedLetter(res.Reason))
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
 		// is nothing to put back.
@@ -550,8 +552,18 @@ func (b *Broker) invoke(
 // guards every subscription and every peer on this broker.
 func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []deadLetter) {
 	for _, d := range dead {
-		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
-			"event_type", d.ev.Type, "redeliveries", d.redeliveries)
+		attrs := []any{"topic", sub.topic, "group", sub.group,
+			"event_type", d.ev.Type, "redeliveries", d.redeliveries}
+		if reason, passed := queue.PassedReason(d.letter); passed {
+			attrs = append(attrs, "passed", reason)
+			if d.unmarked {
+				log.ErrorContext(ctx, "dead_letter_unmarked", "topic", sub.topic,
+					"group", sub.group, "passed", reason,
+					"detail", "the copy leaves its pass's header no room beside it, so "+
+						"it is kept with none: no reader of the group will find it as a pass")
+			}
+		}
+		log.ErrorContext(ctx, "event_dead_lettered", attrs...)
 	}
 }
 
@@ -587,6 +599,11 @@ func headroomLocked(sub *subscription, evs []*events.Event, budget int) []queue.
 type deadLetter struct {
 	ev           *events.Event
 	redeliveries int
+	// letter is the header its return asked the copy to be kept under — a
+	// pass's ([queue.PassedLetter]) — nil for any other return; unmarked is
+	// a pass's copy kept with none, which left its header no room.
+	letter   []byte
+	unmarked bool
 }
 
 // runHandler recovers a panicking handler into a Nak, preserving "an
@@ -614,7 +631,7 @@ func runHandler(ctx context.Context, call func(context.Context) queue.Result) (r
 // ([Broker.retryLaterLocked]), which is why the charge itself is
 // [Broker.chargeLocked] and no path owns it.
 func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
-	keep, dead := b.chargeLocked(sub, evs, budget)
+	keep, dead := b.chargeLocked(sub, evs, budget, nil)
 	sub.mail = prepend(keep, sub.mail)
 	return dead
 }
@@ -622,15 +639,16 @@ func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget i
 // retryLaterLocked charges a FAILURE, or a PASS, and returns the events BEHIND
 // everything already waiting, which is where the shipped broker's redelivery
 // backoff puts them: see [Broker.invoke] for why, and for what the virtual
-// backoff does and does not reproduce.
+// backoff does and does not reproduce. letter is what [Broker.chargeLocked]
+// keeps a retired event's copy under: a pass's header, nil for a failure.
 //
 // A failure that is the only thing in the mailbox therefore comes straight
 // back, exactly as it would on the broker once its backoff elapsed with
 // nothing else to serve — the virtual backoff has no wall clock, so a poison
 // message still reaches its dead-letter boundary inside one drain rather than
 // across minutes of timers.
-func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
-	keep, dead := b.chargeLocked(sub, evs, budget)
+func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget int, letter []byte) []deadLetter {
+	keep, dead := b.chargeLocked(sub, evs, budget, letter)
 	sub.mail = append(sub.mail, keep...)
 	return dead
 }
@@ -645,7 +663,12 @@ func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget
 // deciding the boundary is a second answer to where the dead-letter line is.
 // It does not touch the mailbox: where the survivors go back is the caller's,
 // and the two callers differ precisely there.
-func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int) ([]*events.Event, []deadLetter) {
+//
+// letter is the header a retired event's copy is kept under: a pass's
+// ([queue.PassedLetter]), nil for every other return, whose copy is kept bare.
+func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int,
+	letter []byte) ([]*events.Event, []deadLetter) {
+
 	var keep []*events.Event
 	var dead []deadLetter
 	for _, ev := range evs {
@@ -656,16 +679,23 @@ func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int
 		count := sub.redeliveries[ev.ID] + 1
 		if count > budget {
 			delete(sub.redeliveries, ev.ID)
+			retired := deadLetter{ev: ev, redeliveries: count - 1, letter: letter}
 			// KEPT AS ITS WIRE BYTES, beside every other dead letter, as
 			// the broker this twin stands for republishes the message's
-			// own data to the dead-letter stream with no header of its
-			// own: so DeadLettersOn lists it, DeadLetterFrame reads its
-			// bytes and DropDeadLetter removes it exactly as there. The
-			// event was decoded from JSON, so it encodes again.
+			// own data to the dead-letter stream: so DeadLettersOn lists
+			// it, DeadLetterFrame reads its bytes and DropDeadLetter
+			// removes it exactly as there. The event was decoded from
+			// JSON, so it encodes again. With no header of its own —
+			// unless a pass retired it, whose header goes beside it where
+			// the transport has room, as the broker keeps it.
 			if wire, err := json.Marshal(ev); err == nil {
-				b.keepLocked(topics.DeadLetter(sub.topic, sub.group), nil, wire)
+				header := letter
+				if len(header) > 0 && !queue.LetterFits(header, wire) {
+					header, retired.unmarked = nil, true
+				}
+				b.keepLocked(topics.DeadLetter(sub.topic, sub.group), header, wire)
 			}
-			dead = append(dead, deadLetter{ev: ev, redeliveries: count - 1})
+			dead = append(dead, retired)
 			continue
 		}
 		sub.redeliveries[ev.ID] = count

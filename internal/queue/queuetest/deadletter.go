@@ -7,7 +7,9 @@ import (
 	"errors"
 	"maps"
 	"math"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -316,6 +318,84 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		}
 	})
 
+	t.Run("a_passed_copy_with_no_room_for_its_header_is_kept_bare_and_whole", func(t *testing.T) {
+		t.Parallel()
+		// A PASS RETIRES ITS COPY UNDER THE HEADER NAMING IT WHERE THE
+		// TRANSPORT HAS ROOM BESIDE THE COPY, AND BARE WHERE IT HAS NONE
+		// (queue.PassedLetter, queue.LetterFits). A delivery is as large as
+		// the transport carries, so a copy within a few hundred bytes of the
+		// ceiling cannot carry the header; every backend then keeps every
+		// byte of it with none, rather than lose the copy to its own mark.
+		//
+		// A PROBE MEASURES THE BYTES A COPY CARRIES beside the case's own pad
+		// — its kept frame, exactly what the backend keeps, whatever it
+		// stamps on a delivery — so the large event lands inside that gap on
+		// every backend: more than the room the header leaves, and no more
+		// than the transport carries. One timestamp for both, so the two
+		// encode alike but for the pad.
+		//
+		// THE LARGE COPY IS READ BACK AS THE SUBSCRIPTION'S DEAD LETTER
+		// (DeadLetters), not by its frame: what is held here is how the copy
+		// is KEPT, and a leader's read of a frame this large crosses no leaf
+		// link on the shipped broker, its reply a third larger than the
+		// transport carries.
+		//
+		// Mutation: keep a passed copy under its header whatever its size,
+		// and the broker refuses it, keeping nothing, while the twin keeps
+		// it marked.
+		newQueueWithAttempts := s.needAttempts(t)
+		deadLetters := s.needDeadLetters(t)
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
+		const topic, group, reason = "passed.large", "grp", "newer_record"
+		subscribe(ctx, t, q, topic, group, func(context.Context, *events.Event) queue.Result {
+			return queue.Pass(reason, errors.New("a peer on a newer build reads it"))
+		})
+		subject := topics.DeadLetter(topic, group)
+		under := topics.DeadLettersUnder("passed")
+		at := time.Now().UTC()
+		padded := func(label string, pad int) *events.Event {
+			ev := newEvent(label)
+			ev.Timestamp = at
+			ev.Payload = map[string]any{"pad": strings.Repeat("x", pad)}
+			return ev
+		}
+
+		publish(ctx, t, q, topic, padded("probe", 0))
+		var probe []queue.Kept
+		awaitState(t, "the passed probe to be dead-lettered", func() bool {
+			probe = listedAsMarked(ctx, t, q, under, subject)
+			return len(probe) == 1
+		})
+		if passed, ok := queue.PassedReason(probe[0].Header); !ok || passed != reason {
+			t.Fatalf("the passed probe, a copy with room beside it, is kept under %q, want %q",
+				probe[0].Header, queue.PassedLetter(reason))
+		}
+		carried := len(frameOf(ctx, t, q, subject, probe[0].Seq))
+		// HALF THE FRAMING SHORT OF THE CEILING: a header and the framing
+		// need more room than that, and the transport carries it.
+		pad := queue.MaxPayloadBytes - queue.LetterFraming/2 - carried
+		publish(ctx, t, q, topic, padded("large", pad))
+
+		var got []queue.Kept
+		awaitState(t, "the passed large copy to be dead-lettered", func() bool {
+			got = listedAsMarked(ctx, t, q, under, subject)
+			return len(got) == 2
+		})
+		if len(got[1].Header) != 0 {
+			t.Errorf("a passed copy with no room for its header is kept under %q, want none: "+
+				"the transport cannot carry the two together", got[1].Header)
+		}
+		retired := deadLetters(q, topic, group)
+		if !equalStrings(labelsOf(retired), []string{"probe", "large"}) {
+			t.Fatalf("the subscription's dead letters are %q, want the probe and then the "+
+				"large copy", labelsOf(retired))
+		}
+		if kept, _ := retired[1].Payload["pad"].(string); len(kept) != pad {
+			t.Errorf("the bare copy kept %d bytes of its %d-byte pad: a copy is kept whole",
+				len(kept), pad)
+		}
+	})
+
 	t.Run("a_dead_letter_the_transport_cannot_carry_is_refused_as_too_large", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -458,6 +538,35 @@ func frameOf(ctx context.Context, t *testing.T, q queue.EventQueue, subject stri
 		t.Fatalf("DeadLetterFrame(%s, %d) answered held %v, %v", subject, seq, held, err)
 	}
 	return frame
+}
+
+// keptAsPassed holds the dead letters of topic and group to one passed copy:
+// the entry kept under the header naming the pass and reason
+// ([queue.PassedLetter]), whose body reads back as the event labelled label —
+// the header being what a reader that can handle the copy now finds it again
+// by, and the body what it handles.
+func keptAsPassed(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group,
+	reason, label string) {
+
+	t.Helper()
+	subject := topics.DeadLetter(topic, group)
+	head, _, _ := strings.Cut(topic, ".")
+	got := listedAsMarked(ctx, t, q, topics.DeadLettersUnder(head), subject)
+	if len(got) != 1 {
+		t.Fatalf("%s lists %d entries, want the one passed copy: %q", subject, len(got),
+			headersOf(got))
+	}
+	if passed, ok := queue.PassedReason(got[0].Header); !ok || passed != reason {
+		t.Errorf("the passed copy is kept under %q, want %q, the header naming its pass and "+
+			"its reason: a reader that could handle it now would take it for poison",
+			got[0].Header, queue.PassedLetter(reason))
+	}
+	var ev events.Event
+	if err := json.Unmarshal(frameOf(ctx, t, q, subject, got[0].Seq), &ev); err != nil ||
+		labelOf(&ev) != label {
+		t.Errorf("the passed copy reads back as no event labelled %s (%v): a reader that "+
+			"found it would have nothing to handle", label, err)
+	}
 }
 
 // headersOf is each entry's header as text, for a failure message.

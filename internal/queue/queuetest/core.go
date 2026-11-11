@@ -626,7 +626,12 @@ func (s *suite) runCore(t *testing.T) {
 	//     read must not stop it taking every other;
 	//   - it spends a delivery like every return, and is dead-lettered with
 	//     its copy once the budget is spent: a message no node reads must not
-	//     circle its group for ever.
+	//     circle its group for ever;
+	//   - and that dead letter is kept UNDER A HEADER NAMING THE PASS AND ITS
+	//     REASON (queue.PassedLetter), where a failure's is kept with none
+	//     (a_subscriptions_retired_event_is_one_more_dead_letter): nothing
+	//     steers a pass to a node that can handle it, so the dead letter is
+	//     what a reader that can handle it now finds it again by.
 	//
 	// The mail is HELD while it is published, as the return-order case holds
 	// it, so both events are waiting before anything is fetched and nothing
@@ -635,7 +640,8 @@ func (s *suite) runCore(t *testing.T) {
 	// Mutation: quiesce the attachment on a pass, and e2 is never handled;
 	// return a pass at the head as a deferral's, and e1 comes back ahead of
 	// e2; return it without the budget's check, and it is never
-	// dead-lettered; ack it, and it never comes back.
+	// dead-lettered; ack it, and it never comes back; keep its dead letter
+	// with no header, as a failure's, and it lists as poison.
 	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -672,6 +678,7 @@ func (s *suite) runCore(t *testing.T) {
 		awaitState(t, "the passed e1 to be dead-lettered once its budget is spent", func() bool {
 			return equalStrings(labelsOf(deadLetters(q, topic, group)), []string{"e1"})
 		})
+		keptAsPassed(ctx, t, q, topic, group, "newer_record", "e1")
 	})
 
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {

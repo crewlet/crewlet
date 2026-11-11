@@ -2003,8 +2003,22 @@ func (q *Queue) attachmentsLocked() []*attachment {
 // deadLetter publishes a message the delivery budget has exhausted, to a
 // subject outside the crewlet.* space so the dashboard's crewlet.events.>
 // stream cannot resurface poison as live traffic.
-func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) {
+//
+// UNDER header WHERE THERE IS ONE, a passed message's ([queue.PassedLetter]),
+// through the contract's own keep ([Queue.KeepDeadLetter]): the header rides
+// as the keeper's header of the entry, so a reader of the group lists it as
+// it lists any keeper's and finds the passed copies by it. Every other copy is
+// published as the message's own bytes and nothing beside them, as it always
+// was: a header block costs room that a copy at the transport's ceiling does
+// not have.
+func (q *Queue) deadLetter(ctx context.Context, topic, group string, header, data []byte) {
 	subject := topics.DeadLetter(topic, group)
+	if len(header) > 0 {
+		if err := q.KeepDeadLetter(ctx, subject, header, data); err != nil {
+			q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
+		}
+		return
+	}
 	if _, err := q.streamFor(ctx, subject); err != nil {
 		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
 		return

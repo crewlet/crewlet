@@ -1047,7 +1047,7 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 	case queue.OutcomePass:
 		// Neither a failure nor a deferral, and the attachment goes on
 		// taking mail: see [attachment.pass].
-		a.pass(ctx, msg)
+		a.pass(ctx, msg, res.Reason)
 	}
 }
 
@@ -1055,6 +1055,11 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 // ([queue.OutcomePass]) — through the budget boundary every return crosses,
 // so a message no node reads is dead-lettered with its copy rather than handed
 // round for ever, and spaced as a failure is, by [Queue.nakBackoff].
+//
+// UNDER ITS REASON, should this return be the one that spends the budget: the
+// dead letter is kept under [queue.PassedLetter] of reason, which is how a
+// reader that can handle the copy tells it from a failure's and finds it
+// again.
 //
 // BY ITS DELIVERY COUNT, NOT [attachment.failures]. A pass is no failure, so
 // counting it as one would start this node's first genuine failure of the
@@ -1068,7 +1073,7 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 // NOT QUIESCED, which is the whole difference from a deferral: nothing is
 // wrong with this node, only with this message here, so the attachment keeps
 // taking the rest of its mail while the message waits out its spacing.
-func (a *attachment) pass(ctx context.Context, msg jetstream.Msg) {
+func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, reason string) {
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE is passed at the shortest
 	// spacing, for [attachment.nakOrDeadLetter]'s reason: returnMsg reads
 	// the same metadata for the budget and treats an unreadable one as "not
@@ -1077,7 +1082,7 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg) {
 	if md, err := msg.Metadata(); err == nil {
 		delivered = md.NumDelivered
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(delivered))
+	a.returnMsg(ctx, msg, a.q.nakBackoff(delivered), queue.PassedLetter(reason))
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
@@ -1098,7 +1103,7 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 	if md, err := msg.Metadata(); err == nil {
 		failures = a.failed(md.Sequence.Stream)
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(failures))
+	a.returnMsg(ctx, msg, a.q.nakBackoff(failures), nil)
 }
 
 // handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown.
@@ -1110,19 +1115,21 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 // it means — so a message whose deliveries went on handoffs is dead-lettered
 // with a line rather than discarded by the broker's backstop in silence.
 func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg) {
-	a.returnMsg(ctx, msg, 0)
+	a.returnMsg(ctx, msg, 0, nil)
 }
 
 // returnMsg is the one place a message goes back, and the one place the
-// delivery budget is spent. delay 0 returns it immediately.
-func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration) {
+// delivery budget is spent. delay 0 returns it immediately. letter is the
+// header the message's dead letter is kept under should this return spend its
+// budget — a pass's ([queue.PassedLetter]) — and nil for every other return,
+// whose dead letter is the message's copy alone.
+func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration, letter []byte) {
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
 		// Terminated here, so nothing will redeliver this sequence and
 		// its failure count is dead weight.
 		a.settled(md.Sequence.Stream)
-		a.log.Error("dead_lettered", "deliveries", md.NumDelivered)
-		a.q.deadLetter(ctx, a.key.topic, a.key.group, msg.Data())
+		a.deadLetter(ctx, msg.Data(), md.NumDelivered, letter)
 		// Term, not Ack: the message is being discarded from this
 		// subscription deliberately, and Term says so to anyone reading
 		// consumer state.
@@ -1140,6 +1147,30 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 	if err := msg.NakWithDelay(delay); err != nil {
 		a.log.Warn("nak_failed", "error", err.Error())
 	}
+}
+
+// deadLetter keeps data, the copy of a message whose budget delivered spent,
+// as its subscription's dead letter: under letter where its return was a pass
+// ([queue.PassedLetter]), and with no header otherwise.
+//
+// A PASSED COPY THAT LEAVES ITS HEADER NO ROOM — within a few hundred bytes of
+// the transport's ceiling ([queue.LetterFits]) — is kept with none, as the
+// contract has it: every byte of the copy kept beats a mark nothing can carry,
+// and the line below says that no reader of the group will find it as a pass.
+func (a *attachment) deadLetter(ctx context.Context, data []byte, delivered uint64, letter []byte) {
+	attrs := []any{"deliveries", delivered}
+	if reason, passed := queue.PassedReason(letter); passed {
+		attrs = append(attrs, "passed", reason)
+		if !queue.LetterFits(letter, data) {
+			a.log.Error("dead_letter_unmarked", "passed", reason, "bytes", len(data),
+				"detail", "the copy is within a few hundred bytes of the transport's "+
+					"ceiling and leaves its pass's header no room, so it is kept with "+
+					"none: no reader of the group will find it as a pass")
+			letter = nil
+		}
+	}
+	a.log.Error("dead_lettered", attrs...)
+	a.q.deadLetter(ctx, a.key.topic, a.key.group, letter, data)
 }
 
 // --- the four attachment verbs -------------------------------------------
