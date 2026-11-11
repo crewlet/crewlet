@@ -112,18 +112,23 @@ const MaxHoldingSteps = 2048
 
 // heldByAsksFrom and heldByAsksWhere are the open items a person holds by an
 // open question put to them, held by somebody else: the open asks' predicate,
-// bound to (person, person) then the open groups.
-const (
-	heldByAsksFrom  = openAsksFrom
-	heldByAsksWhere = openAsksWhere + ` AND t.assignee <> ? AND t.status_group IN (%s)`
-)
+// bound to (person, person) then the open groups. The holder and status are an
+// EXISTS on the task's key, so the read drives from the person's questions
+// rather than walking the tasks.
+const heldByAsksFrom = openAsksFrom
+
+// heldByAsksWhere is the predicate over groups open status groups.
+func heldByAsksWhere(groups int) string {
+	return openAsksWhere + ` AND EXISTS (SELECT 1 FROM tracker_tasks h
+		WHERE h.id = c.task_id AND h.assignee <> ? AND h.status_group IN (` + placeholders(groups) + `))`
+}
 
 // heldByAsksStatement is the open questions holding items, newest first: the
 // first of an item's is the one its row names.
 func heldByAsksStatement() (string, []any) {
 	open := openGroups()
 	return `SELECT c.task_id, c.id FROM ` + heldByAsksFrom + `
-		WHERE ` + fmt.Sprintf(heldByAsksWhere, placeholders(len(open))) + `
+		WHERE ` + heldByAsksWhere(len(open)) + `
 		ORDER BY c.created_at DESC LIMIT ?`, open
 }
 
@@ -251,9 +256,9 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 	read := 0
 	for rows.Next() {
 		var task, ask string
-		if err := rows.Scan(&task, &ask); err != nil {
+		if serr := rows.Scan(&task, &ask); serr != nil {
 			_ = rows.Close()
-			return nil, false, fmt.Errorf("worklet: scan what waits on %s's answers: %w", handle, err)
+			return nil, false, fmt.Errorf("worklet: scan what waits on %s's answers: %w", handle, serr)
 		}
 		if read++; read > MaxHoldingCandidates {
 			continue
@@ -263,8 +268,8 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 			askOf[task] = ask
 		}
 	}
-	if err := closeRows(rows); err != nil {
-		return nil, false, fmt.Errorf("worklet: read what waits on %s's answers: %w", handle, err)
+	if cerr := closeRows(rows); cerr != nil {
+		return nil, false, fmt.Errorf("worklet: read what waits on %s's answers: %w", handle, cerr)
 	}
 	more := read > MaxHoldingCandidates
 	if len(ids) == 0 {
@@ -293,7 +298,7 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 func heldByAsksCountStatement() (string, []any) {
 	open := openGroups()
 	return `SELECT COUNT(*) FROM (SELECT DISTINCT c.task_id FROM ` + heldByAsksFrom + `
-		WHERE ` + fmt.Sprintf(heldByAsksWhere, placeholders(len(open))) + ` LIMIT ?)`, open
+		WHERE ` + heldByAsksWhere(len(open)) + ` LIMIT ?)`, open
 }
 
 // countHeldByAsks counts the items a person holds by an open question, each

@@ -330,9 +330,11 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		} else {
 			answer = AskAnswer{By: c.resolvedBy.String, At: store.DecodeTime(c.resolvedAt.Int64),
 				Resolved: true}
-			if answer.Withdrawn, err = withdrawnFrom(ctx, tx, rec); err != nil {
-				return nil, false, err
+			withdrawn, werr := withdrawnFrom(ctx, tx, rec)
+			if werr != nil {
+				return nil, false, werr
 			}
+			answer.Withdrawn = withdrawn
 			var resolveErr error
 			if closedBy, resolveErr = readResolve(ctx, tx, rec.task, rec.comment,
 				c.askRecord); resolveErr != nil {
