@@ -61,12 +61,9 @@ func openBubbled(t *testing.T, l *ledger, extra ...tools.Callable) *bubbled {
 	return b
 }
 
-// connect connects a box to the opening's own server: its every write held by
-// gate where gate is not nil, and every progress it is sent handed to heard
-// where heard is not nil.
-func (b *bubbled) connect(t *testing.T, gate *writeGate,
-	heard chan<- *mcp.ProgressNotificationParams) *mcp.ClientSession {
-
+// connect connects a box to the opening's own server, its every write held by
+// gate where gate is not nil.
+func (b *bubbled) connect(t *testing.T, gate *writeGate) *mcp.ClientSession {
 	t.Helper()
 	serverEnd, clientEnd := mcp.NewInMemoryTransports()
 	var server mcp.Transport = serverEnd
@@ -77,16 +74,7 @@ func (b *bubbled) connect(t *testing.T, gate *writeGate,
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
-	opts := &mcp.ClientOptions{}
-	if heard != nil {
-		opts.ProgressNotificationHandler = func(_ context.Context, req *mcp.ProgressNotificationClientRequest) {
-			select {
-			case heard <- req.Params:
-			default:
-			}
-		}
-	}
-	box, err := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, opts).
+	box, err := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil).
 		Connect(context.WithoutCancel(t.Context()), clientEnd, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -284,8 +272,9 @@ func TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld(t *testing.T) {
 // waits for its answer to a call still running to be out before it closes the
 // box's session: held between the call's handler and the SDK's write, the
 // answer still reaches the box, then the session is closed and the end
-// returns. And the call's answer comes as its first and only progress has: the
-// beat is stopped before it.
+// returns. (That the call's beat is stopped before that answer, as before any,
+// is the tool session's, held by its
+// TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay.)
 //
 // Mutation: close the sessions without waiting for the answers (`true ||` before
 // the end's wait), and the SDK refuses the answer, the box's call failing on a
@@ -307,8 +296,7 @@ func TestAnOpeningsEndAnswersItsRunningCallsBeforeItClosesTheirSessions(t *testi
 				return res, err
 			}
 		})
-		heard := make(chan *mcp.ProgressNotificationParams, 16)
-		box := b.connect(t, nil, heard)
+		box := b.connect(t, nil)
 		t.Cleanup(held.free)
 		t.Cleanup(release)
 
@@ -338,9 +326,6 @@ func TestAnOpeningsEndAnswersItsRunningCallsBeforeItClosesTheirSessions(t *testi
 		if n := b.session.Connections(); n != 0 {
 			t.Errorf("%d of the box's sessions are open after the end", n)
 		}
-		if n := len(heard); n != 1 {
-			t.Errorf("the box heard %d progress on its call, want only the one written as it started", n)
-		}
 
 		held.free()
 		b.bridge.AwaitCalls(t.Context())
@@ -364,7 +349,7 @@ func TestAnOpeningsEndIsHeldNoLongerThanItsBoundByABoxThatDoesNotRead(t *testing
 		held := newHeldTool("write")
 		b := openBubbled(t, &ledger{}, held)
 		gate := &writeGate{}
-		box := b.connect(t, gate, nil)
+		box := b.connect(t, gate)
 		t.Cleanup(held.free)
 		t.Cleanup(gate.release)
 
@@ -421,7 +406,7 @@ func TestACallWhoseToolReturnedBeforeItsOpeningEndedIsAnsweredWithItsOwnResult(t
 		l := &ledger{hold: make(chan struct{}), holding: make(chan struct{}, 1)}
 		record := sync.OnceFunc(func() { close(l.hold) })
 		b := openBubbled(t, l, &stubTool{name: "write"})
-		box := b.connect(t, nil, nil)
+		box := b.connect(t, nil)
 		t.Cleanup(record)
 
 		answered := callFromBox(context.WithoutCancel(t.Context()), box, "write", map[string]any{}, "write-1")
@@ -447,6 +432,208 @@ func TestACallWhoseToolReturnedBeforeItsOpeningEndedIsAnsweredWithItsOwnResult(t
 		if rows := l.rows(); len(rows) != 1 || rows[0].Abandoned {
 			t.Errorf("the call is recorded %+v, want it once, as one its harness was handed", rows)
 		}
+	})
+}
+
+// answerHold is one answer held between its call's handler and the SDK's
+// write of it ([holdAnswers]).
+type answerHold struct {
+	holding  chan struct{}
+	said     sync.Once
+	released chan struct{}
+	release  func()
+}
+
+// holdAnswers holds, on the opening's own server, every answer to a call
+// whose text is one of texts, between the call's handler and the SDK's write
+// of it: each says so on its hold's holding, the first time, and waits until
+// that hold is let go. Added before the box connects; a case lets every hold
+// go in a cleanup it registers once the box is connected, so that one runs
+// before the box's session is closed and waited for ([letGo]).
+func holdAnswers(b *bubbled, texts ...string) map[string]*answerHold {
+	holds := map[string]*answerHold{}
+	for _, said := range texts {
+		h := &answerHold{holding: make(chan struct{}), released: make(chan struct{})}
+		h.release = sync.OnceFunc(func() { close(h.released) })
+		holds[said] = h
+	}
+	mcpbridge.OpeningServers(b.session)[0].AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if answered, ok := res.(*mcp.CallToolResult); ok && method == "tools/call" {
+				if h := holds[text(answered)]; h != nil {
+					h.said.Do(func() { close(h.holding) })
+					<-h.released
+				}
+			}
+			return res, err
+		}
+	})
+	return holds
+}
+
+// letGo lets every hold go ([holdAnswers]).
+func letGo(holds map[string]*answerHold) {
+	for _, h := range holds {
+		h.release()
+	}
+}
+
+// AN OPENING HOLDS A CALL UNTIL ITS ANSWER IS OUT, WHATEVER IT ADMITS AFTER.
+// The opening lets go of a call it admitted only once the call's answer is
+// decided and out, which it reads as it admits the next: a box's parallel
+// batch admits a long call beside quick ones, and an end that found the long
+// one let go would answer it nothing and wait out its tool on the session's
+// close, while one that found a call whose own answer was still on its way let
+// go would close the session under that answer, which its box would then never
+// read. So, with a later call of the opening admitted and returned after it, a
+// call still running is answered by the end at once, the end returning; and a
+// call whose own answer is held short of the SDK's write is waited for, its
+// box reading that answer and not a failure.
+//
+// Mutation: let go of every held call at each admission (`true ||` before the
+// opening's test of a held call's answer), and the end neither answers the
+// call still running nor waits for the answer on its way; let go of a call
+// whose answer is decided without asking whether it is out (`true ||` before
+// that question), and the end closes the session under the second.
+func TestAnOpeningHoldsACallUntilItsAnswerIsOutWhateverItAdmitsAfter(t *testing.T) {
+	t.Parallel()
+	t.Run("a call still running", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			held := newHeldTool("write")
+			b := openBubbled(t, &ledger{}, held)
+			box := b.connect(t, nil)
+			t.Cleanup(held.free)
+
+			first := callFromBox(context.WithoutCancel(t.Context()), box, "write",
+				map[string]any{"value": "hold"}, "")
+			<-held.entered
+			// A LATER CALL OF THE OPENING is admitted, and returns.
+			if res := <-callFromBox(context.WithoutCancel(t.Context()), box, "write",
+				map[string]any{"value": "go"}, ""); res.IsError || text(res) != "write done" {
+				t.Fatalf("the later call was answered %v %q, want its own result", res.IsError, text(res))
+			}
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			synctest.Wait()
+			select {
+			case res := <-first:
+				if res.IsError || text(res) != mcpbridge.EndedRunningNote {
+					t.Errorf("the call still running was answered %v %q as its opening ended, want %q",
+						res.IsError, text(res), mcpbridge.EndedRunningNote)
+				}
+			default:
+				t.Error("the call still running was not answered as its opening ended, a later call " +
+					"of the opening having been admitted")
+			}
+			if !closedNow(ended) {
+				t.Error("the end waited for the call still running")
+			}
+			held.free()
+			<-ended
+			b.bridge.AwaitCalls(t.Context())
+		})
+	})
+	t.Run("a call whose own answer is on its way", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			b := openBubbled(t, &ledger{}, &stubTool{name: "write"}, &stubTool{name: "read"})
+			holds := holdAnswers(b, "write ok")
+			box := b.connect(t, nil)
+			t.Cleanup(func() { letGo(holds) })
+
+			first := callFromBox(context.WithoutCancel(t.Context()), box, "write", map[string]any{}, "")
+			// ITS TOOL RETURNED, it is recorded, and its own answer is held
+			// short of the SDK's write.
+			<-holds["write ok"].holding
+			if res := <-callFromBox(context.WithoutCancel(t.Context()), box, "read",
+				map[string]any{}, ""); res.IsError || text(res) != "read ok" {
+				t.Fatalf("the later call was answered %v %q, want its own result", res.IsError, text(res))
+			}
+			synctest.Wait()
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			synctest.Wait()
+			if closedNow(ended) {
+				t.Fatal("the end returned with the first call's own answer unwritten")
+			}
+			holds["write ok"].release()
+			if res := <-first; res.IsError || text(res) != "write ok" {
+				t.Errorf("the call whose answer was on its way as its opening ended was answered %v %q, "+
+					"want its own result", res.IsError, text(res))
+			}
+			synctest.Wait()
+			if !closedNow(ended) {
+				t.Error("the end did not return once that answer was out")
+			}
+		})
+	})
+}
+
+// AN OPENING'S END WAITS FOR THE ANSWER OF A CALL IT REFUSED BEFORE IT CLOSES.
+// A call that reaches an opening after its end runs nothing and is told what
+// the end means (below), which its box reads only where that answer is
+// written before the opening's sessions close: the SDK writes no answer on a
+// session whose close has begun, and the box's call would fail on the closed
+// session instead. So the end holds every answer the opening gives without
+// running a call, as it holds a running call's: with the end waiting for its
+// answer to a call still running, a call that reaches the opening then is
+// refused, its refusal held short of the SDK's write, and the end does not
+// close the session until that answer too is out, which the box reads.
+//
+// Mutation: hold no refusal for the end to wait for (`false &&` before the
+// opening's hold of one), and the end closes the session under the refusal,
+// the box's call failing on the closed session.
+func TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		held := newHeldTool("write")
+		b := openBubbled(t, &ledger{}, held, &stubTool{name: "read"})
+		holds := holdAnswers(b, mcpbridge.EndedRunningNote, mcpbridge.EndedNote)
+		box := b.connect(t, nil)
+		t.Cleanup(held.free)
+		t.Cleanup(func() { letGo(holds) })
+
+		running := callFromBox(context.WithoutCancel(t.Context()), box, "write",
+			map[string]any{"value": "hold"}, "")
+		<-held.entered
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			b.bridge.Close("run-1")
+		}()
+		// THE END'S ANSWER TO THE CALL STILL RUNNING is held short of its
+		// write, so the end waits; and a call reaches the opening then.
+		<-holds[mcpbridge.EndedRunningNote].holding
+		refused := callFromBox(context.WithoutCancel(t.Context()), box, "read", map[string]any{}, "")
+		<-holds[mcpbridge.EndedNote].holding
+		holds[mcpbridge.EndedRunningNote].release()
+		if res := <-running; res.IsError || text(res) != mcpbridge.EndedRunningNote {
+			t.Fatalf("the call still running was answered %v %q, want %q", res.IsError, text(res),
+				mcpbridge.EndedRunningNote)
+		}
+		synctest.Wait()
+		if closedNow(ended) {
+			t.Fatal("the end returned with its refusal of a later call unwritten")
+		}
+		holds[mcpbridge.EndedNote].release()
+		if res := <-refused; !res.IsError || text(res) != mcpbridge.EndedNote {
+			t.Errorf("the call that reached the opening after its end was answered %v %q, want %q, failed",
+				res.IsError, text(res), mcpbridge.EndedNote)
+		}
+		synctest.Wait()
+		if !closedNow(ended) {
+			t.Error("the end did not return once every answer it gave was out")
+		}
+		held.free()
+		b.bridge.AwaitCalls(t.Context())
 	})
 }
 

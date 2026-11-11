@@ -2,6 +2,7 @@ package mcpbridge
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -233,22 +234,48 @@ func (b *Bridge) AwaitCalls(ctx context.Context) {
 	log.InfoContext(ctx, "mcp_bridge_calls_drained", "calls", len(waiting))
 }
 
-// answeredWithin waits for every channel of answering to close, for at most
-// [endAnswerWait], and reports whether they all did.
-func answeredWithin(answering []<-chan struct{}) bool {
-	if len(answering) == 0 {
-		return true
-	}
-	timer := time.NewTimer(endAnswerWait)
-	defer timer.Stop()
-	for _, over := range answering {
-		select {
-		case <-over:
-		case <-timer.C:
-			return false
+// answersOut waits until no answer the opening gave is on its way — the
+// answer of every call it holds ([binding.holdLocked]) and of every call it
+// answered without running ([binding.holdRefusalLocked]), until each one's
+// request is over ([toolsession.Call.Over]) — or until bound fires, and
+// reports whether it found none on its way. A nil bound waits as long as that
+// takes.
+//
+// EACH PASS READS THE OPENING AGAIN, under its lock, so an answer given while
+// it waited — the refusal of a call that reached the opening after its end —
+// is waited for too. One given after the pass that found none is written only
+// where its write comes before the close that follows: the SDK writes no
+// answer on a session whose close has begun.
+func (o *binding) answersOut(bound <-chan time.Time) bool {
+	for {
+		o.mu.Lock()
+		pending := o.answeringLocked()
+		o.mu.Unlock()
+		if len(pending) == 0 {
+			return true
+		}
+		for _, over := range pending {
+			select {
+			case <-over:
+			case <-bound:
+				return false
+			}
 		}
 	}
-	return true
+}
+
+// answeringLocked is the request's end of every answer the opening gave that
+// is still on its way ([binding.answersOut]), under mu; it lets go of every
+// refusal whose answer is out.
+func (o *binding) answeringLocked() []<-chan struct{} {
+	o.refusals = slices.DeleteFunc(o.refusals, gone)
+	pending := slices.Clone(o.refusals)
+	for c := range o.running {
+		if c.over != nil && !gone(c.over) {
+			pending = append(pending, c.over)
+		}
+	}
+	return pending
 }
 
 // end refuses every later call on the opening, answers every call of it still
@@ -268,13 +295,14 @@ func (o *binding) end(how ending) { o.endKeeping(nil, how) }
 // and answers every call it admitted whose tool has not returned, in the words
 // of how it ended ([ending.stillRunning]); each call's handler stops its beat
 // and hands that answer to the SDK as any. It then waits for every answer of
-// the opening still on its way to be out — those, and the answer of a call
-// whose tool returned before the end, which its own result answers once its
-// record is made — for at most [endAnswerWait], and only then closes the box's
-// sessions: the SDK's close of a session waits for every request in flight on
-// it, and writes no answer once it has begun. Past that bound the sessions
-// are closed behind it ([bridgedCalls]), once those answers are out, and the
-// end returns.
+// the opening still on its way to be out ([binding.answersOut]) — those; the
+// answer of a call whose tool returned before the end, which its own result
+// answers once its record is made; and every answer the opening gave without
+// running a call, the refusal of one that reached it after its end among them
+// — for at most [endAnswerWait], and only then closes the box's sessions: the
+// SDK's close of a session waits for every request in flight on it, and
+// writes no answer once it has begun. Past that bound the sessions are closed
+// behind it ([bridgedCalls]), once those answers are out, and the end returns.
 //
 // AND IT ENDS THE SESSION'S LEDGER ([Ledger.End]), which carries what it owes,
 // before it returns, once, by the call that ended it: no call of the opening
@@ -298,15 +326,11 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 	}
 	o.ended, o.endedAs = true, how
 	cut := 0
-	var answering []<-chan struct{}
 	for c := range o.running {
 		if !c.answeredLocked() {
 			c.cutByEnd, c.note = true, how.stillRunning()
 			close(c.cut)
 			cut++
-		}
-		if c.over != nil && !gone(c.over) {
-			answering = append(answering, c.over)
 		}
 	}
 	inbox := o.steer
@@ -321,13 +345,13 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 			"detail", "the box was answered that each call is still running; each runs on to its "+
 				"own end and is recorded as one nobody waited for")
 	}
-	if answeredWithin(answering) {
+	timer := time.NewTimer(endAnswerWait)
+	defer timer.Stop()
+	if o.answersOut(timer.C) {
 		o.closeSessions()
 	} else {
 		o.calls.closing.Go(func() {
-			for _, over := range answering {
-				<-over
-			}
+			o.answersOut(nil)
 			o.closeSessions()
 		})
 		log.WarnContext(o.ctx, "mcp_bridge_close_deferred", "run_id", o.session.RunID,
@@ -367,4 +391,20 @@ func (o *binding) holdLocked(over <-chan struct{}) *bridgedCall {
 	o.running[c] = struct{}{}
 	o.calls.add(c)
 	return c
+}
+
+// holdRefusalLocked holds, under mu, the answer of a call the opening answers
+// without running it, until the call's request is over: over is its
+// [toolsession.Call.Over], and nil, a call no request carries, holds nothing.
+// The opening's end waits for it before it closes the box's sessions
+// ([binding.answersOut]), which write no answer once their close has begun —
+// so the refusal of a call that reaches the opening after its end, which
+// tells the box what the end means, reaches the box rather than the close's
+// "request terminated without response". And it lets go of every such answer
+// that is out.
+func (o *binding) holdRefusalLocked(over <-chan struct{}) {
+	o.refusals = slices.DeleteFunc(o.refusals, gone)
+	if over != nil {
+		o.refusals = append(o.refusals, over)
+	}
 }

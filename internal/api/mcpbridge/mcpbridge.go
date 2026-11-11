@@ -149,13 +149,17 @@
 // call that failed, and a model makes a failed call again, where this one is
 // running and its effect is still to come. The call's handler stops its beat
 // and waits for it, as before any answer, so no progress follows. The ending
-// waits for each answer it gave to be out ([toolsession.Call.Over]), and for
-// the answer of a call whose tool returned just before it — which its own
-// result answers, once its record is made — for at most [endAnswerWait], and
-// only then closes the sessions, which by then hold no request a tool is
-// behind: so it returns once those answers are out, which a box that reads
-// takes no time over, and a seat leaving this node gives its lease back then
-// rather than once the call returns.
+// waits for each answer it gave to be out ([toolsession.Call.Over]); for the
+// answer of a call whose tool returned just before it, which its own result
+// answers, once its record is made; and for every answer the opening gave
+// without running a call, the refusal of one that reached it after its end
+// among them — for at most [endAnswerWait], and only then closes the
+// sessions, which by then hold no request a tool is behind: so it returns
+// once those answers are out, which a box that reads takes no time over, and
+// a seat leaving this node gives its lease back then rather than once the
+// call returns. A call that reaches the opening as that close begins is
+// refused all the same, and its box reads the close's failure in place of
+// that refusal: the SDK writes no answer once a close has begun.
 //
 // PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
 // box is not reading, and a box that does not read must not hold an ending. It
@@ -1646,6 +1650,11 @@ type binding struct {
 	// decided and out ([bridgedCall]): what its end answers and waits for.
 	// A call leaves it at an admission after its answer is out.
 	running map[*bridgedCall]struct{}
+	// refusals is the request's end of every answer the opening gave without
+	// running a call that may still be on its way
+	// ([binding.holdRefusalLocked]): what its end waits for too, before it
+	// closes the box's sessions.
+	refusals []<-chan struct{}
 
 	// steer is the run's note inbox, fixed when the opening opened
 	// ([Session.Steer]), and closed when it ends; nil once it has.
@@ -1884,7 +1893,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// that serves its box now. TOLD AS THE OPENING ENDED
 		// ([ending.notRun]): to end its turn where the run ended, and to call
 		// again where the box goes on, its next call reaching that opening.
+		// And HELD until that answer is out, which the end waits for before it
+		// closes the box's sessions.
 		why := o.endedAs.notRun()
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		return refused(why)
 	}
@@ -1902,6 +1914,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// made this call after its tools closed — which a reviewer reading
 		// the run should see, and a surface that is not a model can act on
 		// only by its class.
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		o.record(Call{Call: tools.Call{Name: in.Name, Args: args, Output: stoppedNote,
 			Failed: true, Cause: tools.RefusalNotRunning}, Seq: seq})
@@ -1911,6 +1924,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// ANSWERED, NOT RUN, and recorded: the call was made, and an empty
 		// object in place of what the model wrote is a call it never made.
 		// Not admitted to the run's call log, since nothing ran.
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		out := toolloop.UnparsedArguments(in.Name, in.ArgumentsError)
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
