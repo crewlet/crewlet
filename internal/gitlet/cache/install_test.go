@@ -28,26 +28,71 @@ import (
 )
 
 // A COLD SYNC DOWNLOADS SIXTEEN AT ONCE: on S3 a GET is bound by its first
-// byte, so width is what a cold sync is bought with — every open is held
-// until sixteen are open together, which a sync downloading fewer at once
-// never reaches.
+// byte, so width is what a cold sync is bought with. Every GET is held open
+// here, so the sync opens as many as it downloads at once and then parks, and
+// how many is read in a synctest bubble, twice: once every goroutine of the
+// case is durably blocked (synctest.Wait) — the sixteenth GET has been made
+// by then, however late its worker ran, and so has a seventeenth the round
+// was free to make, while a sync of fewer at once has parked short of
+// sixteen — and again once the clock has moved past every timer the cache
+// arms (pastEveryTimer) and every goroutine has blocked again — a seventeenth
+// a wait on that clock let through has been made by then too. On a healthy
+// build the round, its GETs held, waits on no clock, so nothing runs in the
+// span. Once they are let go and the sync has ended, it never had more than
+// sixteen open at once. The opens are counted above the store, whatever
+// serves them, so the bubble's world keeps its packs in memory: the S3 fake
+// answers over a socket, and a goroutine waiting on one is never durably
+// blocked.
+//
+// Mutations: a round downloads one fewer at once (its share one narrower) —
+// it parks with fifteen GETs open; or one more — seventeen; or its sixteenth
+// GET waits a minute for its share — fifteen, at the first read; or a worker
+// whose share has not come within a minute takes its GET without one, or a
+// round one wider has its seventeenth wait a minute for its share — sixteen at
+// the first read, and more once the clock has moved.
 func TestAColdSyncDownloadsSixteenAtOnce(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onS3)
-	repo := w.repo(t, 1)
-	for range 40 {
-		w.push(t, repo, "refs/heads/main", nil)
-	}
-	c := w.open(t)
-	w.objects.holdUntil(cache.FetchConcurrency, hangDetector)
-	began := time.Now()
-	w.sync(t, c, repo)
-	if took := time.Since(began); took >= hangDetector {
-		t.Fatalf("the sync took %v: the gate of %d opens at once was never reached", took, cache.FetchConcurrency)
-	}
-	if _, _, most := w.objects.counts(); most != cache.FetchConcurrency {
-		t.Errorf("the most downloads at once was %d, want %d", most, cache.FetchConcurrency)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		for range 40 {
+			w.push(t, repo, "refs/heads/main", nil)
+		}
+		c := w.open(t)
+		held := make(chan struct{})
+		release := sync.OnceFunc(func() { close(held) })
+		t.Cleanup(release) // before the cache's Stop, which waits for the round
+		w.objects.hold = func(objstore.Key) <-chan struct{} { return held }
+		done := make(chan error, 1)
+		go func() {
+			s, err := c.Sync(context.Background(), repo, linearizable)
+			if err == nil {
+				s.Release()
+			}
+			done <- err
+		}()
+		// The round parked: sixteen GETs held, and every other pack in hand
+		// waiting for its turn or for the round's share.
+		parked := func(when string) {
+			t.Helper()
+			if open := w.objects.open(); open != cache.FetchConcurrency {
+				t.Errorf("with every GET held, the cold sync had %d open at once %s, want %d", open, when,
+					cache.FetchConcurrency)
+			}
+		}
+		synctest.Wait()
+		parked("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		parked("once the clock had then moved past every timer the cache arms")
+		release()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if _, _, most := w.objects.counts(); most != cache.FetchConcurrency {
+			t.Errorf("the most downloads at once was %d, want %d", most, cache.FetchConcurrency)
+		}
+	})
 }
 
 // EVERY CACHE ON A NODE SHARES ITS FETCHES: two repositories synced at once

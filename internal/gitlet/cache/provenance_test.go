@@ -663,15 +663,23 @@ func TestARunsTrailerIsChecked(t *testing.T) {
 // waiting a day for its horizon while a look said no step of it was ever due
 // (crewlet#794).
 //
+// THE DAY HAS PASSED BY THEN. The cache runs on the case's clock, moved to
+// that horizon before the drop is let go, so when the audit looks the copy's
+// time in the later queue has come — as it has on the machine's clock for a
+// runner that lost as long since the placement — and its place is held to a
+// look as of the instant before that time (cache.BackfillAudit). An audit that
+// left such a copy out, as one once did, passed the drop's missing mark.
+//
 // Mutation: mark the drop at its end alone (dropFor's mark in the hold that
 // takes the record taken out) — the audit finds the copy queued for its
 // horizon and a look saying nothing is ever due.
 func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
+	clk := newClock()
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t)
+	c := w.open(t, clk.on)
 	w.sync(t, c, repo)
 	w.push(t, repo, "refs/heads/main", nil)
 	s := w.sync(t, c, repo)
@@ -684,9 +692,10 @@ func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 	flipInPlace(t, filepath.Join(s.Dir, rel))
 
 	placed := make(chan struct{})
+	place := sync.OnceFunc(func() { close(placed) })
 	audited := make(chan []string, 1)
 	var held *cache.Cache
-	c = w.open(t, func(o *cache.Options) {
+	c = w.open(t, clk.on, func(o *cache.Options) {
 		cache.AroundDropping(o, func(dropped string) {
 			if dropped == rel {
 				<-placed
@@ -697,6 +706,7 @@ func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 			}
 		})
 	})
+	t.Cleanup(place) // before the cache's Stop, which waits for the held round
 	held = c
 	w.sync(t, c, repo)
 	// The run's check fails, and its repair round starts — held at its drop of
@@ -705,7 +715,11 @@ func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 	if err != nil || len(steps) == 0 || steps[0] != "check" {
 		t.Fatalf("the backfill took %v (%v), want the damaged run's check first", steps, err)
 	}
-	close(placed)
+	if !slices.Contains(steps, "horizon") {
+		t.Fatalf("the backfill took %v, want the copy's horizon asked: the case needs it placed behind one", steps)
+	}
+	clk.Add(cache.HorizonEvery) // the copy's time behind its horizon has come
+	place()
 	select {
 	case problems := <-audited:
 		if len(problems) > 0 {

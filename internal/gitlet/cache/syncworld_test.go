@@ -499,9 +499,8 @@ func imageOf(t testing.TB, dir string) string {
 }
 
 // countingObjects is the store's read, counted: the opens of each object, in
-// order, and the most open at once — and, when a case asks, held: every open
-// until gate are open at once (or quiet passes), or one object's until the
-// case lets it go.
+// order, and the most open at once — and, when a case asks, held: an object's
+// opens until the case lets them go (hold), each counted open while it waits.
 type countingObjects struct {
 	inner cache.Objects
 
@@ -510,8 +509,6 @@ type countingObjects struct {
 	order    []objstore.Key
 	inFlight int
 	most     int
-	gateN    int
-	gate     chan struct{}
 	hold     func(objstore.Key) <-chan struct{}
 	// fail, when set, is the store's answer to an open of an object, nil
 	// to open it; readFail the answer of every read of an object it opened,
@@ -525,35 +522,20 @@ func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.Rea
 	o.order = append(o.order, obj.Key)
 	o.inFlight++
 	o.most = max(o.most, o.inFlight)
-	gate, hold, fail, readFail := o.gate, o.hold, o.fail, o.readFail
-	if gate != nil && o.inFlight >= o.gateN {
-		close(gate)
-		o.gate = nil
-	}
+	hold, fail, readFail := o.hold, o.fail, o.readFail
 	o.mu.Unlock()
 	done := sync.OnceFunc(func() {
 		o.mu.Lock()
 		o.inFlight--
 		o.mu.Unlock()
 	})
-	wait := func(ch <-chan struct{}) error {
-		select {
-		case <-ch:
-			return nil
-		case <-ctx.Done():
-			done()
-			return context.Cause(ctx)
-		}
-	}
-	if gate != nil {
-		if err := wait(gate); err != nil {
-			return nil, err
-		}
-	}
 	if hold != nil {
 		if ch := hold(obj.Key); ch != nil {
-			if err := wait(ch); err != nil {
-				return nil, err
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				done()
+				return nil, context.Cause(ctx)
 			}
 		}
 	}
@@ -583,22 +565,6 @@ type failedRead struct {
 }
 
 func (f failedRead) Read([]byte) (int, error) { return 0, f.err }
-
-// holdUntil holds every open until n are open at once, or quiet has passed.
-func (o *countingObjects) holdUntil(n int, quiet time.Duration) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	gate := make(chan struct{})
-	o.gateN, o.gate = n, gate
-	time.AfterFunc(quiet, func() {
-		o.mu.Lock()
-		defer o.mu.Unlock()
-		if o.gate == gate {
-			close(gate)
-			o.gate = nil
-		}
-	})
-}
 
 // counts is the opens so far, the opening order and the most open at once.
 func (o *countingObjects) counts() (map[objstore.Key]int, []objstore.Key, int) {
