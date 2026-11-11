@@ -118,12 +118,17 @@ func reviewJSON(login, state, commit string) string {
 
 // runJSON is one check run; an empty conclusion is GitHub's null.
 func runJSON(id int64, name, status, conclusion string, app int64) string {
+	return runOnJSON(id, name, status, conclusion, app, factsHead)
+}
+
+// runOnJSON is runJSON on the commit head.
+func runOnJSON(id int64, name, status, conclusion string, app int64, head string) string {
 	concl := "null"
 	if conclusion != "" {
 		concl = strconv.Quote(conclusion)
 	}
-	return fmt.Sprintf(`{"id":%d,"name":%q,"status":%q,"conclusion":%s,"app":{"id":%d}}`,
-		id, name, status, concl, app)
+	return fmt.Sprintf(`{"id":%d,"name":%q,"head_sha":%q,"status":%q,"conclusion":%s,"app":{"id":%d}}`,
+		id, name, head, status, concl, app)
 }
 
 func runsJSON(runs ...string) string {
@@ -172,7 +177,7 @@ func approvalsFor(t *testing.T, reviews ...string) []string {
 	client, _ := newFactsAPI(t, pullRoutes(map[string]http.HandlerFunc{
 		factsReviews: answer(jsonList(reviews...)),
 	}))
-	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, github.Reporters{})
+	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, nil, github.Reporters{})
 	if err != nil {
 		t.Fatalf("PullFacts: %v", err)
 	}
@@ -190,7 +195,7 @@ func TestPullFactsAreReadAgainstTheHead(t *testing.T) {
 		factsBranch:  answer(protectedMain),
 		factsRuns:    answer(runsJSON(runJSON(7, "ci", "completed", "success", 101))),
 	}))
-	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, github.Reporters{})
+	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, nil, github.Reporters{})
 	if err != nil {
 		t.Fatalf("PullFacts: %v", err)
 	}
@@ -298,12 +303,12 @@ func TestReviewsPastTheBoundAreRefusedNotCut(t *testing.T) {
 	}
 
 	client, _ := newFactsAPI(t, pullRoutes(map[string]http.HandlerFunc{factsReviews: pages(11)}))
-	if _, err := client.PullFacts(t.Context(), "acme", "web", 41, github.Reporters{}); !errors.Is(err, github.ErrListTooLong) {
+	if _, err := client.PullFacts(t.Context(), "acme", "web", 41, nil, github.Reporters{}); !errors.Is(err, github.ErrListTooLong) {
 		t.Errorf("1100 reviews read as %v, want ErrListTooLong", err)
 	}
 
 	client, _ = newFactsAPI(t, pullRoutes(map[string]http.HandlerFunc{factsReviews: pages(10)}))
-	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, github.Reporters{})
+	facts, err := client.PullFacts(t.Context(), "acme", "web", 41, nil, github.Reporters{})
 	if err != nil {
 		t.Fatalf("exactly 1000 reviews were refused: %v", err)
 	}

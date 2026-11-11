@@ -61,7 +61,8 @@ func (l delegatedLog) OpenVerdict(v accessdomain.VerdictRow) (string, string, []
 func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	t.Parallel()
 	// A RULE OF EACH SHAPE: a panel on commands, and one delegate on merges
-	// and deploys with paths of its own that always go to people.
+	// and deploys with paths of its own that always go to people and checks
+	// it requires.
 	doc := "name: Acme\nroles:\n  - {name: Ops Lead, handle: ops-lead, kind: human}\n" +
 		"  - {name: Security A, handle: security-a}\n  - {name: Security B, handle: security-b}\n" +
 		"  - {name: Release Reviewer, handle: release-reviewer}\n" +
@@ -69,7 +70,8 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 		"    - {kinds: [ssh_operate], delegates: [security-a, security-b], escalate_to: [ops-lead], " +
 		"sample_one_in: 5}\n" +
 		"    - {kinds: [pr_merge, deploy], delegates: [release-reviewer], escalate_to: [ops-lead], " +
-		"always_escalate_paths: [billing/**]}\n"
+		"always_escalate_paths: [billing/**], required_checks: [{repo: acme/api, branch: main, " +
+		"checks: [test, lint]}]}\n"
 	company, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +111,12 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "DelegatedDecisionsAnswer", []map[string]any{body}, false)
-	holdShape(t, "DelegatedRule", rowsOf(t, body["rules"]), false)
+	rules := rowsOf(t, body["rules"])
+	holdShape(t, "DelegatedRule", rules, false)
+	if len(rules) != 2 || len(rowsOf(t, rules[1]["required_checks"])) != 1 {
+		t.Fatalf("the merge rule's required checks read %v", rules)
+	}
+	holdShape(t, "DelegatedRequiredChecks", rowsOf(t, rules[1]["required_checks"]), false)
 	limits, ok := body["limits"].(map[string]any)
 	if !ok {
 		t.Fatalf("the answer's limits are %v", body["limits"])
@@ -200,4 +207,97 @@ func TestAHeldCallsCardReadsWhatItsDelegationSends(t *testing.T) {
 	holdShape(t, "HeldDelegation", delegations, false)
 	holdShape(t, "HeldDelegateAnswer", given, false)
 	holdShape(t, "HeldEscalation", escalated, false)
+}
+
+// windowLog is the access log's verdicts as the store answers a window: each
+// row whose instant is in [Since, Until), narrowed by Sampled and Verdict.
+type windowLog struct{ rows []accessdomain.VerdictRow }
+
+func (l windowLog) Verdicts(_ context.Context, q accessdomain.VerdictQuery,
+	_ statelog.Freshness) (accessdomain.VerdictPage, error) {
+
+	var out []accessdomain.VerdictRow
+	for _, row := range l.rows {
+		switch {
+		case row.At.Before(q.Since), !q.Until.IsZero() && !row.At.Before(q.Until),
+			q.Sampled != nil && row.Sampled != *q.Sampled, q.Verdict != "" && row.Verdict != q.Verdict:
+			continue
+		}
+		out = append(out, row)
+	}
+	return accessdomain.VerdictPage{Rows: out, Complete: true}, nil
+}
+
+func (windowLog) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
+	return "systemctl status nginx", "a read of a service's state", nil, nil
+}
+
+// THE RUNNING DAY IS ANSWERED SO FAR. `day=today`, or today's label, answers
+// the company day still running with every verdict given on it until now and
+// `complete: false`; the default stays the last whole day, which Home's digest
+// reads; a day that has not begun is refused.
+//
+// Mutation: answer `today` as the last whole day, or end its window at the
+// last whole day, and a verdict given this morning is missing until tomorrow.
+func TestTheRunningDayAnswersWhatWasDecidedSoFar(t *testing.T) {
+	t.Parallel()
+	doc := "name: Acme\nroles:\n  - {name: Ops Lead, handle: ops-lead, kind: human}\n" +
+		"  - {name: Security A, handle: security-a}\n" +
+		"delegated_decisions:\n  enabled: true\n  rules:\n" +
+		"    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead]}\n"
+	company, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := func(id string, at time.Time) accessdomain.VerdictRow {
+		return accessdomain.VerdictRow{Handle: "sre", ID: id, Request: "r-" + id, Kind: delegated.KindSSHOperate,
+			Rule: 1, By: "security-a", ByKind: accessdomain.VerdictByAgent,
+			Through: accessdomain.VerdictThroughDelegation, Asked: delegated.Allow, Confidence: delegated.High,
+			Verdict: delegated.Allow, Final: true, Host: "h-1", At: at}
+	}
+	thisMorning := row("today", delegatedAt.Add(-30*time.Minute))
+	yesterday := row("yesterday", delegatedAt.Add(-20*time.Hour))
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Company:   func() (*config.Company, *org.Organization) { return company, nil },
+		Now:       func() time.Time { return delegatedAt },
+		Delegated: windowLog{rows: []accessdomain.VerdictRow{yesterday, thisMorning}},
+	})
+	answer := func(params map[string]any) map[string]any {
+		t.Helper()
+		raw, err := r.Answer(asSeat(t, "ops-lead"), "delegated_decisions", params)
+		if err != nil {
+			t.Fatalf("day %v: %v", params, err)
+		}
+		return asMap(t, raw)
+	}
+	requests := func(body map[string]any) []string {
+		var out []string
+		for _, row := range rowsOf(t, body["decided"]) {
+			out = append(out, row["request"].(string))
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name     string
+		params   map[string]any
+		day      string
+		complete bool
+		want     []string
+	}{
+		{"today", map[string]any{"day": "today"}, "2026-11-10", false, []string{"r-today"}},
+		{"today's label", map[string]any{"day": "2026-11-10"}, "2026-11-10", false, []string{"r-today"}},
+		{"the default, the last whole day", nil, "2026-11-09", true, []string{"r-yesterday"}},
+		{"an earlier day", map[string]any{"day": "2026-11-08"}, "2026-11-08", true, nil},
+	} {
+		body := answer(c.params)
+		if body["day"] != c.day || body["complete"] != c.complete || !slices.Equal(requests(body), c.want) {
+			t.Errorf("%s: day %v, complete %v, decided %v; want %s, %v, %v", c.name, body["day"],
+				body["complete"], requests(body), c.day, c.complete, c.want)
+		}
+	}
+	if _, err := r.Answer(asSeat(t, "ops-lead"), "delegated_decisions",
+		map[string]any{"day": "2026-11-11"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("a day that has not begun answered %v, want a bad parameter", err)
+	}
 }

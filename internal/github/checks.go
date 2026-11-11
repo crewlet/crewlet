@@ -58,6 +58,24 @@ import (
 // about the commit; "unread" is a fact about the credential, and only a
 // person can change that one. Any other failure (a timeout, a 5xx, a rate
 // limit) fails the whole read, since a retry may answer it.
+//
+// # A plan without protection requires nothing of GitHub's own
+//
+// A private repository on a plan without branch protection or rulesets is
+// refused both with a 403 that names the plan ([APIError.PlanLacks]). That is
+// GitHub saying it enforces no check there, so [Client.RequiredChecks] reads
+// it as none from that source; any other refusal still fails the read.
+//
+// # A check the company declares is a check run that succeeded
+//
+// Where GitHub enforces nothing, the company names the checks a delegated
+// merge or deploy needs itself ([RequiredCheck.Declared], [WithDeclared]).
+// Such a check passes only as a check run, the newest of each app that
+// reported it, completed with success on exactly the commit read, by an app
+// that is not one of the company's agents. Neutral and skipped pass a check
+// GitHub requires and not this one ([CheckInconclusive]), and a commit status
+// is neither read nor counted for it: no agent's app is offered Commit
+// statuses, so on a private repository the engine could not read one anyway.
 
 // RequiredCheck is one status check a branch requires before a merge.
 type RequiredCheck struct {
@@ -67,6 +85,10 @@ type RequiredCheck struct {
 
 	// AppID is the GitHub App that must report it, or zero for any source.
 	AppID int64 `json:"app_id,omitempty"`
+
+	// Declared is a check the company requires itself rather than one GitHub
+	// enforces: only a successful check run passes it.
+	Declared bool `json:"declared,omitempty"`
 }
 
 // CheckState is how one required check stands on one commit.
@@ -90,12 +112,17 @@ const (
 	// CheckUnread is a source that could report it being refused to this
 	// credential, and nothing read failing it ([CheckResult.Unreadable]).
 	CheckUnread CheckState = "unread"
+
+	// CheckInconclusive is a declared check a source finished neutral or
+	// skipped, which GitHub would count as passing and the company's
+	// declaration does not ([RequiredCheck.Declared]).
+	CheckInconclusive CheckState = "inconclusive"
 )
 
-// Valid reports one of the five states.
+// Valid reports one of the six states.
 func (s CheckState) Valid() bool {
 	switch s {
-	case CheckPassed, CheckFailed, CheckPending, CheckMissing, CheckUnread:
+	case CheckPassed, CheckFailed, CheckPending, CheckMissing, CheckUnread, CheckInconclusive:
 		return true
 	}
 	return false
@@ -259,7 +286,10 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
 	}
 	base := repoPath(owner, repo)
 	var b branchWire
-	if err := c.get(ctx, base+"/branches/"+url.PathEscape(branch), nil, &b); err != nil {
+	switch err := c.get(ctx, base+"/branches/"+url.PathEscape(branch), nil, &b); {
+	case planLacks(err):
+		// NO PROTECTION ON THIS PLAN, so none to enforce: b stays unprotected.
+	case err != nil:
 		return nil, fmt.Errorf("github: read the protection of %s/%s's %s: %w", owner, repo, branch, err)
 	}
 	var out []RequiredCheck
@@ -299,6 +329,9 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
 		// proved this credential sees the repository, so a 404 here is not
 		// GitHub hiding it: it is a GitHub Enterprise Server from before
 		// rulesets, which has none to enforce.
+	case planLacks(err):
+		// NO RULESETS ON THIS PLAN for a private repository, so none to
+		// enforce. Any other 403 is the credential's, and fails the read.
 	case err != nil:
 		return nil, fmt.Errorf("github: read the rules on %s/%s's %s: %w", owner, repo, branch, err)
 	}
@@ -332,6 +365,18 @@ func appOf(id *int64) int64 {
 	return *id
 }
 
+// WithDeclared is required with each of declared added as a check the company
+// requires itself ([RequiredCheck.Declared]), unioned and sorted as
+// [Client.RequiredChecks] answers. A name GitHub also requires stays two
+// requirements, and both must pass.
+func WithDeclared(required []RequiredCheck, declared []string) []RequiredCheck {
+	out := slices.Clone(required)
+	for _, name := range declared {
+		out = append(out, RequiredCheck{Context: name, Declared: true})
+	}
+	return unionChecks(out)
+}
+
 // unionChecks drops blank and repeated requirements and sorts the rest.
 //
 // One context bound to an app and also required from any source stays TWO
@@ -348,9 +393,20 @@ func unionChecks(in []RequiredCheck) []RequiredCheck {
 		if n := strings.Compare(a.Context, b.Context); n != 0 {
 			return n
 		}
-		return cmp.Compare(a.AppID, b.AppID)
+		if n := cmp.Compare(a.AppID, b.AppID); n != 0 {
+			return n
+		}
+		return cmp.Compare(boolRank(a.Declared), boolRank(b.Declared))
 	})
 	return slices.Compact(out)
+}
+
+// boolRank orders false before true.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // checkRunsWire is one page of a commit's check runs.
@@ -362,6 +418,7 @@ type checkRunsWire struct {
 type checkRunWire struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
+	HeadSHA    string `json:"head_sha"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	App        *struct {
@@ -384,6 +441,20 @@ func (r checkRunWire) state() CheckState {
 	switch r.Conclusion {
 	case "success", "neutral", "skipped":
 		return CheckPassed
+	}
+	return CheckFailed
+}
+
+// declaredState is a check run as a declared check reads it: only success
+// passes, and neutral or skipped is no pass and no failure.
+func (r checkRunWire) declaredState() CheckState {
+	switch {
+	case r.Status != "completed":
+		return CheckPending
+	case r.Conclusion == "success":
+		return CheckPassed
+	case r.Conclusion == "neutral" || r.Conclusion == "skipped":
+		return CheckInconclusive
 	}
 	return CheckFailed
 }
@@ -435,7 +506,10 @@ func (c *Client) CommitChecks(
 	case runsErr != nil:
 		return nil, fmt.Errorf("github: read the check runs on %s/%s@%s: %w", owner, repo, sha, runsErr)
 	}
-	runs = slices.DeleteFunc(runs, func(r checkRunWire) bool { return untrusted.app(r.appID()) })
+	// A RUN OF ANOTHER COMMIT says nothing of this one, whatever list it came in.
+	runs = slices.DeleteFunc(runs, func(r checkRunWire) bool {
+		return untrusted.app(r.appID()) || !strings.EqualFold(r.HeadSHA, sha)
+	})
 
 	// STATUSES ONLY WHERE ONE CAN COUNT. A status names no app the API
 	// reports, so an app-bound requirement is never met by one here. That is
@@ -446,7 +520,7 @@ func (c *Client) CommitChecks(
 	// read of them.
 	var statuses map[string]CheckState
 	statusesRead := true
-	if slices.ContainsFunc(required, func(r RequiredCheck) bool { return r.AppID == 0 }) {
+	if slices.ContainsFunc(required, func(r RequiredCheck) bool { return r.AppID == 0 && !r.Declared }) {
 		rows, statusesErr := walk(ctx, c, commit+"/statuses", nil,
 			func(page []statusWire) []statusWire { return page })
 		switch {
@@ -471,17 +545,48 @@ func (c *Client) CommitChecks(
 
 	out := make([]CheckResult, 0, len(required))
 	for _, req := range required {
+		if req.Declared {
+			out = append(out, judgeDeclared(req, runs, runsRead))
+			continue
+		}
 		out = append(out, judge(req, runs, runsRead, statuses, statusesRead))
 	}
 	return out, nil
 }
 
-// judge is one requirement against what was read: the newest check run of
-// each app it accepts, and the commit status where any source counts.
-func judge(
-	req RequiredCheck, runs []checkRunWire, runsRead bool,
-	statuses map[string]CheckState, statusesRead bool,
-) CheckResult {
+// judgeDeclared is one declared check against the commit's check runs alone:
+// the newest run of each app that named it, an app that names none counting
+// for nothing, every one of them completed with success.
+func judgeDeclared(req RequiredCheck, runs []checkRunWire, runsRead bool) CheckResult {
+	result := CheckResult{RequiredCheck: req}
+	if !runsRead {
+		result.State, result.Unreadable = CheckUnread, []string{unreadableChecks}
+		return result
+	}
+	var seen []CheckState
+	for _, run := range newestPerApp(req, runs) {
+		if run.appID() != 0 {
+			seen = append(seen, run.declaredState())
+		}
+	}
+	switch {
+	case slices.Contains(seen, CheckFailed):
+		result.State = CheckFailed
+	case slices.Contains(seen, CheckInconclusive):
+		result.State = CheckInconclusive
+	case slices.Contains(seen, CheckPending):
+		result.State = CheckPending
+	case len(seen) > 0:
+		result.State = CheckPassed
+	default:
+		result.State = CheckMissing
+	}
+	return result
+}
+
+// newestPerApp is the newest run of each app that reported req's context,
+// among the apps req accepts.
+func newestPerApp(req RequiredCheck, runs []checkRunWire) map[int64]checkRunWire {
 	newest := map[int64]checkRunWire{}
 	for _, run := range runs {
 		if run.Name != req.Context || (req.AppID != 0 && run.appID() != req.AppID) {
@@ -494,8 +599,17 @@ func judge(
 			newest[run.appID()] = run
 		}
 	}
+	return newest
+}
+
+// judge is one requirement against what was read: the newest check run of
+// each app it accepts, and the commit status where any source counts.
+func judge(
+	req RequiredCheck, runs []checkRunWire, runsRead bool,
+	statuses map[string]CheckState, statusesRead bool,
+) CheckResult {
 	var seen []CheckState
-	for _, run := range newest {
+	for _, run := range newestPerApp(req, runs) {
 		seen = append(seen, run.state())
 	}
 	result := CheckResult{RequiredCheck: req}
@@ -531,6 +645,13 @@ func judge(
 func forbidden(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Forbidden()
+}
+
+// planLacks reports GitHub refusing a feature the repository's plan does not
+// include ([APIError.PlanLacks]).
+func planLacks(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.PlanLacks()
 }
 
 // fullSHA reports a full commit id: forty hex digits, the only length GitHub
