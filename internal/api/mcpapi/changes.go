@@ -167,19 +167,13 @@ func (s *Service) serveChanges(w http.ResponseWriter, r *http.Request, rec *type
 		answer.Revision = revision
 	}
 	now := s.now()
-	for _, d := range decisions {
+	for i, d := range decisions {
 		wrote, err := s.decide(ctx, review, d, by.Name, now)
 		switch {
 		case err != nil:
 			log.WarnContext(ctx, "mcp_change_not_decided", "server", name, "tool", d.tool,
 				"error", err.Error())
-			detail := "the decision about " + d.tool + " could not be written; ask again, which is " +
-				"safe: nothing is decided twice"
-			if answer.Revision != nil {
-				detail += ". The blocked levels are written"
-			}
-			httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
-				httpjson.Detail{"detail": detail})
+			refusePartial(w, answer, decisions[i:])
 			return
 		case !wrote:
 			answer.Moved = append(answer.Moved, d.tool)
@@ -190,6 +184,35 @@ func (s *Service) serveChanges(w http.ResponseWriter, r *http.Request, rec *type
 		}
 	}
 	httpjson.Write(w, http.StatusOK, answer)
+}
+
+// refusePartial answers 503 for decisions written one by one that stopped at
+// the first of undecided: what was written, what somebody decided first and
+// what was not, by name, so the caller says exactly that and reads the changes
+// again. Asking again with the same body is refused, since what was written is
+// decided; the ones left are asked again by themselves.
+func refusePartial(w http.ResponseWriter, answer ChangesAnswer, undecided []decision) {
+	left := make([]string, 0, len(undecided))
+	for _, d := range undecided {
+		left = append(left, d.tool)
+	}
+	detail := "the decision about " + left[0] + " could not be written"
+	if len(left) > 1 {
+		detail += ", and nothing was tried for " + words.And(left[1:])
+	}
+	if written := slices.Concat(answer.Accepted, answer.Blocked); len(written) > 0 {
+		slices.Sort(written)
+		detail += ". Decided already: " + words.And(written)
+	} else {
+		detail += ". Nothing was decided"
+	}
+	if answer.Revision != nil {
+		detail += ", and the blocked levels are written"
+	}
+	detail += ". Read the server's changes again and decide the ones left."
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds, httpjson.Detail{
+		"detail": detail, "accepted": answer.Accepted, "blocked": answer.Blocked, "moved": answer.Moved,
+		"undecided": left})
 }
 
 // matchDecisions matches each decision the body names to the change it
@@ -287,37 +310,87 @@ func (s *Service) blockReviewed(w http.ResponseWriter, r *http.Request, server s
 	return maps.Clone(written.Answer), true
 }
 
-// acceptHeld accepts the definition a held call was made under, where the
-// fleet lists it for the tool and nobody has accepted it: an Always allow
-// decides the tool's level on that definition (ADR-0078), so a tool held only
-// because it changed runs unasked from then on. Nothing where the server has
-// listed another definition since, which still waits for a review; a failure
-// is logged and leaves the change waiting, the level already written.
+// acceptHeld accepts the definition a held call was made under, by the held
+// call's own digest, where a live listing names the tool under it and nobody
+// has accepted it: an Always allow decides the tool's level on that definition
+// (ADR-0078), so a tool held only because it changed runs unasked from then
+// on. EVERY CALL THAT ACCEPTS NOTHING SAYS WHY in the log: the definition is
+// accepted already, the server's first listing is not yet, or no live listing
+// names the tool under it (the server lists another since, which waits for a
+// review, or no node lists it now). A failure leaves the change waiting, the
+// level already written.
 func (s *Service) acceptHeld(ctx context.Context, held sandbox.HeldCall, by string) {
+	attrs := []any{"server", held.Server, "tool", held.Raw, "digest", held.Digest}
+	notAccepted := func(detail string, extra ...any) {
+		log.WarnContext(ctx, "mcp_held_definition_not_accepted",
+			slices.Concat(attrs, extra, []any{"detail", "the tool is allowed; " + detail})...)
+	}
 	if s.reviews == nil {
+		notAccepted("this node keeps no copy of the fleet's listings, so its change waits for a review")
 		return
 	}
 	review, err := s.reviews.MCPReview(ctx, held.Server)
 	if err != nil {
-		log.WarnContext(ctx, "mcp_held_definition_not_accepted", "server", held.Server, "tool", held.Raw,
-			"error", err.Error(), "detail", "the tool is allowed; its change waits for a review")
+		notAccepted("its change waits for a review", "error", err.Error())
 		return
 	}
-	at := slices.IndexFunc(review.Changes, func(c mcpreview.Change) bool {
-		return c.Tool == held.Raw && c.After != nil && c.After.Digest == held.Digest
-	})
-	if at < 0 {
+	before, decided := review.Accepted[held.Raw]
+	switch {
+	case len(review.Accepted) == 0:
+		log.InfoContext(ctx, "mcp_held_definition_left", slices.Concat(attrs, []any{"detail",
+			"nothing of the server's first listing is accepted yet, and it is accepted as it is"})...)
+		return
+	case decided && !before.Removed && before.Digest == held.Digest:
+		log.InfoContext(ctx, "mcp_held_definition_left", slices.Concat(attrs, []any{"detail",
+			"the definition the call was made under is accepted already; the level written decides it"})...)
 		return
 	}
-	d := decision{tool: held.Raw, change: review.Changes[at]}
-	wrote, err := s.decide(ctx, review, d, by, s.now())
+	listed := listedUnder(review.Listings, held.Raw, held.Digest)
+	if listed == nil {
+		notAccepted("no live listing names it under the definition the call was made under: the "+
+			"server lists another since, which waits for a review, or no node lists it now",
+			"listed", listedDigests(review.Listings, held.Raw))
+		return
+	}
+	change := mcpreview.Change{Tool: held.Raw, Kind: mcpreview.KindAdded, After: listed}
+	if decided && !before.Removed {
+		change.Kind, change.Before = mcpreview.KindChanged, &before
+	}
+	wrote, err := s.decide(ctx, review, decision{tool: held.Raw, change: change}, by, s.now())
 	switch {
 	case err != nil:
-		log.WarnContext(ctx, "mcp_held_definition_not_accepted", "server", held.Server, "tool", held.Raw,
-			"error", err.Error(), "detail", "the tool is allowed; its change waits for a review")
+		notAccepted("its change waits for a review", "error", err.Error())
 	case !wrote:
-		log.WarnContext(ctx, "mcp_held_definition_not_accepted", "server", held.Server, "tool", held.Raw,
-			"detail", "somebody decided the change meanwhile; the tool is allowed and its change "+
-				"is as they left it")
+		notAccepted("somebody decided the change meanwhile, and it is as they left it")
+	default:
+		log.InfoContext(ctx, "mcp_held_definition_accepted", slices.Concat(attrs, []any{"by", by})...)
 	}
+}
+
+// listedUnder is the tool raw as the first live listing naming it under digest
+// lists it, nil where none does.
+func listedUnder(listings []coord.MCPListing, raw, digest string) *coord.MCPListedTool {
+	for _, l := range listings {
+		for _, t := range l.Tools {
+			if t.Raw == raw && t.Digest == digest {
+				return &t
+			}
+		}
+	}
+	return nil
+}
+
+// listedDigests is every digest the live listings name the tool raw under,
+// sorted.
+func listedDigests(listings []coord.MCPListing, raw string) []string {
+	out := []string{}
+	for _, l := range listings {
+		for _, t := range l.Tools {
+			if t.Raw == raw {
+				out = append(out, t.Digest)
+			}
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
