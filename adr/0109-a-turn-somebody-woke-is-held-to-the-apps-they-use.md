@@ -193,9 +193,10 @@ a roll:
 - an older applier retains a record carrying the field at its position, the established deferral;
 - an older change feed defers that record's wake to a newer peer rather than dropping it
   (internal/changefeed, crewlet#842);
-- an older notify parser defers a newer record's wake to a peer that reads it rather than
-  acknowledging it as a payload it cannot parse (internal/notify, crewlet#993), so the wake is
-  never delivered without its carrier;
+- an older notify parser passes a newer record's wake back to the group rather than
+  acknowledging it as a payload it cannot parse (internal/notify, crewlet#993), and the first
+  node of the newer build to start replays whatever the group's deliveries did not deliver, from
+  the copy the pass's dead letter keeps, so the wake is never delivered without its carrier;
 - an older data node refuses a routed write whose actor carries a requester, naming the key
   (`actor.provenance.WrittenFor` for Worklet, `args.Actor.WrittenFor` for Doclet and Chatlet), and
   runs none of it (ADR-0025's amendment). The router asks the next data node, so a data node of the

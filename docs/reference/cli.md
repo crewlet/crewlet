@@ -2312,6 +2312,12 @@ serving the API answers alike. They are clients of the routes in the
 [API reference](api-endpoints.md#the-wake-feeds-dead-letters), and the token
 in `CREWLET_API_TOKEN` takes `admin`.
 
+A wake the notification service's inbound group passed round during a roll
+and no node took is that subscription's dead letter, not a wake feed's:
+neither command lists or discards it, and the first node able to read it
+replays it when it starts
+([Dead letters](../concepts/event-system.md#dead-letters)).
+
 ### `crewlet feeds dead-letters`
 
 One row per entry, every feed's in turn: its **id**, the one `discard` names; its

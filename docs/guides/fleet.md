@@ -848,22 +848,34 @@ The consequences worth stating plainly:
   or discards is kept for `stream.event_retention_hours` and then expires,
   and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
   [Dead letters](../concepts/event-system.md#dead-letters).
-- **An older node hands a newer record's wake back to the fleet, for about
-  ten minutes.** Every node takes the notification service's deliveries from
-  one consumer group, `notify-inbound`, and a wake carries the record its
-  feed relayed, so a wake whose record the newer build wrote reaches the
-  older nodes too, which cannot read it. An older node that wins one hands
-  it back for a peer on the newer build rather than acknowledge it for the
-  whole fleet (`inbound_deferred` and `delivery_passed`, both at `INFO`),
-  and goes on taking its other deliveries. It comes back on the redelivery
-  backoff, a second doubling to thirty, so the group's 25 deliveries offer
-  it to the fleet for about ten minutes; one that no newer node has taken
-  by then is dead-lettered with its copy under
-  `dlq.crewlet.notifications.inbound.notify-inbound` (`dead_lettered` at
-  `ERROR`), and nothing replays it, so its wake is lost. The newer node
-  whose feed relayed the record is already in the group, so keeping the
-  upgraded nodes running while the roll goes on is what delivers it. See
-  [Delivery semantics](../concepts/event-system.md#delivery-semantics).
+- **An older node hands a newer record's wake back to the fleet, and the
+  first newer node to start delivers what the fleet did not.** Every node
+  takes the notification service's deliveries from one consumer group,
+  `notify-inbound`, and a wake carries the record its feed relayed, so a
+  wake whose record the newer build wrote reaches the older nodes too, which
+  cannot read it. An older node that wins one hands it back rather than
+  acknowledge it for the whole fleet (`inbound_deferred` and
+  `delivery_passed`, both at `INFO`), and goes on taking its other
+  deliveries. It comes back on the redelivery backoff, a second doubling to
+  thirty, for the group's 25 deliveries, about ten minutes, and nothing
+  steers those deliveries to a node of the newer build: early in a roll, one
+  newer node among many older ones, every one of them can go to an older
+  node. One that no node has taken by then is dead-lettered with its copy
+  under `dlq.crewlet.notifications.inbound.notify-inbound.{digest}`, marked
+  as passed (`dead_lettered` at `ERROR`, with `passed=newer_record`), and the
+  first node of the newer build to start afterwards delivers its wake and
+  drops it (`inbound_dead_letters_replayed`), so a roll that takes longer
+  than ten minutes loses no wake. A roll that pauses with a newer node among
+  older ones delivers those wakes as it goes on, at each next node's start;
+  one paused for good keeps them for `stream.event_retention_hours`, and
+  restarting a node of the newer build delivers them. Waiting, each holds one
+  of the group's acknowledgement slots for up to its ten minutes, out of the
+  broker's 1000, so only a sustained 1.7 such wakes a second early in a roll
+  would delay the group's other mail, and none of it is lost. `crewlet feeds
+  dead-letters` does not list these: they are the notification service's,
+  not a wake feed's. See
+  [Delivery semantics](../concepts/event-system.md#delivery-semantics) and
+  [Dead letters](../concepts/event-system.md#dead-letters).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two

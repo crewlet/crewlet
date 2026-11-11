@@ -370,14 +370,22 @@ func (s *Service) Unregister(source string) bool {
 	return true
 }
 
-// Start attaches to the inbound topic.
+// Start attaches to the inbound topic, then replays the inbound group's
+// passed wakes that no node handled while they were offered (replay.go).
+//
+// THE REPLAY AFTER THE SUBSCRIBE AND OUTSIDE THE LOCK. After, so this node is
+// a member of the group whatever the replay meets: a replay that failed part
+// way leaves its copies kept for the next start, and must not leave the node
+// deaf. Outside, because the replay handles each copy through [Service.Handle],
+// which takes the read lock, and Go's RWMutex is not reentrant.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.started {
+		s.mu.Unlock()
 		return nil
 	}
 	if err := s.queue.Subscribe(ctx, topics.NotificationsInbound, InboundGroup, s.Handle); err != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("notify: subscribe inbound: %w", err)
 	}
 	s.started = true
@@ -385,7 +393,9 @@ func (s *Service) Start(ctx context.Context) error {
 	// the write lock, and Go's RWMutex is not reentrant — a read lock
 	// taken by the same goroutine deadlocks the boot.
 	sources := slices.Sorted(maps.Keys(s.parsers))
+	s.mu.Unlock()
 	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
+	s.replay(ctx)
 	return nil
 }
 
@@ -423,8 +433,10 @@ func (s *Service) Sources() []string {
 // node (crewlet#993). Nor is it deferred: nothing is wrong with this node, so
 // it goes on taking its other mail, and the delivery's returns are spaced as a
 // failure's are, so the older nodes of a roll cannot spin it between them. The
-// group's 25 deliveries offer it to the fleet for about ten minutes before it
-// is dead-lettered with its copy.
+// group's 25 deliveries offer it to the fleet for about ten minutes, and
+// nothing steers them to a node that reads it; one no node handled by then is
+// dead-lettered with its copy under its pass's reason, and the next node that
+// reads it replays it at its start (replay.go), through this same handling.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
