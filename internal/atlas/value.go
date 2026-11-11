@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ValueType is the grammar one fact's value is written in. A closed set, and
@@ -99,17 +100,17 @@ var (
 // urlSchemes is every scheme an endpoint may be addressed with.
 var urlSchemes = []string{"http", "https", "ws", "wss", "grpc", "grpcs", "tcp"}
 
-// Parse reads raw as a value of type t. words is the closed set a word must be
+// Parse reads raw as a value of type t. set is the closed set a word must be
 // one of, and nil for every other type. The answer is canonical, so two
 // spellings of one value compare equal.
-func Parse(t ValueType, raw string, words []string) (Value, error) {
+func Parse(t ValueType, raw string, set []string) (Value, error) {
 	if t != TypeWord && t != TypeInt && t != TypePort && redact.Contains(raw) {
 		return Value{}, ErrCredential
 	}
 	switch t {
 	case TypeWord:
-		if !slices.Contains(words, raw) {
-			return Value{}, fmt.Errorf("%w: not one of %s", ErrInvalid, strings.Join(words, ", "))
+		if !slices.Contains(set, raw) {
+			return Value{}, fmt.Errorf("%w: a word is %s", ErrInvalid, words.Or(set))
 		}
 		return Value{Type: t, Text: raw}, nil
 	case TypeInt:
@@ -223,7 +224,7 @@ func parseURL(raw string) (Value, error) {
 	}
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !slices.Contains(urlSchemes, strings.ToLower(u.Scheme)) || u.Opaque != "" {
-		return Value{}, fmt.Errorf("%w: an address is one of %s, with a host", ErrInvalid, strings.Join(urlSchemes, ", "))
+		return Value{}, fmt.Errorf("%w: an address is %s, with a host", ErrInvalid, words.Or(urlSchemes))
 	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
 		return Value{}, fmt.Errorf("%w: record the address without credentials, a query or a fragment", ErrCredential)
