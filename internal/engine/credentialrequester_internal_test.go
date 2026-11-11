@@ -70,7 +70,7 @@ func TestACredentialIsPlacedByItsLoginsNamespaceAlone(t *testing.T) {
 		{"token:elsewhere", false, nil},
 		{"token:unknown", false, nil},
 		{"deploy-bot", true, []iam.Grant{iam.GrantDoclet, iam.GrantWorklet, iam.GrantArtifacts, iam.GrantChatlet,
-			iam.GrantGitlet}},
+			iam.GrantGitlet, iam.GrantAtlas}},
 		{"paused-bot", false, nil},
 		{"seated-bot", false, nil},
 		{"ana", false, nil},

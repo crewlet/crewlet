@@ -1,10 +1,12 @@
 package code_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -32,15 +34,20 @@ func announcing(stream *announced) func(*code.CommitterOptions) {
 	return func(o *code.CommitterOptions) { o.Events, o.AgentIDs = stream, agentIDs }
 }
 
-// requireOnce fails t unless stream holds exactly one event of eventType once
-// a retry's would have arrived.
-func requireOnce(t *testing.T, stream *announced, eventType string) {
+// stopper is a writer whose Stop returns only once it has published every
+// announcement its writes handed over: a committer's, whose announcer it
+// drains (Committer.Stop), and a change writer's, whose flights it waits for
+// with the reviews they announce (ChangeWriter.Stop).
+type stopper interface{ Stop(ctx context.Context) }
+
+// settled is every event of eventType stream holds once w has stopped. A
+// stopped writer has published everything its writes handed over, so an
+// announcement a retry wrongly made is among them, never still on its way:
+// read after a pause instead, a late one passed for none.
+func settled(t *testing.T, w stopper, stream *announced, eventType string) []*events.Event {
 	t.Helper()
-	time.Sleep(20 * time.Millisecond)
-	if got := len(stream.of(eventType)); got != 1 {
-		t.Fatalf("%s was announced %d times, want once: a retry the ledger collapsed is its landing's", eventType,
-			got)
-	}
+	w.Stop(context.WithoutCancel(t.Context()))
+	return stream.of(eventType)
 }
 
 // AN OPENED CHANGE IS ANNOUNCED ONCE, NAMING ITS OWNER'S SEAT: dev's open of
@@ -73,12 +80,15 @@ func TestAnOpenedChangeIsAnnouncedOnceOnItsOwnersSeat(t *testing.T) {
 
 	again, err := c.ProposeChange(t.Context(), p)
 	requireChanged(t, again, err)
-	requireOnce(t, stream, "change_opened")
 
 	person, err := c.ProposeChange(t.Context(), opening(repo, releaseRef, mainRef, ada))
 	requireChanged(t, person, err)
-	waitAnnouncedOf(t, stream, "change_opened", 2)
-	if got := stream.of("change_opened")[1].Data.(*types.ChangeOpened); got.Owner != "founder" ||
+	opened := settled(t, c, stream, "change_opened")
+	if len(opened) != 2 {
+		t.Fatalf("the stopped committer published %d openings, want dev's web!1 once and the person's: an open "+
+			"the ledger collapsed is announced by its landing alone", len(opened))
+	}
+	if got := opened[1].Data.(*types.ChangeOpened); got.ChangeID != person.ChangeID || got.Owner != "founder" ||
 		got.OwnerKind != "person" || got.Agent != "" || got.Number != 2 {
 		t.Fatalf("a person's open was announced as %+v, want founder's web!2 named by no agent id", got)
 	}
@@ -110,7 +120,10 @@ func TestAPushThatOpensAChangeAnnouncesItOnce(t *testing.T) {
 	if again, err := c.Propose(t.Context(), p); err != nil || !again.Answer.Collapsed {
 		t.Fatalf("the push proposed again answered %+v, %v; want its first record's row, collapsed", again, err)
 	}
-	requireOnce(t, stream, "change_opened")
+	if got := len(settled(t, c, stream, "change_opened")); got != 1 {
+		t.Fatalf("the stopped committer published %d openings, want the push's once: a push the ledger "+
+			"collapsed is announced by its landing alone", got)
+	}
 }
 
 // A REVIEW IS ANNOUNCED ONCE, NAMING THE SEAT THAT GAVE IT AND THE SEAT THAT
@@ -147,11 +160,14 @@ func TestAReviewIsAnnouncedOnceOnItsReviewerAndOwner(t *testing.T) {
 	if _, err := w.Converse(t.Context(), cw); err != nil {
 		t.Fatalf("the review asked again: %v", err)
 	}
-	requireOnce(t, stream, "review_submitted")
 
 	converse(t, w, reviewing(repo, change, ada, 1, code.VerdictComment, nil, raising(code.SeverityNit, 3, "Naming")))
-	waitAnnouncedOf(t, stream, "review_submitted", 2)
-	if got := stream.of("review_submitted")[1].Data.(*types.ReviewSubmitted); got.Reviewer != "founder" ||
+	reviews := settled(t, w, stream, "review_submitted")
+	if len(reviews) != 2 {
+		t.Fatalf("the stopped writer published %d reviews, want plat-lead's once and the person's: a review "+
+			"the ledger collapsed is announced by its landing alone", len(reviews))
+	}
+	if got := reviews[1].Data.(*types.ReviewSubmitted); got.Reviewer != "founder" ||
 		got.ReviewerKind != "person" || got.Agent != "" || got.OwnerAgent != "agent-dev" || got.Findings != 1 {
 		t.Fatalf("a person's review was announced as %+v, want founder's, named by no agent id, its finding "+
 			"on dev's", got)

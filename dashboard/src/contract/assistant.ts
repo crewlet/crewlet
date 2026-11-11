@@ -81,6 +81,12 @@ export const ASSISTANT_AUDIT_REASON_MAX_RUNES = 500;
 export const ASSISTANT_KEEPALIVE_SECONDS = 15;
 /** The reserved action the server sends after a write lands. */
 export const ASSISTANT_ACTION_CONTEXT_INVALIDATE = "context.invalidate";
+/**
+ * The longest revision, reason or receipt a page's report of a page action
+ * carries, in bytes: each one short line. The engine refuses a report past it,
+ * and a refused report is one the turn never hears.
+ */
+export const ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES = 256;
 /** What opens a proposal's digest on the wire. */
 export const ASSISTANT_DIGEST_PREFIX = "sha256:";
 

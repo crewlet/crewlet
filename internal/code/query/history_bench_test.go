@@ -307,7 +307,7 @@ func (r *historyRig) shapedLocked(b *testing.B, pool *gitproc.Pool, shape string
 		peak, measured := gittest.PeakAnon(func() {
 			began := time.Now()
 			res, err = pool.Run(b.Context(), cmd)
-			took = time.Since(began)
+			took = time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 		})
 		if err != nil {
 			b.Fatalf("git commit-graph write %v in %s: %v\n%s", args, dir, err, res.Stderr)

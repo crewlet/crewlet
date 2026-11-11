@@ -123,7 +123,11 @@ func TestEveryCutOutputButTheLastIsFull(t *testing.T) {
 // outputs uploaded one after another would age the first by every later one —
 // two gibibyte outputs at the store's pacing floor past it, for ever. A store
 // that holds every put until all three of a build's outputs have begun is
-// answered: the three keys are minted within a second of one another.
+// answered, every put let go by that and nothing else: so every key, minted
+// inside the store's put once the hold lets it go, is minted with all three
+// uploads begun, and none waits on another's upload. The hold's own count
+// says so, with no clock: a put it let go before all three had begun, or that
+// its hang detector ended, would be one uploaded alone.
 //
 // Mutation: upload the outputs in a loop, one put at a time, and the first put
 // waits for the others until its hold gives up, failing the compaction.
@@ -132,9 +136,10 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 	x := cutFixture(t)
 	const want = 3
 	var (
-		mu    sync.Mutex
-		begun int
-		all   = make(chan struct{})
+		mu       sync.Mutex
+		begun    int
+		together int
+		all      = make(chan struct{})
 	)
 	rs := &recordingStore{Store: x.store}
 	rs.hold = func(ctx context.Context) error {
@@ -146,8 +151,11 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 		mu.Unlock()
 		select {
 		case <-all:
+			mu.Lock()
+			together++
+			mu.Unlock()
 			return nil
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			return fmt.Errorf("only %d of the %d outputs' puts began in 30 s: the uploads are not made at once",
 				begun, want)
 		case <-ctx.Done():
@@ -159,19 +167,12 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 		t.Fatalf("the compaction of three outputs: %s, %v; want applied", out, err)
 	}
 	stored, _ := rs.stored()
-	if len(stored) != want {
-		t.Fatalf("the compaction stored %d objects, want its %d outputs", len(stored), want)
-	}
-	first, last := stored[0].Key.Minted(), stored[0].Key.Minted()
-	for _, o := range stored[1:] {
-		if at := o.Key.Minted(); at.Before(first) {
-			first = at
-		} else if at.After(last) {
-			last = at
-		}
-	}
-	if spread := last.Sub(first); spread > time.Second {
-		t.Errorf("the outputs' keys were minted %s apart, want within a second", spread)
+	mu.Lock()
+	let := together
+	mu.Unlock()
+	if len(stored) != want || let != want {
+		t.Fatalf("the compaction stored %d objects, %d of them let go with all %d puts begun; want its %d "+
+			"outputs, every one so", len(stored), let, want, want)
 	}
 }
 

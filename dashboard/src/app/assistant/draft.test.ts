@@ -14,11 +14,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
   ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
   ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
+import { bytesOf } from "~/lib/clip.ts";
+import { orList } from "~/lib/words.ts";
 import { pageContextFits, wireBytes } from "~/protocol/assistantWire.ts";
 import {
   applyPageAction,
@@ -36,8 +39,10 @@ import {
   draftSetArgs,
   draftSnapshot,
   isSecretDraftPath,
+  listing,
   parseDraftChange,
   refuse,
+  said,
   type AssistantDraftSpec,
 } from "./draft.ts";
 
@@ -483,5 +488,51 @@ describe("a file field", () => {
       ok: false,
       reason: "Not that one.",
     });
+  });
+});
+
+// A REFUSAL IS ONE SHORT LINE: the reason a page action's report carries back
+// to the model, which the engine takes within its line. The template's own
+// words stay whole, a value that fits stays whole, and the longest give way
+// first, so the room a short value leaves goes to the long ones rather than
+// being cut away from all of them alike; a list says as many as fit and how
+// many more. Mutation: give every value the same share whatever the others
+// take, and the two long values here are cut further than the line needs.
+describe("a refusal said in one short line", () => {
+  const line = ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES;
+
+  test("is the sentence itself where it fits", () => {
+    expect(said`${"Datadog"} offers ${"SRE"} no level called “${"Owner"}”.`).toBe(
+      "Datadog offers SRE no level called “Owner”.",
+    );
+    expect(said`It offers ${listing(["View", "Edit", "Admin"], orList)}.`).toBe(
+      "It offers View, Edit or Admin.",
+    );
+  });
+
+  test("keeps its words and its short values whole, the long ones sharing what is left", () => {
+    const sentence = said`${"QA"} is off on ${"設".repeat(300)}, and its ${"x".repeat(500)} waits.`;
+    expect(bytesOf(sentence)).toBeLessThanOrEqual(line);
+    expect(bytesOf(sentence)).toBeGreaterThan(line - 8);
+    expect(sentence).toMatch(/^QA is off on 設+…, and its x+… waits\.$/);
+    const [, shorter, longer] = /on (設+)…, and its (x+)…/.exec(sentence) ?? [];
+    // An even share of the room the words and "QA" left: a third of the bytes
+    // each, give or take a character.
+    expect(Math.abs(bytesOf(shorter ?? "") - bytesOf(longer ?? ""))).toBeLessThanOrEqual(3);
+  });
+
+  test("lists as many names as fit, then how many more", () => {
+    const names = Array.from({ length: 40 }, (_, i) => `acme/service-${i + 1}`);
+    const sentence = said`GitHub's connection reaches no repository called “${"acme/secret"}”. It reaches: ${listing(names)}.`;
+    expect(bytesOf(sentence)).toBeLessThanOrEqual(line);
+    expect(sentence).toMatch(
+      /^GitHub's .+ called “acme\/secret”\. It reaches: acme\/service-1, .+ and \d+ more\.$/,
+    );
+  });
+
+  test("says how many there are where not even the first fits", () => {
+    const names = ["設".repeat(200), "設".repeat(200)];
+    const sentence = said`It offers ${listing(names)}.`;
+    expect(sentence).toBe("It offers 2 of them.");
   });
 });

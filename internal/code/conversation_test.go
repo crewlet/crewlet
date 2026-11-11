@@ -589,7 +589,7 @@ func TestOneChangesWritesAreTakenOneAtATime(t *testing.T) {
 		select {
 		case a := <-ch:
 			requireConversed(t, a.res, a.err)
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatalf("the %s write was not answered in 30 s", name)
 		}
 	}
@@ -637,7 +637,7 @@ func TestAClosedWriterTakesNothingNewAndFinishesWhatItStarted(t *testing.T) {
 			if !errors.Is(a.err, code.ErrNotServing) {
 				t.Fatalf("%s on a closed writer answered %+v, %v; want ErrNotServing", what, a.res, a.err)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatalf("%s on a closed writer was not answered in 10 s", what)
 		}
 	}
@@ -651,7 +651,7 @@ func TestAClosedWriterTakesNothingNewAndFinishesWhatItStarted(t *testing.T) {
 	select {
 	case a := <-inFlight:
 		requireConversed(t, a.res, a.err)
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the publish in flight was not answered in 30 s once its record went through")
 	}
 }
@@ -719,7 +719,7 @@ func TestABurstPastTheWritersBoundsIsRefusedAtOnce(t *testing.T) {
 		select {
 		case a := <-converse(cw):
 			requireConversationRefused(t, n, before, a.res, a.err, code.ConversationRefusalBusy, says)
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatalf("%s waited rather than being refused at once", what)
 		}
 	}
@@ -749,7 +749,7 @@ func TestABurstPastTheWritersBoundsIsRefusedAtOnce(t *testing.T) {
 		select {
 		case a := <-ch:
 			requireConversed(t, a.res, a.err)
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatalf("taken write %d was not answered in 30 s", i)
 		}
 	}

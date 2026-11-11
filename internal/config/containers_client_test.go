@@ -9,17 +9,20 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// THE NEW-PROJECT DIALOG KEYS A PROJECT BY THE ENGINE'S GRAMMAR.
+// THE DASHBOARD KEYS A CONTAINER BY THE ENGINE'S GRAMMAR.
 //
-// The dialog checks the key a person types before the write that names it,
-// and stops the field at the grammar's width, so its copy is the engine's own
-// text: a looser one let `MY_PROJ`, a single letter and a twelve-letter key
-// through to a write every node refuses; a tighter one would refuse a key the
-// engine takes. And the width it stops at is the pattern's bound.
+// The new-project dialog checks the key a person types before the write that
+// names it, and stops the field at the grammar's width; and past what an enum
+// may list, Ask Crewlet is told a Doclet space by the key's grammar rather
+// than by every space the company has. So the dashboard's copy is the
+// engine's own text: a looser one let `MY_PROJ`, a single letter and a
+// twelve-letter key through to a write every node refuses, and tells the
+// assistant keys no space can have; a tighter one refuses a key the engine
+// takes. And the width it stops at is the pattern's bound.
 //
 // Mutation: change either side's pattern or bound, or MaxContainerKey alone,
 // and this fails.
-func TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar(t *testing.T) {
+func TestTheDashboardKeysAContainerByTheEnginesGrammar(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
 	for name, engine := range map[string]string{

@@ -132,10 +132,11 @@ export const MAX_UNIT_ID = 64;
  * What a project's or a space's KEY may look like (`config.ContainerKeyPattern`):
  * an upper-case letter, then one to nine upper-case letters or digits, the
  * shape every tracker and knowledge backend accepts. The new-project dialog
- * holds the key a person types to it before the write that names it. A
- * STRING, compiled where it is used. Held equal to the engine's, as
- * [CONTAINER_KEY_MAX] is, by
- * `internal/config.TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar`.
+ * holds the key a person types to it before the write that names it, and Ask
+ * Crewlet is told a Doclet space by it where a company has more spaces than an
+ * enum may list. A STRING, compiled where it is used. Held equal to the
+ * engine's, as [CONTAINER_KEY_MAX] is, by
+ * `internal/config.TestTheDashboardKeysAContainerByTheEnginesGrammar`.
  */
 export const CONTAINER_KEY_PATTERN = "^[A-Z][A-Z0-9]{1,9}$";
 

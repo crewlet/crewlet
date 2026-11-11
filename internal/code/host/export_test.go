@@ -138,6 +138,27 @@ func SpoolWaiting(s *Server) int { return s.spools.waiters() }
 // SpoolPlaces is how many places s's spool waiting room has given out now.
 func SpoolPlaces(s *Server) int { return s.spools.placesHeld() }
 
+// RecordSpoolWaits has s's spool allowance note the bound of every wait a
+// request begins from now on, and answers a reader of the bounds noted, in
+// order. Set after SetSpools, which replaces the allowance, and before the
+// requests a case sends: the allowance reads it on every request's goroutine.
+func RecordSpoolWaits(s *Server) func() []time.Duration {
+	var (
+		mu    sync.Mutex
+		waits []time.Duration
+	)
+	s.spools.armed = func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		waits = append(waits, d)
+	}
+	return func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(waits)
+	}
+}
+
 // SpoolOutcomes is every outcome a request's turn at the spool allowance ends
 // in, as crewlet.code.host.spool.waits counts it.
 func SpoolOutcomes() []string { return slices.Clone(spoolOutcomes) }
@@ -412,6 +433,20 @@ func GitTook(s *Server, args ...string) func() (time.Duration, int) {
 		defer mu.Unlock()
 		return total, runs
 	}
+}
+
+// SetClock has s read its clock from now in place of its Options.Now: what a
+// verification's start, end and deadline are stamped by, among the rest. Set
+// before s's first request: the server reads it on every request's goroutine.
+func SetClock(s *Server, now func() time.Time) { s.now = now }
+
+// SetKeepaliveTicks has every push session of s take its keepalive's ticks
+// from ticks, in place of a ticker of its Timing.Keepalive: one line on the
+// push's stderr a tick, each written before the session takes the next. Set
+// before s's first push: the server reads the field on every session's
+// goroutine.
+func SetKeepaliveTicks(s *Server, ticks <-chan time.Time) {
+	s.keepaliveTicks = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
 }
 
 // SetChainMerges scales what a chain's merges are given together after its

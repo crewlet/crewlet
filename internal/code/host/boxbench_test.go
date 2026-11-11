@@ -672,7 +672,7 @@ func boxCheckouts(b *testing.B, box *benchBox, repo sandbox.RunRepo) {
 		b.StartTimer()
 		at := time.Now()
 		boxStep(b, dir, box.env, step)
-		took = append(took, time.Since(at))
+		took = append(took, time.Since(at)) //fixedwait:measure a benchmark reports this; no gate reads it
 		b.StopTimer()
 		if err := os.RemoveAll(dir); err != nil {
 			b.Fatal(err)
@@ -709,7 +709,8 @@ func pastRacy(b *testing.B, checkout string) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	time.Sleep(time.Until(info.ModTime().Truncate(time.Second).Add(time.Second + 10*time.Millisecond)))
+	//fixedwait:bench
+	time.Sleep(time.Until(info.ModTime().Truncate(time.Second).Add(time.Second + 10*time.Millisecond))) //fixedwait:measure the remaining time only sizes the wait past the index's second
 }
 
 // boxStatuses is an op=status arm: a warm `git status` of checkout an
@@ -1300,11 +1301,11 @@ func warmBox(b *testing.B, node codetest.Node, repoID string) {
 		if held > 0 && indexed == held && len(bitmaps) > 0 && graph {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("node %s indexed %d of %d packs (%d bitmaps, commit-graph %t) in %v", node.ID(), indexed,
 				held, len(bitmaps), graph, warmBoxWait)
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) //fixedwait:liveness
 	}
 }
 
@@ -1356,7 +1357,7 @@ func boxTimed(b *testing.B, dir string, env []string, command string) (wall, cpu
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	at := time.Now()
 	err = cmd.Run()
-	wall = time.Since(at)
+	wall = time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 	if cmd.ProcessState != nil {
 		cpu = cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
 	}

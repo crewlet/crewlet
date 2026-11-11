@@ -318,10 +318,8 @@ var contract = []Entry{
 	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 	{"UNIT_ID_PATTERN", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
 	{"MAX_UNIT_ID", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
-	{"CONTAINER_KEY_PATTERN", ReadScalar,
-		"internal/config.TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar"},
-	{"CONTAINER_KEY_MAX", ReadScalar,
-		"internal/config.TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar"},
+	{"CONTAINER_KEY_PATTERN", ReadScalar, "internal/config.TestTheDashboardKeysAContainerByTheEnginesGrammar"},
+	{"CONTAINER_KEY_MAX", ReadScalar, "internal/config.TestTheDashboardKeysAContainerByTheEnginesGrammar"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -432,6 +430,7 @@ var contract = []Entry{
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
 	{"APPS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"DEFAULT_APPS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
 	{"PERSON_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"MACHINE_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
@@ -608,6 +607,7 @@ var contract = []Entry{
 	{"ASSISTANT_AUDIT_REASON_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_KEEPALIVE_SECONDS", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_ACTION_CONTEXT_INVALIDATE", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
+	{"ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_DIGEST_PREFIX", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"AssistantFrame", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantConversationEvent", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},

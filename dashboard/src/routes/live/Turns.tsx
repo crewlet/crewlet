@@ -53,7 +53,13 @@
 import { useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
+import {
+  choiceKey,
+  seatKey,
+  urlAction,
+  windowKey,
+  type UrlActionKey,
+} from "~/app/assistant/urlAction.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
@@ -137,6 +143,24 @@ const WHICH_TURNS = [
   { value: "true", label: "Carried a failure" },
   { value: "false", label: "Clean" },
 ];
+
+/**
+ * What Ask Crewlet may set on Turns, as the controls below write it: the
+ * window from this screen's offer, a seat from the menu's own agent seats
+ * (past what an enum may list, by a handle's grammar), the failures switch
+ * and the order.
+ */
+export function turnsFilterKeys(
+  seats: readonly { handle: string; name: string }[],
+  now: () => number,
+): Readonly<Record<string, UrlActionKey>> {
+  return {
+    window: windowKey(TURN_OFFER, now),
+    seat: seatKey("Seat", seats, "filter"),
+    failed: choiceKey("Which turns", WHICH_TURNS, "filter"),
+    sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
+  };
+}
 
 /**
  * What the axis says while the list is narrowed by failure.
@@ -269,16 +293,7 @@ export function Turns() {
   useAssistantContext({
     actions: urlAction("turns.filter.apply", {
       scope: "Turns list filters and window (view only)",
-      keys: {
-        window: windowKey(TURN_OFFER, () => now),
-        seat: choiceKey(
-          "Seat",
-          seats.map((s) => ({ value: s.handle, label: s.name })),
-          "filter",
-        ),
-        failed: choiceKey("Which turns", WHICH_TURNS, "filter"),
-        sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
-      },
+      keys: turnsFilterKeys(seats, () => now),
       nav,
     }),
   });

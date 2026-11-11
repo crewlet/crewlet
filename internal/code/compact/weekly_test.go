@@ -56,6 +56,54 @@ func (x *fixture) weekly(name string, before time.Time) (code.ExpungeCandidate, 
 	}
 }
 
+// steppedClock is a clock a case moves on by hand from the wall's instant
+// where it began. Its fleet's applier reads every record's broker instant off
+// it (stampedBy), so the instant a pack ARRIVED at is one the case stated, and
+// a compactor's clock set from it judges the grace against such instants
+// alone.
+type steppedClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *steppedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *steppedClock) step(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+// steppedFixture is newFixture over a fleet whose data node stamps every
+// record it applies with clock's instant (stampedBy).
+func steppedFixture(t *testing.T, clock *steppedClock) *fixture {
+	t.Helper()
+	return newFixtureWith(t, func(o *codetest.SoloOptions) { o.WrapApplier = stampedBy(clock.now) })
+}
+
+// between is the instant between the packs x has pushed and the ones it pushes
+// next, on x's stepped clock: the fleet levelled, so every record appended so
+// far is applied and stamped at the clock's instant, then the clock stepped an
+// hour on to it and an hour past it. A pack pushed so far arrived an hour
+// before it, and one pushed from here on arrives an hour after. Never two
+// sleeps around a reading of the wall clock, which hold the instants apart
+// only once the clock has moved between them, and not at all on a coarse
+// one.
+func (x *fixture) between(clock *steppedClock) time.Time {
+	x.t.Helper()
+	if err := x.fleet.Level(x.c.Ctx, ""); err != nil {
+		x.t.Fatalf("level the fleet: %v", err)
+	}
+	clock.step(time.Hour)
+	mid := clock.now()
+	clock.step(time.Hour)
+	return mid
+}
+
 // leakBytes commits a file of n seeded random bytes — incompressible — on a
 // branch named name, pushes it and deletes the branch, the work tree back
 // where it was: a commit no ref reaches, of about n bytes. It answers the
@@ -136,16 +184,22 @@ func TestAWeeklyExpungeWaitsForAQuarter(t *testing.T) {
 // out an older leak beside it, whole; and the next weekly expunge whose clock
 // stands a grace past that pack's arrival takes it.
 //
-// Mutation: plan the schedule's inputs without their arrival (every live
-// pack), and the young pack's objects go with the first expunge.
+// EVERY INSTANT IS THE CASE'S (steppedClock): the old leak arrives and is
+// dropped an hour before mid, the young pack arrives an hour after it, and
+// each expunge's clock is a grace past an instant on the same clock, so the
+// grace is judged against what the case stated and no wall clock has to move.
+//
+// Mutations: plan the schedule's inputs without their arrival (every live
+// pack), and the young pack's objects go with the first expunge; date a pack's
+// arrival by the applying node's own clock rather than its record's broker
+// instant, and the young pack reads as arrived before mid, and goes with it.
 func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t)
+	clock := &steppedClock{at: time.Now()}
+	x := steppedFixture(t, clock)
 	x.push(96 << 10)
 	old := x.leakBytes("old", 96<<10)
-	time.Sleep(100 * time.Millisecond)
-	mid := time.Now()
-	time.Sleep(100 * time.Millisecond)
+	mid := x.between(clock)
 	h := x.handmade()
 	b := make([]byte, 64<<10)
 	for i := range b {
@@ -173,8 +227,13 @@ func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 		t.Fatalf("the commit %s, whose pack arrived within the grace, left the live packs", young)
 	}
 
-	second := x.past()
-	cand, ok = x.weekly(codetest.RepoName, time.Now().Add(code.PruneGrace+time.Hour-code.ExpungeInterval))
+	// THE NEXT WEEKLY EXPUNGE, its clock a grace and an hour past the young
+	// pack's arrival, on the case's clock.
+	clock.step(time.Hour)
+	at := clock.now().Add(code.PruneGrace)
+	second, _, _ := x.compactorOf(func(o *compact.Options) { o.Now = func() time.Time { return at } })
+	compact.ExpungeFrom(second, 1)
+	cand, ok = x.weekly(codetest.RepoName, at.Add(-code.ExpungeInterval))
 	if !ok {
 		t.Fatalf("a week past its expunge the weekly arm names no %s", codetest.RepoName)
 	}
@@ -230,10 +289,10 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 			if _, err := c.ExpungePass(t.Context()); err != nil {
 				t.Fatalf("an expunge pass: %v", err)
 			}
-			if l.count("code_expunge_busy") == busy || time.Now().After(deadline) {
+			if l.count("code_expunge_busy") == busy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the scans are counted after it
 				return
 			}
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 
@@ -279,17 +338,22 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 // that comes up empty after it. No begin is proposed, every live pack stays
 // where it was, and the young pack's objects are still live.
 //
-// Mutation: weigh every live pack rather than the eligible ones, and the scan
+// EVERY INSTANT IS THE CASE'S (steppedClock): the reachable pack arrives an
+// hour before mid and the young one an hour after it, and the scan's clock is
+// a grace past mid on the same clock.
+//
+// Mutations: weigh every live pack rather than the eligible ones, and the scan
 // finds the repository due (code_expunge_due); take into the plan a pack that
 // frees nothing as well, and the cycle rewrites the old, reachable packs to
-// free nothing — applied.
+// free nothing — applied; date a pack's arrival by the applying node's own
+// clock rather than its record's broker instant, and the young pack is weighed
+// as old, and found due.
 func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t)
+	clock := &steppedClock{at: time.Now()}
+	x := steppedFixture(t, clock)
 	x.push(96 << 10)
-	time.Sleep(100 * time.Millisecond)
-	mid := time.Now()
-	time.Sleep(100 * time.Millisecond)
+	mid := x.between(clock)
 	h := x.handmade()
 	b := make([]byte, 96<<10)
 	for i := range b {

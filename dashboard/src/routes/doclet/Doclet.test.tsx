@@ -31,7 +31,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { Doclet } from "./Doclet.tsx";
+import { Doclet, knowledgeSearchKeys } from "./Doclet.tsx";
+import { parseUrlPatch, urlArgs } from "~/app/assistant/urlAction.ts";
+import { ASSISTANT_ACTION_ARGS_MAX_ENUM } from "~/contract/assistant.ts";
+import { CONTAINER_KEY_MAX, CONTAINER_KEY_PATTERN } from "~/contract/config.ts";
+import { actionArgsProblem } from "~/protocol/assistantWire.ts";
 import { ContainerPeek } from "./peeks.tsx";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings, Shell } from "~/app/Shell.tsx";
@@ -1164,4 +1168,28 @@ test("who files here: a reader without the grant is told so, and one whose read 
   await waitFor(() => expect(screen.getAllByText("Engineering").length).toBe(2));
   expect(screen.queryByText(/Who files here/)).toBeNull();
   expect(screen.queryByText("Owner unknown")).toBeNull();
+});
+
+// A COMPANY OF MORE SPACES THAN AN ENUM MAY LIST keeps Ask Crewlet's search:
+// past the engine's bound the space filter is declared by a space key's
+// grammar, where an enum of every space was a schema the frame left out of the
+// page context, and the whole search action with it. A space the company has
+// still parses, and one it does not is refused. Mutation: list every space
+// whatever their number, and the action is past the bound.
+test("offers its search to Ask Crewlet whatever the number of spaces", () => {
+  const key = (i: number) => `S${String(i).padStart(3, "0")}`;
+  const spaces = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ key: key(i + 1), name: `Space ${i + 1}` }));
+  const most = urlArgs(knowledgeSearchKeys(spaces(ASSISTANT_ACTION_ARGS_MAX_ENUM)));
+  expect(most.properties?.space?.enum).toHaveLength(ASSISTANT_ACTION_ARGS_MAX_ENUM);
+  const keys = knowledgeSearchKeys(spaces(ASSISTANT_ACTION_ARGS_MAX_ENUM + 1));
+  const args = urlArgs(keys);
+  expect(actionArgsProblem(args)).toBeNull();
+  expect(args.properties?.space).toMatchObject({
+    pattern: CONTAINER_KEY_PATTERN,
+    maxLength: CONTAINER_KEY_MAX,
+  });
+  expect(args.properties?.space?.enum).toBeUndefined();
+  expect(parseUrlPatch({ space: key(ASSISTANT_ACTION_ARGS_MAX_ENUM + 1) }, keys).ok).toBe(true);
+  expect(parseUrlPatch({ space: "NOPE" }, keys).ok).toBe(false);
 });

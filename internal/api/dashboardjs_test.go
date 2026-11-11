@@ -1368,7 +1368,18 @@ const (
 	// in +404 bytes gzipped (the guard, and the words it names an action it
 	// leaves out in), since every page context is built there, with no
 	// screen's module in the entry. Merged on top of delegated decisions it
-	// measured 401.7 KiB, inside 402 KiB.
+	// measured 401.7 KiB, inside 402 KiB. With the atlas's access words merged
+	// on top it measured 401.8 KiB (411,426 bytes), 222 bytes inside 402 KiB.
+	// A page action's report held to the engine's line and a seat or a space
+	// declared by its grammar past an enum's 64 add 26 bytes to it (the
+	// report's bound beside the page registry's other bounds), so it measures
+	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. A new project's
+	// key, a deck's title and the copied engine bounds held to the engine's
+	// (+181), then the sidebar's pin page in a contract module of its own and
+	// the projects' page beside the work bounds the entry already reads (+15),
+	// take it to 402.0 KiB (411,648 bytes), the budget itself: nothing
+	// remains, so the next addition to the entry moves this budget only with a
+	// reason of its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2241,13 +2252,21 @@ const (
 	// enum's 64, and the org builder's identities and a mention held to the
 	// engine's, +11,156 bytes on the tree they were built on, merged on top of
 	// it, took it to 5753.9 KiB (5,892,019 bytes, +11,158, all script):
-	// 5754 KiB. A new project's key checked by the engine's grammar (+92), a
-	// deck's title held to its bytes with Save held past it or past a slide's
-	// notes (+589), a model's secret named by the secret store's grammar (+19)
-	// and every other copied engine bound held to the engine's own (+202),
-	// +902 bytes on the tree they were built on, merged on top of it, took it
-	// to 5754.8 KiB (5,892,941 bytes, +922, all script): 5755 KiB.
-	treeBudget = 5<<20 + 635<<10
+	// 5754 KiB. The atlas named among the access words a refusal uses, merged
+	// on top of it, took it to 5754.2 KiB (5,892,306 bytes, +287, all
+	// script): 5755 KiB. A page action's report held to the engine's line (a
+	// refusal written within it, the report cut at a whole character) and a
+	// seat or a space declared by its grammar past an enum's 64 took it to
+	// 5755.6 KiB (5,893,768 bytes, +1,462, all script): 5756 KiB.
+	// A new project's key checked by the engine's grammar, a deck's title held
+	// to its bytes with Save held past it or past a slide's notes, a model's
+	// secret named by the secret store's grammar and every other copied engine
+	// bound held to the engine's own (+922 bytes when they were merged on the
+	// tree before these two fixes), then every create page's task text held to
+	// what a task holds and the artifact listing, datastore, board, project and
+	// change part bounds held to the engine's, merged on top of it, took it to
+	// 5757.3 KiB (5,895,481 bytes, +1,713, all script): 5758 KiB.
+	treeBudget = 5<<20 + 638<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -192,7 +192,7 @@ func TestAPushedChangesTitleIsReadBesideItsUpload(t *testing.T) {
 	case <-uploading:
 	case res := <-done:
 		t.Fatalf("the push ended while its change's title was held: %s", res)
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the push's upload did not start while its change's title was read")
 	}
 	release()

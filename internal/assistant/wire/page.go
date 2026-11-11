@@ -253,6 +253,15 @@ const (
 	// PageTitleMaxRunes is the longest page title, and a draft field's
 	// label ([PageDraftLabelMaxRunes]).
 	PageTitleMaxRunes = 120
+	// PageTitleMaxBytes is the most a page title of [PageTitleMaxRunes]
+	// characters takes, at four bytes a character: the ONE bound on the
+	// title's bytes. The turn and the message that carry the title as their
+	// page chip hold it to this (internal/assistantdomain), so a title the
+	// wire takes is one they store. Held to the conversation title's 256
+	// bytes there, a page whose title ran past 85 Japanese characters
+	// validated here and had every question asked on it refused when its
+	// turn opened.
+	PageTitleMaxBytes = 4 * PageTitleMaxRunes
 	// PageValueMaxBytes is the longest value a route parameter or a query
 	// key carries, and an enumerated or constant value of an action's
 	// arguments.
@@ -287,7 +296,7 @@ func (p PageContext) Validate() error {
 			PageContextMaxBytes)
 	case !screenPattern().MatchString(p.Screen):
 		return fmt.Errorf("%w: page context screen %q is not a screen name", ErrInvalid, p.Screen)
-	case !plain(p.Title, 4*PageTitleMaxRunes) || utf8.RuneCountInString(p.Title) > PageTitleMaxRunes:
+	case !plain(p.Title, PageTitleMaxBytes) || utf8.RuneCountInString(p.Title) > PageTitleMaxRunes:
 		return fmt.Errorf("%w: page context title is not plain text of at most %d characters",
 			ErrInvalid, PageTitleMaxRunes)
 	case len(p.Resources) > PageContextMaxResources:

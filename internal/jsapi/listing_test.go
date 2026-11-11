@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -263,6 +264,16 @@ func TestALaterPageIsGivenWhatThePageBeforeItTook(t *testing.T) {
 // back to what it took, so one long silence does not make every later listing
 // wait it out. The client here is given a default of 3.9 seconds, so a page
 // at the read term alone is asked at none and two seconds, twice, inside it.
+//
+// EACH LISTING NOBODY ANSWERS RUNS IN A SYNCTEST BUBBLE, the broker outside
+// it, so its timers fire at exactly their instants: on the machine's clock the
+// bound and a page's third request were a tenth of a second apart, and the
+// verdict turned on how late a loaded runner woke — the object store's stream
+// info failed on CI with its third request sent past the same bound, which
+// the hedge no longer does ([jsprovision.ReadBoundedWith]). A listing's
+// requests are counted behind a fence on its own connection
+// ([jsapitest.Held.Fence]). The listing the leader answers runs outside, as
+// its answer comes from outside every bubble.
 func TestASubjectPageNobodyAnsweredTeachesTheNextListingItsTerm(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond
@@ -273,36 +284,44 @@ func TestASubjectPageNobodyAnsweredTeachesTheNextListingItsTerm(t *testing.T) {
 	}
 	// list lists LOG's subjects for a caller that set no deadline, as the
 	// object collector's sweep is.
-	list := func() error {
-		return leader.Subjects(context.Background(), "log.>", func(map[string]uint64) error { return nil })
+	list := func(ctx context.Context) error {
+		return leader.Subjects(ctx, "log.>", func(map[string]uint64) error { return nil })
 	}
-	silent := func(listing string, err error) {
+	// silent lists in a bubble, where held answers nothing, and is how many
+	// requests the listing put to held.
+	silent := func(listing string, held *jsapitest.Held) int {
 		t.Helper()
-		if !jsprovision.Unanswered(context.Background(), err) {
-			t.Fatalf("%s, which nobody answered, ended with %v rather than as silence", listing, err)
+		synctest.Test(t, func(t *testing.T) {
+			if err := list(t.Context()); !jsprovision.Unanswered(t.Context(), err) {
+				t.Fatalf("%s, which nobody answered, ended with %v rather than as silence", listing, err)
+			}
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		asked, err := held.Fence(ctx, js.Conn())
+		if err != nil {
+			t.Fatal(err)
 		}
+		return asked
 	}
 
 	held := jsapitest.Hold(t, srv, jsapitest.StreamInfo("LOG"))
-	silent("the first listing", list())
-	if n := held.Count(); n != 2 {
+	if n := silent("the first listing", held); n != 2 {
 		t.Fatalf("the first listing's page was asked %d times inside its client's %v, want 2: "+
 			"at none and two seconds, the read term alone", n, bound)
 	}
-	silent("the second listing", list())
-	if n := held.Count() - 2; n != 1 {
+	if n := silent("the second listing", held); n != 1 {
 		t.Errorf("the second listing's page was asked %d times inside its client's %v, want 1: "+
 			"the page before it went unanswered for that whole bound, so it is given that "+
 			"beside the read term", n, bound)
 	}
 
 	held.Release()
-	if err := list(); err != nil {
+	if err := list(t.Context()); err != nil {
 		t.Fatalf("a listing the leader answers: %v", err)
 	}
 	again := jsapitest.Hold(t, srv, jsapitest.StreamInfo("LOG"))
-	silent("the listing after an answered one", list())
-	if n := again.Count(); n != 2 {
+	if n := silent("the listing after an answered one", again); n != 2 {
 		t.Errorf("after a page the leader answered at once, the next listing's page was asked "+
 			"%d times inside its client's %v, want 2: an answered page sets the term back to "+
 			"what it took", n, bound)

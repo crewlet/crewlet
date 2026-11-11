@@ -12,6 +12,8 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { buildPageContext, type FramePage, type PageActionSpec } from "~/app/assistant/context.ts";
+import { ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES } from "~/contract/assistant.ts";
+import { bytesOf } from "~/lib/clip.ts";
 import {
   draftSetAction,
   draftSetArgs,
@@ -411,6 +413,127 @@ describe("a change Ask Crewlet proposes to the Agents tab", () => {
     expect(proposed(jiraAnswer(), { "agent_1.jira.scope": ["ENG"] })).toBe(
       "Product access only on Jira takes no projects. Choose PM's access first, in the same change.",
     );
+  });
+
+  // EVERY REFUSAL IS ONE SHORT LINE, as the page's report carries it back to
+  // the model: whatever an agent, a level or a scope entry is called and
+  // whatever the proposal typed, each sentence the tab can refuse in is within
+  // the engine's line, and still says what the control offers, listed as far
+  // as the line holds and then counted. Said whole, a refusal naming a dozen
+  // repositories was past the line, and the report carrying it was refused.
+  // Mutation: write a refusal as a plain template, or let `said` place a name
+  // whole, and its case here is past the line.
+  test("refuses in one short line, whatever the names and the value run to", () => {
+    const long = "設".repeat(200);
+    // EVERY NAME A PERSON OR A VENDOR WROTE, run long: each agent's, a level's
+    // reason for being offered disabled, and a dozen more levels and scope
+    // entries than the fixture lists, each named as a company names its own.
+    const more = (prefix: string) => Array.from({ length: 12 }, (_, i) => `${prefix}-${i + 1}`);
+    const stretched = (answer: AccessAnswer): AccessAnswer => ({
+      ...answer,
+      options: answer.options.map((o) => ({
+        ...o,
+        levels: [
+          ...(o.levels ?? []).map((l) =>
+            l.unavailable ? { ...l, unavailable: `${l.unavailable} ${long}` } : l,
+          ),
+          ...(o.levels?.length ? more("Custom role").map((name) => ({ id: name, name })) : []),
+        ],
+        ...(o.scope ? { scope: [...o.scope, ...more("acme/service")] } : {}),
+      })),
+      seats: answer.seats.map((s) => ({ ...s, name: `${s.name} ${long}` })),
+    });
+    // TWO OF A LIST'S ENTRIES CALLED ALIKE, and long: the first two levels,
+    // neither of them one the agent holds, and two scope entries.
+    const twins = (answer: AccessAnswer): AccessAnswer => ({
+      ...answer,
+      options: answer.options.map((o) => ({
+        ...o,
+        levels: (o.levels ?? []).map((l, i) => (i < 2 ? { ...l, name: `Twin ${long}` } : l)),
+        ...(o.scope ? { scope: [`acme/${long}`, `acme/${long}`] } : {}),
+      })),
+    });
+    const datadog = stretched(datadogAnswer());
+    const github = stretched(githubAnswer());
+    const confluence = stretched(confluenceAnswer());
+    const typed = `Owner ${long}`;
+    const cases: [string, AccessAnswer, Record<string, unknown>, RegExp][] = [
+      ["a switch's word", datadog, { "agent_2.datadog.enabled": typed }, /is On or Off\.$/],
+      [
+        "a level for an agent that is off",
+        datadog,
+        { "agent_2.datadog.level": typed },
+        /Turn it on in the same change\.$/,
+      ],
+      [
+        "a level no menu offers",
+        datadog,
+        { "agent_3.datadog.level": typed },
+        /”\. It offers .+ and \d+ more\.$/,
+      ],
+      [
+        "a level two of the menu's share",
+        twins(datadogAnswer()),
+        { "agent_3.datadog.level": `Twin ${long}` },
+        /: choose it on .+'s row\.$/,
+      ],
+      [
+        "a level offered disabled",
+        stretched(cloudflareAnswer()),
+        { "agent_2.cloudflare.level": "Secure" },
+        /^The Secure level is unavailable until .+…$/,
+      ],
+      [
+        "a permission no picker offers",
+        confluence,
+        { "agent_1.confluence.levels": [typed] },
+        /”\. It offers .+ and \d+ more\.$/,
+      ],
+      [
+        "a GitHub permission's word",
+        github,
+        { "agent_1.github.permission.workflows": typed },
+        /permission is No access or Read and write\.$/,
+      ],
+      [
+        "a scope entry the connection does not reach",
+        github,
+        { "agent_1.github.scope": [typed] },
+        /”\. It reaches: .+ and \d+ more\.$/,
+      ],
+      [
+        "a scope entry two share",
+        twins(githubAnswer()),
+        { "agent_1.github.scope": [`acme/${long}`] },
+        /on the tab\.$/,
+      ],
+      [
+        "a scope on product access only",
+        stretched(jiraAnswer()),
+        { "agent_1.jira.scope": ["ENG"] },
+        /, in the same change\.$/,
+      ],
+      [
+        "a field the draft does not have",
+        datadog,
+        { [`agent_9.${"x".repeat(300)}`]: "On" },
+        /”\.$/,
+      ],
+      [
+        "a value of the wrong shape",
+        datadog,
+        { "agent_3.datadog.level": 7 },
+        /is a line of text\.$/,
+      ],
+    ];
+    for (const [what, answer, values, ends] of cases) {
+      const reason = proposed(answer, values);
+      expect(typeof reason, `${what} is taken`).toBe("string");
+      expect(bytesOf(reason as string), `${what}: ${reason as string}`).toBeLessThanOrEqual(
+        ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
+      );
+      expect(reason, what).toMatch(ends);
+    }
   });
 
   // A RUNNING SYNC HOLDS EVERY CONTROL, so the card's Approve waits with the

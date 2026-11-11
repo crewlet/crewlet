@@ -182,7 +182,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
 		"any of "+iamGrantWords()+", separated by commas, or `none`. admin includes "+
-			"every app. If left out: every app on invite and a "+
+			"every app. If left out: "+iamAppWords()+" on invite and a "+
 			"person's create, the owner's permissions on token. Required on a "+
 			"service account's create")
 	stage := fs.String("stage", "", "only people at this stage")
@@ -290,13 +290,13 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if err = iamNewcomer(sub, *kind, *email, *login, *seat, granted.given); err != nil {
 		return err
 	}
-	// AND WHAT A PERSON IS GIVEN WHEN NOTHING SAYS: every app, and never
-	// admin. The node requires the field on a create and an invitation —
-	// `[]` is a real answer there, the overview alone — so the default is
-	// this command's, stated in its help, rather than an absence the node
-	// would have to guess at.
+	// AND WHAT A PERSON IS GIVEN WHEN NOTHING SAYS: every app but the
+	// opt-in ones ([iam.DefaultApps]), and never admin. The node requires
+	// the field on a create and an invitation (`[]` is a real answer there,
+	// the overview alone), so the default is this command's, stated in its
+	// help, rather than an absence the node would have to guess at.
 	if !granted.given && iamNewPerson(sub, *kind) {
-		granted = iamGrantList{grants: slices.Clone(iam.Apps), given: true}
+		granted = iamGrantList{grants: slices.Clone(iam.DefaultApps), given: true}
 	}
 	// A TOKEN HAS AN OWNER, and which kind decides who may mint it: a
 	// person mints their own, signed in (-login), and a service account's
@@ -525,9 +525,10 @@ var iamSubjects = subjectTable{
 // since it has no address to propose from.
 //
 // A SERVICE ACCOUNT IS ALSO TOLD WHAT IT CARRIES, every time: a person left
-// without -grants is given every app ([iamNewPerson]), the colleague's
-// default, but nobody is behind a service account to have meant one — what a
-// pipeline may do is a decision, and `-grants none` is how to decide nothing.
+// without -grants is given the default apps ([iamNewPerson]), the
+// colleague's default, but nobody is behind a service account to have meant
+// one. What a pipeline may do is a decision, and `-grants none` is how to
+// decide nothing.
 //
 // THE KIND IS THE FLAG'S, never guessed from the login's shape: the node reads
 // a blank kind as a person, and so does this. A kind this command does not
@@ -679,7 +680,7 @@ var iamGranting = map[string]bool{
 
 // iamNewPerson reports whether sub enrols a PERSON — an invitation, which is
 // always one, or a create whose kind is not a machine — the one newcomer the
-// command gives every app when -grants is left out.
+// command gives the default apps ([iam.DefaultApps]) when -grants is left out.
 func iamNewPerson(sub, kind string) bool {
 	switch sub {
 	case "invite":
@@ -758,11 +759,11 @@ func iamGrants(flagged string) (iamGrantList, error) {
 // "comma-separated" was one more member of the list.
 func iamGrantWords() string { return words.Or(iam.AllGrants) }
 
-// iamAppWords is the APPS among them ([iam.Apps]), which is what a person's
-// invitation or create carries when -grants is left out — read off the same
-// list, for the same reason, and joined with "and", since it is every one of
-// them.
-func iamAppWords() string { return words.And(iam.Apps) }
+// iamAppWords is the apps a person's invitation or create carries when
+// -grants is left out ([iam.DefaultApps]: every app but the opt-in ones), read
+// off the engine's list for the same reason, and joined with "and", since it
+// is every one of them.
+func iamAppWords() string { return words.And(iam.DefaultApps) }
 
 // iamHelp is [iamUsage] with its blanks filled: the default config path, and
 // the permission and app vocabularies, which are the engine's own lists rather

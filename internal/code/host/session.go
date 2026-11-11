@@ -372,13 +372,13 @@ func (s *Server) keepalive(sess *session, fw *frameWriter) (stop func()) {
 	start := s.now()
 	go func() {
 		defer close(ended)
-		ticker := time.NewTicker(s.o.Timing.Keepalive)
-		defer ticker.Stop()
+		ticks, stopTicks := s.keepaliveTicker(s.o.Timing.Keepalive)
+		defer stopTicks()
 		for {
 			select {
 			case <-done:
 				return
-			case <-ticker.C:
+			case <-ticks:
 				sess.mu.Lock()
 				step := sess.current
 				sess.mu.Unlock()

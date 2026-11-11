@@ -128,7 +128,7 @@ func (c *cell) box(t *testing.T) *sandbox.FakeSandbox {
 	select {
 	case b := <-c.made:
 		return b
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no box was made")
 		return nil
 	}
@@ -161,6 +161,11 @@ type fleet struct {
 	faults    *codefault.Script
 	// leases and counter are the company's coordination store: the remote
 	// cells' slots and the fleet's counter their box-minutes are charged to.
+	// The leases keep A CLOCK THE CASE HOLDS, frozen where the fleet began and
+	// moved only by its Advance: a slot lapses only where a case lapses it, so
+	// a slot nobody gave back stays live however long a case waits, and a
+	// wait for every slot given back is met by the giving alone — never by a
+	// lease's TTL running out on the wall clock a minute later.
 	leases  *memory.Backend
 	counter *memory.Fleet
 }
@@ -176,7 +181,9 @@ func newFleet(t *testing.T) *fleet {
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	f := &fleet{t: t, faults: &codefault.Script{}, leases: memory.New(), counter: memory.NewFleet()}
+	began := time.Now().UTC()
+	f := &fleet{t: t, faults: &codefault.Script{}, leases: &memory.Backend{Clock: func() time.Time { return began }},
+		counter: memory.NewFleet()}
 	f.d = codetest.StartDataNode(t, codetest.DataOptions{ID: "data-a", Queue: q, Dir: dir, LogBytes: 64 << 20,
 		Faults: f.faults})
 	f.d.Declare(t, time.Now().UTC().Add(-time.Hour).Truncate(time.Second),
@@ -314,10 +321,10 @@ func (f *fleet) await(key code.CheckKey, what string, ok func(code.CheckRow) boo
 		if held && ok(row) {
 			return row
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			f.t.Fatalf("attempt %d of %s never %s: %+v", key.Attempt, key.Name, what, row)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

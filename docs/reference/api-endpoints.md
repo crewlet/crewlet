@@ -543,7 +543,7 @@ every other route.
 | `GET` | `/gitlet/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-gitletreposnameverifyid)) |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and Ask Crewlet is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported; its `revision`, `reason` and `receipt` are each one short line, at most 256 bytes, and a longer one is `400 invalid_body`. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's Ask Crewlet conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never Ask Crewlet). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#ask-crewlet). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -861,7 +861,7 @@ trusted, and every start of the node logs the same warning as
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares who may ask it — **everybody**, one
 of the [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`), or a verb of the
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, `atlas`), or a verb of the
 authority table that the answer decides record by record — and a principal that
 does not carry what it declares is refused, a Tier A token included, whose
 declared permissions are read through the node's `api.auth.admin` posture on
@@ -6819,7 +6819,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6833,7 +6833,13 @@ and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
 repository, and beside the code writes `code_mark_inbox`, a person's marks
 over their own code notices: a seat is woken, never shown an inbox, so it has
-none to mark. A view is furniture (a name, a shape
+none to mark. And `atlas_search`, the company's
+[atlas](../concepts/atlas.md) for a holder of `atlas`, every entry with its
+facts, sources and relations, and its repositories only for a caller who holds
+`gitlet` too: a `query` (part of a name or key, or an id), a `kind` and a
+`limit` (default 50, at most 500), answered with `entries`, the `total` that
+matched, each source's `coverage` and how many values were `withheld` for being
+shaped like a credential. A view is furniture (a name, a shape
 and a filter, arranged so a person finds the same question tomorrow), and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own

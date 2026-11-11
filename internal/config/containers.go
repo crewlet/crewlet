@@ -34,11 +34,12 @@ var containerKeyPattern = regexp.MustCompile(ContainerKeyPattern)
 // ContainerKeyPattern is [ValidContainerKey]'s grammar as text, at most
 // [MaxContainerKey] characters.
 //
-// EXPORTED FOR THE DASHBOARD's copy: the new-project dialog holds the key a
-// person types to it before the write that names it, rather than send one
-// every node refuses (`CONTAINER_KEY_PATTERN`, held equal by
-// TestTheNewProjectDialogKeysAProjectByTheEnginesGrammar). Written with no
-// flag and no escape, so the dashboard compiles the same text.
+// EXPORTED FOR THE DASHBOARD's copy (`CONTAINER_KEY_PATTERN`, held equal by
+// TestTheDashboardKeysAContainerByTheEnginesGrammar): the new-project dialog
+// holds the key a person types to it before the write that names it, rather
+// than send one every node refuses, and Ask Crewlet is told a Doclet space by
+// this grammar where a company has more spaces than an enum may list. Written
+// with no flag and no escape, so the dashboard compiles the same text.
 const ContainerKeyPattern = `^[A-Z][A-Z0-9]{1,9}$`
 
 // MaxContainerKey is the longest a container key may be: [ContainerKeyPattern]'s

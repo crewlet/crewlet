@@ -19,7 +19,11 @@ import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { TOP_SLACK_PX } from "~/lib/settled.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventEnvelope } from "~/protocol/index.ts";
-import { LiveNow, stripOf } from "./LiveNow.tsx";
+import { LiveNow, liveFilterKeys, stripOf } from "./LiveNow.tsx";
+import { parseUrlPatch, urlArgs } from "~/app/assistant/urlAction.ts";
+import { ASSISTANT_ACTION_ARGS_MAX_ENUM } from "~/contract/assistant.ts";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
+import { actionArgsProblem } from "~/protocol/assistantWire.ts";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -744,4 +748,27 @@ test("the failures chip writes and reads failed=true", async () => {
   await waitFor(() => expect(location.hash).not.toContain("failed="));
   fireEvent.click(chip);
   await waitFor(() => expect(location.hash).toContain("failed=true"));
+});
+
+// A COMPANY OF MORE AGENTS THAN AN ENUM MAY LIST keeps Ask Crewlet's
+// Live filters: past the engine's bound the seat is declared by a handle's grammar,
+// where an enum of every agent was a schema the frame left out of the page
+// context, and the whole action with it. A seat the menu draws still parses,
+// and one it does not is refused. Mutation: list every seat whatever their
+// number, and the action is past the bound.
+test("offers its filters to Ask Crewlet whatever the number of agents", () => {
+  const seats = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ handle: `agent-${i + 1}`, name: `Agent ${i + 1}` }));
+  const now = () => Date.parse("2026-11-11T12:00:00Z");
+  const most = urlArgs(liveFilterKeys(seats(ASSISTANT_ACTION_ARGS_MAX_ENUM), now));
+  expect(most.properties?.seat?.enum).toHaveLength(ASSISTANT_ACTION_ARGS_MAX_ENUM);
+  const keys = liveFilterKeys(seats(ASSISTANT_ACTION_ARGS_MAX_ENUM + 1), now);
+  const args = urlArgs(keys);
+  expect(actionArgsProblem(args)).toBeNull();
+  expect(args.properties?.seat).toMatchObject({ pattern: SEAT_HANDLE, maxLength: MAX_LOGIN });
+  expect(args.properties?.seat?.enum).toBeUndefined();
+  expect(parseUrlPatch({ seat: `agent-${ASSISTANT_ACTION_ARGS_MAX_ENUM + 1}` }, keys).ok).toBe(
+    true,
+  );
+  expect(parseUrlPatch({ seat: "nobody" }, keys).ok).toBe(false);
 });

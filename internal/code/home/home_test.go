@@ -323,10 +323,10 @@ func (e *estate) waitReads(t *testing.T, n int) {
 		if read >= n {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the loop read its listing %d times in 10s, want %d", read, n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -360,7 +360,7 @@ func (e *estate) merged() []code.Mergeability {
 // at the deadline.
 func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 	t.Helper()
-	deadline := time.After(within)
+	deadline := time.After(within) //fixedwait:liveness
 	for {
 		e.mu.Lock()
 		left := len(e.due[repo]) + len(e.rechecks[repo])
@@ -380,7 +380,7 @@ func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 // deadline.
 func (e *estate) waitMerged(t *testing.T, n int, within time.Duration) []code.Mergeability {
 	t.Helper()
-	deadline := time.After(within)
+	deadline := time.After(within) //fixedwait:liveness
 	for {
 		if got := e.merged(); len(got) >= n {
 			return got
@@ -470,7 +470,7 @@ func (n *nudges) subject(t *testing.T, repo string, seq uint64) {
 	t.Helper()
 	select {
 	case <-n.began:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the loop's watch never began")
 	}
 	n.mu.Lock()
@@ -485,7 +485,7 @@ func (n *nudges) gap(t *testing.T, seq uint64) {
 	t.Helper()
 	select {
 	case <-n.began:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the loop's watch never began")
 	}
 	n.mu.Lock()
@@ -751,11 +751,11 @@ func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
 		}) {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the repository's check work was read at %+v, never at the facts' position %s", floors,
 				revised)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -824,7 +824,7 @@ func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 		Share: units(2), NodeID: "node-a"}, time.Hour)
 	select {
 	case <-n.entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the loop never began its watch")
 	}
 	home.BeginStop(l)
@@ -1061,7 +1061,7 @@ func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
 	reopened := code.AskDue{ChangeID: changeID(repoA, 2), State: code.ReviewerRequested}
 	e.owesSettling(repoA, ended, reopened)
 	loopOn(t, "node-a", e, &placement{homes: map[string]string{repoA: "node-a"}}, newNudges(), time.Hour)
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(10 * time.Second) //fixedwait:liveness
 	for len(e.settled()) < 2 {
 		select {
 		case <-e.changed:
@@ -1113,10 +1113,10 @@ func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
 		if again {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatal("the home never asked again for the facts its Gitlet node left short for time")
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	revises, _ := e.wrote()
 	if len(revises) != 1 || revises[0].ChangeID != changeID(repoA, 3) || !revises[0].PatchIDOmitted {

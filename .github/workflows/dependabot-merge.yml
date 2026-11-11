@@ -50,7 +50,8 @@ permissions:
 jobs:
   approve-and-merge:
     name: approve + queue merge
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
 
     # BOTH halves are load-bearing and neither implies the other. The author
     # check is what limits this to a bump. The ACTOR check is what stops it
