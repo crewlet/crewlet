@@ -13272,6 +13272,9 @@ says which). `label` is the state in a reader's words, `reason` one sentence
 on why, and `surface` the surface it was taken from. The rules are
 [One state per tool](../concepts/integration-reconcile.md#one-state-per-tool).
 
+Every reconcile finding carries `label`, the finding in a few words for a list
+that gives each one line: its `title` where it has one, else its kind's own
+words about its `subject` ("An agent identity could not be created for sre").
 A reconcile finding of kind `credential_expiring` carries `expires_at`, the
 instant the credential stops working.
 
