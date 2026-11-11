@@ -72,6 +72,7 @@ type Source struct {
 // Record is which of the engine's own records a computed claim was read from.
 type Record string
 
+// The engine's records the atlas reads.
 const (
 	RecordGitlet       Record = "gitlet"
 	RecordIntegrations Record = "integrations"
@@ -167,6 +168,7 @@ func (s Source) validate() error {
 // Confidence orders claims. Six levels for the fold, three words for a reader.
 type Confidence string
 
+// The confidence levels, the most trusted first.
 const (
 	ConfidenceDeclared Confidence = "declared"
 	ConfidenceAsserted Confidence = "asserted"
@@ -206,6 +208,7 @@ func (c Confidence) Rank() int {
 // Word is how a confidence reads on screen.
 type Word string
 
+// The words a confidence reads as.
 const (
 	WordConfirmed   Word = "confirmed"
 	WordLikely      Word = "likely"

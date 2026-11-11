@@ -59,6 +59,7 @@ type Request struct {
 // SourceName names one place the atlas reads.
 type SourceName string
 
+// The places the atlas reads.
 const (
 	SourceSettings SourceName = "settings"
 	SourceGitlet   SourceName = "gitlet"

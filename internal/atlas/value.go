@@ -27,6 +27,7 @@ import (
 // none of them has anywhere to go.
 type ValueType string
 
+// The value types.
 const (
 	TypeWord       ValueType = "word"
 	TypeInt        ValueType = "int"

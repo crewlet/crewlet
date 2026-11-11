@@ -20,14 +20,14 @@ var now = time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
 // the checks api's default branch runs.
 func acmeGitlet() ([]derive.GitletRepo, []derive.GitletCheck) {
 	return []derive.GitletRepo{
-			{Name: "api", Status: "active", DefaultBranch: "main", Visibility: "company", OwnerKind: "unit", Owner: "platform"},
-			{Name: "tools", Status: "active", DefaultBranch: "main", Visibility: "company", OwnerKind: "seat", Owner: "sre",
-				ImportedFrom: "https://gitlab.acme.example/platform/tools.git"},
-			{Name: "old", Status: "deleted", DefaultBranch: "main", Visibility: "company"},
-		}, []derive.GitletCheck{
-			{Repo: "api", Name: "test", State: "passed", Required: true},
-			{Repo: "api", Name: "deploy", State: "failed", External: true},
-		}
+		{Name: "api", Status: "active", DefaultBranch: "main", Visibility: "company", OwnerKind: "unit", Owner: "platform"},
+		{Name: "tools", Status: "active", DefaultBranch: "main", Visibility: "company", OwnerKind: "seat", Owner: "sre",
+			ImportedFrom: "https://gitlab.acme.example/platform/tools.git"},
+		{Name: "old", Status: "deleted", DefaultBranch: "main", Visibility: "company"},
+	}, []derive.GitletCheck{
+		{Repo: "api", Name: "test", State: "passed", Required: true},
+		{Repo: "api", Name: "deploy", State: "failed", External: true},
+	}
 }
 
 func read(c *config.Company) atlas.View {

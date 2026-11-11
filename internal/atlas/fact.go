@@ -11,6 +11,7 @@ import (
 // applies to.
 type Fact string
 
+// The facts, grouped by the kinds that carry them.
 const (
 	FactName        Fact = "name"
 	FactPurpose     Fact = "purpose"

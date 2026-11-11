@@ -10,6 +10,7 @@ import (
 // "what depends on X" is one walk against them.
 type Relation string
 
+// The relations, each named for what the entry it starts from does.
 const (
 	RelationRunsOn       Relation = "runs_on"
 	RelationDependsOn    Relation = "depends_on"
@@ -54,6 +55,7 @@ func (r Relation) Structural() bool {
 // unit's key, a page's id.
 type External string
 
+// The identities outside the atlas a relation may name.
 const (
 	ExternalSeat External = "seat"
 	ExternalUnit External = "unit"

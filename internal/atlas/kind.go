@@ -57,6 +57,7 @@ func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 // so a kind with no lane fails a test instead of becoming a card with no column.
 type Lane string
 
+// The lanes of the map.
 const (
 	LaneEntry         Lane = "entry"
 	LaneServices      Lane = "services"

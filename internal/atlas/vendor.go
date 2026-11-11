@@ -7,6 +7,7 @@ import "slices"
 // is display text and decides nothing.
 type Vendor string
 
+// The vendors the engine knows.
 const (
 	VendorAWS          Vendor = "aws"
 	VendorAnthropic    Vendor = "anthropic"
@@ -46,6 +47,7 @@ func (v Vendor) Valid() bool { return slices.Contains(Vendors, v) }
 // never by a kind per product.
 type Capability string
 
+// The capabilities a vendor account can carry.
 const (
 	CapabilityChat          Capability = "chat"
 	CapabilityTracker       Capability = "tracker"

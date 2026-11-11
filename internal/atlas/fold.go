@@ -298,7 +298,7 @@ func stateOf(exists *resolution, support, winners []Claim, now time.Time) (State
 		best = slices.MinFunc(winners, order)
 	}
 	switch {
-	case slices.ContainsFunc(support, func(c Claim) bool { return decides(c) }):
+	case slices.ContainsFunc(support, decides):
 		return StateConfirmed, best.Confidence()
 	case !slices.ContainsFunc(support, func(c Claim) bool {
 		return c.Source.Kind != SourceAgent || now.Sub(c.ObservedAt) <= StaleAfter
@@ -452,7 +452,6 @@ func merge(claims []Claim) merges {
 	for r := range nodes {
 		groups[r] = []Ref{r}
 	}
-	root := func(r Ref) Ref { return m.of(r) }
 	keys := make([]string, 0, len(keyed))
 	for k := range keyed {
 		keys = append(keys, k)
@@ -468,7 +467,7 @@ func merge(claims []Claim) merges {
 		}
 		slices.SortFunc(refs, compareRef)
 		for _, r := range refs[1:] {
-			a, b := root(refs[0]), root(r)
+			a, b := m.of(refs[0]), m.of(r)
 			if a == b || blocked(groups[a], groups[b], apart) {
 				continue
 			}

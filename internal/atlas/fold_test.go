@@ -43,7 +43,6 @@ func fact(e atlas.Entry, f atlas.Fact) (atlas.FactView, bool) {
 var (
 	settings = atlas.SettingsSource("r7")
 	gitlet   = atlas.RecordSource(atlas.RecordGitlet)
-	cf       = atlas.IntegrationSource("cloudflare")
 	aws      = atlas.IntegrationSource("aws")
 	ada      = atlas.PersonSource("ada")
 	sre      = atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall)
