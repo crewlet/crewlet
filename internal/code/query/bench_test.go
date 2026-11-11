@@ -549,16 +549,16 @@ func (r *readRig) cold(b *testing.B) {
 		b.StartTimer()
 		start := time.Now()
 		_, err = s.Read(b.Context(), treeQ(r.repo, code.TreeQuery{Rev: r.src.edit}))
-		took = append(took, time.Since(start))
+		// REPORTED, never failed on: that a cold read answers within the
+		// statelog.ReadBudget it waits and its margin is
+		// TestAColdRepositoryAnswersUnreadyAndKeepsSyncing's claim, decided
+		// exactly there.
+		took = append(took, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 		switch {
 		case unready(err, code.UnreadySyncing):
 			unreadies++
 		case err != nil:
 			b.Fatal(err)
-		}
-		if last := took[len(took)-1]; last > statelog.ReadBudget+code.ReplyMargin {
-			b.Errorf("a cold read answered after %s, past the %s it waits and its margin", last,
-				statelog.ReadBudget)
 		}
 	}
 	report(b, took)

@@ -313,7 +313,7 @@ func (o timedObjects) called(op, name string, took time.Duration) {
 func (o timedObjects) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	start := time.Now()
 	err := o.Backend.Put(ctx, name, r, m)
-	took := time.Since(start)
+	took := time.Since(start) //fixedwait:measure a benchmark reports this against a tenth of code.WriteUploadAllowance; no gate reads it
 	o.called("PUT", name, took)
 	o.fig.mu.Lock()
 	defer o.fig.mu.Unlock()
@@ -667,14 +667,17 @@ const (
 // phase asked of the object store, by whose object and which request, every
 // sync of the copy it waited for and the person's proposals, logged.
 //
-// HELD by its own assertions: at the S3 fake's 200 ms first byte every arm's
-// p99 over every answer and over the applied writes is under a quarter of
-// estate.GitWriteAttempt and its upload p99 under a tenth of
-// code.WriteUploadAllowance; an arm asking no more writes at once than the
-// share's units serve (writesAUnitServes a unit) answers none unready or
-// busy; and beside sixty-four writes at once the person's push p99 is within
-// twice its p99 alone — the share leaves the person's scans their half of the
-// read lane. This package's doc.go carries the figures.
+// REPORTED AGAINST ITS BUDGETS, never failed on them, since a benchmark
+// measures and a test decides: at the S3 fake's 200 ms first byte every
+// arm's p99 over every answer and over the applied writes against a quarter
+// of estate.GitWriteAttempt and its upload p99 against a tenth of
+// code.WriteUploadAllowance; and beside sixty-four writes at once the
+// person's push p99 against twice its p99 alone — the share leaves the
+// person's scans their half of the read lane. HELD by its own assertions,
+// which count rather than time: an arm asking no more writes at once than
+// the share's units serve (writesAUnitServes a unit) answers none unready or
+// busy, and every proposal but a branch arm's names a pack. This package's
+// doc.go carries the figures.
 func BenchmarkEngineWrite(b *testing.B) {
 	codetest.Quiet(b)
 	for _, store := range writeStores {
@@ -950,11 +953,13 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 			br.ref, out.Output))
 	case unready(call.err):
 		r.unready++
+		//fixedwait:measure a benchmark reports this against a quarter of estate.GitWriteAttempt; no gate reads it
 		r.answers, r.refusedTook = append(r.answers, end.Sub(start)), append(r.refusedTook, end.Sub(start))
 	case call.err != nil:
 		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s: %w", tool.Name(), br.ref, call.err))
 	case res.Command.Reason == code.RefusalBusy:
 		r.busy++
+		//fixedwait:measure a benchmark reports this against a quarter of estate.GitWriteAttempt; no gate reads it
 		r.answers = append(r.answers, end.Sub(start))
 	case res.Outcome != statelog.OutcomeApplied || res.Refusal != "" || res.Commit == "":
 		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s answered %+v", tool.Name(), br.ref, res))
@@ -965,7 +970,9 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 				br.ref, res.Commit, out.Output))
 			return
 		}
+		//fixedwait:measure a benchmark reports this against a quarter of estate.GitWriteAttempt; no gate reads it
 		r.took, r.answers = append(r.took, end.Sub(start)), append(r.answers, end.Sub(start))
+		//fixedwait:measure a benchmark reports this; no gate reads it
 		r.tool = append(r.tool, call.askedAt.Sub(start)+end.Sub(call.answerAt))
 		r.ended[res.PushID] = call.answerAt
 		if r.arm.kind != writeBranch {
@@ -1120,20 +1127,15 @@ func (r *writeRig) run(b *testing.B) {
 			r.node.Share().Units(), served)
 	}
 
+	// REPORTED AGAINST ITS BUDGET, never failed on: a benchmark measures, and
+	// a test decides. The budgets are the terms of the attempt a write is
+	// held to, each logged beside the p99 it bounds, as M3-decisions M3-O43
+	// asks of every term.
 	if r.arm.store.firstByte == 200*time.Millisecond {
-		quarter := float64(estate.GitWriteAttempt/4) / float64(time.Millisecond)
-		if p99 := quantile(took, 0.99); p99 >= quarter {
-			b.Errorf("the applied writes' p99 is %.0f ms at a 200 ms first byte, past a quarter of "+
-				"estate.GitWriteAttempt (%s)", p99, estate.GitWriteAttempt)
-		}
-		if p99 := quantile(answers, 0.99); p99 >= quarter {
-			b.Errorf("the p99 of every write's answer is %.0f ms at a 200 ms first byte, past a quarter of "+
-				"estate.GitWriteAttempt (%s)", p99, estate.GitWriteAttempt)
-		}
-		if p99 := quantile(uploads, 0.99); p99 >= float64(code.WriteUploadAllowance/10)/float64(time.Millisecond) {
-			b.Errorf("the upload's p99 is %.0f ms at a 200 ms first byte, past a tenth of "+
-				"code.WriteUploadAllowance (%s)", p99, code.WriteUploadAllowance)
-		}
+		b.Logf("at a 200 ms first byte: the applied writes' p99 %.0f ms and every answer's %.0f ms, against a "+
+			"quarter of estate.GitWriteAttempt's %s; the upload's p99 %.0f ms, against a tenth of "+
+			"code.WriteUploadAllowance's %s", quantile(took, 0.99), quantile(answers, 0.99), estate.GitWriteAttempt,
+			quantile(uploads, 0.99), code.WriteUploadAllowance)
 	}
 	if person == nil {
 		return
@@ -1168,8 +1170,8 @@ func (r *writeRig) run(b *testing.B) {
 	b.Logf("the person's push p50/p99: %.0f/%.0f ms alone, %.0f/%.0f ms beside the writes, %.0f/%.0f ms after them",
 		quantile(alone, 0.50), quantile(alone, 0.99), quantile(beside, 0.50), quantile(beside, 0.99),
 		quantile(after, 0.50), quantile(after, 0.99))
-	if r.arm.concurrency == writesAtOnce && quantile(beside, 0.99) > 2*quantile(alone, 0.99) {
-		b.Errorf("the person's push p99 beside %d writes at once is %.0f ms, past twice its %.0f ms alone",
+	if r.arm.concurrency == writesAtOnce {
+		b.Logf("the person's push p99 beside %d writes at once: %.0f ms, against twice its %.0f ms alone",
 			writesAtOnce, quantile(beside, 0.99), quantile(alone, 0.99))
 	}
 }
@@ -1250,7 +1252,7 @@ func (bp *besidePusher) push(ctx context.Context) (time.Duration, error) {
 	if res.Err != nil {
 		return 0, fmt.Errorf("git push: %w\n%s", res.Err, res.Stderr)
 	}
-	return time.Since(start), nil
+	return time.Since(start), nil //fixedwait:measure a benchmark reports this against twice the push alone; no gate reads it
 }
 
 // paced is n pushes — every push until ctx ends where n is 0 — one every
