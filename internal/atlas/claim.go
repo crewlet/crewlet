@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // SourceKind is where a claim came from. A closed set, and the claim's
@@ -358,6 +360,28 @@ func checked(c Claim) (Claim, error) {
 func (c Claim) Validate() error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("atlas: claim on %s: %w", c.Subject, err)
+	}
+	return nil
+}
+
+// Recordable refuses a claim a writer may not record though [Claim.Validate]
+// admits it: one naming an entry, or a seat or a unit, by a key shaped like a
+// credential ([ErrCredential]). Every value its grammar already judges; this is
+// the keys', asked by every writer of a recorded claim and never by the fold.
+// The refusal names the entry's kind and never a key.
+func (c Claim) Recordable() error {
+	refs := []Ref{c.Subject}
+	if t := c.Facet.Target.Entry; t != (Ref{}) {
+		refs = append(refs, t)
+	}
+	for _, r := range refs {
+		if err := r.Recordable(); err != nil {
+			return fmt.Errorf("atlas: claim on a %s: %w", c.Subject.Kind, err)
+		}
+	}
+	if t := c.Facet.Target; t.Name != "" && redact.Contains(t.Name) {
+		return fmt.Errorf("atlas: claim on a %s: the %s it names: %w", c.Subject.Kind, t.External,
+			ErrCredential)
 	}
 	return nil
 }

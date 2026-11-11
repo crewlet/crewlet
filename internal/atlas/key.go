@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // Namespace is the one name space every entry id is minted under. Fixed for
@@ -62,6 +63,35 @@ func NewRef(k Kind, key string) (Ref, error) {
 		return Ref{}, fmt.Errorf("%s key: %w: at most %d bytes", k, ErrInvalid, MaxKeyBytes)
 	}
 	return Ref{Kind: k, Key: canonical}, nil
+}
+
+// RecordedRef is [NewRef] for an entry somebody tells the engine about: a key
+// shaped like a credential is REFUSED ([ErrCredential]), as it was written and
+// in its canonical form, since the canonical form of a host name is lowercase
+// and a token's shape can live in its case. A key's grammar admits a vendor's
+// own identifiers, and some share a token's alphabet; the keys the engine
+// computes are read from the redacting copy, so [NewRef] stays the fold's check.
+func RecordedRef(k Kind, key string) (Ref, error) {
+	if redact.Contains(key) {
+		return Ref{}, fmt.Errorf("%s key: %w", k, ErrCredential)
+	}
+	r, err := NewRef(k, key)
+	if err != nil {
+		return Ref{}, err
+	}
+	if err := r.Recordable(); err != nil {
+		return Ref{}, err
+	}
+	return r, nil
+}
+
+// Recordable refuses a ref whose canonical key is shaped like a credential
+// ([ErrCredential]), naming its kind and never the key.
+func (r Ref) Recordable() error {
+	if redact.Contains(r.Key) {
+		return fmt.Errorf("%s key: %w", r.Kind, ErrCredential)
+	}
+	return nil
 }
 
 // MustRef is [NewRef] for a key the caller built from values already parsed.
