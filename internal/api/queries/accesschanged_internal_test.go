@@ -23,7 +23,7 @@ func (r *reviewsFake) PendingAccessReview(_ context.Context, handle string) (acc
 		return accessreview.Pending{}, false, errors.New("the coordination store is out of service")
 	case "sre":
 		return accessreview.Pending{Baseline: "t-1", Digest: "d", ToldTurn: "t-review", ToldAt: r.toldAt,
-			Lines: []string{"SSH: its level is now Read (was Operate)."}}, true, nil
+			Lines: []string{"SSH: its Crewlet grant now sets its level to Read (was Operate)."}}, true, nil
 	}
 	return accessreview.Pending{}, false, nil
 }

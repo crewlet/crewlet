@@ -191,7 +191,7 @@ func integrationChanges(old, now Snapshot, v voice) []Change {
 		case had && was.On && (!has || !is.On):
 			c := base
 			c.Kind, c.From = ChangeIntegrationOff, was.LevelName
-			c.Line = vendor + ": no longer granted to " + v.you + "."
+			c.Line = vendor + ": no longer in " + v.your + " Crewlet grant."
 			if has {
 				c.Line = vendor + ": " + v.your + " account is not active now, so its tools are unavailable."
 			}
@@ -231,7 +231,8 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 	if was.Level != is.Level {
 		c := base
 		c.Kind, c.From, c.To = ChangeLevel, nameOr(was.LevelName, was.Level), nameOr(is.LevelName, is.Level)
-		c.Line = fmt.Sprintf("%s: %s level is now %s (was %s).", vendor, v.your, c.To, c.From)
+		c.Line = fmt.Sprintf("%s: %s Crewlet grant now sets %s level to %s (was %s).",
+			vendor, v.your, v.your, c.To, c.From)
 		if is.LevelNote != "" {
 			c.Line += " " + is.LevelNote
 		}
@@ -254,6 +255,13 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 		key, access := pendingEntry(entry)
 		arrived[key] = config.GitHubAccess(is.Permissions[key]).Rank() >= access.Rank()
 	}
+	// A PERMISSION HELD BACK AT GITHUB moved for the app's sake, not the
+	// grant's, so its line does not credit the grant.
+	atGitHub := map[string]bool{}
+	for _, entry := range append(slices.Clone(wasPending), isPending...) {
+		key, _ := pendingEntry(entry)
+		atGitHub[key] = true
+	}
 	keys := slices.Sorted(maps.Keys(unionKeys(was.Permissions, is.Permissions)))
 	for _, key := range keys {
 		from, to := config.GitHubAccess(was.Permissions[key]), config.GitHubAccess(is.Permissions[key])
@@ -263,19 +271,30 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 		name := nameOr(names[key], key)
 		c := base
 		c.Kind, c.Items, c.From, c.To = ChangePermission, []string{name}, from.Label(), to.Label()
-		c.Line = fmt.Sprintf("%s: %s is now %s (was %s).", vendor, name, c.To, c.From)
+		switch {
+		case atGitHub[key]:
+			c.Line = fmt.Sprintf("%s: %s is now %s (was %s).", vendor, name, c.To, c.From)
+		case to == "":
+			c.Line = fmt.Sprintf("%s: %s Crewlet grant no longer gives %s (was %s).",
+				vendor, v.your, name, c.From)
+		default:
+			c.Line = fmt.Sprintf("%s: %s Crewlet grant now gives %s %s (was %s).",
+				vendor, v.your, name, c.To, c.From)
+		}
 		out = append(out, c)
 	}
 	if added := minus(is.Scope, was.Scope); len(added) > 0 {
 		c := base
 		c.Kind, c.Items = ChangeScopeAdded, added
-		c.Line = vendor + ": " + v.can + " now work in " + scopeList(added, is.ScopeLabels) + "."
+		c.Line = vendor + ": " + v.your + " Crewlet grant now lets " + v.you + " work in " +
+			scopeList(added, is.ScopeLabels) + "."
 		out = append(out, c)
 	}
 	if removed := minus(was.Scope, is.Scope); len(removed) > 0 {
 		c := base
 		c.Kind, c.Items = ChangeScopeRemoved, removed
-		c.Line = vendor + ": " + v.can + " no longer work in " + scopeList(removed, was.ScopeLabels) + "."
+		c.Line = vendor + ": " + v.your + " Crewlet grant no longer lets " + v.you + " work in " +
+			scopeList(removed, was.ScopeLabels) + "."
 		out = append(out, c)
 	}
 	for _, entry := range minus(isPending, wasPending) {
@@ -283,8 +302,9 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 		name := nameOr(names[key], key)
 		c := base
 		c.Kind, c.Items, c.To = ChangePendingStarted, []string{name}, access.Label()
-		c.Line = fmt.Sprintf("%s: %s %s is requested and not in effect yet: an organization "+
-			"owner has to accept the app's new permissions.", vendor, name, access.Label())
+		c.Line = fmt.Sprintf("%s: %s %s is in %s Crewlet grant and not in effect yet: an "+
+			"organization owner has to accept the app's new permissions at GitHub.",
+			vendor, name, access.Label(), v.your)
 		out = append(out, c)
 	}
 	for _, entry := range minus(wasPending, isPending) {
@@ -295,7 +315,8 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 		if arrived[key] {
 			c.Line = fmt.Sprintf("%s: %s %s is now in effect.", vendor, name, access.Label())
 		} else {
-			c.Line = fmt.Sprintf("%s: %s %s is no longer requested.", vendor, name, access.Label())
+			c.Line = fmt.Sprintf("%s: %s %s is no longer in %s Crewlet grant.", vendor, name,
+				access.Label(), v.your)
 		}
 		out = append(out, c)
 	}
@@ -305,8 +326,8 @@ func laneChanges(base Change, was, is Integration, v voice) []Change {
 		if is.ScopeMore < was.ScopeMore {
 			c.Kind = ChangeScopeRemoved
 		}
-		c.Line = fmt.Sprintf("%s: %s scope changed past the %d entries %s by name; %s %d.",
-			vendor, v.your, len(is.Scope), v.told, v.hold, len(is.Scope)+is.ScopeMore)
+		c.Line = fmt.Sprintf("%s: %s Crewlet grant's scope changed past the %d entries %s by "+
+			"name; %s %d.", vendor, v.your, len(is.Scope), v.told, v.hold, len(is.Scope)+is.ScopeMore)
 		out = append(out, c)
 	}
 	if was.Tool != is.Tool {
@@ -563,9 +584,11 @@ type Audience string
 
 // The two audiences.
 const (
-	// ForSeat is the seat, told its own access ("your level is now Read").
+	// ForSeat is the seat, told its own access ("your Crewlet grant now sets
+	// your level to Read").
 	ForSeat Audience = "seat"
-	// ForPerson is a person reading about the seat ("its level is now Read").
+	// ForPerson is a person reading about the seat ("its Crewlet grant now
+	// sets its level to Read").
 	ForPerson Audience = "person"
 )
 

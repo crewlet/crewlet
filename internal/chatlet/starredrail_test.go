@@ -24,11 +24,11 @@ import (
 // list stars under With, and a step here goes red.
 func TestAStarredRoomTheReaderMayReadIsInTheirRail(t *testing.T) {
 	t.Parallel()
-	r := newWriteRound(t, agents().withPeople("miles", "jane"))
+	r := newWriteRound(t, agents().withPeople("morgan", "jane"))
 	team := r.unitRoom("team", "core", "pm", "eng")
-	mine := r.room(person("miles"), "general")
+	mine := r.room(person("morgan"), "general")
 	private, err := r.store.CreateChannel(t.Context(), person("jane"), chatlet.NewChannel{
-		Name: "deal-room", Kind: chatlet.KindPrivate, Members: members("miles"),
+		Name: "deal-room", Kind: chatlet.KindPrivate, Members: members("morgan"),
 	})
 	if err != nil {
 		t.Fatalf("create the private room: %v", err)
@@ -40,26 +40,26 @@ func TestAStarredRoomTheReaderMayReadIsInTheirRail(t *testing.T) {
 	}
 
 	// WHILE HE MAY READ IT, the private room he starred is his and listed.
-	before, err := r.reader().Channels(t.Context(), "miles", stars, fresh)
+	before, err := r.reader().Channels(t.Context(), "morgan", stars, fresh)
 	if err != nil {
-		t.Fatalf("read miles's rail before he leaves: %v", err)
+		t.Fatalf("read morgan's rail before he leaves: %v", err)
 	}
 	if !slices.ContainsFunc(before.Channels, func(c chatlet.ChannelSummary) bool {
 		return c.Channel.ID == private.Channel.ID && c.Member
 	}) {
-		t.Fatal("the private room miles is in and starred is not in his rail")
+		t.Fatal("the private room morgan is in and starred is not in his rail")
 	}
 
 	// TAKEN OUT OF IT, he may no longer read it, and the same star lists
 	// nothing: the rail asks the one visibility rule, not the star.
-	if _, err := r.store.Leave(t.Context(), person("miles"), private.Channel.ID); err != nil {
-		t.Fatalf("miles leaves the private room: %v", err)
+	if _, err := r.store.Leave(t.Context(), person("morgan"), private.Channel.ID); err != nil {
+		t.Fatalf("morgan leaves the private room: %v", err)
 	}
 	r.drain()
 
-	rail, err := r.reader().Channels(t.Context(), "miles", stars, fresh)
+	rail, err := r.reader().Channels(t.Context(), "morgan", stars, fresh)
 	if err != nil {
-		t.Fatalf("read miles's rail: %v", err)
+		t.Fatalf("read morgan's rail: %v", err)
 	}
 	listed := map[string]bool{}
 	var names []string
@@ -69,28 +69,28 @@ func TestAStarredRoomTheReaderMayReadIsInTheirRail(t *testing.T) {
 	}
 	slices.Sort(names)
 	if !slices.Equal(names, []string{"general", "team"}) {
-		t.Fatalf("miles's rail lists %v, want #general (his) and #team (starred), once each, "+
+		t.Fatalf("morgan's rail lists %v, want #general (his) and #team (starred), once each, "+
 			"and not the private room he left", names)
 	}
 	if member := listed["team"]; member {
-		t.Error("the starred team room is listed as a membership: no message reaches miles from it")
+		t.Error("the starred team room is listed as a membership: no message reaches morgan from it")
 	}
 	if member := listed["general"]; !member {
-		t.Error("miles's own room, which he also starred, is listed as not his")
+		t.Error("morgan's own room, which he also starred, is listed as not his")
 	}
 	if rail.Unreadable != 0 {
-		t.Errorf("the rail counts %d rooms it could not present: the private room miles left "+
+		t.Errorf("the rail counts %d rooms it could not present: the private room morgan left "+
 			"must answer as one that does not exist", rail.Unreadable)
 	}
 
-	common, err := r.reader().Channels(t.Context(), "miles", chatlet.ChannelsQuery{
+	common, err := r.reader().Channels(t.Context(), "morgan", chatlet.ChannelsQuery{
 		With: "pm", Starred: []string{team.Channel.ID},
 	}, fresh)
 	if err != nil {
-		t.Fatalf("read miles's rooms with pm: %v", err)
+		t.Fatalf("read morgan's rooms with pm: %v", err)
 	}
 	if len(common.Channels) != 0 {
-		t.Errorf("miles shares %d rooms with pm, want none: a star is not a membership two "+
+		t.Errorf("morgan shares %d rooms with pm, want none: a star is not a membership two "+
 			"seats share", len(common.Channels))
 	}
 }

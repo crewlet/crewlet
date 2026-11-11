@@ -60,7 +60,7 @@ func TestTheBrandFormatAnswerIsEnoughToWriteAKitFirstTime(t *testing.T) {
 		t.Fatalf("the brand format was refused: %s", got.Output)
 	}
 	for _, want := range []string{"`voice.write_like`", "`type.body.files[].weight`", "`logos.mark`",
-		"EXACTLY ONE of kit, stack and family", "No `<style>` element", "GoPhrase.me"} {
+		"EXACTLY ONE of kit, stack and family", "No `<style>` element", "Acme.me"} {
 		if !strings.Contains(got.Output, want) {
 			t.Errorf("the brand format does not say %q", want)
 		}
@@ -106,7 +106,7 @@ func TestAPolicyRefusalIsBoundedAndPointsAtTheFormat(t *testing.T) {
 	}
 	r.f.publishErr = refusal
 	got := r.call(t, turnFor(t, "agent-cto"), builtin.CreateArtifactTool, map[string]any{
-		"kind": "brand", "title": "GoPhrase brand", "content": "{}"})
+		"kind": "brand", "title": "Acme brand", "content": "{}"})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 		t.Fatalf("a policy refusal answered %q", got.Output)
 	}

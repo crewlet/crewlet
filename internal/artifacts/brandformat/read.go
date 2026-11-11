@@ -292,8 +292,8 @@ func (r *reader) noHost(name, s, brand string) {
 
 // ownHost reports a host is the brand's own name: the name itself, as a
 // company named for its domain writes it ("Booking.com"), or the name and one
-// top-level domain ("GoPhrase.me" for the brand GoPhrase), case aside. Only a
-// host of two labels: a subdomain (`promo.gophrase.me`) is an address, and so
+// top-level domain ("Acme.me" for the brand Acme), case aside. Only a
+// host of two labels: a subdomain (`promo.acme.me`) is an address, and so
 // is any other company's domain.
 //
 // THE BRAND'S `name`, NEVER THE COMPANY RECORD'S: a kit is read again at
@@ -316,7 +316,7 @@ func ownHost(host, brand string) bool {
 }
 
 // compact is a name as a domain label spells it: lowercase letters and
-// digits, nothing else ("Go Phrase" and "go-phrase" are both "gophrase").
+// digits, nothing else ("Acme Works" and "acme-works" are both "acmeworks").
 func compact(s string) string {
 	var b strings.Builder
 	for _, c := range strings.ToLower(s) {

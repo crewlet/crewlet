@@ -55,7 +55,8 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 	r := newRoundTrip(t)
 	log := &writeLog{}
 	w := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{
-		TurnID: "run-1", Written: log,
+		WrittenFor: types.ForTurn(nil),
+		TurnID:     "run-1", Written: log,
 	})
 
 	if _, err := w.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {
@@ -124,7 +125,9 @@ func TestTheWriterRecordsTheKindOfChangeEachRecordCommitted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	log := &writeLog{}
-	w := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{TurnID: "run-1", Written: log})
+	provenance := aTurnNobodyWoke()
+	provenance.TurnID, provenance.Written = "run-1", log
+	w := r.writer.As("dev", worklet.AuthorAgent, provenance)
 	step := func(name string, err error) []types.CommittedChange {
 		t.Helper()
 		if err != nil {

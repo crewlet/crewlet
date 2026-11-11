@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 )
@@ -300,6 +301,10 @@ func (d *Definition) Title() string {
 	return d.annotations.Title
 }
 
+// OwnTitle is the tool's own title alone, "" where the server gives none: with
+// [Definition.Declared]'s title, the words the digest's title part covers.
+func (d *Definition) OwnTitle() string { return d.title }
+
 // OutputSchema is the JSON Schema of the tool's structured result, as the
 // server published it, or nil where it published none.
 func (d *Definition) OutputSchema() map[string]any { return d.output }
@@ -351,6 +356,13 @@ func (t *Tool) Server() string { return ServerName(t.srv.spec.Name) }
 // Origin is this tool's entry in the tool-origin grammar, ready for whatever
 // registry the caller keeps. See origin.go.
 func (t *Tool) Origin() string { return Origin(t.Server()) }
+
+// CallBound is the longest one call of the tool runs: its server's request
+// timeout, at which the client cuts a call that has not answered
+// ([DefaultRequestTimeout] unless the server's entry sets its own). What a
+// box's harness is told to wait for a call to the tool, beside the rest
+// (internal/api/mcpbridge's Bridge.CallTimeout).
+func (t *Tool) CallBound() time.Duration { return t.srv.spec.requestTimeout() }
 
 // Call runs the tool on its server.
 //

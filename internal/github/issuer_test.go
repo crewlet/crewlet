@@ -156,7 +156,7 @@ func TestAnIssuedTokenIsScopedToThePermissionsAndRepositoriesItWasMintedFor(t *t
 	issuer := &github.Issuer{Now: c.now}
 
 	seat := installedSeat(t, "qa", 9)
-	seat.Permissions, seat.Repos = tierPerms("review", false), []string{"gophrase/backend"}
+	seat.Permissions, seat.Repos = tierPerms("review", false), []string{"acme/backend"}
 	reviewer, err := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
@@ -170,7 +170,7 @@ func TestAnIssuedTokenIsScopedToThePermissionsAndRepositoriesItWasMintedFor(t *t
 		t.Fatal("a full_access read was handed the token minted for review")
 	}
 	// The same repositories written differently are the same scope.
-	seat.Repos = []string{" GOPHRASE/backend "}
+	seat.Repos = []string{" ACME/backend "}
 	if again, _ := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife); again.Token != writer.Token {
 		t.Error("one repository spelt differently was minted a second token")
 	}
@@ -495,7 +495,7 @@ func TestADeliverableAddressIsOneGitHubReaches(t *testing.T) {
 func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
 	t.Parallel()
 	off := github.BuildManifest(github.ManifestOptions{
-		Seat: "pm", Name: "GoPhrase Product Manager",
+		Seat: "pm", Name: "Acme Product Manager",
 		DeliveryURL: "http://localhost:8200/webhooks/github/pm",
 		DeliveryOff: true,
 		RedirectURL: "http://localhost:8200/webhooks/github-app",

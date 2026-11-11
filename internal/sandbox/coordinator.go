@@ -466,7 +466,12 @@ type CoordinatorOptions struct {
 	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
 	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
 	// for is done), so the reads and the deletes that follow an ending see
-	// it.
+	// it. IT WAITS FOR NO CALL STILL RUNNING: the session answers each that
+	// it is still running and closes behind those answers, and the call runs
+	// on and records itself as its tool returns, which may be after this has
+	// returned — and after the reads and the delete that follow it, which then
+	// hold nothing of it (internal/api/mcpbridge, "An opening ends without
+	// waiting for its calls").
 	Ended func(runID string)
 
 	// Settle asks the bridge session serving a run's job to carry into the
@@ -3723,7 +3728,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	//
 	// AND THE RUN'S CALLS, read from its log here — after the collection
 	// stopped or read back its box, so a call the run made up to its end is
-	// in them — and never "no calls" for a log the store could not read:
+	// in them, but for one still running as its job's session on the bridge
+	// ended, which the end answered and did not wait for, and which lands as
+	// its tool returns, after this read where it returns later
+	// (internal/api/mcpbridge, "An opening ends without waiting for its
+	// calls") — and never "no calls" for a log the store could not read:
 	// that read failing is a resume that failed, handed back like any other.
 	// Read INSIDE the frame, so an ending decided while it is read waits for
 	// the frame as it would for the resumer ([Coordinator.framing]). WITH THE

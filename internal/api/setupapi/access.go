@@ -482,6 +482,7 @@ func (s *Service) writeSaved(w http.ResponseWriter, r *http.Request,
 		}
 		saved.Seats[i].Lanes = lanes
 	}
+	saved.SetStatuses()
 	s.writeAnswer(w, saved)
 }
 

@@ -602,6 +602,11 @@ type Comment struct {
 	ResolvedBy string     `json:"resolved_by,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 
+	// Withdrawal is why its asker withdrew this question and what covers it
+	// now, set by the resolve that withdrew it; nil on every other comment
+	// and on a question resolved before withdrawals were recorded.
+	Withdrawal *Withdrawal `json:"withdrawal,omitempty"`
+
 	// Removed blanks the body and KEEPS the row, so replies still resolve
 	// against something.
 	Removed bool `json:"removed,omitempty"`

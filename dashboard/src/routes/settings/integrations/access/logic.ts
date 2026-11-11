@@ -15,6 +15,7 @@ import type {
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
+  AccessLaneStatus,
   AccessObserved,
   AccessOptions,
   AccessSeat,
@@ -580,28 +581,28 @@ export interface Status {
   busy?: boolean;
 }
 
-/** One lane's word, from what is saved, what is drafted and what the last sync found. */
-export function statusOf(
-  lane: Lane,
-  saved: AccessSeatLane,
-  drafted: boolean,
-  syncing: boolean,
-  departed = false,
-): Status {
-  if (departed) return { label: "Agent left", tone: "warning" };
-  if (drafted) return { label: "Not saved", tone: "info", outline: true };
-  const pending = saved.plan.length > 0;
-  if (syncing && pending) return { label: "Syncing", tone: "info", busy: true };
-  if (saved.sync?.outcome === "failed") return { label: "Refused", tone: "danger" };
-  if (saved.observed.changed_by_hand_at && pending)
-    return { label: `Changed at ${lane.name}`, tone: "warning" };
-  if (saved.sync?.outcome === "waiting" || saved.plan.some((s) => s.by === "you"))
-    return { label: "Needs you", tone: "warning" };
-  if (pending) return { label: "Next sync", tone: "info" };
-  if (saved.desired.enabled) return { label: "In sync", tone: "success" };
-  if (saved.observed.exists) return { label: "Off, account kept", tone: "neutral" };
-  return { label: "Off", tone: "neutral", outline: true };
+/**
+ * One lane's word: the engine's `status` for what is saved, computed there once
+ * so this tab and Ask Crewlet word a lane alike, or Not saved over a draft.
+ */
+export function statusOf(lane: Lane, saved: AccessSeatLane, drafted: boolean): Status {
+  if (drafted && saved.status !== "departed")
+    return { label: "Not saved", tone: "info", outline: true };
+  return STATUS_WORDS[saved.status](lane);
 }
+
+/** Each engine status in the tab's words, keyed by the contract's set so a new one is worded here. */
+const STATUS_WORDS: Record<AccessLaneStatus, (lane: Lane) => Status> = {
+  departed: () => ({ label: "Agent left", tone: "warning" }),
+  syncing: () => ({ label: "Syncing", tone: "info", busy: true }),
+  refused: () => ({ label: "Refused", tone: "danger" }),
+  changed_at_vendor: (lane) => ({ label: `Changed at ${lane.name}`, tone: "warning" }),
+  needs_you: () => ({ label: "Needs you", tone: "warning" }),
+  next_sync: () => ({ label: "Next sync", tone: "info" }),
+  in_sync: () => ({ label: "In sync", tone: "success" }),
+  off_account_kept: () => ({ label: "Off, account kept", tone: "neutral" }),
+  off: () => ({ label: "Off", tone: "neutral", outline: true }),
+};
 
 /** Whether a lane's status needs a person's attention. */
 export function needsAttention(status: Status): boolean {
@@ -690,13 +691,57 @@ export function noToolRemedy(lane: Lane): string {
     : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
 }
 
-/** The last sync, as one value. */
-export function syncValue(saved: AccessSeatLane, now: number): string {
-  if (!saved.sync) return "Never";
-  const when = relTime(saved.sync.at, now);
-  if (saved.sync.outcome === "failed") return `Refused ${when}`;
-  if (saved.sync.outcome === "waiting") return `Waiting on a person since ${when}`;
-  return when;
+/**
+ * The lane's two clocks as one value: when a pass last read the vendor, Check
+ * now's included, and how the last writing sync ended, so a row just checked
+ * never reads as just applied.
+ */
+export function clockValue(saved: AccessSeatLane, now: number): string {
+  const s = saved.sync;
+  const applied = !s
+    ? "never applied"
+    : s.outcome === "failed"
+      ? `refused ${relTime(s.at, now)}`
+      : s.outcome === "waiting"
+        ? `waiting on a person since ${relTime(s.at, now)}`
+        : `last applied ${relTime(s.at, now)}`;
+  if (saved.observed_at) return `Checked ${relTime(saved.observed_at, now)}, ${applied}`;
+  return s ? applied.charAt(0).toUpperCase() + applied.slice(1) : "Not checked yet";
+}
+
+/**
+ * What a seat's GitHub App holds past the agent's grant, or null: tokens are
+ * narrowed to the grant, so a permission the app holds and the grant lacks is
+ * one the agent does not use, and widening the grant is the change to make.
+ */
+export function ceilingNote(lane: Lane, want: AccessDesired, o: AccessObserved): string | null {
+  if (!lane.permissions || !want.enabled || !o.ceiling) return null;
+  const unused: string[] = [];
+  const narrower = new Map<string, { held: GitHubAccess; uses: GitHubAccess; names: string[] }>();
+  for (const p of lane.permissions) {
+    const held = o.ceiling[p.key];
+    const uses = want.permissions?.[p.key];
+    if (!held || order(held) <= order(uses)) continue;
+    if (!uses) {
+      unused.push(p.name);
+      continue;
+    }
+    const gap = narrower.get(`${held}/${uses}`) ?? { held, uses, names: [] };
+    gap.names.push(p.name);
+    narrower.set(`${held}/${uses}`, gap);
+  }
+  const lines: string[] = [];
+  if (unused.length > 0) {
+    const them = unused.length === 1 ? "it" : "them";
+    lines.push(`The app also holds ${andList(unused)}; this agent does not use ${them}.`);
+  }
+  for (const { held, uses, names } of narrower.values()) {
+    const them = names.length === 1 ? "" : "them ";
+    lines.push(
+      `The app also holds ${andList(names)} ${GITHUB_ACCESS_NAMES[held]}; this agent uses ${them}${GITHUB_ACCESS_NAMES[uses]}.`,
+    );
+  }
+  return lines.length > 0 ? lines.join(" ") : null;
 }
 
 export type SeatAction = "rotate" | "remove";

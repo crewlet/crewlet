@@ -133,6 +133,58 @@ func TestDeepWorkIsOfferedOnlyWhereItCanRun(t *testing.T) {
 	}
 }
 
+// AN IMAGE NOTHING ON THE TURN CAN READ IS SAID WITH WHAT WORKS: only deep work
+// reads images, so a quick turn without it tells the model to say so and to
+// offer pasting the text, and, by why it is missing, an administrator turning
+// it on or asking again shortly; the viewer's flag follows the same rule.
+// Mutation: word both missing cases alike and one case fails.
+func TestAnImageNothingCanReadIsSaidWithWhatWorks(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		company func(t *testing.T) assistant.Company
+		script  *evals.DeepScript
+		reads   bool
+		want    string
+	}{
+		"no deep_work":    {func(t *testing.T) assistant.Company { return assistanttest.Company(t, true, "grace") }, evals.NewDeepScript(), false, "ask an administrator to turn on deep work"},
+		"backend unready": {deepCompany, &evals.DeepScript{Unready: errors.New("no confinement")}, true, "ask again shortly"},
+		"ready":           {deepCompany, evals.NewDeepScript(), true, "You cannot see them; deep work can."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			files := evals.NewFiles(evals.NewClock().Now)
+			f := assistanttest.NewRig(t, evals.RigOptions{Company: c.company(t), Deep: c.script,
+				Files: files, Tools: []catalog.Tool{getTask(t)},
+				Rounds: []evals.Round{evals.Say("I cannot see the image.")}})
+			if got := f.Svc.ReadsImages(); got != c.reads {
+				t.Fatalf("ReadsImages = %v, want %v", got, c.reads)
+			}
+			shot, err := files.Attach(f.Person.ID, f.Conversation, "settings.png",
+				append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, err := f.Svc.Start(context.Background(), assistant.TurnStart{Person: f.Person,
+				Conversation: f.Conversation, Key: evals.Key("shot"), Input: "What does this show?",
+				Read: f.Grant("shot"), Attachments: []uuid.UUID{shot.FileID}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Follow(accepted.TurnID, 0)
+			var prompt strings.Builder
+			for _, m := range f.Model.Requests()[0].Messages {
+				prompt.WriteString(m.Content)
+			}
+			if !strings.Contains(prompt.String(), "settings.png") || !strings.Contains(prompt.String(), c.want) {
+				t.Fatalf("the prompt does not say %q of the image:\n%s", c.want, prompt.String())
+			}
+			if !c.reads && !strings.Contains(prompt.String(), "paste the text") {
+				t.Fatalf("the prompt offers no way that works:\n%s", prompt.String())
+			}
+		})
+	}
+}
+
 // A RUN REACHES CREWLET ONLY THROUGH THE TURN'S OWN SURFACE: its read is one
 // request through the dispatcher on the turn's grant, drawn as a step nested
 // under the run's; the run's step is re-sent with its progress and closed with
@@ -667,7 +719,7 @@ func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
 	script := evals.NewDeepScript(
 		evals.DeepRunScript{Calls: []llm.ToolCall{set("p1", "voice.summary", "Plain and warm.")},
 			Report: "Proposed the voice."},
-		evals.DeepRunScript{Calls: []llm.ToolCall{set("p2", "name", "FairSplit")},
+		evals.DeepRunScript{Calls: []llm.ToolCall{set("p2", "name", "Acme")},
 			Report: "Proposed the name."})
 	f := assistanttest.NewRig(t, evals.RigOptions{
 		Company: deepCompany(t), Deep: script,

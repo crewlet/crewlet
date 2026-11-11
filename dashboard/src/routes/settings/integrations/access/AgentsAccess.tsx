@@ -89,6 +89,8 @@ import {
   accessWords,
   availableActions,
   boxSettingsFact,
+  ceilingNote,
+  clockValue,
   credentialNote,
   emptyScopeHint,
   handoffOf,
@@ -118,7 +120,6 @@ import {
   scopeWords,
   statusOf,
   statusRank,
-  syncValue,
   toolWords,
   wantOf,
   withEnabled,
@@ -389,7 +390,7 @@ export const AgentsAccess = memo(function AgentsAccess({
           want,
           drafted,
           first: i === 0 || !lanes.slice(0, i).some((l) => seat.lanes[l.key]),
-          status: statusOf(lane, saved, drafted, data.syncing, seat.departed),
+          status: statusOf(lane, saved, drafted),
         },
       ];
     }),
@@ -755,7 +756,10 @@ export const AgentsAccess = memo(function AgentsAccess({
               });
           const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
           const placed = refusalAt(row.seat, row.lane, "level", "permissions", "scope");
-          return message || hint || placed ? (
+          const ceiling = row.seat.departed
+            ? null
+            : ceilingNote(row.lane, row.want, row.saved.observed);
+          return message || hint || placed || ceiling ? (
             <div className="agent-access-under">
               {message}
               {placed && (
@@ -768,6 +772,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 </p>
               )}
               {hint && <p className="t-caption">{hint}</p>}
+              {ceiling && <p className="t-caption">{ceiling}</p>}
             </div>
           ) : null;
         }}
@@ -1295,7 +1300,7 @@ function Details({
                   ] as const,
                 ]
               : []),
-            ["Last sync", <Clocked key="sync" text={(now) => syncValue(saved, now)} />],
+            ["Sync", <Clocked key="sync" text={(now) => clockValue(saved, now)} />],
           ]}
         />
       )}

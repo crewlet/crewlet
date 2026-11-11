@@ -81,24 +81,36 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 // name, spelled alike, and a turn the notice wakes decides from it whose
 // errand it is: a colleague's comment is the colleague's, the engine's own
 // repair is nobody's. A wake that named only the actor left every one of them
-// to be read as a vendor id nobody holds, which is a stranger.
+// to be read as a vendor id nobody holds, which is a stranger. An agent's
+// write made in a turn somebody woke names them too, and the turn it wakes
+// works for them (ADR-0109).
+//
+// Mutation: leave the record's carrier off the writer the parser builds, and
+// the agent's write made for ada wakes its seat for the agent.
 func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	for _, c := range []struct {
 		actor string
 		kind  worklet.AuthorKind
 		apps  []iam.Grant
-		want  types.NotificationWriter
+		// carrier is whom the record says it was written for.
+		carrier *types.WorkingFor
+		want    types.NotificationWriter
 	}{
-		{"ana", worklet.AuthorHuman, nil, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
-		{"bo", worklet.AuthorAgent, nil, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
+		{"ana", worklet.AuthorHuman, nil, nil, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
+		{"bo", worklet.AuthorAgent, nil, nil, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
+		// AN AGENT'S WRITE MADE IN A TURN ADA WOKE wakes its seat for ada
+		// (ADR-0109).
+		{"bo", worklet.AuthorAgent, nil, ada,
+			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo", WorkingFor: ada}},
 		// A CREDENTIAL ACTING AS NO SEAT, by its login and with the apps the
 		// node that took its write recorded for it (ADR-0109).
-		{"token:ci", worklet.AuthorOperator, []iam.Grant{iam.GrantWorklet},
+		{"token:ci", worklet.AuthorOperator, []iam.Grant{iam.GrantWorklet}, nil,
 			types.NotificationWriter{Kind: iam.ActorOperator, Login: "token:ci",
 				Apps: []iam.Grant{iam.GrantWorklet}}},
 		// A NODE NAMED LIKE A SEAT is still the engine.
-		{"bo", worklet.AuthorSystem, nil, types.NotificationWriter{Kind: iam.ActorSystem}},
+		{"bo", worklet.AuthorSystem, nil, nil, types.NotificationWriter{Kind: iam.ActorSystem}},
 	} {
 		// THE COMMENT ASKS cy BY NAME, so it wakes cy whoever wrote it:
 		// unnamed, only a person's comment asks the assignee anything
@@ -110,6 +122,7 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 				CommentAuthorKind: c.kind, CommentAsks: ptr(true)},
 		})
 		record.Actor, record.ActorKind, record.ActorApps = c.actor, c.kind, c.apps
+		record.WorkingFor = c.carrier
 		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
 			t.Context(), delivery(t, record), registry(t, "ana", "bo", "cy"))
 		if err != nil || len(routed) != 1 {

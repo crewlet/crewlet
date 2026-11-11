@@ -17,9 +17,12 @@ const MaxLines = 20
 // The two sections' headings and opening sentences.
 const (
 	YourAccessHeading = "## Your access"
-	yourAccessIntro   = "What you can reach with your own credentials now. This is current on " +
-		"every turn: where anything you remember, or anything earlier in this conversation, " +
-		"disagrees, this wins."
+	yourAccessIntro   = "What you can reach with your own credentials now. Crewlet narrows " +
+		"every credential you hold to the grant an administrator sets for you in Crewlet, so " +
+		"a vendor's own settings never widen it and only an administrator changes it: ask " +
+		"one for more, with `" + toolname.RequestAccess + "` where your tools include it. " +
+		"This is current on every turn: where anything you remember, or anything earlier in " +
+		"this conversation, disagrees, this wins."
 
 	ChangesHeading = "## What changed since your last turn"
 	changesIntro   = "Your access changed. These lines are current and replace anything you " +
@@ -57,7 +60,9 @@ func YourAccess(s Snapshot) string {
 		for _, lane := range s.NotGranted {
 			names = append(names, seataccess.LaneName(seataccess.Lane(lane)))
 		}
-		lines = append(lines, "- Not granted to you: "+strings.Join(names, ", ")+".")
+		lines = append(lines, "- Not in your Crewlet grant: "+strings.Join(names, ", ")+
+			". An administrator grants an integration under Settings, Integrations, then "+
+			"its Agents tab.")
 	}
 	return strings.Join(append([]string{YourAccessHeading, yourAccessIntro}, lines...), "\n")
 }
@@ -90,6 +95,7 @@ func integrationLine(in Integration) string {
 	if len(parts) == 0 {
 		parts = append(parts, "your own account.")
 	}
+	parts = append(parts, grantSentence(seataccess.Lane(in.Lane)))
 	if tool := toolSentence(seataccess.ToolState(in.Tool), false, voiceOf(ForSeat)); tool != "" {
 		parts = append(parts, capitalized(tool))
 	}
@@ -97,6 +103,13 @@ func integrationLine(in Integration) string {
 		parts = append(parts, commandsSentence(hc))
 	}
 	return head + ": " + strings.Join(parts, " ")
+}
+
+// grantSentence is where a lane's level, permissions and scope are decided:
+// the seat's Crewlet grant, and the screen an administrator changes it on.
+func grantSentence(lane seataccess.Lane) string {
+	return "Your Crewlet grant sets this; an administrator changes it under " +
+		seataccess.GrantPlace(lane) + "."
 }
 
 // commandsSentence is one SSH host's read commands, as the seat types them.
@@ -113,7 +126,8 @@ func commandsSentence(hc HostCommands) string {
 }
 
 // permissionWords is GitHub's grants in effect, what is requested and not in
-// effect yet, and what is not granted, each in GitHub's names.
+// effect yet, and what the grant leaves out (noting what the app already
+// holds), each in GitHub's names.
 func permissionWords(in Integration) []string {
 	keys := slices.Sorted(maps.Keys(in.PermissionNames))
 	for key := range in.Permissions {
@@ -136,6 +150,8 @@ func permissionWords(in Integration) []string {
 		}
 		if want, ok := pending[key]; ok {
 			requested = append(requested, name+" "+want.Label())
+		} else if access == "" && slices.Contains(in.AppHolds, key) {
+			none = append(none, name+" (the app already holds it, so nothing at GitHub waits)")
 		} else if access == "" {
 			none = append(none, name)
 		}
@@ -147,11 +163,12 @@ func permissionWords(in Integration) []string {
 		out = append(out, "No permissions in effect.")
 	}
 	if len(requested) > 0 {
-		out = append(out, "Requested and not in effect yet, until an organization owner accepts "+
-			"the app's new permissions: "+strings.Join(requested, ", ")+".")
+		out = append(out, "Requested in your Crewlet grant and not in effect yet, until an "+
+			"organization owner accepts the app's new permissions at GitHub: "+
+			strings.Join(requested, ", ")+".")
 	}
 	if len(none) > 0 {
-		out = append(out, "Not granted: "+strings.Join(none, ", ")+".")
+		out = append(out, "Not in your Crewlet grant: "+strings.Join(none, ", ")+".")
 	}
 	return out
 }

@@ -124,7 +124,7 @@ test("a record with a list under it keeps its facts in its peek: the principles 
       ],
       items: [
         { kind: "unit", id: "1", label: "Money is an integer number of cents." },
-        { kind: "unit", id: "2", label: "Miles is the final authority." },
+        { kind: "unit", id: "2", label: "Morgan is the final authority." },
       ],
     },
   });

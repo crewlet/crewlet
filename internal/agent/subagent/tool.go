@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -70,6 +71,12 @@ func NewTool(cfg Config) *Tool { return &Tool{cfg: cfg} }
 
 // Name is the tool's name in the registry.
 func (t *Tool) Name() string { return ToolName }
+
+// CallBound is the longest one call runs: the call's cap ([Limits.CallTimeout]),
+// waves included, at which every worker still out is cancelled. What a box's
+// harness is told to wait for a call to the tool, beside the rest
+// (internal/api/mcpbridge's Bridge.CallTimeout).
+func (t *Tool) CallBound() time.Duration { return t.cfg.Limits.CallTimeout }
 
 // Description is what the model is told this tool does.
 //

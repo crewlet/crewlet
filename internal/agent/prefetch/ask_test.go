@@ -183,11 +183,11 @@ func TestTheMemoryReFilterIsToldWhoIsAsking(t *testing.T) {
 	})
 	_, seat := company(t)
 	if _, err := f.RecallMemories(t.Context(), seat, "agent-1", "the deploy freeze",
-		[]learning.Subject{{ExternalID: "U2", Platform: "slack", Name: "Miles"}}, turnAux); err != nil {
+		[]learning.Subject{{ExternalID: "U2", Platform: "slack", Name: "Morgan"}}, turnAux); err != nil {
 		t.Fatalf("RecallMemories: %v", err)
 	}
 	prompts := model.prompts()
-	if len(prompts) != 1 || !strings.Contains(prompts[0], "Current sender: Miles") {
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "Current sender: Morgan") {
 		t.Fatalf("the re-filter was not told who is asking:\n%v", prompts)
 	}
 }

@@ -49,6 +49,16 @@ const (
 	// metadata is what [MetaExcerpt] already is.
 	MetaDeltas = "deltas"
 
+	// MetaMoved is WHAT KINDS OF CHANGE the write made: every kind whose
+	// field it moved ([Notify.movedKinds]), whatever kind its record ended
+	// with, comma-separated in [ChangeKinds] order, and absent where it
+	// moved none of them. The prompt says what happened by it, as the
+	// router decides who hears it by the same deltas ([Notify.moved]): a
+	// hand-off written with a status is a `status` record whose wake names
+	// `assignee` here too, so its new holder reads that the task was
+	// assigned to them and the change line names both moves (#953).
+	MetaMoved = "moved"
+
 	// MetaObject and MetaObjectID are WHAT the change was about, and they
 	// exist because one of the two routable kinds is not a task. The
 	// prompt keys its opener on the object rather than on the change kind:
@@ -268,6 +278,13 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if text := changedText(record.Notify.Fields, record.Notify.FieldsOmitted); text != "" {
 		metadata[MetaDeltas] = text
 	}
+	if moved := record.Notify.movedKinds(); len(moved) > 0 {
+		names := make([]string, len(moved))
+		for i, kind := range moved {
+			names[i] = string(kind)
+		}
+		metadata[MetaMoved] = strings.Join(names, ",")
+	}
 	if record.Notify.CommentID != "" {
 		metadata[MetaCommentID] = record.Notify.CommentID
 	}
@@ -320,8 +337,10 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// AND WHO THE SENDER IS, by the record's own kind: the actor is a
 		// seat's handle, a credential's login or a node's name, and only the
 		// kind tells a turn this wakes whether a colleague is asking or
-		// nobody is (notify.FirstPartyWriter).
-		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps),
+		// nobody is (notify.FirstPartyWriter); and whom an agent wrote it
+		// for, which the turn this wakes works for (ADR-0109).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps,
+			record.WorkingFor),
 	}
 }
 

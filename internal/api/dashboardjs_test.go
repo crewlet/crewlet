@@ -2196,20 +2196,31 @@ const (
 	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
 	// script): still 5713 KiB. An agent's permissions and scope read as their
 	// values beside a pencil, the scope changed in a dialog of its own, took it
-	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. An open
-	// draft held to what the engine takes (draft.set's arguments declared only
-	// while one schema holds them, and sizes counted as the engine encodes
-	// them) took it to 5716.3 KiB (5,853,532 bytes, +538 over the tree it was
-	// built on, all script): 5717 KiB. Ask Crewlet reading and proposing to
-	// the agents' access draft (an integration's Agents tab and an agent's
-	// Access tab, one draft over its tabs) and draft.set written in its fields'
-	// order took it to 5725.3 KiB (5,862,652 bytes, +9,120, all script):
-	// 5726 KiB. Every page action's arguments held to the engine's bounds
-	// for a schema before a page context is sent, the page context's own
-	// bounds held to the engine's, and the Budgets ceiling's seat held to a
-	// handle's grammar past an enum's 64 took it to 5726.6 KiB (5,864,019
-	// bytes, +1,367, all script): 5727 KiB.
-	treeBudget = 5<<20 + 607<<10
+	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. The work
+	// grid's Key, Status, Type and Assignee sort heads, merged with a session's
+	// relaunch note on Executors, took it to 5716.1 KiB (5,853,244 bytes, +431,
+	// all script): 5717 KiB. A tool change reviewed whole, a part it cannot
+	// show said rather than drawn as unchanged, and wording changes to
+	// read-only tools listed and accepted together, merged on top of it, took
+	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB. A
+	// withdrawn question read with its asker's reason and what covers it, and
+	// the Inbox leading with the agent work a person holds up, merged on top of
+	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
+	// An agent's two access clocks, the note on what its GitHub App holds past
+	// its grant, the engine's status word and Ask Crewlet taking images only
+	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
+	// (5,859,202 bytes, +1,351, all script): 5722 KiB. An open draft held to
+	// what the engine takes (draft.set's arguments declared only while one
+	// schema holds them, and sizes counted as the engine encodes them), Ask
+	// Crewlet reading and proposing to the agents' access draft (an
+	// integration's Agents tab and an agent's Access tab, one draft over its
+	// tabs) with draft.set written in its fields' order, every page action's
+	// arguments and the page context held to the engine's bounds, the Budgets
+	// ceiling's seat held to a handle's grammar past an enum's 64, and the org
+	// builder's identities and a mention held to the engine's, +11,156 bytes
+	// on the tree they were built on, merged on top of it, took it to 5732.8
+	// KiB (5,870,373 bytes, all script): 5733 KiB.
+	treeBudget = 5<<20 + 613<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

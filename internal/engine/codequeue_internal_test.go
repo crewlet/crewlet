@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,14 +32,16 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 		as   code.Principal
 		want builtin.Actor
 	}{
+		// A SEAT'S CLOSE IS MADE FOR NOBODY ELSE: the queue lands the change
+		// outside any turn, and Gitlet's records carry no carrier yet.
 		{"a seat", code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
-			builtin.Actor{Handle: "dev", Kind: worklet.AuthorAgent}},
+			builtin.Actor{Handle: "dev", Kind: worklet.AuthorAgent, WrittenFor: types.ForNobody()}},
 		{"a person", code.Principal{Kind: code.PrincipalOperator, Seat: "founder", OperatorID: "pat:ada"},
 			builtin.Actor{Handle: "founder", Kind: worklet.AuthorHuman, OperatorID: "pat:ada"}},
 	} {
 		got, err := enqueuerActor(c.as)
 		if err != nil || got.Handle != c.want.Handle || got.Kind != c.want.Kind ||
-			got.OperatorID != c.want.OperatorID {
+			got.OperatorID != c.want.OperatorID || !reflect.DeepEqual(got.WrittenFor, c.want.WrittenFor) {
 			t.Errorf("%s's close is written as %+v (%v), want %+v", c.name, got, err, c.want)
 		}
 	}

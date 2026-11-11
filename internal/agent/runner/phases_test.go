@@ -364,6 +364,10 @@ type buildOpts struct {
 	// conversation is the conversation the turn serves, for the cases about
 	// what a run is told of it: none unless a case serves one.
 	conversation string
+
+	// typed is the engine's read of a pickup's typed answer
+	// (runner.Config.TypedAnswer), for the cases about a pickup's turn.
+	typed func(context.Context) (bool, error)
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -445,6 +449,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		CapabilityChanges: opts.changes,
 		Task:              task,
 		Reply:             waiting,
+		TypedAnswer:       opts.typed,
 		Launcher:          launcher,
 		Resume:            opts.resume,
 		Fence:             opts.fence,

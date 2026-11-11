@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -388,6 +389,12 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Subject:   roomLabel(n),
 		Body:      wakeBody(record),
 		Metadata:  meta,
+		// AND WHO WROTE IT, as the other first-party sources state theirs
+		// (notify.FirstPartyWriter): a message is said as a seat, an agent's
+		// or the human seat a person holds, so the writer is that seat (and
+		// the partition keys on it, `seat:`, as it does theirs), and whom an
+		// agent wrote it for, which the turn this wakes works for (ADR-0109).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(n.AuthorKind), n.Author, nil, record.WorkingFor),
 	}
 }
 

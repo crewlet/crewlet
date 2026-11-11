@@ -63,6 +63,8 @@ type TrackerReader interface {
 		loc *time.Location) (worklet.MyWork, error)
 	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 		worklet.ReadyWork, error)
+	TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error)
+	OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -136,7 +138,7 @@ type TrackerWriter interface {
 	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
 		notify *worklet.Notify) (worklet.WriteResult, error)
 	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
-		notify *worklet.Notify) (worklet.WriteResult, error)
+		withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
@@ -527,6 +529,10 @@ type ServerSeams struct {
 	Units worklet.Units
 	Leads worklet.Leads
 
+	// Roster is attached to every task listing, for the seats' names
+	// `sort=assignee` orders by.
+	Roster worklet.Roster
+
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
@@ -629,7 +635,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		if b.Tracker == nil {
 			return worklet.Answer{}, errNoHalf
 		}
-		a.Query.Units = b.Units
+		a.Query.Units, a.Query.Roster = b.Units, b.Roster
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
 	})
 
@@ -862,6 +868,28 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 			return worklet.ReadyWork{}, errNoHalf
 		}
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
+	})
+
+var opTypedAnswer = define("tracker.typed_answer", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.TypedAnswerQuery) (bool, error) {
+		if b.Tracker == nil {
+			return false, errNoHalf
+		}
+		return b.Tracker.TypedAnswer(ctx, q)
+	})
+
+// ownAsksArgs is [opOwnAsks]' input.
+type ownAsksArgs struct {
+	Query worklet.OwnAsksQuery
+	Now   time.Time
+}
+
+var opOwnAsks = define("tracker.own_asks", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a ownAsksArgs) (worklet.OwnAsks, error) {
+		if b.Tracker == nil {
+			return worklet.OwnAsks{}, errNoHalf
+		}
+		return b.Tracker.OwnAsks(ctx, a.Query, a.Now)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,
@@ -1547,7 +1575,10 @@ type resolveCommentOnTaskArgs struct {
 	TaskID    string
 	Project   string
 	CommentID string
-	Notify    *worklet.Notify
+	// Withdrawal is why its asker withdraws the question; nil resolves a
+	// remark, which is what an older build does.
+	Withdrawal *worklet.Withdrawal
+	Notify     *worklet.Notify
 }
 
 // RESOLVING ONE'S OWN REMARK, a question its asker withdraws: the author is
@@ -1558,7 +1589,7 @@ var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, 
 		if err != nil {
 			return worklet.WriteResult{}, err
 		}
-		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Notify)
+		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Withdrawal, a.Notify)
 	})
 
 type removeTaskArgs struct {
@@ -1718,6 +1749,20 @@ func keyed(actor doclet.Actor) bool { return strings.TrimSpace(actor.OpKey) != "
 // asks, so a repeat under it is the same operation.
 func chatKeyed(actor chatlet.Actor) bool { return strings.TrimSpace(actor.OpKey) != "" }
 
+// pageActorWrites is the check every page write is held to before it is asked
+// anywhere ([op.refusedBeforeAsking]): that the actor its arguments hold may
+// write ([actorWrites]).
+func pageActorWrites(actor doclet.Actor) error {
+	return actorWrites(actor.Handle, iam.ActorKind(actor.Kind), actor.WrittenFor)
+}
+
+// chatActorWrites is [pageActorWrites] for a chat write, every gesture whose
+// arguments hold the actor it writes as. A reach writes nothing, and is held
+// to nothing here.
+func chatActorWrites(actor chatlet.Actor) error {
+	return actorWrites(actor.Handle, iam.ActorKind(actor.Kind), actor.WrittenFor)
+}
+
 type createPageArgs struct {
 	Actor doclet.Actor
 	Page  doclet.NewPage
@@ -1729,7 +1774,8 @@ var opCreatePage = define("pages.create", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.Create(ctx, a.Actor, a.Page)
-	}).repeatableWhen(func(a createPageArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a createPageArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a createPageArgs) error { return pageActorWrites(a.Actor) })
 
 type savePageArgs struct {
 	Actor  doclet.Actor
@@ -1743,7 +1789,8 @@ var opSavePage = define("pages.save", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.SavePage(ctx, a.Actor, a.PageID, a.Save)
-	}).repeatableWhen(func(a savePageArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a savePageArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a savePageArgs) error { return pageActorWrites(a.Actor) })
 
 type renamePageArgs struct {
 	Actor  doclet.Actor
@@ -1758,7 +1805,8 @@ var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.Rename(ctx, a.Actor, a.PageID, a.Title, a.Quiet)
-	}).repeatableWhen(func(a renamePageArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a renamePageArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a renamePageArgs) error { return pageActorWrites(a.Actor) })
 
 type commentArgs struct {
 	Actor   doclet.Actor
@@ -1785,7 +1833,7 @@ var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 		return commented{Comment: c, Written: w}, err
 	}).repeatableWhen(func(a commentArgs) bool {
 	return keyed(a.Actor)
-})
+}).refusedBeforeAsking(func(a commentArgs) error { return pageActorWrites(a.Actor) })
 
 type editCommentArgs struct {
 	Actor     doclet.Actor
@@ -1801,7 +1849,8 @@ var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false
 		}
 		c, w, err := b.PageWriter.EditComment(ctx, a.Actor, a.PageID, a.CommentID, a.Body)
 		return commented{Comment: c, Written: w}, err
-	}).repeatableWhen(func(a editCommentArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a editCommentArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a editCommentArgs) error { return pageActorWrites(a.Actor) })
 
 // ---- the operator's page writes ------------------------------------------ //
 
@@ -1822,7 +1871,8 @@ var opTrashPage = define("pages.trash", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.Trash(ctx, a.Actor, a.PageID)
-	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a pageRefArgs) error { return pageActorWrites(a.Actor) })
 
 var opRestorePage = define("pages.restore", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a pageRefArgs) (doclet.Written, error) {
@@ -1830,7 +1880,8 @@ var opRestorePage = define("pages.restore", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.Restore(ctx, a.Actor, a.PageID)
-	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a pageRefArgs) error { return pageActorWrites(a.Actor) })
 
 type purgePageArgs struct {
 	Actor  doclet.Actor
@@ -1844,7 +1895,8 @@ var opPurgePage = define("pages.purge", opOnceWrite, pagesDomain, false,
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.Purge(ctx, a.Actor, a.PageID, a.Reason)
-	}).repeatableWhen(func(a purgePageArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a purgePageArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a purgePageArgs) error { return pageActorWrites(a.Actor) })
 
 type removeCommentArgs struct {
 	Actor     doclet.Actor
@@ -1864,7 +1916,8 @@ var opRemoveComment = define("pages.remove_comment", opOnceWrite, pagesDomain, f
 			return doclet.Written{}, errNoHalf
 		}
 		return b.PageWriter.RemoveComment(ctx, a.Actor, a.PageID, a.CommentID, a.Authority)
-	}).repeatableWhen(func(a removeCommentArgs) bool { return keyed(a.Actor) })
+	}).repeatableWhen(func(a removeCommentArgs) bool { return keyed(a.Actor) }).
+	refusedBeforeAsking(func(a removeCommentArgs) error { return pageActorWrites(a.Actor) })
 
 // knowledgeArgs is a search as it crosses. The seat is its HANDLE and the
 // org is the serving node's own, for the reason the package doc gives:
@@ -2574,7 +2627,8 @@ var opChatCreateChannel = define("chat.create_channel", opOnceWrite, chatDomain,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.CreateChannel(ctx, a.Actor, a.Channel)
-	}).repeatableWhen(func(a chatCreateChannelArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatCreateChannelArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatCreateChannelArgs) error { return chatActorWrites(a.Actor) })
 
 type chatOpenDirectArgs struct {
 	Actor        chatlet.Actor
@@ -2594,7 +2648,8 @@ var opChatOpenDirect = define("chat.open_direct", opOnceWrite, chatDomain, false
 		}
 		w, created, err := b.ChatWriter.OpenDirect(ctx, a.Actor, a.Participants)
 		return openedDirect{Written: w, Created: created}, err
-	}).repeatableWhen(func(a chatOpenDirectArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatOpenDirectArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatOpenDirectArgs) error { return chatActorWrites(a.Actor) })
 
 type chatPatchChannelArgs struct {
 	Actor     chatlet.Actor
@@ -2616,7 +2671,8 @@ var opChatPatchChannel = define("chat.patch_channel", opOnceWrite, chatDomain, f
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.PatchChannel(ctx, a.Actor, a.ChannelID, a.Patch, a.Authority)
-	}).repeatableWhen(func(a chatPatchChannelArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatPatchChannelArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatPatchChannelArgs) error { return chatActorWrites(a.Actor) })
 
 type chatSetMembersArgs struct {
 	Actor     chatlet.Actor
@@ -2635,7 +2691,8 @@ var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members, a.Expected)
-	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatSetMembersArgs) error { return chatActorWrites(a.Actor) })
 
 type chatAddMembersArgs struct {
 	Actor     chatlet.Actor
@@ -2656,7 +2713,8 @@ var opChatAddMembers = define("chat.add_members", opOnceWrite, chatDomain, false
 		}
 		w, added, err := b.ChatWriter.AddMembers(ctx, a.Actor, a.ChannelID, a.Handles)
 		return addedMembers{Written: w, Added: added}, err
-	}).repeatableWhen(func(a chatAddMembersArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatAddMembersArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatAddMembersArgs) error { return chatActorWrites(a.Actor) })
 
 type chatMembershipArgs struct {
 	Actor     chatlet.Actor
@@ -2669,7 +2727,8 @@ var opChatJoin = define("chat.join", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Join(ctx, a.Actor, a.ChannelID)
-	}).repeatableWhen(func(a chatMembershipArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatMembershipArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatMembershipArgs) error { return chatActorWrites(a.Actor) })
 
 var opChatLeave = define("chat.leave", opOnceWrite, chatDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a chatMembershipArgs) (chatlet.Written, error) {
@@ -2677,7 +2736,8 @@ var opChatLeave = define("chat.leave", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Leave(ctx, a.Actor, a.ChannelID)
-	}).repeatableWhen(func(a chatMembershipArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatMembershipArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatMembershipArgs) error { return chatActorWrites(a.Actor) })
 
 type chatPostArgs struct {
 	Actor     chatlet.Actor
@@ -2691,7 +2751,8 @@ var opChatPost = define("chat.post", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Post(ctx, a.Actor, a.ChannelID, a.Message)
-	}).repeatableWhen(func(a chatPostArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatPostArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatPostArgs) error { return chatActorWrites(a.Actor) })
 
 type chatReplyArgs struct {
 	Actor     chatlet.Actor
@@ -2709,7 +2770,8 @@ var opChatReply = define("chat.reply", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Reply(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
-	}).repeatableWhen(func(a chatReplyArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatReplyArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatReplyArgs) error { return chatActorWrites(a.Actor) })
 
 // chatReachArgs is a post's dry run as it crosses: the post's own arguments,
 // with the thread it would answer (empty for a room post).
@@ -2744,7 +2806,8 @@ var opChatEdit = define("chat.edit", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Edit(ctx, a.Actor, a.ChannelID, a.MessageID, a.Edit)
-	}).repeatableWhen(func(a chatEditArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatEditArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatEditArgs) error { return chatActorWrites(a.Actor) })
 
 type chatDeleteArgs struct {
 	Actor     chatlet.Actor
@@ -2764,7 +2827,8 @@ var opChatDelete = define("chat.delete", opOnceWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Delete(ctx, a.Actor, a.ChannelID, a.MessageID, a.Authority)
-	}).repeatableWhen(func(a chatDeleteArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatDeleteArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatDeleteArgs) error { return chatActorWrites(a.Actor) })
 
 type chatReactArgs struct {
 	Actor     chatlet.Actor
@@ -2787,7 +2851,8 @@ var opChatReact = define("chat.react", opOnceWrite, chatDomain, false,
 			return b.ChatWriter.Unreact(ctx, a.Actor, a.ChannelID, a.MessageID, a.Emoji)
 		}
 		return b.ChatWriter.React(ctx, a.Actor, a.ChannelID, a.MessageID, a.Emoji)
-	}).repeatableWhen(func(a chatReactArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatReactArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatReactArgs) error { return chatActorWrites(a.Actor) })
 
 // ---- the admin's chat writes --------------------------------------------- //
 
@@ -2815,7 +2880,8 @@ var opChatSetRetention = define("chat.set_retention", opOnceWrite, chatDomain, f
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.SetRetention(ctx, a.Actor, a.ChannelID, a.Days)
-	}).repeatableWhen(func(a chatSetRetentionArgs) bool { return chatKeyed(a.Actor) })
+	}).repeatableWhen(func(a chatSetRetentionArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatSetRetentionArgs) error { return chatActorWrites(a.Actor) })
 
 type chatEraseArgs struct {
 	Actor      chatlet.Actor
@@ -2834,7 +2900,7 @@ var opChatErase = define("chat.erase", opIdempotentWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Erase(ctx, a.Actor, a.OpID, a.ChannelID, a.MessageIDs, a.Reason)
-	})
+	}).refusedBeforeAsking(func(a chatEraseArgs) error { return chatActorWrites(a.Actor) })
 
 type chatPruneArgs struct {
 	Actor     chatlet.Actor
@@ -2850,7 +2916,7 @@ var opChatPrune = define("chat.prune", opIdempotentWrite, chatDomain, false,
 			return chatlet.Written{}, errNoHalf
 		}
 		return b.ChatWriter.Prune(ctx, a.Actor, a.OpID, a.ChannelID, a.Cutoff)
-	})
+	}).refusedBeforeAsking(func(a chatPruneArgs) error { return chatActorWrites(a.Actor) })
 
 // Served is which halves a data node's copy runs natively, as a seat's
 // admission asks it ([Router.Serves]).

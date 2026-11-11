@@ -204,8 +204,9 @@ type threadBlock struct {
 	// message. See [notify.Transcript.StoppedShort].
 	stoppedShort bool
 	// answered are the messages the block showed that were waiting for this
-	// turn. See [Blocks.ThreadContextAnswered].
-	answered []string
+	// turn, each at the version it was shown at. See
+	// [Blocks.ThreadContextAnswered].
+	answered []Answered
 }
 
 // threadContext renders the block.
@@ -269,9 +270,10 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // message recorded as answered is one a later delivery of it is dropped for.
 func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
-	// waiting runs beside lines: the id of the message a line rendered when
-	// that message was waiting for this turn, and "" for every other line.
-	waiting := make([]string, 0, len(read.Messages))
+	// waiting runs beside lines: the message a line rendered, by its id and
+	// the version it was shown at, when that message was waiting for this
+	// turn, and the zero Answered for every other line.
+	waiting := make([]Answered, 0, len(read.Messages))
 	// authors runs beside them too: who said each line, so the fence names
 	// the speakers of what it holds and nobody whose message was left out.
 	authors := make([]provenance.Author, 0, len(read.Messages))
@@ -288,7 +290,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 				// THE ENGINE'S WORDS in the root's slot, so the engine is
 				// their author.
 				lines = append(lines, UnrenderableRootLine)
-				waiting = append(waiting, "")
+				waiting = append(waiting, Answered{})
 				authors = append(authors, provenance.Author{Kind: iam.ActorSystem})
 				continue
 			}
@@ -330,11 +332,11 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	lines, middle := splitThread(lines)
 	// The same split, beside the lines: splitThread keeps the root's slot
 	// and the newest, so a middle is lines[1 : 1+len(middle)].
-	var waitingMiddle []string
+	var waitingMiddle []Answered
 	var authorsMiddle []provenance.Author
 	if len(middle) > 0 {
 		waitingMiddle = waiting[1 : 1+len(middle)]
-		waiting = append(append([]string{}, waiting[0]), waiting[1+len(middle):]...)
+		waiting = append(append([]Answered{}, waiting[0]), waiting[1+len(middle):]...)
 		authorsMiddle = authors[1 : 1+len(middle)]
 		authors = append(append([]provenance.Author{}, authors[0]), authors[1+len(middle):]...)
 	}
@@ -362,7 +364,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			// verbatim, unlabelled. Calling it condensed would be a lie
 			// about text nobody rewrote.
 			lines = append(append(append([]string{}, lines[0]), middle...), lines[1:]...)
-			waiting = append(append(append([]string{}, waiting[0]), waitingMiddle...), waiting[1:]...)
+			waiting = append(append(append([]Answered{}, waiting[0]), waitingMiddle...), waiting[1:]...)
 			authors = append(append(append([]provenance.Author{}, authors[0]), authorsMiddle...), authors[1:]...)
 			posts += len(middle)
 			middle = nil
@@ -412,10 +414,10 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			"thread are not shown; read the thread itself with your chat tools if " +
 			"you need them.)_")
 	}
-	var answered []string
-	for _, id := range waiting {
-		if id != "" {
-			answered = append(answered, id)
+	var answered []Answered
+	for _, a := range waiting {
+		if a.ID != "" {
+			answered = append(answered, a)
 		}
 	}
 	return threadBlock{
@@ -427,7 +429,9 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 
 // waitingMessages marks, by position in the read, the messages that were
 // waiting for the turn trigger woke: the trigger's own writer's, after this
-// seat's own last reply, before the trigger itself.
+// seat's own last reply, before the trigger itself. Each is named by its id
+// and the version it was read at ([notify.Message.Version]), so its mark
+// drops the wake of the edit the turn was shown and never a later one.
 //
 // NOTHING, unless the read reached the trigger: a read that stopped short is
 // missing the newest messages — the trigger among them — and a trigger the
@@ -444,7 +448,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 // price, accepted: when another writer's turn failed and its message comes
 // back behind this one, that turn answers it even where this turn already
 // spoke to it.
-func waitingMessages(read notify.Transcript, trigger string) map[int]string {
+func waitingMessages(read notify.Transcript, trigger string) map[int]Answered {
 	if trigger == "" || read.StoppedShort {
 		return nil
 	}
@@ -461,14 +465,14 @@ func waitingMessages(read notify.Transcript, trigger string) map[int]string {
 	if writer == "" {
 		return nil
 	}
-	out := map[int]string{}
+	out := map[int]Answered{}
 	for i := at - 1; i >= 0; i-- {
 		m := read.Messages[i]
 		if m.Own {
 			break
 		}
 		if m.ID != "" && m.ID != trigger && m.SenderID == writer {
-			out[i] = m.ID
+			out[i] = Answered{ID: m.ID, Version: m.Version}
 		}
 	}
 	return out

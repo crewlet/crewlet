@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -20,7 +21,7 @@ import (
 func TestDecideRefusesAnOpOnASubjectTheTableDoesNotPlaceItOn(t *testing.T) {
 	t.Parallel()
 	stamp := statelog.Stamp{Gen: 1, Writer: "node-a"}
-	actor := Actor{Handle: "eng", Kind: AuthorAgent}
+	actor := Actor{Handle: "eng", Kind: AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	at := time.Unix(1_700_000_000, 0).UTC()
 	room := uuid.NewString()
 	post := MessagePost{V: 1, MessageID: uuid.NewString(), Body: "hello",

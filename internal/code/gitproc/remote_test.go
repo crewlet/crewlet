@@ -824,6 +824,10 @@ func redirectOn(t *testing.T, git string) {
 // half times the stall, scaled to six seconds so the probes go out every
 // second after three seconds of quiet (and are answered), is waited on, and
 // the pack it then sends is fetched whole, on every git a Gitlet node may run.
+// The remote sends that pack only once its quiet is over, so a fetch that
+// answers with it — main at the tip, the objects fsck'd — waited through all
+// of the quiet: the order the remote keeps says so, and no clock is read to
+// hold the fetch to the quiet's length.
 //
 // Mutation: hand libcurl back its low-speed check (http.lowSpeedLimit 1,
 // http.lowSpeedTime the stall), and the run is ended — curl 28, "Operation
@@ -857,12 +861,9 @@ func quietRemoteOn(t *testing.T, git string) {
 	into := gittest.Empty(t)
 	began := time.Now()
 	res, err := fetchFrom(t, p, r, into)
-	took := time.Since(began)
 	if err != nil {
+		took := time.Since(began) //fixedwait:measure the failure message's own reading, which decides nothing
 		t.Fatalf("a fetch from a remote quiet for %v was ended after %v: %v\n%s", hold, took, err, res.Stderr)
-	}
-	if took < hold {
-		t.Fatalf("the fetch returned after %v, inside the remote's %v of quiet: it never waited", took, hold)
 	}
 	if got := strings.TrimSpace(c.Run(t, "", "--git-dir="+into, "rev-parse", "refs/heads/main")); got != tip {
 		t.Errorf("the fetch moved main to %s, want %s", got, tip)
@@ -891,7 +892,7 @@ func quietServer(tip string, pack []byte, hold time.Duration) http.HandlerFunc {
 			select {
 			case <-req.Context().Done():
 				return
-			case <-time.After(hold):
+			case <-time.After(hold): //fixedwait:simulated a git server working quietly for hold before it answers
 			}
 			// Side band 1, in packets of at most side-band-64k's 65 520
 			// bytes: the length, the band, the data.

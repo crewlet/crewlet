@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -33,13 +34,25 @@ type NoticeLoad struct {
 	Addressed int    `json:"addressed"`
 }
 
-// IdleReview is an item in review its agent holder has taken no turn on.
+// IdleReview is an item in review its agent holder has taken no turn on, and
+// whom the review waits on.
 type IdleReview struct {
 	Task   string    `json:"task"`
 	Key    string    `json:"key"`
 	Holder string    `json:"holder"`
 	Since  time.Time `json:"since"`
+
+	// SubmittedBy is who moved it into review: the holder itself on one it
+	// submitted, which nobody reviews unless it asked somebody.
+	SubmittedBy string `json:"submitted_by,omitempty"`
+	// WaitsOn is whom the holder's open questions on it are put to, sorted:
+	// a review put to a person waits on their answer, not on the holder.
+	WaitsOn []string `json:"waits_on,omitempty"`
 }
+
+// WaitsOnNobody reports a review its holder submitted itself with no question
+// open on it: nobody holds the review.
+func (r IdleReview) WaitsOnNobody() bool { return r.SubmittedBy == r.Holder && len(r.WaitsOn) == 0 }
 
 // MaxPatternExamples bounds the records a pattern names as its evidence.
 const MaxPatternExamples = 5
@@ -88,9 +101,15 @@ type NamedWithoutAsk struct {
 	Told  int `json:"told"`
 	Asked int `json:"asked"`
 	Woken int `json:"woken"`
-	// Comments and WokenComments are at most five of each, by id.
-	Comments      []string `json:"comments"`
-	WokenComments []string `json:"woken_comments"`
+	// Requested counts, of a person's notices, the comments that asked them
+	// for something without an ask ([RequestedWithoutAsk]), whatever else
+	// they put their question to.
+	Requested int `json:"requested"`
+	// Comments, WokenComments and RequestedComments are at most five of
+	// each, by id.
+	Comments          []string `json:"comments"`
+	WokenComments     []string `json:"woken_comments"`
+	RequestedComments []string `json:"requested_comments"`
 }
 
 // WorkPatterns reads q's window of comments and answers.
@@ -107,7 +126,7 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		Set:   true,
 	}, func(tx *sql.Tx) error {
 		since, until := store.EncodeTime(q.Since), store.EncodeTime(q.Until)
-		if err := readNamedWithoutAsk(ctx, tx, since, until, &out); err != nil {
+		if err := readNamedWithoutAsk(ctx, tx, since, until, q.People, &out); err != nil {
 			return err
 		}
 		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
@@ -132,12 +151,24 @@ LEFT JOIN tracker_notifications n ON n.record_id = c.record_id AND n.reason = 'm
 WHERE c.author_kind = 'agent' AND c.created_at >= ? AND c.created_at < ? AND c.removed = 0
 ORDER BY c.created_at, c.id`
 
-func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkPatterns) error {
+func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, people []string,
+	out *WorkPatterns) error {
+
 	rows, err := tx.QueryContext(ctx, patternNamedStatement, since, until)
 	if err != nil {
 		return fmt.Errorf("worklet: read the window's agent comments: %w", err)
 	}
+	person := func(handle string) bool { return slices.Contains(people, handle) }
 	byHandle := map[string]*NamedWithoutAsk{}
+	entry := func(handle string) *NamedWithoutAsk {
+		named := byHandle[handle]
+		if named == nil {
+			named = &NamedWithoutAsk{Handle: handle, Comments: []string{},
+				WokenComments: []string{}, RequestedComments: []string{}}
+			byHandle[handle] = named
+		}
+		return named
+	}
 	last := ""
 	for rows.Next() {
 		var id, ask string
@@ -151,15 +182,26 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 			out.AgentComments++
 			last = id
 		}
-		if ask != "" || !recipient.Valid {
+		if !recipient.Valid {
 			continue
 		}
-		named := byHandle[recipient.String]
-		if named == nil {
-			named = &NamedWithoutAsk{Handle: recipient.String, Comments: []string{},
-				WokenComments: []string{}}
-			byHandle[recipient.String] = named
+		// THE TOOL'S OWN PREDICATE, so what it refuses and what this
+		// counts are one set; an unknown statement is no request.
+		var stated *bool
+		if asks.Valid {
+			stated = &asks.Bool
 		}
+		if len(RequestedWithoutAsk(true, stated, ask, []string{recipient.String}, person)) > 0 {
+			named := entry(recipient.String)
+			named.Requested++
+			if len(named.RequestedComments) < MaxPatternExamples {
+				named.RequestedComments = append(named.RequestedComments, id)
+			}
+		}
+		if ask != "" {
+			continue
+		}
+		named := entry(recipient.String)
 		named.Told++
 		switch {
 		case !asks.Valid:
@@ -322,9 +364,46 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet t
 		case ok && handed.After(r.Since):
 			r.Since = handed
 		}
+		if r.SubmittedBy, r.WaitsOn, err = readReviewWaits(ctx, tx, r.Task, r.Holder); err != nil {
+			return err
+		}
 		out.IdleReviews = append(out.IdleReviews, r)
 	}
 	return nil
+}
+
+// reviewAsksStatement is whom one holder's open questions on one item are put
+// to, a seek of the open asks' (task_id, ask) index.
+const reviewAsksStatement = `SELECT DISTINCT c.ask FROM tracker_comments c
+	WHERE c.task_id = ? AND c.author = ? AND c.ask <> '' AND c.resolved = 0
+	  AND c.answered_by IS NULL AND c.removed = 0 AND c.overtaken = ''
+	ORDER BY c.ask`
+
+// readReviewWaits is who moved one item into review, and whom its holder's
+// open questions on it are put to.
+func readReviewWaits(ctx context.Context, tx *sql.Tx, task, holder string) (string, []string, error) {
+	var submitter string
+	err := tx.QueryRowContext(ctx, readyReviewArm, task).Scan(new(string), &submitter)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", nil, fmt.Errorf("worklet: read who moved %s into review: %w", task, err)
+	}
+	rows, err := tx.QueryContext(ctx, reviewAsksStatement, task, holder)
+	if err != nil {
+		return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+	}
+	var asked []string
+	for rows.Next() {
+		var handle string
+		if err := rows.Scan(&handle); err != nil {
+			_ = rows.Close()
+			return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+		}
+		asked = append(asked, handle)
+	}
+	if err := closeRows(rows); err != nil {
+		return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+	}
+	return submitter, asked, nil
 }
 
 // patternNoticesStatement is one person's notices in the window, a range of

@@ -16,6 +16,11 @@ func TestInABubble(t *testing.T) {
 		_ = time.Until(start)
 		_ = sinceIn(start)
 		_ = subIn(start)
+		deadline := start.Add(2 * time.Second)
+		if !time.Now().Before(deadline) || time.Now().After(deadline) || time.Now().Compare(deadline) >= 0 {
+			t.Fatal("the bubble's clock is exact")
+		}
+		_ = beforeIn(deadline)
 	})
 }
 
@@ -32,4 +37,13 @@ func sinceIn(start time.Time) time.Duration {
 //fixedwait:bubble
 func subIn(start time.Time) time.Duration {
 	return start.Add(time.Second).Sub(start)
+}
+
+// beforeIn compares the clock with an instant through a Before alone, and
+// every caller runs it in a bubble: the declaration holds that reading, so
+// it is not stale.
+//
+//fixedwait:bubble
+func beforeIn(deadline time.Time) bool {
+	return time.Now().Before(deadline)
 }

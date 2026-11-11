@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -146,7 +147,7 @@ func TestAGenerationRecordNamesItsAuthorInChatsWords(t *testing.T) {
 		"a person, as the directory names one": {"jane", iam.ActorHuman, "pat:1",
 			chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorHuman, OperatorID: "pat:1"}},
 		"a seat": {"eng", iam.ActorAgent, "",
-			chatlet.Actor{Handle: "eng", Kind: chatlet.AuthorAgent}},
+			chatlet.Actor{Handle: "eng", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}},
 		"the engine": {"engine", iam.ActorSystem, "",
 			chatlet.Actor{Handle: "engine", Kind: chatlet.AuthorSystem}},
 		"a credential acting as itself": {"ops-1", iam.ActorOperator, "",

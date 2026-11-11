@@ -1528,7 +1528,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 				continue
 			}
 			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-			if chat, ok := chatKeyOf(ev); ok {
+			if chat, _, ok := chatKeyOf(ev); ok {
 				keys = append(keys, chat)
 			}
 		}
@@ -1553,10 +1553,12 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 			out = append(out, ev)
 			continue
 		}
-		chat, isChat := chatKeyOf(ev)
+		chat, edit, isChat := chatKeyOf(ev)
 		switch {
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
+		case isChat && edit && worked[chat]:
+			skip(ev.ID, skipEditInThread)
 		case isChat && worked[chat]:
 			skip(ev.ID, skipInThread)
 		case d.absorbed(ctx, handle, ev, marks):
@@ -1910,6 +1912,8 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		switch skipped[ev.ID] {
 		case skipInThread:
 			reason = "a later turn was shown this message waiting in its thread and answered it there"
+		case skipEditInThread:
+			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
 		}
@@ -2009,7 +2013,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// exhaustion.
 			owed = turn.EngineReply()
 
-		case types.TaskAssigned{}.EventType(), types.WorkPickupType:
+		case types.TaskAssigned{}.EventType():
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
 			//
@@ -2020,6 +2024,15 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// engine has no basis to pick one. Naming a surface here
 			// would refuse the other two. See [turn.Reply.Surface].
 			owed = turn.ToolReply("")
+
+		case types.WorkPickupType:
+			// A PICKUP IS ANSWERED ON ITS ITEM, TYPED (ADR-0122): the turn
+			// is delivered only by a change on the item it was handed or
+			// an ask, never by a comment saying it still waits.
+			owed = turn.ToolReply("")
+			if p, ok := events.DataAs[*types.WorkPickup](ev); ok && p != nil {
+				owed.Item = p.Item
+			}
 
 		case types.ExternalNotification{}.EventType():
 			// The third-party app's own reading of its routing. See
@@ -2066,7 +2079,10 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		if replyRank[owed.Kind] > replyRank[out.Kind] {
+		// A PICKUP'S ITEM SURVIVES A MERGE with another tool obligation: the
+		// typed answer it owes is the stricter of the two.
+		if replyRank[owed.Kind] > replyRank[out.Kind] ||
+			owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
 			out = owed
 		}
 	}

@@ -832,6 +832,7 @@ var contract = []Entry{
 	{"AccessOp", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessVerb", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessActor", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessLaneStatus", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessOutcome", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessDisabledBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessCredentialSource", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},

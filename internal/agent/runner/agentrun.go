@@ -419,10 +419,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// otherwise the resume rebuilds it from the run's durable bridged-call
 	// log.
 	var surface *tools.Surface
-	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
-		keptWhole(decodeWork(r.cfg.Reply,
+	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
+		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
-			func() turn.Surface { return describe(surface) })))
+			func() turn.Surface { return describe(surface) }))))
 
 	// ITS OWN METER: every call this surface serves is the harness's, made
 	// over the bridge after this segment has suspended and charged what it
@@ -598,13 +598,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// gets as it submits reads them as well, its record's dropped middle
 	// included, or a delivery made before the question, or before the loss,
 	// would be refused here and accepted there.
-	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
-		keptWhole(decodeWork(r.cfg.Reply,
+	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
+		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				carried := append(slices.Clone(logged), ledger.Called(elided)...)
 				return turn.Record(history, append(carried, calls(surface)...))
 			},
-			func() turn.Surface { return describe(surface) })))
+			func() turn.Surface { return describe(surface) }))))
 	bridged := NewBridgedSpend()
 	// THE TURN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, the
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
@@ -915,12 +915,12 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
-	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
-		keptWhole(decodeWork(r.cfg.Reply,
+	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
+		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
 			},
-			func() turn.Surface { return describe(surface) })))
+			func() turn.Surface { return describe(surface) }))))
 
 	meter := NewBridgedSpendFrom(spent)
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
@@ -1041,6 +1041,7 @@ func frozen(blocks prefetch.Blocks, d dispatched) execstate.Frozen {
 		EpisodeRecall:       blocks.EpisodeRecall,
 		CounterpartyProfile: blocks.CounterpartyProfile,
 		SynthesizedSkills:   blocks.SynthesizedSkills,
+		OpenAsks:            blocks.OpenAsks,
 		Endings:             d.endings,
 		Access:              d.access,
 		CapabilityChanges:   d.changes,
@@ -1057,6 +1058,7 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, dispatched) {
 		EpisodeRecall:       f.EpisodeRecall,
 		CounterpartyProfile: f.CounterpartyProfile,
 		SynthesizedSkills:   f.SynthesizedSkills,
+		OpenAsks:            f.OpenAsks,
 	}, dispatched{endings: f.Endings, access: f.Access, changes: f.CapabilityChanges}
 }
 
@@ -1096,12 +1098,12 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// ([keptWhole]): the submission is already made, and one a build before
 	// that bound recorded whole is replayed as it stands.
 	var surface *tools.Surface
-	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
-		decodeWork(r.cfg.Reply,
+	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
+		typedPickup(r.cfg.Reply, r.typedAnswer, decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(logged), ledger.Called(elided)...))
 			},
-			func() turn.Surface { return describe(surface) }))
+			func() turn.Surface { return describe(surface) })))
 
 	// THE SURFACE THE RUN LEFT, the tools it activated over the bridge
 	// included, which the round's record states as what the run held and

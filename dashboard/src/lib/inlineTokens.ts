@@ -43,11 +43,11 @@
  *     across, so `https://x.test/a/b#1` and `/a/b#1` are not one.
  *  3a. A REPOSITORY is a bare `owner/repo`, exactly two segments, and only
  *     where `owner` is one the company's code hosts name (`link_hosts`'
- *     `owners`, any case): `gophrase/backend` is one, and `and/or`,
+ *     `owners`, any case): `acme/backend` is one, and `and/or`,
  *     `src/app`, `client/server`, `2024/10` and `1/2` are words because no
  *     company works under `and`, `src` or `2024`. It is at the boundaries a
  *     reference is, never continued by a slash, a `#`, `!` or `@` (that is
- *     a reference), or a dot and a letter (`gophrase/backend.py`). Its name
+ *     a reference), or a dot and a letter (`acme/backend.py`). Its name
  *     holds no dot, which in prose is a file's extension or a stop; a
  *     repository named with one is written as a reference or an address.
  *  3b. A BARE NUMBER (`#11`) is a reference only where its repository is
@@ -57,7 +57,7 @@
  *        `issue #7`, `MR #7`, `merge request #7`, the last two a merge
  *        request) are one reference, its words the whole phrase. The
  *        repository needs no configured owner: the phrase says it is one.
- *     1. THE MESSAGE NAMES THE NUMBER IN FULL: `gophrase/backend#11`
+ *     1. THE MESSAGE NAMES THE NUMBER IN FULL: `acme/backend#11`
  *        elsewhere in the message (an ask's question, context and options,
  *        one comment, one page) makes `#11` that reference; the same number
  *        under two repositories is words.
@@ -76,7 +76,7 @@
  *  4. A COMMIT is seven to forty lowercase hex characters holding a digit and
  *     a letter, and only where the prose says it is one: after the word
  *     `commit`, or after `at`, `at head` or `head` following a reference
- *     earlier in the same run ("gophrase/backend#14 at b5362d2"). A hex word
+ *     earlier in the same run ("acme/backend#14 at b5362d2"). A hex word
  *     on its own (`deadbeef1`, `at 1234567`) is a word.
  *  5. A KEY is a capital, capitals and digits, a hyphen and a number
  *     (`GP-66`), at the boundaries the assistant's record chips use: no
@@ -528,7 +528,7 @@ export interface CodePlace {
 export interface LinkDescription {
   /** Whose mark it is drawn with, or null for an address of nobody we know. */
   vendor: LinkVendor | null;
-  /** What it says in place of the whole address: `gophrase/backend#14`, `~design`. */
+  /** What it says in place of the whole address: `acme/backend#14`, `~design`. */
   label: string;
   /** Whether the label is an identifier set in mono (a reference, a key). */
   code: boolean;
@@ -630,7 +630,7 @@ interface Under {
 /**
  * Whether a code host takes `owner`'s repositories as the company's: only an
  * owner it names (`link_hosts`' `owners`), in any case. `attacker/exfil#1` on
- * a GitHub the company works on under `gophrase` is somebody else's
+ * a GitHub the company works on under `acme` is somebody else's
  * repository, and no link is built to it.
  *
  * CLOSED WITHOUT OWNERS: a host that names none (a company that configured

@@ -274,35 +274,53 @@ type Inbound struct {
 }
 
 // FirstPartyWriter is the writer a first-party notice states
-// ([Inbound.Writer]), from the actor, the actor kind and the actor's apps its
-// record names: the actor as the seat's handle for a seat's write and for a
-// person's, which iam.ActorFor records under the seat they hold; as the
-// credential's login for a credential acting as no seat, with the apps the
-// node that took the write recorded for it (iam.ActorApps); and nothing for
-// the engine's. THE KIND DECIDES, NEVER THE SPELLING: a handle is one segment,
-// and so can be a node's name.
+// ([Inbound.Writer]), from the actor, the actor kind, the actor's apps and
+// whom the write was made for, as its record names them: the actor as the
+// seat's handle for a seat's write and for a person's, which iam.ActorFor
+// records under the seat they hold; as the credential's login for a credential
+// acting as no seat, with the apps the node that took the write recorded for
+// it (iam.ActorApps); and nothing for the engine's. THE KIND DECIDES, NEVER
+// THE SPELLING: a handle is one segment, and so can be a node's name.
 //
-// THE ONE PLACE A WRITER IS BUILT, and the apps a parameter rather than an
-// option, so no producer names a credential's write without what a turn it
-// wakes may use for it: a credential's writer carrying no apps is worked for
-// as a stranger (ADR-0109). Kept for a credential's write alone, and only as
+// THE ONE PLACE A WRITER IS BUILT, and the apps and the carrier parameters
+// rather than options, so no producer names a credential's write without what
+// a turn it wakes may use for it (a credential's writer carrying no apps is
+// worked for as a stranger), nor an agent's without whom it was written for
+// (ADR-0109). The apps are kept for a credential's write alone, and only as
 // apps this build knows, once each, in iam.Apps order: what a seat's or a
-// person's record carries is not its requester's to use — the running node
-// reads who holds the seat.
-func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant) *types.NotificationWriter {
+// person's record carries is not its requester's to use, since the running
+// node reads who holds the seat. The carrier is kept for an agent's write
+// alone, its apps held to that same order: a person, a credential and the
+// engine write for nobody but themselves, and a carrier handed for one of
+// them would make a turn work for somebody that writer never spoke for.
+func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant,
+	workingFor *types.WorkingFor) *types.NotificationWriter {
+
 	w := &types.NotificationWriter{Kind: kind}
 	switch kind {
 	case iam.ActorAgent, iam.ActorHuman:
 		w.Seat = strings.TrimSpace(actor)
+		if kind == iam.ActorAgent && workingFor != nil {
+			w.WorkingFor = workingFor.Clone()
+			w.WorkingFor.Apps = knownApps(workingFor.Apps)
+		}
 	case iam.ActorOperator:
 		w.Login = strings.TrimSpace(actor)
-		for _, app := range iam.Apps {
-			if slices.Contains(apps, app) {
-				w.Apps = append(w.Apps, app)
-			}
-		}
+		w.Apps = knownApps(apps)
 	}
 	return w
+}
+
+// knownApps is apps as a writer carries them: only the apps this build knows,
+// once each, in iam.Apps order, and nil for none.
+func knownApps(apps []iam.Grant) []iam.Grant {
+	var out []iam.Grant
+	for _, app := range iam.Apps {
+		if slices.Contains(apps, app) {
+			out = append(out, app)
+		}
+	}
+	return out
 }
 
 // Parties resolves a third-party app's external id to a colleague in the org.

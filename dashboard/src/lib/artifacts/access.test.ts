@@ -28,6 +28,7 @@ const PERSON: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  assistantReadsImages: false,
 };
 
 describe("a change to an artifact", () => {

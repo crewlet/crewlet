@@ -109,7 +109,11 @@ import {
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { ownName } from "~/lib/viewer.ts";
-import { assistantModelFor, assistantUnavailableFor } from "./assistant/availability.ts";
+import {
+  assistantModelFor,
+  assistantUnavailableFor,
+  attachClosedFor,
+} from "./assistant/availability.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
@@ -765,6 +769,11 @@ function Frame({ children }: { children: ReactNode }) {
     [viewer, companyName],
   );
   const assistantModel = assistantModelFor(viewer);
+  const readsImages = viewer.assistantReadsImages;
+  const assistantAttach = useMemo(
+    () => attachClosedFor({ assistantReadsImages: readsImages }),
+    [readsImages],
+  );
   const assistantControl = useMemo(
     () => ({
       open: assistantOpen,
@@ -888,6 +897,7 @@ function Frame({ children }: { children: ReactNode }) {
                   <AssistantDrawer
                     unavailable={assistantUnavailable}
                     model={assistantModel}
+                    attach={assistantAttach}
                     admin={viewer.admin}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}

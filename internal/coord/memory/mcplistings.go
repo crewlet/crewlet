@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ---- MCP listings and tool schemas ------------------------------------- //
+// ---- MCP listings and tool definitions ---------------------------------- //
 
 // A listing is kept by its whole key, as the KV store files it, so the record
 // is stamped with the server and node its key names, whatever its body says.
@@ -79,61 +79,61 @@ func (f *Fleet) WatchMCPListings(ctx context.Context) (<-chan coord.MCPListingUp
 	return f.listings.watchLocked(ctx, f), nil
 }
 
-// CreateMCPToolSchema stores a definition's schemas unless its digest holds
-// some.
-func (f *Fleet) CreateMCPToolSchema(_ context.Context, s coord.MCPToolSchema) (bool, error) {
+// CreateMCPToolDefinition stores a definition unless its digest holds
+// one.
+func (f *Fleet) CreateMCPToolDefinition(_ context.Context, s coord.MCPToolDefinition) (bool, error) {
 	if err := s.Validate(); err != nil {
 		return false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, held := f.schemas[s.Digest]; held {
+	if _, held := f.definitions[s.Digest]; held {
 		return false, nil
 	}
 	f.version++
 	s.At, s.Version = s.At.UTC(), f.version
 	s.Input, s.Output = slices.Clone(s.Input), slices.Clone(s.Output)
-	if f.schemas == nil {
-		f.schemas = map[string]coord.MCPToolSchema{}
+	if f.definitions == nil {
+		f.definitions = map[string]coord.MCPToolDefinition{}
 	}
-	f.schemas[s.Digest] = s
+	f.definitions[s.Digest] = s
 	return true, nil
 }
 
-// MCPToolSchema reads one definition's schemas.
-func (f *Fleet) MCPToolSchema(_ context.Context, digest string) (coord.MCPToolSchema, bool, error) {
+// MCPToolDefinition reads one definition.
+func (f *Fleet) MCPToolDefinition(_ context.Context, digest string) (coord.MCPToolDefinition, bool, error) {
 	if !coord.IsMCPDigest(digest) {
-		return coord.MCPToolSchema{}, false, fmt.Errorf("coord/memory: %q is not a definition digest", digest)
+		return coord.MCPToolDefinition{}, false, fmt.Errorf("coord/memory: %q is not a definition digest", digest)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	s, ok := f.schemas[digest]
+	s, ok := f.definitions[digest]
 	return s, ok, nil
 }
 
-// ListMCPToolSchemas returns every stored schema, ordered by digest.
-func (f *Fleet) ListMCPToolSchemas(context.Context) ([]coord.MCPToolSchema, error) {
+// ListMCPToolDefinitions returns every stored definition, ordered by digest.
+func (f *Fleet) ListMCPToolDefinitions(context.Context) ([]coord.MCPToolDefinition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]coord.MCPToolSchema, 0, len(f.schemas))
-	for _, digest := range slices.Sorted(maps.Keys(f.schemas)) {
-		out = append(out, f.schemas[digest])
+	out := make([]coord.MCPToolDefinition, 0, len(f.definitions))
+	for _, digest := range slices.Sorted(maps.Keys(f.definitions)) {
+		out = append(out, f.definitions[digest])
 	}
 	return out, nil
 }
 
-// DeleteMCPToolSchema removes a definition's schemas at a version.
-func (f *Fleet) DeleteMCPToolSchema(_ context.Context, digest string, version uint64) (bool, error) {
+// DeleteMCPToolDefinition removes a definition at a version.
+func (f *Fleet) DeleteMCPToolDefinition(_ context.Context, digest string, version uint64) (bool, error) {
 	if !coord.IsMCPDigest(digest) {
 		return false, fmt.Errorf("coord/memory: %q is not a definition digest", digest)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	held, ok := f.schemas[digest]
+	held, ok := f.definitions[digest]
 	if !ok || version == 0 || held.Version != version {
 		return false, nil
 	}
-	delete(f.schemas, digest)
+	delete(f.definitions, digest)
 	return true, nil
 }
 

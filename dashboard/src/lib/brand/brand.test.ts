@@ -28,7 +28,7 @@ const ratio = (a: string, b: string) => contrast(parseHex(a)!, parseHex(b)!);
 function doc(over: Partial<BrandDocument> = {}): BrandDocument {
   return {
     v: 1,
-    name: "FairSplit",
+    name: "Acme",
     logos: { primary: "logos/primary.svg" },
     colors: { primary: "#0f7b5f" },
     type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -145,7 +145,7 @@ describe("a version read back", () => {
   // a colour, and refuses only to adopt it.
   test("reads a partial draft, keeping what it sets and dropping what it cannot", () => {
     const draft = parseBrandDocument(
-      JSON.stringify({ v: 1, name: "FairSplit", logos: {}, colors: { primary: "red" } }),
+      JSON.stringify({ v: 1, name: "Acme", logos: {}, colors: { primary: "red" } }),
     );
     expect(draft).not.toBeNull();
     expect(draft!.logos).toEqual({});
@@ -198,7 +198,7 @@ describe("what adopting changes", () => {
       { key: "face.heading", label: "Headings typeface", was: "Geist", now: "System serif" },
     ]);
     const first = brandChanges(null, doc(), { before: {}, after: { primary: "aaa" } });
-    expect(first[0]).toEqual({ key: "name", label: "Name", now: "FairSplit" });
+    expect(first[0]).toEqual({ key: "name", label: "Name", now: "Acme" });
   });
 
   // A LOGO AND A COLOUR SHARE THEIR ROLE'S WORD, so each change names its

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -14,11 +16,71 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
+
+// AN AGENT'S TRACKER WRITE FROM A BUILD WITHOUT THE CARRIER RUNS FOR NOBODY on
+// this build's data node (ADR-0109's roll). A node of the build before the
+// carrier, crossing under the wire's rule for what an operation takes
+// (crewlet#910), sends an agent's actor whose provenance carries nothing as no
+// provenance at all — the merge queue's close of a landed change's item is
+// such a write — and this build's tracker refuses, for good, an agent's
+// writer that states nobody it writes for. So the actor's own decoder states
+// whom its writes are for whatever arrived, and the write runs on this node's
+// REAL tracker, through the very writer the node serves a routed tracker
+// request with ([Engine.estateBackend]), as the seat's own work: the actor it
+// runs as carries nobody.
+//
+// Mutation: state whom the writes are for only where a provenance arrives (in
+// a decode of worklet.Provenance rather than of estate.Actor), and the tracker
+// refuses the write.
+func TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNodeOf(t, nativeCleanupCompany)
+	at := time.Now().UTC()
+	key := fmt.Sprintf("C%05d", seededProjects.Add(1))
+	mustApply(t, "the project", func() (worklet.WriteResult, error) {
+		return e.native.Load().writer.WriteDocument(t.Context(), statelog.NewOpID(at, "project"),
+			worklet.ProjectSubject(key), "", worklet.Project{V: worklet.DocumentVersion, Key: key,
+				Name: "Roll " + key, CreatedAt: at, UpdatedAt: at}, worklet.ChangeProjectCreated, nil)
+	})
+
+	// AS A DATA NODE DECODES A REQUEST'S ACTOR, under the wire's rule, which
+	// refuses every member this build does not declare.
+	var actor estate.Actor
+	if err := jsonv2.Unmarshal([]byte(`{"handle":"ceo","kind":"agent"}`), &actor,
+		jsonv2.RejectUnknownMembers(true)); err != nil {
+		t.Fatalf("decode the older node's actor: %v", err)
+	}
+	if carrier, err := actor.Provenance.WrittenFor.For(iam.ActorAgent); err != nil || carrier != nil {
+		t.Fatalf("the older node's agent arrives written for %+v (%v), want stated for nobody", carrier, err)
+	}
+	served := e.estateBackend(e.core.Load(), e.native.Load())
+	if served.Writer == nil {
+		t.Fatal("this data node serves no tracker writer")
+	}
+	tracker := served.Writer(actor)
+	if tracker == nil {
+		t.Fatal("this data node's tracker refused to act as the older node's agent")
+	}
+	id := key + "-roll"
+	task := worklet.Task{V: worklet.DocumentVersion, ID: id, Project: key, Type: "task", Title: "close it",
+		Assignee: "ceo", Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted,
+		Priority: worklet.PriorityNormal, CreatedAt: at, UpdatedAt: at}
+	mustApply(t, "the older node's agent write", func() (worklet.WriteResult, error) {
+		return tracker.CreateTask(t.Context(), statelog.NewOpID(at, "create"), task,
+			worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil))
+	})
+	if _, err := e.native.Load().trackerReader.Task(t.Context(), id, worklet.DetailWants{},
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}); err != nil {
+		t.Errorf("the older node's agent write ran and its task does not read: %v", err)
+	}
+}
 
 // THE TRIM AND THE GATE COUNT ONLY THE NODES THAT HOLD DATA. A node without it
 // applies no log and publishes no position, so a trim that counted it at zero
@@ -121,18 +183,23 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 // was made under, a task filed from a thread forgot the thread, and a turn
 // that wrote one item was charged to none. A credential's apps are that kind
 // of field: the record keeps them for the turn the write wakes, which is held
-// to them (ADR-0109). So the
-// fixture sets EVERY field a provenance has, and a field added to it later is
-// one this test makes its author carry across or explain.
+// to them (ADR-0109), and so is whom an agent's write was made for, which the
+// turn the write wakes works for. So the fixture sets EVERY field a
+// provenance has, and a field added to it later is one this test makes its
+// author carry across or explain.
+//
+// Mutation: drop WrittenFor from Actor.Provenance, and the agent's write
+// crosses written for nobody.
 func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	t.Parallel()
 	written := &turnctx.Written{}
 	actor := builtin.Actor{
 		Handle: "ops-token", Kind: worklet.AuthorOperator,
 		OperatorID: "tok-1", TurnID: "run-1", Chain: []string{"cto", "swe"},
-		Thread:  &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
-		Apps:    []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
-		Written: written,
+		Thread:     &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
+		Apps:       []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+		WrittenFor: types.ForNobody(),
+		Written:    written,
 	}
 	got := remoteActor(actor)
 	if got.Handle != actor.Handle || got.Kind != actor.Kind || got.Records {
@@ -147,9 +214,16 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	}
 	want := worklet.Provenance{OperatorID: "tok-1", TurnID: "run-1",
 		Chain: []string{"cto", "swe"}, Origin: actor.Thread,
-		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}, Written: written}
+		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}, WrittenFor: types.ForNobody(), Written: written}
 	if !reflect.DeepEqual(got.Provenance, want) {
 		t.Errorf("the provenance crossed as %+v, want %+v", got.Provenance, want)
+	}
+
+	// AN AGENT'S WRITE CROSSES WITH WHOM IT WAS MADE FOR, the carrier whole.
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	agent := builtin.Actor{Handle: "swe", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(ada)}
+	if got := remoteActor(agent).Provenance.WrittenFor; !got.Stated() || !reflect.DeepEqual(got.Carrier(), ada) {
+		t.Errorf("an agent's write for ada crossed written for %+v", got.Carrier())
 	}
 
 	// A TURN WITH NO SET CROSSES WITH NONE: a nil set in the interface would

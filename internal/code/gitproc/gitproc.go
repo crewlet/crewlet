@@ -621,6 +621,18 @@ type Pool struct {
 	slotWait, killGrace, remoteStall time.Duration
 	captureMax                       int
 
+	// now, grace and draining are the suite's seams (export_test.go), New
+	// setting each to the machine's own: now is the clock a run's Began and
+	// Took are read from; grace arms the wait kill makes between SIGTERM and
+	// SIGKILL, answering the channel that ends it and the Stop that frees
+	// it; and draining, nil outside a case, is told each stream the drain
+	// begins to wait for. Through them a case states the instants a run is
+	// stamped with, holds the grace the pool armed, and waits a run into its
+	// drain — none of which anything a run reports shows.
+	now      func() time.Time
+	grace    func(time.Duration) (<-chan time.Time, func() bool)
+	draining func(stream string)
+
 	// gaugeMu orders every change a gauge reports — the processes running
 	// in each class and the read lane's cores lent — so a later Set never
 	// carries an older count.
@@ -835,6 +847,8 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		killGrace:   KillGrace,
 		remoteStall: TransferStall,
 		captureMax:  CaptureMax,
+		now:         time.Now,
+		grace:       timer,
 		running:     make(map[Class]int64, len(Classes)),
 		log:         logger,
 		metrics:     o.Metrics,

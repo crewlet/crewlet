@@ -134,6 +134,8 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 			func(v string) bool { return seataccess.StepActor(v).Valid() }},
 		{"AccessRefusalField", strs(string(seataccess.FieldLevel), string(seataccess.FieldPermissions),
 			string(seataccess.FieldScope)), func(v string) bool { return seataccess.RefusalField(v).Valid() }},
+		{"AccessLaneStatus", wire(seataccess.LaneStatuses()),
+			func(v string) bool { return seataccess.LaneStatus(v).Valid() }},
 		{"AccessOutcome", strs(
 			string(seataccess.OutcomeOK), string(seataccess.OutcomeFailed),
 			string(seataccess.OutcomeWaiting),

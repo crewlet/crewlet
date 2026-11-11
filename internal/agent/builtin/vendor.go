@@ -22,11 +22,14 @@ type VendorNeed struct {
 // Reaches reports whether the tool reaches a vendor at all.
 func (n VendorNeed) Reaches() bool { return n.Vendor != "" }
 
-// Refusal is what a vendor's refusal of this tool says, from the declaration.
+// Refusal is what a vendor's refusal of this tool says, from the declaration:
+// the grant is Crewlet's, so it names where in Crewlet an administrator adds it.
 func (n VendorNeed) Refusal(tool string) string {
 	return tool + ": " + n.Vendor + " refused this agent's credential. It needs " + n.Level +
-		" access to " + n.Permission + ", and the engine's grant of it to this agent is not in place. " +
-		"An administrator grants it in the agent's " + n.Vendor + " access; asking again changes nothing until then."
+		" access to " + n.Permission + ", which is not in this agent's Crewlet grant: Crewlet " +
+		"narrows the credential to that grant, so the fix is in Crewlet, not at " + n.Vendor +
+		". An administrator adds it under " + seataccess.GrantPlace(seataccess.Lane(n.Lane)) +
+		"; asking again changes nothing until then."
 }
 
 var (

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,7 +36,9 @@ import (
 //   - 3: an agent's comment stating whether it asks ([Notify.Asks],
 //     [CommentPatch.Asks]), the open asks it answers ([CommentPatch.Closes])
 //     and the agents it wakes for their open asks ([Notify.Awaiting]).
-const RecordVersion = 3
+//   - 4: whom an agent's record that may wake another agent was written for
+//     ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -66,6 +69,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Notify.Awaiting", Since: 3, Path: []string{"notify", "awaiting"}},
 	{Name: "CommentPatch.Asks", Since: 3, Path: []string{"mutation", "comment", "asks"}},
 	{Name: "CommentPatch.Closes", Since: 3, Path: []string{"mutation", "comment", "closes"}},
+	{Name: "MutationRecord.WorkingFor", Since: 4, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -264,6 +268,19 @@ type MutationRecord struct {
 	// build retains a record carrying it rather than waking a seat for a
 	// credential it would read as a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
+
+	// WorkingFor is whom an [AuthorAgent] record that may wake an agent was
+	// written for (ADR-0109): whoever the turn that wrote it worked for,
+	// composed from that turn's own bound ceiling, on a record whose Notify
+	// proves an agent other than the writer may wake ([Actor.recordedFor]),
+	// and absent on every other record: an agent's write made for nobody
+	// else, every other author's, and one no agent wakes for (a gate among
+	// them). NOT APPLIED to any row:
+	// the change feed reads it, and the turn the record wakes works for them
+	// (notify.FirstPartyWriter), never for the writing seat, which holds every
+	// app. Version 4: an older build retains a record carrying it rather than
+	// waking a seat for the writing agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.

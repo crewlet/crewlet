@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -159,6 +160,14 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	if version == 0 {
 		return record.Encode()
 	}
+	if version >= worklet.WorkingForVersion && id == "suite-b" {
+		// AN AGENT'S WRITE MADE FOR SOMEBODY, on half the objects of a
+		// record version that carries whom it was made for, so the apply
+		// cases hold the history row's column it fills to one value on
+		// every node and through a redelivery (ADR-0109).
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	}
 	return json.Marshal(record)
 }
 
@@ -214,6 +223,17 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "Comment.Withdrawal":
+		// A RESOLVE THAT WITHDRAWS A QUESTION, SAYING WHY AND WHAT COVERS IT.
+		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
+			ID: "c-ask", Task: "carrying", Author: "ada", Ask: "bo", Resolved: true, ResolvedBy: "ada",
+			Withdrawal: &worklet.Withdrawal{Reason: "c-why", ReplacedBy: &worklet.Replacement{
+				URL: "https://github.com/acme/web/pull/12"}}}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Kind, record.Mutation = worklet.ChangeCommentResolved, patch
 	case "TaskPatch.WaitReason":
 		// A PATCH THAT SAYS WHY THE TASK WAITS UNTIL ITS START.
 		start, reason := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "the vendor's window opens then"
@@ -250,6 +270,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// from, which only a reply reads and every build must carry.
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
+	case "MutationRecord.WorkingFor":
+		// AN AGENT'S WRITE THAT WAKES SOMEBODY, made in a turn a person
+		// woke: whom it was written for rides beside the agent.
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated}
 	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
 		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
 		// decodes no flag would apply as a patch naming no date.

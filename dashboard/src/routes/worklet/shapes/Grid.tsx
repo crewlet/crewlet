@@ -156,13 +156,15 @@ type SortKey = (typeof COLUMN_SORT_KEYS)[number];
  * A column ordered at its own head.
  *
  * The key is typed to [COLUMN_SORT_KEYS] rather than to `string`, so a column
- * that gains a `sortValue` without a key the engine knows does not compile.
- * A column with no ordering is spelled as a plain object and its head is
- * inert — which is the honest rendering for `status`, `assignee` and the key
- * itself, none of which the engine has an order for.
+ * whose head sorts without a key the engine knows does not compile. A column
+ * with no ordering is spelled as a plain object and its head is inert.
+ *
+ * SORTABLE WITH OR WITHOUT A `sortValue`: the grid is `serverSorted`, so the
+ * press only asks the engine, whose order (a key's number, the board's status
+ * order, a seat's name) no comparator over the cells would reproduce.
  */
 function sorted(key: SortKey, column: Omit<DataGridColumn<WorkSummary>, "key">) {
-  return { key, ...column };
+  return { key, sortable: true, ...column };
 }
 
 /**
@@ -200,6 +202,12 @@ interface ColumnContext {
   keyOf?: (id: string) => string | undefined;
   /** Who can hold a task, for a writer's inline assignee picker. */
   seats?: readonly { handle: string; name: string; human?: boolean }[];
+  /**
+   * Every row is held by one person the screen already names (My work's
+   * Queue), so the Assignee column would repeat them on every row: it is a
+   * choice in the Display menu there rather than on by default.
+   */
+  assigneeFixed?: boolean;
 }
 
 /**
@@ -241,8 +249,8 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   );
   const out: DataGridColumn<WorkSummary>[] = [
     c.priority,
-    c.key,
-    c.status,
+    sorted("key", c.key),
+    sorted("status", c.status),
     sorted("title", { ...c.title, sortValue: (row) => row.title }),
   ];
   if (workspace) out.push(projectColumn(true));
@@ -251,8 +259,8 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     startColumn(),
     pointsColumn(),
     estimateColumn(),
-    c.type,
-    c.assignee,
+    sorted("type", c.type),
+    sorted("assignee", { ...c.assignee, optional: ctx.assigneeFixed }),
     sorted("updated", { ...c.updated, sortValue: (row) => row.updated ?? "" }),
   );
   return out;
@@ -270,49 +278,41 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
 function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   const { chrome, detail, workspace } = ctx;
   const out: DataGridColumn<WorkSummary>[] = [
-    {
-      key: "key",
+    sorted("key", {
       header: "Key",
       shrink: true,
       cell: (row) => <TableKeyCell value={row.key} />,
-    },
-    {
-      key: "type",
-      header: "",
-      label: "Type",
-      // ONE MARK PER ROW: a fixed, centred track, named by its label.
-      icon: true,
+    }),
+    sorted("type", {
+      header: "Type",
+      // ONE MARK PER ROW, centred under its word; the mark names the type.
+      shrink: true,
+      align: "center",
       cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
-    },
+    }),
     sorted("title", {
       header: "Title",
       sortValue: (row) => row.title,
       title: (row) => row.title,
       cell: (row) => <span className="truncate">{row.title}</span>,
     }),
-    {
-      key: "status",
+    sorted("status", {
       header: "Status",
       shrink: true,
-      // NOT SORTABLE, deliberately. The engine's nearest key is
-      // `status_entered` — how long a task has been in the status it is
-      // in — which is a different claim, and there is no ordering over
-      // the status words themselves: they are a company's own vocabulary
-      // and alphabetical order over them means nothing. `group_by=status`
-      // is what a reader asking this actually wants, and the filter bar
-      // already offers it.
+      // THE BOARD'S ORDER, To do to Closed, never the words alphabetically.
       cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
-    },
+    }),
     sorted("priority", {
       header: "Priority",
       shrink: true,
       sortValue: (row) => row.priority ?? "",
       cell: (row) => <PriorityCell row={row} word />,
     }),
-    {
-      key: "assignee",
+    sorted("assignee", {
       header: "Assignee",
       shrink: true,
+      optional: ctx.assigneeFixed,
+      // BY THE SEAT'S NAME, as the cell reads it, with nobody last.
       cell: (row) => (
         <AssigneeCell
           row={row}
@@ -335,7 +335,7 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
           }
         />
       ),
-    },
+    }),
   ];
   if (workspace) out.push(projectColumn(false));
   out.push(
@@ -481,10 +481,16 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<Work
  *
  * `workspace` decides whether the Project column exists at all, because it
  * does not inside a project — offering it there would be a checkbox for a
- * column the grid never draws.
+ * column the grid never draws. `assigneeFixed` is [ColumnContext]'s.
  */
-export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, workspace }));
+export function columnChoices(
+  shape: GridShape,
+  workspace: boolean,
+  assigneeFixed = false,
+): ColumnChoice[] {
+  return columnChoicesOf(
+    buildColumns(shape, { chrome: {}, detail: null, workspace, assigneeFixed }),
+  );
 }
 
 export function WorkGrid({
@@ -504,6 +510,7 @@ export function WorkGrid({
   removals,
   foot,
   seats,
+  assigneeFixed = false,
   more,
   sort,
   defaultSort,
@@ -555,6 +562,8 @@ export function WorkGrid({
   foot?: string;
   /** Who can hold a task, for a writer's inline assignee picker. */
   seats?: readonly { handle: string; name: string; human?: boolean }[];
+  /** Every row is held by the one person the screen names: see [ColumnContext]. */
+  assigneeFixed?: boolean;
   /**
    * THE REST OF THE LIST, where the answer carried a cursor: "Load more", and
    * what is loaded out of how many match. Absent on a complete answer.
@@ -584,8 +593,9 @@ export function WorkGrid({
       removals,
       keyOf: (id: string) => keys.get(id),
       seats,
+      assigneeFixed,
     };
-  }, [rows, groups, chrome, detail, workspace, removals, seats]);
+  }, [rows, groups, chrome, detail, workspace, removals, seats, assigneeFixed]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 

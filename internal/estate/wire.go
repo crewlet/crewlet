@@ -3,6 +3,8 @@ package estate
 import (
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -14,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -226,8 +229,19 @@ func (l lane) String() string {
 // inside a request the fleet SIGNED ([Envelopes]), so no party on the broker
 // can name one.
 type Actor struct {
-	Handle     string             `json:"handle"`
-	Kind       worklet.AuthorKind `json:"kind"`
+	Handle string             `json:"handle"`
+	Kind   worklet.AuthorKind `json:"kind"`
+
+	// Provenance is the credential, the turn and the chain behind the write,
+	// and whom it is written for. Left off the wire only where every field of
+	// it is at Go's zero, as any field an operation takes is ([encodeInput]):
+	// never an agent's this build sends, whose being stated is no zero, so an
+	// agent's stated for nobody crosses as an empty object; but an older
+	// build, knowing no carrier, sends an agent's provenance that carries
+	// nothing as no member at all, the merge queue's close of a landed
+	// change's item among them. So the actor's own decoder states whom its
+	// writes are for whether or not a provenance arrived
+	// ([Actor.UnmarshalJSONFrom]).
 	Provenance worklet.Provenance `json:"provenance"`
 
 	// Records asks the serving node to answer which work items the write
@@ -235,6 +249,64 @@ type Actor struct {
 	// a turn's [worklet.WriteLog], a set in the asking process that no
 	// wire carries. Set by the router itself wherever that log is present.
 	Records bool `json:"records,omitempty"`
+}
+
+// UnmarshalJSONFrom decodes the actor of a request this node serves, and
+// states whom its writes are for, WHATEVER ARRIVED ([types.WrittenFor.Received]):
+// no node asks a write whose actor may write nothing ([actorWrites]), and an
+// older node, knowing no carrier, sends an agent's provenance that carries
+// nothing as no member at all. So it is stated here, on the actor, and never
+// where a provenance arrived: there, such a write would arrive stating
+// nothing, which the tracker refuses for good, and a write the older node
+// owes (the merge queue's close) would be retried until the roll completed.
+//
+// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
+// wire ([decodeInput]) a member the serving build does not declare, beside
+// the provenance, inside it or inside its carrier, refuses the request, named
+// at its path, as one anywhere else in what an operation takes does. An
+// UnmarshalJSON would be handed bytes and decode them again under
+// encoding/json's own defaults, which drop such a member without a word.
+//
+// NO ENCODER OF ITS OWN: what crosses is the plain encoding of its fields
+// under the caller's options, which every gate over what an operation takes
+// reads it as (wirerule_test.go's inputTypes walks into it).
+func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	type wire Actor
+	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
+		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
+		// hands its caller a *jsonv2.SemanticError a method returns as it
+		// is, and wraps any other in a second one, typed as this actor and
+		// placed wherever the decoder stopped. [decodeInput] names the
+		// member it refuses from the first SemanticError it finds, so
+		// returned bare that is the decoder's own, at the member's path as
+		// the decoder recorded it, never a position json/v2 inferred, which
+		// is the member's only because that is where the decoder stops.
+		return err
+	}
+	a.Provenance.WrittenFor = a.Provenance.WrittenFor.Received()
+	return nil
+}
+
+// actorWrites is why an actor named who, of kind, whose writes are for
+// writtenFor, may write nothing ([types.WrittenFor.For]): an agent's actor that
+// states nobody it writes for, or a carrier on any other kind's. Nil where it
+// may write.
+//
+// THE CHECK EVERY WRITE'S ACTOR IS HELD TO BEFORE IT IS ASKED ANYWHERE, this
+// node's own copy in process included, so the answer is the same from every
+// node: the tracker's, by the router itself for every operation that runs as
+// an actor ([callAs]), and a page or chat write's, whose arguments hold the
+// actor, by its own [op.refusedBeforeAsking]. A serving node cannot make it,
+// because it cannot tell what never arrived from what an older node, knowing
+// no carrier, never sent: it reads both as stated nobody
+// ([Actor.UnmarshalJSONFrom], and Doclet's and Chatlet's own), and the turn
+// the write woke would work for the writing seat, every app. Each domain's
+// writer keeps its own check, for a write that reaches it another way.
+func actorWrites(who string, kind iam.ActorKind, writtenFor types.WrittenFor) error {
+	if _, err := writtenFor.For(kind); err != nil {
+		return fmt.Errorf("estate: a write as %q is asked of no node: %w", who, err)
+	}
+	return nil
 }
 
 // opClass is what a failover may do with an operation that went unanswered.
@@ -557,6 +629,13 @@ type opSpec struct {
 	// [errDecidesNoGrant] before it runs, however it was asked.
 	judges func(args any) bool
 
+	// asked is the check the ASKING node makes of the arguments before the
+	// request runs anywhere ([op.refusedBeforeAsking]), nil for every
+	// operation that declares none. On the declaration rather than the
+	// typed handle, as judges is, so a gate over the registry can ask it
+	// of every operation.
+	asked func(args any) error
+
 	// lane is the registration a serving node answers the operation on —
 	// the shared one, the zero lane, unless it is declared on another
 	// ([op.answeredOn]) — and the one subject the router asks it on.
@@ -608,11 +687,6 @@ type op[A, R any] struct {
 	// (Timing.GitWriteAttemptFor) — and nil for every operation whose
 	// attempt is its class's alone ([Router.wholeAttempt]).
 	attempt func(A, Timing) time.Duration
-
-	// asked is the check the ASKING node makes of the arguments before the
-	// request runs anywhere ([op.refusedBeforeAsking]), nil for every
-	// operation that declares none.
-	asked func(A) error
 }
 
 // refusedBeforeAsking declares a check the ASKING node makes of an operation's
@@ -631,10 +705,26 @@ type op[A, R any] struct {
 // such field to a reason ([zeroThroughPointer], wirerule_test.go), and a field
 // refused here names its check there.
 //
+// AND FOR AN ACTOR THAT MAY WRITE NOTHING, held in a page or chat write's
+// arguments ([actorWrites]): a serving node reads a carrier that never
+// arrived as stated nobody, whichever build left it off, so the actor is held
+// to it where the write is asked, as [callAs] holds the actor every tracker
+// operation runs as. A DECLARATION, NOT A LIST: every operation whose
+// arguments hold a page or chat actor must declare it, or be named with why
+// not, which TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite
+// holds over the registry, so a new write cannot forget it.
+//
 // A property of the asking side, like [op.keyedBy]: the server runs the
 // operation as it always did.
 func (o op[A, R]) refusedBeforeAsking(check func(A) error) op[A, R] {
-	o.asked = check
+	name := o.spec.name
+	o.spec.asked = func(args any) error {
+		a, ok := args.(A)
+		if !ok {
+			return fmt.Errorf("estate: %s is asked with arguments of type %T", name, args)
+		}
+		return check(a)
+	}
 	return o
 }
 

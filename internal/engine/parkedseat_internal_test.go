@@ -27,6 +27,17 @@ import (
 // the node announces a release only to a turn refused behind it
 // (node.Config.SeatTurnEnded), so the gate is asked once per resume while the
 // park holds, and once more each when it releases.
+//
+// CLAIMED IS A STATUS, NEVER A STAMP. A resume tried again once the park
+// releases is claimed by ClaimForResume's compare-and-swap, which flips its
+// run out of answered, and an admitted resume runs its turn and settles the
+// run; a resume the park still refuses is handed back to answered. So the
+// case waits for each run to leave answered. The run's UpdatedAt is the
+// store's clock and its answer's RecordedAt the case's, two readings that are
+// never equal, so comparing them decided nothing (#958).
+//
+// Mutation: lift no limit and readmit nothing, so no run is ever claimed, and
+// the last wait never ends.
 func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
@@ -70,7 +81,7 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 	eventually(t, "both answers to be claimed for their resumes", func() bool {
 		for _, id := range []string{"a1", "a2"} {
 			run, found, err := rt.pending.Get(t.Context(), id)
-			if err != nil || (found && run.Status == sandbox.StatusAnswered && run.UpdatedAt.Equal(run.Answer.RecordedAt)) {
+			if err != nil || (found && run.Status == sandbox.StatusAnswered) {
 				return false
 			}
 		}

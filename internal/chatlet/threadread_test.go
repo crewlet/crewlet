@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -198,6 +199,46 @@ func view(id, author string, kind chatlet.AuthorKind, body string, links ...stri
 	return chatlet.MessageView{Message: chatlet.Message{
 		ID: id, Author: author, AuthorKind: kind, Body: body, Links: links,
 	}}
+}
+
+// AN EDITED MESSAGE IS HANDED OVER AT THE EDIT IT WAS READ AT: the position of
+// the record that last wrote it, which is the token that edit's wake carries
+// as its trigger, so a turn's mark of the message drops that edit's wake and
+// no later one. An unedited message names no version, though its row has a
+// position too: its post's own wake is dropped by its id, as it always was.
+//
+// Mutation: leave Version empty, or name one for every message, and a row
+// goes red.
+func TestTheTurnStartThreadReadSaysWhichEditOfAMessageItShowed(t *testing.T) {
+	t.Parallel()
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: "chat", Generation: 1, Seq: seq}
+	}
+	editedAt := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	root := view("root", "ana", chatlet.AuthorHuman, "what is the plan")
+	root.Position = at(3)
+	edited := view("m-1", "bea", chatlet.AuthorAgent, "the plan, revised")
+	edited.Message.EditedAt = &editedAt
+	edited.Position = at(41)
+	plain := view("m-2", "bea", chatlet.AuthorAgent, "and the date")
+	plain.Position = at(17)
+	source := &threadSource{thread: chatlet.Thread{ChannelID: "room-1", Root: root,
+		Replies: []chatlet.MessageView{edited, plain}}}
+
+	got, ok := chatlet.NewThreadReader(source, nil).ReadThread(t.Context(), "swe", "room-1", "root")
+	if !ok || len(got.Messages) != 3 {
+		t.Fatalf("the thread read back as %+v (ok %v), want the root and two replies", got.Messages, ok)
+	}
+	if v := got.Messages[1].Version; v != at(41).String() {
+		t.Errorf("the edited reply reads at version %q, want %q: the position of the record that "+
+			"last wrote it, which its edit's wake carries", v, at(41).String())
+	}
+	for _, m := range []notify.Message{got.Messages[0], got.Messages[2]} {
+		if m.Version != "" {
+			t.Errorf("the unedited message %s reads at version %q, want none: a mark naming its "+
+				"post's position would drop nothing and key nothing", m.ID, m.Version)
+		}
+	}
 }
 
 // A CHATLET THREAD IS HANDED TO THE TURN IT WOKE, AS THE SEAT IT WOKE.

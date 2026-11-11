@@ -132,7 +132,7 @@ var completedArgs = map[string]map[string]any{
 		"project": "ENG"},
 	"create_page": {"title": "Onboarding", "body": "Welcome.", "container": "ENG"},
 	"update_company_principles": {"mission": "Help friends share costs fairly.",
-		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
+		"vision": "Settling up takes seconds.", "policies": []any{"Morgan is the final " +
 			"authority.", "Money is an integer number of cents."}},
 	// A MEMBERSHIP STATES EVERY MEMBER'S FOLLOWING: pm, named by handle
 	// alone, keeps following the whole room.

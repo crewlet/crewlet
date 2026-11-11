@@ -52,7 +52,7 @@ type Tool[T any] struct {
 	name   string
 	desc   string
 	schema map[string]any
-	decode func(map[string]any) (T, error)
+	decode func(context.Context, map[string]any) (T, error)
 
 	mu     sync.Mutex
 	value  T
@@ -66,6 +66,15 @@ type Tool[T any] struct {
 // has to correct it rather than for a log.
 func New[T any](name, description string, schema map[string]any,
 	decode func(map[string]any) (T, error),
+) *Tool[T] {
+	return NewContext(name, description, schema,
+		func(_ context.Context, args map[string]any) (T, error) { return decode(args) })
+}
+
+// NewContext is [New] for a decoder that reads under the call's own context:
+// one that checks a submission against a record it reads as the call is made.
+func NewContext[T any](name, description string, schema map[string]any,
+	decode func(context.Context, map[string]any) (T, error),
 ) *Tool[T] {
 	return &Tool[T]{name: name, desc: description, schema: schema, decode: decode}
 }
@@ -83,8 +92,8 @@ func (t *Tool[T]) Description() string { return t.desc }
 func (t *Tool[T]) Parameters() map[string]any { return t.schema }
 
 // Call decodes one submission and records it.
-func (t *Tool[T]) Call(_ context.Context, args map[string]any) (tools.Result, error) {
-	v, err := t.decode(args)
+func (t *Tool[T]) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	v, err := t.decode(ctx, args)
 	if err != nil {
 		// A failed validation goes BACK TO THE MODEL rather than ending
 		// the phase. It is the one tool failure the model can reliably

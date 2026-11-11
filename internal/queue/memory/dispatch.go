@@ -33,11 +33,10 @@ import (
 // is no cap here on purpose: a limit would be an invented constant that changes
 // delivery semantics for every well-behaved caller in order to bound one that
 // is asking for infinite work.
-func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool) {
+func (b *Broker) drain(ctx context.Context, sub *subscription) {
 	b.mu.Lock()
 	if sub.draining {
 		sub.drainAgain = true
-		sub.drainAgainBypass = sub.drainAgainBypass || bypassLinger
 		b.mu.Unlock()
 		return
 	}
@@ -49,7 +48,7 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 	b.mu.Unlock()
 
 	for {
-		b.drainPass(ctx, sub, bypassLinger)
+		b.drainPass(ctx, sub)
 
 		b.mu.Lock()
 		if !sub.drainAgain {
@@ -58,21 +57,21 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 			b.mu.Unlock()
 			return
 		}
-		bypassLinger = sub.drainAgainBypass
-		sub.drainAgain, sub.drainAgainBypass = false, false
+		sub.drainAgain = false
 		b.mu.Unlock()
 	}
 }
 
 // drainPass delivers until the mailbox is empty, nothing can take a delivery,
-// or a batch consumer opens a linger window.
+// or a batch consumer opens a linger window: which it does for any mail but
+// the events a window's flush found waiting ([subscription.lingered]).
 //
 // Deliverability is re-checked every iteration, so a handler that pauses its
 // own subscription (which is what a seat with no turn engine does before it
 // requeues) stops the drain at the next event rather than being run over.
 // Events published during a pass join the tail, so the mailbox stays FIFO
 // instead of being overtaken by new arrivals.
-func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger bool) {
+func (b *Broker) drainPass(ctx context.Context, sub *subscription) {
 	for {
 		b.mu.Lock()
 		if len(sub.mail) == 0 {
@@ -90,7 +89,7 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 		}
 		m := members[sub.cursor%len(members)]
 
-		if m.batched && !bypassLinger {
+		if m.batched && !lingeredLocked(sub) {
 			if linger := m.options.EffectiveLinger(); linger > 0 {
 				// Hold the window open and stop draining. The window is
 				// fixed from the first waiting event, not sliding: later
@@ -120,6 +119,24 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 		b.mu.Unlock()
 		b.deliverBatch(ctx, sub, m, chunk)
 	}
+}
+
+// lingeredLocked reports whether the mailbox still holds an event a linger
+// window's flush found waiting, and forgets the set once it holds none: read
+// off the mailbox, whatever road its events left by (a take, a stop, a
+// requeue that re-sorts it), so a mark never outlives what it marked.
+func lingeredLocked(sub *subscription) bool {
+	if len(sub.lingered) == 0 {
+		return false
+	}
+	if slices.ContainsFunc(sub.mail, func(ev *events.Event) bool {
+		_, ok := sub.lingered[ev]
+		return ok
+	}) {
+		return true
+	}
+	sub.lingered = nil
+	return false
 }
 
 // deliverableMembersLocked answers, of each CONSUMER rather than of the
@@ -761,6 +778,19 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 	w.closed = true
 	deliverable := deliverableLocked(m)
 	backlog := len(sub.mail)
+	if deliverable {
+		// WHAT THIS WINDOW COLLECTED has waited it out: the drain below
+		// takes it without opening another. Only it — mail published after
+		// this point has waited for nothing, and opens a window of its own
+		// (#983). An undelivered window marks nothing: its mail waits for
+		// the window the next drain opens.
+		if sub.lingered == nil {
+			sub.lingered = make(map[*events.Event]struct{}, backlog)
+		}
+		for _, ev := range sub.mail {
+			sub.lingered[ev] = struct{}{}
+		}
+	}
 	b.mu.Unlock()
 	// THE WINDOW STAYS COUNTED UNTIL ITS FLUSH HAS RUN ([Broker.Idle]): the
 	// drain below counts itself before this lets go, so the broker never
@@ -778,9 +808,9 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 			"topic", sub.topic, "group", sub.group, "backlog", backlog)
 		return
 	}
-	// Bypass the linger check that would otherwise re-open the window
-	// immediately on the events this one collected.
-	b.drain(ctx, sub, true)
+	// The events this window collected go without re-opening a window on
+	// them: they are marked lingered above.
+	b.drain(ctx, sub)
 }
 
 // --- small helpers --------------------------------------------------------

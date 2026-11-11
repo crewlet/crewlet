@@ -33,6 +33,37 @@
 // end — a harness killed past its grace whose relay was in a process group of its
 // own — finds its socket gone rather than the next run's calls.
 //
+// # A running call's answer, kept going where its transport needs it
+//
+// A server can keep the answer of every call its dispatcher runs going while
+// the call's tool runs ([Server.KeepAnswersGoing]): a progress on the call's
+// own token the moment the call starts running ([Call.Running]), another
+// every cadence, none once its tool has returned — and a progress that can no
+// longer be written tells the dispatcher nobody can read the answer
+// ([Call.Abandoned]). The bridge turns it on for a box's harness, which dials
+// it over streamable HTTP, where a call's response is silent until its first
+// event and a harness gives up on one silent for too long
+// (internal/api/mcpbridge). This package's own sessions do not: a harness
+// reaches them over the relay's stdio, where no harness times a response's
+// first byte, and the tool loop answers a call still running "still running"
+// itself, before the harness's own tool timeout by a tenth of it and at least
+// five seconds — the timeout every harness profile states
+// (internal/agent/toolloop, internal/providers/llm/harness/harnessprofile).
+//
+// # An answer before the tool returns
+//
+// A dispatcher may answer a call while its tool runs on, and then finish and
+// record the call itself: the tool loop near its harness's tool timeout, as
+// above, and the bridge as the opening a call was made on ends. That answer,
+// like the tool loop's, is not a failure: a harness hands its model a failed
+// result as a call that failed, and a model makes a failed call again. The
+// server writes such an answer as it writes any, after the beat is stopped and
+// waited for. What the dispatcher may need besides is when that answer is out
+// ([Call.Over]: the request's end, which the SDK reaches only once the
+// answer's write has returned), since a session whose close has begun writes
+// no answer: the bridge waits on it before it closes the sessions of the
+// opening that ended.
+//
 // # No listener anywhere
 //
 // Nothing here binds a network port. A node may bind none at all (`api.port:

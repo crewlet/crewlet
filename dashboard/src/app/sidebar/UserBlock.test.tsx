@@ -97,6 +97,7 @@ const nobody: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  assistantReadsImages: false,
   chatVendors: [],
 };
 const ada: ViewerState = {
@@ -109,14 +110,14 @@ const ada: ViewerState = {
   kind: "human",
 };
 
-/** A Tier A token bound to Miles's human seat, as `/viewer` answers it. */
+/** A Tier A token bound to Morgan's human seat, as `/viewer` answers it. */
 const reviewToken: ViewerState = {
   ...nobody,
   login: "token:review",
   grants: ["admin"],
-  handle: "miles",
-  owner: "miles",
-  name: "Miles",
+  handle: "morgan",
+  owner: "morgan",
+  name: "Morgan",
   kind: "human",
 };
 
@@ -248,7 +249,7 @@ describe("who the block says this is", () => {
   });
 
   // A CREDENTIAL ACTING AS A SEAT IS THE SEAT. A Tier A token bound to
-  // Miles's seat read "token:review" over "Miles": the credential's spelling
+  // Morgan's seat read "token:review" over "Morgan": the credential's spelling
   // as the name, and the place it acts for as the aside. It has no name of
   // its own, so it is called by the seat, and the line under it says how it
   // is signed in: the KIND of credential, with its name left to the title and
@@ -256,21 +257,21 @@ describe("who the block says this is", () => {
   // "token:review" again; say the whole line and it reads "via API token
   // review", which the rail's width cut short.
   test("a token bound to a seat is the seat, with how it is signed in under it", () => {
-    const session = { login: "token:review", seat: "miles", kind: "person" };
-    expect(whoLine(reviewToken, "Miles", session)).toEqual({
-      name: "Miles",
+    const session = { login: "token:review", seat: "morgan", kind: "person" };
+    expect(whoLine(reviewToken, "Morgan", session)).toEqual({
+      name: "Morgan",
       detail: "via API token",
       grants: "Admin",
     });
     // THE CHART UNREAD, the handle stands in, written as a handle.
-    expect(whoLine({ ...reviewToken, name: "" }, "", session).name).toBe("@miles");
+    expect(whoLine({ ...reviewToken, name: "" }, "", session).name).toBe("@morgan");
     // A SERVICE ACCOUNT BOUND TO A SEAT is the seat too.
     expect(
-      whoLine({ ...reviewToken, login: "ci:deploy" }, "Miles", { login: "ci:deploy" }),
-    ).toMatchObject({ name: "Miles", detail: "via service account" });
+      whoLine({ ...reviewToken, login: "ci:deploy" }, "Morgan", { login: "ci:deploy" }),
+    ).toMatchObject({ name: "Morgan", detail: "via service account" });
     // AND WHILE THE VIEWER HAS NOT ANSWERED, from the session alone.
     expect(whoLine({ ...nobody, loading: true }, "", { ...session, grants: ["admin"] })).toEqual({
-      name: "@miles",
+      name: "@morgan",
       detail: "via API token",
       grants: "Admin",
     });
@@ -419,7 +420,7 @@ describe("who the block says this is", () => {
   // credential. Mutation: put the name back in the row and the first line goes
   // red; drop it from the title or the header and a later line does.
   test("a token bound to a seat says its kind in the row and its name in the title and the menu", async () => {
-    render(block(reviewToken, "Miles"));
+    render(block(reviewToken, "Morgan"));
     const row = screen.getByRole("button", { name: /your menu/ });
     expect(row.querySelector(".crewlet-account-row__detail")!.textContent).toBe("via API token");
     expect(row.getAttribute("title")).toBe(
@@ -509,8 +510,8 @@ describe("who the block says this is", () => {
   // and the initials are gone.
   test("a token bound to a seat wears the seat's initials, with a key on its corner", () => {
     const frame = () => document.querySelector(".crewlet-account-row .crewlet-avatar-frame")!;
-    render(block(reviewToken, "Miles"));
-    expect(frame().querySelector(".crewlet-avatar")!.textContent).toBe("MI");
+    render(block(reviewToken, "Morgan"));
+    expect(frame().querySelector(".crewlet-avatar")!.textContent).toBe("MO");
     expect(frame().querySelector(".crewlet-avatar__icon")).toBeNull();
     expect(frame().querySelector(".crewlet-avatar__status--mark svg")).not.toBeNull();
     cleanup();
@@ -532,7 +533,7 @@ describe("who the block says this is", () => {
     // A MARKED BADGE draws no ring: the kit cuts the mark's notch from the
     // outline the ring would follow.
     cleanup();
-    render(block(reviewToken, "Miles"));
+    render(block(reviewToken, "Morgan"));
     expect(ringed()).toBe(0);
     for (const unknown of [
       { ...nobody, anonymous: true },

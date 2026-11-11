@@ -23,6 +23,9 @@ const (
 	skipWorked skipCause = iota
 	// skipInThread: a later turn's thread block showed the message waiting.
 	skipInThread
+	// skipEditInThread: a later turn's thread block showed the message
+	// waiting at this very edit, working for whom the edit was made for.
+	skipEditInThread
 	// skipAbsorbed: a completed turn read its conversation past it.
 	skipAbsorbed
 )
