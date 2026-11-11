@@ -113,9 +113,10 @@ nothing out; the request reaches people at its deadline.
 
 - **Escalations**, in the Inbox and on Home, with each delegate's verdict, confidence, reason and findings above the request, and why Crewlet put it to you.
 - **Decided under delegation**: every answer a delegate gave is marked with its rule wherever the answer is shown: the run's page, the turn, the event and the live event log.
-- **The digest**: what delegates decided for you on the last company day, on Home and in **Settings › Delegated decisions**.
+- **The digest**: what delegates decided for you on the last whole company day, on Home.
+- **Today, so far**: **Settings › Delegated decisions** opens on the company day still running, with every decision made on it until now (asked again every minute), and says the day is still running. Its pager goes back to yesterday and earlier days, and forward no further than today.
 - **Spot-checks**: one decision in `sample_one_in`, shown after the fact, with nothing to answer unless it was wrong.
-- **The audit**: `GET /setup/integrations/ssh/audit?kind=verdict` for every verdict on a command, and `GET /delegated-decisions` for the rules, the digest and the spot-checks.
+- **The audit**: `GET /setup/integrations/ssh/audit?kind=verdict` for every verdict on a command, and `GET /delegated-decisions` for the rules, the digest (`day=today` for the day still running) and the spot-checks.
 
 ## Asking to merge and to deploy
 

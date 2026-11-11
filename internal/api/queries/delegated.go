@@ -16,10 +16,11 @@ import (
 
 // `GET /delegated-decisions` (ADR-0125): the rules a company delegates
 // decisions by, the limits the engine holds every delegate to, what delegates
-// decided on one company day (the digest), and the spot-checks and flagged
-// denials of the week before it, read off the access log's verdicts. Nothing
-// here is written: a digest is read off the records, so it reaches whoever is
-// owed it when it is read, and cannot be sent twice or lost.
+// decided on one company day (the digest, the last whole day by default, or
+// the day still running so far, marked incomplete), and the spot-checks and
+// flagged denials of the week before now, read off the access log's verdicts.
+// Nothing here is written: a digest is read off the records, so it reaches
+// whoever is owed it when it is read, and cannot be sent twice or lost.
 //
 // THE PEOPLE DELEGATES ANSWER TO read it: an administrator, or a person a rule
 // names in escalate_to ([authz.ActionDelegatedRead]).
@@ -38,8 +39,13 @@ const delegatedLookback = 7 * 24 * time.Hour
 // which the answer says it holds more.
 const delegatedPage = accessdomain.MaxPageSize
 
+// delegatedToday is the `day=` that names the company day still running.
+const delegatedToday = "today"
+
 // delegatedDecisions answers the read, `day=` naming the company day the
-// digest covers (the last whole one by default).
+// digest covers: the last whole one by default, which Home's digest reads, or
+// `today` (or today's label) for the running day so far, answered with
+// `complete: false`. A day that has not begun is refused.
 func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) {
 	asking, err := caller(ctx, "delegated_decisions")
 	if err != nil {
@@ -56,11 +62,20 @@ func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) 
 	}
 	now := s.clock()
 	loc := s.zone()
-	day := period.At(period.Day, now, loc).Shift(-1)
-	if label := p.String("day"); label != "" {
+	today := period.At(period.Day, now, loc)
+	day := today.Shift(-1)
+	switch label := p.String("day"); label {
+	case "":
+	case delegatedToday:
+		day = today
+	default:
 		if day, err = period.Parse(period.Day, label, loc); err != nil {
-			return nil, fmt.Errorf("%w: the day parameter is a company day such as 2026-11-09, and %q "+
-				"isn't", ErrBadParams, label)
+			return nil, fmt.Errorf("%w: the day parameter is a company day such as 2026-11-09, or %s, "+
+				"and %q isn't", ErrBadParams, delegatedToday, label)
+		}
+		if day.Start.After(today.Start) {
+			return nil, fmt.Errorf("%w: %s has not begun; the latest company day is %s", ErrBadParams,
+				day.Label, today.Label)
 		}
 	}
 	final, sampled := true, true
@@ -104,7 +119,7 @@ func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) 
 			"decisions_per_hour":     delegated.DecisionsPerHour,
 			"server_allows_per_hour": builtin.ServerAllowsPerHour,
 		},
-		"day": day.Label, "since": day.Start.UTC(), "until": day.End.UTC(),
+		"day": day.Label, "since": day.Start.UTC(), "until": day.End.UTC(), "complete": !now.Before(day.End),
 		"decided": decided, "decided_more": decidedMore,
 		"spot_checks": samples, "spot_checks_more": samplesMore,
 		"flagged": flagged, "flagged_more": deniedMore,

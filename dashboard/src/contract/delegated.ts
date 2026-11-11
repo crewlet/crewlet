@@ -162,6 +162,11 @@ export interface DelegatedDecisionsAnswer {
   day: string;
   since: string;
   until: string;
+  /**
+   * False for the company day still running (`day=today`): `decided` is what
+   * was decided on it so far, and grows until the day ends.
+   */
+  complete: boolean;
   decided: DelegatedVerdictRow[];
   /** The log holds more than the page for that day. */
   decided_more: boolean;
