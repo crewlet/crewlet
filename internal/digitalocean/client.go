@@ -30,13 +30,9 @@ const (
 const ClientTimeout = 15 * time.Second
 
 // Rate limiting: DigitalOcean allows 250 requests a minute and 5,000 an hour
-// per token, and answers 429. A wait up to rateLimitWaitCap is taken in the
-// call, up to rateLimitRetries times; a longer one is returned to the caller.
-const (
-	rateLimitRetries  = 3
-	rateLimitWaitCap  = 30 * time.Second
-	defaultRetryAfter = 5 * time.Second
-)
+// per token, and answers 429, which every call waits out by
+// [httpx.VendorRateLimit]: a short wait is taken in the call, and a longer one
+// is returned to the caller.
 
 // maxResponse bounds what one answer may be: a one-row listing or the account
 // is a few kilobytes, and the cap stops a proxy's page being read whole.
@@ -76,7 +72,7 @@ func reject(err error) error { return integration.Reject(err, Status(err)) }
 type Client struct {
 	token string
 	http  *http.Client
-	wait  func(ctx context.Context, d time.Duration) error
+	limit httpx.RateLimit
 }
 
 // ClientOptions builds a client.
@@ -98,25 +94,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if hc == nil {
 		hc = httpx.Client(ClientTimeout)
 	}
-	return &Client{token: token, http: hc, wait: sleep}, nil
-}
-
-// sleep waits for d or until ctx is done.
-func sleep(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// fits reports whether a wait ends before ctx's deadline.
-func fits(ctx context.Context, d time.Duration) bool {
-	deadline, ok := ctx.Deadline()
-	return !ok || time.Until(deadline) > d
+	return &Client{token: token, http: hc, limit: httpx.VendorRateLimit()}, nil
 }
 
 // Account is the token's user and team, as GET /v2/account answers them.
@@ -174,11 +152,8 @@ func (c *Client) call(ctx context.Context, method, address, body, contentType st
 	for attempt := 0; ; attempt++ {
 		status, err := c.once(ctx, method, address, body, contentType, out)
 		api, ok := errors.AsType[*APIError](err)
-		if ok && api.Status == http.StatusTooManyRequests && attempt < rateLimitRetries &&
-			api.RetryAfter <= rateLimitWaitCap && fits(ctx, api.RetryAfter) {
-			if werr := c.wait(ctx, api.RetryAfter); werr != nil {
-				return status, err
-			}
+		if ok && api.Status == http.StatusTooManyRequests &&
+			c.limit.WaitOut(ctx, attempt, api.RetryAfter) == nil {
 			continue
 		}
 		return status, err
@@ -242,16 +217,16 @@ func (c *Client) once(ctx context.Context, method, address, body, contentType st
 	return res.StatusCode, nil
 }
 
-// retryAfter reads DigitalOcean's wait: Retry-After in seconds where it sends
-// one, else ratelimit-reset (a Unix time), else the default.
+// retryAfter reads DigitalOcean's wait: Retry-After where it sends one, else
+// ratelimit-reset (a Unix time), else the default.
 func retryAfter(h http.Header) time.Duration {
-	if seconds, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && seconds >= 0 {
-		return time.Duration(seconds) * time.Second
+	if wait, ok := httpx.RetryAfter(h, time.Now()); ok {
+		return wait
 	}
 	if reset, err := strconv.ParseInt(strings.TrimSpace(h.Get("Ratelimit-Reset")), 10, 64); err == nil {
 		if wait := time.Until(time.Unix(reset, 0)); wait > 0 {
 			return wait
 		}
 	}
-	return defaultRetryAfter
+	return httpx.DefaultRetryAfter
 }
